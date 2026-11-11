@@ -170,12 +170,7 @@ class TrainingDataMode(StrEnum):
 
 
 def restore_template_from(state):
-    """ShapeDtypeStructs carrying each leaf's concrete sharding, releasing the leaves.
-
-    `jax.eval_shape` drops the `pinned_host` memory kind that `initial_state` puts on
-    offloaded optimizer state, which is most of a hero checkpoint. Reading the sharding off a
-    built state keeps it.
-    """
+    """Return restore shapes with concrete shardings and memory kinds, releasing the state leaves."""
     template = jax.tree.map(
         lambda leaf: (
             jax.ShapeDtypeStruct(leaf.shape, leaf.dtype, sharding=leaf.sharding) if isinstance(leaf, jax.Array) else leaf

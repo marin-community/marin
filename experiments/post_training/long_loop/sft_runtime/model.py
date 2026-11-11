@@ -923,16 +923,7 @@ def _qb_beta_hist(
     num_experts: int,
     n_bins: int,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """Global (1-K/E)-quantile of the logit margins over the live ``[min, max]`` grid (this step's).
-
-    A ``pmin``/``pmax`` sets the grid to the exact current range of the margins, then
-    ``_bincount_upper_quantile`` reads the per-expert threshold. Replaces the per-device ``top_k`` +
-    ``pmean`` estimate with a smoother global quantile at the cost of the per-expert count reduction.
-
-    Padding is omitted from the histogram and from the dynamic target rank. Returns
-    ``(beta, margin_min, margin_max)``: the per-expert threshold plus the live margin
-    range (the grid ``lo``/``hi``), surfaced for logging.
-    """
+    """Return per-expert global quantile thresholds and margin bounds, excluding padding."""
 
     token_axes = _token_axes(mesh)
 

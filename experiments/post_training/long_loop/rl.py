@@ -39,11 +39,7 @@ def configured_rl_step(
     seed: int,
     ray_timeouts: dict[str, int],
 ) -> ArtifactStep[SkyRLRun]:
-    """Bind an explicit recipe to admitted data; admission belongs to the run-spec stage.
-
-    Unlike the historical smoke wrapper, this binding supplies no data selection,
-    training geometry, credential configuration, or trace-retention defaults.
-    """
+    """Bind supplied training settings to admitted model/data artifacts and runtime paths."""
     validate_stage_config(config, "rl")
     buffer = config.get("trainer", {}).get("rollout_buffer", {})
     quotas = buffer.get("consumed_route_quotas", {})
