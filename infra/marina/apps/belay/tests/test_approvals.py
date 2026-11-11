@@ -482,6 +482,8 @@ def test_a_live_ladder_rung_marks_its_idea_running(api: TestClient, database_url
         assert connection.execute(text("SELECT state FROM belay_api_test.ideas WHERE id = 1")).scalar_one() == "running"
         row = connection.execute(text("SELECT registry_id, experiment, run FROM belay_api_test.runs")).one()
     assert tuple(row) == ("X0221", "X0221d512", "seed0")
+    public = api.get("/public/state").json()["runs"]
+    assert [(r["registry_id"], r["experiment"]) for r in public] == [("X0221", "X0221d512")]
 
 
 def test_migrate_moves_a_rung_out_of_an_older_runs_registry_id(conn) -> None:

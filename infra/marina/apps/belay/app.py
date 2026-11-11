@@ -1123,6 +1123,7 @@ def _public_run(run: dict[str, Any]) -> dict[str, Any]:
     keys = (
         "name",
         "registry_id",
+        "experiment",
         "state",
         "step",
         "total_steps",
