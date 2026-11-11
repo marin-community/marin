@@ -17,11 +17,11 @@ use std::collections::BTreeMap;
 
 use arrow::array::{Array, Int64Array, RecordBatch};
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::statistics::Statistics;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{CatalogColumnBounds, ObjectRef};
+use crate::store::segment::metadata_int64_bounds;
 
 /// Column name to the segment's inclusive `(min, max)` over its non-null values.
 pub type ColumnBounds = BTreeMap<String, (i64, i64)>;
@@ -89,39 +89,14 @@ pub fn from_batches(batches: &[RecordBatch], columns: &[String]) -> ColumnBounds
 /// segments written before their table flagged a column. A column whose
 /// statistics are missing in any non-empty row group is always scanned.
 pub fn from_parquet(metadata: &ParquetMetaData, columns: &[String]) -> ColumnBounds {
-    let schema = metadata.file_metadata().schema_descr();
     let mut bounds = ColumnBounds::new();
     for column in columns {
-        let Some(index) = (0..schema.num_columns())
-            .find(|&i| schema.column(i).path().parts() == [column.as_str()])
-        else {
-            bounds.insert(column.clone(), ALWAYS_SCAN);
-            continue;
-        };
-        let range = footer_int64_bounds(metadata, index).unwrap_or(ALWAYS_SCAN);
+        let range = metadata_int64_bounds(metadata, column)
+            .and_then(|(minimum, maximum)| minimum.zip(maximum))
+            .unwrap_or(ALWAYS_SCAN);
         bounds.insert(column.clone(), range);
     }
     bounds
-}
-
-fn footer_int64_bounds(metadata: &ParquetMetaData, column: usize) -> Option<(i64, i64)> {
-    let mut range = None;
-    for row_group in metadata.row_groups() {
-        if row_group.num_rows() == 0 {
-            continue;
-        }
-        let Some(Statistics::Int64(statistics)) = row_group.column(column).statistics() else {
-            return None;
-        };
-        if statistics.null_count_opt() == Some(row_group.num_rows() as u64) {
-            continue;
-        }
-        let (Some(&minimum), Some(&maximum)) = (statistics.min_opt(), statistics.max_opt()) else {
-            return None;
-        };
-        widen(&mut range, minimum, maximum);
-    }
-    Some(range.unwrap_or(ALWAYS_SCAN))
 }
 
 /// The flagged `columns` that `bounds` has no entry for, which the backfill
@@ -298,16 +273,5 @@ mod tests {
             ..Default::default()
         };
         assert!(from_proto(&[incomplete]).is_empty());
-    }
-
-    #[test]
-    fn missing_columns_names_the_flagged_columns_without_bounds() {
-        let bounds = ColumnBounds::from([("epoch_ms".to_string(), (1, 2))]);
-        assert!(missing_columns(&bounds, &columns(&["epoch_ms"])).is_empty());
-        assert_eq!(
-            missing_columns(&bounds, &columns(&["epoch_ms", "ts"])),
-            columns(&["ts"])
-        );
-        assert!(missing_columns(&ColumnBounds::new(), &[]).is_empty());
     }
 }

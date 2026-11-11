@@ -164,17 +164,6 @@ impl SegmentView {
             .unwrap_or((None, None))
     }
 
-    /// The column bounds `path` currently records.
-    pub fn column_bounds(&self, path: &str) -> ColumnBounds {
-        self.segments
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|segment| segment.path == path)
-            .map(|segment| segment.column_bounds.clone())
-            .unwrap_or_default()
-    }
-
     /// The local artifacts `path` currently advertises.
     pub fn artifacts(&self, path: &str) -> LocalArtifacts {
         self.segments

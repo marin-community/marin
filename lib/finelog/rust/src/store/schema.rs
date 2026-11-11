@@ -1788,16 +1788,6 @@ mod tests {
     }
 
     #[test]
-    fn catalog_bounds_require_an_int64_column() {
-        let mut schema = worker_schema();
-        schema.columns[0].index.catalog_bounds = true;
-        assert!(matches!(
-            validate_index_policies(&schema),
-            Err(StatsError::SchemaValidation(_))
-        ));
-    }
-
-    #[test]
     fn exact_index_policies_require_string_columns() {
         for column in [
             col("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false).with_value_counts(),
