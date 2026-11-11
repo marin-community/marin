@@ -12,7 +12,11 @@ from cloud.iris.launch_config import load_launch_config
 from cloud.iris.rl_config_translation import RL_ENTRYPOINTS, RLEntrypoint
 from cloud.iris.runtime_environment import IRIS_TASK_IMAGE
 from omegaconf import OmegaConf
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 from skyrl_train import objective  # noqa: F401 - populate the runtime policy-loss registry
+from skyrl_train.models.grug_context_parallel import grug_cp_communication, validate_cp_attention
+from skyrl_train.models.grug_moe import GrugMoeConfig, grug_long_layer_flags
 from skyrl_train.utils.utils import validate_cfg, validate_generator_cfg
 
 
@@ -26,6 +30,26 @@ def main(source: Path, destination: Path) -> None:
         validate_generator_cfg(config.skyrl)
     else:
         validate_cfg(config.skyrl)
+    if config.skyrl.trainer.strategy == "megatron":
+        fs, key = filesystem_for(prefix_join(config.inputs.model.uri, "config.json"))
+        model_bytes = fs.cat_file(key)
+        model_dict = json.loads(model_bytes)
+        if model_dict.get("model_type") == "grug_moe":
+            model = GrugMoeConfig(**model_dict)
+            topology = config.skyrl.trainer.policy.megatron_config
+            long_layers = grug_long_layer_flags(model.num_hidden_layers, model.global_every)
+            communications = topology.transformer_config_kwargs.get("cp_comm_type", grug_cp_communication(long_layers))
+            if isinstance(communications, str):
+                communications = [communications] * len(long_layers)
+            for is_long, communication in zip(long_layers, communications, strict=True):
+                validate_cp_attention(
+                    query_heads=model.num_attention_heads,
+                    kv_heads=(model.global_kv_heads if is_long else model.local_kv_heads) or model.num_key_value_heads,
+                    tensor_parallel=topology.tensor_model_parallel_size,
+                    context_parallel=topology.context_parallel_size,
+                    communication=communication,
+                    sliding_window=not is_long,
+                )
     submitted = OmegaConf.load(source)
     expected_routes = OmegaConf.select(submitted, "skyrl.trainer.rollout_buffer.source_routes", default={})
     actual_routes = OmegaConf.select(config, "skyrl.trainer.rollout_buffer.source_routes", default={})
