@@ -104,6 +104,7 @@ class DaytonaEnvironment(BaseEnvironment):
             ttl_minutes=ttl_minutes,
             create_timeout=create_timeout,
             network_policy=policy,
+            snapshot_leaser=kwargs.get("host_capabilities", HostCapabilities()).snapshot_leaser,
         )
         self.model_endpoint, self.model_name = model_endpoint, model_name
         self.judge_access = JudgeAccess(judge_access)

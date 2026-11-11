@@ -38,6 +38,7 @@ from skyrl_train.rollouts.installed_agent import run_installed_agent
 from skyrl_train.rollouts.harbor_trial_session import HarborTrialHarness, run_harbor_trial
 from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
 from skyrl_train.rollouts.harbor_settings import EnvironmentType
+from skyrl_train.rollouts.daytona_snapshot_pool import shared_snapshot_leaser
 
 
 async def publish_attempt(evidence: Path, destination: str) -> None:
@@ -61,6 +62,7 @@ class InstalledAgentSettings(BaseModel):
     service_shutdown_timeout: float
     trial_reward_key: str = "reward"
     judge_model: str | None = None
+    snapshot_capacity: int | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -93,6 +95,16 @@ class InstalledAgentRuntime:
             value for value in (daytona_connection.api_key, eval_daytona_connection.api_key) if value
         )
         self.limits = NativeAPILimits(backend.model_name, backend.max_model_len, max_output_tokens)
+        self.snapshot_leaser = None
+        if settings.snapshot_capacity is not None:
+            if not daytona_connection.api_key or not daytona_connection.target:
+                raise ValueError("Snapshot leasing requires the RL Daytona connection")
+            self.snapshot_leaser = shared_snapshot_leaser(
+                capacity=settings.snapshot_capacity,
+                api_key=daytona_connection.api_key,
+                api_url=daytona_connection.api_url,
+                target=daytona_connection.target,
+            )
         self.resources = AsyncExitStack()
         self.port: int | None = None
 
@@ -166,6 +178,7 @@ class InstalledAgentRuntime:
             protected = protected | protected_environment_values({"OPENAI_API_KEY": self.judge.api_key})
         host_capabilities = HostCapabilities(
             daytona=connection,
+            snapshot_leaser=self.snapshot_leaser if phase == "train" else None,
             model_authentication=authentication,
             protected_values=protected,
         )

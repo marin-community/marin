@@ -37,6 +37,7 @@ from daytona.common.snapshot import Snapshot
 from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
 
+from shellbox.backends.daytona.leases import SnapshotLease, SnapshotLeaser
 from shellbox.backends.daytona.process import DaytonaProcessSession
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
@@ -508,11 +509,13 @@ class DaytonaMachineFactory:
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
         network_policy: DaytonaNetworkPolicy | None = None,
+        snapshot_leaser: SnapshotLeaser | None = None,
     ):
         self.client_factory = client_factory
         self.ttl_minutes = ttl_minutes
         self.create_timeout = create_timeout
         self.network_policy = network_policy
+        self.snapshot_leaser = snapshot_leaser
 
     def _check_spec(self, spec: MachineSpec) -> DockerfileSource | RegistryImage:
         source: DockerfileSource | RegistryImage
@@ -561,6 +564,21 @@ class DaytonaMachineFactory:
         async with self.client_factory() as client, asyncio.timeout(timeout):
             return await self._prepare(client, spec)
 
+    async def _delete_and_release(self, client: AsyncDaytona, name: str, lease: SnapshotLease | None) -> None:
+        await _delete_named_sandbox(client, name)
+        if lease is not None:
+            # Provider deletion may be asynchronous. Keep the lease until the
+            # sandbox is absent, not merely until DELETE has been accepted.
+            async with asyncio.timeout(120):
+                while True:
+                    try:
+                        await client.get(name)
+                    except DaytonaNotFoundError:
+                        break
+                    await asyncio.sleep(2)
+            assert self.snapshot_leaser is not None
+            await self.snapshot_leaser.release(lease)
+
     async def create(self, spec: MachineSpec) -> DaytonaMachine:
         network = (
             {"network_block_all": spec.network is NetworkPolicy.DENY}
@@ -571,9 +589,14 @@ class DaytonaMachineFactory:
             client = await lifetime.enter_async_context(self.client_factory())
             timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
             async with asyncio.timeout(timeout):
-                snapshot = await self._prepare(client, spec)
+                lease = None
+                if self.snapshot_leaser is not None and isinstance(spec.source, RegistryImage):
+                    lease = await self.snapshot_leaser.acquire(spec)
+                    snapshot = lease.name
+                else:
+                    snapshot = await self._prepare(client, spec)
                 name = f"shellbox-{uuid.uuid4().hex}"
-                lifetime.push_async_callback(_delete_named_sandbox, client, name)
+                lifetime.push_async_callback(self._delete_and_release, client, name, lease)
                 sandbox = await _create_sandbox(
                     client,
                     CreateSandboxFromSnapshotParams(

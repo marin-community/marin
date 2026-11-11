@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
+from shellbox.backends.daytona.leases import SnapshotLeaser
+
 from harbor.utils.env import protected_environment_values
 from harbor_config.env import get_required_host_vars, resolve_env_vars
 
@@ -138,6 +140,7 @@ class HostCapabilities:
     """Host authority passed outside serialized job and task configuration."""
 
     daytona: DaytonaConnection | None = field(default=None, repr=False)
+    snapshot_leaser: SnapshotLeaser | None = field(default=None, repr=False)
     model_authentication: Mapping[str, str] = field(default_factory=dict, repr=False)
     protected_values: frozenset[str] = field(default_factory=frozenset, repr=False)
 
