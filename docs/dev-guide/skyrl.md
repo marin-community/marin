@@ -49,6 +49,22 @@ to check runtime behavior after dependency changes.
 The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
 The pinned Ray release has no Intel macOS wheel.
 
+## Grug activation storage
+
+With full/uniform recomputation and pipeline parallelism, Grug can store saved
+activation inputs in pinned CPU memory:
+
+```bash
++trainer.policy.megatron_config.transformer_config_kwargs.grug_checkpoint_cpu_offload=true
+```
+
+This opt-in uses PyTorch's `save_on_cpu` on non-final model stages, including
+the embedding stage. Backward restores each input to its original device before
+recomputation. Scoring and the final pipeline stage keep their normal storage
+policy. It trades host memory and device-to-host/host-to-device copies for GPU
+headroom; update time can increase. It cannot be combined with Megatron's other
+activation-offload modes.
+
 ## CI checks
 
 The `skyrl-wheel` unit lane checks the independent lock and runs the packaging,
@@ -76,6 +92,32 @@ Marin revision. Its Grug CUTLASS kernel check runs weekly or by manual selection
 see [the workflow](https://github.com/marin-community/marin/blob/main/.github/workflows/marin-skyrl-nightly.yaml)
 for the selected tests. `Marin - SkyRL CPU Nightly` runs CatCount
 learning and checkpoint/resume gates at 06:00 UTC using the nested lock.
+
+## Grug training communication
+
+Batch-invariant workers inherit vLLM's one-channel NCCL limit. Megatron policies
+with TP1 and expert TP1 can set a separate training limit:
+
+```text
+trainer.algorithm.batch_invariant=true
+trainer.policy.megatron_config.tensor_model_parallel_size=1
+trainer.policy.megatron_config.expert_tensor_parallel_size=1
+trainer.policy.megatron_config.nccl_max_channels=8
+generator.weight_sync_transport=broadcast
+```
+
+The default `nccl_max_channels=null` preserves existing behavior. Broadcast
+publication keeps vLLM's channel limit on both ends; `expert_block` requires
+`null` or `1`. Leave `NCCL_MAX_CTAS` unset when using this option.
+
+Eight channels is a tested starting point for Hero on 192 H100s at 65K, not a
+universal setting. More channels consume GPU memory: automatic selection ran
+out on its second update, while eight completed eight updates. See the
+[paired measurements](https://marin-us-east-02a.cwobject.com/marin/users/romain/hero-nccl-auto-01a13c0f/reports/HERO-NCCL-AUTOMATIC-SELECTION.md).
+One and eight channels produced identical scores and expert choices at each
+tested batch shape, but both retained existing batch-shape sensitivity. This
+option does not establish exact batch invariance; see the
+[numerical checks](https://marin-us-east-02a.cwobject.com/marin/users/romain/hero-nccl-invariance-01a13c0f/reports/HERO-NCCL-BATCH-INVARIANCE.md).
 
 ## Train, resume, and evaluate through Marin
 
@@ -126,3 +168,25 @@ terms but does not freeze embedding rows, prevent gradients through context,
 or guarantee that learned behavioral changes remain confined to those spans.
 
 Token exclusions are rejected for DPO because they can empty one side of a preference pair. The generic mask also intersects auxiliary FTPO weights.
+
+## Reference-likelihood diagnostics
+
+Add `type: reference_likelihood` to `trainer.callbacks`, with `reference_paths`
+(a list of Parquet paths), `output_path`, and optional `batch_size` (default 8).
+It runs inside the existing evaluation session, after rollout weights have been
+synchronized. Keep an evaluation callback to schedule those sessions.
+
+Each Parquet row needs a unique `id`, `validation_domain`, `reference_token_ids`
+(the complete prompt and answer), and `reference_start` (the first answer token).
+Render the native chat template, including thinking-mode delimiters, before
+creating these rows. A nonempty prompt is required to score the first answer token.
+The tokenizer must match the serving model. The scorer requests prompt logprobs
+and one disposable output token; it does not grade that generated token.
+
+Metrics distinguish equal-example NLL from token-weighted NLL. Per-step JSONL
+records contain the full token IDs, answer start, and chosen answer-token logprobs.
+Use them to locate distribution changes. Lower NLL does not establish factual
+correctness, better generated answers, or preserved behavior. The callback does
+not select checkpoints, enforce preservation gates, or stop training.
+Missing or misaligned scores fail that step's scoring: the trainer logs a
+warning, omits the step's reference metrics and JSONL, and continues training.

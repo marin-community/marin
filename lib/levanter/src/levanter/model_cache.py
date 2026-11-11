@@ -14,8 +14,11 @@ read the snapshot from the nearby cache.
 The populate step streams **directly into the cache filesystem** — there is no
 full local copy of the snapshot. :func:`cache_hf_model` is the easy path for the
 common case (mirror an HF repo by id), downloading and uploading one file at a
-time so a multi-hundred-GB repo never has to fit on local disk. :func:`cache_to_prefix`
-takes an arbitrary populate callback for callers that need a custom source.
+time so a multi-hundred-GB repo never has to fit on local disk. If a worker stops
+before the completion marker is written, the next worker compares existing file
+sizes with the requested Hugging Face tree and downloads missing or partial files.
+:func:`cache_to_prefix` takes an arbitrary populate callback for callers that need
+a custom source.
 """
 
 from __future__ import annotations
@@ -29,9 +32,10 @@ import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 
 import fsspec
-from huggingface_hub import hf_hub_download, list_repo_files, model_info
+from huggingface_hub import RepoFile, hf_hub_download, list_repo_tree, model_info
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.factory import url_to_fs
@@ -47,6 +51,11 @@ class CacheMetadata:
     """Metadata persisted with a completed cache snapshot."""
 
     source_revision: str | None = None
+
+
+class CacheMode(StrEnum):
+    POPULATE = "populate"
+    READ_ONLY = "read_only"
 
 
 _LOCK_SUFFIX = ".lock"
@@ -145,8 +154,9 @@ def cache_hf_model(
 
     The easy path over :func:`cache_to_prefix`: streams the repo into the cache
     one file at a time (see :func:`_stream_hf_snapshot`), excluding the cache
-    completion marker, so the snapshot never has to fit on local disk. The caller
-    chooses ``cache_path``; use :func:`resolve_cached_model_path` when a branch
+    completion marker, so the snapshot never has to fit on local disk. An incomplete
+    prefix is checked against source file sizes and resumed under the same lock.
+    The caller chooses ``cache_path``; use :func:`resolve_cached_model_path` when a branch
     or tag must be resolved and included in the cache identity. Returns ``cache_path``.
 
     Args:
@@ -172,6 +182,7 @@ def resolve_cached_model_path(
     cache_ttl_days: int,
     cache_prefix: str,
     complete_marker: str = DEFAULT_COMPLETE_MARKER,
+    cache_mode: CacheMode = CacheMode.POPULATE,
 ) -> str:
     """Resolve *model* to a path to load it from, mirroring a HuggingFace repo to a TTL cache.
 
@@ -188,18 +199,31 @@ def resolve_cached_model_path(
         cache_ttl_days: TTL in days for the region-local mirror; ``<= 0`` disables mirroring.
         cache_prefix: Sub-path under the TTL bucket the mirror is written to.
         complete_marker: Filename written last to mark the cache complete.
+        cache_mode: READ_ONLY returns the original source on a miss without creating a mirror.
 
     Returns:
         A path the caller can load *model* from.
     """
-    # Deferred so importing levanter (which eagerly imports this module) does not pull
-    # transformers via hf_checkpoints onto CPU-only workers (see levanter/__init__.py).
+    if cache_ttl_days <= 0:
+        return model
+    pinned = resolve_hf_model_ref(model)
+    if pinned is None:
+        return model
+    repo, _, revision = pinned.partition("@")
+    cache_path = marin_temp_bucket(cache_ttl_days, f"{cache_prefix}/{_cache_slug(pinned)}")
+    if cache_mode is CacheMode.READ_ONLY:
+        fs, _ = url_to_fs(cache_path)
+        return cache_path if fs.exists(f"{cache_path.rstrip('/')}/{complete_marker}") else model
+    return cache_hf_model(cache_path, repo, revision=revision, complete_marker=complete_marker)
+
+
+def resolve_hf_model_ref(model: str) -> str | None:
+    """Return a pinned ``repo@commit`` for a Hub model without deriving a storage path."""
     from levanter.compat.hf_checkpoints import _is_hf_model_id  # noqa: PLC0415  # optional dep: transformers
 
     repo, _, revision = model.partition("@")
-    if cache_ttl_days <= 0 or not _is_hf_model_id(repo):
-        return model
-
+    if not _is_hf_model_id(repo):
+        return None
     requested_revision = revision or None
     if requested_revision is not None and _HF_COMMIT_PATTERN.fullmatch(requested_revision):
         resolved_revision = requested_revision.lower()
@@ -207,10 +231,7 @@ def resolve_cached_model_path(
         resolved_revision = model_info(repo, revision=requested_revision).sha
         if resolved_revision is None:
             raise ValueError(f"Hugging Face did not return a commit SHA for {model!r}")
-
-    resolved_model = f"{repo}@{resolved_revision}"
-    cache_path = marin_temp_bucket(cache_ttl_days, f"{cache_prefix}/{_cache_slug(resolved_model)}")
-    return cache_hf_model(cache_path, repo, revision=resolved_revision, complete_marker=complete_marker)
+    return f"{repo}@{resolved_revision}"
 
 
 def _cache_slug(model: str) -> str:
@@ -237,14 +258,35 @@ def _stream_hf_snapshot(
     repo.
     """
     # A repository may contain this filename; only cache_to_prefix may write it.
-    filenames = [filename for filename in list_repo_files(model_id, revision=revision) if filename != complete_marker]
-    logger.info("streaming %d files from HF repo %s into %s", len(filenames), model_id, dest)
+    files = [
+        entry
+        for entry in list_repo_tree(model_id, revision=revision, recursive=True)
+        if isinstance(entry, RepoFile) and entry.path != complete_marker
+    ]
+    logger.info("streaming %d files from HF repo %s into %s", len(files), model_id, dest)
     with tempfile.TemporaryDirectory(prefix="hf_stream_") as scratch:
-        for filename in filenames:
-            local_path = hf_hub_download(model_id, filename, revision=revision, local_dir=scratch)
-            remote_path = f"{dest}/{filename}"
+        for file in files:
+            remote_path = f"{dest}/{file.path}"
+            if _has_expected_size(fs, remote_path, file.size):
+                logger.info("model cache file hit: %s", remote_path)
+                continue
+
+            local_path = hf_hub_download(model_id, file.path, revision=revision, local_dir=scratch)
+            if os.path.getsize(local_path) != file.size:
+                raise ValueError(f"Hugging Face download has the wrong size: {file.path}")
             # Local/posix-backed fsspec filesystems don't auto-create parents; object
             # stores treat this as a no-op since they have no real directories.
             fs.makedirs(remote_path.rsplit("/", 1)[0], exist_ok=True)
             fs.put_file(local_path, remote_path)
+            if not _has_expected_size(fs, remote_path, file.size):
+                raise OSError(f"Uploaded model cache file has the wrong size: {remote_path}")
             os.remove(local_path)
+
+
+def _has_expected_size(fs: fsspec.AbstractFileSystem, path: str, expected_size: int) -> bool:
+    """Check file size using fresh filesystem metadata without reading its contents."""
+    fs.invalidate_cache(path)
+    try:
+        return fs.info(path)["size"] == expected_size
+    except FileNotFoundError:
+        return False

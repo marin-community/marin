@@ -80,12 +80,14 @@ def build_run_request(
         ports_json=row.ports_json,
         constraints_json=row.constraints_json,
         task_image=row.task_image,
+        termination_grace_ms=row.termination_grace_ms,
         task_id=row.task_id.to_wire(),
         attempt_id=attempt_id,
         # Priority selects the Kueue WorkloadPriorityClass on the direct path.
         priority=row.priority_band,
         container_profile=row.container_profile,
         egress_policy=row.egress_policy,
+        egress_allow_json=row.egress_allow_json,
     )
     # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
     if row.timeout_ms is not None and row.timeout_ms > 0:

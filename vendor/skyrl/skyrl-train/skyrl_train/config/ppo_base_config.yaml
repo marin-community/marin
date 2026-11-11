@@ -43,6 +43,8 @@ checkpoint_export:
   hf_upload_mode: latest
 
 trainer:
+  # Best selection queues only the final export, after the last evaluation.
+  hf_export_checkpoint: latest  # latest or best native checkpoint for HF export
   evaluation_runner: training # task or harbor selects generated validation for offline preference training
   trajectory_selector:
     type: null # null | best_of_n; selection runs after reward postprocessing and before teacher scoring
@@ -136,6 +138,7 @@ trainer:
       max_grad_norm: 1.0
       offload_after_step: true
       num_warmup_steps: 0
+      lr_decay_steps: null
       scheduler: "constant_with_warmup"
       optimizer_kwargs: {}
     sequence_parallel_size: 1
@@ -175,6 +178,7 @@ trainer:
       max_grad_norm: 1.0
       offload_after_step: true
       num_warmup_steps: 0
+      lr_decay_steps: null
       scheduler: "constant_with_warmup"
       optimizer_kwargs: {}
     sequence_parallel_size: 1
@@ -267,7 +271,12 @@ trainer:
     # fills each batch in commit order and regenerates groups that miss the staleness window, so a slow rollout never
     # blocks training, but quick rollouts train more often and at lower staleness.
     batch_policy: full_batch
-    # Cap on prompt groups generating at once; null bounds generation only by staleness.
+    # How many times in a row rolling regenerates a prompt whose group missed the staleness window; after that the
+    # prompt waits until the prompt order offers it again.
+    max_stale_retries: 1
+    # Cap on prompt groups generating at once. An Iris launch replaces null with 1.5 training batches, rounded up; in a
+    # run with a terminal_bench_config, at most its Harbor n_concurrent_trials (16 when unset) divided by
+    # n_samples_per_prompt. Elsewhere null bounds generation only by staleness.
     max_in_flight: null
     # Directory, usually an S3 prefix, that holds each trainable group as its own object; a checkpoint then
     # records URIs instead of copying groups. Nothing deletes the objects, so use an expiring prefix. null keeps
@@ -312,7 +321,9 @@ trainer:
   max_ckpts_to_keep: 2
   callbacks: null
   ckpt_interval: 5
-  hf_save_interval: ${trainer.ckpt_interval}
+  # A positive interval also exports intermediate checkpoints, and pruning keeps each
+  # one until its export completes. -1 exports only the terminal checkpoint.
+  hf_save_interval: -1
   export_hf_artifact: false
   hf_upload_mode: latest
   export_path: "${oc.env:HOME}/exports"
@@ -499,6 +510,12 @@ generator:
       free_tokens: 0
       penalty_per_token: 0.0
       max_penalty: 0.2
+    reasoning_span:
+      # Charged for a malformed reasoning span in any chat turn.
+      penalty: 0.0
+      # `rollout` subtracts it once from the reward. `marker` subtracts it from the loop credit at the token
+      # where each span goes wrong, or charges the reward when a violation has no such token.
+      target: rollout
 
   trajectory_retention:
     enabled: true
@@ -538,7 +555,8 @@ trajectory_runner:
   command_timeout: 120
   cleanup_timeout: 30
   shutdown_timeout: 45
-  max_concurrent_tasks: 32
+  # Trajectories each rollout worker runs at once; an evaluation runs at most this many across all workers.
+  max_concurrent_tasks: 1024
   # One worker pool executes all task families on the trainer's node.
   rollout_workers:
     num_workers: 4

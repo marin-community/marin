@@ -13,6 +13,7 @@ import atexit
 import logging
 import os
 import time
+from collections.abc import Callable
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -108,7 +109,7 @@ _COORDINATOR_PENDING_CODES = frozenset({Code.NOT_FOUND, Code.UNIMPLEMENTED, Code
 
 def _poll_for_coordinator(
     resolver: Resolver,
-    endpoint_name: str,
+    endpoint_name: Callable[[], str],
     timeout: float,
     poll_interval: float,
 ) -> str:
@@ -116,7 +117,7 @@ def _poll_for_coordinator(
 
     Args:
         resolver: Namespaced resolver for this job.
-        endpoint_name: Name of the coordinator endpoint.
+        endpoint_name: Return the coordinator's current attempt endpoint name.
         timeout: Maximum seconds to wait.
         poll_interval: Initial backoff delay in seconds.
 
@@ -128,16 +129,18 @@ def _poll_for_coordinator(
     """
     backoff = ExponentialBackoff(initial=poll_interval, maximum=max(poll_interval, 30.0))
     deadline = Deadline.from_now(Duration.from_seconds(timeout))
+    name = "coordinator"
     while True:
         try:
-            resolved = resolver.resolve(endpoint_name)
+            name = endpoint_name()
+            resolved = resolver.resolve(name)
             if not resolved.is_empty:
                 return resolved.first().url
         except ConnectError as e:
             if e.code not in _COORDINATOR_PENDING_CODES:
                 raise
         if deadline.expired():
-            raise TimeoutError(f"Timed out after {timeout}s waiting for coordinator endpoint '{endpoint_name}'")
+            raise TimeoutError(f"Timed out after {timeout}s waiting for coordinator endpoint '{name}'")
         interval = min(backoff.next_interval(), deadline.remaining_seconds())
         if interval > 0:
             time.sleep(interval)
@@ -152,6 +155,15 @@ def _parse_local_device_ids(raw: str | None) -> list[int] | None:
 
 def _attempt_endpoint_name(endpoint_name: str, attempt_id: int) -> str:
     return f"{endpoint_name}-attempt-{attempt_id}"
+
+
+def _coordinator_endpoint_name(job_info: JobInfo, endpoint_name: str) -> str:
+    ctx = iris_ctx()
+    if ctx.client is None:
+        raise RuntimeError("Iris client is required for coordinator discovery")
+    coordinator_task = job_info.job_id.task(0)
+    attempt_id = ctx.client.task_status(coordinator_task).current_attempt_number
+    return _attempt_endpoint_name(endpoint_name, attempt_id)
 
 
 def _register_coordinator(job_info: JobInfo, port: int | None, endpoint_name: str) -> str:
@@ -199,10 +211,15 @@ def _initialize_supervised_jax(
         raise RuntimeError("multi-process JAX initialization requires an Iris job context")
 
     if proc_index == 0:
-        coordinator = _register_coordinator(job_info, port, endpoint_name)
+        coordinator = _register_coordinator(job_info, port, _attempt_endpoint_name(endpoint_name, job_info.attempt_id))
     else:
         ctx = iris_ctx()
-        coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
+        coordinator = _poll_for_coordinator(
+            ctx.resolver,
+            lambda: _coordinator_endpoint_name(job_info, endpoint_name),
+            poll_timeout,
+            poll_interval,
+        )
 
     logger.info(
         "initialize_jax (supervised): process_id=%d/%d local_device_ids=%s coordinator=%s",
@@ -246,7 +263,7 @@ def initialize_jax(
             ``IRIS_PORT_JAX`` named port and otherwise asks the kernel to select
             an available port. Pass a port only to pin it.
         endpoint_name: Base name for coordinator discovery. Iris scopes the
-            registered name to the current task attempt.
+            registered name to the coordinator task's current attempt.
         poll_timeout: Maximum seconds for non-coordinator tasks to wait for the
             coordinator endpoint to register. Defaults to ``_JAX_DIST_INIT_TIMEOUT``
             so a slow coordinator host on a large-gang cold restart does not abort
@@ -275,7 +292,8 @@ def initialize_jax(
         return
 
     job_info = get_job_info()
-    if job_info is not None:
+    base_endpoint_name = endpoint_name
+    if job_info is not None and job_info.task_index == 0:
         endpoint_name = _attempt_endpoint_name(endpoint_name, job_info.attempt_id)
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
 
@@ -288,7 +306,7 @@ def initialize_jax(
             jax,
             job_info,
             port=port,
-            endpoint_name=endpoint_name,
+            endpoint_name=base_endpoint_name,
             poll_timeout=poll_timeout,
             poll_interval=poll_interval,
             heartbeat_timeout=heartbeat_timeout,
@@ -329,7 +347,12 @@ def initialize_jax(
         )
     else:
         ctx = iris_ctx()
-        coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
+        coordinator = _poll_for_coordinator(
+            ctx.resolver,
+            lambda: _coordinator_endpoint_name(job_info, base_endpoint_name),
+            poll_timeout,
+            poll_interval,
+        )
         jax.distributed.initialize(
             coordinator,
             job_info.num_tasks,

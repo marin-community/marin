@@ -18,6 +18,28 @@ from harbor.trial.errors import AgentTimeoutError
 from harbor.utils.artifact_writer import get_artifact_writer
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"apiKey": "provider-private-canary"},
+        {"headers": {"Authorization": "Bearer provider-private-canary"}},
+    ],
+)
+async def test_opencode_rejects_provider_auth_in_config_before_guest_execution(
+    tmp_path, options
+):
+    agent = OpenCode(
+        logs_dir=tmp_path,
+        model_name="hosted_vllm/model",
+        opencode_config={"provider": {"hosted_vllm": {"options": options}}},
+    )
+    environment = AsyncMock()
+    with pytest.raises(ValueError, match="Provider credentials"):
+        await agent.run("do something", environment, AgentContext())
+    assert environment.exec.call_args_list == []
+
+
 def _write_events(logs_dir, events):
     """Write a list of event dicts as JSON lines to opencode.txt."""
     lines = [json.dumps(e) for e in events]
@@ -607,12 +629,11 @@ class TestOpenCodeRunCommands:
             ("google/gemini-2.5-pro", "GOOGLE_BASE_URL"),
         ],
     )
-    async def test_run_forwards_provider_base_url(
-        self, temp_dir, monkeypatch, model_name, variable
-    ):
+    async def test_run_forwards_provider_base_url(self, temp_dir, model_name, variable):
         endpoint = "https://provider.example.test/v1"
-        monkeypatch.setenv(variable, endpoint)
-        agent = OpenCode(logs_dir=temp_dir, model_name=model_name)
+        agent = OpenCode(
+            logs_dir=temp_dir, model_name=model_name, extra_env={variable: endpoint}
+        )
         mock_env = AsyncMock()
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
 
@@ -1297,7 +1318,8 @@ class TestOpenCodeLiteralTraces:
         ``hosted_vllm/<alias>`` (terminal_bench_generator), so the openai-compatible
         provider block (npm + baseURL + apiKey) AND the x-ot-trial-id correlation header
         must fire for the ``hosted_vllm`` provider id, not only for bare ``vllm``. The
-        prior header test used ``vllm/...`` and so passed while the real path no-op'd."""
+        prior header test used ``vllm/...`` and so passed while the real path no-op'd.
+        """
         import shlex
 
         from harbor.literal.proxy import CORRELATION_ID_HEADER
@@ -1305,7 +1327,8 @@ class TestOpenCodeLiteralTraces:
         monkeypatch.setenv(
             "OPENAI_BASE_URL", "https://ingress.example/proxy/t/tok/ep/v1"
         )
-        monkeypatch.setenv("OPENCODE_DUMMY_KEY", "dummy-inert-key")
+        monkeypatch.setenv("OPENAI_API_KEY", "host-provider-private-canary")
+        monkeypatch.delenv("OPENCODE_DUMMY_KEY", raising=False)
         agent = OpenCode(
             logs_dir=temp_dir,
             model_name="hosted_vllm/my-model",
@@ -1320,7 +1343,7 @@ class TestOpenCodeLiteralTraces:
         assert provider_cfg["npm"] == "@ai-sdk/openai-compatible"
         options = provider_cfg["options"]
         assert options["baseURL"] == "https://ingress.example/proxy/t/tok/ep/v1"
-        assert options["apiKey"] == "dummy-inert-key"
+        assert options["apiKey"] == "EMPTY"
         # the per-trial correlation header the shared RecordProxy attributes by
         assert options["headers"][CORRELATION_ID_HEADER] == agent.rollout_correlation_id
 
@@ -1371,7 +1394,8 @@ class TestOpenCodeLiteralTraces:
         CTOR KWARG the RL generator passes — with BOTH env vars UNSET. The RL trial's
         opencode config-build runs in a process that does not inherit run_rl's late-set
         HARBOR_MODEL_ENDPOINT/OPENAI_BASE_URL, so the env-only path produced an
-        `undefined` baseURL; the kwarg travels with the trial dispatch as data and works."""
+        `undefined` baseURL; the kwarg travels with the trial dispatch as data and works.
+        """
         import shlex
 
         monkeypatch.delenv("HARBOR_MODEL_ENDPOINT", raising=False)
@@ -1425,7 +1449,8 @@ class TestOpenCodeLiteralTraces:
     def test_version_and_opencode_config_reach_ctor(self, temp_dir):
         """GAP B (agent side): the ``version`` pin + ``opencode_config`` passthrough must
         land on the OpenCode instance (self._version drives the install pin; opencode_config
-        deep-merges into opencode.json). These are the kwargs harbor_config now forwards."""
+        deep-merges into opencode.json). These are the kwargs harbor_config now forwards.
+        """
         import shlex
 
         agent = OpenCode(

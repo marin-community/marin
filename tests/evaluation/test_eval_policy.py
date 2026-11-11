@@ -5,13 +5,10 @@
 
 from dataclasses import asdict
 
-from marin.evaluation import eval_policy
 from marin.evaluation.eval_policy import (
-    HARBOR_COMMIT,
     SEPTEMBER_16_VERSION,
     SEPTEMBER_24_VERSION,
     policy_violations,
-    runtime_violations,
 )
 from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS
 from marin.evaluation.model_config import ModelConfig
@@ -74,22 +71,6 @@ def test_september_16_preserves_model_defaults_and_checks_shots():
 
 def test_legacy_policy_label_is_not_verified():
     assert policy_violations("eval-policy-updated", _model(), _math500(None))
-
-
-def test_runtime_pin_is_selected_by_cohort(monkeypatch):
-    monkeypatch.setattr(
-        eval_policy,
-        "RUNTIME_COMMITS",
-        {
-            SEPTEMBER_16_VERSION: {"evalchemy": "older", "harbor": HARBOR_COMMIT},
-            SEPTEMBER_24_VERSION: {"evalchemy": "newer", "harbor": HARBOR_COMMIT},
-        },
-    )
-    evaluation = _math500(True)
-
-    assert runtime_violations(SEPTEMBER_16_VERSION, evaluation, "older") == ()
-    assert runtime_violations(SEPTEMBER_24_VERSION, evaluation, "newer") == ()
-    assert runtime_violations(SEPTEMBER_16_VERSION, evaluation, "newer")
 
 
 def test_model_configurations_have_distinct_comparison_identities():

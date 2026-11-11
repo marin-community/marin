@@ -31,6 +31,9 @@ from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
+# Sync and cancel must return so the peer loop can deliver later handoffs.
+_PEER_RPC_TIMEOUT_MS = 60_000
+
 # A handoff carries a full request and a peer's cold boot can outrun the default
 # RPC deadline, so deliver LaunchJob with this floor to avoid spurious failures.
 _LAUNCH_JOB_TIMEOUT_FLOOR_MS = 180_000
@@ -131,7 +134,9 @@ class _PeerRpcConnection:
     """
 
     def __init__(self, controller_address: str, interceptors: Iterable[InterceptorSync]):
-        self._client = ControllerServiceClientSync(address=controller_address, interceptors=interceptors)
+        self._client = ControllerServiceClientSync(
+            address=controller_address, interceptors=interceptors, timeout_ms=_PEER_RPC_TIMEOUT_MS
+        )
 
     def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
         response = self._client.list_backends(

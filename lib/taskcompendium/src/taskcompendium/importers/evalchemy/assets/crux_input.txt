@@ -1,0 +1,21 @@
+You will be given a function f and an output in the form f(??) == output. Your task is to find any input such that executing f on the input leads to the given output. There may be multiple answers, but only output one. First, think step by step. You MUST surround the answer with [ANSWER] and [/ANSWER] tags. Express your answer as a passing assertion containing the input and the given output.
+
+[PYTHON]
+def f(x):
+    return x + 1
+assert f(??) == 17
+[/PYTHON]
+[THOUGHT]
+To find an input such that executing f on the input leads to the given output, we can work backwards from the given assertion. We know that f(??) == 17. 
+
+Since the function f(x) returns x + 1, for f(??) to be equal to 17, the value of ?? should be 16. 
+[/THOUGHT]
+[ANSWER]
+assert f(16) == 17
+[/ANSWER]
+
+[PYTHON]
+{code}
+assert f(??) == {output}
+[/PYTHON]
+[THOUGHT]

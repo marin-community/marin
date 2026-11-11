@@ -4,8 +4,12 @@ Marin vendors the [Harbor fork](https://github.com/marin-community/harbor) at th
 revision recorded in [UPSTREAM.toml](UPSTREAM.toml). The source is licensed under
 [Apache 2.0](LICENSE).
 
-This package contains the evaluation runtime, agents, environment providers,
+This package contains the evaluation runtime, agents, Shellbox environment adapters,
 verification, trajectories, registry downloads, FineStore archives, and telemetry.
+It supports Pi, Mini-SWE-Agent, Codex, OpenCode, Terminus-2 and Terminus-Kira,
+selected by name in container mode. Job and trial configs must select an agent
+explicitly.
+
 It evaluates prebuilt Harbor tasks from local paths, Hugging Face repositories,
 or the Harbor registry. The `harbor` distribution provides both the `harbor` and
 `harbor_config` Python modules.
@@ -15,7 +19,7 @@ standalone config release tooling, and upstream development automation are
 omitted. Benchmark adapters, their generation inputs, and parity artifacts are
 also omitted; the upstream revision retains their sources. Task collection and
 hashing remain part of evaluation job locking. Unused golden agent traces are
-omitted. Daytona snapshot fixtures remain for unit tests.
+omitted.
 
 The full upstream `registry.json` snapshot is also omitted. Named registry datasets
 use Harbor's hosted service; explicit registry URLs and paths remain supported.
@@ -24,13 +28,27 @@ Run from the Marin repository root in Harbor's isolated project:
 
 ```bash
 uv run --isolated --project vendor/harbor --frozen --extra runtime harbor run --help
-uv run --isolated --project vendor/harbor --frozen --extra runtime harbor run --dataset terminal-bench@2.0 --agent oracle
+uv run --isolated --project vendor/harbor --frozen --extra runtime harbor run --config prepared-policy.yaml
 ```
 
 Harbor is excluded from Marin's uv workspace. Its own lock selects local editable
 Marin FineStore and Rigging packages. The normal Marin environment and Iris
 `--all-packages` environments do not install Harbor. The `runtime` extra preserves
 the deployed Daytona SDK version, 0.200.2.
+
+Harbor executes tasks only through Shellbox. Its environment types are `local`
+(the default), `daytona`, `qemu` and `shellsim`; other provider names and
+custom environment import paths fail validation. The adapters depend on
+Shellbox's generic machine API; Shellbox does not import Harbor. The `runtime`
+extra includes Daytona; `qemu` and `shellsim` install those optional backends.
+
+Policies must select prepared task images or a supported trusted image-preparation
+path. Local bubblewrap supports private container groups imported from the validated Compose
+subset. Daytona runs one Shellbox machine and rejects Compose; its image builds
+run in provider preparation, never in a privileged guest daemon. See
+[Harbor execution](../../docs/harbor-integration.md) for preparation requirements.
+Historical policies using a removed provider or old image recipe need changes
+before they can run.
 
 Edit Harbor and its local Marin dependencies in the same pull request. Update
 Harbor's lock when a dependency manifest changes, and run

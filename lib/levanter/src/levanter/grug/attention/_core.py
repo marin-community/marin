@@ -35,6 +35,14 @@ GrugAttentionImplementation = Literal[
     "gpu_pallas_triton_flash",  # Pallas-Triton flash kernel with block skipping; for AMD (ROCm) GPUs.
 ]
 
+ContextAttentionLayout = Literal["zigzag", "contiguous"]
+"""How the FA4 backends assign query rows to context shards.
+
+"zigzag" swaps the late half of each shard's queries with its mirror shard so every shard does equal
+causal work; "contiguous" runs each shard's own rows. Other implementations ignore it.
+"""
+DEFAULT_CONTEXT_ATTENTION_LAYOUT: ContextAttentionLayout = "zigzag"
+
 
 @dataclass(frozen=True)
 class RotaryConfig:
@@ -56,9 +64,13 @@ class AttentionMask(eqx.Module):
     segment_ids: tuple[jax.Array, jax.Array] | None = None
     sliding_window: int | None = eqx.field(default=None, static=True)
     # Optional precomputed FA4/CuTe per-token metadata (lower_bounds, valid), both [B, S] int32/bool.
-    # When set, ``gpu_fa4_cute_attention`` uses these directly instead of rebuilding from
-    # ``segment_ids``/``sliding_window``. This lets a caller compute the metadata once outside a
+    # When set, ``gpu_fa4_cute_attention`` and the AMD Triton flash kernels use these directly instead of
+    # rebuilding from ``segment_ids``/``sliding_window``, and ``materialize_mask`` (reference attention) also keeps
+    # only keys at or after each query's lower bound. This lets a caller compute the metadata once outside a
     # ``lax.scan`` and select a per-layer sliding window (a static field the scan body cannot vary).
+    # Build them with ``fa4_cute_segment_bounds`` from segment IDs that each form one contiguous run: the AMD
+    # kernels need nondecreasing bounds at most each token's position (invalid tokens counting as their own
+    # position) and do not check it.
     fa4_bounds: tuple[jax.Array, jax.Array] | None = None
 
     @classmethod
@@ -105,7 +117,7 @@ class AttentionMask(eqx.Module):
 
         Shapes:
           - If `segment_ids` is unset, returns `(q_len, k_len)` (broadcastable across batch).
-          - If `segment_ids` is set with per-batch IDs, returns `(batch, q_len, k_len)`.
+          - If `segment_ids` is set with per-batch IDs, or `fa4_bounds` is set, returns `(batch, q_len, k_len)`.
         """
         mask = None
 
@@ -138,6 +150,15 @@ class AttentionMask(eqx.Module):
                 allowed = q_seg[:, :, None] == k_seg[:, None, :]
             else:
                 raise ValueError(f"segment_ids must be 1D or 2D, got ndim={q_seg.ndim}")
+            mask = allowed if mask is None else jnp.logical_and(mask, allowed)
+
+        if self.fa4_bounds is not None:
+            # Inclusive per-query key lower bounds; they carry a per-layer window and document starts.
+            # Padding queries hold a kernel tile-skip hint (up to a ``seq_len`` sentinel) rather than a
+            # bound, which would mask the whole row, so they keep only the other mask terms.
+            lower_bounds, valid = self.fa4_bounds
+            lower_bounds = jnp.where(valid, lower_bounds, 0)
+            allowed = jnp.arange(k_len)[None, None, :] >= lower_bounds[:, :, None]
             mask = allowed if mask is None else jnp.logical_and(mask, allowed)
 
         return mask
@@ -437,6 +458,7 @@ def attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     implementation: GrugAttentionImplementation | None = None,
+    context_layout: ContextAttentionLayout = DEFAULT_CONTEXT_ATTENTION_LAYOUT,
 ) -> Float[Array, "B Q Hq D"]:
     if implementation == "reference":
         return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
@@ -447,11 +469,11 @@ def attention(
     if implementation == "gpu_fa4_cute":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention  # noqa: PLC0415
 
-        return gpu_fa4_cute_attention(q, k, v, mask)
+        return gpu_fa4_cute_attention(q, k, v, mask, context_layout=context_layout)
     if implementation == "gpu_fa4_cute_sm100":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_sm100_attention  # noqa: PLC0415
 
-        return gpu_fa4_cute_sm100_attention(q, k, v, mask)
+        return gpu_fa4_cute_sm100_attention(q, k, v, mask, context_layout=context_layout)
     if implementation == "gpu_pallas_triton_flash":
         from levanter.grug.attention._amd_pallas_triton_flash import pallas_triton_flash_attention  # noqa: PLC0415
 
@@ -474,6 +496,8 @@ def attention(
 
 __all__ = [
     "AttentionMask",
+    "ContextAttentionLayout",
+    "DEFAULT_CONTEXT_ATTENTION_LAYOUT",
     "GrugAttentionImplementation",
     "RotaryConfig",
     "align_kv_heads",

@@ -23,8 +23,6 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import prefix_join
 
-from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_PATTERN
-
 logger = logging.getLogger(__name__)
 
 DEFAULT_RECORDS_PREFIX = "gs://marin-eval-metadata/evals"
@@ -330,12 +328,6 @@ class HarborRef(BaseModel):
         pattern=r"^sha256:[0-9a-f]{64}$",
         exclude_if=lambda value: value is None,
     )
-    harbor_config_commit: str | None = Field(
-        default=None,
-        description="Upstream Harbor import base; eval_runtime identifies the vendored source and dependency lock",
-        pattern=FULL_GIT_COMMIT_PATTERN,
-        exclude_if=lambda value: value is None,
-    )
     max_input_tokens: int | None = Field(
         default=None,
         description="Agent context budget resolved from the served model, the policy, and Harbor's defaults",
@@ -370,6 +362,8 @@ class EvalRef(BaseModel):
     tasks: tuple[EvalTaskRef, ...] = ()
     evalchemy: EvalchemyRef | None = None
     harbor: HarborRef | None = None
+    postprocessing: dict[str, str] = Field(default_factory=dict, exclude_if=lambda value: not value)
+    """Named final-score protocols and their frozen JSON configurations."""
 
 
 class HardwareRef(BaseModel):
@@ -394,18 +388,16 @@ class HostedJudgeRef(BaseModel):
 
 
 class Provenance(BaseModel):
-    """Where the run came from: launch-time git SHA, eval runtime, and launch host.
-
-    ``eval_runtime`` identifies Evalchemy's pinned package, vendored Harbor's upstream revision
-    and runtime digests, or a historical Harbor environment's pinned packages.
-    Records written before external evaluators used ``eval_image`` or
-    ``evalchemy_image`` for the same value.
-    """
+    """Launch-time Marin revision, host, and an optional external evaluator runtime."""
 
     model_config = ConfigDict(frozen=True)
 
     git_sha: str
-    eval_runtime: str = Field(validation_alias=AliasChoices("eval_runtime", "eval_image", "evalchemy_image"))
+    eval_runtime: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("eval_runtime", "eval_image", "evalchemy_image"),
+        exclude_if=lambda value: value is None,
+    )
     launch_host: str
 
 
@@ -476,6 +468,8 @@ class TaskCoverage(BaseModel):
     ``n_attempted`` is the number of items the run set out to grade after any declared cap, and
     ``n_scored`` how many have a usable score. ``errors`` counts errors by type, including errors
     on scored outcomes when the harness permits them. Completion uses the item counts.
+    A repeated aggregate counts distinct benchmark problems as items and records scored trials
+    separately in ``repeat_aggregates``. Extraction filters for one trial are not new items.
 
     ``n_attempted`` is ``None`` when the run graded items but could not establish how many it set out
     to grade. That is unknown coverage, and readers widen for it; it is never read as complete. A
@@ -500,6 +494,29 @@ class TaskCoverage(BaseModel):
     n_correct: int | None = None
     n_unanswered: int = 0
     errors: dict[str, int] = Field(default_factory=dict)
+
+
+class RepeatCoverageBasis(StrEnum):
+    """Whether projected coverage counts items, bounds them, or retains source units."""
+
+    ITEMS = "items"
+    ITEM_LOWER_BOUND = "item_lower_bound"
+    SOURCE = "source"
+
+
+class RepeatAggregate(BaseModel):
+    """A repeated score's item and trial counts, publication uncertainty, and source coverage."""
+
+    model_config = ConfigDict(frozen=True)
+
+    n_items: int
+    n_repeats: int
+    n_trials: int
+    n_scored_trials: int | None = None
+    coverage_basis: RepeatCoverageBasis
+    stderr: float
+    stderr_basis: str
+    source_coverage: TaskCoverage | None = None
 
 
 class EvalRunRecord(BaseModel):
@@ -546,6 +563,8 @@ class EvalRunRecord(BaseModel):
     """Per-task item coverage, keyed like ``metrics``, for mechanisms that report an attempted-item
     count. Empty when the mechanism reports none and on every record written before coverage existed;
     a reader treats an empty entry as unknown coverage, never as complete coverage."""
+    repeat_aggregates: dict[str, RepeatAggregate] = Field(default_factory=dict)
+    """Serving projections for repeated scores. Raw evaluator metrics and coverage remain available."""
     jobs: dict[str, str]
     """Pipeline role (``orchestrator``/``inference``/``eval``) to Iris job path, for every job the run
     submitted before finishing; a failure before a role's submission simply omits that role."""
