@@ -9,6 +9,41 @@ from skyrl_train.callbacks.builtin import create_callbacks_from_config
 
 
 @pytest.mark.asyncio
+async def test_preservation_gates_reject_ineligible_step_zero_evaluation(tmp_path):
+    config = OmegaConf.create(
+        {
+            "trainer": {
+                "callbacks": [
+                    {
+                        "type": "best_checkpoint",
+                        "initial_model_uri": "base-model",
+                        "expected_tasks": 40,
+                        "minimum_scored_tasks": 40,
+                        "selection_metric": "identity",
+                        "preservation_max_drop": {"preservation": 0.0},
+                    }
+                ]
+            }
+        }
+    )
+    callback = create_callbacks_from_config(config)[0]
+    trainer = SimpleNamespace(cfg=SimpleNamespace(trainer=SimpleNamespace(ckpt_path=str(tmp_path))))
+
+    with pytest.raises(ValueError, match="eligible step-zero evaluation"):
+        await callback.on_evaluate_async(
+            TrainerState(0, 0, 20, 20),
+            TrainerControl(),
+            trainer=trainer,
+            metrics={
+                "eval/all/num_attempted": 40,
+                "eval/all/num_scored": 39,
+                "identity": 0.1,
+                "preservation": 0.9,
+            },
+        )
+
+
+@pytest.mark.asyncio
 async def test_delayed_best_selection_preserves_baseline_gates_after_resume(tmp_path):
     saved_steps = []
     current_step = 0

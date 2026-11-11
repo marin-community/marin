@@ -242,11 +242,14 @@ class BestCheckpointCallback(TrainerCallback):
                 self.preservation_baseline = saved.get("preservation_baseline", {})
         attempted = metrics["eval/all/num_attempted"]
         scored = metrics["eval/all/num_scored"]
-        if (
+        ineligible = (
             attempted != self.expected_tasks
             or scored < self.minimum_scored_tasks
             or not metrics.get("eval/selection_eligible", 1.0)
-        ):
+        )
+        if state.global_step == 0 and self.preservation_max_drop and ineligible:
+            raise ValueError("Preservation-gated selection requires an eligible step-zero evaluation")
+        if ineligible:
             return control
         if state.global_step == 0:
             self.preservation_baseline = {key: metrics[key] for key in self.preservation_max_drop}

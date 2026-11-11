@@ -206,6 +206,8 @@ model as a candidate without saving weights; if it remains best, load the
 `model_uri` recorded in `best_checkpoint.json`. Optional `preservation_max_drop`
 entries map metric names to allowed absolute drops from their step-zero values;
 all gates must pass before a candidate can replace the best checkpoint. The
+step-zero evaluation must meet the configured coverage and eligibility checks
+when preservation gates are set; otherwise the callback fails immediately. The
 baseline and selection policy are recorded in `best_checkpoint.json` and the
 baseline is restored on resume. Keep metric definitions and the selection policy
 unchanged on resume.
