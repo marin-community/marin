@@ -13,8 +13,11 @@ import numpy as np
 import optax
 import pytest
 from jax.sharding import AxisType, Mesh, reshard
+from levanter.data.dataset import ListAsyncDataset
+from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample
+from levanter.schedule import BatchSchedule
 from levanter.testing.devices import use_test_devices
 
 from experiments.grug.moe_hero_ep import model
@@ -38,10 +41,12 @@ from experiments.grug.moe_hero_ep.launch_hero_sft import (
 )
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import (
+    MixtureContinuation,
     RouterBiasMode,
     SpecialTokenInit,
     _make_train_step,
     _place_restored_experts,
+    continued_mixture,
     initial_state,
     permute_experts,
     reseed_special_token_columns,
@@ -101,7 +106,7 @@ def test_one_epoch_stages_read_every_sft_store_exactly_once():
     stages = one_epoch_weight_stages(sft_counts, {"replay/x": 3.0, "replay/y": 1.0}, plan)
 
     assert len(stages) == plan.num_blocks
-    assert [start for start, _ in stages] == [block * plan.block_size for block in range(plan.num_blocks)]
+    assert [step for step, _ in stages] == [block * plan.block_size // 16 for block in range(plan.num_blocks)]
     draws: dict[str, int] = {}
     for _, weights in stages:
         counts = {name: round(weight * plan.block_size) for name, weight in weights.items()}
@@ -122,6 +127,28 @@ def test_a_handoff_reads_the_rest_of_the_epoch_once_at_the_new_batch():
     read = steps.first_sequence + (steps.num_train_steps - steps.first_step) * 144
     assert plan.run_sequences - 144 < read <= plan.run_sequences
     assert abs(steps.decay_steps * 144 - plan.decay_steps * 176) <= 72
+
+
+def test_a_continued_mixture_reads_the_rest_of_the_parents_stream():
+    # The parent reads at batch 6 from step 1000. Its second stage starts at sequence 32, inside its sixth step.
+    parent_schedule, child_schedule = BatchSchedule(6), BatchSchedule(4)
+    mixture = MixtureDataset(
+        {"a": ListAsyncDataset(list(range(1_000))), "b": ListAsyncDataset(list(range(10_000, 11_000)))},
+        [(0, {"a": 0.75, "b": 0.25}), (32, {"a": 0.25, "b": 0.75})],
+        block_size=16,
+        key=jax.random.PRNGKey(0),
+        first_index=parent_schedule.global_data_offset_by_step(1000),
+    )
+    parent = mixture.as_sync_dataset().get_batch(list(range(6000, 6072)))
+    # The child restores the parent's step 1004, after 24 sequences, and reads at batch 4.
+    child = continued_mixture(mixture, child_schedule, MixtureContinuation(batch_size=6, step=1004, sequence=24))
+
+    reads = child.as_sync_dataset().get_batch(
+        [index for step in range(1004, 1016) for index in child_schedule.batch_indices_at_step(step)]
+    )
+
+    assert reads == parent[24:]
+    assert child.as_sync_dataset().get_batch([child.first_readable_index()]) == parent[:1]
 
 
 def _write_sft_checkpoint(path, step: int, position: SftMixturePosition | None = None) -> str:

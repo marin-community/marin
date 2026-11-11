@@ -24,7 +24,6 @@ from levanter.data.text.datasets import (
     DatasetComponent,
     DatasetComponentBase,
     LmDataConfig,
-    MixtureStageUnit,
 )
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.tracker.wandb import WandbConfig
@@ -76,6 +75,7 @@ from experiments.grug.moe_hero_ep.launch_scaling_ladder import (
 from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,
     GrugRunConfig,
+    MixtureContinuation,
     RouterBiasMode,
     SpecialTokenInit,
     TrainingDataMode,
@@ -296,9 +296,11 @@ def one_epoch_weight_stages(
     """Per-block mixture weights that read each SFT component exactly once over the run.
 
     Each block takes an even share of every SFT component's sequences and fills the rest with replay,
-    split by ``replay_weights`` with at least one draw per replay component. Stage starts count sequences
-    from the mixture's first sequence (``MixtureStageUnit.SEQUENCE``), so they hold at any batch size.
+    split by ``replay_weights`` with at least one draw per replay component. Stage steps count from the
+    mixture's start step (``LmDataConfig.mixture_start_step``).
     """
+    if plan.block_size % plan.batch_size:
+        raise ValueError("Mixture block boundaries must fall on training steps")
     if not replay_weights or any(weight <= 0 for weight in replay_weights.values()):
         raise ValueError("Replay needs at least one positive-weight component")
     replay_total = sum(replay_weights.values())
@@ -318,7 +320,9 @@ def one_epoch_weight_stages(
             replay_counts[name] += 1
         counts.update(replay_counts)
         assert sum(counts.values()) == plan.block_size
-        stages.append((block * plan.block_size, {name: n / plan.block_size for name, n in counts.items()}))
+        stages.append(
+            (block * plan.block_size // plan.batch_size, {name: n / plan.block_size for name, n in counts.items()})
+        )
     return stages
 
 
@@ -326,11 +330,11 @@ def sft_data_config(
     stores: Mapping[str, SftStore],
     plan: SftMixturePlan,
     *,
-    steps: SftSteps,
+    start_step: int,
     replay: LmDataConfig,
     validation: Mapping[str, DatasetComponentBase],
 ) -> LmDataConfig:
-    """The SFT epoch read from ``steps``, replay from the first stage of ``replay``, and zero-weight ``validation``."""
+    """The SFT epoch from ``start_step``, replay from the first stage of ``replay``, and zero-weight ``validation``."""
     components, sft_counts = sft_components(stores, plan)
     replay_stage = replay.train_weights[0][1] if isinstance(replay.train_weights, list) else replay.train_weights
     assert replay_stage is not None
@@ -344,7 +348,7 @@ def sft_data_config(
     if collisions := components.keys() & validation.keys():
         raise ValueError(f"validation components collide with training components: {sorted(collisions)}")
     components.update(validation)
-    stages = [(start, {**weights, **{name: 0.0 for name in validation}}) for start, weights in stages]
+    stages = [(step, {**weights, **{name: 0.0 for name in validation}}) for step, weights in stages]
     return LmDataConfig(
         tokenizer=SFT_TOKENIZER,
         cache_dir=None,
@@ -355,9 +359,7 @@ def sft_data_config(
         block_cross_document_attention=True,
         mixture_block_size=plan.block_size,
         stop_strategy=StopStrategy.RESTART_STRATEGY,
-        mixture_start_step=steps.first_step,
-        mixture_start_sequence=steps.first_sequence,
-        mixture_stage_unit=MixtureStageUnit.SEQUENCE,
+        mixture_start_step=start_step,
     )
 
 
@@ -611,8 +613,9 @@ def build_sft_run(
             validation=[],
             stats_path=ctx.artifact_path(length_statistics),
         )
+        # A handoff reads the parent's mixture unchanged; `mixture_continuation` moves where this run reads it.
         data = sft_data_config(
-            stores, plan, steps=steps, replay=replay, validation=validation_components(ctx, validation)
+            stores, plan, start_step=start_step, replay=replay, validation=validation_components(ctx, validation)
         )
         return GrugRunConfig(
             model=model,
@@ -635,6 +638,13 @@ def build_sft_run(
             ),
             stop_after_steps=stop_step,
             processes_per_task=HERO_PROCESSES_PER_TASK,
+            mixture_continuation=(
+                None
+                if handoff is None
+                else MixtureContinuation(
+                    batch_size=plan.batch_size, step=steps.first_step, sequence=steps.first_sequence
+                )
+            ),
         )
 
     return ArtifactStep(

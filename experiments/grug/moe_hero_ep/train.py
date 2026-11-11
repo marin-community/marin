@@ -10,7 +10,7 @@ import logging
 import math
 import os
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -459,6 +459,19 @@ class FlopsBaseline:
 
 
 @dataclass(frozen=True)
+class MixtureContinuation:
+    """Continue another run's mixture at this run's batch size.
+
+    The mixture keeps the layout the other run read at ``batch_size`` sequences per step, and this run's
+    ``step`` reads its sequence ``sequence``.
+    """
+
+    batch_size: int
+    step: int
+    sequence: int
+
+
+@dataclass(frozen=True)
 class GrugRunConfig:
     """Top-level config for grug training."""
 
@@ -475,6 +488,7 @@ class GrugRunConfig:
     # the schedule's end. None runs the whole schedule and its extension.
     stop_after_steps: int | None = None
     flops_baseline: FlopsBaseline | None = None
+    mixture_continuation: MixtureContinuation | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.jax.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
@@ -511,6 +525,35 @@ def build_train_dataset(
     key: PRNGKeyArray,
 ) -> MixtureDataset[GrugLmExample]:
     return data_config.train_mixture(Axis("position", max_seq_len), batch_schedule, key=key)
+
+
+class ContinuedMixture(AsyncDataset[GrugLmExample]):
+    """``mixture`` read at a constant index shift; its first readable index reads the mixture's first sequence."""
+
+    def __init__(self, mixture: MixtureDataset[GrugLmExample], shift: int):
+        super().__init__()
+        self.mixture = mixture
+        self.shift = shift
+
+    async def async_len(self) -> int:
+        return await self.mixture.async_len() - self.shift
+
+    def is_finite(self) -> bool:
+        return self.mixture.is_finite()
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[GrugLmExample]:
+        return await self.mixture.get_batch([index + self.shift for index in indices])
+
+    def first_readable_index(self) -> int:
+        return self.mixture.first_readable_index() - self.shift
+
+
+def continued_mixture(
+    mixture: MixtureDataset[GrugLmExample], batch_schedule: BatchSchedule, continuation: MixtureContinuation
+) -> ContinuedMixture:
+    """``mixture`` read so that ``continuation.step`` of ``batch_schedule`` reads ``continuation.sequence``."""
+    step_index = batch_schedule.global_data_offset_by_step(continuation.step)
+    return ContinuedMixture(mixture, mixture.first_readable_index() + continuation.sequence - step_index)
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -807,19 +850,22 @@ def log_device_memory(step_info) -> None:
     )
 
 
-def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: BatchSchedule):
+def _make_mixture_stage_callback(
+    mixture: MixtureDataset, train_dataset: AsyncDataset[GrugLmExample], batch_schedule: BatchSchedule
+):
     last_mixture_stage = -1
 
     def log_mixture_stage(step_info):
         nonlocal last_mixture_stage
-        # Stages are laid out from the mixture's first readable index, which `mixture_start_step` can move.
+        # Stages are laid out from the first readable index of what the loader reads, which
+        # `mixture_start_step` and a `MixtureContinuation` can move.
         seq_index = batch_schedule.global_data_offset_by_step(step_info.step) - train_dataset.first_readable_index()
-        block_id = seq_index // train_dataset.block_size
-        stage = train_dataset._get_stage_for_block(block_id)
+        block_id = seq_index // mixture.block_size
+        stage = mixture._get_stage_for_block(block_id)
         if stage == last_mixture_stage:
             return
 
-        weights = train_dataset.weight_stages[stage][1]
+        weights = mixture.weight_stages[stage][1]
         mixture_log = {f"mixture/weight/{name}": weight for name, weight in weights.items()}
         mixture_log["mixture/stage"] = stage
         levanter.tracker.log(mixture_log, step=step_info.step)
@@ -1513,15 +1559,19 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
+        mixture = None
         train_dataset = None
         train_loader = None
         if config.trainer.training_data_mode == TrainingDataMode.MIXTURE:
-            train_dataset = build_train_dataset(
+            continuation = config.mixture_continuation
+            mixture = build_train_dataset(
                 config.data,
                 max_seq_len=config.model.max_seq_len,
-                batch_schedule=batch_schedule,
+                # A continuation builds the other run's mixture, laid out at that run's batch size.
+                batch_schedule=batch_schedule if continuation is None else BatchSchedule(continuation.batch_size),
                 key=data_key,
             )
+            train_dataset = mixture if continuation is None else continued_mixture(mixture, batch_schedule, continuation)
             train_loader = build_train_loader(
                 train_dataset,
                 batch_schedule=batch_schedule,
@@ -1627,8 +1677,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 ),
                 every=1,
             )
-        if train_dataset is not None:
-            state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
+        if mixture is not None and train_dataset is not None:
+            state_callbacks.add_hook(_make_mixture_stage_callback(mixture, train_dataset, batch_schedule), every=1)
         state_callbacks.add_hook(log_device_memory, every=1)
         if eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
