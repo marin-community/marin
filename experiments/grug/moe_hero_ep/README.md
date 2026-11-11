@@ -756,9 +756,10 @@ Submit it through the Marin Iris controller as with
 
 A rack holds 16 sequences per update, so a different rack count changes the batch. A run that continues an
 epoch on other racks is a new run: it has its own run ID and output, and a W&B fork of the parent. It keeps
-the parent's mixture plan and reads the rest of the parent's data stream at its own batch size, from mixture
-sequence (handoff step - start step) x parent batch. The learning-rate decay covers the same final sequences as
-the parent's, and fewer than one batch of sequences at the end of the epoch stays unread. The handoff checkpoint
+the parent's mixture plan and reads the rest of the parent's data stream at its own batch size, from the
+mixture sequence that the handoff checkpoint records for its step. A checkpoint written before positions were
+recorded gives (handoff step - start step) x parent batch. The learning-rate decay covers the same final
+sequences as the parent's, and fewer than one batch of sequences at the end of the epoch stays unread. The handoff checkpoint
 records the expert placement, so the run does not place experts again, and it reseeds the special tokens only
 at the epoch's start step. A handoff must come before the decay starts. Each SFT checkpoint records its run's
 mixture position, so a handed-off run can be handed off again; `--handoff-dp-racks` is needed only for a
