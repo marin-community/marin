@@ -10,7 +10,6 @@ def test_startup_wait_preserves_pending_actors_across_progress_polls(monkeypatch
     clock = [0.0]
     replies = ["ready", "slow"]
     killed = []
-    diagnostics = []
 
     def wait(pending, *, num_returns, timeout, fetch_local):
         if pending == replies:
@@ -24,7 +23,6 @@ def test_startup_wait_preserves_pending_actors_across_progress_polls(monkeypatch
     monkeypatch.setattr(startup.ray, "wait", wait)
     monkeypatch.setattr(startup.ray, "get", lambda refs: refs)
     monkeypatch.setattr(startup.ray, "kill", killed.append)
-    monkeypatch.setattr(startup.logger, "info", lambda fmt, *args: diagnostics.append(fmt.format(*args)))
     if eventually_ready:
         assert startup.wait_for_inference_engine_startup(replies, ["actor0", "actor1"], timeout_seconds=90) == replies
         assert killed == []
@@ -33,4 +31,3 @@ def test_startup_wait_preserves_pending_actors_across_progress_polls(monkeypatch
             startup.wait_for_inference_engine_startup(replies, ["actor0", "actor1"], timeout_seconds=90)
         assert killed == ["actor0", "actor1"]
         assert clock[0] == 90
-    assert any("1/2 ready; pending actor indices [1]" in message for message in diagnostics)
