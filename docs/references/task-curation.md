@@ -317,6 +317,17 @@ remove a source from the catalog; it records that a run would exceed the org's
 limits. [Making a dataset Daytona-safe](../../.agents/ops/daytona.md#making-a-dataset-daytona-safe)
 covers the faithful ways to bring one inside the budget.
 
+**Publishing a conversion.** A curation step that converts data publishes the converted
+artifact to the `open-athena` Hugging Face org as a **private** repository: campaign
+datasets stay private until an explicit release, so a card says so and the verification
+reads the upload back through the same login and compares file hashes rather than
+fetching anonymously. The repository name is
+`open-athena/<family>-<format>-<YYYYMMDD>`. The card carries provenance (upstream
+repository and revision, decontamination list), the deferred and excluded counts with
+their reasons, the license, and the research-artifact warning. The Atlas entry for a
+converted dataset points at that repository and its pinned revision, with the upstream
+source recorded as provenance.
+
 Measurement runs that production path rather than reimplementing it
 (`experiments/post_training/task_curation/daytona_identity.py`): each pinned
 task's environment is materialized to a build context, the `MachineSpec` is

@@ -1,7 +1,24 @@
+---
+license: other
+pretty_name: CalibForge V1 rebuilt (TaskCompendium)
+tags:
+- agentic
+- reinforcement-learning
+- taskcompendium
+- calibforge
+task_categories:
+- text-generation
+language:
+- en
+---
+
 # CalibForge V1, rebuilt for a bounded snapshot budget
 
 TaskCompendium-format rebuild of the CalibForge V1 cohort, published so the RL data
 Atlas points at a converted artifact rather than at the deprecated native release.
+
+> **Private pending release.** This repository is private. It is used for training and
+> auditability within Marin and is not a public dataset release; do not cite it as one.
 
 > **Research artifact.** These tasks are training data for reinforcement learning on
 > software agents. They are not a benchmark, they carry no leaderboard, and their

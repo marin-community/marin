@@ -90,6 +90,39 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             info=SourceInfo(
+                id="Campaign Release:smartie-calibforge-rebuilt-v1",
+                title="Snowball Smartie CalibForge V1 rebuilt cohort (TaskCompendium)",
+                origin="Snowball Smartie RL",
+                family="terminal-agent",
+                tags=("agentic", "multi-turn", "license:cc-by-4.0", "campaign-release", "converted"),
+                count=1357,
+                daytona_snapshot_count=7,
+                daytona_count_basis=(
+                    "production snapshot_identity with Harbor's machine_spec over the lowered task specs "
+                    "at the pinned revision: 1,357 specs, seven distinct identities, zero failures"
+                ),
+                daytona_execution_failures=0,
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                notes=(
+                    "1,357 CalibForge V1 tasks rebuilt onto seven digest-pinned base images, with fixtures "
+                    "staged through task resources and environment_requirements.setup_commands. Upstream: "
+                    "smartie-continuation-20261016/calibforge @ 6a6429ccba098e11ea9f6297a70cb43a34670c0f, "
+                    "minus the curated decontamination list. 732 tasks deferred because their recipe needs a "
+                    "step the lowering cannot express; one excluded because its own setup segfaults. "
+                    "Qualified without oracles: 1,357 of 1,357 reproduce the native copies at their "
+                    "destinations, and 76 of 76 sampled verifiers return a negative verdict on the "
+                    "untouched workspace. The repository is private pending release."
+                ),
+                dataset=SourceReference(
+                    "open-athena/calibforge-v1-rebuilt-taskcompendium-20261111",
+                    "8f00c12884d6a68107b245e7c98711b6bd64f4af",
+                    "https://huggingface.co/datasets/open-athena/calibforge-v1-rebuilt-taskcompendium-20261111"
+                    "/tree/8f00c12884d6a68107b245e7c98711b6bd64f4af",
+                ),
+            )
+        ),
+        RlDataSource(
+            info=SourceInfo(
                 id="Campaign Release:smartie-calibforge-shared-v2",
                 title="Snowball Smartie repaired CalibForge shared environment v2",
                 origin="Snowball Smartie RL",

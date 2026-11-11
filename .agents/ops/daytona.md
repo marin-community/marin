@@ -235,6 +235,12 @@ threshold and the basis on the source; the verdict
 procedure creates or deletes a snapshot; cleanup stays with the operator
 procedure above.
 
+Publish the converted cohort to the `open-athena` Hugging Face org as a **private**
+repository (`experiments/post_training/task_curation/calibforge_publish.py`), with a
+card that states it is private pending release, and read the upload back through the
+same login to compare hashes. Keep the Atlas entry pinned to that repository and
+revision.
+
 ## Source provenance
 
 Transferred from MarinSkyRL revision

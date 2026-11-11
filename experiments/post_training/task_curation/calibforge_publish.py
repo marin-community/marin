@@ -1,14 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish a converted cohort as a public TaskCompendium dataset.
+"""Publish a converted cohort as a private TaskCompendium dataset.
 
 Curation that converts data must publish the converted artifact, so the Atlas can
 point at something a reader can actually load instead of at the deprecated native
 release. This uploads the lowered task spec rows beside the dataset card, verifies the
 result by fetching it anonymously, and prints the revision to record.
 
-Run it with the cached Hugging Face login (``HfApi()`` needs no explicit token)::
+Campaign datasets stay private until release, so the repo is created private and the
+artifact is verified by reading it back through the cached login and comparing hashes.
+Run it with that login (``HfApi()``/``hf_hub_download`` need no explicit token)::
 
     uv run python -m experiments.post_training.task_curation.calibforge_publish \
         --tasks /path/to/lowered-tasks.parquet \
@@ -17,6 +19,7 @@ Run it with the cached Hugging Face login (``HfApi()`` needs no explicit token):
 """
 
 import argparse
+import hashlib
 import shutil
 import tempfile
 from pathlib import Path
@@ -27,14 +30,22 @@ TASKS_FILENAME = "tasks.parquet"
 CARD_FILENAME = "README.md"
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def publish(tasks: Path, card: Path, repo: str) -> str:
-    """Upload ``tasks`` and ``card`` to a public ``repo`` and return the commit revision."""
+    """Upload ``tasks`` and ``card`` to a private ``repo`` and return the commit revision."""
     api = HfApi()
     with tempfile.TemporaryDirectory(prefix="calibforge-publish-") as directory:
         staging = Path(directory)
         shutil.copyfile(tasks, staging / TASKS_FILENAME)
         shutil.copyfile(card, staging / CARD_FILENAME)
-        api.create_repo(repo_id=repo, repo_type="dataset", private=False, exist_ok=True)
+        api.create_repo(repo_id=repo, repo_type="dataset", private=True, exist_ok=True)
         commit = api.upload_folder(
             repo_id=repo,
             repo_type="dataset",
@@ -42,11 +53,12 @@ def publish(tasks: Path, card: Path, repo: str) -> str:
             commit_message="Publish the rebuilt CalibForge TaskCompendium cohort",
         )
     revision = commit.oid
-    # Verify the artifact as a reader sees it: an anonymous download must succeed.
-    for name in (TASKS_FILENAME, CARD_FILENAME):
-        downloaded = hf_hub_download(repo_id=repo, repo_type="dataset", filename=name, revision=revision, token=False)
-        if Path(downloaded).stat().st_size == 0:
-            raise ValueError(f"{name} downloaded empty from {repo}@{revision}")
+    # Read the artifact back through the login that uploaded it and compare hashes, so
+    # a truncated or rewritten file fails here rather than at a reader.
+    for source, name in ((tasks, TASKS_FILENAME), (card, CARD_FILENAME)):
+        downloaded = hf_hub_download(repo_id=repo, repo_type="dataset", filename=name, revision=revision)
+        if _sha256(Path(downloaded)) != _sha256(source):
+            raise ValueError(f"{name} at {repo}@{revision} does not match the uploaded file")
     return revision
 
 
@@ -55,7 +67,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tasks", type=Path, required=True, help="lowered task spec parquet")
     parser.add_argument("--card", type=Path, required=True, help="dataset card markdown")
-    parser.add_argument("--repo", required=True, help="public dataset repo, e.g. open-athena/<name>")
+    parser.add_argument("--repo", required=True, help="dataset repo, e.g. open-athena/<name> (created private)")
     args = parser.parse_args()
     revision = publish(args.tasks, args.card, args.repo)
     print(f"{args.repo}@{revision}")
