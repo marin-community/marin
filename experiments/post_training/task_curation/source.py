@@ -159,7 +159,10 @@ class RlDataSource[ConfigT: CatalogConfig]:
             ),
             is_benchmark="benchmark" in tags,
             kind="Generator" if "generator" in tags else "Dataset",
-            status="Excluded" if "excluded" in tags else "Available",
+            status=next(
+                (label for tag, label in (("deprecated", "Deprecated"), ("excluded", "Excluded")) if tag in tags),
+                "Available",
+            ),
             pipeline=invocation,
             independent_qc=info.independent_qc,
             daytona_safety=DaytonaSafety.SAFE if "agentic" not in tags else info.daytona_safety,

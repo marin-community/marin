@@ -60,15 +60,17 @@ def sources() -> list[RlDataSource]:
                 title="Snowball Smartie CalibForge admitted cohort",
                 origin="Snowball Smartie RL",
                 family="terminal-agent",
-                tags=("agentic", "multi-turn", "license:cc-by-4.0", "campaign-release"),
+                tags=("agentic", "multi-turn", "license:cc-by-4.0", "campaign-release", "deprecated"),
                 count=2205,
                 notes=(
-                    "2,205 quality-admitted CalibForge tasks. Quality review accepted the task text; "
-                    "oracle solution execution was explicitly skipped, so successful execution is not "
-                    "certified. The pinned release manifest records this cohort as not published: "
-                    "source privacy, split and overlap checks remain. "
-                    "smartie-calibforge-shared-v2, repaired from these candidates, is the usable "
-                    "release. See the campaign report: " + CAMPAIGN_ISSUE
+                    "2,205 quality-admitted CalibForge tasks. Deprecated: each task bakes its data "
+                    "into its own build context, so running the cohort provisions one Daytona "
+                    "snapshot per distinct context — 2,181 distinct contexts across 2,205 tasks on "
+                    "the pinned release payloads, far beyond the ten-snapshot budget. Oracle "
+                    "solution execution was also skipped, so successful execution is not certified, "
+                    "and the pinned release manifest records the cohort as not published. A "
+                    "snapshot-safe rebuild from these candidates is planned. See the campaign "
+                    "report: " + CAMPAIGN_ISSUE
                 ),
                 dataset=calibforge,
                 independent_qc=IndependentQC(
@@ -79,7 +81,7 @@ def sources() -> list[RlDataSource]:
                     admitted=2205,
                     evidence_url=_pinned_blob(calibforge, "manifest.json"),
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -88,13 +90,17 @@ def sources() -> list[RlDataSource]:
                 title="Snowball Smartie repaired CalibForge shared environment v2",
                 origin="Snowball Smartie RL",
                 family="terminal-agent",
-                tags=("agentic", "multi-turn", "license:cc-by-4.0", "campaign-release"),
+                tags=("agentic", "multi-turn", "license:cc-by-4.0", "campaign-release", "deprecated"),
                 count=324,
                 notes=(
-                    "324 environment-admitted CalibForge tasks split 259 train / 65 validation, with "
-                    "fixtures, qualification evidence, source attribution and reproduction scripts. "
-                    "Admission checks cover fixture equivalence and setup and verifier execution; "
-                    "oracle solution execution was waived."
+                    "324 environment-admitted CalibForge tasks split 259 train / 65 validation. "
+                    "Deprecated pending the snapshot-safe CalibForge rebuild: the campaign's "
+                    "admission-time records report the cohort needing 23 image/resource snapshot "
+                    "variants (19 on the training split), over the ten-snapshot budget — not "
+                    "snapshot-safe, even though the public lowered payloads pin only two verifier "
+                    "identities; the discrepancy is tracked with the rebuild. Admission checks "
+                    "cover fixture equivalence and setup and verifier execution; oracle solution "
+                    "execution was waived."
                 ),
                 dataset=shared_v2,
                 independent_qc=IndependentQC(
@@ -105,7 +111,7 @@ def sources() -> list[RlDataSource]:
                     admitted=324,
                     evidence_url=_pinned_blob(shared_v2, "manifest.json"),
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(

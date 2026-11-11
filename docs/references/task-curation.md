@@ -290,7 +290,9 @@ ArtifactSteps.
 
 An `RlDataSource` has `info`, a typed `config` and an optional `pipeline`.
 `SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
-search tags, notes and an optional input-row count. `independent_qc` records
+search tags, notes and an optional input-row count. The `deprecated` tag marks a
+source `Deprecated` in the catalog (overriding `excluded`), and its notes carry
+the deprecation reason. `independent_qc` records
 quality control a pinned release performed outside curation, so inventory-only
 pointers surface that evidence in the Atlas. `daytona_safety` records whether
 running the source fits the Daytona snapshot budget (`DAYTONA_SAFE_SNAPSHOT_LIMIT`,
