@@ -40,6 +40,7 @@ from harbor.environments.daytona import machine_spec
 from harbor_config.models.task.config import EnvironmentConfig
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, snapshot_identity
+from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import HostImage, NetworkPolicy
 from taskcompendium.grading_result import Outcome
@@ -131,12 +132,15 @@ async def run_one(spec: dict, base: str, factory: DaytonaMachineFactory) -> Live
         storage_mb=runtime.storage_mb,
     )
     grader_environment = getattr(task.grader, "environment", None)
+    grading_factory = factory
     if grader_environment is not None and grader_environment.packages_lock is not None:
-        # A packaged grader runs from the host image the lock resolves to, exactly as the
-        # rollout runner maps a package lock (rolloutengine.machines._machine_spec).
+        # A packaged grader is DESIGNED to run in the local bubblewrap runtime: the grading
+        # path builds the lock and mounts it read-only (runtime/environment.py). It never
+        # reaches a sandbox backend, so it adds no Daytona identity.
         spec_machine = replace(spec_machine, source=HostImage())
+        grading_factory = LocalMachineFactory()
     try:
-        result = await grade_empty_in_sandbox(task, factory, spec_machine, timeout=VERIFIER_TIMEOUT)
+        result = await grade_empty_in_sandbox(task, grading_factory, spec_machine, timeout=VERIFIER_TIMEOUT)
     except TimeoutError as error:
         return LivenessResult(task.id, base, "timeout", None, None, snapshot, str(error))
     except Exception as error:
