@@ -310,6 +310,8 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
     monkeypatch.setattr(skyrl_entrypoint, "get_job_info", lambda: SimpleNamespace(job_id="/tests/bootstrap-trainer"))
 
     def installed_version(name):
+        if not fail:
+            return "fixture-vllm-v2"
         if entrypoint == "generate":
             return "fixture-vllm"
         raise skyrl_entrypoint.PackageNotFoundError(name)
