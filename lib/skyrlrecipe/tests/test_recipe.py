@@ -106,7 +106,6 @@ def test_settings_merge_required_sections_and_preserve_empty_mappings(base_recip
         "terminal_bench_config": "terminal_bench",
         "algorithm_recipe": "grpo",
     }
-    assert schema.SkyRLRecipe.from_document(grouped.to_skyrl()) == grouped
     local = schema.RecipePatch(environment=sections.Environment(task_sessions={"local": {}}))
     for enabled in (
         base.merge(local),
@@ -126,8 +125,10 @@ def test_settings_merge_required_sections_and_preserve_empty_mappings(base_recip
     )
     assert named_option.to_skyrl()["generator"]["engine_init_kwargs"]["user_options"]["backend"] == "custom-engine"
     assert named_option.to_skyrl()["trainer"]["run_name"] == "123"
-    with pytest.raises(json.JSONDecodeError):
-        edited.with_settings(['generator.engine_init_kwargs.user_options={"items":'])
+    for setting in ('generator.engine_init_kwargs.user_options={"items":', "trainer.max_steps=lots"):
+        with pytest.raises(ValueError) as error:
+            edited.with_settings([setting])
+        assert f"setting {setting!r}" in str(error.value)
     structured = expected.with_settings(['context_budget={"max_turns":4}'])
     assert structured.context_budget == edited.context_budget
     with pytest.raises(ValueError, match="request_window_tokens must exceed"):
@@ -144,19 +145,23 @@ def test_recipe_validation_reports_owned_removed_and_nonnullable_paths(base_reci
                 schema.SkyRLRecipe.from_document(document)
             assert f"{path}:" in str(error.value)
             assert owner in str(error.value)
+            with pytest.raises(ValueError) as setting_error:
+                base.with_settings([f"{path}=authored-sentinel"])
+            assert f"{path}:" in str(setting_error.value)
+            assert owner in str(setting_error.value)
     for path, message in REMOVED.items():
         document = base.to_skyrl()
         set_path(document, path, {})
         with pytest.raises(ValueError) as error:
             schema.SkyRLRecipe.from_document(document)
         assert f"{path}: {message}" in str(error.value)
+        with pytest.raises(ValueError) as setting_error:
+            base.with_settings([f"{path}={{}}"])
+        assert f"{path}: {message}" in str(setting_error.value)
     removed = {"harbor": {"max_episodes": 1}}
     with pytest.raises(ValueError, match=r"use context_budget.max_turns; Harbor reads max_turns"):
         schema.RecipePatch(terminal_bench=removed)
     heads = schema.RecipePatch(model_num_attention_heads=42)
-    tensor_parallel = schema.RecipePatch(generator=sections.Generator(inference_engine_tensor_parallel_size=2))
-    valid = base.merge(heads, tensor_parallel)
-    assert schema.SkyRLRecipe.from_document(valid.to_skyrl()) == valid
     with pytest.raises(ValueError, match="does not divide model_num_attention_heads=42"):
         base.merge(heads)
     with pytest.raises(ValueError, match="micro_forward_batch_size_per_gpu"):

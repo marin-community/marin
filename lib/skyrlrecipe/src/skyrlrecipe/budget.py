@@ -25,9 +25,15 @@ class ContextBudget(Section):
     def _response_fits(self) -> Self:
         if self.request_window_tokens <= self.max_new_tokens_per_turn:
             raise ValueError("request_window_tokens must exceed max_new_tokens_per_turn")
-        if "serving_window_tokens" in self.model_fields_set and self.serving_window_tokens < self.request_window_tokens:
+        if self.effective_serving_window_tokens < self.request_window_tokens:
             raise ValueError("serving_window_tokens must cover the complete request_window_tokens")
         return self
+
+    @property
+    def effective_serving_window_tokens(self) -> int:
+        if "serving_window_tokens" in self.model_fields_set:
+            return self.serving_window_tokens
+        return self.request_window_tokens
 
     @property
     def max_input_tokens(self) -> int:
@@ -49,11 +55,7 @@ class ContextBudget(Section):
             "generator.max_input_length": self.max_input_tokens,
             "generator.max_turns": self.max_turns,
             "generator.sampling_params.max_generate_length": self.max_new_tokens_per_turn,
-            "generator.engine_init_kwargs.max_model_len": (
-                self.serving_window_tokens
-                if "serving_window_tokens" in self.model_fields_set
-                else self.request_window_tokens
-            ),
+            "generator.engine_init_kwargs.max_model_len": self.effective_serving_window_tokens,
             "generator.trajectory_reward_shaping.overlong.l_max": self.generated_tokens_per_trajectory,
             "generator.trajectory_reward_shaping.overlong.l_cache": self.overlong_cache_tokens,
             "environment.task_sessions.session.max_turns": self.max_turns,

@@ -766,6 +766,12 @@ def classify(
     native_changed: set[str] = set()
     experiment_asset_areas: set[str] = set()
 
+    launch_census = "tests/rl/test_rl_launch_documents.py"
+    if (repo_root / launch_census).is_file() and any(
+        path.startswith(("vendor/skyrl/", "lib/skyrlrecipe/")) for path in changed_files
+    ):
+        direct_tests["marin"].append(launch_census)
+
     for filepath in changed_files:
         if filepath in broad_triggers:
             broad = True
