@@ -174,10 +174,10 @@ verifier setup. Both exclude cleanup. Reports average each statistic over the me
 
 Learning/data medium evaluates at update 0 and 25. Train-long evaluates before training and
 every ten updates. Speed-short measures its primary throughput before its full-panel evaluation;
-quality answers and timing stay outside that throughput window. Saved metrics and primary answers
-normally live under `exports/metrics/` and `exports/dumped_evals/`; speed-short quality answers
-use `exports/eval_lite/dumped_evals/eval_only/`. The configured export root and native receipt
-identify their actual locations.
+quality answers and timing stay outside that throughput window. Metrics and attempt receipts
+live in FineStore tables under `exports/run-records/`; primary answers use `exports/dumped_evals/`.
+Speed-short quality answers use `exports/eval_lite/dumped_evals/eval_only/`. The configured export
+root identifies their actual locations.
 
 ## Which experiment to run
 
