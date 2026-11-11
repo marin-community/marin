@@ -16,6 +16,7 @@ from marin.rollouts.evaluation import (
     ModelIdentity,
     run_evaluation,
 )
+from rolloutengine import engine
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.evaluation.corpus import chat_item
@@ -210,3 +211,30 @@ def test_the_report_pairs_nothing_with_another_models_run_of_the_same_corpus(
 
     assert summaries == [Summary("colors", 6, 0, 0, None, None, raised=0, lowered=0)]
     assert changes == []
+
+
+def test_the_report_pairs_the_source_attempt_that_the_provenance_names(tmp_path, strict_corpus, run_config, monkeypatch):
+    grade_rollout = engine._grade_rollout
+    calls = []
+
+    async def first_grading_times_out(*args, **kwargs):
+        calls.append(None)
+        if len(calls) == 1:
+            raise TimeoutError
+        return await grade_rollout(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "_grade_rollout", first_grading_times_out)
+    source = str(tmp_path / "source")
+    with pytest.raises(EvaluationInfrastructureError):
+        stored_run(strict_corpus, source, run_config)
+    corrected = publish(tmp_path, "corrected", ignore_case=True)
+    output = str(tmp_path / "regraded")
+    config = task_driver.stored_config(source)
+    task_driver.execute_with_retries((corrected,), output, config, None, None, None, responses_from=source)
+    # Resuming the source with another request concurrency grades the timed-out attempt again under a new evidence blob.
+    stored_run(strict_corpus, source, run_config.model_copy(update={"concurrency": 2}))
+
+    summaries, _ = regrade_report.compare(source, output)
+
+    assert [(summary.attempts, summary.reused, summary.paired) for summary in summaries] == [(6, 6, 5)]
+
