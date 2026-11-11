@@ -76,11 +76,6 @@ from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
 )
 
-# Iris limit for one Snowball run, coordinator and job alike.
-RUN_TIMEOUT_HOURS = recipe.RUN_TIMEOUT_HOURS
-
-
-DEFAULT_WANDB_ENTITY = "marin-community"
 _WANDB_ENTITY_ENV = "WANDB_ENTITY"
 _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, JobState.UNSCHEDULABLE}
 
@@ -285,7 +280,7 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
                 "version": step.version,
                 "state": state,
                 "iris_job_id": result.iris_job_id if result else None,
-                "wandb_entity": team or DEFAULT_WANDB_ENTITY,
+                "wandb_entity": team or recipe.DEFAULT_WANDB_ENTITY,
                 **{
                     key: tracking.get(key)
                     for key in ("attempt_id", "wandb_url", "started_at", "engine")
@@ -404,7 +399,7 @@ def _iris_client() -> Iterator[IrisClient]:
 
 def _wait_for_run(job: JobName, handles: list[ArtifactStep], preset: presets.Preset) -> None:
     with _iris_client() as client:
-        parent = client.job(job).wait(RUN_TIMEOUT_HOURS * 3600, poll_interval=60, raise_on_failure=False)
+        parent = client.job(job).wait(recipe.RUN_TIMEOUT_HOURS * 3600, poll_interval=60, raise_on_failure=False)
     run = _from_handles(handles)
     snapshot = _status(run, preset)
     if "verdict" not in snapshot and (parent.state != JobState.SUCCEEDED or run.gate is not None):

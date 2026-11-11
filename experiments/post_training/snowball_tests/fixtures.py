@@ -96,8 +96,8 @@ def selection(tmp_path, monkeypatch):
     monkeypatch.setattr(gate, "configure_coreweave_s3", lambda: None)
     monkeypatch.setattr(presets, "SELECTION_ROOT", str(tmp_path))
     monkeypatch.setattr(presets, "artifact_prefix", lambda cluster: str(tmp_path))
-    root = tmp_path / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION
-    panel = tmp_path / presets.DEFAULT_EVAL_LITE_NAME / presets.DEFAULT_EVAL_LITE_VERSION
+    training = {preset.tasks for preset in presets.PRESETS.values()}
+    panels = {preset.eval_lite for preset in presets.PRESETS.values()}
     summary = {
         "recipe": {"heldout": [{"version": "2026.10.23.1", "rows": 910}]},
         "training_rows": 100000,
@@ -105,22 +105,26 @@ def selection(tmp_path, monkeypatch):
         "full_validation_rows": 910,
         "grader_kind_counts": {"train": {}, "validation": {}, "full_validation": {}},
     }
-    write_json(root / "summary.json", summary)
+    for binding in training:
+        write_json(Path(presets.selection_artifact(binding).path()) / "summary.json", summary)
     candidate = presets.selection_artifact("fixture-selection@2026.11.10")
     candidate_summary = deepcopy(summary)
     candidate_summary["recipe"]["exclusions"] = [
-        {"uri": str(panel / presets.FULL_VALIDATION_FILENAME), "version": panel.name}
+        {"uri": str(Path(panel.path()) / presets.FULL_VALIDATION_FILENAME), "version": panel.version}
+        for binding in sorted(panels)
+        for panel in (presets.selection_artifact(binding),)
     ]
     write_json(Path(candidate.path()) / "summary.json", candidate_summary)
-    write_json(
-        panel / "summary.json",
-        {
-            "recipe": {},
-            "validation_rows": 100,
-            "full_validation_rows": 1500,
-            "grader_kind_counts": {"validation": {}, "full_validation": {}},
-        },
-    )
+    for binding in panels:
+        write_json(
+            Path(presets.selection_artifact(binding).path()) / "summary.json",
+            {
+                "recipe": {},
+                "validation_rows": 100,
+                "full_validation_rows": 1500,
+                "grader_kind_counts": {"validation": {}, "full_validation": {}},
+            },
+        )
     return candidate
 
 
@@ -160,21 +164,22 @@ def recorded_runs(selection, tmp_path, monkeypatch, request, native_json):
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    panel = Path(presets.selection_artifact(presets.PRESETS["learning-medium"].eval_lite).path())
-    pq.write_table(
-        pa.Table.from_pylist(
-            [
-                {
-                    "task_id": f"task-{i}",
-                    "family": "small" if i == 0 else "large",
-                    "aaii_category": "format" if i == 0 else "coding",
-                    "agentic": False,
-                }
-                for i in range(1500)
-            ]
-        ),
-        panel / presets.TASK_MANIFEST_FILENAME,
-    )
+    for binding in {preset.eval_lite for preset in presets.PRESETS.values()}:
+        panel = Path(presets.selection_artifact(binding).path())
+        pq.write_table(
+            pa.Table.from_pylist(
+                [
+                    {
+                        "task_id": f"task-{i}",
+                        "family": "small" if i == 0 else "large",
+                        "aaii_category": "format" if i == 0 else "coding",
+                        "agentic": False,
+                    }
+                    for i in range(1500)
+                ]
+            ),
+            panel / presets.TASK_MANIFEST_FILENAME,
+        )
 
     @contextmanager
     def endpoint(**kwargs):

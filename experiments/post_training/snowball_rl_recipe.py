@@ -67,7 +67,8 @@ def _training_config(
     config["trainer"]["ref"] = {"megatron_config": deepcopy(geometry)}
     for text in preset.settings:
         setting = presets.parse_setting(text)
-        set_config_value(config, setting.key, setting.value)
+        for leaf in presets.setting_leaves(setting) or (setting,):
+            set_config_value(config, leaf.key, leaf.value)
     for setting in settings:
         presets.apply_setting(config, setting, preset)
     return config
@@ -163,8 +164,6 @@ def run_spec(
     profiles = {}
     expected_tasks = 0
     for index, evaluation in enumerate(chosen):
-        if index and (evaluation.every is not None or evaluation.at_start):
-            raise click.BadParameter(f"non-primary evaluation {evaluation.name} accepts neither every nor at_start")
         evaluation_tasks = evaluation.tasks(selection, default, preset.eval_lite)
         _refuse_judged(presets.selection_summary(evaluation_tasks), evaluation.file)
         profile_config = config if index == 0 else deepcopy(config)

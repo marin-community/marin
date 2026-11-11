@@ -104,7 +104,6 @@ _DEFAULT_SETTINGS = (
     "trainer.rollout_buffer.object_store_root=null",
     "trainer.ckpt_interval=0",
     "trainer.hf_save_interval=-1",
-    "trainer.callbacks=[]",
     'generator.backend="vllm"',
     'generator.model_dtype="bfloat16"',
     'generator.vllm_attention_backend="FLASH_ATTN"',
@@ -240,6 +239,11 @@ class Preset:
     gaps: tuple[Gap, ...] = ()
     budget: str = "hours to days"
 
+    def __post_init__(self) -> None:
+        for evaluation in self.evaluations[1:]:
+            if evaluation.every is not None or evaluation.at_start:
+                raise ValueError(f"non-primary evaluation {evaluation.name} accepts neither every nor at_start")
+
     @property
     def name(self) -> str:
         return f"{self.focus}-{self.duration}"
@@ -256,7 +260,11 @@ def parse_setting(text: str) -> Setting:
     key, separator, value = text.partition("=")
     if not separator or not key:
         raise click.BadParameter(f"expected dotted.key=value, got {text!r}")
-    return Setting(key.lstrip("+"), yaml.safe_load(value), key.startswith("+"))
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        parsed = yaml.safe_load(value)
+    return Setting(key.lstrip("+"), parsed, key.startswith("+"))
 
 
 def setting_leaves(setting: Setting) -> tuple[Setting, ...]:

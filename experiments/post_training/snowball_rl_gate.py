@@ -151,10 +151,13 @@ def gate_inputs(
     init: str | None = None,
     requirements: Sequence[str] = (),
 ) -> GateInputs:
-    values = {setting.key: setting.value for setting in settings}
+    values = {setting.key: setting for setting in settings}
     return GateInputs(
         preset_name=preset_name,
-        settings=tuple(f"{key}={json.dumps(value, default=str)}" for key, value in sorted(values.items())),
+        settings=tuple(
+            f"{'+' if setting.allows_new_key else ''}{key}={json.dumps(setting.value, default=str)}"
+            for key, setting in sorted(values.items())
+        ),
         tasks=tasks.removeprefix(presets.SELECTION_PREFIX + "/") if tasks else None,
         init=init,
         requirements=tuple(dict.fromkeys(requirements)),
@@ -878,9 +881,9 @@ def comparison_config(launch: dict) -> dict[str, object]:
         "run.coordinator_iris_job_id",
         "iris.job_name",
         "iris.wandb_entity",
-        "skyrl.trainer.run_name",
     ):
         set_config_value(config, path, f"<identity:{path}>")
+    replace_alias("skyrl.trainer.run_name", [launch["iris"]["job_name"]], "<launcher-run-name>")
     replace_alias(
         "skyrl.generator.trajectory_retention.run_id",
         [launch["run"]["id"], launch["iris"]["job_name"]],
@@ -899,25 +902,35 @@ def _current_configs(preset: presets.Preset, inputs: GateInputs) -> tuple[dict, 
         root = Path(directory)
         paths = []
         for index, candidate in enumerate((GateInputs(preset_name=preset.name), inputs)):
-            spec = recipe.run_spec(
-                preset,
-                name=f"current-config-{index}",
-                tasks=presets.selection_artifact(candidate.tasks) if candidate.tasks else None,
-                init=presets.published_artifact(candidate.init, revision=preset.revision) if candidate.init else None,
-                settings=tuple(map(presets.parse_setting, candidate.settings)),
-            )
-            step = recipe.run_step(preset, spec)
-            context = StepContext.for_run(
-                str(root / f"run-{index}"), str(root), runtime_args=step.runtime_args, deps=step.deps
-            )
-            path = root / f"config-{index}.yaml"
-            path.write_text(step.build_config(context).launch_config_yaml)
-            paths.append(str(path))
+            try:
+                spec = recipe.run_spec(
+                    preset,
+                    name=f"current-config-{index}",
+                    tasks=presets.selection_artifact(candidate.tasks) if candidate.tasks else None,
+                    init=(
+                        presets.published_artifact(candidate.init, revision=preset.revision) if candidate.init else None
+                    ),
+                    settings=tuple(map(presets.parse_setting, candidate.settings)),
+                )
+                step = recipe.run_step(preset, spec)
+                context = StepContext.for_run(
+                    str(root / f"run-{index}"),
+                    presets.artifact_prefix(preset.recipe.layout.cluster),
+                    runtime_args=step.runtime_args,
+                    deps=step.deps,
+                )
+                path = root / f"config-{index}.yaml"
+                path.write_text(step.build_config(context).launch_config_yaml)
+                paths.append(str(path))
+            except (ValueError, click.BadParameter) as error:
+                raise InvalidComparison("recorded inputs cannot build the current preset") from error
+
         native_root = str(presets.REPO_ROOT / "vendor/skyrl")
         program = (
             "import json,sys\nfrom pathlib import Path\nfrom omegaconf import OmegaConf\n"
-            "from cloud.iris import launch_config\n"
-            f"assert Path(launch_config.__file__).resolve().is_relative_to({native_root!r})\n"
+            "from cloud.iris import launch_config\nimport skyrl_train,marinskyrl\n"
+            f"assert all(Path(module.__file__).resolve().is_relative_to({native_root!r}) "
+            "for module in (launch_config,skyrl_train,marinskyrl))\n"
             "print(json.dumps([OmegaConf.to_container(launch_config.load_launch_config(path), resolve=True) "
             "for path in sys.argv[1:]]))\n"
         )
@@ -1112,6 +1125,8 @@ def _gate_artifact(
     run_paths: tuple[str, ...],
 ) -> ArtifactStep[GateReport]:
     pins = control_pins(preset)
+    defaults = recipe.run_step(preset, recipe.run_spec(preset, name="current-defaults"))
+    name += "-defaults-" + fingerprint_hash(canonical_json((defaults.fingerprint(), defaults.runtime_args)))
     controls = tuple(
         tuple(
             (

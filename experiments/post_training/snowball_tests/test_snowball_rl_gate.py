@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -22,10 +23,10 @@ from iris.client.client import IrisClient
 from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState
-from marin.execution.lazy import ArtifactStep, StepContext, run
+from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
+from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl import SkyRLRun
 from marin.rl.skyrl_records import read_skyrl_metrics
-from marin.training.training import LevanterCheckpoint
 from scipy.stats import t
 
 from experiments.post_training import snowball_rl as snowball
@@ -334,7 +335,9 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
         inputs = gate.GateInputs(preset_name=preset, tasks="candidate-training@2026.11.10")
     root = recorded_runs(preset, "users/test/current-generation", speed=101, inputs=inputs)
     if inputs is not None:
-        path = Path(selected.path()) / "train.parquet"
+        launch = json.loads((root / "terminal.json").read_text())["config"]
+        descriptor = launch["inputs"]["validation_data"][0]
+        path = Path(descriptor["uri"]) / descriptor["relative_path"]
         rows = pq.read_table(path).to_pylist()
         for row in rows:
             task = json.loads(row["task_spec"])
@@ -363,20 +366,46 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
 
 
 @pytest.mark.parametrize(
-    "path,value,verdict",
+    "path,value,settings,verdict",
     [
-        (("skyrl", "generator", "enable_prefix_caching"), False, "pass"),
-        (("runtime", "task_env", "VLLM_PROBE"), "1", "pass"),
-        (("skyrl", "generator", "eval_sampling_params", "temperature"), 0.5, "invalid"),
-        (("skyrl", "generator", "chat_template"), "different", "invalid"),
-        (("runtime", "task_env", "TASK_PROBE"), "1", "invalid"),
+        (("skyrl", "generator", "enable_prefix_caching"), False, ("generator.enable_prefix_caching=false",), "pass"),
+        (("skyrl", "generator", "enable_prefix_caching"), False, (), "invalid"),
+        (("runtime", "task_env", "VLLM_PROBE"), "1", ('+extra_env.VLLM_PROBE="1"',), "pass"),
+        (("skyrl", "generator", "eval_sampling_params", "temperature"), 0.5, (), "invalid"),
+        (("skyrl", "generator", "chat_template"), "different", (), "invalid"),
+        (("runtime", "task_env", "TASK_PROBE"), "1", (), "invalid"),
+        (("recorded-named",), None, (), "pass"),
     ],
 )
-def test_evaluation_protocol_compares_requests_and_accepts_training_or_engine_changes(
-    recorded_runs, path, value, verdict
+def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_changes(
+    recorded_runs, path, value, settings, verdict
 ):
+    if path == ("recorded-named",):
+        root = recorded_runs("speed-short", "users/test/recorded-named")
+        launch = json.loads((root / "terminal.json").read_text())["config"]
+        launch["skyrl"]["generator"]["eval_sampling_params"]["presence_penalty"] = 0.8
+        launch["skyrl"]["generator"]["eval_n_samples_per_prompt"] = 7
+        protocol = scoring.evaluation_protocol(launch, "eval_lite")
+        assert protocol["sampling_params"] == {
+            "ignore_eos": False,
+            "max_generate_length": 8192,
+            "repetition_penalty": 1.0,
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "min_p": 0.0,
+            "top_k": -1,
+            "logprobs": None,
+            "stop": None,
+        }
+        assert protocol["n_samples_per_prompt"] == 1
+        assert protocol["context_budget"]["max_new_tokens_per_turn"] == 8192
+        return
     controls(recorded_runs, "learning-medium")
-    root = recorded_runs("learning-medium", "users/test/protocol")
+    root = recorded_runs(
+        "learning-medium",
+        "users/test/protocol",
+        inputs=gate.GateInputs(preset_name="learning-medium", settings=settings),
+    )
     receipt = json.loads((root / "terminal.json").read_text())
     target = receipt["config"]
     for key in path[:-1]:
@@ -386,7 +415,7 @@ def test_evaluation_protocol_compares_requests_and_accepts_training_or_engine_ch
     report = rescore("learning-medium", "--candidate", "users/test/protocol")
     assert report["verdict"] == verdict, report
     if verdict == "invalid":
-        assert "evaluation protocol" in report["reason"]
+        assert "evaluation protocol" in report["reason"] or "config differs" in report["reason"]
 
 
 @pytest.mark.parametrize(
@@ -520,61 +549,203 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
 
 
 @pytest.mark.timeout(180)
-def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recorded_runs, native_json, tmp_path):
-    preset = presets.PRESETS["learning-medium"]
+@pytest.mark.parametrize(
+    "case",
+    [
+        "optimizer",
+        "initializer",
+        "stale-default",
+        "explicit-equal",
+        "untouched-sibling",
+        "unbound-model",
+        "unbound-data",
+        "batch",
+        "staged-profile",
+        "wrong-profile-control",
+        "home-alias",
+        "alias-sibling",
+        "unbound-gsm8k",
+        "allocation",
+        "source-identity",
+        "relative-file",
+        "authored-run-name",
+        "cached-default",
+        "cached-execution",
+    ],
+)
+def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recorded_runs, tmp_path, monkeypatch, case):
+    short = {"staged-profile", "wrong-profile-control", "home-alias", "alias-sibling", "unbound-gsm8k"}
+    preset = presets.PRESETS["speed-short" if case in short else "learning-medium"]
     control_roots = controls(recorded_runs, preset.name)
-    initializer = ArtifactStep.adopt(
-        "tests/custom-init", "2026.11.07", str(tmp_path / "custom-init"), kind=LevanterCheckpoint
-    )
-    builds = [
-        snowball.build_run(preset, control=True),
-        snowball.build_run(preset, settings=(presets.parse_setting("trainer.policy.optimizer_config.lr=2.0e-6"),)),
-        snowball.build_run(preset, init=initializer),
-    ]
-    paths = []
-    for index, built in enumerate(builds):
-        step = built.runs[0]
-        config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-        path = tmp_path / f"protocol-{index}.yaml"
-        path.write_text(config.launch_config_yaml)
-        paths.append(str(path))
-    composed = native_json(
-        """
-import json, sys
-from cloud.iris.launch_config import load_launch_config
-from omegaconf import OmegaConf
-print(json.dumps([OmegaConf.to_container(load_launch_config(path), resolve=True) for path in sys.argv[1:]]))
-""",
-        paths,
-    )
-    for index, config in enumerate(composed):
-        roots = control_roots if index == 0 else [recorded_runs(preset.name, f"users/test/native-protocol-{index}")]
-        for source in roots:
-            document = json.loads((source / "terminal.json").read_text())
-            document["config"].update(skyrl=config["skyrl"], runtime=config["runtime"])
-            write_receipt(source, document)
-    for index in [1, 2]:
-        report = rescore(preset.name, "--candidate", f"users/test/native-protocol-{index}")
+    setting = "trainer.policy.optimizer_config.lr=2.0e-6"
+    inputs = gate.GateInputs(preset_name=preset.name, settings=(setting,))
+    if case in short:
+        inputs = gate.GateInputs(preset_name=preset.name)
+    if case == "wrong-profile-control":
+        inputs = gate.GateInputs(preset_name=preset.name, settings=("generator.enable_prefix_caching=false",))
+    if case == "batch":
+        inputs = gate.GateInputs(
+            preset_name=preset.name,
+            settings=(
+                "trainer.train_batch_size=64",
+                "trainer.policy_mini_batch_size=64",
+                "generator.n_samples_per_prompt=8",
+                "trainer.micro_train_batch_size_per_gpu=2",
+            ),
+        )
+    if case in ("cached-default", "cached-execution"):
+        inputs = gate.GateInputs(preset_name=preset.name)
+    if case in ("initializer", "unbound-model"):
+        name, version = "tests/custom-init", "2026.11.07"
+        source = tmp_path / name / version
+        initializer = SkyRLRun(
+            path=str(source),
+            hf_model_uri="s3://fixture-initializer/policy",
+            global_step=25,
+            tokenizer_uri=preset.model.tokenizer_uri,
+            tokenizer_revision=preset.model.tokenizer_revision,
+            checkpoint_root=str(source / "checkpoints"),
+            draft_checkpoint_root=None,
+            terminal_manifest_uri=str(source / "terminal.json"),
+            iris_job_id="/tests/initializer",
+        )
+        _json(
+            source / RECORD_FILENAME,
+            ArtifactRecord(
+                name=name,
+                version=version,
+                fingerprint="initializer",
+                result_type=result_type_name(SkyRLRun),
+                result=initializer.result_payload(),
+            ).model_dump(mode="json"),
+        )
+        inputs = gate.GateInputs(preset_name=preset.name, init=f"{name}@{version}")
+    if case in ("stale-default", "explicit-equal", "untouched-sibling"):
+        promoted = replace(preset, settings=(*preset.settings, setting))
+        monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset.name: promoted})
+        if case == "stale-default":
+            inputs = gate.GateInputs(preset_name=preset.name)
+    name = f"users/test/native-{case}"
+    candidate = recorded_runs(preset.name, name, inputs=inputs)
+    fault_key = None
+    if case == "untouched-sibling":
+        document = json.loads((control_roots[0] / "terminal.json").read_text())
+        document["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["weight_decay"] = 0.1
+        write_receipt(control_roots[0], document)
+        fault_key = "weight_decay"
+    elif case in ("unbound-model", "unbound-data"):
+        document = json.loads((candidate / "terminal.json").read_text())
+        if case == "unbound-model":
+            document["config"]["skyrl"]["trainer"]["policy"]["model"]["path"] = "/unbound/model"
+            fault_key = "skyrl.trainer.policy.model.path"
+        else:
+            document["config"]["skyrl"]["data"]["train_data"] = ["/unbound/train.parquet"]
+            fault_key = "skyrl.data.train_data"
+        write_receipt(candidate, document)
+    elif case in ("staged-profile", "wrong-profile-control"):
+        root = control_roots[0] if case == "wrong-profile-control" else candidate
+        document = json.loads((root / "terminal.json").read_text())
+        launch = document["config"]
+        source = launch["inputs"]["evaluation_data"]["eval_lite"][0]
+        for index, callback in enumerate(launch["skyrl"]["trainer"]["callbacks"]):
+            if "eval_lite" in callback.get("additional_evaluations", {}):
+                profile = callback["additional_evaluations"]["eval_lite"]
+                profile["data_files"] = [str(Path(source["local_path"]) / source["relative_path"])]
+                if case == "wrong-profile-control":
+                    profile["data_files"] = ["/unbound/named-panel.parquet"]
+                    fault_key = f"skyrl.trainer.callbacks.{index}.additional_evaluations.eval_lite.data_files"
+        write_receipt(root, document)
+    elif case in ("home-alias", "alias-sibling", "unbound-gsm8k"):
+        document = json.loads((candidate / "terminal.json").read_text())
+        launch = document["config"]
+        launch["skyrl"]["data"]["train_data"] = ["/root/data/gsm8k/train.parquet"]
+        if case == "unbound-gsm8k":
+            launch["skyrl"]["data"]["train_data"] = ["/other/data/gsm8k/train.parquet"]
+            fault_key = "skyrl.data.train_data"
+        elif case == "alias-sibling":
+            launch["skyrl"]["generator"]["max_num_seqs"] += 1
+            fault_key = "skyrl.generator.max_num_seqs"
+        write_receipt(candidate, document)
+    elif case in ("allocation", "source-identity", "relative-file", "authored-run-name"):
+        document = json.loads((candidate / "terminal.json").read_text())
+        launch = document["config"]
+        if case == "allocation":
+            launch["iris"]["allocation"]["num_nodes"] += 1
+            fault_key = "iris.allocation.num_nodes"
+        elif case == "source-identity":
+            source = launch["inputs"]["train_data"][0]
+            source["identity"] = "other-source@2026.11.10"
+            launch["skyrl"]["data"]["train_data"] = [dict(source)]
+            fault_key = "inputs.train_data.0.identity"
+        elif case == "relative-file":
+            source = launch["inputs"]["validation_data"][0]
+            shutil.copyfile(Path(source["uri"]) / source["relative_path"], Path(source["uri"]) / "other.parquet")
+            source["relative_path"] = "other.parquet"
+            launch["skyrl"]["data"]["val_data"] = [dict(source)]
+            fault_key = "recorded panel file differs"
+        else:
+            launch["skyrl"]["trainer"]["run_name"] = "authored-run-name"
+            fault_key = "skyrl.trainer.run_name"
+        write_receipt(candidate, document)
+    report = rescore(preset.name, "--candidate", name)
+    if case in ("cached-default", "cached-execution"):
+        assert report["verdict"] == "pass", report
+        if case == "cached-default":
+            promoted = replace(preset, settings=(*preset.settings, "trainer.policy.optimizer_config.weight_decay=0.1"))
+            changed_key = "skyrl.trainer.policy.optimizer_config.weight_decay"
+        else:
+            promoted = replace(
+                preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, host_memory="123GB"))
+            )
+            changed_key = "iris.allocation.memory"
+        monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset.name: promoted})
+        updated = rescore(preset.name, "--candidate", name)
+        assert updated["verdict"] == "invalid", updated
+        assert changed_key in updated["reason"]
+        assert updated["report"] != report["report"]
+    elif fault_key is not None or case == "stale-default":
+        assert report["verdict"] == "invalid", report
+        assert (fault_key or "skyrl.trainer.policy.optimizer_config.lr") in report["reason"]
+    else:
         assert (report["verdict"], report["label"]) == ("pass", "no change"), report
+        if case in ("initializer", "optimizer", "explicit-equal", "batch"):
+            expected_key = {
+                "initializer": "inputs.model.uri",
+                "batch": "skyrl.trainer.train_batch_size",
+            }.get(case, "skyrl.trainer.policy.optimizer_config.lr")
+            assert expected_key in report["run"]["config_changes"]
 
 
-def test_task_set_identity_uses_contents_and_ignores_row_order_and_storage_location(recorded_runs):
+def test_task_set_content_identity_and_declared_panel_bindings(recorded_runs):
     preset_name = "learning-medium"
     controls(recorded_runs, preset_name)
     source = recorded_runs(preset_name, "users/test/task-content")
     document = json.loads((source / "terminal.json").read_text())
     descriptor = document["config"]["inputs"]["validation_data"][0]
+    original = Path(descriptor["uri"]) / descriptor["relative_path"]
+    rows = pq.read_table(original).to_pylist()
+    pq.write_table(pa.Table.from_pylist(list(reversed(rows))), original)
+    report = rescore(preset_name, "--candidate", "users/test/task-content")
+    assert (report["verdict"], report["label"]) == ("pass", "no change"), report
+    source = recorded_runs(preset_name, "users/test/task-content-relocated")
+    document = json.loads((source / "terminal.json").read_text())
+    descriptor = document["config"]["inputs"]["validation_data"][0]
     copied = source / "panel-copy"
     shutil.copytree(descriptor["uri"], copied)
     descriptor["uri"] = str(copied)
+    document["config"]["skyrl"]["data"]["val_data"] = [dict(descriptor)]
     path = copied / descriptor["relative_path"]
     rows = pq.read_table(path).to_pylist()
     pq.write_table(pa.Table.from_pylist(list(reversed(rows))), path)
     write_receipt(source, document)
-    assert rescore(preset_name, "--candidate", "users/test/task-content")["verdict"] == "pass"
+    report = rescore(preset_name, "--candidate", "users/test/task-content-relocated")
+    assert report["verdict"] == "invalid" and "config differs" in report["reason"], report
     changed_source = recorded_runs(preset_name, "users/test/task-content-changed")
     changed_document = json.loads((changed_source / "terminal.json").read_text())
     changed_document["config"]["inputs"]["validation_data"][0]["uri"] = str(copied)
+    changed_document["config"]["skyrl"]["data"]["val_data"] = [
+        dict(changed_document["config"]["inputs"]["validation_data"][0])
+    ]
     write_receipt(changed_source, changed_document)
     task = json.loads(rows[0]["task_spec"])
     task["context"]["events"][0]["content"] = "Return dog."
@@ -585,7 +756,7 @@ def test_task_set_identity_uses_contents_and_ignores_row_order_and_storage_locat
 
     roots = controls(recorded_runs, preset_name)
     roots.append(recorded_runs(preset_name, "users/test/wrong-cohort"))
-    panel_root = Path(presets.selection_artifact(presets.EVALUATIONS["eval_lite"].source).path())
+    panel_root = Path(presets.selection_artifact(presets.PRESETS[preset_name].eval_lite).path())
     manifest = pq.read_table(panel_root / presets.TASK_MANIFEST_FILENAME).to_pylist()
     manifest.append(manifest[0] | {"task_id": "task-outside-input"})
     pq.write_table(pa.Table.from_pylist(manifest), panel_root / presets.TASK_MANIFEST_FILENAME)
@@ -602,16 +773,34 @@ def test_task_set_identity_uses_contents_and_ignores_row_order_and_storage_locat
 
 @pytest.mark.parametrize("preset_name", ["learning-medium", "data-medium"])
 def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, tmp_path, monkeypatch, preset_name):
-    controls(recorded_runs, preset_name)
+    preset = presets.PRESETS[preset_name]
     model = tmp_path / "model"
     model.mkdir()
-    monkeypatch.setattr(presets, "MODEL_URI", str(model))
-    preset = presets.PRESETS[preset_name]
+    local = replace(
+        preset.model,
+        step=ArtifactStep.adopt(
+            preset.model.step.name,
+            preset.model.step.version,
+            str(model),
+            kind=preset.model.step.artifact_type,
+        ),
+    )
+    preset = replace(preset, model=local)
+    monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset_name: preset})
+    controls(recorded_runs, preset_name)
     tasks = selection if preset_name == "data-medium" else None
-    settings = (presets.parse_setting("trainer.policy.optimizer_config.lr=2.0e-6"),) if tasks is None else ()
+    setting_text = ("trainer.policy.optimizer_config.lr=2.0e-6", '+extra_env.VLLM_PROBE="1"') if tasks is None else ()
+    settings = tuple(map(presets.parse_setting, setting_text))
     built = snowball.build_run(preset, settings=settings, tasks=tasks, requirements=("policy/raw_grad_norm<=10",))
     task_name = "fixture-selection@2026.11.10" if tasks else None
-    source = recorded_runs(preset.name, built.runs[0].name, fingerprint=built.runs[0].fingerprint())
+    source = recorded_runs(
+        preset.name,
+        built.runs[0].name,
+        fingerprint=built.runs[0].fingerprint(),
+        inputs=gate.GateInputs(
+            preset_name=preset.name, settings=setting_text, tasks=task_name, requirements=("policy/raw_grad_norm<=10",)
+        ),
+    )
     staged = source.with_name("native-staging")
     source.rename(staged)
     (staged / gate.GATE_INPUTS_FILENAME).unlink()
@@ -627,7 +816,7 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
     assert recorded.preset_name == preset_name and recorded.requirements == ("policy/raw_grad_norm<=10",)
     decoded = dict(item.split("=", 1) for item in recorded.settings)
     assert {key: json.loads(value) for key, value in decoded.items()} == (
-        {} if tasks else {"trainer.policy.optimizer_config.lr": 2e-6}
+        {} if tasks else {"trainer.policy.optimizer_config.lr": 2e-6, "+extra_env.VLLM_PROBE": "1"}
     )
     assert recorded.tasks == task_name
     before = {path: path.read_bytes() for path in source.rglob("*") if path.is_file()}

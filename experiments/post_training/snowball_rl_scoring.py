@@ -130,8 +130,8 @@ def evaluation_protocol(launch: dict, name: str) -> dict:
         )
         if profile is None:
             raise InvalidComparison(f"expected one recorded evaluation profile for {name}")
-        sampling.update(profile.get("sampling_params") or {})
-        samples = profile.get("n_samples_per_prompt", samples)
+        sampling = deepcopy(profile["sampling_params"])
+        samples = profile["n_samples_per_prompt"]
     return {
         "sampling_params": sampling,
         "n_samples_per_prompt": samples,
