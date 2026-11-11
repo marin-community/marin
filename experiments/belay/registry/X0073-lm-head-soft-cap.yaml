@@ -535,8 +535,8 @@ events:
   checkpoint: belay-ckpt-2026-10-20
 potential:
   score: 8
-  rationale: -0.0217 at speedrun equal time (step +1%); ladder held on older bases d768 -0.0157/-0.019, d1024 -0.0079; current-recipe
-    ladder blocked; MFU not run -> 8
+  rationale: -0.0217 at speedrun equal time; ladder held on older bases (d768 -0.016, d1024 -0.008); current ladder failed
+    at startup -> 8
   model: claude-opus-5-5
-  date: '2026-11-05'
-  inputs_digest: 1388a8922f2d
+  date: '2026-11-11'
+  inputs_digest: fee74de1b939
