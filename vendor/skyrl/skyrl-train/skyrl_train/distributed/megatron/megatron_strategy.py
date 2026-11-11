@@ -55,6 +55,7 @@ from megatron.core.dist_checkpointing.strategies.fully_parallel import (
 )
 from transformers import PreTrainedTokenizer
 from megatron.core.optimizer import ChainedOptimizer, DistributedOptimizer
+from megatron.core.optimizer.cpu_offloading import HybridDeviceOptimizer
 from megatron.core.optimizer.clip_grads import clip_grad_by_total_norm_fp32
 from skyrl_train.distributed.step_policy import (
     NonfiniteStepPolicy,
@@ -500,11 +501,11 @@ class MegatronStrategy(DistributedStrategy):
                 torch.cuda.synchronize()
                 torch.accelerator.memory.empty_host_cache()
 
+            children = optimizer.chained_optimizers if isinstance(optimizer, ChainedOptimizer) else [optimizer]
             if (
                 not muonh
                 and saved_type == "dp_reshardable"
-                and self.optimizer_config is not None
-                and self.optimizer_config.optimizer_cpu_offload
+                and any(isinstance(child.optimizer, HybridDeviceOptimizer) for child in children)
             ):
                 if str(self.optimizer_config.optimizer).lower() in ("adam", "adamw"):
                     restore_hybrid_adam_bucket_steps(state_dict["optimizer"])
