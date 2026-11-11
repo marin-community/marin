@@ -95,7 +95,8 @@ def test_wait_does_not_commit_nonterminal_zero_exit_outcome(tmp_path: Path, run_
     assert result.failure == "Iris job reached submitted"
     assert not backend.exported
     record = read_attempt("s3://runs/smoke/exports", "attempt-1")
-    assert record is not None and record.native.result == result
+    assert record is not None
+    assert record.native.result.model_dump(mode="json") == result.model_dump(mode="json")
     assert not StoragePath("s3://runs/smoke/terminal.json").exists()
 
 

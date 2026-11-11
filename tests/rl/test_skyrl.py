@@ -764,6 +764,7 @@ with Tracking("tests-project", "history", "records", history_config("middle", ro
     middle.start(resumed_step=3, checkpoint=parent)
     for step in (4, 5, 9):
         middle.log({"loss": step / 10}, step=step)
+    middle.log({"eval/all/avg_score": 0.4}, step=5)
 with Tracking("tests-project", "history", "records", history_config("sibling", root / "exports")) as sibling:
     sibling.start(resumed_step=3, checkpoint=parent)
     sibling.log({"loss": 9.9}, step=4)
@@ -786,6 +787,10 @@ with Tracking("tests-project", "history", "records", history_config("stage", roo
         checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=5))
     stage.log({"loss": 9}, step=0)
     stage.log({"loss": 8}, step=1)
+with Tracking("tests-project", "history", "records", history_config("missing-parent", root / "exports")) as missing:
+    missing.start(resumed_step=2,
+        checkpoint=CheckpointReference(export_root=str(ancestor_root), attempt_id="unrecorded", step=2))
+    missing.log({"loss": 3}, step=3)
 try:
     with Tracking("tests-project", "history", "records", history_config("failed-direct", root / "exports")) as failed:
         failed.start(resumed_step=None)
@@ -817,9 +822,9 @@ class LocalBackend:
             with Tracking("tests-project", "record-boundary", "records", config.skyrl) as tracker:
                 tracker.start(resumed_step=5,
                     checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=5))
-                tracker.log({"startup/resume": 0.05}, step=5)
-                tracker.log({"loss": 0.25}, step=6)
-                tracker.log({"entropy": 0.75}, step=6)
+                tracker.log({"startup/resume": 0.05, "eval/all/avg_score": 0.6}, step=5)
+                tracker.log({"loss": 1.25}, step=6)
+                tracker.log({"loss": 0.25, "entropy": 0.75}, step=6)
             checkpoints = Path(config.artifacts.checkpoint_root)
             checkpoints.mkdir(parents=True, exist_ok=True)
             (checkpoints / CHECKPOINT_MARKER_FILENAME).write_text("8\n")
@@ -892,7 +897,12 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
         "metric_attempt_ids": {"loss": config.attempt_id, "entropy": config.attempt_id},
     }
     assert metrics[5]["attempt_id"] == config.attempt_id
-    assert metrics[5]["metric_attempt_ids"] == {"loss": "middle", "startup/resume": config.attempt_id}
+    assert metrics[5]["metric_attempt_ids"] == {
+        "loss": "middle",
+        "startup/resume": config.attempt_id,
+        "eval/all/avg_score": config.attempt_id,
+    }
+    assert metrics[5]["loss"] == 0.5 and metrics[5]["eval/all/avg_score"] == 0.6
     assert receipt.parent is not None and receipt.parent.attempt_id == "middle"
     assert receipt.metrics_started_at is not None and receipt.started_at is not None
     startup = AttemptRecord.model_validate_json((tmp_path / "startup-observation.json").read_text())
@@ -906,6 +916,8 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     assert list(stage) == [0, 1] and [row["loss"] for row in stage.values()] == [9, 8]
     assert read_attempt(export_root, "stage").parent.step == 5
     assert read_attempt_metrics(export_root, "failed-direct")[1]["loss"] == 0.9
+    with pytest.raises(FileNotFoundError, match="unrecorded"):
+        read_attempt_metrics(export_root, "missing-parent")
     (tmp_path / "terminal.json").unlink()
     assert read_stored_skyrl_receipt(str(tmp_path)) == receipt
     assert read_stored_skyrl_attempts(str(tmp_path))[0] == config.attempt_id
