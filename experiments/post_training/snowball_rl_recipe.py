@@ -67,7 +67,7 @@ def _training_config(
     config["trainer"]["ref"] = {"megatron_config": deepcopy(geometry)}
     for text in preset.settings:
         setting = presets.parse_setting(text)
-        for leaf in presets.setting_leaves(setting) or (setting,):
+        for leaf in presets.setting_leaves(setting):
             set_config_value(config, leaf.key, leaf.value)
     for setting in settings:
         presets.apply_setting(config, setting, preset)

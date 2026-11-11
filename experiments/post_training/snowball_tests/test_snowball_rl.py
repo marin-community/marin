@@ -54,6 +54,14 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
     path = tmp_path / "off-boundary.yaml"
     _render(off_boundary, path, runtime=True)
     paths.append(str(path))
+    monkeypatch.delenv("WANDB_ENTITY", raising=False)
+    revisioned = snowball.build_run(replace(presets.PRESETS["speed-short"], revision="2026.11.12.1"), control=True).runs[
+        0
+    ]
+    path = tmp_path / "revisioned-speed.yaml"
+    _render(revisioned, path, runtime=True)
+    paths.append(str(path))
+    monkeypatch.setenv("WANDB_ENTITY", "test-team")
     changed = snowball.build_run(
         presets.PRESETS["learning-medium"],
         settings=tuple(
@@ -64,6 +72,7 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
                     "generator.n_samples_per_prompt=8",
                     "trainer.micro_train_batch_size_per_gpu=2",
                     "trainer.policy.optimizer_config.lr=2.0e-6",
+                    "+generator.engine_init_kwargs.probe={}",
                 ),
             )
         ),
@@ -224,6 +233,8 @@ print(json.dumps([{
     "adam_betas": list(config.skyrl.trainer.policy.optimizer_config.adam_betas),
     "model_uri": config.inputs.model.uri,
     "tokenizer": [config.inputs.model.tokenizer_uri, config.inputs.model.tokenizer_revision],
+    "engine_kwargs": OmegaConf.to_container(config.skyrl.generator.engine_init_kwargs),
+    "validation_identity": config.inputs.validation_data[0].identity if config.inputs.validation_data else None,
     "train_uri": config.inputs.train_data[0].uri if config.inputs.train_data else None,
     "eval_uri": config.inputs.validation_data[0].uri if config.inputs.validation_data else None,
     "profile_inputs": (OmegaConf.to_container(config.inputs.evaluation_data)
@@ -296,6 +307,9 @@ print(json.dumps([{
             2,
             2e-6,
         )
+    assert rows[-4]["engine_kwargs"]["probe"] == {}
+    sampled = next(row for row in rows if row["path"] == str(tmp_path / "revisioned-speed.yaml"))
+    assert sampled["validation_identity"].partition(":")[0].endswith("@2026.11.12.1")
     assert rows[0]["name"].endswith("2026.11.11.1")
     for row in rows[-3:-1]:
         assert row["name"].endswith("2026.11.12.1")
@@ -337,22 +351,34 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
     for binding, summary in summaries.items():
         (StoragePath(presets.selection_artifact(binding).path()) / presets.SUMMARY_FILENAME).write_text(summary)
     revisions = {
-        "speed-short": {"2026.11.11.1": ("591281b9", "2398a5a3")},
-        "data-short": {"2026.11.11.1": ("5de6ea64", "deb49a2a")},
-        "speed-medium": {"2026.11.11.1": ("98e2f8dd", "8fe22250")},
-        "learning-medium": {"2026.11.11.1": ("cd894082", "39624cc1")},
-        "speed-long": {"2026.11.11.1": ("970a1522", "dc09e061")},
+        "speed-short": {"2026.11.11.1": ("55ebf515", "196dd177")},
+        "data-short": {"2026.11.11.1": ("ec3a962a", "a40e2c35")},
+        "speed-medium": {"2026.11.11.1": ("9afe247a", "ef952dad")},
+        "learning-medium": {"2026.11.11.1": ("ab45bfdf", "59846c81")},
+        "speed-long": {"2026.11.11.1": ("e40c8ba5", "18f50b58")},
     }
-    expected = {name: versions[presets.PRESETS[name].revision] for name, versions in revisions.items()}
+    expected = {name: versions.get(presets.PRESETS[name].revision) for name, versions in revisions.items()}
+
+    def render(step, path, output_path):
+        context = StepContext.for_run(
+            output_path,
+            "/snowball-pin-prefix",
+            runtime_args=step.runtime_args,
+            deps=step.deps,
+        )
+        path.write_text(step.build_config(context).launch_config_yaml)
+
     paths = []
+    outputs = {}
     for name in expected:
         step = snowball.build_run(presets.PRESETS[name], control=True).runs[0]
         path = tmp_path / f"{name}.yaml"
-        _render(step, path)
+        outputs[name] = "/snowball-pin-output/" + step.name
+        render(step, path, outputs[name])
         paths.append(str(path))
     candidate = snowball.build_run(presets.PRESETS["learning-medium"]).runs[0]
     candidate_path = tmp_path / "learning-medium-candidate.yaml"
-    _render(candidate, candidate_path)
+    render(candidate, candidate_path, outputs["learning-medium"])
     candidate_launch = yaml.safe_load(candidate_path.read_text())
     control_launch = yaml.safe_load((tmp_path / "learning-medium.yaml").read_text())
     candidate_launch["run"]["id"] = control_launch["run"]["id"]
@@ -374,6 +400,17 @@ print(json.dumps([
 """,
         paths,
     )
+    for config in configs:
+        attempt = config["run"]["attempt_id"]
+        job = config["iris"]["job_name"]
+        assert job.endswith(attempt)
+        assert config["skyrl"]["trainer"]["run_name"] == job
+        assert config["skyrl"]["generator"]["trajectory_retention"]["run_id"] == job
+        stable_job = job.removesuffix(attempt) + "<attempt_id>"
+        config["run"]["attempt_id"] = "<attempt_id>"
+        config["iris"]["job_name"] = stable_job
+        config["skyrl"]["trainer"]["run_name"] = stable_job
+        config["skyrl"]["generator"]["trajectory_retention"]["run_id"] = stable_job
     actual = {
         name: (
             fingerprint_hash(
@@ -383,6 +420,7 @@ print(json.dumps([
         )
         for name, config in zip(expected, configs[:-1], strict=True)
     }
+    print(json.dumps(actual, sort_keys=True, indent=2))
     assert actual == expected, "Fingerprint envelope changed: bump the changed preset revision and recollect controls."
     learning_control = configs[list(expected).index("learning-medium")]
     assert configs[-1]["skyrl"] == learning_control["skyrl"]
@@ -401,6 +439,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     def name(preset=learning, *settings, **kwargs):
         return run(preset, *settings, **kwargs).name
 
+    assert name(learning, "+generator.engine_init_kwargs.probe={}") != name()
     repeated = snowball.build_run(learning, replicates=3)
     assert [step.name for step in snowball.build_run(learning, replicates=2).runs] == [
         step.name for step in repeated.runs[:2]

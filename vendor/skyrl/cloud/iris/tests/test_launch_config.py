@@ -405,7 +405,7 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: 
     document["run"]["export_hf"] = False
     document["skyrl"]["entrypoint"] = "generate"
     generator = document["skyrl"].setdefault("generator", {})
-    generator["eval_sampling_params"] = {"temperature": 0.5, "stop": ["base-stop"]}
+    generator["eval_sampling_params"] = {"temperature": 0.5, "stop": ["base-stop"], "top_p": 0.73}
     generator["eval_n_samples_per_prompt"] = 2
     profile = {
         "sampling_params": {"temperature": 0.0, "stop": None, "seed": 42, "frequency_penalty": 0.5, "stop_token_ids": [7]},
@@ -446,7 +446,14 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: 
         with pytest.raises(ValueError, match=error):
             load_launch_config(path)
         return
-    prepared = launch._prepare_config(load_launch_config(path))
+    loaded = load_launch_config(path)
+    recorded = loaded.skyrl.trainer.callbacks[0].additional_evaluations.sampled
+    assert recorded.n_samples_per_prompt == (3 if case == "explicit" else 2)
+    request = OmegaConf.to_container(recorded.sampling_params, resolve=True)
+    assert {key: request[key] for key in ("top_p", "temperature", "stop", "seed")} == {
+        "top_p": 0.73, "temperature": 0.0, "stop": None, "seed": 42,
+    }
+    prepared = launch._prepare_config(loaded)
     OmegaConf.update(prepared, "skyrl.generator.eval_sampling_params.seed", 91, force_add=True)
     OmegaConf.update(prepared, "skyrl.generator.eval_sampling_params.presence_penalty", 0.25, force_add=True)
     task_runtime.materialize_data_sources(task_runtime._runtime_namespace(prepared).data_sources_json)

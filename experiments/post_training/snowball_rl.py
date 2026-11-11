@@ -167,7 +167,7 @@ def build_run(
         "settings": sorted({setting.key: setting.value for setting in settings}.items()),
         "evaluations": sorted(evaluation_inputs),
     }
-    snowball_rl_gate.validate_candidate(preset, requirements, control=control)
+    snowball_rl_gate.validate_requirements(preset, requirements, control=control)
     provenance = _provenance(control=control)
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
     inputs = snowball_rl_gate.gate_inputs(
@@ -255,7 +255,7 @@ def _status(
     issue: int | None = None,
     publication_urls: dict[str, str] | None = None,
 ) -> dict:
-    run = replace(run, gate=snowball_rl_gate.completed_gate(preset, run.runs, run.gate))
+    run = replace(run, gate=snowball_rl_gate.completed_gate(run.gate))
     rows = []
     planned = []
     for step in run.runs:
@@ -413,7 +413,7 @@ def _publish_records(
     if not snowball_rl_publication.publishes(preset):
         return None
     prefix = presets.artifact_prefix(preset.recipe.layout.cluster)
-    completed_gate = snowball_rl_gate.completed_gate(preset, run.runs, run.gate)
+    completed_gate = snowball_rl_gate.completed_gate(run.gate)
     gate_path = completed_gate.path(prefix) if completed_gate is not None else None
     outputs = [training.path(prefix) for training in run.runs]
     return snowball_rl_publication.publish_runs(
@@ -492,11 +492,17 @@ def _run_command(function: Callable) -> click.Command:
         preset = presets.PRESETS[options["preset_name"]]
         try:
             if get_job_info() is None:
+                if _from_handles(handles).gate is not None:
+                    try:
+                        snowball_rl_gate.validate_candidate(preset)
+                    except (scoring.InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
+                        click.echo(json.dumps({"preset": preset.name, "verdict": "invalid", "reason": str(error)}))
+                        raise click.exceptions.Exit(snowball_rl_gate.REFUSAL_EXIT_CODE) from error
                 job = submit_or_run("experiments.post_training.snowball_rl", handles, max_concurrent, os.environ)
             else:
                 planned = _from_handles(handles)
                 build_artifacts(*planned.runs, max_concurrent=max_concurrent)
-                gate = snowball_rl_gate.completed_gate(preset, planned.runs, planned.gate)
+                gate = snowball_rl_gate.completed_gate(planned.gate)
                 if gate is not None:
                     build_artifacts(gate, max_concurrent=max_concurrent)
                 job = None
