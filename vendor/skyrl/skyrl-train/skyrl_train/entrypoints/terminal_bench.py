@@ -21,23 +21,17 @@ class TerminalBenchExp(BasePPOExp):
             RolloutWorkerResources.from_config(cfg),
         )
 
-    def _task_dataset(self, data_files) -> HarborTaskDataset:
+    def _build_eval_dataset(self, data_files) -> HarborTaskDataset:
         return self.harbor_task_dataset(data_files)
 
     def get_train_dataset(self):
-        prompts_dataset = self._task_dataset(self.cfg.data.train_data)
+        prompts_dataset = self.harbor_task_dataset(self.cfg.data.train_data)
         # make sure the dataset is large enough to train on
         assert len(prompts_dataset) >= self.cfg.trainer.train_batch_size, (
             f"dataset must be at least as large as `train_batch_size` {self.cfg.trainer.train_batch_size}, "
             f"but has size {len(prompts_dataset)}"
         )
         return prompts_dataset
-
-    def get_eval_dataset(self, data_files: list[str] | None = None):
-        data_files = self.cfg.data.val_data if data_files is None else data_files
-        if self.cfg.trainer.eval_interval <= 0 or not data_files:
-            return None
-        return self._task_dataset(data_files)
 
 
 @ray.remote(num_cpus=1, max_retries=0)
