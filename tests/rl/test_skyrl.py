@@ -260,6 +260,28 @@ def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
     )
 
 
+def test_cross_host_expert_parallel_plan_renders_one_rack_allocation() -> None:
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        policy_num_nodes=12,
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=16,
+        inference_engine_expert_parallel_size=16,
+        n_samples_per_prompt=8,
+    )
+    spec = dataclasses.replace(
+        _spec(),
+        topology=SkyRLTopology(num_nodes=plan.num_nodes, gpus_per_node=4, gpu_variant="GB200", role_plan=plan),
+    )
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = yaml.safe_load(config.launch_config_yaml)
+    assert launch["iris"]["allocation"]["num_nodes"] == 16
+    assert launch["skyrl"]["trainer"]["placement"]["policy_num_nodes"] == 12
+    assert launch["skyrl"]["generator"]["inference_engine_data_parallel_size"] == 16
+
+
 @pytest.mark.parametrize("key", ["use_conversation_multi_turn", "require_exact_chat_transport"])
 @pytest.mark.parametrize("value", [False, True])
 def test_skyrl_spec_rejects_retired_transport_options_before_submission(key: str, value: bool) -> None:

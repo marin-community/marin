@@ -1,0 +1,187 @@
+# Adapted from long_loop/rl-smoke.yaml at bf163020a7115d85fd3fcb02099d3abfda3b6cf2.
+entrypoint: taskcompendium
+context_budget:
+  request_window_tokens: 24576
+  max_new_tokens_per_turn: 8192
+  max_turns: 1
+environment:
+  task_sessions:
+    local: {}
+    daytona:
+      api_key_env: DAYTONA_RL_API_KEY
+      ttl_minutes: 60
+      eval_api_key_env: DAYTONA_EVAL_API_KEY
+    task_spec:
+      harness_by_dataset:
+        long-loop-smartie-calibforge: harbor_trial
+      session:
+        max_turns: 8
+        attempt_timeout: 900
+        total_turn_timeout: 600
+        model_turn_timeout: 180
+        verifier_timeout: 180
+trainer:
+  strategy: megatron
+  flash_attn: false
+  use_sample_packing: false
+  gradient_checkpointing: true
+  offload_optimizer_during_rollouts: false
+  epochs: 50
+  max_steps: 5
+  update_epochs_per_batch: 1
+  micro_forward_batch_size_per_gpu: 1
+  eval_batch_size: 256
+  eval_interval: -1
+  resume_mode: none
+  max_ckpts_to_keep: 2
+  seed: 20261020
+  logger: wandb
+  project_name: mochi-one-rack-smoke
+  tracker_commit_each_step: true
+  training_metrics: true
+  rollout_spans: true
+  policy_train_spans: true
+  algorithm:
+    advantage_estimator: rloo_n
+    policy_loss_type: regular
+    loss_reduction: token_mean
+    use_kl_loss: false
+    use_kl_in_reward: false
+    kl_estimator_type: k3_unbiased_gradient
+    off_policy_correction: none
+    eps_clip_low: 0.2
+    eps_clip_high: 0.2
+    group_advantage_min_size: 2
+    advantage_batch_normalize: false
+    rloo_n_filter_zero_reward_groups: false
+    use_entropy_loss: false
+  policy:
+    optimizer_config:
+      optimizer: AdamW
+      lr: 1.0e-06
+      weight_decay: 0.0
+      max_grad_norm: 0.5
+      adam_betas:
+      - 0.9
+      - 0.999
+      scheduler: constant_with_warmup
+      num_warmup_steps: 0
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 12
+      context_parallel_size: 4
+      expert_model_parallel_size: 4
+      expert_tensor_parallel_size: 1
+      optimizer_config_kwargs:
+        optimizer_cpu_offload: true
+        optimizer_offload_fraction: 1.0
+        overlap_cpu_optimizer_d2h_h2d: false
+      optimizer_checkpoint_sharding_type: dp_reshardable
+  ref:
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 12
+      context_parallel_size: 4
+      expert_model_parallel_size: 4
+      expert_tensor_parallel_size: 1
+  placement: {}
+  rollout_buffer:
+    max_staleness_steps: 0
+    batch_policy: full_batch
+    max_in_flight: 2
+    object_store_root: null
+  eval_before_train: false
+  ckpt_interval: 5
+  eval_num_prompts: null
+  dump_eval_results: true
+  step_wise_training: false
+  dump_data_batch: true
+  callbacks:
+  - type: checkpoint
+    save_steps: 5
+    save_on_train_end: true
+generator:
+  backend: vllm
+  model_dtype: bfloat16
+  vllm_attention_backend: FLASH_ATTN
+  run_engines_locally: true
+  weight_sync_backend: nccl
+  weight_sync_pause:
+    mode: keep
+    clear_cache: true
+  weight_sync_transport: expert_block
+  expert_block_sync:
+    timeout_seconds: 600
+    verify: true
+  gpu_memory_utilization: 0.75
+  max_num_seqs: 16
+  max_num_batched_tokens: 8192
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+  enforce_eager: false
+  enable_http_endpoint: false
+  chat_template: null
+  engine_init_kwargs:
+    moe_backend: triton
+  sampling_params:
+    temperature: 1.0
+    top_p: 1.0
+    logprobs: 0
+    stop_token_ids:
+    - 128001
+    - 128009
+    skip_special_tokens: false
+  trajectory_reward_shaping:
+    enabled: true
+    overlong:
+      penalty_scale: 0.0
+    reasoning_span:
+      penalty: 0.1
+      target: marker
+  chat_template_kwargs:
+    enable_thinking: true
+  eval_sampling_params:
+    stop_token_ids:
+    - 128001
+    - 128009
+    skip_special_tokens: false
+  trajectory_retention:
+    enabled: true
+    sample_fraction: 1.0
+    sample_count_per_step: 2
+    max_bytes_per_step: 67108864
+    max_bytes_per_run: 536870912
+    required: true
+data:
+  kind: parquet
+  shuffle: false
+extra_env:
+  PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+  NCCL_NET: Socket
+  NCCL_IB_DISABLE: '1'
+  NCCL_SOCKET_FAMILY: AF_INET
+terminal_bench:
+  harbor:
+    environment_type: daytona
+    daytona_api_key_env: DAYTONA_RL_API_KEY
+    eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY
+    override_timeout_sec: 600
+    trial_attempt_timeout_sec: 900
+    n_concurrent_trials: 16
+    max_retries: 0
+    enable_reward_shaping: false
+  installed_agent:
+    agent:
+      name: mini-swe-agent
+      override_setup_timeout_sec: 300
+      kwargs:
+        version: 2.1.0
+        max_turns: 8
+        temperature: 1.0
+    setup_timeout: 300
+    run_timeout: 600
+    cleanup_timeout: 60
+    service_startup_timeout: 60
+    service_shutdown_timeout: 60
+    trial_reward_key: reward
+    output_path: PENDING_RUN_AGENT_TRACE_URI
