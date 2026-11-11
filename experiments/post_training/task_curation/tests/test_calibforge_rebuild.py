@@ -9,10 +9,12 @@ import tarfile
 import tomllib
 
 import pytest
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
 from experiments.post_training.task_curation.calibforge_rebuild import (
     FIXED_BASES,
     DeferredRebuild,
+    lowered_task_spec,
     parse_instructions,
     rebuild_task,
 )
@@ -20,7 +22,12 @@ from experiments.post_training.task_curation.calibforge_rebuild import (
 
 def native_task(dockerfile: str, files: dict[str, bytes] | None = None) -> bytes:
     """Build a gzip task tar in the native release layout."""
-    members = {"environment/Dockerfile": dockerfile.encode()}
+    members = {
+        "environment/Dockerfile": dockerfile.encode(),
+        "instruction.md": b"Solve the task.\n",
+        "tests/test.sh": b"#!/bin/bash\necho 0 > /logs/verifier/reward.txt\n",
+        "tests/test_outputs.py": b"def test_placeholder():\n    assert True\n",
+    }
     members["task.toml"] = b'[task]\nid = "fixture"\n\n[environment]\nworkdir = "/app"\n'
     for name, content in (files or {"data/input.csv": b"a,b\n1,2\n"}).items():
         members[f"environment/{name}"] = content
@@ -184,3 +191,28 @@ def test_a_task_declaring_more_than_the_normalized_shape_defers():
             archive.addfile(info, io.BytesIO(content))
     with pytest.raises(DeferredRebuild, match="larger_machine_shape"):
         rebuild_task(gzip.compress(buffer.getvalue(), mtime=0))
+
+
+def test_a_lowered_spec_stages_fixtures_through_setup_commands():
+    """The rollout runner installs resources then runs setup_commands; both are present."""
+    rebuilt = rebuild_task(
+        native_task(
+            "FROM ubuntu:24.04\nWORKDIR /app\nCOPY files/ /app/files/\n",
+            {"files/input.csv": b"a\n1\n"},
+        )
+    )
+    spec = lowered_task_spec("fixture", rebuilt.task_binary)
+    task = spec["task"]
+    assert task["environment_requirements"]["setup_commands"] == ["sh /setup_files/calibforge-initialize.sh"]
+    assert task["environment_requirements"]["docker_image"] == rebuilt.base_ref
+    assert task["environment_requirements"]["command_semantics"] == "linux_process"
+    staged = {resource["path"] for resource in task["resources"]["all"]}
+    assert staged == {"setup_files/calibforge-fixtures.tar.gz", "setup_files/calibforge-initialize.sh"}
+    assert {resource["path"] for resource in task["resources"]["verifier"]} == {"tests/test.sh", "tests/test_outputs.py"}
+    assert spec["runtime"]["task_machine"] == {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240}
+
+
+def test_an_unpinned_base_cannot_reach_a_lowered_spec():
+    """A floating tag is a schema error, so a missed pin fails loudly."""
+    with pytest.raises(ValueError, match="sha256"):
+        EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image="ubuntu:24.04")

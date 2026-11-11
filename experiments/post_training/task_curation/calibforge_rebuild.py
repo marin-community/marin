@@ -12,6 +12,7 @@ cannot serve is deferred with an explicit reason, never silently altered.
 """
 
 import argparse
+import base64
 import gzip
 import hashlib
 import io
@@ -26,6 +27,23 @@ from pathlib import Path, PurePosixPath
 import pyarrow as pa
 import pyarrow.parquet as pq
 import tomlkit
+from taskcompendium.models import (
+    AnswerType,
+    CommandSemantics,
+    ConversationInput,
+    EnvironmentRequirements,
+    FileReward,
+    InlineFile,
+    PlainText,
+    ResourceGroups,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
+    Source,
+    TaskResource,
+    TaskSpec,
+    TextMessage,
+)
 from tomlkit.items import Table
 
 FIXTURE_ARCHIVE = "calibforge-fixtures.tar.gz"
@@ -417,6 +435,63 @@ def _rewrite_task_toml(original: bytes | None, base_ref: str, workdir: str) -> b
     return tomlkit.dumps(document).encode()
 
 
+LOWERED_RUNTIME = {"cpus": NORMALIZED_CPUS, "memory_mb": NORMALIZED_MEMORY_MB, "storage_mb": NORMALIZED_STORAGE_MB}
+"""The machine shape every lowered task declares."""
+
+
+def lowered_task_spec(task_id: str, task_binary: bytes) -> dict:
+    """The TaskCompendium spec a rollout consumes: resources plus setup commands.
+
+    Harbor's task.toml cannot express a start hook, but the rollout runner executes
+    ``EnvironmentRequirements.setup_commands`` after installing resources
+    (``rolloutengine.machines``), so the fixtures travel as resources and the setup
+    script runs from ``/setup_files``. The models forbid extra keys, which makes an
+    unsupported field a validation error instead of a silently ignored one.
+    """
+    with tarfile.open(fileobj=io.BytesIO(gzip.decompress(task_binary))) as archive:
+        files = {member.name: archive.extractfile(member).read() for member in archive.getmembers() if member.isfile()}
+    document = tomllib.loads(files["task.toml"].decode())
+    environment = document["environment"]
+    base_ref = environment["docker_image"]
+    workdir = environment.get("workdir") or "/app"
+    setup_script = (environment.get("setup") or {}).get("command", "").split()[-1].rsplit("/", 1)[-1]
+
+    def resource(path: str, content: bytes, mode: str | None = None) -> TaskResource:
+        payload = base64.b64encode(content).decode()
+        return TaskResource(path=path, source=InlineFile(content_base64=payload), mode=mode)
+
+    verifier = tuple(resource(path, files[path]) for path in sorted(files) if path.startswith("tests/"))
+    setup = tuple(
+        resource(path, files[path], "0755" if files[path].startswith(b"#!") else None)
+        for path in sorted(files)
+        if path.startswith("setup_files/")
+    )
+    spec = TaskSpec(
+        id=task_id,
+        context=ConversationInput(events=(TextMessage(role="user", content=files["instruction.md"].decode()),)),
+        environment_requirements=EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            docker_image=base_ref,
+            working_directory=workdir,
+            setup_commands=(f"sh {SETUP_ROOT}/{setup_script}",),
+        ),
+        answer_type=AnswerType.TEXT,
+        answer_format=PlainText(),
+        grader=ScriptGrader(
+            argv=("bash", "/tests/test.sh"),
+            cwd=workdir,
+            environment=EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=base_ref),
+            reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)),
+        ),
+        source=Source(dataset="smartie-calibforge-rebuilt", revision="1", row=task_id, importer_revision="1"),
+        resources=ResourceGroups(verifier=verifier, all=setup),
+    )
+    return {
+        "task": spec.model_dump(mode="json"),
+        "runtime": {"task_machine": LOWERED_RUNTIME, "verifier_machine": LOWERED_RUNTIME},
+    }
+
+
 def main() -> None:
     """Rebuild a native cohort parquet: staged tasks + evidence manifest."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -427,6 +502,7 @@ def main() -> None:
     args.output.mkdir(parents=True, exist_ok=False)
     excluded = set(json.loads(args.excluded.read_text()))
     records = []
+    lowered: list[dict] = []
     evidence = []
     base_refs: list[str] = []
     for batch in pq.ParquetFile(args.cohort).iter_batches(batch_size=64, columns=["path", "task_binary"]):
@@ -452,9 +528,12 @@ def main() -> None:
                 archive_sha256=hashlib.sha256(rebuilt.task_binary).hexdigest(),
             )
             records.append({"path": path, "source": path, "task_binary": rebuilt.task_binary})
+            lowered.append({"path": path, "lowered_task_spec": json.dumps(lowered_task_spec(path, rebuilt.task_binary))})
             evidence.append(record)
     schema = pa.schema([("path", pa.string()), ("source", pa.string()), ("task_binary", pa.binary())])
     pq.write_table(pa.Table.from_pylist(records, schema=schema), args.output / "pending-tasks.parquet")
+    lowered_schema = pa.schema([("path", pa.string()), ("lowered_task_spec", pa.string())])
+    pq.write_table(pa.Table.from_pylist(lowered, schema=lowered_schema), args.output / "lowered-tasks.parquet")
     manifest = {
         "cohort_sha256": hashlib.sha256(args.cohort.read_bytes()).hexdigest(),
         "excluded_sha256": hashlib.sha256(args.excluded.read_bytes()).hexdigest(),
