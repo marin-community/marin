@@ -82,22 +82,13 @@ class PolicyJudge:
             with remote_inference(inference) as policy_judge:
                 jobs = {f"policy-judge-{i}": str(job.job_id) for i, job in enumerate(policy_judge.jobs)}
                 policy_judge.wait_until_ready(check_dependencies=lambda: check_inference_backend(backend_state()))
-                assert self.model.revision is not None
-                configuration = JudgeIdentity(
-                    deployment=self.model.location,
-                    models={self.model.location: self.model.revision},
-                    default_model=self.model.location,
-                )
-                executor = replace(
-                    self.source, settings=self.source.settings.model_copy(update={"judge": configuration})
-                )
 
                 def dependencies() -> InferenceBackendState:
                     check_inference_backend(policy_judge.backend_state())
                     return backend_state()
 
                 try:
-                    outcome = executor(
+                    outcome = self.source(
                         session,
                         output_dir,
                         {**env_vars, "JUDGE_API_KEY": "local-policy-judge"},

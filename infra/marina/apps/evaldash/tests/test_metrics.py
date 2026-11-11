@@ -949,7 +949,7 @@ def test_comparison_keeps_protocol_variants_and_matches_historical_shots():
     family = next(entry for entry in metadata["families"] if entry["family"] == "gsm8k")
     assert set(family["variants"]) == set(rows)
     selected = "gsm8k [harness; 0-shot; completion]"
-    request = panel_request(benchmarks=(selected,), cohort_version="historical")
+    request = panel_request(benchmarks=(selected,), cohort="historical")
     panel = build_panel(records, request)
     assert panel["rows"][0]["cells"][selected]["value"] == 0.6
     assert panel["rows"][0]["missing"] == {}
