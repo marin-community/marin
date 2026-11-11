@@ -343,15 +343,9 @@ def test_boxed_preserves_physics_reference_raw_fallback():
         ("m < -n < n < -m", "-m > n > -n > m", 1),
         ("p < q < r < s", "p<q<r<s", 1),
         ("p < q < r < s", "p < q < r", 0),
+        ("x - s", "x-s", 1),
+        ("x - s", "x", 0),
         (r"5 \text{ m}", "5", 1),  # a real unit is still stripped
-        # math-verify reads 10:00 as 10/0; clock times compare as times.
-        ("10:00", "10:00 AM", 1),
-        ("10:00", "11:00", 0),
-        (r"02\!:\!00 \text{ PM}", "14:00", 1),
-        (r"02\!:\!00 \text{ PM}", "2:00 p.m.", 1),
-        (r"02\!:\!00 \text{ PM}", "2:00 AM", 0),
-        (r"18\!:\!00", "6:00 PM", 1),
-        ("16:25", "32:50", 1),  # without clock markers a:b stays a ratio
         # math-verify cannot compare Unequality; a != b compares as a = b.
         (r"x \neq 3", r"x \ne 3", 1),
         (r"x \neq 3", r"x \neq 4", 0),
@@ -366,6 +360,12 @@ def test_answers_math_verify_cannot_compare_grade_by_their_meaning(expected, can
 def test_an_undefined_reference_is_an_invalid_task():
     with pytest.raises(InvalidTask, match="undefined"):
         grade_math.grade_math_candidate(MathSpec(expected=r"\frac{1}{0}"), "1")
+
+
+def test_interval_comparison_keeps_a_relation_chain_whole():
+    spec = MathSpec(expected="(1,3)", math_type=MathType.INTERVAL, profile=MathProfile.ANCHORED)
+
+    assert grade_math.grade_math_candidate(spec, "1<x<3").reward == 1
 
 
 @pytest.mark.parametrize("profile", [MathProfile.ANCHORED, MathProfile.BOXED])

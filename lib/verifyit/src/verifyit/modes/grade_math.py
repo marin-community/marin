@@ -21,7 +21,7 @@ import math
 import re
 import threading
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from enum import StrEnum
 from fractions import Fraction
 from pathlib import Path
@@ -57,14 +57,8 @@ def _timeout() -> int:
 _DANGLING_OPERATOR = re.compile(r"(?:[<>=+\-*/^]|\\(?:leq?|geq?|lt|gt|neq?|cdot|times))\s*$")
 
 
-def _math_verify_parse(text: str, extraction_config: Sequence[Any] | None = None, **kwargs: Any) -> list:
-    """math-verify's ``parse``, retried without unit stripping when stripping cut the answer.
-
-    Unit normalization deletes a trailing spaced single letter as a unit (``m``,
-    ``d``, ``s``), so ``p < q < r < s`` normalizes to ``p < q < r <``. A parse whose
-    normalized text ends in an operator lost a term that way; parsing again with
-    unit stripping off restores it, while ``5 \\text{ m}`` still loses its unit.
-    """
+def _math_verify_parse(text: str, extraction_config: Sequence[object] | None = None, **kwargs: Any) -> list:
+    """Parse math, retaining trailing variables that unit normalization removed."""
     from math_verify import parse  # noqa: PLC0415
     from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig  # noqa: PLC0415
 
@@ -122,7 +116,9 @@ def _verify_pair(gold: Any, target: Any, allow_set_relation_comp: bool) -> bool:
     from math_verify import verify  # noqa: PLC0415
     from sympy import Eq, Ne  # noqa: PLC0415
 
-    if _is_relation_chain(gold) or _is_relation_chain(target):
+    if (_is_relation_chain(gold) or _is_relation_chain(target)) and (
+        not allow_set_relation_comp or _is_relation_chain(gold) == _is_relation_chain(target)
+    ):
         # A chain a < b < c parses as a conjunction of relations, which SymPy
         # deduplicates (m < -n < n < -m keeps two: n < -m is m < -n) and orders.
         # math-verify zips two conjunctions in order with strict=True and raises
@@ -157,60 +153,6 @@ def _verify_pair(gold: Any, target: Any, allow_set_relation_comp: bool) -> bool:
         # A comparison failure not handled above: neither a verdict on the answer nor
         # a property of the task, so it surfaces instead of scoring silently.
         raise GradingInfraError(f"math-verify could not compare: {type(error).__name__}: {error}") from error
-
-
-_CLOCK_SPACING = re.compile(r"\\[!,;:]|\\(?:text|mathrm)\{([^}]*)\}|\s+")
-_CLOCK_TIME = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?(am|pm|a\.m\.|p\.m\.)?", re.IGNORECASE)
-
-
-@dataclass(frozen=True)
-class _ClockTime:
-    hour: int
-    minute: int
-    second: int
-    meridiem: str | None
-
-
-def _clock_time(text: str) -> _ClockTime | None:
-    """A parsed clock time, or ``None`` when the text is not one."""
-    raw = strip_math_delimiters(text.strip())
-    compact = re.sub(r"\s+", "", _CLOCK_SPACING.sub(lambda match: match.group(1) or "", raw))
-    match = _CLOCK_TIME.fullmatch(compact)
-    if match is None:
-        return None
-    hour, minute, second = int(match[1]), int(match[2]), int(match[3] or 0)
-    meridiem = match[4].lower().replace(".", "") if match[4] else None
-    if hour > 24 or minute > 59 or second > 59 or (meridiem and not 1 <= hour <= 12):
-        return None
-    return _ClockTime(hour, minute, second, meridiem)
-
-
-def _reference_clock_time(text: str) -> _ClockTime | None:
-    """The reference's clock time when math-verify would misread it, else ``None``.
-
-    That is a meridiem, LaTeX colon spacing (``10\\!:\\!00``), or a ``:00`` minute,
-    which math-verify parses as division by zero. Any other ``a:b`` stays a ratio.
-    """
-    time = _clock_time(text)
-    if time is None or time.meridiem is not None or "\\" in text or time.minute == 0:
-        return time
-    return None
-
-
-def _clock_times_match(expected: _ClockTime, candidate: _ClockTime) -> bool:
-    """A reference with a meridiem fixes the 24-hour time; one without accepts either reading of its hour."""
-
-    def on_24_hours(time: _ClockTime) -> tuple[int, int, int]:
-        hour = time.hour
-        if time.meridiem is not None:
-            hour = hour % 12 + (12 if time.meridiem == "pm" else 0)
-        return hour, time.minute, time.second
-
-    if expected.meridiem is not None:
-        return on_24_hours(expected) == on_24_hours(candidate)
-    expected_clock = expected.hour, expected.minute, expected.second
-    candidate_clock = candidate.hour, candidate.minute, candidate.second
-    return expected_clock in (candidate_clock, on_24_hours(candidate))
 
 
 def _is_expression(parsed: list) -> bool:
@@ -428,14 +370,6 @@ def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
 
 
 def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
-    expected_time = _reference_clock_time(spec.expected) if spec.math_type is MathType.SCALAR else None
-    if expected_time is not None:
-        # math-verify reads 10:00 as 10/0; clock times compare as times.
-        if spec.profile is MathProfile.RAW and BOXED in candidate:
-            candidate = extract_boxed(candidate) or ""
-        candidate_time = _clock_time(candidate)
-        match = candidate_time is not None and _clock_times_match(expected_time, candidate_time)
-        return scored(float(match), extracted=candidate, expected=spec.expected, comparison="clock_time")
     if spec.profile is MathProfile.RAW:
         return _grade_raw_math(spec, candidate)
     if spec.profile is MathProfile.BOXED:
