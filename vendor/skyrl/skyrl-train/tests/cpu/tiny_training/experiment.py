@@ -18,6 +18,7 @@ import os
 from enum import StrEnum
 from pathlib import Path
 
+from finestore.rl.run_records import read_attempt_metrics, read_attempts
 import ray
 from omegaconf import DictConfig, OmegaConf
 from skyrl_train.config.rollout_validation import validate_rollout_launch
@@ -132,7 +133,7 @@ def tiny_training_config(
             "resume_mode": "latest",
             "ckpt_path": str(root / "ckpts"),
             "export_path": str(root / "exports"),
-            "logger": "files",
+            "logger": "records",
         },
         "generator": {
             "num_inference_engines": 1,
@@ -152,7 +153,9 @@ def tiny_training_config(
 
 def read_metrics(root: Path) -> list[dict]:
     """Return the metrics records an experiment under ``root`` logged, in order."""
-    return [json.loads(path.read_text()) for path in sorted((root / "exports" / "metrics").glob("step-*.json"))]
+    records = read_attempts(str(root / "exports"))
+    latest = max(records.values(), key=lambda record: record.metrics_started_at or "")
+    return list(read_attempt_metrics(str(root / "exports"), latest.attempt_id).values())
 
 
 def cpu_inference_engine_client(cfg: DictConfig, tokenizer) -> InferenceEngineClient:

@@ -6,8 +6,8 @@
 from dataclasses import replace
 
 from marin.evaluation.model_config import ModelConfig
-from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
-from marin.rl.skyrl import SkyRLRun
+from marin.execution.lazy import ArtifactStep, StepContext
+from marin.rl.skyrl import SkyRLRun, resolve_skyrl_policy
 
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
 
@@ -21,17 +21,13 @@ def resolve_skyrl_model(ctx: StepContext, source: ArtifactStep[SkyRLRun], model:
     if model.tokenizer is None:
         raise ValueError("SkyRL evaluation models require an explicit Hugging Face tokenizer")
 
-    if ctx.is_fingerprint:
-        return replace(model, location=f"{artifact_identity(source)}/policy", identity=artifact_identity(source))
-    terminal = ctx.resolved(source)
-    if terminal.hf_model_uri is None:
-        raise ValueError("SkyRL evaluation requires skyrl_step(..., export_hf=True)")
+    resolved = resolve_skyrl_policy(ctx, source)
     return replace(
         model,
-        location=terminal.hf_model_uri,
-        identity=artifact_identity(source),
-        tokenizer=terminal.tokenizer_uri,
-        tokenizer_revision=terminal.tokenizer_revision,
+        location=resolved.uri,
+        identity=resolved.identity,
+        tokenizer=resolved.tokenizer_uri,
+        tokenizer_revision=resolved.tokenizer_revision,
     )
 
 

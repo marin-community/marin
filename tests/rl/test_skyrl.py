@@ -12,12 +12,26 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import IO
 
 import pytest
 import yaml
+from finestore.rl.run_records import (
+    AttemptRecord,
+    LaunchState,
+    attempt_tracking,
+    read_attempt,
+    read_attempt_metrics,
+    register_run_tables,
+    run_records_root,
+    write_attempt,
+)
+from finestore.store import DataStore
+from iris.rpc import controller_pb2, job_pb2
+from marin.evaluation.model_config import ModelConfig
 from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.skyrl import (
@@ -43,13 +57,14 @@ from marin.rl.skyrl import (
 )
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.rl.skyrl_records import (
-    read_skyrl_attempt_tracking,
     read_skyrl_metrics,
     read_stored_skyrl_attempts,
     read_stored_skyrl_receipt,
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import cluster_config
+
+from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, resolve_skyrl_model
 
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
@@ -679,7 +694,7 @@ def test_native_writers_round_trip_through_stored_readers(tmp_path, monkeypatch)
             "model_num_attention_heads: 8\n" + spec.config_yaml
         ),
     )
-    step = skyrl_step(spec, _execution(), export_hf=True)
+    step = skyrl_step(spec, dataclasses.replace(_execution(), max_retries=0), export_hf=True)
     config = step.build_config(
         StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
     )
@@ -695,9 +710,11 @@ def test_native_writers_round_trip_through_stored_readers(tmp_path, monkeypatch)
         }.items()
     }
     launch["iris"]["wandb_entity"] = "tests-team"
-    launch["skyrl"]["trainer"].update(project_name="tests-project", logger=["files", "wandb"])
+    launch["skyrl"]["trainer"].update(project_name="tests-project", logger=["records", "wandb"])
     launch_path = tmp_path / "launch.yaml"
     launch_path.write_text(yaml.safe_dump(launch))
+    (tmp_path / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": launch}))
+    assert read_skyrl_metrics(str(tmp_path)) == {}
     environment = dict(os.environ)
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV", "IRIS_TASK_ID"):
         environment.pop(key, None)
@@ -706,20 +723,81 @@ import json
 import sys
 from pathlib import Path
 from omegaconf import OmegaConf, open_dict
+from unittest.mock import patch
 from cloud.iris.export_hf_checkpoint import ExportJobSpec, checkpoint_export_launch_config
 from cloud.iris.launch import LaunchOutcome, execute_launch
 from cloud.iris.launch_config import load_launch_config
-from cloud.iris.skyrl_entrypoint import _write_tracking
+from cloud.iris.skyrl_entrypoint import _start_attempt_record
 from marinskyrl.checkpoint_paths import policy_export_path
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
 from skyrl_train.hf_export_schema import HFExportRequest
 from skyrl_train.utils.tracking import Tracking
+from finestore.rl.run_records import CheckpointReference, read_attempt
 
 path = Path(sys.argv[1])
 root = path.parent
-import cloud.iris.launch, skyrl_train, taskcompendium
-for module in (cloud.iris.launch, skyrl_train, taskcompendium):
+invalid = OmegaConf.load(path)
+invalid.iris.max_retries = 1
+invalid_path = root / "retry-enabled.yaml"
+invalid_path.write_text(OmegaConf.to_yaml(invalid))
+try:
+    load_launch_config(invalid_path)
+except ValueError as error:
+    assert "records backend requires iris.max_retries=0" in str(error), error
+else:
+    raise AssertionError("retry-enabled records launch was accepted")
+import cloud.iris.launch, skyrl_train, taskcompendium, finestore.rl.run_records
+for module in (cloud.iris.launch, skyrl_train, taskcompendium, finestore.rl.run_records):
     assert Path(module.__file__).resolve().is_relative_to(Path.cwd()), module.__file__
+
+def history_config(attempt_id, export_root):
+    return OmegaConf.create({"trainer": {"export_path": str(export_root)},
+        "runtime": {"run_id": "history", "attempt_id": attempt_id}})
+
+ancestor_root = root / "ancestor-exports"
+original = Tracking("tests-project", "history", "records", history_config("original", ancestor_root))
+original.start(resumed_step=None)
+for step in (0, 1, 2, 3, 8):
+    original.log({"loss": step / 10}, step=step)
+parent = CheckpointReference(export_root=str(ancestor_root), attempt_id="original", step=3)
+with Tracking("tests-project", "history", "records", history_config("middle", root / "exports")) as middle:
+    middle.start(resumed_step=3, checkpoint=parent)
+    for step in (4, 5, 9):
+        middle.log({"loss": step / 10}, step=step)
+    middle.log({"eval/all/avg_score": 0.4}, step=5)
+with Tracking("tests-project", "history", "records", history_config("sibling", root / "exports")) as sibling:
+    sibling.start(resumed_step=3, checkpoint=parent)
+    sibling.log({"loss": 9.9}, step=4)
+try:
+    with Tracking("tests-project", "history", "records", history_config("middle", root / "exports")) as replay:
+        replay.start(resumed_step=3, checkpoint=parent)
+except ValueError as error:
+    assert "fresh attempt_id" in str(error), error
+else:
+    raise AssertionError("replayed execution reused its old metric rows")
+with Tracking("tests-project", "history", "records", history_config("rewind", root / "exports")) as rewind:
+    rewind.start(resumed_step=1, checkpoint=parent.model_copy(update={"step": 1}))
+    rewind.log({"loss": 2.5}, step=2)
+with Tracking("tests-project", "history", "records", history_config("rewind-middle", root / "exports")) as rewind:
+    rewind.start(resumed_step=2,
+        checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=2))
+    rewind.log({"loss": 9.3}, step=4)
+with Tracking("tests-project", "history", "records", history_config("stage", root / "exports")) as stage:
+    stage.start(resumed_step=0,
+        checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=5))
+    stage.log({"loss": 9}, step=0)
+    stage.log({"loss": 8}, step=1)
+with Tracking("tests-project", "history", "records", history_config("missing-parent", root / "exports")) as missing:
+    missing.start(resumed_step=2,
+        checkpoint=CheckpointReference(export_root=str(ancestor_root), attempt_id="unrecorded", step=2))
+    missing.log({"loss": 3}, step=3)
+try:
+    with Tracking("tests-project", "history", "records", history_config("failed-direct", root / "exports")) as failed:
+        failed.start(resumed_step=None)
+        failed.log({"loss": 0.9}, step=1)
+        raise RuntimeError("fixture workload failed")
+except RuntimeError as error:
+    assert str(error) == "fixture workload failed", error
 
 class LocalBackend:
     def launch(self, config_path):
@@ -736,10 +814,17 @@ class LocalBackend:
             with open_dict(config.skyrl):
                 config.skyrl.runtime = {"run_id": config.run.id, "attempt_id": config.run.attempt_id,
                     "iris_job_id": "/local/training", "coordinator_iris_job_id": None}
-            _write_tracking(config)
-            with Tracking("tests-project", "record-boundary", "files", config.skyrl) as tracker:
-                tracker.start(resumed_step=None)
-                tracker.log({"loss": 0.25}, step=3)
+            with patch("cloud.iris.skyrl_entrypoint.version", return_value="fixture-vllm"):
+                _start_attempt_record(config)
+            startup = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
+            assert startup is not None and startup.vllm_version == "fixture-vllm"
+            (root / "startup-observation.json").write_text(startup.model_dump_json())
+            with Tracking("tests-project", "record-boundary", "records", config.skyrl) as tracker:
+                tracker.start(resumed_step=5,
+                    checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=5))
+                tracker.log({"startup/resume": 0.05, "eval/all/avg_score": 0.6}, step=5)
+                tracker.log({"loss": 1.25}, step=6)
+                tracker.log({"loss": 0.25, "entropy": 0.75}, step=6)
             checkpoints = Path(config.artifacts.checkpoint_root)
             checkpoints.mkdir(parents=True, exist_ok=True)
             (checkpoints / CHECKPOINT_MARKER_FILENAME).write_text("8\n")
@@ -775,6 +860,8 @@ config.run.export_hf = True
 path.write_text(OmegaConf.to_yaml(config))
 result = execute_launch(path, backend=LocalBackend())
 assert result.state == "succeeded", result
+original.log({"loss": 12}, step=12)
+original.close(exit_code=0)
 receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
 (root / "resolved-launch.yaml").write_text(OmegaConf.to_yaml({"config": receipt["config"]}))
 """
@@ -788,24 +875,86 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     assert result.returncode == 0, result.stdout + result.stderr
     monkeypatch.setattr("marin.rl.skyrl.connect_controller", lambda **kwargs: pytest.fail("unexpected Iris lookup"))
     receipt = read_stored_skyrl_receipt(str(tmp_path))
-    assert receipt is not None and receipt.result.model is not None
-    assert receipt.result.model.global_step == 8
+    assert receipt is not None and receipt.native.result.model is not None
+    assert receipt.native.result.model.global_step == 8
     assert read_skyrl_launch_receipt(str(tmp_path)) == receipt
     current_id, attempts = read_stored_skyrl_attempts(str(tmp_path))
     assert current_id == config.attempt_id
     assert set(attempts) == {config.attempt_id, "earlier-failed-attempt"}
-    assert attempts["earlier-failed-attempt"].result.failure == "Iris job reached failed"
-    tracking = read_skyrl_attempt_tracking(str(tmp_path), config.attempt_id)
+    assert attempts["earlier-failed-attempt"].native.result.failure == "Iris job reached failed"
+    tracking = attempt_tracking(receipt)
     assert tracking["attempt_id"] == config.attempt_id
     assert tracking["wandb_url"] == f"https://wandb.ai/tests-team/tests-project/runs/{config.attempt_id}"
     assert "vllm_version" in tracking["engine"]
-    assert read_skyrl_metrics(str(tmp_path)) == {3: {"step": 3, "loss": 0.25}}
+    metrics = read_skyrl_metrics(str(tmp_path))
+    assert list(metrics) == list(range(7))
+    assert [row["loss"] for row in metrics.values()] == [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.25]
+    assert metrics[6] == {
+        "step": 6,
+        "attempt_id": config.attempt_id,
+        "loss": 0.25,
+        "entropy": 0.75,
+        "metric_attempt_ids": {"loss": config.attempt_id, "entropy": config.attempt_id},
+    }
+    assert metrics[5]["attempt_id"] == config.attempt_id
+    assert metrics[5]["metric_attempt_ids"] == {
+        "loss": "middle",
+        "startup/resume": config.attempt_id,
+        "eval/all/avg_score": config.attempt_id,
+    }
+    assert metrics[5]["loss"] == 0.5 and metrics[5]["eval/all/avg_score"] == 0.6
+    assert receipt.parent is not None and receipt.parent.attempt_id == "middle"
+    assert receipt.metrics_started_at is not None and receipt.started_at is not None
+    startup = AttemptRecord.model_validate_json((tmp_path / "startup-observation.json").read_text())
+    assert receipt.started_at == startup.started_at and receipt.vllm_version == startup.vllm_version == "fixture-vllm"
+    export_root = str(tmp_path / "exports")
+    rewind = read_attempt_metrics(export_root, "rewind")
+    assert list(rewind) == [0, 1, 2] and rewind[2]["loss"] == 2.5
+    middle_rewind = read_attempt_metrics(export_root, "rewind-middle")
+    assert list(middle_rewind) == [0, 1, 2, 4] and middle_rewind[4]["loss"] == 9.3
+    stage = read_attempt_metrics(export_root, "stage")
+    assert list(stage) == [0, 1] and [row["loss"] for row in stage.values()] == [9, 8]
+    assert read_attempt(export_root, "stage").parent.step == 5
+    assert read_attempt_metrics(export_root, "failed-direct")[1]["loss"] == 0.9
+    with pytest.raises(FileNotFoundError, match="unrecorded"):
+        read_attempt_metrics(export_root, "missing-parent")
     (tmp_path / "terminal.json").unlink()
     assert read_stored_skyrl_receipt(str(tmp_path)) == receipt
-    (tmp_path / f"exports/attempts/{config.attempt_id}/receipt.json").unlink()
-    assert read_stored_skyrl_receipt(str(tmp_path)) is None
     assert read_stored_skyrl_attempts(str(tmp_path))[0] == config.attempt_id
-    (tmp_path / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": attempts["earlier-failed-attempt"].config}))
+    pending = receipt.model_copy(
+        update={
+            "launch": receipt.native.model_copy(
+                update={"result": receipt.native.result.model_copy(update={"state": LaunchState.SUBMITTED})}
+            )
+        }
+    )
+    with DataStore.open(run_records_root(export_root)) as store:
+        write_attempt(register_run_tables(store).attempts, pending)
+        store.flush()
+
+    @contextmanager
+    def controller(**_kwargs):
+        yield SimpleNamespace(url="http://controller.test", credentials=None)
+
+    @contextmanager
+    def rpc(*_args):
+        job = job_pb2.JobStatus(
+            job_id=f"/tests/{receipt.native.config['iris']['job_name']}", state=job_pb2.JOB_STATE_FAILED
+        )
+        yield SimpleNamespace(list_jobs=lambda _query: controller_pb2.Controller.ListJobsResponse(jobs=[job]))
+
+    with monkeypatch.context() as network:
+        network.setattr("marin.rl.skyrl.connect_controller", controller)
+        network.setattr("marin.rl.skyrl.rpc_client", rpc)
+        refreshed = read_skyrl_launch_receipt(str(tmp_path))
+    assert refreshed is not None and refreshed.native.result.state == "failed"
+    assert refreshed.started_at == startup.started_at and refreshed.vllm_version == "fixture-vllm"
+    with DataStore.open(run_records_root(export_root)) as store:
+        write_attempt(register_run_tables(store).attempts, receipt)
+        store.flush()
+    (tmp_path / "resolved-launch.yaml").write_text(
+        yaml.safe_dump({"config": attempts["earlier-failed-attempt"].native.config})
+    )
     assert read_stored_skyrl_receipt(str(tmp_path)) == attempts["earlier-failed-attempt"]
     (tmp_path / "resolved-launch.yaml").unlink()
     assert read_stored_skyrl_attempts(str(tmp_path)) == (None, {})
@@ -1051,3 +1200,24 @@ def test_finished_policy_resolves_terminal_export_as_model_input(tmp_path):
     resolved = model.resolve(context)
     assert resolved.uri == str(root / "policy")
     assert (resolved.tokenizer_uri, resolved.tokenizer_revision) == ("tests/tokenizer", "tokenizer-commit")
+    evaluation = ModelConfig(name="finished", location=SKYRL_POLICY_LOCATION, tokenizer="declared/tokenizer")
+    evaluated = resolve_skyrl_model(context, source, evaluation)
+    assert (evaluated.location, evaluated.tokenizer, evaluated.tokenizer_revision) == (
+        str(root / "policy"),
+        "tests/tokenizer",
+        "tokenizer-commit",
+    )
+    fingerprint = StepContext.for_fingerprint({}, model.deps())
+    policy_identity = model.resolve(fingerprint)
+    evaluation_identity = resolve_skyrl_model(fingerprint, source, evaluation)
+    assert (evaluation_identity.location, evaluation_identity.tokenizer, evaluation_identity.tokenizer_revision) == (
+        policy_identity.uri,
+        policy_identity.tokenizer_uri,
+        policy_identity.tokenizer_revision,
+    )
+    assert evaluated.identity == evaluation_identity.identity == f"tests/finished@2026.10.26:{source.fingerprint()}"
+    assert evaluation_identity.location == f"tests/finished@2026.10.26:{source.fingerprint()}/policy"
+    other = ArtifactStep.adopt("tests/other-policy", "2026.10.27", str(root), kind=SkyRLRun)
+    other_model = resolve_skyrl_model(StepContext.for_fingerprint({}, (other,)), other, evaluation)
+    assert other_model.identity == f"tests/other-policy@2026.10.27:{other.fingerprint()}"
+    assert other_model.location == f"tests/other-policy@2026.10.27:{other.fingerprint()}/policy"
