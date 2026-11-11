@@ -12,7 +12,7 @@ from skyrl_train.entrypoints.main_base import (
     run_ray_driver,
 )
 from skyrl_train.entrypoints.terminal_bench import TerminalBenchExp
-from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
+from skyrl_train.inference_engines.sampling import get_sampling_params_for_backend
 from skyrl_train.config.rollout_validation import EntrypointOperation
 from skyrl_train.trajectory_runners.trajectory_processing import prepare_trajectory_request
 

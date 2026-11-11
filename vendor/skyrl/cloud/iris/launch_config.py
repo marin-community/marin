@@ -11,7 +11,7 @@ from typing import Any, Mapping
 
 from omegaconf import MISSING, DictConfig, OmegaConf, open_dict
 
-from skyrl_train.evaluation_profiles import named_evaluation_profiles
+from skyrl_train.evaluation_profiles import evaluation_profiles, validate_evaluation_data
 
 from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.callbacks import validate_hf_export_config
@@ -241,7 +241,7 @@ def load_launch_config(path: Path) -> DictConfig:
     """Load and validate one complete SkyRL launch document."""
     config = compose_launch_config(OmegaConf.load(path))
     if _is_source_recipe(config.skyrl):
-        _validate_evaluation_data(config)
+        validate_evaluation_data(config, source_recipe=True)
         if config.run.mode != RunMode.TRAIN:
             raise ValueError("checkpoint_export launch configs must already contain a composed SkyRL subtree")
         config = _compose_source_recipe(config)
@@ -250,6 +250,7 @@ def load_launch_config(path: Path) -> DictConfig:
         artifact_root = posixpath.dirname(str(config.artifacts.resolved_config_uri))
         probe.archive_uri = join_resource_path(artifact_root, "mismatch_probe")
     validate_launch_config(config)
+    evaluation_profiles(config.skyrl)
     return config
 
 
@@ -277,15 +278,6 @@ def _validate_inputs(inputs: dict[str, Any]) -> None:
             if not isinstance(value, dict):
                 raise TypeError(f"inputs.{name}[{index}] must be a mapping")
             data_source(value)
-
-
-def _validate_evaluation_data(config: DictConfig) -> None:
-    for name in config.inputs.get("evaluation_data", {}):
-        profile = named_evaluation_profiles(config.skyrl).get(name)
-        if profile is None:
-            raise ValueError(f"evaluation data has no additional evaluation profile: {name}")
-        if _is_source_recipe(config.skyrl) and profile.get("data_files") is not None:
-            raise ValueError(f"evaluation profile {name} has both data_files and evaluation_data")
 
 
 def validate_iris_allocation(config: dict[str, Any]) -> IrisAllocationConfig:
@@ -338,7 +330,7 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     backends = raw["skyrl"].get("trainer", {}).get("logger", ())
     if "records" in backends and raw["iris"]["max_retries"] != 0:
         raise ValueError("The records backend requires iris.max_retries=0 and a fresh attempt_id per execution")
-    _validate_evaluation_data(config)
+    validate_evaluation_data(config, source_recipe=_is_source_recipe(config.skyrl))
     ray = raw["ray"]
     if ray["rendezvous_timeout"] <= 0 or ray["cluster_join_timeout"] <= 0 or ray["driver_liveness_timeout"] < 0:
         raise ValueError(

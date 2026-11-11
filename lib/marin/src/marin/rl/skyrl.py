@@ -28,6 +28,7 @@ from finestore.rl.run_records import (
     AttemptRecord,
     LaunchReceipt,
     LaunchResult,
+    LaunchState,
 )
 from iris.cli.connect import connect_controller, rpc_client
 from iris.cluster.client.job_info import get_job_info
@@ -125,7 +126,7 @@ class SkyRLRolePlan:
 
     @property
     def num_nodes(self) -> int:
-        """Count inference nodes, adding trainer and reference nodes for training."""
+        """Count allocated nodes for the selected role placement."""
         if self.colocate_all and not self.generate_only:
             return self.policy_num_nodes
         engine_gpus = (
@@ -492,18 +493,6 @@ class SkyRLSpec:
         names = [name for name, _ in self.evaluation_data]
         if len(names) != len(set(names)):
             raise ValueError("duplicate evaluation data names")
-        profiles = {
-            name: profile
-            for callback in _parsed_config(self.config_yaml).get("trainer", {}).get("callbacks") or []
-            if callback.get("type") == "evaluation"
-            for name, profile in (callback.get("additional_evaluations") or {}).items()
-        }
-        for name, _ in self.evaluation_data:
-            profile = profiles.get(name)
-            if profile is None:
-                raise ValueError(f"evaluation data has no additional evaluation profile: {name}")
-            if profile.get("data_files") is not None:
-                raise ValueError(f"evaluation profile {name} has both data_files and evaluation_data")
 
 
 @dataclass(frozen=True)
@@ -1060,7 +1049,7 @@ def read_skyrl_launch_receipt(run_output: str) -> AttemptRecord | None:
     controller and may be running. Raises SkyRLReceiptLookupError when the job name matches no job or several.
     """
     record = read_stored_skyrl_receipt(run_output)
-    if record is not None and record.native.result.state in {"succeeded", "failed"}:
+    if record is not None and record.native.result.state in {LaunchState.SUCCEEDED, LaunchState.FAILED}:
         return record
     if record is not None:
         config = record.native.config
@@ -1092,9 +1081,9 @@ def read_skyrl_launch_receipt(run_output: str) -> AttemptRecord | None:
     if len(matches) != 1:
         raise SkyRLReceiptLookupError(f"cannot identify the Iris job {name}; its state is unavailable")
     job = matches[0]
-    state = "submitted"
+    state = LaunchState.SUBMITTED
     if is_job_finished(job.state):
-        state = "succeeded" if job.state == job_pb2.JOB_STATE_SUCCEEDED else "failed"
+        state = LaunchState.SUCCEEDED if job.state == job_pb2.JOB_STATE_SUCCEEDED else LaunchState.FAILED
     receipt = LaunchReceipt.model_validate(
         {
             "config": config,

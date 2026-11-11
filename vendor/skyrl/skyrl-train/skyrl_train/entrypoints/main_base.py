@@ -27,7 +27,7 @@ from loguru import logger
 import asyncio
 import multiprocessing as mp
 
-from skyrl_train.evaluation_profiles import named_evaluation_profiles, parse_evaluation_profiles
+from skyrl_train.evaluation_profiles import evaluation_profiles
 from skyrl_train.inference_engines.chat_template import get_custom_chat_template
 from skyrl_train.config.rollout_validation import (
     EntrypointOperation,
@@ -184,7 +184,7 @@ def create_ray_wrapped_inference_engines_from_config(
     requested_logprobs = [cfg.generator.sampling_params.logprobs, cfg.generator.eval_sampling_params.logprobs]
     requested_logprobs.extend(
         (profile.sampling_params or {}).get("logprobs")
-        for profile in parse_evaluation_profiles(named_evaluation_profiles(cfg)).values()
+        for profile in evaluation_profiles(cfg).values()
     )
     requested_logprobs = [
         value + 1
@@ -410,11 +410,11 @@ class BasePPOExp:
         )
 
     def get_eval_dataset(self, data_files: list[str] | None = None):
-        """Load validation prompts for evaluation or new mismatch-probe generation."""
+        """Load selected evaluation prompts or new mismatch-probe prompts."""
         data_files = self.cfg.data.val_data if data_files is None else data_files
         probe = self.cfg.trainer.mismatch_probe
         needs_probe_prompts = probe.enabled and probe.reuse_probe is None
-        needs_named_evaluation = bool(named_evaluation_profiles(self.cfg))
+        needs_named_evaluation = bool(evaluation_profiles(self.cfg))
         if (self.cfg.trainer.eval_interval > 0 or needs_probe_prompts or needs_named_evaluation) and data_files:
             return self._build_eval_dataset(data_files)
         return None
@@ -427,7 +427,7 @@ class BasePPOExp:
     def get_named_eval_datasets(self):
         """Build the datasets selected by named evaluation profiles."""
         datasets = {}
-        for name, profile in parse_evaluation_profiles(named_evaluation_profiles(self.cfg)).items():
+        for name, profile in evaluation_profiles(self.cfg).items():
             if profile.data_files is not None:
                 dataset = self.get_eval_dataset(profile.data_files)
                 if dataset is None:

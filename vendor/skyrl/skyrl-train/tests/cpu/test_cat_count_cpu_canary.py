@@ -416,9 +416,24 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
             preserved = records[1]
 
 
+    if not step_wise:
+        zero_root = root / "zero-progress"
+        cfg = cat_count_config(zero_root, cat_count_policy, steps=1)
+        cfg.trainer.epochs = 0
+        cfg.trainer.callbacks = [{
+            "type": "evaluation", "eval_steps": 1, "eval_before_train": True, "eval_on_train_end": False,
+            "additional_evaluations": {"final_panel": {"schedule": "final"}},
+        }]
+        records = run_process(forkserver_context, zero_root, cfg)
+        assert any("eval/all/num_attempted" in row for row in records)
+        assert all("policy/raw_grad_norm" not in row for row in records)
+        assert all(not any(key.startswith("eval/final_panel/") for key in row) for row in records)
+
+
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
+@pytest.mark.parametrize("final_profile", [False, True])
 def test_cat_count_generate_preserves_task_ids_and_token_metrics(
-    tmp_path, cat_count_policy, cat_count_session, forkserver_context
+    tmp_path, cat_count_policy, cat_count_session, forkserver_context, final_profile
 ):
     root = tmp_path / "generate"
     cfg = cat_count_config(root, cat_count_policy)
@@ -454,6 +469,14 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     cfg.generator.eval_n_samples_per_prompt = 2
     cfg.generator.eval_sampling_params.ignore_eos = True
     cfg.generator.eval_sampling_params.max_generate_length = 8
+    if final_profile:
+        cfg.trainer.callbacks = [{
+            "type": "evaluation", "additional_evaluations": {"final_panel": {"schedule": "final"}},
+        }]
+        environment = {key: os.environ[key] for key in ("SKYRL_TELEMETRY_ENDPOINT", "SKYRL_RUN_ID", "SKYRL_EXECUTION_UID")}
+        with pytest.raises(ValueError, match="final evaluation profiles require training updates"):
+            run_cat_count_generate(cfg, environment)
+        return
     records = run_process(forkserver_context, root, cfg, run_cat_count_generate)
     assert len(records) == 1
     metrics = records[0]

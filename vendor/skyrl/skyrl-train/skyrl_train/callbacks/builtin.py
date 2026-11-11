@@ -30,7 +30,12 @@ from typing import Any, Dict, List, Optional, Type
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
-from skyrl_train.evaluation_profiles import named_evaluation_metrics, parse_evaluation_profiles
+from skyrl_train.evaluation_profiles import (
+    EvaluationProfile,
+    evaluation_profile_due,
+    evaluation_profiles,
+    named_evaluation_metrics,
+)
 from skyrl_train.config.callbacks import has_explicit_callbacks, hf_export_destination_configured
 from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.json_serialization import to_jsonable
@@ -321,24 +326,20 @@ class EvaluationCallback(TrainerCallback):
         eval_steps: int = 5,
         eval_on_train_end: bool = True,
         eval_before_train: bool = True,
-        additional_evaluations: Dict[str, Dict[str, Any]] | None = None,
+        additional_evaluations: Dict[str, EvaluationProfile] | None = None,
         metric_groups: Dict[str, List[str]] | None = None,
         stop_when: Dict[str, Dict[str, float]] | None = None,
     ):
         self.eval_steps = eval_steps
         self.eval_on_train_end = eval_on_train_end
         self.eval_before_train = eval_before_train
-        self.additional_evaluations = parse_evaluation_profiles(additional_evaluations)
+        self.additional_evaluations = additional_evaluations or {}
         self.metric_groups = metric_groups or {}
         self.stop_when = {name: EvaluationStopConfig(**value) for name, value in (stop_when or {}).items()}
         self._initial_values: Dict[str, float] = {}
         self._initial_step: int | None = None
         if any(not keys for keys in self.metric_groups.values()):
             raise ValueError("evaluation metric groups must be nonempty")
-
-    @staticmethod
-    def _final_due(state: TrainerState) -> bool:
-        return state.is_last_step and state.global_step > 0
 
     async def collect_evaluation(self, state, *, trainer, pool):
         metrics = {}
@@ -353,7 +354,7 @@ class EvaluationCallback(TrainerCallback):
 
         async with asyncio.TaskGroup() as tasks:
             for name, parameters in self.additional_evaluations.items():
-                if parameters.schedule == "every_evaluation" or self._final_due(state):
+                if evaluation_profile_due(parameters, step=state.global_step, last_step=state.is_last_step):
                     tasks.create_task(collect(name, parameters))
         return metrics
 
@@ -410,8 +411,10 @@ class EvaluationCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        final_due = self._final_due(state) and any(
-            profile.schedule == "final" for profile in self.additional_evaluations.values()
+        final_due = any(
+            profile.schedule == "final"
+            and evaluation_profile_due(profile, step=state.global_step, last_step=state.is_last_step)
+            for profile in self.additional_evaluations.values()
         )
         if (self.eval_on_train_end and self.eval_steps > 0) or final_due:
             control.should_evaluate = True
@@ -1180,6 +1183,7 @@ def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
     if callbacks_config is None:
         return []
 
+    profiles = evaluation_profiles(cfg)
     callbacks = []
     for callback_config in callbacks_config:
         # Convert OmegaConf to dict if needed
@@ -1189,6 +1193,10 @@ def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
             config_dict = callback_config
 
         try:
+            if config_dict.get("type") == "evaluation":
+                config_dict["additional_evaluations"] = {
+                    name: profiles[name] for name in config_dict.get("additional_evaluations") or {}
+                }
             callback = create_callback_from_config(config_dict)
             callbacks.append(callback)
             logger.debug(f"Created callback: {callback.__class__.__name__}")
