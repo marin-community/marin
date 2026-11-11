@@ -23,6 +23,7 @@ The kernel serves three groups of routes under ``/belay/api``:
   the session is running: another caller with the same identity can only claim, never write into that session.
 """
 
+import dataclasses
 import datetime
 import hashlib
 import hmac
@@ -90,6 +91,9 @@ LABEL_WIDTH = 90
 RECENT_SESSIONS = 20
 RECENT_ACTIVITY = 60
 
+# A registry id: the experiment of a Belay run starts with its idea's (see parse_run_name).
+REGISTRY_ID_PATTERN = "X[0-9]{4}"
+
 SCHEMA = (
     """CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY, value JSONB NOT NULL, updated_by TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
@@ -105,6 +109,11 @@ SCHEMA = (
         submitted_at TIMESTAMPTZ, finished_at TIMESTAMPTZ, nodes INTEGER NOT NULL DEFAULT 1, step INTEGER,
         total_steps INTEGER, loss DOUBLE PRECISION, wandb_url TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         step_at TIMESTAMPTZ, steps_per_sec DOUBLE PRECISION)""",
+    # A run's registry_id is its idea's (X0221); a ladder rung's run also carries its rung in experiment (X0221d512).
+    # Rows from before this held the experiment in registry_id; move it over once.
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS experiment TEXT",
+    f"UPDATE runs SET experiment = registry_id, registry_id = substring(registry_id FROM '^{REGISTRY_ID_PATTERN}') "
+    "WHERE experiment IS NULL",
     """CREATE TABLE IF NOT EXISTS events (
         id BIGSERIAL PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now(), kind TEXT NOT NULL, ref TEXT,
         summary TEXT NOT NULL, payload JSONB NOT NULL DEFAULT '{}', session_id TEXT)""",
@@ -135,15 +144,35 @@ SCHEMA = (
 )
 
 
+# A Belay run is named belay-<experiment>-<run>. The experiment is the idea's registry id, plus a rung tag for a
+# ladder rung: belay-X0221d512-seed0 is run seed0 of rung d512 of X0221.
+REGISTRY_ID_PREFIX = re.compile(REGISTRY_ID_PATTERN)
+
+
+@dataclasses.dataclass(frozen=True)
+class RunName:
+    experiment: str
+    run: str
+    registry_id: str | None
+    """The idea's registry id; None for a run outside the registry."""
+
+
+def parse_run_name(name: str) -> RunName:
+    experiment, _, run = name.removeprefix("belay-").partition("-")
+    match = REGISTRY_ID_PREFIX.match(experiment)
+    return RunName(experiment=experiment, run=run, registry_id=match.group() if match else None)
+
+
 RUNS_WITH_EXPECTATIONS = (
     "SELECT runs.*, e.expected_at FROM runs LEFT JOIN run_expectations e USING (name) "
     "ORDER BY submitted_at DESC NULLS LAST"
 )
 _TERMINAL_SQL = ", ".join(f"'{state}'" for state in sorted(TERMINAL_RUN_STATES))
 UPSERT_RUN = f"""
-INSERT INTO runs (name, job_id, registry_id, run, state, submitted_at, finished_at, nodes, step, total_steps, loss,
-                  wandb_url, updated_at)
-VALUES (:name, :job_id, :rid, :run, :state, :submitted_at, NULL, :nodes, :step, :total_steps, :loss, :wandb_url, now())
+INSERT INTO runs (name, job_id, registry_id, experiment, run, state, submitted_at, finished_at, nodes, step,
+                  total_steps, loss, wandb_url, updated_at)
+VALUES (:name, :job_id, :rid, :experiment, :run, :state, :submitted_at, NULL, :nodes, :step, :total_steps, :loss,
+        :wandb_url, now())
 ON CONFLICT (name) DO UPDATE SET
     state = EXCLUDED.state,
     step = COALESCE(EXCLUDED.step, runs.step),
@@ -804,7 +833,7 @@ def note_overdue_runs(conn: Connection) -> int:
         cutoff=_now() - OVERDUE_GRACE,
     )
     for run in overdue:
-        experiment = run["name"].removeprefix("belay-").partition("-")[0]
+        experiment = parse_run_name(run["name"]).experiment
         _enqueue(
             conn,
             EventKind.RUN_OVERDUE,
@@ -1343,11 +1372,17 @@ def create_api(services: Services) -> RegisteredApi:
         with engine.begin() as conn:
             for r in sync.runs:
                 previous = _rows(conn, "SELECT state, step, step_at, steps_per_sec FROM runs WHERE name = :n", n=r.name)
-                experiment, _, run = r.name.removeprefix("belay-").partition("-")
+                parsed = parse_run_name(r.name)
                 terminal = r.state in TERMINAL_RUN_STATES
                 conn.execute(
                     text(UPSERT_RUN),
-                    {**r.model_dump(), "rid": experiment, "run": run, "terminal": terminal},
+                    {
+                        **r.model_dump(),
+                        "rid": parsed.registry_id,
+                        "experiment": parsed.experiment,
+                        "run": parsed.run,
+                        "terminal": terminal,
+                    },
                 )
                 _update_rate(conn, r, previous[0] if previous else None)
                 was_live = bool(previous) and previous[0]["state"] not in TERMINAL_RUN_STATES
@@ -1361,15 +1396,16 @@ def create_api(services: Services) -> RegisteredApi:
                         EventKind.RUN_FINISHED,
                         r.name,
                         f"{r.name} {r.state}",
-                        {"run": r.name, "job_id": r.job_id, "state": r.state, "experiment": experiment},
+                        {"run": r.name, "job_id": r.job_id, "state": r.state, "experiment": parsed.experiment},
                     )
-                if not terminal and experiment:
+                # Any live run of an idea, a ladder rung's included, means the idea is running.
+                if not terminal and parsed.registry_id:
                     conn.execute(
                         text(
                             "UPDATE ideas SET state = 'running', updated_at = now() "
                             "WHERE registry_id = :rid AND state IN ('approved', 'planned')"
                         ),
-                        {"rid": experiment},
+                        {"rid": parsed.registry_id},
                     )
         return {"finished": finished}
 

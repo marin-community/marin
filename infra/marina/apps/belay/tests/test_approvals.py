@@ -242,8 +242,8 @@ def failed_plan(conn) -> int:
     conn.execute(text("UPDATE ideas SET state = 'planned', registry_id = 'X0014' WHERE id = :id"), {"id": idea_id(conn)})
     conn.execute(
         text(
-            "INSERT INTO runs (name, job_id, registry_id, run, state) "
-            "VALUES ('belay-X0014d512-seed0', 'j', 'X0014d512', 'seed0', 'failed')"
+            "INSERT INTO runs (name, job_id, registry_id, experiment, run, state) "
+            "VALUES ('belay-X0014d512-seed0', 'j', 'X0014', 'X0014d512', 'seed0', 'failed')"
         )
     )
     return idea_id(conn)
@@ -470,6 +470,34 @@ def test_only_the_claiming_session_can_write_into_it(api: TestClient) -> None:
     assert client.post("/agent/sessions/s1/finish", json=finish, headers=mine).status_code == 200
     # A finished session's secret writes nothing more.
     assert client.post("/agent/ideas/1/report", json=note, headers=mine).status_code == 403
+
+
+def test_a_live_ladder_rung_marks_its_idea_running(api: TestClient, database_url: str) -> None:
+    with create_engine(database_url).begin() as connection:
+        connection.execute(text("UPDATE belay_api_test.ideas SET state = 'planned', registry_id = 'X0221' WHERE id = 1"))
+    run = {"name": "belay-X0221d512-seed0", "job_id": "/loom/belay-X0221d512-seed0-coord", "state": "running"}
+    response = api.post("/agent/sync/runs", json={"runs": [run]}, headers={"X-Belay-Token": API_TOKEN})
+    assert response.status_code == 200
+    with create_engine(database_url).connect() as connection:
+        assert connection.execute(text("SELECT state FROM belay_api_test.ideas WHERE id = 1")).scalar_one() == "running"
+        row = connection.execute(text("SELECT registry_id, experiment, run FROM belay_api_test.runs")).one()
+    assert tuple(row) == ("X0221", "X0221d512", "seed0")
+
+
+def test_migrate_moves_a_rung_out_of_an_older_runs_registry_id(conn) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO runs (name, job_id, registry_id, run, state) "
+            "VALUES ('belay-X0014d512-seed0', 'j', 'X0014d512', 'seed0', 'failed'), "
+            "('belay-X0037-seed0', 'j', 'X0037', 'seed0', 'succeeded')"
+        )
+    )
+    migrate(conn)
+    rows = conn.execute(text("SELECT name, registry_id, experiment FROM runs ORDER BY name")).all()
+    assert [tuple(r) for r in rows] == [
+        ("belay-X0014d512-seed0", "X0014", "X0014d512"),
+        ("belay-X0037-seed0", "X0037", "X0037"),
+    ]
 
 
 def test_a_lost_sessions_secret_is_refused(api: TestClient, database_url: str) -> None:
