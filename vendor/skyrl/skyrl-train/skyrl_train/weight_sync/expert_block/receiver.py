@@ -53,6 +53,7 @@ class ExpertBlockReceiver:
         pp_rank: int,
         pp_size: int,
         gpu_uuid: str,
+        weight_sync_max_ctas: int | None,
     ):
         self.vllm_config = vllm_config
         self.device = device
@@ -62,6 +63,7 @@ class ExpertBlockReceiver:
         self.pp_rank = pp_rank
         self.pp_size = pp_size
         self.gpu_uuid = gpu_uuid
+        self.weight_sync_max_ctas = weight_sync_max_ctas
         self.participant: int | None = None
         self.parameters: dict[str, torch.Tensor] = {}
         self.identity: dict[str, tuple] = {}
@@ -137,6 +139,7 @@ class ExpertBlockReceiver:
             plan,
             Rendezvous(**init_info["rendezvous"]),
             self.device,
+            max_ctas=self.weight_sync_max_ctas,
             parameters=self.parameters,
             expert_maps=self.expert_maps,
         )

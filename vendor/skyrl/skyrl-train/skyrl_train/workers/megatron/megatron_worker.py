@@ -18,7 +18,7 @@ from megatron.core.optimizer import ChainedOptimizer, DistributedOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.tensor_parallel.random import get_cuda_rng_tracker
 from omegaconf import OmegaConf
-from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
+from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV, NCCL_MAX_CHANNELS_ENV
 from skyrl_train.distributed.dispatch import MeshRank
 from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH
 from skyrl_train.distributed.megatron.megatron_strategy import MegatronStrategy
@@ -386,16 +386,15 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                 raise ValueError("nccl_max_channels requires a batch-invariant TP1/ETP1 policy")
             if not isinstance(channels, int) or isinstance(channels, bool) or channels < 1:
                 raise ValueError("nccl_max_channels must be a positive integer")
-            publication_channels = BATCH_INVARIANT_NCCL_ENV["NCCL_MAX_NCHANNELS"]
+            publication_channels = BATCH_INVARIANT_NCCL_ENV[NCCL_MAX_CHANNELS_ENV]
             if os.environ.get("NCCL_MAX_CTAS") is not None:
                 raise ValueError(
                     "Unset NCCL_MAX_CTAS when using nccl_max_channels so training and weight transfers can use separate limits"
                 )
             # Training can use more channels. Keep weight publication at vLLM's
             # limit so sender and receiver use the same broadcast layout.
-            os.environ["NCCL_MAX_NCHANNELS"] = str(channels)
-            self._weight_sync_pg_options = torch.distributed.ProcessGroupNCCL.Options()
-            self._weight_sync_pg_options.config.max_ctas = int(publication_channels)
+            os.environ[NCCL_MAX_CHANNELS_ENV] = str(channels)
+            self._weight_sync_max_ctas = int(publication_channels)
         self.model: MegatronModelWrapper = None
         self.actor_module: list[nn.Module] = None
         self.scheduler: OptimizerParamScheduler = None

@@ -37,7 +37,11 @@ from skyrl_train.distributed.dispatch import ActorInfo, Dispatch, DispatchRegist
 from skyrl_train.distributed import collective_phase_diagnostics as _phase_diagnostics
 from skyrl_train.distributed.strategy import DistributedStrategy
 from loguru import logger
-from skyrl_train.distributed.utils import init_custom_process_group, init_worker_process_group_with_device
+from skyrl_train.distributed.utils import (
+    init_custom_process_group,
+    init_worker_process_group_with_device,
+    nccl_group_options,
+)
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
 from skyrl_train.utils.policy_math import ppo_critic_loss
 from skyrl_train.utils.importance_ratio_diagnostics import (
@@ -321,7 +325,7 @@ class Worker(DistributedTorchRayActor):
         if telemetry_config.endpoint is not None:
             self._telemetry.enter_context(ProcessTelemetry(telemetry_config, WORKER_ROLE))
         enable_trainer_batch_invariance(cfg.trainer.algorithm.batch_invariant)
-        self._weight_sync_pg_options = None
+        self._weight_sync_max_ctas: int | None = None
 
     @property
     def device(self) -> torch.device:
@@ -456,7 +460,7 @@ class Worker(DistributedTorchRayActor):
                     world_size=world_size,
                     rank=0,
                     group_name=group_name,
-                    pg_options=self._weight_sync_pg_options,
+                    pg_options=nccl_group_options(self._weight_sync_max_ctas),
                 )
             )
             results = await asyncio.gather(*tasks)

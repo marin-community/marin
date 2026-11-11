@@ -66,6 +66,42 @@ def validate_expert_block_transport(config: Mapping[str, Any]) -> None:
         raise ValueError("generator.weight_sync_transport=expert_block requires: " + "; ".join(problems))
 
 
+# The only vLLM MoE all-to-all backend whose collectives have been checked at a raised channel limit.
+# Its dispatch all-gathers tokens; its combine sums per-rank expert outputs with an NCCL reduce-scatter.
+ENGINE_NCCL_CHANNELS_ALL2ALL_BACKEND = "allgather_reducescatter"
+
+
+def validate_engine_nccl_channels(config: Mapping[str, Any]) -> None:
+    """Reject ``generator.inference_engine_nccl_max_channels`` outside the engine layout it was checked on.
+
+    The engine's remaining reductions are the MoE combine's reduce-scatters. A ring reduce-scatter
+    sums each element in ring order, so raising the channel limit keeps that order only while every
+    channel follows the same ring; ``tests/gpu/test_engine_nccl_channels.py`` checks this on the target
+    hardware. TP all-reduces, decode-context-parallel merges and other all-to-all backends have not been
+    checked, so the setting requires TP=1, DCP=1 and the analyzed backend.
+    """
+    generator = config["generator"]
+    channels = generator["inference_engine_nccl_max_channels"]
+    if channels is None:
+        return
+    if not isinstance(channels, int) or isinstance(channels, bool) or channels < 1:
+        raise ValueError(f"generator.inference_engine_nccl_max_channels must be a positive integer, not {channels!r}")
+    problems = []
+    if not config["trainer"]["algorithm"]["batch_invariant"]:
+        problems.append("trainer.algorithm.batch_invariant=true")
+    if generator["backend"] != "vllm":
+        problems.append("the vllm backend")
+    if generator["inference_engine_tensor_parallel_size"] != 1:
+        problems.append("TP=1")
+    if generator.get("inference_engine_decode_context_parallel_size", 1) != 1:
+        problems.append("decode context parallel size 1")
+    backend = generator["engine_init_kwargs"].get("all2all_backend", ENGINE_NCCL_CHANNELS_ALL2ALL_BACKEND)
+    if backend != ENGINE_NCCL_CHANNELS_ALL2ALL_BACKEND:
+        problems.append(f"all2all_backend {ENGINE_NCCL_CHANNELS_ALL2ALL_BACKEND!r}, not {backend!r}")
+    if problems:
+        raise ValueError("generator.inference_engine_nccl_max_channels requires: " + "; ".join(problems))
+
+
 @dataclass(frozen=True)
 class InferenceWorkerPlacement:
     """What one vLLM worker reports about itself."""

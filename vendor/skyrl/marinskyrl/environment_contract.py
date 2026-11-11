@@ -18,6 +18,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from marinskyrl.inference_placement import validate_engine_nccl_channels
+
 
 class EnvVarScope(StrEnum):
     DRIVER = "driver"
@@ -78,6 +80,7 @@ VLLM_USE_V1_ENV = "VLLM_USE_V1"
 VLLM_USE_V2_MODEL_RUNNER_ENV = "VLLM_USE_V2_MODEL_RUNNER"
 VLLM_USE_DEEP_GEMM_ENV = "VLLM_USE_DEEP_GEMM"
 VLLM_BATCH_INVARIANT_ENV = "VLLM_BATCH_INVARIANT"
+ENGINE_NCCL_MAX_CHANNELS_ENV = "SKYRL_ENGINE_NCCL_MAX_CHANNELS"
 VLLM_ALLOW_INSECURE_SERIALIZATION_ENV = "VLLM_ALLOW_INSECURE_SERIALIZATION"
 RUNAI_STREAMER_LOG_TO_STDERR_ENV = "RUNAI_STREAMER_LOG_TO_STDERR"
 RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS_ENV = "RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"
@@ -192,6 +195,12 @@ ENV_VAR_SPECS = (
     EnvVarSpec(
         VLLM_BATCH_INVARIANT_ENV,
         "trainer.algorithm.batch_invariant",
+        EnvVarSource.CONFIG,
+        frozenset({EnvVarScope.RAY_WORKER, EnvVarScope.INFERENCE_WORKER}),
+    ),
+    EnvVarSpec(
+        ENGINE_NCCL_MAX_CHANNELS_ENV,
+        "generator.inference_engine_nccl_max_channels",
         EnvVarSource.CONFIG,
         frozenset({EnvVarScope.RAY_WORKER, EnvVarScope.INFERENCE_WORKER}),
     ),
@@ -522,6 +531,10 @@ class EnvVarManager:
                 values[name] = value
         if _config_value(config, "trainer.algorithm.batch_invariant", False):
             values[VLLM_BATCH_INVARIANT_ENV] = "1"
+        engine_channels = _config_value(config, "generator.inference_engine_nccl_max_channels")
+        if engine_channels is not None:
+            validate_engine_nccl_channels(config)
+            values[ENGINE_NCCL_MAX_CHANNELS_ENV] = str(engine_channels)
         if _config_value(config, "generator.fuse_weights", False):
             values[VLLM_ALLOW_INSECURE_SERIALIZATION_ENV] = "1"
         if _config_value(config, "trainer.placement.enable_numa_affinity", False):
