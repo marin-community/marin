@@ -75,10 +75,14 @@ def typed_batch_records[T: TypedBatchValue](
     task_ids: Sequence[str],
     *,
     tool_name: str,
-    validate: Callable[[str], T],
+    validate: Callable[[str, str], T],
     identity_error: str,
 ) -> list[TypedBatchRecord[T]]:
-    """Validate structured values and identities while retaining protocol failures."""
+    """Validate structured values and identities while retaining protocol failures.
+
+    ``validate`` receives the tool-call arguments JSON and the response's own task ID,
+    so repair provenance can be recorded against the request that was answered.
+    """
     records = []
     for response in batch_tool_arguments(output, task_ids, tool_name=tool_name):
         task_id = response.task_id
@@ -87,7 +91,7 @@ def typed_batch_records[T: TypedBatchValue](
             continue
         try:
             assert response.arguments is not None
-            value = validate(json.dumps(response.arguments))
+            value = validate(json.dumps(response.arguments), task_id)
             if value.task_id != task_id:
                 raise ValueError(identity_error)
         except (KeyError, TypeError, ValueError) as error:

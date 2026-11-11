@@ -92,7 +92,9 @@ class AnswerTaskSession:
         self.result = GradeResult(Outcome.UNAVAILABLE, None, "The task has no completed turn")
 
     async def prepare(self) -> Prompt:
-        return episode_prompt(self.task)
+        prompt = episode_prompt(self.task)
+        template_kwargs = self.extras.get("chat_template_kwargs", {})
+        return Prompt(prompt.messages, {**prompt.options, "chat_template_kwargs": template_kwargs})
 
     async def advance(self, turn: ModelTurn) -> TaskTransition:
         transition = await self.blocking.run(self.grader, turn, self.config, self.extras)

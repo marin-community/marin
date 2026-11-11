@@ -35,7 +35,7 @@ from marin.evaluation.metric_selection import (
     base_metric,
     declared_metric,
 )
-from marin.evaluation.records import EvalRunRecord, EvalTaskRef, MetricKind
+from marin.evaluation.records import BenchmarkMetricRef, EvalRunRecord, EvalTaskRef, MetricKind
 from marin.evaluation.records import TaskCoverage as RecordTaskCoverage
 
 # A value derived from n items is integral in k to within this tolerance when it really is k/n.
@@ -359,6 +359,77 @@ def declared_metric_gap(record: EvalRunRecord) -> str | None:
         if name not in metrics:
             return f"declared metric {name} not in canonical results"
     return None
+
+
+@dataclass(frozen=True)
+class MetricRow:
+    """One metric a record reports for a task: protocol name, value, and whether it was declared."""
+
+    task: str
+    metric: str
+    value: float
+    declared: bool
+
+
+def _metric_task_keys(record: EvalRunRecord) -> list[str]:
+    """Every distinct non-scratch metrics key, from either the raw or the canonical map."""
+    return [key for key in dict.fromkeys((*record.metrics, *record.canonical_metrics)) if not _is_scratch_task_key(key)]
+
+
+def _declared_metric_value(record: EvalRunRecord, task_keys: Sequence[str], metric: BenchmarkMetricRef) -> float | None:
+    """A declared metric's canonical value, or its raw source value under filter priority."""
+    for task_key in task_keys:
+        canonical = record.canonical_metrics.get(task_key, {})
+        if metric.name in canonical:
+            return canonical[metric.name]
+    for task_key in task_keys:
+        picked = declared_metric(record.metrics.get(task_key, {}), metric.source_name)
+        if picked is not None:
+            return picked[1]
+    return None
+
+
+def declared_metric_rows(record: EvalRunRecord) -> list[MetricRow]:
+    """Every declared benchmark metric for each recorded task, the primary metric first.
+
+    A declared metric reports its protocol name and takes the canonical value when the producer
+    wrote one; otherwise the raw source metric supplies it under the same extraction-filter priority
+    the statistics engine ranks with. Metrics with no recorded value are left out.
+    """
+    rows: list[MetricRow] = []
+    task_keys = _metric_task_keys(record)
+    for task in record.evaluation.tasks:
+        benchmark = task.benchmark
+        if benchmark is None:
+            continue
+        keys = [task_key for task_key in task_keys if _task_ref(record, task_key) is task]
+        ordered = [metric for metric in benchmark.metrics if metric.name == benchmark.primary_metric]
+        ordered += [metric for metric in benchmark.metrics if metric.name != benchmark.primary_metric]
+        for metric in ordered:
+            value = _declared_metric_value(record, keys, metric)
+            if value is not None:
+                rows.append(MetricRow(task=task.name, metric=metric.name, value=value, declared=True))
+    return rows
+
+
+def undeclared_metric_rows(record: EvalRunRecord) -> list[MetricRow]:
+    """Raw metric rows for task keys that no declared benchmark covers.
+
+    A record can mix tasks with benchmark metadata and tasks without it. The declared rows describe
+    only the former, so the latter keep their raw rows; a record with no declarations at all returns
+    its whole raw metric map, in stable task then metric order.
+    """
+    rows: list[MetricRow] = []
+    for task_key, metrics in record.metrics.items():
+        if _is_scratch_task_key(task_key):
+            continue
+        task = _task_ref(record, task_key)
+        if task is not None and task.benchmark is not None:
+            continue
+        rows.extend(
+            MetricRow(task=task_key, metric=name, value=value, declared=False) for name, value in metrics.items()
+        )
+    return sorted(rows, key=lambda row: (row.task, row.metric))
 
 
 def _successes(value: float, coverage: Coverage) -> int | None:

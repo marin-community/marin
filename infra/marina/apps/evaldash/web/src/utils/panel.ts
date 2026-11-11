@@ -2,8 +2,15 @@ import { INTERVAL_KIND, type IntervalKind, type Meta, type PanelCell, type Panel
 import { formatCoverage } from './formatting'
 import { compareCells } from './ranking'
 
+// Cohort query values that name no version label; the API reads them the same way.
+export const ALL_COHORTS = 'all'
+export const UNVERSIONED_COHORT = 'unversioned'
+
 export function cohortWarning(cohort: string, meta: Meta): string | null {
-  if (cohort === 'all') return 'All cohorts may mix evaluation settings. Check run configurations before comparing scores.'
+  if (cohort === ALL_COHORTS) return 'All cohorts may mix evaluation settings. Check run configurations before comparing scores.'
+  if (cohort === UNVERSIONED_COHORT) {
+    return 'Runs launched without a version label have no settings contract and may mix settings. Check run configurations before comparing scores.'
+  }
   if (!meta.verified_cohorts.includes(cohort)) {
     return 'This historical cohort has no verified settings contract. Check run configurations before comparing scores.'
   }

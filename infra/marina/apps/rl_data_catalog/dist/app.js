@@ -1,9 +1,10 @@
 /* Copyright The Marin Authors. SPDX-License-Identifier: Apache-2.0 */
 const number = new Intl.NumberFormat('en-US');
 const labels = {good: 'Good', some_issues: 'Some issues', bad: 'Bad', unknown: 'Unknown', unassessed: 'Not assessed'};
+const daytonaLabels = {safe: 'Safe', unsafe: 'Unsafe'};
 const useLabels = {train: 'Training', eval: 'Evaluation', unprocessed: 'Not processed'};
-const columns = [['display_name', 'Source'], ['examples', 'Examples'], ['use', 'Use'], ['quality', 'Quality'], ['area', 'Top curriculum area']];
-const state = {sources: [], sort: 'examples', direction: -1};
+const columns = [['display_name', 'Source'], ['examples', 'Examples'], ['use', 'Use'], ['quality', 'Quality'], ['independent', 'Independent QC'], ['daytona', 'Daytona safe'], ['area', 'Top curriculum area']];
+const state = {sources: [], sort: 'examples', direction: -1, daytonaSnapshotLimit: null};
 
 function grade(row) {
   return row.assessment.status === 'complete' ? row.assessment.admitted.grade : 'unassessed';
@@ -12,6 +13,8 @@ function value(row, key) {
   if (key === 'examples') return row.coverage?.example_count;
   if (key === 'use') return row.coverage?.intended_use || 'unprocessed';
   if (key === 'quality') return grade(row);
+  if (key === 'independent') return row.independent_qc?.verdict;
+  if (key === 'daytona') return row.daytona_safety;
   if (key === 'area') return row.coverage?.top_area?.name;
   return row[key];
 }
@@ -56,8 +59,12 @@ function render() {
     open.title = row.display_name; open.addEventListener('click', () => details(row));
     name.append(open, node('span', row.origin, 'source-subtitle'));
     const examples = node('td', row.coverage ? number.format(row.coverage.example_count) : '—', 'num');
-    examples.title = row.coverage ? 'Converted examples before curation admission' : 'No processed examples in this release';
-    const use = node('td', row.coverage ? useLabels[row.coverage.intended_use] : '—', 'use-cell');
+    if (row.coverage && row.coverage.basis === 'declared') {
+      examples.title = 'Declared examples in the pinned release; no curriculum placement';
+    } else {
+      examples.title = row.coverage ? 'Converted examples before curation admission' : 'No processed examples in this release';
+    }
+    const use = node('td', row.coverage && useLabels[row.coverage.intended_use] ? useLabels[row.coverage.intended_use] : '—', 'use-cell');
     const quality = node('td');
     const badge = node('span', labels[grade(row)], `chip quality-${grade(row)}`);
     if (row.assessment.status === 'complete') {
@@ -65,6 +72,27 @@ function render() {
       anchor.title = row.assessment.admitted.grade_reason; anchor.append(badge);
       quality.append(anchor, node('span', `${number.format(row.assessment.admitted.reviewed)} reviewed`, 'source-subtitle'));
     } else quality.append(badge);
+    const independent = node('td');
+    if (row.independent_qc) {
+      const qc = row.independent_qc;
+      const chip = node('span', labels[qc.verdict], `chip quality-${qc.verdict}`);
+      chip.title = qc.method;
+      const subtitle = qc.admitted === null
+        ? `${number.format(qc.reviewed)} reviewed`
+        : `${number.format(qc.admitted)} of ${number.format(qc.reviewed)} reviewed`;
+      independent.append(chip, node('span', subtitle, 'source-subtitle'));
+    } else independent.append(node('span', '—', 'muted'));
+    const daytona = node('td');
+    const daytonaState = row.daytona_safety;
+    if (!daytonaState || daytonaState === 'unassessed') {
+      daytona.append(node('span', '—', 'muted'));
+    } else {
+      const safe = daytonaState === 'safe';
+      const chip = node('span', daytonaLabels[daytonaState], `chip quality-${safe ? 'good' : 'bad'}`);
+      const budget = `at most ${number.format(state.daytonaSnapshotLimit)} unique Daytona snapshots`;
+      chip.title = safe ? `Running this source needs ${budget}` : `Running this source needs more than ${budget}`;
+      daytona.append(chip);
+    }
     const area = node('td');
     if (row.coverage?.top_area) {
       const anchor = node('a', row.coverage.top_area.name, 'area-link');
@@ -72,7 +100,7 @@ function render() {
       anchor.title = `${number.format(row.coverage.top_area.instances)} examples in this area`;
       area.append(anchor);
     } else area.append(node('span', '—', 'muted'));
-    tr.append(name, examples, use, quality, area); return tr;
+    tr.append(name, examples, use, quality, independent, daytona, area); return tr;
   }));
   $('empty').hidden = rows.length > 0;
   $('visible-count').textContent = `${number.format(rows.length)} of ${number.format(state.sources.length)} sources`;
@@ -81,8 +109,10 @@ function details(row) {
   $('detail-name').textContent = row.display_name; $('detail-notes').textContent = row.notes;
   const controls = row.curation?.verification;
   const fields = [
-    ['Catalog', row.origin], ['Converted examples', row.coverage?.example_count],
+    ['Catalog', row.origin], ['Status', row.status], ['Converted examples', row.coverage?.example_count],
     ['Use', useLabels[row.coverage?.intended_use]], ['Quality', labels[grade(row)]],
+    ['Independent QC', row.independent_qc ? `${labels[row.independent_qc.verdict]}: ${row.independent_qc.admitted === null ? `${row.independent_qc.reviewed} reviewed` : `${row.independent_qc.admitted} of ${row.independent_qc.reviewed} reviewed`} — ${row.independent_qc.method}` : null],
+    ['Daytona safe', daytonaLabels[row.daytona_safety]],
     ['Top curriculum area', row.coverage?.top_area?.name],
     ['Input rows', row.task_count], ['Source ID', row.id], ['Dataset revision', row.dataset_revision],
     ['Pipeline', row.pipeline?.name], ['Curation', row.curation?.status],
@@ -95,7 +125,11 @@ function details(row) {
     return field;
   }));
   const links = [];
-  if (row.coverage) { const anchor = node('a', 'Curriculum coverage'); anchor.href = curriculumLink(row); links.push(anchor); }
+  if (row.coverage && row.coverage.basis !== 'declared') { const anchor = node('a', 'Curriculum coverage'); anchor.href = curriculumLink(row); links.push(anchor); }
+  if (row.independent_qc) {
+    const anchor = node('a', 'Independent QC evidence ↗'); anchor.href = row.independent_qc.evidence_url;
+    anchor.rel = 'noopener'; anchor.target = '_blank'; links.push(anchor);
+  }
   if (row.assessment.status === 'complete') {
     const anchor = node('a', 'Quality assessment'); anchor.href = `assessment.html?source=${encodeURIComponent(row.id)}`; links.push(anchor);
   }
@@ -107,7 +141,8 @@ function details(row) {
 async function load() {
   const data = await json('api/sources');
   state.sources = data.sources;
-  const processed = data.sources.filter(row => row.coverage);
+  state.daytonaSnapshotLimit = data.daytona_snapshot_limit;
+  const processed = data.sources.filter(row => row.coverage && row.coverage.basis !== 'declared');
   const examples = processed.reduce((total, row) => total + row.coverage.example_count, 0);
   $('message').textContent = `${number.format(data.sources.length)} sources · ${number.format(examples)} examples · ${processed.length} sources processed`;
   $('snapshot-info').textContent = `Curation inventory dated ${new Date(data.created_at).toLocaleDateString()}.`;

@@ -13,7 +13,7 @@ import { apiGet, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatDelta, formatInterval, formatScore } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { cellCoverageLabel, cohortWarning, isPartialCoverage, scoredItemsLabel } from '@/utils/panel'
+import { UNVERSIONED_COHORT, cellCoverageLabel, cohortWarning, isPartialCoverage, scoredItemsLabel } from '@/utils/panel'
 import { FACETS, MAX_COMPARE } from '@/constants'
 import type { Comparison, ComparisonRow, Meta, Panel, PanelCell } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -52,9 +52,8 @@ const { data, error, refresh } = useApi<Comparison>(() =>
 const { data: panel, loading: loadingModels, error: modelsError, refresh: refreshModels } = useApi<Panel>(() =>
   `api/panel?${selectionQuery.value}&include_archived=1`,
 )
-const mixedCohorts = computed(() => new URLSearchParams(selectionQuery.value).get('cohort') === 'all')
 const availableModels = computed(() =>
-  modelsError.value || mixedCohorts.value
+  modelsError.value
     ? []
     : (panel.value?.rows ?? [])
         .filter((row) => Object.values(row.cells).some((cell) => cell.value !== 0))
@@ -190,8 +189,7 @@ const chartSeries = computed(() =>
       <div class="font-mono text-[10px] uppercase tracking-widest text-text-muted mb-2">
         Models ({{ selected.length }}/{{ MAX_COMPARE }})
       </div>
-      <p v-if="mixedCohorts" class="text-sm text-status-warning">Choose one cohort on the Panel before comparing models.</p>
-      <p v-else-if="loadingModels && !panel" class="text-sm text-text-muted">Loading models…</p>
+      <p v-if="loadingModels && !panel" class="text-sm text-text-muted">Loading models…</p>
       <p v-else-if="modelsError" class="text-sm text-status-danger">{{ modelsError }}</p>
       <p v-else-if="!availableModels.length" class="text-sm text-text-muted">No models have non-zero scores in this selection.</p>
       <template v-else>
@@ -315,7 +313,7 @@ const chartSeries = computed(() =>
                       backgroundColor: scoreTint(cell(row, m)!.value),
                       ...(row.leader === m ? { '--tw-ring-color': 'var(--c-best)' } : {}),
                     }"
-                    :title="`${cell(row, m)!.metric} · ${scoredItemsLabel(cell(row, m)!)} graded`"
+                    :title="`${cell(row, m)!.metric} · ${scoredItemsLabel(cell(row, m)!)} graded · cohort ${cell(row, m)!.version ?? UNVERSIONED_COHORT}`"
                   >
                     <span class="font-mono font-medium tabular-nums">{{ formatScore(cell(row, m)!.value) }}</span>
                     <span class="block font-mono text-[10px] text-text-muted tabular-nums leading-none">
@@ -331,6 +329,12 @@ const chartSeries = computed(() =>
                       class="block font-mono text-[9px] leading-none text-text-muted"
                       :title="`95% interval for this model's gap to ${row.leader}`"
                       >{{ gapLabel(row, m) }}</span
+                    >
+                    <RouterLink
+                      :to="`/runs/${encodeURIComponent(cell(row, m)!.run_id)}`"
+                      class="block font-mono text-[9px] leading-none text-text-muted hover:text-accent mt-0.5"
+                      :title="`Open the run behind this score (${cell(row, m)!.run_id})`"
+                      >{{ cell(row, m)!.version ?? UNVERSIONED_COHORT }}</RouterLink
                     >
                   </div>
                   <span v-else class="text-text-muted">—</span>

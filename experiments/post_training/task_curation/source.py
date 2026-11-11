@@ -6,7 +6,7 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from finestore.rl.curation import PipelineReference, SourceDeclaration
+from finestore.rl.curation import DaytonaSafety, IndependentQC, PipelineReference, SourceDeclaration
 from marin.execution.lazy import ArtifactStep
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
@@ -72,6 +72,15 @@ class SourceInfo:
     count: int | None = None
     notes: str = ""
     dataset: SourceReference | None = None
+    independent_qc: IndependentQC | None = None
+    daytona_safety: DaytonaSafety = DaytonaSafety.UNASSESSED
+    """Whether running the source fits the Daytona-safe snapshot budget.
+
+    Each unique agent or grader image a run provisions is one Daytona snapshot. Sources
+    without the ``agentic`` tag never provision sandboxes and are safe regardless of this
+    value; assess an agentic source's unique snapshot count against
+    ``DAYTONA_SAFE_SNAPSHOT_LIMIT`` before declaring it safe or unsafe.
+    """
 
 
 @dataclass(frozen=True)
@@ -150,8 +159,13 @@ class RlDataSource[ConfigT: CatalogConfig]:
             ),
             is_benchmark="benchmark" in tags,
             kind="Generator" if "generator" in tags else "Dataset",
-            status="Excluded" if "excluded" in tags else "Available",
+            status=next(
+                (label for tag, label in (("deprecated", "Deprecated"), ("excluded", "Excluded")) if tag in tags),
+                "Available",
+            ),
             pipeline=invocation,
+            independent_qc=info.independent_qc,
+            daytona_safety=DaytonaSafety.SAFE if "agentic" not in tags else info.daytona_safety,
         )
 
 
