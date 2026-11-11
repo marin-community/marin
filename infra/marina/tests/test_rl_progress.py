@@ -41,7 +41,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         "data_identity": "data-1",
         "initializer_identity": "model-1",
         "evaluation": {
-            "name": "test-panel",
+            "name": "eval_lite",
             "version": "1",
             "task_count": 100,
             "task_set_sha256": "a" * 64,

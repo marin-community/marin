@@ -233,7 +233,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     persisted = {row["attempt_id"]: row for row in client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()["runs"]}
     assert set(persisted) == {"native-0", "native-1"} and persisted["native-0"]["issue"] == 73
     # A numeric bound is stored only as an invariant, with distinct replicate outcomes.
-    relative_key = "test_panel/aaii_category/coding/mean"
+    relative_key = "eval_lite/aaii_category/coding/mean"
     report, second_gate = saved_gate(("policy/entropy<=0", "policy/entropy>=0", f"{relative_key}>=control"))
     assert [
         (row.metric, row.run, row.control) for row in report.comparisons if row.role == gate.ComparisonRole.REQUIREMENT
