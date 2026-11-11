@@ -24,6 +24,7 @@ from levanter.data.text.datasets import (
     DatasetComponent,
     DatasetComponentBase,
     LmDataConfig,
+    MixtureStageUnit,
 )
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.tracker.wandb import WandbConfig
@@ -176,6 +177,49 @@ def plan_sft_mixture(stores: Mapping[str, SftStore], *, batch_size: int, replay_
     )
 
 
+@dataclass(frozen=True)
+class SftHandoff:
+    """A run of the same SFT epoch to continue, from its permanent checkpoint at ``step``.
+
+    The continuing run keeps the plan that ``parent_dp_racks`` racks ran and reads the rest of its data
+    stream at its own batch size.
+    """
+
+    checkpoint: str
+    step: int
+    parent_dp_racks: int
+
+
+@dataclass(frozen=True)
+class SftSteps:
+    """The steps a run trains: ``first_step`` reads mixture sequence ``first_sequence``."""
+
+    first_step: int
+    first_sequence: int
+    num_train_steps: int
+    decay_steps: int
+
+
+def sft_steps(plan: SftMixturePlan, *, start_step: int, batch_size: int, handoff_step: int | None = None) -> SftSteps:
+    """Steps that read the rest of the plan's epoch once at ``batch_size``, from ``handoff_step`` if set.
+
+    Before ``handoff_step`` the epoch ran at the plan's batch size. The decay covers the same final sequences
+    as the plan's, and fewer than ``batch_size`` sequences at the end of the epoch stay unread.
+    """
+    if handoff_step is None:
+        if batch_size != plan.batch_size:
+            raise ValueError(f"batch {batch_size} does not match the plan's {plan.batch_size}")
+        return SftSteps(start_step, 0, start_step + plan.steps, plan.decay_steps)
+    first_sequence = (handoff_step - start_step) * plan.batch_size
+    if not 0 < first_sequence < plan.run_sequences:
+        raise ValueError(f"handoff step {handoff_step} is outside the epoch that starts at step {start_step}")
+    num_train_steps = handoff_step + (plan.run_sequences - first_sequence) // batch_size
+    decay_steps = max(2, round(plan.decay_steps * plan.batch_size / batch_size))
+    if num_train_steps - decay_steps < handoff_step:
+        raise ValueError(f"handoff step {handoff_step} falls inside the learning-rate decay")
+    return SftSteps(handoff_step, first_sequence, num_train_steps, decay_steps)
+
+
 def _store_component(store: SftStore) -> DatasetComponent:
     # The stores hold only a train split; a flat cache gives evaluation no validation split to look for.
     return DatasetComponent(
@@ -218,11 +262,9 @@ def one_epoch_weight_stages(
     """Per-block mixture weights that read each SFT component exactly once over the run.
 
     Each block takes an even share of every SFT component's sequences and fills the rest with replay,
-    split by ``replay_weights`` with at least one draw per replay component. Stage steps count from the
-    mixture's start step (``LmDataConfig.mixture_start_step``).
+    split by ``replay_weights`` with at least one draw per replay component. Stage starts count sequences
+    from the mixture's first sequence (``MixtureStageUnit.SEQUENCE``), so they hold at any batch size.
     """
-    if plan.block_size % plan.batch_size:
-        raise ValueError("Mixture block boundaries must fall on training steps")
     if not replay_weights or any(weight <= 0 for weight in replay_weights.values()):
         raise ValueError("Replay needs at least one positive-weight component")
     replay_total = sum(replay_weights.values())
@@ -242,9 +284,7 @@ def one_epoch_weight_stages(
             replay_counts[name] += 1
         counts.update(replay_counts)
         assert sum(counts.values()) == plan.block_size
-        stages.append(
-            (block * plan.block_size // plan.batch_size, {name: n / plan.block_size for name, n in counts.items()})
-        )
+        stages.append((block * plan.block_size, {name: n / plan.block_size for name, n in counts.items()}))
     return stages
 
 
@@ -252,11 +292,11 @@ def sft_data_config(
     stores: Mapping[str, SftStore],
     plan: SftMixturePlan,
     *,
-    start_step: int,
+    steps: SftSteps,
     replay: LmDataConfig,
     validation: Mapping[str, DatasetComponentBase],
 ) -> LmDataConfig:
-    """The SFT epoch from ``start_step``, replay from the first stage of ``replay``, and zero-weight ``validation``."""
+    """The SFT epoch read from ``steps``, replay from the first stage of ``replay``, and zero-weight ``validation``."""
     components, sft_counts = sft_components(stores, plan)
     replay_stage = replay.train_weights[0][1] if isinstance(replay.train_weights, list) else replay.train_weights
     assert replay_stage is not None
@@ -281,7 +321,9 @@ def sft_data_config(
         block_cross_document_attention=True,
         mixture_block_size=plan.block_size,
         stop_strategy=StopStrategy.RESTART_STRATEGY,
-        mixture_start_step=start_step,
+        mixture_start_step=steps.first_step,
+        mixture_start_sequence=steps.first_sequence,
+        mixture_stage_unit=MixtureStageUnit.SEQUENCE,
     )
 
 
@@ -326,6 +368,7 @@ def build_sft_run(
     eval_every: int = 0,
     checkpoint_root: str | None = None,
     expert_placement: ExpertPlacement | None = None,
+    handoff: SftHandoff | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the hero SFT run that continues ``initialize_from`` at ``start_step``.
@@ -335,7 +378,9 @@ def build_sft_run(
     ``eval_every`` counts absolute steps, so the first eval lands on the first multiple after ``start_step``;
     the trainer's first-step eval never fires on a restored run. ``capacity_factor`` replaces the hero's routed
     expert capacity; with a frozen bias, SFT data overflows the hero's 1.5. ``expert_placement`` renumbers the
-    routed experts of ``initialize_from`` so each capacity block carries a similar load.
+    routed experts of ``initialize_from`` so each capacity block carries a similar load. ``handoff`` continues
+    another run of this epoch from its checkpoint instead of starting at ``initialize_from``; ``stop_after_steps``
+    then counts from the handoff.
     """
     if dp_racks <= 0:
         raise ValueError(f"dp_racks must be positive, got {dp_racks}")
@@ -353,13 +398,18 @@ def build_sft_run(
         expert_placement.validate_for(
             num_layers=model.num_layers, num_experts=model.num_experts, expert_axis_size=expert_axis_size
         )
-    batch_size = hero_rack_batch_size(model.max_seq_len) * dp_racks
+    rack_batch_size = hero_rack_batch_size(model.max_seq_len)
+    batch_size = rack_batch_size * dp_racks
     stores = load_sft_stores()
-    plan = plan_sft_mixture(stores, batch_size=batch_size, replay_fraction=replay_fraction)
-    num_train_steps = start_step + plan.steps
-    stop_step = num_train_steps if stop_after_steps is None else start_step + stop_after_steps
+    plan_racks = dp_racks if handoff is None else handoff.parent_dp_racks
+    plan = plan_sft_mixture(stores, batch_size=rack_batch_size * plan_racks, replay_fraction=replay_fraction)
+    steps = sft_steps(
+        plan, start_step=start_step, batch_size=batch_size, handoff_step=None if handoff is None else handoff.step
+    )
+    num_train_steps = steps.num_train_steps
+    stop_step = num_train_steps if stop_after_steps is None else steps.first_step + stop_after_steps
     if stop_step > num_train_steps:
-        raise ValueError(f"stop_after_steps={stop_after_steps} is past the {plan.steps}-step epoch")
+        raise ValueError(f"stop_after_steps={stop_after_steps} is past the epoch's last step {num_train_steps}")
 
     # The restored optimizer state comes from the hero's pretraining recipe, which fixes beta2 and epsilon.
     _, pretrain_optimizer = build_hero_configs(
@@ -371,7 +421,7 @@ def build_sft_run(
         learning_rate=muon_lr,
         adam_lr=adam_lr,
         warmup=0,
-        decay=plan.decay_steps,
+        decay=steps.decay_steps,
         min_lr_ratio=SFT_MIN_LR_RATIO,
         weight_decay=0.0,
         gate_router_weight_decay=0.0,
@@ -414,15 +464,17 @@ def build_sft_run(
     validation = validation_datasets() if eval_every > 0 else []
     length_statistics = harrier_length_statistics()
     logger.info(
-        "Hero SFT %s: %d updates of %d sequences, %d blocks of %d, replay %.4f, decay over the last %d updates, "
-        "router bias %s, capacity factor %g",
+        "Hero SFT %s: steps %d to %d of %d sequences from mixture sequence %d, %d blocks of %d, replay %.4f, "
+        "decay over the last %d updates, router bias %s, capacity factor %g",
         run_id,
-        plan.steps,
-        plan.batch_size,
+        steps.first_step,
+        num_train_steps,
+        batch_size,
+        steps.first_sequence,
         plan.num_blocks,
         plan.block_size,
         plan.replay_fraction,
-        plan.decay_steps,
+        steps.decay_steps,
         router_bias_mode.value,
         capacity_factor,
     )
@@ -464,6 +516,7 @@ def build_sft_run(
                     f"router-bias-{router_bias_mode.value}",
                     f"capacity-{capacity_factor:g}",
                     *([] if expert_placement is None else [_placement_label(expert_placement)]),
+                    *([] if handoff is None else [f"handoff-step-{handoff.step}"]),
                     "gb200",
                 ],
                 group="hero-sft",
@@ -476,8 +529,8 @@ def build_sft_run(
                 process_timeout=HERO_PROCESS_STALL_TIMEOUT,
                 startup_timeout=HERO_STARTUP_TIMEOUT,
             ),
-            # The run's own checkpoints come first, so a retry resumes the SFT; the base starts it.
-            load_checkpoint_path=[*resume_paths, initialize_from],
+            # The run's own checkpoints come first, so a retry resumes the SFT; the base or the handoff starts it.
+            load_checkpoint_path=[*resume_paths, initialize_from if handoff is None else handoff.checkpoint],
             load_checkpoint=True,
             checkpointer=CheckpointerConfig(
                 base_path=permanent_path,
@@ -498,7 +551,7 @@ def build_sft_run(
             stats_path=ctx.artifact_path(length_statistics),
         )
         data = sft_data_config(
-            stores, plan, start_step=start_step, replay=replay, validation=validation_components(ctx, validation)
+            stores, plan, steps=steps, replay=replay, validation=validation_components(ctx, validation)
         )
         return GrugRunConfig(
             model=model,
@@ -605,6 +658,18 @@ def _grad_norm(value: str) -> float | None:
     default=None,
     help="Expert placement JSON from `expert_placement.py`; renumbers the start checkpoint's routed experts.",
 )
+@click.option(
+    "--handoff-checkpoint",
+    default=None,
+    help="Permanent checkpoint of a run of this epoch to continue, at --dp-racks, from its step. Pass that "
+    "run's other options unchanged.",
+)
+@click.option(
+    "--handoff-dp-racks",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Data-parallel racks of the run that wrote --handoff-checkpoint.",
+)
 @build_options
 def main(
     run_id: str,
@@ -620,7 +685,16 @@ def main(
     eval_every: int,
     checkpoint_root: str | None,
     expert_placement_path: Path | None,
+    handoff_checkpoint: str | None,
+    handoff_dp_racks: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
+    if (handoff_checkpoint is None) != (handoff_dp_racks is None):
+        raise click.UsageError("--handoff-checkpoint and --handoff-dp-racks go together")
+    handoff = (
+        None
+        if handoff_checkpoint is None or handoff_dp_racks is None
+        else SftHandoff(handoff_checkpoint, checkpoint_step(handoff_checkpoint), handoff_dp_racks)
+    )
     return build_sft_run(
         run_id=run_id,
         initialize_from=initialize_from,
@@ -638,6 +712,7 @@ def main(
         expert_placement=(
             None if expert_placement_path is None else ExpertPlacement.from_json(expert_placement_path.read_text())
         ),
+        handoff=handoff,
     )
 
 

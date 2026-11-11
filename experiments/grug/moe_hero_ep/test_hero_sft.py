@@ -31,6 +31,7 @@ from experiments.grug.moe_hero_ep.launch_hero_sft import (
     one_epoch_weight_stages,
     plan_sft_mixture,
     sft_components,
+    sft_steps,
 )
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import (
@@ -97,7 +98,7 @@ def test_one_epoch_stages_read_every_sft_store_exactly_once():
     stages = one_epoch_weight_stages(sft_counts, {"replay/x": 3.0, "replay/y": 1.0}, plan)
 
     assert len(stages) == plan.num_blocks
-    assert [step for step, _ in stages] == [block * plan.block_size // 16 for block in range(plan.num_blocks)]
+    assert [start for start, _ in stages] == [block * plan.block_size for block in range(plan.num_blocks)]
     draws: dict[str, int] = {}
     for _, weights in stages:
         counts = {name: round(weight * plan.block_size) for name, weight in weights.items()}
@@ -107,6 +108,25 @@ def test_one_epoch_stages_read_every_sft_store_exactly_once():
             draws[name] = draws.get(name, 0) + count
     assert {name: draws[name] for name in sft_counts} == sft_counts
     assert draws["replay/x"] + draws["replay/y"] == plan.run_sequences - plan.sft_sequences
+
+
+def test_a_handoff_reads_the_rest_of_the_epoch_once_at_the_new_batch():
+    plan = plan_sft_mixture({"a": _store(900_000), "b": _store(68_596)}, batch_size=176, replay_fraction=0.2035)
+
+    steps = sft_steps(plan, start_step=393_491, batch_size=144, handoff_step=394_552)
+
+    assert steps.first_sequence == (394_552 - 393_491) * 176
+    read = steps.first_sequence + (steps.num_train_steps - steps.first_step) * 144
+    assert plan.run_sequences - 144 < read <= plan.run_sequences
+    assert abs(steps.decay_steps * 144 - plan.decay_steps * 176) <= 72
+
+
+def test_a_handoff_must_precede_the_decay():
+    plan = plan_sft_mixture({"a": _store(900_000), "b": _store(68_596)}, batch_size=176, replay_fraction=0.2035)
+    last_step = 393_491 + plan.steps
+
+    with pytest.raises(ValueError, match="inside the learning-rate decay"):
+        sft_steps(plan, start_step=393_491, batch_size=144, handoff_step=last_step - plan.decay_steps // 2)
 
 
 def test_stores_smaller_than_the_block_count_share_one_component():

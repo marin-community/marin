@@ -8,6 +8,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from enum import StrEnum
 from functools import cached_property
 from typing import Literal, TypeAlias, TypeVar
 
@@ -761,6 +762,16 @@ _ClassifiedComponent: TypeAlias = tuple[
 ]
 
 
+class MixtureStageUnit(StrEnum):
+    """What the start of each ``LmDataConfig.train_weights`` stage counts."""
+
+    STEP = "step"
+    """Training steps, which the trainer's batch schedule converts to sequences."""
+    SEQUENCE = "sequence"
+    """Sequences from the mixture's first sequence, whatever the batch size. Each start must be a multiple of
+    ``mixture_block_size``."""
+
+
 @dataclass(frozen=True)
 class LmDataConfig:
     """Unified LM data config built from components."""
@@ -834,6 +845,12 @@ class LmDataConfig:
     Each source then starts at the beginning of its shuffled order at this step, whatever the batch size, and a
     restore at a later step continues in place. A restore before this step raises. The steps of ``train_weights``
     stages count from this step. Requires the restart stop strategy, and excludes ``prior_context_phases``."""
+    mixture_start_sequence: int = 0
+    """The mixture sequence that ``mixture_start_step`` reads. A run that continues another run's mixture at a
+    different batch size sets it to the sequences the other run read before this step, so it reads the rest of the
+    same stream. Requires ``mixture_start_step`` and ``MixtureStageUnit.SEQUENCE``."""
+    mixture_stage_unit: MixtureStageUnit = MixtureStageUnit.STEP
+    """What the start of each ``train_weights`` stage counts; see ``MixtureStageUnit``."""
 
     def __post_init__(self):
         if self.components and self.train_weights is None:
@@ -889,6 +906,11 @@ class LmDataConfig:
                 raise ValueError(
                     "mixture_start_step excludes prior_context_phases, which replay this config's sources"
                 )
+        if self.mixture_start_sequence:
+            if self.mixture_start_step is None or self.mixture_start_sequence < 0:
+                raise ValueError("mixture_start_sequence must be positive and requires mixture_start_step")
+            if self.mixture_stage_unit != MixtureStageUnit.SEQUENCE:
+                raise ValueError("mixture_start_sequence requires stage starts in MixtureStageUnit.SEQUENCE")
 
     @cached_property
     def the_tokenizer(self) -> MarinTokenizer:
@@ -1011,7 +1033,7 @@ class LmDataConfig:
         """Return the training mixture, with each source's start offset when ``prior_context_phases`` is set."""
         mix_key, shuffle_key = jax.random.split(key)
         weights = self._training_weights(Pos.size)
-        if isinstance(weights, list):
+        if isinstance(weights, list) and self.mixture_stage_unit == MixtureStageUnit.STEP:
             weights = rescale_mixture_schedule_for_batch_schedule(
                 weights, batch_schedule, start_step=self.mixture_start_step or 0
             )
@@ -1034,7 +1056,7 @@ class LmDataConfig:
             first_index=(
                 0
                 if self.mixture_start_step is None
-                else batch_schedule.global_data_offset_by_step(self.mixture_start_step)
+                else batch_schedule.global_data_offset_by_step(self.mixture_start_step) - self.mixture_start_sequence
             ),
         )
 

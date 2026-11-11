@@ -18,6 +18,7 @@ from levanter.data.text.datasets import (
     LmDataConfig,
     ContextPhase,
     ContextPhaseConfig,
+    MixtureStageUnit,
     skip_to_window_offsets,
 )
 from levanter.data.text.formats import TextLmDatasetFormat, preprocessor_for_format
@@ -306,6 +307,22 @@ def test_mixture_start_step_counts_stage_steps_from_the_start(tmp_path):
     started = dataclasses.replace(staged, mixture_start_step=1000)
 
     assert _step_tokens(started, NEW_BATCH, 1000, 1020) == _step_tokens(staged, NEW_BATCH, 0, 20)
+
+
+def test_a_run_continues_another_runs_mixture_at_a_new_batch_size(tmp_path):
+    # The parent reads at batch 6 from step 1000. Its second stage starts at sequence 32, inside its sixth step.
+    parent = dataclasses.replace(
+        _cached_config(tmp_path, NEW_SEQ, stage_step=8),
+        train_weights=[(0, WEIGHTS_BEFORE), (32, WEIGHTS_AFTER)],
+        mixture_stage_unit=MixtureStageUnit.SEQUENCE,
+        mixture_start_step=1000,
+    )
+    # The child restores the parent's step 1004, after 24 sequences, and reads at batch 4.
+    child = dataclasses.replace(parent, mixture_start_step=1004, mixture_start_sequence=24)
+
+    parent_tokens = _step_tokens(parent, 6, 1000, 1012)
+
+    assert _step_tokens(child, 4, 1004, 1016) == parent_tokens[24 * NEW_SEQ :]
 
 
 def test_mixture_start_step_rejects_a_restore_before_the_start(tmp_path):
