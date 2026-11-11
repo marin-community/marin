@@ -23,14 +23,10 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import tomlkit
 from tomlkit.items import Table
-
-from experiments.post_training.task_curation.daytona_identity import (
-    DEFAULT_RESOURCES,
-    image_source_key_from_context,
-    snapshot_identity,
-)
 
 FIXTURE_ARCHIVE = "calibforge-fixtures.tar.gz"
 SETUP_SCRIPT = "calibforge-initialize.sh"
@@ -135,9 +131,7 @@ def parse_instructions(dockerfile: str) -> list[Instruction]:
             if not parts:
                 continue
             args = parts
-        instructions.append(
-            Instruction(command=command, args=args, flags=flags, json_form=json_form, raw=raw_args)
-        )
+        instructions.append(Instruction(command=command, args=args, flags=flags, json_form=json_form, raw=raw_args))
     if buffer:
         raise DeferredRebuild("requires_continuation_terminator")
     return instructions
@@ -272,12 +266,14 @@ def compile_recipe(
             if is_directory:
                 directory_source = source_name.rstrip("/")
                 copied_files.update(
-                    str(PurePosixPath(target) / name[len(prefix):])
+                    str(PurePosixPath(target) / name[len(prefix) :])
                     for name in matches
                     if files[name] or name.endswith("/")
                 )
                 commands.append("mkdir -p " + shlex.quote(target))
-                commands.append("cp -a " + f'"$stage"/{shlex.quote(directory_source)}' + "/. " + shlex.quote(target + "/"))
+                commands.append(
+                    "cp -a " + f'"$stage"/{shlex.quote(directory_source)}' + "/. " + shlex.quote(target + "/")
+                )
                 continue
             name = matches[0]
             resources[name] = files[name]
@@ -302,7 +298,9 @@ def compile_recipe(
 
 def rebuild_task(task_binary: bytes) -> RebuiltTask:
     """Lower one native task tar onto the fixed base set."""
-    with tarfile.open(fileobj=io.BytesIO(gzip.decompress(task_binary) if task_binary[:2] == b"\x1f\x8b" else task_binary)) as archive:
+    with tarfile.open(
+        fileobj=io.BytesIO(gzip.decompress(task_binary) if task_binary[:2] == b"\x1f\x8b" else task_binary)
+    ) as archive:
         files: dict[str, bytes] = {}
         modes: dict[str, int] = {}
         environment_modes: dict[str, int] = {}
@@ -314,12 +312,16 @@ def rebuild_task(task_binary: bytes) -> RebuiltTask:
             files[member.name] = archive.extractfile(member).read()
             modes[member.name] = member.mode
             if member.name.startswith(ENVIRONMENT_PREFIX):
-                environment_modes[member.name[len(ENVIRONMENT_PREFIX):]] = member.mode
+                environment_modes[member.name[len(ENVIRONMENT_PREFIX) :]] = member.mode
     dockerfile = files.pop("environment/Dockerfile", None)
     if dockerfile is None:
         raise DeferredRebuild("missing_environment_dockerfile")
     instructions = parse_instructions(dockerfile.decode(errors="replace"))
-    context_files = {name[len(ENVIRONMENT_PREFIX):]: content for name, content in files.items() if name.startswith(ENVIRONMENT_PREFIX)}
+    context_files = {
+        name[len(ENVIRONMENT_PREFIX) :]: content
+        for name, content in files.items()
+        if name.startswith(ENVIRONMENT_PREFIX)
+    }
     base_ref, workdir, setup_script, payload = compile_recipe(instructions, context_files, environment_modes)
     output_files = {name: content for name, content in files.items() if not name.startswith(ENVIRONMENT_PREFIX)}
     output_files["task.toml"] = _rewrite_task_toml(files.get("task.toml"), base_ref, workdir)
@@ -362,24 +364,8 @@ def _rewrite_task_toml(original: bytes | None, base_ref: str, workdir: str) -> b
     return tomlkit.dumps(document).encode()
 
 
-def count_base_identities(base_refs: list[str]) -> int:
-    """Distinct snapshot identities for a rebuilt cohort: one per base reference."""
-    from experiments.post_training.task_curation.daytona_identity import ContextFile
-
-    identities = set()
-    for base_ref in sorted(set(base_refs)):
-        dockerfile = f"FROM {base_ref}\nWORKDIR /app\n".encode()
-        entry = ContextFile(name="Dockerfile", mode=0o100644, content=dockerfile)
-        key = image_source_key_from_context("Dockerfile", [entry])
-        identities.add(snapshot_identity(key, DEFAULT_RESOURCES))
-    return len(identities)
-
-
 def main() -> None:
     """Rebuild a native cohort parquet: staged tasks + evidence manifest."""
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cohort", type=Path, required=True, help="native cohort parquet (path, task_binary)")
     parser.add_argument("--excluded", type=Path, required=True, help="decontamination exclusion list (json array)")
@@ -391,7 +377,7 @@ def main() -> None:
     evidence = []
     base_refs: list[str] = []
     for batch in pq.ParquetFile(args.cohort).iter_batches(batch_size=64, columns=["path", "task_binary"]):
-        for path, blob in zip(batch.to_pydict()["path"], batch.to_pydict()["task_binary"]):
+        for path, blob in zip(batch.to_pydict()["path"], batch.to_pydict()["task_binary"], strict=True):
             raw = bytes(blob.as_py() if hasattr(blob, "as_py") else blob)
             if path in excluded:
                 evidence.append({"task_id": path, "status": "excluded_decontamination"})
@@ -423,7 +409,9 @@ def main() -> None:
         "excluded_count": sum(1 for row in evidence if row["status"] == "excluded_decontamination"),
         "rebuilt_count": len(records),
         "deferred_count": sum(1 for row in evidence if row["status"] == "deferred"),
-        "snapshot_identity_count": count_base_identities(base_refs),
+        # The Atlas counter measures the snapshot identities from these refs; the
+        # rebuild itself stays free of the Harbor measurement environment.
+        "snapshot_identity_count": None,
         "base_refs": sorted(set(base_refs)),
         "digest_pinned": False,
         "admission": "not_run",
