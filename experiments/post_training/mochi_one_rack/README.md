@@ -2,7 +2,7 @@
 
 This experiment starts from a privately retained Mochi SFT step 395161 and its BF16 schema-3 export. It runs five optimizer updates with a 4,096-token combined cap, then starts a fresh job against the saved model/optimizer checkpoint and advances from step 5 to step 10 with a 32,768-token cap. The second stage restarts task ordering so its controlled length probe is consumed. Native checkpoints are retained; terminal HF export is disabled.
 
-The allocation is 15 GB200 trays in one NVLink domain on `cw-us-east-08a`, at `production` priority: 48 training GPUs (TP1/PP12/EP4/CP4) and 12 rollout GPUs (TP1/PP1/DP12/EP12). The cluster's ordinary Kueue topology policy keeps this gang in one domain. This fits the 15 schedulable trays observed in the remaining domain; the initial 64-GPU candidate needed one more tray. AdamW optimizer state uses the existing CPU offload path to fit the trainer footprint. vLLM compilation uses mode 3 and piecewise CUDA graphs. The recipe excludes attention/cache updates and `vllm::grug_moe_short_conv` from capture, as Grug's stateful ShortConv requires. Without that explicit configuration, vLLM automatically disables CUDA graphs even with `enforce_eager=false`.
+The allocation is 15 GB200 trays in one NVLink domain on `cw-us-east-08a`, at `production` priority: 48 training GPUs (TP1/PP12/EP4/CP4) and 12 rollout GPUs (TP1/PP1/DP12/EP12). The cluster's ordinary Kueue topology policy keeps this gang in one domain. This fits the 15 schedulable trays observed in the remaining domain; the initial 64-GPU candidate needed one more tray. AdamW offloads 75% of its parameters through the existing hybrid CPU/GPU optimizer. Full CPU offload exceeded host memory during the first optimizer step. vLLM compilation uses mode 3 and piecewise CUDA graphs. The recipe excludes attention/cache updates and `vllm::grug_moe_short_conv` from capture, as Grug's stateful ShortConv requires. Without that explicit configuration, vLLM automatically disables CUDA graphs even with `enforce_eager=false`.
 
 Each tray requests 120 CPUs, 940 GiB RAM and 2 TiB disk (`940GB`/`2TB` in Iris's resource parser). Ray's existing per-job override caps its object store at 32 GiB. RunAI uses its CPU-buffered loading path with an 8 GiB buffer and four requests per worker, keeping temporary loading allocations bounded. The model stays BF16; distributed expert-parallel inference and weight publication use their ordinary NCCL paths.
 
@@ -16,7 +16,7 @@ Build and inspect the graph before submitting it:
 
 ```bash
 uv run python -m experiments.post_training.mochi_one_rack.launch \
-  --stage 32k --version 2026.11.11.9266
+  --stage 32k --version 2026.11.11.9267
 ```
 
 Load the dedicated `DAYTONA_RL_API_KEY` and `DAYTONA_EVAL_API_KEY` through the documented Secret Manager path. Set `MARIN_PREFIX` to the private experiment prefix, then add `--run` to the same command. Stop at `--stage 4k` for a diagnostic of only the first stage. Use a fresh calendar version after runtime changes; the input artifact identities remain explicit in `launch.py`.
