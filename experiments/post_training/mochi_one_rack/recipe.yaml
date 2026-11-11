@@ -23,7 +23,7 @@ environment:
 trainer:
   strategy: megatron
   flash_attn: false
-  use_sample_packing: false
+  use_sample_packing: true
   gradient_checkpointing: true
   offload_optimizer_during_rollouts: false
   epochs: 50
