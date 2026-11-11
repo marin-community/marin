@@ -12,9 +12,10 @@ from typing import Any
 
 from shellbox.machine import Machine, MachineFactory, MachineSpec
 from taskcompendium.chat import chat_conversation
-from taskcompendium.grading import grade_answer, grade_remote_judge_answer
+from taskcompendium.grading import grade_answer, grade_decision_model_answer, grade_remote_judge_answer
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
+    DecisionModelGrader,
     GradingAttempt,
     NoGrader,
     ScriptGrader,
@@ -69,7 +70,7 @@ async def _grade_rollout(
     stop_reason: str,
     verifier: Callable[[MachineSpec], Awaitable[Machine]] | None = None,
 ) -> GradeResult:
-    """Grade in process, through the judge service, or in a supplied or attempt-owned verifier.
+    """Grade in process, through the decision model or judge service, or in a supplied or attempt-owned verifier.
 
     ``outputs`` holds the task's ``output_paths`` that the engine captured after the harness ended.
     """
@@ -78,6 +79,10 @@ async def _grade_rollout(
     if isinstance(grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
     conversation = chat_conversation(list(messages))
+    if isinstance(grader, DecisionModelGrader):
+        assert spec.decision_model is not None
+        attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
+        return await grade_decision_model_answer(task, attempt, spec.decision_model)
     if isinstance(grader, VerifyitGrader) and grades_with_judge(grader):
         attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
         return await asyncio.to_thread(grade_remote_judge_answer, task, attempt, judge_connection(spec))

@@ -32,6 +32,15 @@ class Hold(EffectIssue):
     """
 
 
+class DecisionModelUnavailable(Hold):
+    """The decision model stayed unavailable for ``decision_model.unavailable_wait``; hold until it answers.
+
+    Rationale: the decision model is one preemptible pod that can be down for hours. Waiting longer would fill
+    the driver's slots with blocked workpieces, and failing would discard authored work, so the workpiece is held
+    (its resolved effects stay in the log) and the driver resumes it once a decision-model read succeeds.
+    """
+
+
 class LogFailure(EffectIssue):
     """Event log encoding, decoding, or persistence failed."""
 

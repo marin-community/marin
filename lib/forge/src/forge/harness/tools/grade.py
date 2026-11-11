@@ -64,4 +64,7 @@ class GradeTool(ValidatedTool[CandidateArgs]):
                 "Grader checks must be a list of {name: string, passed: boolean, weight: number}; "
                 f"fix the grader output: {error}"
             )
-        return ToolResult(pretty_json({"reward": result.reward, "status": result.status, "grader_checks": checks}))
+        output: dict[str, object] = {"reward": result.reward, "status": result.status, "grader_checks": checks}
+        if read := (result.detail or {}).get("decision_model"):
+            output["decision_model"] = read
+        return ToolResult(pretty_json(output))

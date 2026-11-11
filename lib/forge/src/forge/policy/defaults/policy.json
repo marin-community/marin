@@ -39,7 +39,12 @@
   "sampling.top_p": 0.95,
   "sampling.reasoning_effort": "high",
   "sampling.max_continuations": 0,
-  "judge.model": "clef",
+  "judge.model": "",
   "judge.pool": "high",
-  "judge.route": "glm-5.3"
+  "decision_model.model": "clef",
+  "decision_model.route": "glm-5.3",
+  "decision_model.max_inflight": 4,
+  "decision_model.request_timeout": 300.0,
+  "decision_model.unavailable_wait": 900.0,
+  "decision_model.retry_interval": 300.0
 }

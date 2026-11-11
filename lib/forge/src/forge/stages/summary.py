@@ -51,6 +51,7 @@ def grade_summary(grade: GradeResult | None) -> dict[str, object]:
         "error": excerpt(grade.error),
         "stdout": excerpt(grade.diagnostics.get("stdout")),
         "stderr": excerpt(grade.diagnostics.get("stderr")),
+        **({"decision_model": read} if (read := (grade.detail or {}).get("decision_model")) else {}),
     }
 
 

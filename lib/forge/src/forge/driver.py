@@ -11,6 +11,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 import traceback
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
@@ -25,9 +26,9 @@ from rigging.log_setup import configure_logging
 from forge.checkpoint import CheckpointSink
 from forge.coordinator import reasons, run_workpiece
 from forge.effects.events import StageCompleted
-from forge.effects.issues import Hold, LogFailure, Restart, Transient
+from forge.effects.issues import DecisionModelUnavailable, Hold, LogFailure, Restart, Transient
 from forge.effects.log import EventLog, JsonlSink, Status, fold
-from forge.model.proposal import TASK_PROPOSAL, TaskProposal
+from forge.model.proposal import TASK_PROPOSAL, TaskProposal, Verification
 from forge.model.review import Incomplete
 from forge.model.workpiece import WORKPIECE, Terminal, Workpiece
 from forge.policy import Policy, load_policy, parse_overlay
@@ -124,13 +125,17 @@ def eligible(proposal: TaskProposal, policy: Policy) -> bool:
     return True
 
 
-async def one(args: argparse.Namespace) -> None:
+DECISION_MODEL_HELD = 75
+"""``one``'s exit status for a workpiece held because the decision model was unavailable (EX_TEMPFAIL)."""
+
+
+async def one(args: argparse.Namespace) -> int:
     configure_coreweave_s3()
     with open_url(args.proposals, "rt") as source:
         proposal = TASK_PROPOSAL.validate_json(source.read())
     _, policy = run_policy(args.policy)
     if not eligible(proposal, policy):
-        return
+        return 0
     identity = proposal_key(args.proposals)
     if identity.is_absolute() or ".." in identity.parts:
         raise ValueError("Proposal id must be a relative path without '..'")
@@ -140,13 +145,13 @@ async def one(args: argparse.Namespace) -> None:
     sink = JsonlSink(str(workdir / "events.jsonl"))
     wp = Workpiece(proposal.header.id, proposal)
     log: EventLog | None = None
-    skipped = False
+    skipped = decision_model_held = False
     try:
         restored = await recover(workdir, destination)
         if restored is not None and (restored.finished or (restored.terminal is Terminal.HELD and not args.resume_held)):
             logging.info("SKIP %s: published terminal=%s", identity, restored.terminal)
             skipped = True
-            return
+            return 0
         previous = await sink.read() if Path(sink.path).exists() else ()
         checkpoints = CheckpointSink(sink, destination, WORKPIECE.dump_json(wp))
         log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade)
@@ -165,6 +170,7 @@ async def one(args: argparse.Namespace) -> None:
         if log is not None:
             await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
         logging.warning("Forge workpiece %s held: %s", proposal.header.id, reasons(error))
+        decision_model_held = error.subgroup(DecisionModelUnavailable) is not None
     except* Exception as error:
         detail = traceback.format_exc()
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete((f"bug: {detail}",))))
@@ -183,6 +189,7 @@ async def one(args: argparse.Namespace) -> None:
             )
             (workdir / "status.json").write_text(json.dumps(asdict(status)))
             publish(workdir, destination, SNAPSHOT_FILES if log is not None else SNAPSHOT_FILES[1:])
+    return DECISION_MODEL_HELD if decision_model_held else 0
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -196,27 +203,47 @@ async def run(args: argparse.Namespace) -> None:
     active: dict[asyncio.Task[int], tuple[str, subprocess.Popen[bytes]]] = {}
     failures: list[str] = []
     _, policy = run_policy(args.policy)
-    skipped = completed = submitted = 0
+    retry_interval = policy.setting("decision_model.retry_interval", float)
+    # Decision-model proposals wait here while the decision model is down; one probe resumes after retry_interval.
+    deferred: list[str] = []
+    down_since: float | None = None
+    probe: str | None = None
+    skipped = completed = submitted = held = 0
+
+    def decision_model_ready() -> bool:
+        return down_since is None or (probe is None and time.monotonic() - down_since >= retry_interval)
+
     try:
         exhausted = False
-        while active or not exhausted:
-            while len(active) < args.concurrency and not exhausted:
-                path = next(proposals, None)
-                if path is None:
-                    exhausted = True
+        while active or not exhausted or deferred:
+            while len(active) < args.concurrency:
+                if deferred and decision_model_ready():
+                    path, resume = deferred.pop(0), True
+                    if down_since is not None:
+                        probe = path
+                elif not exhausted:
+                    path = next(proposals, None)
+                    if path is None:
+                        exhausted = True
+                        continue
+                    with open_url(path, "rt") as source:
+                        proposal = TASK_PROPOSAL.validate_json(source.read())
+                    if not eligible(proposal, policy):
+                        skipped += 1
+                        continue
+                    if proposal.header.verification is Verification.DECISION_MODEL and not decision_model_ready():
+                        deferred.append(path)
+                        continue
+                    resume = args.resume_held
+                else:
                     break
-                with open_url(path, "rt") as source:
-                    proposal = TASK_PROPOSAL.validate_json(source.read())
-                if not eligible(proposal, policy):
-                    skipped += 1
-                    continue
                 command = [sys.executable, "-u", "-m", "forge.driver", "one", "--proposals", path]
                 command += [
                     item
                     for name in ("arm", "output", "policy", "work_dir")
                     for item in (f"--{name.replace('_', '-')}", getattr(args, name))
                 ]
-                if args.resume_held:
+                if resume:
                     command.append("--resume-held")
                 process = subprocess.Popen(command)
                 submitted += 1
@@ -226,14 +253,29 @@ async def run(args: argparse.Namespace) -> None:
                 for task in done:
                     path, _ = active.pop(task)
                     completed += 1
+                    if task.result() == DECISION_MODEL_HELD:
+                        held += 1
+                        down_since, probe = time.monotonic(), None
+                        deferred.append(path)
+                        logging.warning("DECISION_MODEL_HELD %s: %d decision_model proposals deferred", path, len(deferred))
+                        continue
+                    if path == probe:
+                        logging.info("Decision model answered again; resuming %d deferred proposals", len(deferred))
+                        down_since = probe = None
                     if task.result() != 0:
                         failures.append(path)
+            elif deferred and down_since is not None:
+                await asyncio.sleep(max(0.0, down_since + retry_interval - time.monotonic()))
     finally:
         for _, process in active.values():
             if process.poll() is None:
                 process.terminate()
         await asyncio.gather(*active, return_exceptions=True)
-    print(f"SUMMARY submitted={submitted} completed={completed} failed={len(failures)} skipped={skipped}", flush=True)
+    print(
+        f"SUMMARY submitted={submitted} completed={completed} failed={len(failures)} skipped={skipped} "
+        f"decision_model_held={held}",
+        flush=True,
+    )
     if failures:
         raise RuntimeError(f"{len(failures)} workpieces failed: {failures}")
 
@@ -262,8 +304,10 @@ def main() -> None:
     if args.command == "report":
         configure_coreweave_s3()
         print("\n".join(asyncio.run(report(args.output_root, args.since_hours))))
+    elif args.command == "run":
+        asyncio.run(run(args))
     else:
-        asyncio.run(run(args) if args.command == "run" else one(args))
+        sys.exit(asyncio.run(one(args)))
 
 
 if __name__ == "__main__":

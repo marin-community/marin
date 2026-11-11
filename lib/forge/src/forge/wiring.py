@@ -55,7 +55,7 @@ from forge.model.workpiece import Submission, Workpiece
 from forge.policy import Policy, load_policy, resolution_lines
 from forge.policy import sampling as policy_sampling
 from forge.resources.bundle import Resources
-from forge.resources.clef import CLEF_MODEL, ClefBackend
+from forge.resources.decision_model import CLEF_MODEL, ClefDecisionModel, DecisionModelClient, DecisionModelEngine
 from forge.resources.clock import Clock, Now, now
 from forge.resources.env import Env, EnvFactory, ShellboxEnvFactory
 from forge.resources.grading import GradeCandidate, GradingResource, grade
@@ -126,6 +126,13 @@ def install(ctx: Context, resources: Resources) -> None:
             await ctx.emit(Note(f"Cleanup failed: {value.diagnostics['cleanup_errors']}"))
 
     rollouts, grading = resources.rollouts, resources.grading
+    if (decision_model := resources.decision_model) is not None:
+        rollouts = replace(rollouts, engine=DecisionModelEngine(rollouts.engine, ctx, decision_model))
+        grading = replace(
+            grading,
+            engine=DecisionModelEngine(grading.engine, ctx, decision_model),
+            fresh_engine=DecisionModelEngine(grading.fresh_engine, ctx, decision_model) if grading.fresh_engine else None,
+        )
     if (judge := resources.role_inference.get("judge")) is not None:
         rollouts = replace(rollouts, engine=JudgeEngine(rollouts.engine, ctx, judge))
         grading = replace(
@@ -175,7 +182,11 @@ async def solver_turn(client: CompletionBackend, sampling: LLMPolicy, request: M
 
 
 def build_resources(
-    policy: Policy, clients: Mapping[str, CompletionBackend], factories: Mapping[str, MachineFactory], web: WebClient
+    policy: Policy,
+    clients: Mapping[str, CompletionBackend],
+    factories: Mapping[str, MachineFactory],
+    web: WebClient,
+    decision_model: DecisionModelClient | None = None,
 ) -> Resources:
     settings = lowering_settings(policy)
     command_timeout = policy.setting("solver.command_timeout", float)
@@ -213,6 +224,7 @@ def build_resources(
         web,
         inference,
         verifiers,
+        decision_model,
     )
 
 
@@ -314,10 +326,13 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
 
 def provider_policy(policy: Policy) -> Policy:
     """Reject deadlines that expire before the provider availability window, and decision_model without Clef."""
-    if Verification.DECISION_MODEL in policy.setting("proposals.verifications", tuple) and (
-        policy.setting("judge.model", str) != CLEF_MODEL
-    ):
-        raise ValueError(f"proposals.verifications includes decision_model, which needs judge.model {CLEF_MODEL!r}")
+    if Verification.DECISION_MODEL in policy.setting("proposals.verifications", tuple):
+        if policy.setting("decision_model.model", str) != CLEF_MODEL:
+            raise ValueError(f"proposals.verifications includes decision_model, which needs decision_model.model {CLEF_MODEL!r}")
+        if policy.setting("decision_model.unavailable_wait", float) + policy.setting(
+            "decision_model.request_timeout", float
+        ) >= policy.setting("solver.turn_timeout", float):
+            raise ValueError("decision_model.unavailable_wait plus request_timeout must end before solver.turn_timeout")
     window = policy.setting("provider.unavailable_wait", float)
     turn = policy.setting("solver.turn_timeout", float)
     if turn < window + policy.setting("provider.stall_timeout", float):
@@ -367,24 +382,11 @@ async def runtime(
         for role in roles:
             model = policy.setting(f"{role}.model", str)
             provider = TypeAdapter(LLMProviderConfig).validate_python({**provider_fields, "model": model})
-            clef = role == "judge" and model == CLEF_MODEL
-            route = policy.setting("judge.route", str) if clef else model
-            role_source = replace(source, model=route) if isinstance(source, RelayEndpoint) else source
-            client: CompletionBackend
-            if clef:
-                logging.info(
-                    "MODEL role=judge model=%s route declared=%s resolved=%s/systemone",
-                    model,
-                    route,
-                    role_source.current().base_url,
-                )
-                clef_http = await owned.enter_async_context(httpx.AsyncClient())
-                client = ClefBackend(role_source, clef_http, policy.setting("provider.stall_timeout", float))
-            else:
-                if role == "judge":
-                    role_source = PooledEndpoint(role_source, Pool(policy.setting("judge.pool", str)))
-                logging.info("MODEL role=%s model=%s endpoint=%s", role, model, role_source.current().base_url)
-                client = await owned.enter_async_context(GlmClient(role_source, provider, limit_output=False))
+            role_source = replace(source, model=model) if isinstance(source, RelayEndpoint) else source
+            if role == "judge":
+                role_source = PooledEndpoint(role_source, Pool(policy.setting("judge.pool", str)))
+            logging.info("MODEL role=%s model=%s endpoint=%s", role, model, role_source.current().base_url)
+            client = await owned.enter_async_context(GlmClient(role_source, provider, limit_output=False))
             clients[role] = WaitingBackend(
                 client,
                 policy.setting("provider.unavailable_wait", float),
@@ -392,7 +394,31 @@ async def runtime(
                 provider.backoff_maximum,
                 provider.backoff_factor,
             )
+        decision_model = None
+        if (decision_name := policy.setting("decision_model.model", str)) == CLEF_MODEL:
+            route = policy.setting("decision_model.route", str)
+            model_source = replace(source, model=route) if isinstance(source, RelayEndpoint) else source
+            limit = policy.setting("decision_model.max_inflight", int)
+            logging.info(
+                "MODEL role=decision_model model=%s route declared=%s resolved=%s/systemone max_inflight=%d",
+                decision_name,
+                route,
+                model_source.current().base_url,
+                limit,
+            )
+            decision_model = ClefDecisionModel(
+                model_source,
+                await owned.enter_async_context(httpx.AsyncClient()),
+                request_timeout=policy.setting("decision_model.request_timeout", float),
+                unavailable_wait=policy.setting("decision_model.unavailable_wait", float),
+                max_inflight=limit,
+            )
+        elif decision_name:
+            raise ValueError(f"decision_model.model must be {CLEF_MODEL!r} or empty, not {decision_name!r}")
         http = await owned.enter_async_context(
             httpx.AsyncClient(base_url="https://api.parallel.ai/v1/", headers=headers, timeout=60)
         )
-        yield build_config(policy, arm, factories), build_resources(policy, clients, factories, ParallelWeb(http))
+        yield (
+            build_config(policy, arm, factories),
+            build_resources(policy, clients, factories, ParallelWeb(http), decision_model),
+        )

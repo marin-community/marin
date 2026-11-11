@@ -13,21 +13,22 @@ from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
 from rolloutengine.validation import InvalidTaskSpec, check_grader
 from shellbox.machine import DEFAULT_WORKDIR, Backend, MachineFactory, NetworkPolicy, PackageSpec
+from taskcompendium.grading import DecisionModelConnection
 from taskcompendium.models import (
     CommandSemantics,
+    DecisionModelGrader,
     EnvironmentRequirements,
     Grader,
     ScriptGrader,
     TaskSpec,
+    VerifyitGrader,
     judge_spec,
 )
 from verifyit.modes.grade_judge import JudgeConnection
-from verifyit.spec import RUBRIC_REFERENCE
 
 from forge.model.controls import Candidate
 from forge.model.proposal import Verification
 from forge.policy import GRADER_BASE_IMAGE, Policy
-from forge.resources.clef import CLEF_MODEL
 from forge.resources.sandbox.factories import (
     SANDBOX_SCHEDULING_TIMEOUT,
     grading_environment,
@@ -118,6 +119,7 @@ def lower(
     limits: RolloutLimits,
     factories: Mapping[str, MachineFactory],
     judge_connection: JudgeConnection | None = None,
+    decision_model: DecisionModelConnection | None = None,
 ) -> TaskRolloutSpec:
     """The ``TaskRolloutSpec`` that runs ``task`` on ``factories`` under ``TOOL_HARNESS``.
 
@@ -141,6 +143,7 @@ def lower(
         task=task,
         harness=TOOL_HARNESS,
         judge_connection=judge_connection,
+        decision_model=decision_model,
         task_machine=(None if task_machine is None else machine_runtime(task_machine, task.environment_requirements)),
         verifier_machine=(
             None if verifier_machine is None or grading is None else machine_runtime(verifier_machine, grading)
@@ -201,6 +204,8 @@ class LoweringSettings:
     verifier_machine: MachineSettings
     limits: RolloutLimits
     judge_model: str = ""
+    decision_model: str = ""
+    """The decision model behind decision_model graders (``decision_model.model``); empty disables them."""
 
 
 def lowering_settings(policy: Policy) -> LoweringSettings:
@@ -219,7 +224,9 @@ def lowering_settings(policy: Policy) -> LoweringSettings:
     if memory_mb <= 0:
         raise ValueError("sandbox.memory_mb must be positive")
     settings = replace(GRADING_MACHINE, limits=MachineLimits(memory_mb=memory_mb, cpus=1))
-    return LoweringSettings(settings, settings, limits, policy.setting("judge.model", str))
+    return LoweringSettings(
+        settings, settings, limits, policy.setting("judge.model", str), policy.setting("decision_model.model", str)
+    )
 
 
 def lower_with_settings(
@@ -238,20 +245,21 @@ def lower_with_settings(
             raise InvalidTaskSpec(
                 f"Judge model must be empty or {settings.judge_model!r}, as selected by policy judge.model"
             )
-        if settings.judge_model == CLEF_MODEL and (
-            grading_environment(task) is not None or judge.rubric != RUBRIC_REFERENCE or not judge.question.strip()
-        ):
-            raise InvalidTaskSpec(CLEF_GRADER)
         connection = JudgeConnection(
             "http://forge-judge.invalid/v1", "inference-effect", default_model=settings.judge_model
         )
+    decision_model = None
+    if isinstance(task.grader, DecisionModelGrader):
+        if not settings.decision_model:
+            raise ValueError("Decision-model grading is disabled: policy decision_model.model is empty")
+        decision_model = UNBOUND_DECISION_MODEL
     grader = grading_environment(task)
     if grader is not None and grader.docker_image not in (None, GRADER_BASE_IMAGE):
         raise InvalidTaskSpec(
             f"grader image must be {GRADER_BASE_IMAGE} or null for ShellSim; got {grader.docker_image}"
         )
     timeout = verifier_timeout(task.grader)
-    if judge is not None:
+    if judge is not None or decision_model is not None:
         timeout = max(timeout, settings.limits.model_turn_timeout or 0)
     limits = settings.limits.model_copy(update={"verifier_timeout": timeout})
     return lower(
@@ -261,37 +269,56 @@ def lower_with_settings(
         limits=limits,
         factories=factories,
         judge_connection=connection,
+        decision_model=decision_model,
     )
 
 
-CLEF_GRADER = (
-    "The Clef decision model grades a host VerifyitGrader (no environment) with mode=judge, rubric=reference, "
-    "the task question plus its rubric in question, and the gold answer in references"
-)
+ANSWER_IN_BOX_MODES = frozenset({"exact", "numeric", "math", "mcq"})
+"""VerifyIt's generic final-answer matches: exact, numeric, math and choice (``mcq``)."""
 
 
 def check_verification(task: TaskSpec, verification: Verification, settings: LoweringSettings) -> None:
     """Require the grader kind the proposal's verification names.
 
-    ``decision_model`` needs a Clef-judged grader and fails closed (``ValueError``, a host refusal) when policy
-    selects no Clef judge; ``answer_in_box`` and ``code`` need a deterministic grader. Other kinds are unchecked.
+    ``answer_in_box`` is a host VerifyIt exact, numeric, math or choice match. ``code`` is a deterministic
+    script or VerifyIt check. ``decision_model`` is a ``DecisionModelGrader`` and fails closed (``ValueError``,
+    a host refusal) when policy names no decision model. None of them is an LLM judge; other kinds are unchecked.
 
     Raises:
         InvalidTaskSpec: The authored grader does not match the verification.
-        ValueError: The verification is ``decision_model`` and policy ``judge.model`` is not Clef.
+        ValueError: The verification is ``decision_model`` and policy ``decision_model.model`` is empty.
     """
-    judge = judge_spec(task.grader) is not None
+    grader = task.grader
+    decision = isinstance(grader, DecisionModelGrader)
     if verification is Verification.DECISION_MODEL:
-        if settings.judge_model != CLEF_MODEL:
-            raise ValueError(
-                f"decision_model grading needs policy judge.model {CLEF_MODEL!r}, not {settings.judge_model!r}"
-            )
-        if not judge:
+        if not settings.decision_model:
+            raise ValueError("decision_model proposals need policy decision_model.model; it is empty")
+        if not decision:
             raise InvalidTaskSpec(
-                f"Verification is decision_model, so a script or deterministic grader is refused. {CLEF_GRADER}"
+                'Verification is decision_model: the grader must be {"kind": "decision_model", ...} with deliverable, '
+                "rubric, reference and cut; script, VerifyIt and LLM-judge graders are refused"
             )
-    elif verification in (Verification.ANSWER_IN_BOX, Verification.CODE) and judge:
-        raise InvalidTaskSpec(f"Verification is {verification}: submit a deterministic grader, not a judge")
+    elif verification is Verification.ANSWER_IN_BOX:
+        if not (
+            isinstance(grader, VerifyitGrader) and grader.environment is None and grader.mode in ANSWER_IN_BOX_MODES
+        ):
+            raise InvalidTaskSpec(
+                "Verification is answer_in_box: the grader must be a host VerifyitGrader (no environment) with mode "
+                "exact, numeric, math or mcq; script, code, decision-model and LLM-judge graders are refused"
+            )
+    elif verification is Verification.CODE and (decision or judge_spec(grader) is not None):
+        raise InvalidTaskSpec(
+            "Verification is code: the grader must be a deterministic script or VerifyIt check; "
+            "decision-model and LLM-judge graders are refused"
+        )
+
+
+async def _unbound_decision_model(_grader: DecisionModelGrader, _answer: str) -> float:
+    raise RuntimeError("The decision model is bound by forge.resources.decision_model.DecisionModelEngine")
+
+
+UNBOUND_DECISION_MODEL = DecisionModelConnection(_unbound_decision_model)
+"""Lets RolloutEngine check a decision_model spec; ``DecisionModelEngine`` binds the real one per run."""
 
 
 def check_candidates(task: TaskSpec, candidates: Sequence[Candidate]) -> None:

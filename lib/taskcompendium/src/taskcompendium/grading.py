@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grade an attempt in process with the task's verifyit mode.
+"""Grade an attempt in process with the task's verifyit mode, or with the host's decision model.
 
 The task's answer format extracts one typed submission; this module adapts it to a verifyit
 candidate and maps the verifyit reward to a ``GradeResult``. verifyit owns specification
@@ -10,6 +10,8 @@ validation and scoring.
 
 import json
 import math
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 from openai import APIError
 from verifyit.candidate import Candidate, grade_candidate, grade_ejection_candidate
@@ -33,6 +35,7 @@ from taskcompendium.models import (
     ActionSubmission,
     AnswerType,
     AssistantToolCalls,
+    DecisionModelGrader,
     GradingAttempt,
     JsonSubmission,
     PlainText,
@@ -221,3 +224,44 @@ def grade_remote_judge_answer(
     except (RuntimeError, OSError) as error:
         return GradeResult(Outcome.INFRA_ERROR, None, str(error))
     return grade_result(verifier, verdict)
+
+
+@dataclass(frozen=True)
+class DecisionModelConnection:
+    """The host's decision model, kept outside serialized task specifications like ``JudgeConnection``.
+
+    ``read`` returns the decision model's expected level on ``DECISION_LEVELS`` for one answer.
+    """
+
+    read: Callable[[DecisionModelGrader, str], Awaitable[float]]
+
+
+async def grade_decision_model_answer(
+    task: TaskSpec, attempt: GradingAttempt, connection: DecisionModelConnection
+) -> GradeResult:
+    """Score the final answer 1 when the decision model reads it at or above the grader's cut, else 0.
+
+    ``detail["decision_model"]`` records the expected level and the cut. Decision-model failures propagate.
+    """
+    grader = task.grader
+    if not isinstance(grader, DecisionModelGrader):
+        raise TypeError(f"Decision-model grading requires a decision_model grader, not {grader.kind}")
+    require_submission_compatibility(task)
+    try:
+        submission = answer_submission(task, attempt)
+    except SubmissionFailure as error:
+        return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+    if isinstance(submission, TextSubmission):
+        answer = submission.value
+    elif isinstance(submission, ActionSubmission):
+        answer = native_action_text(submission.message)
+    else:
+        raise TypeError(f"A decision model cannot grade a {type(submission).__name__}")
+    if not answer.strip():
+        return GradeResult(Outcome.GRADED, 0.0, detail={"reason": "empty_candidate"})
+    level = await connection.read(grader, answer)
+    return GradeResult(
+        Outcome.GRADED,
+        1.0 if level >= grader.cut else 0.0,
+        detail={"decision_model": {"expected_level": level, "cut": grader.cut}},
+    )

@@ -10,6 +10,7 @@ from taskcompendium.models import (
     CONVERSATION_ANSWERS,
     AnswerType,
     CommandSemantics,
+    DecisionModelGrader,
     EnvironmentRequirements,
     Grader,
     NoGrader,
@@ -58,6 +59,11 @@ def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, Machine
     grader_environment = (
         grader.environment if isinstance(grader, VerifyitGrader | ScriptGrader) and not host_judge else None
     )
+    if isinstance(grader, DecisionModelGrader):
+        if spec.decision_model is None:
+            raise ValueError("A decision_model grader needs TaskRolloutSpec.decision_model")
+        if task.answer_type not in CONVERSATION_ANSWERS:
+            raise NotImplementedError(f"The engine grades a decision model only on a conversation answer, not {task.answer_type}")
     if judge:
         judge_connection(spec)
         if task.answer_type not in CONVERSATION_ANSWERS:

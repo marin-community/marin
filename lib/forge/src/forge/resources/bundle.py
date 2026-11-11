@@ -10,6 +10,7 @@ from types import MappingProxyType
 from shellbox.machine import MachineFactory
 
 from forge.resources.clock import Clock
+from forge.resources.decision_model import DecisionModelClient
 from forge.resources.env import EnvFactory
 from forge.resources.grading import GradingResource
 from forge.resources.ids import Ids
@@ -32,6 +33,7 @@ class Resources:
     role_inference: Mapping[str, InferenceClient] = field(default_factory=dict)
 
     verifiers: RoundVerifier | None = None
+    decision_model: DecisionModelClient | None = None
 
     async def close_round(self) -> None:
         if self.verifiers is not None:
