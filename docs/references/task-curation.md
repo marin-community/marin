@@ -294,14 +294,18 @@ search tags, notes and an optional input-row count. The `deprecated` tag marks a
 source `Deprecated` in the catalog (overriding `excluded`), and its notes carry
 the deprecation reason. `independent_qc` records
 quality control a pinned release performed outside curation, so inventory-only
-pointers surface that evidence in the Atlas. `daytona_safety` records whether
-running the source fits the Daytona snapshot budget (`DAYTONA_SAFE_SNAPSHOT_LIMIT`,
-ten unique snapshots); every non-agentic source is safe automatically, and an
-agentic source stays `unassessed` until its snapshot requirement is assessed.
-That assessment must be measured, not inferred: `daytona_snapshot_count` holds
-the number of distinct snapshot names the production path would create for the
-pinned task payloads, `daytona_count_basis` names the rule and payload source,
-and an agentic verdict without both collapses back to `unassessed`.
+pointers surface that evidence in the Atlas. The Daytona verdict is derived, never
+declared: `finestore.rl.curation.daytona_verdict` marks a non-agentic source safe,
+an agentic source with no measured count `unassessed`, and a measured source
+unsafe when its unique environment count exceeds `DAYTONA_SAFE_SNAPSHOT_LIMIT`
+(ten) or when the Daytona backend refuses any task's declared execution
+requirements. The inputs are measurements: `daytona_snapshot_count` holds the
+number of distinct environments the source's own task specs require through the
+production path, `daytona_count_basis` names the rule and payload source, and
+`daytona_execution_failures` counts refused tasks. An unsafe label does not
+remove a source from the catalog; it records that a run would exceed the org's
+limits. [Making a dataset Daytona-safe](../../.agents/ops/daytona.md#making-a-dataset-daytona-safe)
+covers the faithful ways to bring one inside the budget.
 
 Measurement runs that production path rather than reimplementing it
 (`experiments/post_training/task_curation/daytona_identity.py`): each pinned

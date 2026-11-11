@@ -187,6 +187,54 @@ summaries. Compare timezone-aware timestamps in UTC. Resolved configurations,
 logs, and trial metadata can contain capability JWTs inside model ingress URLs;
 redact those as well as named API keys before publication.
 
+## Making a dataset Daytona-safe
+
+A dataset is Daytona-safe when it runs on the RL org as configured: its tasks
+require at most `DAYTONA_SAFE_SNAPSHOT_LIMIT` (ten) unique environments, and no
+task's declared execution requirements are refused by
+`shellbox.machine.check_execution_requirements` with the Daytona capability set
+(`{shell, filesystem, python, process, network, git_repository}`; no Docker-in-
+Docker, no privileged mode, no host mounts). The count and the verdict come from
+the tasks' own specs. Never substitute a shared image for an environment a task
+specifies: the spec is part of the data.
+
+Only these options are faithful. Each ends with a new dataset version and a
+re-measurement; none changes a task's own instruction, files or grader.
+
+1. **Lower onto a few fixed digest-pinned bases.** Keep the archived recipe's
+   `RUN` and `COPY` behavior by emitting a TaskCompendium spec whose resources
+   carry the copied files and whose `environment_requirements.setup_commands`
+   stage them, as `experiments/post_training/task_curation/calibforge_rebuild.py`
+   does. Pin every base by digest; a floating tag fails spec validation. A step
+   the lowering cannot express (a multi-stage build, a user creation, an
+   unsupported interpreter) defers the task instead of approximating it.
+2. **Normalize the machine shape.** Identity includes the machine resources, so
+   declare one shape (for example 2 CPU / 4096 MB / 10240 MB) for task and
+   verifier machines. Differing shapes multiply snapshot names without changing
+   the environment.
+3. **Prove a no-op before re-declaring the agent image.** A task may declare
+   `iris-task` only when
+   `experiments/post_training/task_curation/environment_fidelity.py` proves its
+   recipe changes nothing: a single `FROM` equal to the digest-pinned agent
+   image, no `RUN`/`COPY`/`ADD`/`ENV`/`ARG`/`USER`/`ENTRYPOINT`/`CMD` step, and
+   no copied fixtures. That rewrite is a conversion, so it ships as a new dataset
+   version whose declaration records the basis. Anything unproven keeps its own
+   environment and is built.
+4. **Build the archived environment as the task image.** When lowering cannot
+   express the recipe and the image is available to the RL org, build it, pin the
+   resulting digest, and count each distinct image as one identity.
+
+Re-measure with the production path, not a reimplementation:
+`experiments/post_training/task_curation/daytona_identity.py` materializes each
+task's environment, builds the `MachineSpec` through Harbor's mapping
+(`harbor.environments.daytona.machine_spec`), names it with
+`shellbox.backends.daytona.machine.snapshot_identity`, and runs
+`daytona_execution_failure` per task. Record the resulting count, the ten-snapshot
+threshold and the basis on the source; the verdict
+(`finestore.rl.curation.daytona_verdict`) is derived from them. Nothing in this
+procedure creates or deletes a snapshot; cleanup stays with the operator
+procedure above.
+
 ## Source provenance
 
 Transferred from MarinSkyRL revision
