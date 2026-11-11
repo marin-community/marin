@@ -109,7 +109,7 @@ function details(row) {
   $('detail-name').textContent = row.display_name; $('detail-notes').textContent = row.notes;
   const controls = row.curation?.verification;
   const fields = [
-    ['Catalog', row.origin], ['Converted examples', row.coverage?.example_count],
+    ['Catalog', row.origin], ['Status', row.status], ['Converted examples', row.coverage?.example_count],
     ['Use', useLabels[row.coverage?.intended_use]], ['Quality', labels[grade(row)]],
     ['Independent QC', row.independent_qc ? `${labels[row.independent_qc.verdict]}: ${row.independent_qc.admitted === null ? `${row.independent_qc.reviewed} reviewed` : `${row.independent_qc.admitted} of ${row.independent_qc.reviewed} reviewed`} — ${row.independent_qc.method}` : null],
     ['Daytona safe', daytonaLabels[row.daytona_safety]],
