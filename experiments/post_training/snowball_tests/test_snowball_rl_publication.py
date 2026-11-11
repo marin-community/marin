@@ -6,6 +6,7 @@ import shutil
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
+from importlib import reload
 
 import click
 import pytest
@@ -179,6 +180,7 @@ print("null")
 @pytest.mark.integration
 @pytest.mark.timeout(180)
 def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progress_client, recorded_runs, monkeypatch):
+    reload(publication)
     client, request = rl_progress_client
     preset = presets.PRESETS["learning-medium"]
     pin = gate.control_pins(preset.name)[0]
