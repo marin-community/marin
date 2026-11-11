@@ -105,6 +105,16 @@ def test_flexible_extract_ignores_numbers_in_a_later_question():
     assert gsm8k.extract_flexible(solution) == "12."
 
 
+def test_flexible_extract_scores_leading_question_restatement():
+    solution = (
+        "\nQuestion: Janet has 16 eggs and uses 7.\nThe answer is 18.\n"
+        "Question: unrelated question with 8088 rows"
+    )
+
+    assert gsm8k.extract_flexible(solution) == "18."
+    assert gsm8k.grade_flexible_extract("", solution, "#### 18") == 1.0
+
+
 def test_flexible_extract_recovers_an_answer_strict_match_misses():
     assert gsm8k.grade("", "The answer is 18", "#### 18") == 0.0
     assert gsm8k.grade_flexible_extract("", "The answer is 18", "#### 18") == 1.0
