@@ -312,7 +312,8 @@ def render_sections(schema: RenderSchema) -> str:
             fields.append(f"    {group}: Literal[{choices}] = unset_field()")
     body += "\n\nclass ConfigGroups(Section):\n" + ("\n".join(fields) or "    pass") + "\n"
     referenced = {node.id for node in ast.walk(ast.parse(body)) if isinstance(node, ast.Name)}
-    imports = "from .declared import " + ", ".join(name for name in schema.declared if name in referenced) + "\n"
+    declared = ", ".join(name for name in schema.declared if name in referenced)
+    imports = f"from .declared import {declared}\n" if declared else ""
     if "EvalSamplingParams" in referenced:
         imports += "from .sampling import EvalSamplingParams\n"
     return generated_module(body, imports)
