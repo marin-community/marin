@@ -182,8 +182,7 @@ def plan_sft_mixture(stores: Mapping[str, SftStore], *, batch_size: int, replay_
 class SftHandoff:
     """A run of the same SFT epoch to continue, from its permanent checkpoint at ``step``.
 
-    The continuing run keeps the plan that ``parent_dp_racks`` racks ran and reads the rest of its data
-    stream at its own batch size.
+    The continuing run plans the epoch at ``parent_dp_racks`` and reads at its own batch size.
     """
 
     checkpoint: str
@@ -204,8 +203,8 @@ class SftSteps:
 def sft_steps(plan: SftMixturePlan, *, start_step: int, batch_size: int, handoff_step: int | None = None) -> SftSteps:
     """Steps that read the rest of the plan's epoch once at ``batch_size``, from ``handoff_step`` if set.
 
-    Before ``handoff_step`` the epoch ran at the plan's batch size. The decay covers the same final sequences
-    as the plan's, and fewer than ``batch_size`` sequences at the end of the epoch stay unread.
+    The handoff offset assumes all preceding steps used the plan's batch size. The decay covers the same final
+    sequences as the plan's, and fewer than ``batch_size`` sequences at the end of the epoch stay unread.
     """
     if handoff_step is None:
         if batch_size != plan.batch_size:
