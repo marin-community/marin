@@ -92,7 +92,7 @@ function inLiveRecipe(idea, recipeTag) {
 function gateChip(g, more = null) {
   const look = GATE[g.kind] ?? GATE.none
   const shown = ['win', 'loss', 'running', 'partial', 'failed'].includes(g.kind) && g.short ? ` ${g.short}` : ''
-  const chip = el('span', { class: `gate-chip ${look.cls}` }, el('b', {}, look.icon), shown)
+  const chip = el('span', { class: `gate-chip ${look.cls}${g.provisional ? ' provisional' : ''}` }, el('b', {}, look.icon), shown)
   const lines = [g.text, ...(g.title ? g.title.split('\n') : [])].filter((x, i, a) => x && a.indexOf(x) === i)
   const tip = el('span', { class: 'gate-tip', role: 'tooltip' }, ...lines.map((x) => el('span', {}, x)), more)
   const cell = el('span', { class: 'gcell', tabindex: '0', 'aria-expanded': 'false', 'aria-label': g.text }, chip, tip)
@@ -289,12 +289,14 @@ const COMPETITIVE = 'competitive-'
 // Single-scale trials from before the ladder, whose rung is the bare size.
 const LEGACY_RUNGS = ['d768', 'd1024', 'd1280']
 
-// The protocol of an official ladder rung: trained at equal compute with its baseline at hero-scale MFU, its steps set
+// The protocol of a hero-MFU-matched ladder rung: trained at equal compute with its baseline at hero-scale MFU, its steps set
 // from the idea's latest hero-mfu result (experiments/belay config.Protocol.HERO_MFU_MATCHED).
 const HERO_MFU_MATCHED = 'hero_mfu_matched'
 
-// Gate 4, the hero-scale projection. Official only once all four competitive rungs are recorded hero-MFU matched; an
-// informal (equal-steps) ladder, a partial one or legacy pre-ladder trials show their deltas without a verdict.
+// Gate 4, the hero-scale projection: a verdict once all four competitive rungs are recorded. A hero-MFU-matched
+// ladder's verdict is final; an equal-steps ladder (hero-mfu skipped) gets a provisional verdict, since the idea needs
+// a hero-mfu result before it joins the recipe. A partial ladder or legacy pre-ladder trials show their deltas without
+// a verdict.
 // ``rungRuns`` is the idea's latest launch of ladder rungs: while any is in flight the ladder shows as running, and
 // once all have ended it shows any that failed or that results are still to be recorded.
 function scalingGate(idea, cfg, rungRuns) {
@@ -307,10 +309,14 @@ function scalingGate(idea, cfg, rungRuns) {
   const recorded = LADDER_RUNGS.filter((r) => ladder.has(r)).length
   const registered = new Set(rungTrials.map((t) => t.rung)).size
   const failed = rungRuns.filter((r) => TERMINAL.has(r.state) && r.state !== 'succeeded').length
-  if (recorded === LADDER_RUNGS.length && [...ladder.values()].every((t) => t.protocol === HERO_MFU_MATCHED)) {
+  if (recorded === LADDER_RUNGS.length) {
     const verdicts = [...ladder.values()].map((t) => verdictOf(t.delta[0], trackInfo(cfg, t.rung).noise))
     const kind = verdicts.includes('loss') ? 'loss' : verdicts.every((v) => v === 'win') ? 'win' : 'noise'
-    return { kind, short: signed(ladder.get('d1280').delta[0]), text: `${kind} at all 4 rungs, hero-MFU matched`, title }
+    const short = signed(ladder.get('d1280').delta[0])
+    if ([...ladder.values()].every((t) => t.protocol === HERO_MFU_MATCHED)) {
+      return { kind, short, text: `${kind} at all 4 rungs, hero-MFU matched`, title }
+    }
+    return { kind, short, provisional: true, text: `provisional ${kind} at all 4 rungs, equal steps · needs hero-mfu before inclusion`, title }
   }
   if (rungRuns.some((r) => !TERMINAL.has(r.state))) return { kind: 'running', short: `${recorded}/4`, text: `ladder running · ${recorded}/4 rungs recorded`, title }
   if (registered > recorded) {
@@ -321,8 +327,7 @@ function scalingGate(idea, cfg, rungRuns) {
   if (!ladder.size) {
     return { kind: 'partial', short: [...legacy.keys()].join('+'), text: `unofficial: legacy ${[...legacy.keys()].join(', ')} only`, title }
   }
-  const why = recorded === LADDER_RUNGS.length ? 'informal ladder, equal steps (no hero-MFU result)' : `${recorded}/4 rungs`
-  return { kind: 'partial', short: `${recorded}/4`, text: `unofficial: ${why}`, title }
+  return { kind: 'partial', short: `${recorded}/4`, text: `partial ladder: ${recorded}/4 rungs`, title }
 }
 
 function recipeCell(idea, recipeTag) {
