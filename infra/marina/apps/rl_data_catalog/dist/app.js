@@ -1,9 +1,10 @@
 /* Copyright The Marin Authors. SPDX-License-Identifier: Apache-2.0 */
 const number = new Intl.NumberFormat('en-US');
 const labels = {good: 'Good', some_issues: 'Some issues', bad: 'Bad', unknown: 'Unknown', unassessed: 'Not assessed'};
+const daytonaLabels = {safe: 'Safe', unsafe: 'Unsafe'};
 const useLabels = {train: 'Training', eval: 'Evaluation', unprocessed: 'Not processed'};
-const columns = [['display_name', 'Source'], ['examples', 'Examples'], ['use', 'Use'], ['quality', 'Quality'], ['independent', 'Independent QC'], ['area', 'Top curriculum area']];
-const state = {sources: [], sort: 'examples', direction: -1};
+const columns = [['display_name', 'Source'], ['examples', 'Examples'], ['use', 'Use'], ['quality', 'Quality'], ['independent', 'Independent QC'], ['daytona', 'Daytona safe'], ['area', 'Top curriculum area']];
+const state = {sources: [], sort: 'examples', direction: -1, daytonaSnapshotLimit: null};
 
 function grade(row) {
   return row.assessment.status === 'complete' ? row.assessment.admitted.grade : 'unassessed';
@@ -13,6 +14,7 @@ function value(row, key) {
   if (key === 'use') return row.coverage?.intended_use || 'unprocessed';
   if (key === 'quality') return grade(row);
   if (key === 'independent') return row.independent_qc?.verdict;
+  if (key === 'daytona') return row.daytona_safety;
   if (key === 'area') return row.coverage?.top_area?.name;
   return row[key];
 }
@@ -80,6 +82,17 @@ function render() {
         : `${number.format(qc.admitted)} of ${number.format(qc.reviewed)} reviewed`;
       independent.append(chip, node('span', subtitle, 'source-subtitle'));
     } else independent.append(node('span', '—', 'muted'));
+    const daytona = node('td');
+    const daytonaState = row.daytona_safety;
+    if (!daytonaState || daytonaState === 'unassessed') {
+      daytona.append(node('span', '—', 'muted'));
+    } else {
+      const safe = daytonaState === 'safe';
+      const chip = node('span', daytonaLabels[daytonaState], `chip quality-${safe ? 'good' : 'bad'}`);
+      const budget = `at most ${number.format(state.daytonaSnapshotLimit)} unique Daytona snapshots`;
+      chip.title = safe ? `Running this source needs ${budget}` : `Running this source needs more than ${budget}`;
+      daytona.append(chip);
+    }
     const area = node('td');
     if (row.coverage?.top_area) {
       const anchor = node('a', row.coverage.top_area.name, 'area-link');
@@ -87,7 +100,7 @@ function render() {
       anchor.title = `${number.format(row.coverage.top_area.instances)} examples in this area`;
       area.append(anchor);
     } else area.append(node('span', '—', 'muted'));
-    tr.append(name, examples, use, quality, independent, area); return tr;
+    tr.append(name, examples, use, quality, independent, daytona, area); return tr;
   }));
   $('empty').hidden = rows.length > 0;
   $('visible-count').textContent = `${number.format(rows.length)} of ${number.format(state.sources.length)} sources`;
@@ -99,6 +112,7 @@ function details(row) {
     ['Catalog', row.origin], ['Converted examples', row.coverage?.example_count],
     ['Use', useLabels[row.coverage?.intended_use]], ['Quality', labels[grade(row)]],
     ['Independent QC', row.independent_qc ? `${labels[row.independent_qc.verdict]}: ${row.independent_qc.admitted === null ? `${row.independent_qc.reviewed} reviewed` : `${row.independent_qc.admitted} of ${row.independent_qc.reviewed} reviewed`} — ${row.independent_qc.method}` : null],
+    ['Daytona safe', daytonaLabels[row.daytona_safety]],
     ['Top curriculum area', row.coverage?.top_area?.name],
     ['Input rows', row.task_count], ['Source ID', row.id], ['Dataset revision', row.dataset_revision],
     ['Pipeline', row.pipeline?.name], ['Curation', row.curation?.status],
@@ -127,6 +141,7 @@ function details(row) {
 async function load() {
   const data = await json('api/sources');
   state.sources = data.sources;
+  state.daytonaSnapshotLimit = data.daytona_snapshot_limit;
   const processed = data.sources.filter(row => row.coverage && row.coverage.basis !== 'declared');
   const examples = processed.reduce((total, row) => total + row.coverage.example_count, 0);
   $('message').textContent = `${number.format(data.sources.length)} sources · ${number.format(examples)} examples · ${processed.length} sources processed`;

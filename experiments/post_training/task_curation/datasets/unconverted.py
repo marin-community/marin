@@ -4,6 +4,8 @@
 """Sources retained in the inventory that do not yet have a conversion recipe."""
 
 
+from finestore.rl.curation import DaytonaSafety
+
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_REPO, TASKTROVE_REVISION
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
@@ -39,6 +41,7 @@ def sources() -> list[RlDataSource]:
                     "sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c",
                     "https://hub.harborframework.com/datasets/skill2env/skill2env",
                 ),
+                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -53,6 +56,7 @@ def sources() -> list[RlDataSource]:
                     "explicitly accepted."
                 ),
                 dataset=TASKTROVE_RELEASE,
+                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -69,6 +73,7 @@ def sources() -> list[RlDataSource]:
                     "oracle and needs a custom environment adapter."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -85,6 +90,7 @@ def sources() -> list[RlDataSource]:
                     "uninstalled doctest dependency."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -100,6 +106,7 @@ def sources() -> list[RlDataSource]:
                     "either polarity."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -115,6 +122,7 @@ def sources() -> list[RlDataSource]:
                     "the crosscodeeval slice only checks that an import succeeds."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -130,6 +138,7 @@ def sources() -> list[RlDataSource]:
                     "ideas are usable; regenerate verifiers with an oracle/no-op gate."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -151,6 +160,7 @@ def sources() -> list[RlDataSource]:
                     "current review status before training use."
                 ),
                 dataset=TASKTROVE_RELEASE,
+                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -172,6 +182,7 @@ def sources() -> list[RlDataSource]:
                     "before training use."
                 ),
                 dataset=TASKTROVE_RELEASE,
+                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -184,6 +195,7 @@ def sources() -> list[RlDataSource]:
                 count=500,
                 notes="Byte-identical generator to codeforces-v3 at 500 rows; merge, do not keep separately.",
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -199,6 +211,7 @@ def sources() -> list[RlDataSource]:
                     "Rewrite against the real BugsInPy project suites."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -214,6 +227,7 @@ def sources() -> list[RlDataSource]:
                     "20+ cases per task."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -226,6 +240,7 @@ def sources() -> list[RlDataSource]:
                 count=1768,
                 notes="0.25 reward for any identifier-shaped output; instruction coaches the hack.",
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -238,6 +253,7 @@ def sources() -> list[RlDataSource]:
                 count=2139,
                 notes="Exact string match on a single line completion. Not agentic, no execution.",
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -250,6 +266,7 @@ def sources() -> list[RlDataSource]:
                 count=500,
                 notes="0.25 for any non-empty output; instruction discloses the tiers.",
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -262,6 +279,7 @@ def sources() -> list[RlDataSource]:
                 count=3356,
                 notes=("Re-skin of the Python variant with the same free 0.25 tier; metadata still says " "python."),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -274,6 +292,7 @@ def sources() -> list[RlDataSource]:
                 count=9930,
                 notes=("Instruction lists every job and step verbatim; workflow is never executed. " "Transcription."),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -290,6 +309,7 @@ def sources() -> list[RlDataSource]:
                     "environment."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -302,6 +322,7 @@ def sources() -> list[RlDataSource]:
                 count=447,
                 notes="20% of sampled tasks contain unconditional fail() stubs the verifier restores.",
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -316,6 +337,7 @@ def sources() -> list[RlDataSource]:
                     "LLM-synthesized stub-filling toys (TypeScript formatter shim, Flask hello page). " "Kata-grade."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -332,6 +354,7 @@ def sources() -> list[RlDataSource]:
                     "reference Solution class inside the test."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -347,6 +370,7 @@ def sources() -> list[RlDataSource]:
                     "containers that do not exist."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -362,6 +386,7 @@ def sources() -> list[RlDataSource]:
                     "internals) that are not in the task, so most tasks are unsolvable as specified."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -374,6 +399,7 @@ def sources() -> list[RlDataSource]:
                 count=424,
                 notes="Spy-call contracts against a 90-package global npm image; 424 rows.",
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -389,6 +415,7 @@ def sources() -> list[RlDataSource]:
                     "and scan-class-path counts any test class."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -401,6 +428,7 @@ def sources() -> list[RlDataSource]:
                 count=462,
                 notes="Fail-open exit paths, regex class discovery, 462 rows.",
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -417,6 +445,7 @@ def sources() -> list[RlDataSource]:
                     "that weak stubs can satisfy."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -432,6 +461,7 @@ def sources() -> list[RlDataSource]:
                     "offline. Bake gems and drop tasks that fail the oracle gate."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -448,6 +478,7 @@ def sources() -> list[RlDataSource]:
                     "needs its own converter. Vague refactor prompts, nothing executed."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -463,6 +494,7 @@ def sources() -> list[RlDataSource]:
                     "slice tests a local mock rather than the solution."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -479,6 +511,7 @@ def sources() -> list[RlDataSource]:
                     "tests."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -494,6 +527,7 @@ def sources() -> list[RlDataSource]:
                     "only test files in three of 10 tasks."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -510,6 +544,7 @@ def sources() -> list[RlDataSource]:
                     "transcripts."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -525,6 +560,7 @@ def sources() -> list[RlDataSource]:
                     "generic reply or unrelated action without validating the required safe continuation."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -537,6 +573,7 @@ def sources() -> list[RlDataSource]:
                 count=1541,
                 notes="No repo in the container; a 9B judge rates one predicted next action.",
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -553,6 +590,7 @@ def sources() -> list[RlDataSource]:
                     "1,478 tasks are gate-able today. Port the gate checks before converting."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -568,6 +606,7 @@ def sources() -> list[RlDataSource]:
                     "language checks, or skip."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -580,6 +619,7 @@ def sources() -> list[RlDataSource]:
                 count=1000,
                 notes="Asks an LLM judge to count exactly five spelling errors.",
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -592,6 +632,7 @@ def sources() -> list[RlDataSource]:
                 count=9033,
                 notes="Grades presence of literal marker substrings; never checks the cited content.",
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -604,6 +645,7 @@ def sources() -> list[RlDataSource]:
                 count=8869,
                 notes="Counts markdown tables and bullets; no content check.",
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -616,6 +658,7 @@ def sources() -> list[RlDataSource]:
                 count=1982,
                 notes="Required literal format contradicts the demonstrated turns; judge-only.",
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -628,6 +671,7 @@ def sources() -> list[RlDataSource]:
                 count=1000,
                 notes="Gate matches against a deliberately broken synthetic reference; then judge.",
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -643,6 +687,7 @@ def sources() -> list[RlDataSource]:
                     "otherwise it is a 3k duplicate of mcqa."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -658,6 +703,7 @@ def sources() -> list[RlDataSource]:
                     "with no RDKit. Fix format contract and install cheminformatics."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -674,6 +720,7 @@ def sources() -> list[RlDataSource]:
                     "every subexpression."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -686,6 +733,7 @@ def sources() -> list[RlDataSource]:
                 count=1050,
                 notes="Single subjective criterion with 'Expected answer: YES' embedded in the judge prompt.",
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -701,6 +749,7 @@ def sources() -> list[RlDataSource]:
                     "text, and it duplicates openqa."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -717,6 +766,7 @@ def sources() -> list[RlDataSource]:
                     "1,478 tasks are gate-able today. Port the gate checks before converting."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -733,6 +783,7 @@ def sources() -> list[RlDataSource]:
                     "agent time. Needs its own converter."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -748,6 +799,7 @@ def sources() -> list[RlDataSource]:
                     "pytest node id; not the trusted-paths shape the swe converters handle."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -764,6 +816,7 @@ def sources() -> list[RlDataSource]:
                     "oracles fail on missing dependencies and the empty check cannot start."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -780,6 +833,7 @@ def sources() -> list[RlDataSource]:
                     "strip the success criteria."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -792,6 +846,7 @@ def sources() -> list[RlDataSource]:
                 count=9998,
                 notes="Easy SFT persona math, gold in plaintext, carries the terminal-bench canary.",
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -806,6 +861,7 @@ def sources() -> list[RlDataSource]:
                     "expected-status grading; oracle patches remain separate."
                 ),
                 dataset=TASKTROVE_RELEASE,
+                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -821,6 +877,7 @@ def sources() -> list[RlDataSource]:
                     "hidden cases by fuzzing inputs through the oracle."
                 ),
                 dataset=TASKTROVE_INPUT,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -834,6 +891,7 @@ def sources() -> list[RlDataSource]:
                     "Canonical SWE-Gym tasks with native test selection and grading; oracle patches " "remain separate."
                 ),
                 dataset=TASKTROVE_RELEASE,
+                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -852,6 +910,7 @@ def sources() -> list[RlDataSource]:
                     "and dependency resolution remain mutable."
                 ),
                 dataset=TASKTROVE_RELEASE,
+                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -873,6 +932,7 @@ def sources() -> list[RlDataSource]:
                     "hashes."
                 ),
                 dataset=TASKTROVE_RELEASE,
+                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -894,6 +954,7 @@ def sources() -> list[RlDataSource]:
                     "V2.6-RL-oss__general/source.json) for runtime revisions and file hashes."
                 ),
                 dataset=TASKTROVE_RELEASE,
+                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -907,6 +968,7 @@ def sources() -> list[RlDataSource]:
                     "Canonical prompts with the complete native ABC-to-MIDI continuous scorer; no shipped " "solutions."
                 ),
                 dataset=TASKTROVE_RELEASE,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -929,6 +991,7 @@ def sources() -> list[RlDataSource]:
                     "hashes."
                 ),
                 dataset=TASKTROVE_RELEASE,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
     ]
