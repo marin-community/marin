@@ -2,7 +2,7 @@
 
 This experiment starts from a privately retained Mochi SFT step 395161 and its BF16 schema-3 export. It runs five optimizer updates with a 4,096-token combined cap, then starts a fresh job against the saved model/optimizer checkpoint and advances from step 5 to step 10 with a 32,768-token cap. The second stage restarts task ordering so its controlled length probe is consumed. Native checkpoints are retained; terminal HF export is disabled.
 
-The allocation is 16 GB200 trays in one NVLink domain on `cw-us-east-08a`, at `production` priority: 48 training GPUs (TP1/PP12/EP4/CP4) and 16 rollout GPUs (TP1/PP1/DP16/EP16). The cluster's ordinary Kueue topology policy keeps this 16-tray gang in one domain. AdamW optimizer state uses the existing CPU offload path to fit the trainer footprint. vLLM compilation and CUDA graphs remain enabled.
+The allocation is 15 GB200 trays in one NVLink domain on `cw-us-east-08a`, at `production` priority: 48 training GPUs (TP1/PP12/EP4/CP4) and 12 rollout GPUs (TP1/PP1/DP12/EP12). The cluster's ordinary Kueue topology policy keeps this gang in one domain. This fits the 15 schedulable trays observed in the remaining domain; the initial 64-GPU candidate needed one more tray. AdamW optimizer state uses the existing CPU offload path to fit the trainer footprint. vLLM compilation and CUDA graphs remain enabled.
 
 The recipe comes from Ben's long-loop recipe at `bf163020a7115d85fd3fcb02099d3abfda3b6cf2`. It preserves RLOO-N and eight responses per prompt group, using two groups per update. It keeps zero-reward groups for this runtime smoke, so the controlled length probe is not filtered out. The real tasks are two original Harbor CalibForge tasks and two non-agentic arithmetic/sequence tasks from Ben's pinned mixed-task artifact. The second stage replaces one short arithmetic prompt with a clearly marked visible ledger plus the same arithmetic question and verifier. Its rendered prompt has 31,611 valid tokens; it does not use masked padding to reach that length.
 
@@ -12,7 +12,7 @@ Build and inspect the graph before submitting it:
 
 ```bash
 uv run python -m experiments.post_training.mochi_one_rack.launch \
-  --stage 32k --version 2026.11.11.9261
+  --stage 32k --version 2026.11.11.9262
 ```
 
 Load the dedicated `DAYTONA_RL_API_KEY` and `DAYTONA_EVAL_API_KEY` through the documented Secret Manager path. Set `MARIN_PREFIX` to the private experiment prefix, then add `--run` to the same command. Stop at `--stage 4k` for a diagnostic of only the first stage. Use a fresh calendar version after runtime changes; the input artifact identities remain explicit in `launch.py`.

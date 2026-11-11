@@ -108,7 +108,7 @@ class SkyRLRolePlan:
         return self.reference_num_nodes is None
 
     @property
-    def cross_node_expert_parallel(self) -> bool:
+    def uses_expert_parallel_placement(self) -> bool:
         """Whether rollout uses the runtime's verified one-GPU EP placement atoms."""
         return (
             self.inference_engine_tensor_parallel_size == 1
@@ -125,7 +125,7 @@ class SkyRLRolePlan:
             * self.inference_engine_pipeline_parallel_size
             * self.inference_engine_data_parallel_size
         )
-        if self.cross_node_expert_parallel:
+        if self.uses_expert_parallel_placement:
             rollout_gpus = self.num_inference_engines * engine_gpus
             rollout_nodes = (rollout_gpus + self.policy_num_gpus_per_node - 1) // self.policy_num_gpus_per_node
             return self.policy_num_nodes + (self.reference_num_nodes or 0) + rollout_nodes
@@ -187,7 +187,7 @@ class SkyRLTopology:
                 "each colocated SkyRL inference engine TP*PP slice must divide gpus_per_node; "
                 f"got TP*PP={tensor_pipeline_gpus} and gpus_per_node={self.gpus_per_node}"
             )
-        if not plan.colocate_all and not plan.cross_node_expert_parallel and engine_gpus > self.gpus_per_node:
+        if not plan.colocate_all and not plan.uses_expert_parallel_placement and engine_gpus > self.gpus_per_node:
             raise ValueError(
                 "each SkyRL inference engine must fit on one node, but "
                 f"TP*PP*DP={engine_gpus} exceeds gpus_per_node={self.gpus_per_node}"
@@ -586,7 +586,7 @@ def _validate_skyrl_backend_constraints(
     if not isinstance(_declared_config_value(config, "generator.backend"), str):
         raise ValueError("SkyRL config must explicitly set a non-empty generator.backend")
     if (
-        plan.cross_node_expert_parallel
+        plan.uses_expert_parallel_placement
         and plan.inference_engine_data_parallel_size > topology.gpus_per_node
         and _declared_config_value(config, "generator.backend") != "vllm"
     ):

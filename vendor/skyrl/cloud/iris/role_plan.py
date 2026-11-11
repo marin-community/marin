@@ -306,7 +306,7 @@ def _minimum_disaggregated_rollout_nodes(
     """Return the smallest whole-node pool that SkyRL's current Ray placement can realize."""
     tensor_pipeline_size = tensor_parallel_size * pipeline_parallel_size
     per_engine_gpus = tensor_pipeline_size * data_parallel_size
-    cross_node_ep = (
+    expert_parallel_workers = (
         backend == "vllm"
         and tensor_parallel_size == pipeline_parallel_size == 1
         and expert_parallel_size == data_parallel_size > 1
@@ -319,12 +319,12 @@ def _minimum_disaggregated_rollout_nodes(
     # Mirror the runtime's placement atoms, including otherwise wasted GPUs when an atom does not divide a node.
     # Verified TP1/PP1 EP workers use one-GPU PACK atoms. Other Ray engines use STRICT_PACK;
     # the mp path packs node-atomic TP*PP actors per DP rank.
-    if not multiprocessing_backend and not cross_node_ep and per_engine_gpus > gpus_per_node:
+    if not multiprocessing_backend and not expert_parallel_workers and per_engine_gpus > gpus_per_node:
         raise ValueError(
             f"each ray-backed rollout engine requires {per_engine_gpus} GPUs in one {gpus_per_node}-GPU node; "
             "reduce TP*PP*DP or use generator.inference_engine_mp_backend=true"
         )
-    if cross_node_ep:
+    if expert_parallel_workers:
         placement_atom_gpus = 1
         placement_atoms = replicas * data_parallel_size
     elif multiprocessing_backend:

@@ -27,6 +27,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.storage_path import StoragePath
 
 TRIAL_ROOT = "s3://marin-us-east-08a/tmp/ttl=7d/romain/mochi-rl-smoke/2026.11.11.01a1c926.a1"
 INPUT_VERSION = "2026.11.11.9261"
@@ -37,8 +38,8 @@ ROLE_PLAN = SkyRLRolePlan(
     num_inference_engines=1,
     inference_engine_tensor_parallel_size=1,
     inference_engine_pipeline_parallel_size=1,
-    inference_engine_data_parallel_size=16,
-    inference_engine_expert_parallel_size=16,
+    inference_engine_data_parallel_size=12,
+    inference_engine_expert_parallel_size=12,
     train_batch_size=2,
     policy_mini_batch_size=2,
     micro_train_batch_size_per_gpu=1,
@@ -53,15 +54,17 @@ class MochiSmoke:
 
 
 def build_smoke(version: str) -> MochiSmoke:
+    trial_root = StoragePath(TRIAL_ROOT)
+    hf_root = str(trial_root / "hf-sft")
     model = ArtifactHfModel(
         step=ArtifactStep.adopt(
             "users/romain/checkpoints/mochi-sft-395161-schema3",
             INPUT_VERSION,
-            source=f"{TRIAL_ROOT}/hf-sft",
+            source=hf_root,
             kind=LevanterCheckpoint,
         ),
         relative_path="",
-        tokenizer_uri=f"{TRIAL_ROOT}/hf-sft",
+        tokenizer_uri=hf_root,
         tokenizer_revision="3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09",
     )
     execution = IrisSkyRLExecution(
@@ -94,7 +97,7 @@ def build_smoke(version: str) -> MochiSmoke:
         data = ArtifactStep.adopt(
             f"users/romain/documents/mochi-one-rack/{stage}",
             INPUT_VERSION,
-            source=f"{TRIAL_ROOT}/data/{stage}",
+            source=str(trial_root / "data" / stage),
             kind=Artifact,
         )
         step = skyrl_step(
@@ -122,10 +125,10 @@ def build_smoke(version: str) -> MochiSmoke:
         def bind_traces(ctx: StepContext) -> SkyRLRunConfig:
             config = build_config(ctx)
             launch = yaml.safe_load(config.launch_config_yaml)
-            traces = launch["artifacts"]["attempts_root"] + "/traces"
-            launch["skyrl"]["generator"]["trajectory_retention"]["output_path"] = traces
+            traces = StoragePath(launch["artifacts"]["attempts_root"]) / "traces"
+            launch["skyrl"]["generator"]["trajectory_retention"]["output_path"] = str(traces)
             launch["skyrl"]["generator"]["trajectory_retention"]["run_id"] = launch["run"]["id"]
-            launch["skyrl"]["terminal_bench"]["installed_agent"]["output_path"] = traces + "/agent"
+            launch["skyrl"]["terminal_bench"]["installed_agent"]["output_path"] = str(traces / "agent")
             return replace(config, launch_config_yaml=yaml.safe_dump(launch, sort_keys=False))
 
         return replace(step, build_config=bind_traces)
