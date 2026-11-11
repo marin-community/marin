@@ -75,7 +75,7 @@ uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b \
   --evals mmlu-smoke \
   --evalchemy-config experiments/evaluation/configs/evalchemy/ifeval.yaml \
-  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --harbor-config experiments/evaluation/configs/harbor/aime-harbor.yaml \
   --limit 2 \
   --dry-run
 ```
@@ -168,7 +168,8 @@ uv run python -m experiments.evaluation.cli launch \
 ```
 
 `agentic` runs seven full Harbor datasets and can consume substantial Daytona and inference
-capacity. Use `tb2-lite`, `swebench-lite`, `aime-smoke`, or `--limit N` for validation runs.
+capacity. Use `tb2-lite` or `swebench-lite` for validation runs. Use `--limit N` to cap
+`aime-harbor` and other full evaluations.
 
 Resume an interrupted Harbor evaluation from its existing results tree:
 
@@ -181,7 +182,7 @@ uv run python -m experiments.evaluation.cli launch \
 ```
 
 The resume option accepts exactly one Harbor evaluation. The launcher and worker check the
-model, hosted judge, dataset, policy, runtime, and task limit against the saved results before
+model, hosted judge, dataset, policy, and task limit against the saved results before
 reuse. Incompatible results are rejected before submission. Compatible completed trials are reused.
 
 Run one OT-TBLite trial with the registered Grug model and OpenCode agent policy:
@@ -279,7 +280,7 @@ It is exploratory and is not part of a verified evaluation policy cohort.
 The `code` suite is registered but is not runnable with the current pinned evaluation image because
 its HumanEvalPlus and MBPPPlus dependencies are absent. Individual evaluation keys are defined in
 `experiments/evaluation/evals.py`. Useful Harbor keys outside `agentic` include `tb2-lite`,
-`swebench-lite`, `swebench-full`, `aime-smoke`, `aime-harbor`, and `ot-tblite`.
+`swebench-lite`, `swebench-full`, `aime-harbor`, and `ot-tblite`.
 
 ### Choose a model
 
@@ -342,6 +343,10 @@ Each Evalchemy evaluator bounds its active evaluation items through
 default can have up to 512 active items. Each evaluation broker worker allows 64 concurrent HTTP
 requests; the proxy allows `max(256, 64 * instances)` outstanding requests (512 for eight instances),
 including requests already running on workers.
+Model-info, metrics, and tokenization requests bypass generation admission. The proxy forwards
+them directly to a worker's auxiliary HTTP endpoint while its heartbeat lease is live. Worker
+replacement updates that address after preemption; when no worker is ready, these requests return
+503. Token counts and model info come from the live serving backend rather than a local estimate.
 GPU evaluation servers schedule up to 4,096 tokens across requests per iteration by default;
 TPU servers use 512.
 Set `serve.max_num_batched_tokens` in the model configuration to override that budget.
@@ -365,8 +370,26 @@ Requests wait asynchronously for inference, so the proxy's configured outstandin
 does not depend on the web server's thread-pool size.
 
 Each selected evaluation runs as its own step against shared inference. An evaluation failure gets
-a record for that eval; other steps continue. A server startup failure marks every pending eval as
-an infrastructure failure. To relaunch after a cancellation or failure, repeat the command above
+a record for that eval; other steps continue. For a Hugging Face model with caching enabled,
+`remote_inference` checks the completion marker in-process when the coordinator and serving
+workers can be proven to share a cluster and region. A hit skips CPU preparation.
+A named CoreWeave target still submits the CPU job because its local Iris controller reports
+the execution cluster as `local`, which does not prove a match to the target name. A miss, or a different
+serving placement, submits a CPU job with the serving placement constraints before
+reserving GPUs or TPUs. Root GPU submissions without `target_cluster` skip preparation with a warning: the GPU job
+can auto-federate while a CPU prepare job stays local. GPU children inside an Iris job keep
+preparing without a cluster pin because child jobs stay on their parent cluster.
+TPU placement with `ANY_REGION` or several regions also skips preparation with a warning when
+no target cluster is set. An unset TPU region keeps preparing inside a job because children inherit the parent region.
+A root TPU submission without a cluster or region pin skips preparation: there is no parent region to inherit.
+Both paths use the worker's model resolver. The job receives the serving worker's environment,
+including `HF_TOKEN`, and gets one retry for a failure. Preparation
+has one four-hour wait budget; a preparation timeout does not trigger a serving-startup retry.
+With different cache prefixes or a target cluster spanning several regions, preparation can warm
+a cache the serving worker cannot use, and that worker may still download on an accelerator.
+Candidate and hosted-judge preparation are separate: cold judge preparation can hold already
+reserved candidate accelerators. A preparation or
+server startup failure marks every pending eval as an infrastructure failure. To relaunch after a cancellation or failure, repeat the command above
 with the same `--run-id`. The launcher derives the same eval identities, skips completed steps,
 and keeps unfinished evals in their existing FineStore archives. Evalchemy restores completed
 requests from those archives even when the inference URL or request concurrency changes.

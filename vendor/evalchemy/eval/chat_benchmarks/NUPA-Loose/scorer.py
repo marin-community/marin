@@ -19,11 +19,15 @@ SCIENTIFIC = "ScientificNotation"
 _ANSWER_MARKER_RE = re.compile(r"(?i)^(?:the\s+answer\s+is|so\s+the\s+answer\s+is)\s+")
 _BOXED_RE = re.compile(r"\\boxed\{([^{}]+)\}")
 _INLINE_MATH_RE = re.compile(r"\\\(([^()]*)\\\)")
+_DOLLAR_MATH_RE = re.compile(r"\$([^$\n]+)\$")
+_BOLD_RE = re.compile(r"\*\*([^*\n]+)\*\*")
 _EQUATION_TAIL_RE = re.compile(r"=\s*([^\s=]+)\s*$")
 _ANSWER_TAIL_RE = re.compile(
     r"(?i)(?:^|\n)\s*(?:(?:so|therefore|thus)[, ]+)?(?:the\s+)?(?:final\s+)?"
     r"(?:answer|result|output)\s*(?:is\s*)?[:=]?\s*([^\s]+)\s*\Z"
 )
+_NUMERIC_TOKEN_RE = re.compile(r"(?=[^\d]*\d)[\d.,/eE+-]+\Z")
+_PERIOD_NUMBER_RE = re.compile(r"\.\d")
 _ANSWER_PATTERNS = {
     INTEGER: re.compile(r"^\d+"),
     FLOAT: re.compile(r"^\d+\.\d+"),
@@ -40,6 +44,7 @@ _READ_FROM_RIGHT = {
 
 @dataclass(frozen=True)
 class ExampleScore:
+    extracted_answer: str | None
     exact_match: float
     digit_match: float
     dlength: float
@@ -58,9 +63,9 @@ def extract_answer(text: str | None, answer_format: str) -> str | None:
     if "<|start_think|>" in text:
         return None
     stripped = text.strip()
-    tail = stripped.rstrip(" \t\r\n.,;:!?$")
+    tail = stripped.rstrip(" \t\r\n.,;:!?")
 
-    for pattern in (_BOXED_RE, _INLINE_MATH_RE):
+    for pattern in (_BOXED_RE, _INLINE_MATH_RE, _DOLLAR_MATH_RE, _BOLD_RE):
         match = list(pattern.finditer(tail))
         if match and not tail[match[-1].end() :].strip(" \t\r\n.,;:!?$\\)"):
             answer = _full_answer(match[-1].group(1).strip(), answer_format)
@@ -68,16 +73,22 @@ def extract_answer(text: str | None, answer_format: str) -> str | None:
                 return answer
 
     for pattern in (_EQUATION_TAIL_RE, _ANSWER_TAIL_RE):
-        match = pattern.search(tail)
+        match = pattern.search(tail.rstrip("$"))
         if match is not None:
             answer = _full_answer(match.group(1), answer_format)
             if answer is not None:
                 return answer
 
+    final_line = tail.splitlines()[-1].strip() if tail else ""
+    if len(stripped.splitlines()) > 1 and _NUMERIC_TOKEN_RE.fullmatch(final_line):
+        return _full_answer(final_line, answer_format)
+
     direct = _ANSWER_MARKER_RE.sub("", stripped, count=1)
     match = _ANSWER_PATTERNS[answer_format].match(direct)
     if match is None:
-        return _full_answer(tail.splitlines()[-1].strip() if tail else "", answer_format)
+        return None
+    if _PERIOD_NUMBER_RE.match(direct[match.end() :]):
+        return None
     return _normalize_answer(match.group())
 
 
@@ -98,6 +109,7 @@ def score_prediction(prediction: str | None, gold: str, answer_format: str) -> E
     prediction_parts = _digit_parts(extracted or "", answer_format)
     format_valid = extracted is not None
     return ExampleScore(
+        extracted_answer=extracted,
         exact_match=1.0 if format_valid and prediction_parts == gold_parts else 0.0,
         digit_match=_digit_match(prediction_parts, gold_parts, answer_format),
         dlength=float(abs(_total_part_length(prediction_parts) - _total_part_length(gold_parts))),

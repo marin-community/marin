@@ -69,6 +69,7 @@ nav:
       - Setting up a Local GPU Environment: tutorials/local-gpu.md
       - Training on Cloud GPUs: tutorials/cloud-gpu.md
       - Fine-tune Snowball on Your H100 Cluster: tutorials/run-snowball-sft-on-h100.md
+      - Quick RL Loop: recipes/quick-rl-loop.md
       - Prepare a Storage Bucket: tutorials/storage-bucket.md
       - Publishing an Analysis Site: tutorials/publish-analysis-site.md
       - Training an LM: tutorials/train-an-lm.md
@@ -93,8 +94,10 @@ nav:
       - Contributing: dev-guide/contributing.md
       - Agent Workflows: dev-guide/agent-workflows.md
       - Experiment Records: dev-guide/experiment-records.md
+      - Research Engineering: dev-guide/research-engineering.md
       - Writing Style:
           - House Style: dev-guide/writing-style/index.md
+          - Public Communication Conventions: dev-guide/writing-style/conventions.md
           - Prose Review: dev-guide/writing-style/ai-writing-donts.md
           - Pull Requests and Commits: dev-guide/writing-style/pull-requests.md
           - Issues: dev-guide/writing-style/issues.md
@@ -112,6 +115,7 @@ nav:
       - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:
       - Task Curation: references/task-curation.md
+      - Evaluation tasks: references/evaluation-tasks.md
       - Specifying Hardware Resources: references/resource-config.md
       - Default Steps: references/default-steps.md
       - Launching RL experiments: references/rl-launching.md

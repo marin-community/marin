@@ -18,6 +18,7 @@ from marinskyrl.distillation import (
 )
 from skyrl_train.config.ftpo import validate_ftpo
 from skyrl_train.dynamic_sampling import DynamicSamplingType
+from skyrl_train.config.reasoning_span_penalty import charges_reasoning_span_tokens
 
 from marinskyrl.runtime_options import (
     PREFERENCE_PAIR_ENV_CLASS,
@@ -337,10 +338,11 @@ def validate_objective(cfg: DictConfig, *, loss_spec: LossSpec | None = None) ->
     loop_credit = float(
         OmegaConf.select(cfg, "generator.trajectory_reward_shaping.loop.advantage_penalty_per_token", default=0)
     )
+    token_credit = loop_credit > 0 or charges_reasoning_span_tokens(cfg)
     if spec is not None and spec.sequence_level:
         if reduction is not LossReduction.SEQUENCE_MEAN:
             raise ValueError(f"{algorithm.policy_loss_type} requires trainer.algorithm.loss_reduction=sequence_mean")
-        if loop_credit > 0 or (plan is not None and not topk):
+        if token_credit or (plan is not None and not topk):
             raise ValueError(f"{algorithm.policy_loss_type} requires sequence-level advantages; use a token-level loss")
     if algorithm.think_token_weight != 1 and not algorithm.enable_token_reward_channel:
         raise ValueError("think_token_weight != 1 requires trainer.algorithm.enable_token_reward_channel=true")
@@ -387,10 +389,11 @@ def validate_objective(cfg: DictConfig, *, loss_spec: LossSpec | None = None) ->
         if (
             algorithm.use_kl_in_reward
             or algorithm.advantage_batch_normalize
-            or loop_credit > 0
+            or token_credit
             or algorithm.dynamic_sampling.type is not None
         ):
             raise ValueError(
                 "distillation reward_mode=replace requires use_kl_in_reward=false, advantage_batch_normalize=false, "
-                "loop.advantage_penalty_per_token=0 and dynamic_sampling.type=null"
+                "no token credit from loop.advantage_penalty_per_token or reasoning_span target=marker, "
+                "and dynamic_sampling.type=null"
             )

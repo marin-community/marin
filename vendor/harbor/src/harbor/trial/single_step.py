@@ -1,4 +1,7 @@
 import asyncio
+from collections.abc import Mapping
+
+from harbor.host_capabilities import HostCapabilities
 
 from harbor.agents.base import MalformedModelResponseError, TurnCapExhaustedError
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
@@ -24,31 +27,32 @@ class SingleStepTrial(Trial):
         *,
         _task: Task | None = None,
         _attempt_index: int | None = None,
+        host_capabilities: HostCapabilities = HostCapabilities(),
+        guest_environment: Mapping[str, str] = {},
     ):
         if _task is not None and _task.has_steps:
             raise ValueError("SingleStepTrial requires a task without [[steps]].")
-        super().__init__(config, _task=_task, _attempt_index=_attempt_index)
+        super().__init__(
+            config,
+            _task=_task,
+            _attempt_index=_attempt_index,
+            host_capabilities=host_capabilities,
+            guest_environment=guest_environment,
+        )
         self._are_artifacts_collected = False
 
     async def _run(self) -> None:
-        mode = resolve_task_verifier_mode(self.task.config)
-
         await self._run_agent()
+        await self._collect_runtime_logs()
+        await self._sync_agent_output(self.result)
         await self._upload_agent_logs()
         await self._collect_artifacts()
 
-        if mode == VerifierEnvironmentMode.SEPARATE:
-            await self._stop_agent_environment()
-
         await self._run_verifier()
-
-        if mode == VerifierEnvironmentMode.SHARED:
-            await self._stop_agent_environment()
 
     async def _recover_outputs(self) -> None:
         await self._sync_agent_output(self.result)
         await self._collect_artifacts()
-        await self._stop_agent_environment()
 
     async def _collect_artifacts(self) -> None:
         if self._are_artifacts_collected:
@@ -83,8 +87,6 @@ class SingleStepTrial(Trial):
             # verification; so is a turn-capped rollout that never confirmed
             # completion.
             await self._record_exception(exc)
-        finally:
-            await self._sync_agent_output(self.result)
 
     async def _run_verifier(self) -> None:
         if self.config.verifier.disable:

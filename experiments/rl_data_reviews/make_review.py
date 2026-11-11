@@ -683,7 +683,6 @@ def independent_reviews(
             "marinskyrl_commit": identity["marinskyrl"]["commit"],
             "marinskyrl_dirty": identity["marinskyrl"]["dirty"],
             "marinskyrl_python_tree_sha256": identity["marinskyrl"]["python_tree_sha256"],
-            "harbor_commit": identity.get("harbor", {}).get("commit"),
         },
         "created_at": utc_now(),
         "subjects": [],
@@ -937,8 +936,6 @@ def make_review(config_path: Path, n: int, seed: int, output: Path, resume: bool
         for task in tasks
         if task.packed_task
     }
-    if any(task.route == Route.HARBOR for task in tasks):
-        identity["harbor"] = checkout_identity(Path(native["harbor_checkout"]), ["src/harbor"])
     snapshot_id = hashlib.sha256(json_text(identity).encode()).hexdigest()
     if output.exists() and not resume:
         raise ValueError("Output already exists; use --resume or a new output directory")

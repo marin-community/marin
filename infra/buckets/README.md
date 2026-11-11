@@ -1,7 +1,7 @@
 # Shared data buckets
 
 This Pulumi project manages shared Marin data buckets and lifecycle policies in
-GCS, CoreWeave AI Object Storage, and Cloudflare R2, plus creation of the shared
+GCS, CoreWeave AI Object Storage, and Cloudflare R2, plus public release hosting and creation of the shared
 Hugging Face bucket. The `marin-buckets` stack is operated manually because its
 provider credentials are not available to CI.
 
@@ -19,6 +19,22 @@ Marin repository root. Pulumi blocks removal while the resource is protected. Af
 unprotection, removing the resource leaves the HF bucket in place. The resource does
 not manage file contents or subsequent visibility changes. Creation fails if the
 bucket already exists, so an existing bucket cannot be silently adopted.
+
+`marin-na-public` is separate from the private `marin-na` data bucket. Its
+custom domain `public.oa.dev` serves objects without credentials; `r2.dev`
+access stays disabled. The stack exports `publicUrl` and `publicPrefix` for
+application stacks. Objects must carry their HTTP content type and cache policy;
+the domain cache respects origin headers, including catalog revalidation.
+A hostname-scoped configuration rule disables Browser Integrity Check so package
+clients such as Python's `urllib` can download artifacts.
+
+Before applying public hosting, audit the zone's `http_request_cache_settings`
+and `http_config_settings` rulesets. Cloudflare has one entry-point ruleset per
+phase. If one already exists, preserve its rules in the declaration and import it through the program-first
+workflow in `infra/pulumi/README.md`; do not replace unrelated zone rules.
+Provider tokens need R2 bucket management plus Zone Read, Cache Rules Edit and
+Config Rules Edit on `oa.dev`. R2 Admin Read & Write alone covers bucket and domain
+operations but does not include these zone permissions.
 
 ## Credentials
 
@@ -91,8 +107,9 @@ incomplete multipart uploads after seven days.
 
 The default shared scratch bucket for CoreWeave clusters is declared as
 `data.stores.coreweave.temp_bucket` in `config/coreweave.yaml`, separately from the region
-mirror set. Permanent east-region artifacts remain in `marin-us-east-02a`; `hero-checkpoints`
-is reserved for hero checkpoints.
+mirror set. Lifecycle rules expire only its `tmp/ttl=Nd/` prefixes, so RNO2A durable outputs
+under `marin/` persist. Other permanent east-region artifacts remain in `marin-us-east-02a`;
+`hero-checkpoints` is reserved for hero checkpoints.
 
 CoreWeave bucket access policies preserve S3 access for principals in the Open Athena organization.
 Only `marin-us-east-02a` denies every principal the `s3:DeleteObject` and
@@ -100,12 +117,17 @@ Only `marin-us-east-02a` denies every principal the `s3:DeleteObject` and
 temporary checkpoint staging paths remain deletable. Before a policy update, audit each bucket's
 live access policy; Pulumi replaces the complete bucket policy.
 
+Every CoreWeave bucket policy also denies the Marin Belay user (`BELAY_USER_ID`) any action
+outside its grants: writes outside its run prefixes, reads outside its data, and listing buckets
+it does not use. The `marin-belay` organization access policy grants that access, but other
+organization grants also reach the user, so the explicit bucket-policy denies are what bound it.
+
 `marin-rno2a` is the RNO2A regional data bucket. It uses the same organization access policy,
 multipart cleanup, and `tmp/ttl=Nd/` lifecycle rules as the other regional buckets. RNO2A task
-configuration selects this bucket for both durable outputs and scratch with `MARIN_PREFIX`
-and `MARIN_TEMP_PREFIX`; it does not need a separate scratch bucket. Apply the bucket stack
-before deploying that task configuration. Existing RNO2A controller state and Finelog archives
-keep their `marin-us-east-02a` paths until a verified migration preserves their referenced objects.
+configuration does not select it: tasks write durable outputs under `s3://marin-us-east-08a/marin`
+and scratch to the shared CoreWeave temp bucket. Existing RNO2A controller state and Finelog
+archives keep their `marin-us-east-02a` paths until a verified migration preserves their
+referenced objects.
 
 ## Automation boundary
 

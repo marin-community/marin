@@ -5,8 +5,8 @@ retained Hyperdisk root disk, Artifact Registry repository, Secret Manager
 access, and Cloudflare DNS. The production host is an on-demand C4D VM with an
 AMD Turin CPU. It uses NVMe for its boot disk and gVNIC for networking, as
 required by the machine family. Hyperdisk performance is pinned to the included
-3,000 IOPS and 140 MB/s baseline. The runtime is built from the operator's local
-Loom worktree and runs as a Docker Compose application on the GCE host.
+3,000 IOPS and 140 MB/s baseline. The operator's workstation builds the release
+image, and the GCE host runs it as a Docker Compose application.
 
 ## Prerequisites
 
@@ -41,10 +41,11 @@ gcloud compute ssh loom --zone=us-central1-a --project=hai-gcp-models
 ## Deploy
 
 By default, Pulumi resolves the HEAD of Loom's default branch to its full commit
-SHA and uses that immutable Git context as the image input. When the resolved
-commit changes, preview reports an image update. `pulumi up` builds and pushes
-the changed image, places the provider-produced digest in VM metadata, and waits
-for `https://loom.oa.dev/api/ready` after activation.
+SHA and uses that immutable Git context as the image input. The build pulls
+current base images, so every update rebuilds the image, even for an unchanged
+commit. When preview skips that build, it shows the VM image as unknown.
+`pulumi up` builds and pushes the image, places the provider-produced digest in
+VM metadata, and waits for `https://loom.oa.dev/api/ready` after activation.
 
 ```sh
 cd /path/to/marin
@@ -215,6 +216,15 @@ it too. All profiles set `IRIS_USER=loom`, which makes Iris jobs submitted from
 a session land under `/loom/<job>` instead of inheriting the session container's
 `app` OS account.
 
+The `belay` profile runs approved Marin Belay ideas through
+`experiments/belay/RUNBOOK.md` on the `marin_belay_v1_recipe` branch, one
+session at a time. It reads three Belay secrets: `BELAY_WANDB_API_KEY`, a
+`marin-community` W&B service-account key that the training launcher passes to
+each job, and `BELAY_CW_KEY_ID` and `BELAY_CW_KEY_SECRET`, a CoreWeave access
+key set as `CW_KEY_ID` and `CW_KEY_SECRET`. Iris attaches the submitter's keys
+to every CoreWeave job, so this key's access policy bounds what Belay runs can
+read and write. Replies on the intake issue use Loom's GitHub App token.
+
 Every profile that can run the `claude` agent sets `CLAUDE_CODE_OAUTH_TOKEN`
 from the `LOOM_CLAUDE_CODE_OAUTH_TOKEN` secret. That covers the interactive
 profiles, which accept a per-launch agent override, and the Claude automation
@@ -309,6 +319,15 @@ Recreating the control-plane service preserves those containers, and the new
 control plane discovers and adopts them. Do not run `docker compose down` while
 sessions are live because it removes their shared network.
 
+The [startup script](startup-script.sh) disables MPTCP in the host network namespace and persists
+the setting in `/etc/sysctl.d/99-loom-mptcp.conf`. Compose disables MPTCP in
+Caddy's network namespace and sets `GODEBUG=multipathtcp=0`.
+Apply changes to Caddy's environment or sysctls by recreating only its service:
+
+```sh
+docker compose -f /opt/loom/docker-compose.yml up -d --no-deps --force-recreate caddy
+```
+
 To roll back an application release, check out the prior Loom tree, restore its
 numbered `dotenvSecretVersion` when necessary, and run the normal preview and
 update. The separately managed root disk is protected, retained if removed from
@@ -335,10 +354,24 @@ which keeps the Marin high-level board and the goals document below its
 - the `marin` IAM stack applied first, for the `loom-vm` token-creator grant on
   itself that mints a documents-scoped token.
 
+The `belay` watch runs the `belay` profile every 10 minutes
+([prompt](watches/belay.md)): a cheap check of the Belay app's queue, and a
+runbook session that drains the queue only when events wait. Turning dispatch off in the
+Belay app's admin page pauses it without a Loom deploy.
+
 Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/pull/378)
 before applying these declarations. See [Loom's watch documentation](https://github.com/marin-community/loom/blob/main/docs/ARCHITECTURE.md#scheduled-watches)
 for scheduling and execution behavior, and [WatchConfig](infrastructure.py) for
 the IaC fields. Custom script files must already exist on the Loom server.
+
+## Doc sessions
+
+The `doc` profile ([instructions](profiles/doc/AGENTS.md)) runs a session whose
+record of the work is the branch artifact `doc`, with progress updates in the
+artifact `progress`. The agent writes both with the `loom` MCP artifact tools.
+The profile sets `docArtifact: doc`. Loom's
+[session doc](https://github.com/marin-community/loom/blob/main/docs/artifacts.md#the-session-doc)
+describes the Doc tab, comments, and the message that a person's edit sends.
 
 ## claude.ai connector
 

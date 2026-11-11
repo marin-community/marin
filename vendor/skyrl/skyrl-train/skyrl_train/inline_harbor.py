@@ -4,10 +4,13 @@ import argparse
 import asyncio
 import json
 import math
+import os
 import signal
 import socket
 import traceback
+from collections.abc import Mapping
 
+from harbor.cli.utils import cli_guest_environment, cli_host_capabilities
 from harbor.job import Job
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult
@@ -45,7 +48,7 @@ def validation_metrics(result: JobResult, config: JobConfig, reward_key: str) ->
     }
 
 
-async def serve_trials(control_fd: int) -> None:
+async def serve_trials(control_fd: int, *, host_environment: Mapping[str, str]) -> None:
     """Execute only trials admitted by the parent; stdout remains available for Harbor logs."""
     connection = socket.socket(fileno=control_fd)
     connection.setblocking(False)
@@ -73,7 +76,13 @@ async def serve_trials(control_fd: int) -> None:
                     "job_name": f"{config.job_name}-task-{index:05d}",
                 }
             )
-            job = await Job.create(config)
+            job = await Job.create(
+                config,
+                host_capabilities=cli_host_capabilities(
+                    host_environment, environment_kwargs=config.environment.kwargs, agents=config.agents
+                ),
+                guest_environment=cli_guest_environment(config.environment.kwargs),
+            )
             result = await job.run()
             response = {"id": message["id"], "metrics": validation_metrics(result, config, cohort["reward_key"])}
         except Exception:
@@ -95,7 +104,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--control-fd", type=int, required=True)
     args = parser.parse_args()
-    asyncio.run(serve_trials(args.control_fd))
+    host_environment = dict(os.environ)
+    asyncio.run(serve_trials(args.control_fd, host_environment=host_environment))
 
 
 if __name__ == "__main__":

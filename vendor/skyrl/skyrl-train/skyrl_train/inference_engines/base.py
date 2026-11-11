@@ -1,5 +1,8 @@
 from abc import ABC, abstractmethod
+import hashlib
 from typing import List, Dict, TypedDict, Any, Optional, Hashable, NotRequired
+
+from uuid import uuid4
 
 import numpy as np
 
@@ -7,6 +10,34 @@ MessageType = Dict[str, str]
 ConversationType = List[MessageType]
 OnlineEagleResult = Dict[str, Any] | List[Dict[str, Any]]
 SESSION_ID_HEADER = "x-skyrl-session-id"
+
+
+_GROUPED_REQUEST_PREFIX = "skyrl-group-"
+
+
+def request_id_for_session(session_id: Hashable) -> str:
+    """Return a unique request ID carrying the digest of the session's prompt group.
+
+    A rollout session ID is "<prompt uid>_<repetition>", so repetitions of one prompt share a group; any other
+    session ID is its own group.
+    """
+    text = str(session_id)
+    prompt_uid, _, repetition = text.rpartition("_")
+    group = prompt_uid if prompt_uid and repetition.isdigit() else text
+    return f"{_GROUPED_REQUEST_PREFIX}{hashlib.sha256(group.encode()).hexdigest()[:16]}-{uuid4().hex}"
+
+
+def request_group_from_id(request_id: str) -> str:
+    """Return the prompt-group digest of a request ID from `request_id_for_session`, or the ID itself.
+
+    vLLM names a chat-completions request "chatcmpl-<x-request-id>".
+    """
+    remainder = request_id.removeprefix("chatcmpl-")
+    if remainder.startswith(_GROUPED_REQUEST_PREFIX):
+        group, separator, _ = remainder[len(_GROUPED_REQUEST_PREFIX) :].partition("-")
+        if separator and group:
+            return group
+    return request_id
 UNSTAMPED_POLICY_STEP = -1
 # Chat-completion choice field with one policy step per token in ``token_ids``.
 CHOICE_POLICY_STEPS_KEY = "policy_steps"

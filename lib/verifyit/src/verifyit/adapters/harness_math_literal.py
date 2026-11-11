@@ -9,8 +9,8 @@ from importlib import import_module
 from pathlib import Path
 
 from verifyit.adapters import harness_validation as validation
-from verifyit.adapters.skyrl import grade_literal_candidate
 from verifyit.grade import InvalidTask, Reward, Status, invalid_task, scored
+from verifyit.modes.grade_exact import grade_literal_candidate
 
 _NONFINITE = {"nan", "inf", "+inf", "-inf", "infinity", "+infinity", "-infinity"}
 

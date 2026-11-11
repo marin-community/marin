@@ -584,6 +584,16 @@ class CallbackHandler:
 
         return control
 
+    async def collect_evaluation(
+        self, callback: TrainerCallback, state: TrainerState, *, trainer, pool
+    ) -> Dict[str, float]:
+        """Collect one callback's evaluation metrics, applying its error_behavior on failure."""
+        try:
+            return await callback.collect_evaluation(state, trainer=trainer, pool=pool)
+        except Exception as e:
+            self._handle_error(callback, "collect_evaluation", e)
+            return {}
+
     def _handle_error(self, callback: TrainerCallback, event: str, error: Exception) -> None:
         """Handle an error from a callback based on its error_behavior setting."""
         callback_name = callback.__class__.__name__

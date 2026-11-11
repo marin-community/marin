@@ -160,7 +160,6 @@ packages = ["marinskyrl", "cloud", "skyrl-gym/skyrl_gym", "skyrl-train/skyrl_tra
 
 [tool.hatch.build.targets.wheel.force-include]
 "chat_templates" = "chat_templates"
-"open_mopd_versions.py" = "open_mopd_versions.py"
 
 [tool.uv]
 exclude-dependencies = ["litellm"]
@@ -197,6 +196,11 @@ override-dependencies = [
     "opentelemetry-api ; sys_platform != 'linux'",
 ]
 constraint-dependencies = [
+    "dnspython>=2.9.0",
+    "gitpython>=3.2.0",
+    "msgpack>=1.2.3",
+    "nltk>=3.10.4",
+    "oauthlib>=4.0.1",
     "uv>=0.13.5",
     "gcsfs==2026.4.0",
     "botocore==1.42.97 ; sys_platform == 'linux'",

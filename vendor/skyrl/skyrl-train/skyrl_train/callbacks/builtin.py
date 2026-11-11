@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Type
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
-from skyrl_train.config.callbacks import has_explicit_callbacks, interval_hf_export_enabled
+from skyrl_train.config.callbacks import has_explicit_callbacks, hf_export_destination_configured
 from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.io import io
@@ -46,6 +46,7 @@ from skyrl_train.inference_observability import (
 )
 
 from skyrl_train.mismatch_probe.callback import MismatchProbeCallback
+from skyrl_train.callbacks.reference_likelihood import ReferenceLikelihoodCallback
 
 from .base import TrainerCallback, TrainerState, TrainerControl, CallbackHandler, checkpoint_save_allowed
 from .types import (
@@ -56,7 +57,7 @@ from .types import (
 
 # Registry mapping callback type names to classes
 # This enables YAML-based callback configuration
-CALLBACK_REGISTRY: Dict[str, Type[TrainerCallback]] = {}
+CALLBACK_REGISTRY: Dict[str, Type[TrainerCallback]] = {"reference_likelihood": ReferenceLikelihoodCallback}
 
 
 def register_callback(name: str):
@@ -434,13 +435,14 @@ class EvaluationCallback(TrainerCallback):
 @register_callback(HF_MODEL_SAVE_CALLBACK_TYPE)
 class HFModelSaveCallback(TrainerCallback):
     """
-    Callback for requesting Hugging Face exports at regular intervals.
+    Callback for requesting Hugging Face exports at the end of training and, optionally, at intervals.
 
     Normal training records a request beside the immutable sharded checkpoint;
     a dedicated export job later converts and optionally publishes that checkpoint.
 
     Args:
-        save_steps: Request an HF export every N steps. Set to -1 or 0 to disable.
+        save_steps: Request an HF export every N steps. Set to -1 or 0 to request only the
+            terminal export.
         save_on_train_end: Whether to request a final HF export when training ends.
         save_after_fraction: Suppress exports before this fraction of planned updates, including early termination.
     """
@@ -470,7 +472,7 @@ class HFModelSaveCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_on_train_end and self.save_steps > 0 and checkpoint_save_allowed(state, self.save_after_fraction):
+        if self.save_on_train_end and checkpoint_save_allowed(state, self.save_after_fraction):
             control.should_save_hf_model = True
         return control
 
@@ -1030,7 +1032,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
         )
 
     # HF model save callback
-    if interval_hf_export_enabled(cfg):
+    if hf_export_destination_configured(cfg):
         callbacks.append(HFModelSaveCallback(save_steps=int(cfg.trainer.hf_save_interval)))
 
     # Reference model update callback

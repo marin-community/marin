@@ -3,6 +3,8 @@
 
 """The prompts of the agent, of the adversary role of its rollouts, and of the reviewer of ``submit``."""
 
+from shellbox.machine import Backend
+
 AGENT_PROMPT = """\
 You make reinforcement-learning tasks for a language-model agent. The file /workspace/idea.json holds a capability: \
 a skill from a catalog. Make {n} different tasks that train and test this skill.
@@ -11,16 +13,7 @@ a skill from a catalog. Make {n} different tasks that train and test this skill.
 
 A task is a TaskSpec: a prompt, optional files for the solver, an answer format, and a grader with the reference \
 answer.
-- A solver model gets the prompt. If the task declares the capabilities "shell" and "filesystem", the solver also \
-gets a shell and the task's files in /workspace on a ShellSim machine: a simulated shell with ls, cat, grep, sed, \
-awk, jq, sort, wc, find and similar tools, and no network.
-- The solver has python3 with the standard library only when the task sets environment_requirements.package_spec \
-to a PackageSpec with pypi_packages, and declares the capability "python", as /workspace/example_build.py does. \
-List a PyPI package, for example "numpy", in pypi_packages to install it. Without Python, the solver's arithmetic is \
-limited: awk has log but no exp, sqrt or ^, and bc has no -l math library. Do not make a task hard only because the \
-solver must compute such functions by hand. ShellSim awk reads a field separator of one regular-expression \
-character, for example | or ., as a regular expression, with no error: separate the fields of the solver's files \
-with commas, tabs or spaces.
+{solver_machine}
 - The solver answers with its final message. The answer type is "text", "number" or "json". The grader is a \
 verifyit spec that grades the answer in process, for example a NumericSpec or an ExactSpec, made with \
 taskcompendium.grader.verifyit_package. The solver never sees the grader or its reference answer.
@@ -44,6 +37,9 @@ yourself, for example that each CSV row has as many fields as the header.
 - When a task gives code with its output, for example a log, make the output by running the code in your shell. \
 Test each claim of the prompt that an answer is the only one, for example "only one line causes the error", with \
 the other candidates.
+- The program of an accepted task also makes more tasks of the same kind from other task ids, for training and for \
+held-out tests. So every task id must give a valid task with different data and the same difficulty, and the \
+reference answers of different ids must vary: a policy that trains on tasks whose answers repeat learns to guess.
 
 # Tools
 
@@ -58,15 +54,17 @@ difficulty. Role "adversary" tells the \
 solver to get credit without solving the task, for example by finding the answer or exploiting the grader. An \
 adversary can also pass by doing the work, so the reviewer of submit judges its passes. The tool saves the \
 transcripts under /workspace/rollouts/.
-- submit: submit a task. It refuses a task that the tools cannot run or that has a malformed CSV or JSON file. Then \
-it needs this evidence for the exact TaskSpec: a control with expect "pass" that passed, a control with expect \
-"fail" that failed, and no "fail" control that passed; at least {min_solver_runs} graded solver rollouts with a pass \
-rate from {low} to {high}; format failures in at most {max_format_failures} of the solver rollouts; and at least \
-{min_adversary_runs} adversary rollouts with a graded answer. Then it grades wrong answers that it makes from your \
-two controls, for example your right answer with its last digit changed, and refuses a grader that accepts one. \
-Last, an independent reviewer reads the task, its grader, the failed solver answers and the adversary rollouts, and \
-accepts or refuses it. The review refuses a task whose answer selects an option from a list. A changed task has no \
-evidence until you run the tools on it again. submit tells you what is missing or wrong.
+- submit: submit a task with the path of its build program. It refuses a task that the tools cannot run or that \
+has a malformed CSV or JSON file, and a program that does not write the same task again from the task id, or that \
+writes the same task, a broken task or a repeated reference answer from other task ids. Then it needs this evidence \
+for the exact TaskSpec: a control with expect "pass" that passed, a control with expect "fail" that failed, and no \
+"fail" control that passed; at least {min_solver_runs} graded solver rollouts with a pass rate from {low} to {high}; \
+format failures in at most {max_format_failures} of the solver rollouts; and at least {min_adversary_runs} adversary \
+rollouts with a graded answer. Then it grades wrong answers that it makes from your two controls, for example your \
+right answer with its last digit changed, and refuses a grader that accepts one. Last, an independent reviewer reads \
+the task, its grader, the failed solver answers and the adversary rollouts, and accepts or refuses it. The review \
+refuses a task whose answer selects an option from a list. A changed task has no evidence until you run the tools on \
+it again. submit tells you what is missing or wrong.
 - finish: stop, with a report. The session also stops when {n} tasks are accepted.
 
 # How to work well
@@ -97,6 +95,35 @@ have evidence, and a changed task loses its evidence.
 web calls. When you cannot make more good tasks, call finish with a report \
 that says why. After {max_empty_budget_calls} calls on an empty budget, the tools stop the session.
 """
+
+
+SOLVER_MACHINES = {
+    Backend.SHELLSIM: (
+        """\
+- A solver model gets the prompt. If the task declares the capabilities "shell" and "filesystem", the solver also \
+gets a shell and the task's files in /workspace on a ShellSim machine: a simulated shell with ls, cat, grep, sed, \
+awk, jq, sort, wc, find and similar tools, and no network.
+- The solver has python3 with the standard library only when the task sets environment_requirements.package_spec \
+to a PackageSpec with pypi_packages, and declares the capability "python", as /workspace/example_build.py does. \
+List a PyPI package, for example "numpy", in pypi_packages to install it. Without Python, the solver's arithmetic is \
+limited: awk has log but no exp, sqrt or ^, and bc has no -l math library. Do not make a task hard only because the \
+solver must compute such functions by hand. ShellSim awk reads a field separator of one regular-expression \
+character, for example | or ., as a regular expression, with no error: separate the fields of the solver's files \
+with commas, tabs or spaces."""
+    ),
+    Backend.LOCAL: (
+        """\
+- A solver model gets the prompt. If the task declares the capabilities "shell" and "filesystem", the solver also \
+gets a shell and the task's files in /workspace on a Linux machine: a bubblewrap sandbox with bash, coreutils, grep, \
+sed, awk, find and similar tools, and no network. Such a task sets environment_requirements.command_semantics to \
+"linux_process".
+- A task whose solver uses Python declares the capability "python" and sets environment_requirements.package_spec \
+to a PackageSpec with pypi_packages, as /workspace/example_build.py does: the solver's python3 is then a Python of \
+its own. An empty pypi_packages gives the standard library. List each PyPI package with its version, for example \
+"numpy==2.3.4", to install it."""
+    ),
+}
+"""The description of the solver's machine in the agent prompt, for each solver backend."""
 
 USER_PROMPT = "Make {n} tasks for the capability {capability_id} in /workspace/idea.json."
 

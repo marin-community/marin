@@ -31,9 +31,13 @@ gh workflow run ops-pulumi-rollout.yaml --ref main -f service=echo
 
 `ops-agent-prose-cleanup.yaml` launches a Loom session for an issue or PR carrying
 the `agent-generated` label whose author has write access or is `marin-ops-agent[bot]`
-or `loom-oa-dev[bot]`; external issues and PRs are not cleaned up. Its goal directs the session to follow the
-writing-style guide and apply the archive, validation, and stale-body checks
-in `scripts/ci/github_prose_cleanup.py` before any update. Actions checks out
+or `loom-oa-dev[bot]`; external issues and PRs are not cleaned up. The session
+leaves descriptions alone unless they contain egregious prose or agent
+attribution such as "written by Claude". Short descriptions, minor style issues,
+and harmless formatting do not warrant edits. Changes are local and preserve
+technical facts; the publishing helper does not apply further style rewrites.
+The session applies the archive, validation, and stale-body checks in
+`scripts/ci/github_prose_cleanup.py` before any update. Actions checks out
 only the trusted default-branch launch and access-check actions. The workflow runs on open, reopen, and label
 events, not edits. The launch uses the low-effort `prose-cleanup` Loom profile published as
 `LOOM_PROSE_CLEANUP_PROFILE`, and its idempotency key is the issue or PR number, so later label
@@ -242,6 +246,14 @@ Finelog, and Iris native versions from PyPI, advances their compatibility floors
 and `uv.lock`, and merges only after the same identity, file, SHA, and CI gates
 pass. Manual dispatch retries a failed or missed update without republishing the
 wheels.
+
+## Snowball family-tree releases
+
+`marin-release-snowball-tree.yaml` publishes the Snowball family-tree app from
+`main` with `scripts/ci/snowball_release.py`. Scheduled runs require the
+repository variable `SNOWBALL_TREE_RELEASE=enabled`. The
+[tree maintenance guide](../../docs/references/snowball-family-tree.md#nightly-publication)
+covers activation and manual runs.
 
 ## Canonical recipe: open or update a bot PR with `git + gh`
 

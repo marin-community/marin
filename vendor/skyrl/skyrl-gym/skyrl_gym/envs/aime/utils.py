@@ -16,9 +16,10 @@
 
 from math_verify import parse
 from sympy import Basic, MatrixBase, Set, Tuple
-from verifyit.adapters.skyrl import grade_aime_extracted, grade_literal_candidate
+from verifyit.adapters.skyrl import grade_aime_extracted
 from verifyit.execution.worker import call_bounded
 from verifyit.grade import Reward
+from verifyit.modes.grade_exact import grade_literal_candidate
 from verifyit.modes.grade_math import grade_math_candidate
 from verifyit.spec import MathProfile, MathSpec, MathType
 

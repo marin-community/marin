@@ -19,6 +19,7 @@ from skyrl_train.rollouts.harbor_settings import (
     EnvironmentType,
     RetryConfig,
     VerifierConfig,
+    concurrent_trials,
 )
 
 from skyrl_train.trajectory_runners.harbor.configuration import HarborConfigBuilder
@@ -72,7 +73,7 @@ class HarborTaskSettings:
             options.get("max_turns"),
             float(trial.get("timeout_multiplier", 1)),
             builder.get_eval_timeout_override_sec(),
-            builder.get_n_concurrent_trials(),
+            concurrent_trials(config.get("harbor", {})),
             builder.get_error_handling_config(),
             builder.get_reward_shaping_config(),
             builder.build_retry_config(),

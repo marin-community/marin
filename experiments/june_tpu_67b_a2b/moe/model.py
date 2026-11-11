@@ -17,7 +17,6 @@ import jax
 import jax.numpy as jnp
 from einops import rearrange
 from haliax.jax_utils import named_call
-from haliax.nn import ArrayStacked
 from jax import random
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
@@ -43,6 +42,7 @@ from levanter.grug.grug_moe import (
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head, _mesh_axis_size, unshard
+from levanter.layers.stacked import ArrayStacked
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -824,9 +824,9 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
         raise ValueError(f"num_devices must be positive, got {num_devices}")
     expert = 2 if num_devices % 2 == 0 else 1
     data = max(1, num_devices // expert)
-    axis_names = ("replica_dcn", "data", "context", "expert", "model")
+    axis_names = ("replica_dcn", "data", "expert", "context", "model")
     mesh = jax.sharding.AbstractMesh(
-        axis_sizes=(1, data, 1, expert, 1),
+        axis_sizes=(1, data, expert, 1, 1),
         axis_names=axis_names,
         axis_types=(jax.sharding.AxisType.Explicit,) * len(axis_names),
     )

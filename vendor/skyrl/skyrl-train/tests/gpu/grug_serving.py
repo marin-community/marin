@@ -7,11 +7,16 @@ import torch
 from transformers import AutoTokenizer
 
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
-from skyrl_train.inference_engines.ray_wrapped_inference_engine import create_ray_wrapped_inference_engines
+from skyrl_train.inference_engines.ray_wrapped_inference_engine import (
+    create_ray_wrapped_inference_engines,
+    create_ray_wrapped_inference_engines_with_retry,
+)
 from skyrl_train.training_batch import TrainingInputBatch
 from tests.gpu.grug_tiny_checkpoint import TOY_SHAPE, router_bias_names
 
 MAX_MODEL_LEN = 128
+ENGINE_STARTUP_RETRIES = 1
+ENGINE_STARTUP_RETRY_BACKOFF_SECONDS = 2.0
 STACKED_EXPERT_NAME = "model.layers.0.mlp.experts.gate_proj.weight"
 LM_HEAD_NAME = "lm_head.weight"
 ROUTER_NAME = "model.layers.0.mlp.router.weight"
@@ -54,26 +59,36 @@ def grug_engine_client(
     engine_init_kwargs = {"max_model_len": MAX_MODEL_LEN}
     if moe_backend is not None:
         engine_init_kwargs["kernel_config"] = {"moe_backend": moe_backend}
-    engines = create_ray_wrapped_inference_engines(
-        num_inference_engines=cfg.generator.num_inference_engines,
-        tensor_parallel_size=1,
-        data_parallel_size=cfg.generator.inference_engine_data_parallel_size,
-        expert_parallel_size=cfg.generator.inference_engine_expert_parallel_size,
-        model_dtype="bfloat16",
-        pretrain=model_path,
-        seed=23,
-        vllm_v1_disable_multiproc=True,
-        enable_prefix_caching=False,
-        enforce_eager=cfg.generator.enforce_eager,
+    def create_engines(remaining_timeout_seconds: float):
+        return create_ray_wrapped_inference_engines(
+            num_inference_engines=cfg.generator.num_inference_engines,
+            tensor_parallel_size=1,
+            data_parallel_size=cfg.generator.inference_engine_data_parallel_size,
+            expert_parallel_size=cfg.generator.inference_engine_expert_parallel_size,
+            model_dtype="bfloat16",
+            pretrain=model_path,
+            seed=23,
+            vllm_v1_disable_multiproc=True,
+            enable_prefix_caching=False,
+            enforce_eager=cfg.generator.enforce_eager,
+            engine_init_timeout_seconds=remaining_timeout_seconds,
+            shared_pg=shared_pg,
+            gpu_memory_utilization=cfg.generator.gpu_memory_utilization,
+            inference_engine_enable_sleep=inference_engine_enable_sleep,
+            max_num_batched_tokens=MAX_MODEL_LEN * cfg.generator.inference_engine_data_parallel_size,
+            max_num_seqs=cfg.trainer.train_batch_size,
+            tokenizer=tokenizer,
+            backend="vllm",
+            engine_init_kwargs=engine_init_kwargs,
+        )
+
+    engines = create_ray_wrapped_inference_engines_with_retry(
+        create_engines,
+        model_path=model_path,
         engine_init_timeout_seconds=cfg.generator.engine_init_timeout_seconds,
-        shared_pg=shared_pg,
-        gpu_memory_utilization=cfg.generator.gpu_memory_utilization,
-        inference_engine_enable_sleep=inference_engine_enable_sleep,
-        max_num_batched_tokens=MAX_MODEL_LEN * cfg.generator.inference_engine_data_parallel_size,
-        max_num_seqs=cfg.trainer.train_batch_size,
-        tokenizer=tokenizer,
-        backend="vllm",
-        engine_init_kwargs=engine_init_kwargs,
+        max_retries=ENGINE_STARTUP_RETRIES,
+        backoff_base_seconds=ENGINE_STARTUP_RETRY_BACKOFF_SECONDS,
+        backoff_cap_seconds=ENGINE_STARTUP_RETRY_BACKOFF_SECONDS,
     )
     return InferenceEngineClient(engines, tokenizer, cfg)
 

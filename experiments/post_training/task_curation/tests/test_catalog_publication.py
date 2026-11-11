@@ -17,6 +17,9 @@ from finestore.rl.curation import (
     AssessmentStatus,
     CurationCatalog,
     CurationSummary,
+    DaytonaSafety,
+    IndependentQC,
+    Verdict,
     register_catalog,
 )
 from finestore.store import DataStore
@@ -24,6 +27,7 @@ from rigging.filesystem.distributed_lock import LeaseLostError, LocalFileLease
 
 from experiments.post_training.task_curation.catalog_snapshot import publish_catalog
 from experiments.post_training.task_curation.curation_catalog import RUNS
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 
@@ -177,6 +181,50 @@ def test_a_superseded_source_does_not_block_the_other_sources_in_its_campaign(tm
     assert rows[first.info.id].assessment_key is None
     assert rows[first.info.id].latest_attempt_key == "new-key"
     assert rows[second.info.id].assessment_key == "second"
+
+
+def test_republication_refreshes_an_inventory_only_declaration(tmp_path):
+    root = str(tmp_path / "production")
+    runnable = number_source(tmp_path / "input")
+    pointer = RlDataSource(info=SourceInfo(id="release:pointer", title="pointer", origin="fixture"))
+    record_attempt(root, runnable, "first", "2026-10-16T10:00:00Z", "key-a")
+    publish_catalog(root, "first", [runnable, pointer])
+    qc = IndependentQC(verdict=Verdict.GOOD, method="release oracle", reviewed=3, admitted=2, evidence_url="pinned")
+    edited = RlDataSource(info=replace(pointer.info, independent_qc=qc))
+    record_attempt(root, runnable, "second", "2026-10-16T11:00:00Z", "key-a")
+    publish_catalog(root, "second", [runnable, edited])
+    assert selected_sources(root)[pointer.info.id].declaration.independent_qc == qc
+
+
+def test_publication_round_trips_daytona_safety_to_the_inventory(tmp_path):
+    root = str(tmp_path / "production")
+    runnable = number_source(tmp_path / "input")
+    agent = RlDataSource(
+        info=replace(runnable.info, id="fixture:agent", tags=("agentic",), daytona_safety=DaytonaSafety.UNSAFE)
+    )
+    record_attempt(root, runnable, "first", "2026-10-16T10:00:00Z", "key-a")
+    publish_catalog(root, "first", [runnable, agent])
+    rows = selected_sources(root)
+    assert rows[runnable.info.id].declaration.daytona_safety is DaytonaSafety.SAFE
+    assert rows["fixture:agent"].declaration.daytona_safety is DaytonaSafety.UNSAFE
+
+
+def test_an_unselected_runnable_source_picks_up_the_current_safety_verdict(tmp_path):
+    root = str(tmp_path / "production")
+    first = number_source(tmp_path / "first")
+    pinned = SourceReference("agent-data", "pin-1", "https://example.org/agent")
+    agent = RlDataSource(info=replace(first.info, id="fixture:agent", tags=("agentic",), dataset=pinned))
+    record_attempt(root, first, "first", "2026-10-16T10:00:00Z", "key-a", source_count=2)
+    record_attempt(root, agent, "first", "2026-10-16T10:00:00Z", "key-b")
+    publish_catalog(root, "first", [first, agent])
+    reassessed = replace(first, config=replace(first.config, name="numbers-second"))
+    record_attempt(root, reassessed, "second", "2026-10-16T11:00:00Z", "key-a")
+    repaired = RlDataSource(info=replace(agent.info, daytona_safety=DaytonaSafety.SAFE))
+    publish_catalog(root, "second", [reassessed, repaired])
+    rows = selected_sources(root)
+    assert rows["fixture:agent"].declaration.daytona_safety is DaytonaSafety.SAFE
+    assert rows["fixture:agent"].assessment_key == "key-b"
+    assert rows[reassessed.info.id].assessment_key == "key-a"
 
 
 class ExpiredLease(LocalFileLease):

@@ -325,17 +325,62 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
 
 
 @pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
-def test_daytona_command_timeout_stops_descendants_and_preserves_next_command(tmp_path):
+@pytest.mark.parametrize("interruption", ["timeout", "cancel", "cancel_twice", "cancel_during_timeout_stop"])
+def test_daytona_command_interruption_stops_descendants_and_preserves_next_command(tmp_path, interruption):
     async def scenario():
+        stopping, release_stop = asyncio.Event(), asyncio.Event()
+
+        class HeldStop(LocalProcess):
+            def __init__(self):
+                super().__init__()
+                self.cancellations = []
+
+            async def exec(self, command, **kwargs):
+                try:
+                    if "stop-command" in command and interruption in {"cancel_twice", "cancel_during_timeout_stop"}:
+                        stopping.set()
+                        await release_stop.wait()
+                    return await super().exec(command, **kwargs)
+                except asyncio.CancelledError as cancellation:
+                    self.cancellations.append(cancellation)
+                    raise
+
         client = LocalDaytona()
+        client.sandbox.process = HeldStop()
         machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
         )
+        child = None
         try:
             await machine.run(Command(("sh", "-c", "echo 12 > answer")))
-            result = await machine.run(Command(("sh", "-c", "sleep 3600 & echo $! > child.pid; wait"), timeout=0.5))
-            assert result.reason is ExitReason.TIMED_OUT
+            pending = asyncio.create_task(
+                machine.run(
+                    Command(
+                        ("sh", "-c", "sleep 3600 & echo $! > child.pid; wait"),
+                        timeout=0.5 if interruption in {"timeout", "cancel_during_timeout_stop"} else None,
+                    )
+                )
+            )
+            async with asyncio.timeout(5):
+                while not (tmp_path / "child.pid").exists() or not (tmp_path / "child.pid").read_text().strip():
+                    # Wait for the real child to publish its PID before cancelling its parent.
+                    await asyncio.sleep(0)
             child = int((tmp_path / "child.pid").read_text())
+            if interruption == "timeout":
+                result = await pending
+                assert result.reason is ExitReason.TIMED_OUT
+            else:
+                if interruption == "cancel_during_timeout_stop":
+                    await asyncio.wait_for(stopping.wait(), timeout=5)
+                pending.cancel("agent deadline")
+                if interruption == "cancel_twice":
+                    await asyncio.wait_for(stopping.wait(), timeout=5)
+                    pending.cancel("second cancellation")
+                release_stop.set()
+                with pytest.raises(asyncio.CancelledError) as caught:
+                    await pending
+                assert caught.value.args == ("agent deadline",)
+                assert caught.value is client.sandbox.process.cancellations[-1]
             stopped = await machine.run(
                 Command(
                     (
@@ -353,22 +398,36 @@ def test_daytona_command_timeout_stops_descendants_and_preserves_next_command(tm
             assert (graded.exit_code, graded.stdout) == (0, b"1.0")
             assert not client.deleted and not client.closed
         finally:
+            release_stop.set()
             await machine.close()
+            if child is not None:
+                try:
+                    os.kill(child, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
         assert client.deleted and client.closed
 
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("interrupt_failure", ["exit", "timeout"])
-def test_daytona_failed_timeout_cleanup_is_infrastructure_failure(tmp_path, interrupt_failure):
+@pytest.mark.parametrize("interrupt_failure", ["exit", "timeout", "files"])
+@pytest.mark.parametrize("interruption", ["timeout", "cancel"])
+def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_failure, interruption):
+    entered = asyncio.Event()
+
     class FailedStop(LocalProcess):
         async def exec(self, command, **kwargs):
             if "candidate-block" in command:
+                entered.set()
                 await asyncio.Future()
             if "stop-command" in command:
                 if interrupt_failure == "timeout":
                     raise TimeoutError("Provider interruption timed out")
+                if interrupt_failure == "files":
+                    return SimpleNamespace(exit_code=0, result="")
                 return SimpleNamespace(exit_code=1, result="Cannot stop the process group")
+            if interrupt_failure == "files" and entered.is_set() and "rm -rf /tmp/.shellbox-" in command:
+                return SimpleNamespace(exit_code=1, result="Cannot remove command files")
             return await super().exec(command, **kwargs)
 
     async def scenario():
@@ -377,9 +436,19 @@ def test_daytona_failed_timeout_cleanup_is_infrastructure_failure(tmp_path, inte
         machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
         )
-        with pytest.raises(RuntimeError) as failure:
-            await machine.run(Command(("candidate-block",), timeout=0.5))
-        assert isinstance(failure.value.__cause__, TimeoutError if interrupt_failure == "timeout" else RuntimeError)
+        pending = asyncio.create_task(
+            machine.run(Command(("candidate-block",), timeout=0.5 if interruption == "timeout" else None))
+        )
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        if interruption == "cancel":
+            pending.cancel("agent deadline")
+            with pytest.raises(asyncio.CancelledError) as failure:
+                await pending
+            assert failure.value.args == ("agent deadline",)
+        else:
+            with pytest.raises(RuntimeError) as failure:
+                await pending
+            assert isinstance(failure.value.__cause__, TimeoutError if interrupt_failure == "timeout" else RuntimeError)
         assert client.deleted and client.closed
         with pytest.raises(RuntimeError, match="closed"):
             await machine.run(Command(("true",)))

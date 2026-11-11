@@ -44,6 +44,9 @@ GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ATTENTION_MODE = "production"
 GRUG_STACKED_EXPERT_SCHEMA_VERSION = 1
 GRUG_SPLIT_EXPERT_SCHEMA_VERSION = 2
+# Split experts with the log_scaling_* fields, null when off. A stack that cannot apply the factor
+# rejects a config with the fields set instead of training at the wrong query scale past the floor.
+GRUG_LOG_SCALING_SCHEMA_VERSION = 3
 GRUG_DEFAULT_GLOBAL_EVERY = 4
 GRUG_EAGER_ATTENTION_BACKEND = "eager"
 GRUG_FLASH_ATTENTION_BACKEND = "flash_attention_2"
@@ -170,6 +173,9 @@ class GrugMoeConfig(PretrainedConfig):
         initializer_std: float | None = None,
         qk_mult: float = 1.5703274004183786,
         qk_mult_long_scale: float = 1.0,
+        log_scaling_n_floor: int | None = None,
+        log_scaling_alpha: float | None = None,
+        log_scaling_power: float | None = None,
         rope_theta: float = 10000.0,
         disable_pko: bool = True,
         disable_long_rope: bool = True,
@@ -272,11 +278,17 @@ class GrugMoeConfig(PretrainedConfig):
         if int(grugmoe_artifact_schema_version) not in (
             GRUG_STACKED_EXPERT_SCHEMA_VERSION,
             GRUG_SPLIT_EXPERT_SCHEMA_VERSION,
+            GRUG_LOG_SCALING_SCHEMA_VERSION,
         ):
             raise ValueError(
                 f"unsupported Grug artifact schema {grugmoe_artifact_schema_version}; "
-                "expected 1 (stacked experts) or 2 (split experts)"
+                "expected 1 (stacked experts), 2 (split experts) or 3 (split experts with log_scaling_* fields)"
             )
+        log_scaling_fields = (log_scaling_n_floor, log_scaling_alpha, log_scaling_power)
+        if len({field is None for field in log_scaling_fields}) != 1:
+            raise ValueError("log_scaling_n_floor, log_scaling_alpha and log_scaling_power must be set together")
+        if log_scaling_n_floor is not None and min(log_scaling_fields) <= 0:
+            raise ValueError("log_scaling_n_floor, log_scaling_alpha and log_scaling_power must be positive")
         if latent_dim is not None and not 0 < latent_dim <= hidden_size:
             raise ValueError("latent_dim must be in (0, hidden_size]")
         if num_shared_experts < 1 or global_every < 1 or sconv_kernel < 1:
@@ -323,6 +335,9 @@ class GrugMoeConfig(PretrainedConfig):
         self.initializer_range = self.initializer_std = initializer_range
         self.qk_mult = float(qk_mult)
         self.qk_mult_long_scale = float(qk_mult_long_scale)
+        self.log_scaling_n_floor = None if log_scaling_n_floor is None else int(log_scaling_n_floor)
+        self.log_scaling_alpha = None if log_scaling_alpha is None else float(log_scaling_alpha)
+        self.log_scaling_power = None if log_scaling_power is None else float(log_scaling_power)
         self.rope_theta = float(rope_theta)
         self.disable_pko = True
         self.disable_long_rope = True
@@ -348,7 +363,7 @@ class GrugMoeConfig(PretrainedConfig):
             or self.num_shared_experts != 1
             or self.rope_fused
             or self.global_every != GRUG_DEFAULT_GLOBAL_EVERY
-            or self.grugmoe_artifact_schema_version == GRUG_SPLIT_EXPERT_SCHEMA_VERSION
+            or self.grugmoe_artifact_schema_version >= GRUG_SPLIT_EXPERT_SCHEMA_VERSION
         )
 
 
@@ -859,6 +874,8 @@ class GrugMoeModel(GrugMoePreTrainedModel):
         super().__init__(config)
         if config.uses_hero_architecture:
             raise ValueError("Hero architecture requires the Megatron backend; the eager model supports Snowball only")
+        if config.log_scaling_n_floor is not None:
+            raise ValueError("log scaling requires the Megatron backend; the eager model does not apply it")
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
         self.embed_norm = GrugMoeRMSNorm(config.hidden_size, config.rms_norm_eps)
         self.embed_gated_norm = GrugMoeGatedNorm(config.hidden_size)

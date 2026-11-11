@@ -224,6 +224,12 @@ export interface EnvironmentConfig {
   dockerfile?: string
 }
 
+export interface EgressRule {
+  domain?: string
+  cidr?: string
+  ports?: number[]
+}
+
 export interface LaunchJobRequest {
   name: string
   entrypoint?: RuntimeEntrypoint
@@ -240,6 +246,10 @@ export interface LaunchJobRequest {
   // Per-task retry budget on failure (default 0) and on preemption.
   maxRetriesFailure?: number
   maxRetriesPreemption?: number
+  // The egress policy the job runs under (EGRESS_POLICY_*), resolved at
+  // submission, and the job's own allowlist rules.
+  egressPolicy?: string
+  egressAllow?: EgressRule[]
 }
 
 export interface GetTaskStatusResponse {
