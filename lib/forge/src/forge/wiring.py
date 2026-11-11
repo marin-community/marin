@@ -27,6 +27,7 @@ from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavaila
 from shellbox.machine import MachineFactory
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import EnvironmentRequirements, TaskResource
+from taskforge.llm.client import ModelUnavailable
 from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.llm.rollout_model import model_turn
@@ -75,6 +76,17 @@ from forge.resources.web import ParallelWeb, WebClient, WebFetch, WebSearch, fet
 from forge.stages.rules import default_review
 
 
+class EndpointUnregistered(ModelUnavailable, RuntimeError):
+    """The relay has no endpoint right now, e.g. while a fresh controller waits for relays to re-register.
+
+    As ``ModelUnavailable`` the provider wrapper retries it inside its availability window. As ``RuntimeError``
+    the decision-model client keeps treating it as unreachable.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, ())
+
+
 # Source: acceptance-measure worktree, taskforge/llm/glm_client.py:168-196.
 @dataclass(frozen=True, slots=True)
 class RelayEndpoint(EndpointSource):
@@ -89,10 +101,10 @@ class RelayEndpoint(EndpointSource):
     def current(self) -> GlmEndpoint:
         client = iris_ctx().client
         if client is None:
-            raise RuntimeError("Iris client is unavailable inside the task")
+            raise EndpointUnregistered("Iris client is unavailable inside the task")
         endpoints = client.resolver_for_job(JobName.from_string(self.job)).resolve(self.model).endpoints
         if not endpoints:
-            raise RuntimeError(f"GLM relay {self.job} has no registered endpoint for {self.model}")
+            raise EndpointUnregistered(f"GLM relay {self.job} has no registered endpoint for {self.model}")
         url = endpoints[0].url.rstrip("/")
         return GlmEndpoint(url if url.endswith("/v1") else f"{url}/v1", self.token, self.pool)
 

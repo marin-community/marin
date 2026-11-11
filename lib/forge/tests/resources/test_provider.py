@@ -93,6 +93,15 @@ async def test_failure_after_streaming_restarts_the_window() -> None:
     assert time.waits == [1, 1, 1]
 
 
+async def test_unregistered_relay_endpoint_is_waited_not_a_bug() -> None:
+    backend = Backend((wiring.EndpointUnregistered("GLM relay /r has no registered endpoint for m"), provider_completion()))
+    time = Time()
+    waiting = WaitingBackend(backend, 3600, 1, 60, 2, role="author", clock=time.clock, sleep=time.sleep)
+    result = await waiting.complete((), LLMPolicy())
+    assert result.content == "answer" and len(backend.calls) == 2 and time.waits == [1]
+    assert isinstance(wiring.EndpointUnregistered("x"), RuntimeError)
+
+
 async def test_provider_400_is_not_waited_or_retried() -> None:
     rejection = ModelRequestRejected(400, "maximum context length", ())
     backend = Backend((rejection,))
