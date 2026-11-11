@@ -299,11 +299,20 @@ running the source fits the Daytona snapshot budget (`DAYTONA_SAFE_SNAPSHOT_LIMI
 ten unique snapshots); every non-agentic source is safe automatically, and an
 agentic source stays `unassessed` until its snapshot requirement is assessed.
 That assessment must be measured, not inferred: `daytona_snapshot_count` holds
-the distinct snapshot identities counted over the pinned task payloads with the
-shellbox identity rule (`daytona_identity.py`, fidelity-tested against
-`shellbox.image.image_source_key`), `daytona_count_basis` names the rule and
-payload source, and an agentic verdict without both collapses back to
-`unassessed`. A
+the number of distinct snapshot names the production path would create for the
+pinned task payloads, `daytona_count_basis` names the rule and payload source,
+and an agentic verdict without both collapses back to `unassessed`.
+
+Measurement runs that production path rather than reimplementing it
+(`experiments/post_training/task_curation/daytona_identity.py`): each pinned
+task's environment is materialized to a build context, the `MachineSpec` is
+built through Harbor's own task-config mapping
+(`harbor.environments.daytona.machine_spec`), and the name comes from
+`shellbox.backends.daytona.machine.snapshot_identity` — the same function the
+Daytona factory uses to name and create snapshots. A task the production
+validation rejects (for example a Dockerfile with `ADD`, which Daytona cannot
+build) counts as a failure and is reported, not treated as safe. No Daytona API
+calls are made. A
 `SourceReference` groups a
 name, revision and URL for an inventory dataset. Runnable sources expose their
 pinned input through `config.dataset`. Current grades come from the executed

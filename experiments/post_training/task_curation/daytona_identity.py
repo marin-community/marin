@@ -1,159 +1,109 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Count the distinct Daytona snapshot identities a task cohort provisions.
+"""Count the distinct Daytona snapshots a task cohort provisions.
 
-Shellbox names every Daytona snapshot from one identity string
-(``shellbox.backends.daytona.machine._snapshot``)::
-
-    identity = f"{image_source_key(source)}\\0{json.dumps(asdict(Resources(...)), sort_keys=True)}"
-    name = f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
-
-A cohort therefore needs one snapshot per distinct (build context, resources)
-pair, and running it within the Daytona budget means that count stays at or
-below ``DAYTONA_SAFE_SNAPSHOT_LIMIT``. The helpers here recompute that identity
-from pinned task payloads — native release tars and lowered Harbor specs — so a
-catalog verdict can cite a measured count instead of an inference.
+Measurement runs the production naming path: each pinned task's environment
+is materialized to a build context, the shellbox ``MachineSpec`` is built
+through Harbor's own task-config mapping, and the snapshot name comes from
+``shellbox.backends.daytona.machine.snapshot_identity`` — the same function
+the Daytona factory uses to name and create snapshots. A task the production
+validation rejects is counted as a failure and reported; it is not
+Daytona-safe. No Daytona API calls are made.
 """
 
 import base64
 import gzip
-import hashlib
 import io
 import json
 import math
-import stat
 import tarfile
+import tempfile
 from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from daytona import Resources
+from harbor.environments.daytona import machine_spec
+from shellbox.backends.daytona.machine import UnsupportedMachineSpec, snapshot_identity
+from shellbox.image import RegistryImage
 
-AGENTIC_DEFAULT_IMAGE_KEY = "shellbox-default-agent"
-"""Shared identity key for task machines that use the shellbox default agent image."""
-
-DEFAULT_RESOURCES = json.dumps(asdict(Resources()), sort_keys=True)
-"""Resources JSON for tasks whose payload specifies no machine shape."""
-
-DIRECTORY_MODE = 0o40755
-"""Mode of a synthesized parent directory: type bits plus the common 0755."""
-
-IDENTITY_RULE = "shellbox: sha256(image_source_key + NUL + resources-json), first 40 hex characters"
+ENVIRONMENT_PREFIX = "environment/"
+DOCKERFILE = "Dockerfile"
 
 
 @dataclass(frozen=True)
-class ContextFile:
-    """One entry of a build context as the extracted filesystem would present it.
+class EnvConfig:
+    """The identity-relevant slice of Harbor's task environment config."""
 
-    ``mode`` is the full ``st_mode`` including type bits (regular file, directory
-    or symlink); directories carry no content, symlinks carry ``link``.
-    """
-
-    name: str
-    mode: int
-    content: bytes | None = None
-    link: str | None = None
+    docker_image: str | None = None
+    workdir: str = "/app"
+    allow_internet: bool = False
 
 
-def _with_parents(files: list[ContextFile]) -> list[ContextFile]:
-    """Add every implicit parent directory the extracted tree would contain."""
-    known = {item.name for item in files}
-    completed = list(files)
-    for item in files:
-        parts = item.name.split("/")
-        for depth in range(1, len(parts)):
-            parent = "/".join(parts[:depth])
-            if parent not in known:
-                known.add(parent)
-                completed.append(ContextFile(name=parent, mode=DIRECTORY_MODE))
-    return completed
+@dataclass
+class SnapshotIdentityCount:
+    """Distinct production snapshot names with per-name cohort sizes."""
+
+    distinct: int
+    sizes: dict[str, int] = field(default_factory=dict)
+    failures: list[tuple[str, str]] = field(default_factory=list)
 
 
-def image_source_key_from_context(dockerfile_name: str, files: Iterable[ContextFile]) -> str:
-    """Hash a build context exactly like :func:`shellbox.image.image_source_key`.
-
-    The dockerfile name is relative to the context root. Entries hash in Path
-    order (per path segment, not plain string order) as ``path\\0mode\\0`` followed
-    by the symlink target or file bytes; directories contribute no bytes. Parent
-    directories are synthesized so archives that omit them hash like the
-    extracted tree.
-    """
-    digest = hashlib.sha256()
-    digest.update(f"{dockerfile_name}\0".encode())
-    for context_file in sorted(_with_parents(list(files)), key=lambda item: tuple(item.name.split("/"))):
-        digest.update(f"{context_file.name}\0".encode())
-        digest.update(f"{context_file.mode}\0".encode())
-        if context_file.link is not None:
-            digest.update(context_file.link.encode())
-        elif context_file.content is not None:
-            digest.update(context_file.content)
-    return f"dockerfile:{digest.hexdigest()}"
-
-
-def registry_image_key(reference: str) -> str:
-    """Return the shellbox identity key for a pinned registry reference."""
-    return f"registry:{reference}"
-
-
-def snapshot_identity(image_key: str, resources_json: str = DEFAULT_RESOURCES) -> str:
-    """Return the 40-hex snapshot identity shellbox would name for this pair."""
-    return hashlib.sha256(f"{image_key}\0{resources_json}".encode()).hexdigest()[:40]
-
-
-def resources_json(
-    cpu: int | None = None,
-    memory_mb: int | None = None,
-    storage_mb: int | None = None,
-    gpus: int | None = None,
-) -> str:
-    """Return Daytona resource JSON for CPU, MiB memory/storage, and GPU requests."""
-    return json.dumps(
-        asdict(
-            Resources(
-                cpu=cpu,
-                memory=math.ceil(memory_mb / 1024) if memory_mb is not None else None,
-                disk=math.ceil(storage_mb / 1024) if storage_mb is not None else None,
-                gpu=gpus or None,
-            )
-        ),
-        sort_keys=True,
+def _machine_resources(cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int = 0) -> Resources:
+    """The ``Resources`` construction mirroring ``DaytonaMachineFactory._prepare``."""
+    return Resources(
+        cpu=cpus,
+        memory=math.ceil(memory_mb / 1024) if memory_mb is not None else None,
+        disk=math.ceil(storage_mb / 1024) if storage_mb is not None else None,
+        gpu=gpus or None,
     )
 
 
-def _context_files_from_tar(archive: tarfile.TarFile, root: str) -> list[ContextFile]:
-    """Extract the ``root`` subtree of a task tar as extracted-filesystem entries.
-
-    Tar modes carry permission bits only, so the type bits are OR'd in and
-    implicit parent directories are synthesized by the context hash.
-    """
-    members = [member for member in archive.getmembers() if member.name.startswith(root)]
-    if not members:
-        raise ValueError(f"task tar has no {root} build context")
-    files = []
-    for member in members:
-        relative = member.name[len(root) :]
-        if not relative:
-            continue
-        if member.issym():
-            files.append(ContextFile(name=relative, mode=member.mode | stat.S_IFLNK, link=member.linkname))
-        elif member.isdir():
-            files.append(ContextFile(name=relative, mode=member.mode | stat.S_IFDIR))
-        else:
-            files.append(
-                ContextFile(name=relative, mode=member.mode | stat.S_IFREG, content=archive.extractfile(member).read())
-            )
-    return files
+def _write_context(root: Path, name: str, content: bytes, mode: int = 0o644) -> None:
+    """Stage one context entry with the mode the extracted task tree carries."""
+    target = root / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(content)
+    target.chmod(mode & 0o7777)
 
 
-def identities_from_task_tars(task_payloads: Iterable[bytes]) -> Iterator[str]:
-    """Yield one snapshot identity per native task tar, resources defaulted."""
-    for payload in task_payloads:
-        with tarfile.open(
-            fileobj=io.BytesIO(gzip.decompress(payload) if payload[:2] == b"\x1f\x8b" else payload)
-        ) as archive:
-            files = _context_files_from_tar(archive, "environment/")
-            yield snapshot_identity(image_source_key_from_context("Dockerfile", files))
+def _unpack_environment(payload: bytes) -> Iterator[tuple[str, bytes, int]]:
+    with tarfile.open(
+        fileobj=io.BytesIO(gzip.decompress(payload) if payload[:2] == b"\x1f\x8b" else payload)
+    ) as archive:
+        for member in archive.getmembers():
+            if member.isdir() or member.issym() or not member.name.startswith(ENVIRONMENT_PREFIX):
+                continue
+            yield member.name[len(ENVIRONMENT_PREFIX) :], archive.extractfile(member).read(), member.mode
+
+
+def _registry_identity(reference: str) -> str:
+    """Production snapshot name for a registry reference with default resources."""
+    return snapshot_identity(RegistryImage(reference), Resources())
+
+
+def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentityCount:
+    """Count snapshot identities for native cohort tars, one per task."""
+    sizes: Counter[str] = Counter()
+    failures: list[tuple[str, str]] = []
+    for task_id, payload in tasks:
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                for name, content, mode in _unpack_environment(payload):
+                    _write_context(Path(tmp), name, content, mode)
+                if not (Path(tmp) / DOCKERFILE).exists():
+                    raise UnsupportedMachineSpec(f"missing {ENVIRONMENT_PREFIX}{DOCKERFILE}")
+                spec = machine_spec(EnvConfig(), Path(tmp), {}, cpus=None, memory_mb=None, storage_mb=None)
+                name = snapshot_identity(
+                    spec.source, _machine_resources(spec.cpus, spec.memory_mb, spec.storage_mb, spec.gpus)
+                )
+            except UnsupportedMachineSpec as error:
+                failures.append((task_id, str(error)))
+                continue
+            sizes[name] += 1
+    return SnapshotIdentityCount(distinct=len(sizes), sizes=dict(sizes), failures=failures)
 
 
 def _decoded_source(source: Mapping) -> bytes:
@@ -162,64 +112,71 @@ def _decoded_source(source: Mapping) -> bytes:
     return json.dumps(source, sort_keys=True).encode()
 
 
-def _machine_shape(machine: Mapping) -> str:
-    return resources_json(
-        cpu=machine.get("cpus"),
-        memory_mb=machine.get("memory_mb"),
-        storage_mb=machine.get("storage_mb"),
-        gpus=machine.get("gpus"),
-    )
-
-
-def _lowered_verifier_key(spec: Mapping) -> str:
+def _verifier_files(spec: Mapping) -> Iterator[tuple[str, bytes, int]]:
     resources = (spec.get("task") or {}).get("resources", {})
     items = list(resources.get("verifier", [])) + list(resources.get("all", []))
-    prefix = "environment/"
-    files = []
     for item in items:
         path = item.get("path", "")
-        if not path.startswith(prefix) or item.get("source", {}).get("kind") == "directory":
-            continue
-        files.append(
-            ContextFile(
-                name=path[len(prefix) :],
-                mode=int(item.get("mode") or "644", 8) | stat.S_IFREG,
-                content=_decoded_source(item["source"]),
+        if path.startswith(ENVIRONMENT_PREFIX) and item.get("source", {}).get("kind") != "directory":
+            yield (
+                path[len(ENVIRONMENT_PREFIX) :],
+                _decoded_source(item["source"]),
+                int(item.get("mode") or "644", 8),
             )
-        )
-    if not files:
-        return AGENTIC_DEFAULT_IMAGE_KEY
-    return image_source_key_from_context("Dockerfile", files)
 
 
-def identities_from_lowered_specs(specs: Iterable[Mapping]) -> Iterator[str]:
-    """Yield snapshot identities for lowered Harbor task specs.
+def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> SnapshotIdentityCount:
+    """Count snapshot identities for lowered Harbor task specs.
 
-    Each spec contributes a verifier and task-machine identity. The task uses
-    its registry image when specified, otherwise shellbox's default agent image.
+    Each spec contributes a verifier identity — its registry image or its
+    materialized ``environment/`` context with the verifier machine shape —
+    and a task-machine identity on the registry image or shellbox's default
+    agent image with the task machine shape.
     """
-    for spec in specs:
+    sizes: Counter[str] = Counter()
+    failures: list[tuple[str, str]] = []
+    for task_id, spec in tasks:
         task = spec.get("task") or {}
         runtime = spec.get("runtime") or {}
-        yield snapshot_identity(_lowered_verifier_key(spec), _machine_shape(runtime.get("verifier_machine") or {}))
         docker_image = (task.get("environment_requirements") or {}).get("docker_image")
-        task_key = registry_image_key(docker_image) if docker_image else AGENTIC_DEFAULT_IMAGE_KEY
-        yield snapshot_identity(task_key, _machine_shape(runtime.get("task_machine") or {}))
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                for name, content, mode in _verifier_files(spec):
+                    _write_context(Path(tmp), name, content, mode)
+                if not docker_image and not (Path(tmp) / DOCKERFILE).exists():
+                    raise UnsupportedMachineSpec(f"no docker_image and no {ENVIRONMENT_PREFIX}{DOCKERFILE}")
+                verifier = machine_spec(
+                    EnvConfig(docker_image=docker_image),
+                    Path(tmp),
+                    {},
+                    cpus=(runtime.get("verifier_machine") or {}).get("cpus"),
+                    memory_mb=(runtime.get("verifier_machine") or {}).get("memory_mb"),
+                    storage_mb=(runtime.get("verifier_machine") or {}).get("storage_mb"),
+                )
+                task_machine = machine_spec(
+                    EnvConfig(docker_image=docker_image),
+                    Path(tmp),
+                    {},
+                    cpus=(runtime.get("task_machine") or {}).get("cpus"),
+                    memory_mb=(runtime.get("task_machine") or {}).get("memory_mb"),
+                    storage_mb=(runtime.get("task_machine") or {}).get("storage_mb"),
+                )
+                # Identities are derived while the context exists: the production hash
+                # reads the Dockerfile and every file of the staged tree.
+                for machine in (verifier, task_machine):
+                    name = snapshot_identity(
+                        machine.source,
+                        _machine_resources(machine.cpus, machine.memory_mb, machine.storage_mb, machine.gpus),
+                    )
+                    sizes[name] += 1
+            except UnsupportedMachineSpec as error:
+                failures.append((task_id, str(error)))
+    return SnapshotIdentityCount(distinct=len(sizes), sizes=dict(sizes), failures=failures)
 
 
-@dataclass
-class SnapshotIdentityCount:
-    """Measured distinct snapshot identities with per-identity cohort sizes."""
-
-    distinct: int
-    identity_rule: str = IDENTITY_RULE
-    sizes: dict[str, int] = field(default_factory=dict)
-
-
-def count_identities(identities: Iterable[str]) -> SnapshotIdentityCount:
-    """Count distinct identities, largest cohorts first in ``sizes``."""
-    sizes = Counter(identities)
-    return SnapshotIdentityCount(
-        distinct=len(sizes),
-        sizes=dict(sorted(sizes.items(), key=lambda item: -item[1])),
-    )
+def count_registry_identities(references: Iterable[str]) -> SnapshotIdentityCount:
+    """Count snapshot identities for registry references, resources defaulted."""
+    sizes: Counter[str] = Counter()
+    for reference in set(references):
+        sizes[_registry_identity(reference)] += 1
+    return SnapshotIdentityCount(distinct=len(sizes), sizes=dict(sizes))

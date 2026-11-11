@@ -999,9 +999,12 @@ def sources() -> list[RlDataSource]:
                     "Canonical SWE-Gym tasks with native test selection and grading; oracle patches " "remain separate."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                daytona_safety=DaytonaSafety.SAFE,
-                daytona_snapshot_count=1,
-                daytona_count_basis="release provenance dockerfiles inventory, task-trove@ec049a4f, resources defaulted",
+                daytona_safety=DaytonaSafety.UNSAFE,
+                daytona_snapshot_count=2163,
+                daytona_count_basis=(
+                    "production snapshot_identity over pinned shard contexts; one Dockerfile but "
+                    "2,163 distinct per-task setup_repo.sh payloads"
+                ),
             )
         ),
         RlDataSource(

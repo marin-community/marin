@@ -12,6 +12,7 @@ TEST_ROOTS = (
     "vendor/harbor/tests/unit",
     "lib/shellbox/tests/test_http_service.py",
     "lib/shellbox/tests/test_iris_machine.py",
+    "experiments/post_training/task_curation/tests/test_daytona_identity.py",
 )
 
 
