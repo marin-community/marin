@@ -83,7 +83,7 @@ class TestExecSetupLogging:
         assert any(
             rec.getMessage() == "Running command: echo ok"
             and rec.__dict__["user"] == "root"
-            and rec.__dict__["env"] == {}
+            and rec.__dict__["env_keys"] == []
             for rec in caplog.records
         )
         assert any(
@@ -115,6 +115,7 @@ class TestExecSetupLogging:
         )
         assert any(
             rec.getMessage() == "Running command: badcmd"
-            and rec.__dict__.get("env") == {"FOO": "bar"}
+            and rec.__dict__.get("env_keys") == ["FOO"]
+            and "env" not in rec.__dict__
             for rec in caplog.records
         )

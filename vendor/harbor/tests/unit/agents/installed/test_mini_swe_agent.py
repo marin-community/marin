@@ -844,14 +844,15 @@ class TestInstallMethod:
 
 
 @pytest.mark.asyncio
-async def test_install_model_import_ignores_task_repository_packages(tmp_path):
+async def test_install_model_import_ignores_task_repository_packages(tmp_path, monkeypatch):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    monkeypatch.setattr("harbor.agents.installed.mini_swe_agent._MODEL_DIRECTORY", str(model_dir))
     agent = MiniSweAgent(logs_dir=tmp_path / "logs")
     environment = AsyncMock()
     environment.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
     await agent.install(environment)
 
-    model_dir = tmp_path / "model"
-    model_dir.mkdir()
     for upload in environment.upload_file.call_args_list:
         source, destination = upload.args
         shutil.copyfile(source, model_dir / Path(destination).name)
@@ -882,7 +883,7 @@ async def test_install_model_import_ignores_task_repository_packages(tmp_path):
             **os.environ,
             "HOME": str(tmp_path),
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
-            "PYTHONPATH": str(model_dir),
+            "PYTHONPATH": str(task_dir),
         },
         capture_output=True,
         text=True,
