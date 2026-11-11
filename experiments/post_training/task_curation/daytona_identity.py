@@ -108,7 +108,7 @@ def _context_files_from_tar(archive: tarfile.TarFile, root: str) -> list[Context
         raise ValueError(f"task tar has no {root} build context")
     files = []
     for member in members:
-        relative = member.name[len(root):]
+        relative = member.name[len(root) :]
         if not relative:
             continue
         if member.issym():
@@ -123,7 +123,9 @@ def _context_files_from_tar(archive: tarfile.TarFile, root: str) -> list[Context
 def identities_from_task_tars(task_payloads: Iterable[bytes]) -> Iterator[str]:
     """Yield one snapshot identity per native task tar, resources defaulted."""
     for payload in task_payloads:
-        with tarfile.open(fileobj=io.BytesIO(gzip.decompress(payload) if payload[:2] == b"\x1f\x8b" else payload)) as archive:
+        with tarfile.open(
+            fileobj=io.BytesIO(gzip.decompress(payload) if payload[:2] == b"\x1f\x8b" else payload)
+        ) as archive:
             files = _context_files_from_tar(archive, "environment/")
             yield snapshot_identity(image_source_key_from_context("Dockerfile", files))
 
@@ -154,7 +156,7 @@ def _lowered_verifier_key(spec: Mapping) -> str:
             continue
         files.append(
             ContextFile(
-                name=path[len(prefix):],
+                name=path[len(prefix) :],
                 mode=int(item.get("mode", "644"), 8),
                 content=_decoded_source(item["source"]),
             )

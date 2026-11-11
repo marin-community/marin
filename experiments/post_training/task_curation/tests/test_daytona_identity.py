@@ -16,8 +16,8 @@ from shellbox.image import DockerfileSource, image_source_key
 
 from experiments.post_training.task_curation.daytona_identity import (
     AGENTIC_DEFAULT_IMAGE_KEY,
-    ContextFile,
     DEFAULT_RESOURCES,
+    ContextFile,
     count_identities,
     identities_from_lowered_specs,
     identities_from_task_tars,
@@ -26,7 +26,6 @@ from experiments.post_training.task_curation.daytona_identity import (
     resources_json,
     snapshot_identity,
 )
-
 
 
 def _stage(tmp_path: Path, files: dict[str, bytes | str]) -> Path:
@@ -48,7 +47,11 @@ def test_context_key_matches_shellbox_on_a_real_staged_context(tmp_path):
     )
     shellbox_key = image_source_key(DockerfileSource(context=context, dockerfile=context / "Dockerfile"))
     files = [
-        ContextFile(name="Dockerfile", mode=(context / "Dockerfile").stat().st_mode, content=b"FROM python:3.11-bookworm\nCOPY files/ /app/files\n"),
+        ContextFile(
+            name="Dockerfile",
+            mode=(context / "Dockerfile").stat().st_mode,
+            content=b"FROM python:3.11-bookworm\nCOPY files/ /app/files\n",
+        ),
         ContextFile(name="files", mode=(context / "files").stat().st_mode),
         ContextFile(name="files/a.csv", mode=(context / "files/a.csv").stat().st_mode, content=b"one\ntwo\n"),
         ContextFile(name="files/b.json", mode=(context / "files/b.json").stat().st_mode, content=b'{"k": 1}'),
@@ -67,9 +70,6 @@ def test_two_tasks_sharing_a_context_yield_one_snapshot(tmp_path):
 
 
 def test_task_tars_differ_when_data_is_baked_into_the_context(tmp_path):
-    import gzip
-    import io
-    import tarfile
 
     def tar_with(dockerfile: str, data: bytes) -> bytes:
         buffer = io.BytesIO()
@@ -96,7 +96,10 @@ def test_lowered_specs_without_shapes_collapse_to_shared_identities():
                     "verifier": [
                         {
                             "path": "environment/Dockerfile",
-                            "source": {"kind": "inline_file", "content_base64": base64.b64encode(dockerfile.encode()).decode()},
+                            "source": {
+                                "kind": "inline_file",
+                                "content_base64": base64.b64encode(dockerfile.encode()).decode(),
+                            },
                             "mode": "644",
                         }
                     ]
@@ -115,6 +118,8 @@ def test_lowered_specs_without_shapes_collapse_to_shared_identities():
 
 def test_resource_shapes_and_registry_references_distinguish_identities():
     plain = snapshot_identity(registry_image_key("registry.example/img@sha256:aa"))
-    shaped = snapshot_identity(registry_image_key("registry.example/img@sha256:aa"), resources_json(cpu=4, memory_mb=32768))
+    shaped = snapshot_identity(
+        registry_image_key("registry.example/img@sha256:aa"), resources_json(cpu=4, memory_mb=32768)
+    )
     assert plain != shaped
     assert json.dumps(asdict(Resources()), sort_keys=True) == DEFAULT_RESOURCES
