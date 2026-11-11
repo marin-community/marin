@@ -236,6 +236,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     count=8728,
                     notes="Hidden test_data.json, only the first case is shown. Exact-line compare; fine.",
                     daytona_safety=DaytonaSafety.SAFE,
+                    daytona_snapshot_count=1,
+                    daytona_count_basis=(
+                        "production snapshot_identity over every converted task of the pinned input; "
+                        "every task resolves to the pipeline's shared agent image"
+                    ),
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
             ),
@@ -258,6 +263,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                         "credit for not crashing)."
                     ),
                     daytona_safety=DaytonaSafety.SAFE,
+                    daytona_snapshot_count=1,
+                    daytona_count_basis=(
+                        "production snapshot_identity over every converted task of the pinned input; "
+                        "every task resolves to one image (sha256:sha256:d6af0)"
+                    ),
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
             ),
@@ -277,6 +287,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     count=15713,
                     notes="50 hidden stdin/stdout cases per task. Best competitive source in the corpus.",
                     daytona_safety=DaytonaSafety.SAFE,
+                    daytona_snapshot_count=1,
+                    daytona_count_basis=(
+                        "production snapshot_identity over every converted task of the pinned input; "
+                        "every task resolves to one image (sha256:sha256:d6af0)"
+                    ),
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
             ),
@@ -301,6 +316,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                         "aware compare where the prompt promises one."
                     ),
                     daytona_safety=DaytonaSafety.SAFE,
+                    daytona_snapshot_count=1,
+                    daytona_count_basis=(
+                        "production snapshot_identity over every converted task of the pinned input; "
+                        "every task resolves to the pipeline's shared agent image"
+                    ),
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
             ),

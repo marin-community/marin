@@ -73,6 +73,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     count=1498,
                     notes="Semantic output comparison against an oracle command run in the same sandbox.",
                     daytona_safety=DaytonaSafety.SAFE,
+                    daytona_snapshot_count=1,
+                    daytona_count_basis=(
+                        "production snapshot_identity over every converted task of the pinned input; "
+                        "every task resolves to one image (sha256:sha256:66cba)"
+                    ),
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
             ),

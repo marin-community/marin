@@ -233,6 +233,11 @@ SOURCES = {
                     "failed every task. Kept with the kata tag."
                 ),
                 daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over every converted task of the pinned input; "
+                    "every task resolves to one image (sha256:sha256:d1574)"
+                ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -255,6 +260,11 @@ SOURCES = {
                     "failed every task. Kept with the kata tag."
                 ),
                 daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over every converted task of the pinned input; "
+                    "every task resolves to one image (sha256:sha256:d1574)"
+                ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -277,6 +287,11 @@ SOURCES = {
                     "tasks; exact instruction dedup handles overlap with the large cut."
                 ),
                 daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over every converted task of the pinned input; "
+                    "every task resolves to one image (sha256:sha256:d1574)"
+                ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -298,6 +313,11 @@ SOURCES = {
                     "tasks; exact instruction dedup handles repeated katas."
                 ),
                 daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over every converted task of the pinned input; "
+                    "every task resolves to one image (sha256:sha256:d1574)"
+                ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -319,6 +339,11 @@ SOURCES = {
                     "submissions failed every task. Kept with the kata tag."
                 ),
                 daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over every converted task of the pinned input; "
+                    "every task resolves to one image (sha256:sha256:d1574)"
+                ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -340,6 +365,11 @@ SOURCES = {
                     "passed, while empty and trivial submissions failed."
                 ),
                 daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over every converted task of the pinned input; "
+                    "every task resolves to one image (sha256:sha256:d1574)"
+                ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -361,6 +391,11 @@ SOURCES = {
                     "passed, while empty and trivial submissions failed."
                 ),
                 daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over every converted task of the pinned input; "
+                    "every task resolves to one image (sha256:sha256:d1574)"
+                ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -382,6 +417,11 @@ SOURCES = {
                     "passed all 10 sampled oracles and rejected all 10 empty submissions."
                 ),
                 daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over every converted task of the pinned input; "
+                    "every task resolves to one image (sha256:sha256:d1574)"
+                ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -403,6 +443,11 @@ SOURCES = {
                     "passed, while empty and trivial submissions failed."
                 ),
                 daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over every converted task of the pinned input; "
+                    "every task resolves to one image (sha256:sha256:d1574)"
+                ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -424,6 +469,11 @@ SOURCES = {
                     "failed every task. Kept with the kata tag."
                 ),
                 daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over every converted task of the pinned input; "
+                    "every task resolves to one image (sha256:sha256:97528)"
+                ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
