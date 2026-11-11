@@ -109,5 +109,5 @@ potential:
   score: 6
   rationale: -0.0074 at speedrun equal time (step time within 1%); ladder blocked by registry escalation, MFU not run -> 6
   model: claude-opus-5-5
-  date: '2026-11-05'
+  date: '2026-11-11'
   inputs_digest: 539d2851fe9a
