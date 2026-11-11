@@ -462,11 +462,11 @@ class FlopsBaseline:
 class MixtureContinuation:
     """Continue another run's mixture at this run's batch size.
 
-    The mixture keeps the layout it was planned with, at ``batch_size`` sequences per step, and this run's
+    The mixture keeps the layout it was planned with, at ``layout_batch_size`` sequences per step, and this run's
     ``step`` reads its sequence ``sequence``.
     """
 
-    batch_size: int
+    layout_batch_size: int
     step: int
     sequence: int
 
@@ -530,18 +530,23 @@ def build_train_dataset(
 
 
 class ContinuedMixture(AsyncDataset[GrugLmExample]):
-    """``mixture`` read at a constant index shift; its first readable index reads the mixture's first sequence."""
+    """A restarting ``mixture`` read at a constant index shift.
+
+    Its first readable index reads the mixture's first sequence.
+    """
 
     def __init__(self, mixture: MixtureDataset[GrugLmExample], shift: int):
+        if mixture.is_finite():
+            raise ValueError("only a mixture that restarts its sources can be continued")
         super().__init__()
         self.mixture = mixture
         self.shift = shift
 
     async def async_len(self) -> int:
-        return await self.mixture.async_len() - self.shift
+        raise ValueError("a restarting mixture has no length")
 
     def is_finite(self) -> bool:
-        return self.mixture.is_finite()
+        return False
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[GrugLmExample]:
         return await self.mixture.get_batch([index + self.shift for index in indices])
@@ -1570,7 +1575,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 config.data,
                 max_seq_len=config.model.max_seq_len,
                 # A continuation builds the other run's mixture, laid out at that run's batch size.
-                batch_schedule=batch_schedule if continuation is None else BatchSchedule(continuation.batch_size),
+                batch_schedule=(
+                    batch_schedule if continuation is None else BatchSchedule(continuation.layout_batch_size)
+                ),
                 key=data_key,
             )
             train_dataset = mixture if continuation is None else continued_mixture(mixture, batch_schedule, continuation)

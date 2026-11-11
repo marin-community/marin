@@ -689,7 +689,7 @@ the seven chat special-token columns of the LM head from single-token anchors.
 | `--eval-every` | Dropless eval at multiples of this absolute step; 0 disables it |
 | `--checkpoint-root` | Put all checkpoints below this prefix, for example a `tmp/ttl=3d` path |
 | `--expert-placement` | Expert placement JSON that renumbers the start checkpoint's routed experts |
-| `--handoff-checkpoint`, `--handoff-dp-racks` | Continue another run of this epoch from its permanent checkpoint; the rack count is needed only when the checkpoint records no mixture position (see [Handoff to another rack count](#handoff-to-another-rack-count)) |
+| `--handoff-checkpoint`, `--handoff-dp-racks` | Continue another run of this epoch from its permanent checkpoint (see [Handoff to another rack count](#handoff-to-another-rack-count)) |
 
 Every option above except `--router-bias`, `--capacity-factor` and the last five is required. `GrugTrainerConfig`
 gains `router_bias_mode`, `special_tokens` (`SpecialTokenInit`), and `expert_placement` (`ExpertPlacement`);
@@ -755,15 +755,16 @@ Submit it through the Marin Iris controller as with
 #### Handoff to another rack count
 
 A rack holds 16 sequences per update, so a different rack count changes the batch. A run that continues an
-epoch on other racks is a new run: it has its own run ID and output, and a W&B fork of the parent. It keeps
-the parent's mixture plan and reads the rest of the parent's data stream at its own batch size, from the
-mixture sequence that the handoff checkpoint records for its step. A checkpoint written before positions were
-recorded gives (handoff step - start step) x parent batch. The learning-rate decay covers the same final
-sequences as the parent's, and fewer than one batch of sequences at the end of the epoch stays unread. The handoff checkpoint
-records the expert placement, so the run does not place experts again, and it reseeds the special tokens only
-at the epoch's start step. A handoff must come before the decay starts. Each SFT checkpoint records its run's
-mixture position, so a handed-off run can be handed off again; `--handoff-dp-racks` is needed only for a
-checkpoint without that record.
+epoch on other racks is a new run, with its own run ID and output and a W&B fork of the parent. It reads the
+parent's mixture, laid out as planned, through a constant index shift: from the handoff step on, it reads the
+rest of the parent's data stream at its own batch size. The learning-rate decay covers the same final sequences
+as the parent's, and fewer than one batch of sequences at the end of the epoch stays unread. A handoff must come
+before the decay starts.
+
+Each SFT checkpoint records the run's mixture position: the plan, a step, the mixture sequence that step reads,
+and the batch. A handoff resumes from that record, so a handed-off run can be handed off again, and it refuses
+to start if this launch plans a different mixture. The handoff checkpoint also records the expert placement, so
+the run does not place experts again, and the special tokens are reseeded only at the epoch's start step.
 
 1. Request a permanent checkpoint from the parent's `training-control` endpoint with the
    `request-permanent-checkpoint` header value (see [Train an LM](../../../docs/tutorials/train-an-lm.md)).
@@ -771,9 +772,9 @@ checkpoint without that record.
 2. Create the W&B child once, forked from the parent's row with `global_step=N-1` for handoff `step-N`, as in
    [Hero cutovers](#hero-cutovers-and-wb-lineage).
 3. Launch with the parent's options, a new `--run-id`, the new `--dp-racks`, and `--handoff-checkpoint` set to
-   `step-N`. For a parent whose checkpoints record no mixture position, also pass its rack count as
-   `--handoff-dp-racks`. To keep the learning rate per sequence,
-   scale `--muon-lr` and `--adam-lr` by the new batch over the old: 11 to 9 racks gives 0.818x.
+   `step-N`. A parent launched before positions were recorded needs its rack count as `--handoff-dp-racks`.
+   The learning rates stay explicit: to keep the rate per sequence, scale `--muon-lr` and `--adam-lr` by the
+   new batch over the old, so 11 to 9 racks gives 0.818x.
 
 ## Result Record
 

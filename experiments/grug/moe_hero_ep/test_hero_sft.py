@@ -19,8 +19,9 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.schedule import BatchSchedule
 from levanter.testing.devices import use_test_devices
+from marin.execution.lazy import StepContext
 
-from experiments.grug.moe_hero_ep import model
+from experiments.grug.moe_hero_ep import launch_hero_sft, model
 from experiments.grug.moe_hero_ep.expert_placement import (
     ExpertPlacement,
     balanced_expert_order,
@@ -33,6 +34,7 @@ from experiments.grug.moe_hero_ep.launch_hero_sft import (
     SftHandoff,
     SftMixturePosition,
     SftStore,
+    build_sft_run,
     one_epoch_weight_stages,
     plan_sft_mixture,
     sft_components,
@@ -120,11 +122,11 @@ def test_one_epoch_stages_read_every_sft_store_exactly_once():
 
 def test_a_handoff_reads_the_rest_of_the_epoch_once_at_the_new_batch():
     plan = plan_sft_mixture({"a": _store(900_000), "b": _store(68_596)}, batch_size=176, replay_fraction=0.2035)
-    handoff = SftHandoff("s3://bucket/step-394552", 394_552, plan_dp_racks=11, sequence=(394_552 - 393_491) * 176)
+    parent = SftMixturePosition(plan, step=394_552, sequence=(394_552 - 393_491) * 176, batch_size=176)
 
-    steps = sft_steps(plan, start_step=393_491, batch_size=144, handoff=handoff)
+    steps = sft_steps(plan, start_step=393_491, batch_size=144, handoff=SftHandoff("s3://bucket/step-394552", parent))
 
-    read = steps.first_sequence + (steps.num_train_steps - steps.first_step) * 144
+    read = steps.position.sequence + (steps.num_train_steps - steps.position.step) * 144
     assert plan.run_sequences - 144 < read <= plan.run_sequences
     assert abs(steps.decay_steps * 144 - plan.decay_steps * 176) <= 72
 
@@ -141,7 +143,7 @@ def test_a_continued_mixture_reads_the_rest_of_the_parents_stream():
     )
     parent = mixture.as_sync_dataset().get_batch(list(range(6000, 6072)))
     # The child restores the parent's step 1004, after 24 sequences, and reads at batch 4.
-    child = continued_mixture(mixture, child_schedule, MixtureContinuation(batch_size=6, step=1004, sequence=24))
+    child = continued_mixture(mixture, child_schedule, MixtureContinuation(layout_batch_size=6, step=1004, sequence=24))
 
     reads = child.as_sync_dataset().get_batch(
         [index for step in range(1004, 1016) for index in child_schedule.batch_indices_at_step(step)]
@@ -161,14 +163,57 @@ def _write_sft_checkpoint(path, step: int, position: SftMixturePosition | None =
 
 def test_a_second_handoff_resumes_where_the_first_one_left_off(tmp_path):
     # An 11-rack run written before positions were recorded, handed to 9 racks, then to 8.
-    first = sft_handoff(_write_sft_checkpoint(tmp_path / "step-394552", 394_552), start_step=393_491, parent_dp_racks=11)
-    nine_racks = SftMixturePosition(plan_dp_racks=11, step=first.step, sequence=first.sequence, batch_size=144)
+    legacy = _write_sft_checkpoint(tmp_path / "step-394552", 394_552)
+    first = sft_handoff(legacy, start_step=393_491, replay_fraction=0.2035, parent_dp_racks=11)
+    nine_racks = sft_steps(first.position.plan, start_step=393_491, batch_size=144, handoff=first).position
     second_checkpoint = _write_sft_checkpoint(tmp_path / "nine" / "step-395000", 395_000, nine_racks)
 
-    second = sft_handoff(second_checkpoint, start_step=393_491, parent_dp_racks=None)
+    second = sft_handoff(second_checkpoint, start_step=393_491, replay_fraction=0.2035, parent_dp_racks=None)
 
-    assert first.sequence == (394_552 - 393_491) * 176
-    assert second == SftHandoff(second_checkpoint, 395_000, plan_dp_racks=11, sequence=first.sequence + 448 * 144)
+    assert first.position.sequence == (394_552 - 393_491) * 176
+    assert second.position == dataclasses.replace(nine_racks, step=395_000, sequence=first.position.sequence + 448 * 144)
+    with pytest.raises(ValueError, match="records mixture plan"):
+        sft_handoff(second_checkpoint, start_step=393_491, replay_fraction=0.3, parent_dp_racks=None)
+
+
+def test_a_handoff_run_reads_the_parents_mixture_and_records_its_position(monkeypatch):
+    # The SFT tokenizer lives in object storage; the anchors do not affect the data or the schedule.
+    monkeypatch.setattr(
+        launch_hero_sft,
+        "special_token_init",
+        lambda start_step: SpecialTokenInit(token_ids=(1,), anchor_ids=(2,), start_step=start_step, lr_multiplier=1.0),
+    )
+    common = dict(
+        initialize_from="s3://bucket/base/checkpoints/step-393491",
+        start_step=393_491,
+        muon_lr=1e-5,
+        adam_lr=1e-5,
+        max_grad_norm=1.0,
+        replay_fraction=0.2035,
+        router_bias_mode=RouterBiasMode.FROZEN,
+        capacity_factor=1.625,
+        version="dev",
+    )
+    parent = build_sft_run(run_id="parent", dp_racks=11, **common)
+    plan = plan_sft_mixture(launch_hero_sft.load_sft_stores(), batch_size=176, replay_fraction=0.2035)
+    handoff = SftHandoff(
+        "s3://bucket/parent/checkpoints/step-394552",
+        SftMixturePosition(plan, step=394_552, sequence=(394_552 - 393_491) * 176, batch_size=176),
+    )
+    child = build_sft_run(run_id="child", dp_racks=9, handoff=handoff, **common)
+
+    parent_config, child_config = (
+        step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)) for step in (parent, child)
+    )
+
+    assert child_config.data == parent_config.data
+    assert parent_config.mixture_continuation is None
+    assert child_config.mixture_continuation == MixtureContinuation(
+        layout_batch_size=176, step=394_552, sequence=(394_552 - 393_491) * 176
+    )
+    assert SftMixturePosition.recorded_in(child_config.trainer.checkpoint_metadata) == dataclasses.replace(
+        handoff.position, batch_size=144
+    )
 
 
 def test_stores_smaller_than_the_block_count_share_one_component():
