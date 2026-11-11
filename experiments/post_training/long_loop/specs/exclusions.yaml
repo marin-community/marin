@@ -101,3 +101,4 @@ historical_question_union:
   scan_sha256: e588fbf98bed7440cde2654daeb778b1cc370e7df2cb129b65de96e0e8a2eaa7
 triviaqa_config: rc.nocontext (vendored override; both no-context validation universes
   excluded)
+selection_override: CalibForge entirely removed from train and validation

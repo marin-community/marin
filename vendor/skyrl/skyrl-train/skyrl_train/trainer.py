@@ -2496,6 +2496,13 @@ class RayPPOTrainer:
         if loop_advantages_tensor is not None:
             training_input["loop_advantages"] = loop_advantages_tensor
         training_input.metadata = {"uids": uids}
+        trajectory_ids = trajectory_batch.get("trajectory_ids")
+        if trajectory_ids is not None:
+            if len(trajectory_ids) != len(response_ids):
+                raise ValueError("trajectory_ids must carry one identity per response row")
+            training_input.metadata["trajectory_ids"] = [identity.to_string() for identity in trajectory_ids]
+        elif self.cfg.trainer.step_wise_training or self.cfg.trainer.dump_training_order:
+            raise ValueError("Step-wise training and training-order retention require rollout trajectory_ids")
         # For RLOO-N: pass through exclude_from_baseline flags if present
         if trajectory_batch.get("exclude_from_baseline") is not None:
             training_input.metadata["exclude_from_baseline"] = np.array(
@@ -2507,12 +2514,6 @@ class RayPPOTrainer:
         # padded response length
         training_input.metadata["response_length"] = response_masks_tensor.shape[1]
         if self.cfg.trainer.step_wise_training:
-            assert "trajectory_ids" in trajectory_batch, (
-                "Expected `trajectory_ids` in trajectory batch for step wise training"
-            )
-            training_input.metadata["trajectory_ids"] = [
-                trajectory_id.to_string() for trajectory_id in trajectory_batch["trajectory_ids"]
-            ]
             training_input.metadata["avg_response_length"] = sum(
                 len(sample_response_ids)
                 for sample_response_ids, is_last_step in zip(response_ids, trajectory_batch["is_last_step"])

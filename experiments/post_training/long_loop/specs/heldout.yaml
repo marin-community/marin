@@ -1,20 +1,29 @@
-candidate_uri: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/normalized-v4
+candidate_uri: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/swe-pi-nonroot-20261111-v1
 data_file: validation.parquet
-rows: 140
+rows: 120
 seed: 20261109
-agentic_selection: First20 per cohort sorted by sha256(seed:source/path), excluded
-  from training
+agentic_selection: Original20 SWE-smith heldouts retained; CalibForge absent
 composition:
   swesmith: 20
-  calibforge: 20
   snowball-100k: 100
 files:
-- uri: s3://marin-us-east-02a/marin/users/benfeuer/long-loop/rl-data/smartie-mixed-20261110-v1/validation.parquet
-  sha256: 13f5d17334c8f29adbe85cd7a31c0740d698ffdb52b9169f447f9fd010b184f0
-- uri: s3://marin-us-east-02a/marin/users/benfeuer/long-loop/rl-data/smartie-mixed-20261110-v1/manifest.json
-  sha256: 94f21b06fedc6dce7184e783dab1349f1c14fed05fab3d47fcace61d2386701a
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-nonroot-20261111-v1/swe-pi-nonroot-20261111-v1/validation.parquet
+  sha256: c80aeeb0a18819b5597b09db4f3ba31853a0294e99672e9a3a23c6ffd42c83b2
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-nonroot-20261111-v1/swe-pi-nonroot-20261111-v1/manifest.json
+  sha256: 5f738a4812d1fc69f17d0fe639b69ed04455ea937ff3cfb07b482dafac3b910f
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-nonroot-20261111-v1/swe-pi-nonroot-20261111-v1/validation.parquet.identities.jsonl
+  sha256: ba9b5ea51e5e532b61394e84f8d2b52e13207e9fec9622746f8a21e90d2d7831
 admission_pending: []
 overlap_admission:
   path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/overlap-admission-20261110.json
   sha256: ac2e5c18c94222404cbc39b58077572e225efdaa125a11eb5a0375d152e83872
-uri: s3://marin-us-east-02a/marin/users/benfeuer/long-loop/rl-data/smartie-mixed-20261110-v1
+uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-nonroot-20261111-v1/swe-pi-nonroot-20261111-v1
+execution_overlay:
+  marin_revision: 14d333820a1667f8c32468ec24a477e30dd67892
+  agent: pi
+  version: 0.87.0
+  agent_user: longloop-agent
+  agent_uid: 10001
+  snapshot_contexts: 5
+  row_order_and_source_identity: preserved
+  upstream_manifest_sha256: cf4050ab35a497d4189552883f2e234a66a7c31fa833615b7baa8c3616bd8db4

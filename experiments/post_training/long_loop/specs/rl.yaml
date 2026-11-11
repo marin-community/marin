@@ -26,7 +26,6 @@ config:
           model_turn_timeout: 1800
         harness_by_dataset:
           long-loop-smartie-swesmith: harbor_trial
-          long-loop-smartie-calibforge: harbor_trial
   trainer:
     strategy: megatron
     flash_attn: false
@@ -77,25 +76,28 @@ config:
       megatron_config:
         tensor_model_parallel_size: 1
         pipeline_model_parallel_size: 2
-        context_parallel_size: 4
+        context_parallel_size: 5
         expert_model_parallel_size: 8
         expert_tensor_parallel_size: 1
-        moe_router_replay: true
         transformer_config_kwargs:
+          cp_comm_type: a2a
           moe_router_fusion: false
+        moe_router_replay: true
     ref:
       megatron_config:
         tensor_model_parallel_size: 1
         pipeline_model_parallel_size: 2
-        context_parallel_size: 4
+        context_parallel_size: 5
         expert_model_parallel_size: 8
         expert_tensor_parallel_size: 1
+        transformer_config_kwargs:
+          cp_comm_type: a2a
     placement:
       colocate_all: false
       colocate_policy_ref: true
-      policy_num_nodes: 16
+      policy_num_nodes: 10
       policy_num_gpus_per_node: 8
-      ref_num_nodes: 16
+      ref_num_nodes: 10
       ref_num_gpus_per_node: 8
     rollout_buffer:
       max_staleness_steps: 2
@@ -107,7 +109,6 @@ config:
         nonagentic: 32
       source_routes:
         long-loop-smartie-swesmith: agentic
-        long-loop-smartie-calibforge: agentic
         PRIME-RL/Eurus-2-RL-Data: nonagentic
         nvidia/Nemotron-RL-Ultra-Training-Blends: nonagentic
         nvidia/OpenScience: nonagentic
@@ -136,8 +137,8 @@ config:
       eval_on_train_end: true
     - type: best_checkpoint
       initial_model_uri: PENDING_PRECEDING_SFT_EXPORT
-      expected_tasks: 140
-      minimum_scored_tasks: 140
+      expected_tasks: 120
+      minimum_scored_tasks: 120
       ema_window: 5
     - type: hf_model_save
       save_steps: -1
@@ -198,7 +199,7 @@ config:
       - 128001
       - 128009
       skip_special_tokens: false
-    num_inference_engines: 16
+    num_inference_engines: 22
     inference_engine_tensor_parallel_size: 1
     inference_engine_pipeline_parallel_size: 1
     inference_engine_data_parallel_size: 8
@@ -222,6 +223,7 @@ config:
       max_bytes_per_step: null
       max_bytes_per_run: null
       required: true
+    engine_init_timeout_seconds: 600
   data:
     kind: parquet
     shuffle: true
@@ -264,9 +266,9 @@ config:
       output_path: PENDING_RUN_AGENT_TRACE_URI
 role_plan:
   colocate_all: false
-  policy_num_nodes: 16
+  policy_num_nodes: 10
   policy_num_gpus_per_node: 8
-  num_inference_engines: 16
+  num_inference_engines: 22
   inference_engine_tensor_parallel_size: 1
   inference_engine_pipeline_parallel_size: 1
   inference_engine_data_parallel_size: 8

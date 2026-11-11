@@ -146,6 +146,11 @@ def resolve_spec(path: Path, *, smoke: bool) -> dict:
                 result["evaluation"]["attempts_per_selected_task"]
             )
             result["evaluation"]["expected_expanded_attempt_count"] = result["evaluation"]["expected_rollouts"]
+    heldout = result["datasets"].get("heldout")
+    if heldout is not None:
+        for callback in result["rl"]["config"]["trainer"].get("callbacks", []):
+            if callback["type"] == "best_checkpoint" and callback["expected_tasks"] != heldout["rows"]:
+                raise ValueError("Best-checkpoint validation cardinality differs from the pinned held-out manifest")
     # Dataset manifests are the sole data authority, independent of stage files.
     result["sft"]["data"] = copy.deepcopy(result["datasets"]["sft"]["data"])
     result["gpu_peaks"] = allocation_peaks(result)
