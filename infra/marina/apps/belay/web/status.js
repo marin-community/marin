@@ -284,25 +284,31 @@ function heroGate(idea, cfg) {
 }
 
 const LADDER_RUNGS = ['d512', 'd768', 'd1024', 'd1280']
+// A ladder rung's Track is this prefix plus the rung (competitive-d768).
+const COMPETITIVE = 'competitive-'
+// Single-scale trials from before the ladder, whose rung is the bare size.
+const LEGACY_RUNGS = ['d768', 'd1024', 'd1280']
 
 // The protocol of an official ladder rung: trained at equal compute with its baseline at hero-scale MFU, its steps set
 // from the idea's latest hero-mfu result (experiments/belay config.Protocol.HERO_MFU_MATCHED).
 const HERO_MFU_MATCHED = 'hero_mfu_matched'
 
-// Gate 4, the hero-scale projection. Official only once all four competitive rungs are recorded hero-MFU-matched; an
-// informal (equal-steps) ladder, a partial one or a legacy single-scale trial shows its deltas without a verdict. ``rungRuns`` is the idea's latest launch of ladder rungs: while any is in flight the
-// ladder shows as running, and once all have ended it shows any that failed or that results are still to be recorded.
+// Gate 4, the hero-scale projection. Official only once all four competitive rungs are recorded hero-MFU matched; an
+// informal (equal-steps) ladder, a partial one or legacy pre-ladder trials show their deltas without a verdict.
+// ``rungRuns`` is the idea's latest launch of ladder rungs: while any is in flight the ladder shows as running, and
+// once all have ended it shows any that failed or that results are still to be recorded.
 function scalingGate(idea, cfg, rungRuns) {
-  const ladder = new Map(counted(idea.trials.filter((t) => t.rung?.startsWith('competitive-'))).map((t) => [t.rung.replace('competitive-', ''), t]))
-  const legacy = new Map(counted(idea.trials.filter((t) => ['d768', 'd1024', 'd1280'].includes(t.rung))).map((t) => [t.rung, t]))
+  const rungTrials = idea.trials.filter((t) => t.rung?.startsWith(COMPETITIVE))
+  const ladder = new Map(counted(rungTrials).map((t) => [t.rung.slice(COMPETITIVE.length), t]))
+  const legacy = new Map(counted(idea.trials.filter((t) => LEGACY_RUNGS.includes(t.rung))).map((t) => [t.rung, t]))
   const shown = ladder.size ? ladder : legacy
   const parts = [...shown].map(([r, t]) => `${r} ${signed(t.delta[0])} (${t.protocol === HERO_MFU_MATCHED ? 'hero-MFU matched' : 'equal steps'})`)
   const title = parts.join('\n')
   const recorded = LADDER_RUNGS.filter((r) => ladder.has(r)).length
-  const registered = new Set(idea.trials.filter((t) => t.rung?.startsWith('competitive-')).map((t) => t.rung)).size
+  const registered = new Set(rungTrials.map((t) => t.rung)).size
   const failed = rungRuns.filter((r) => TERMINAL.has(r.state) && r.state !== 'succeeded').length
   if (recorded === LADDER_RUNGS.length && [...ladder.values()].every((t) => t.protocol === HERO_MFU_MATCHED)) {
-    const verdicts = [...ladder.values()].map((t) => verdictOf(t.delta[0], trackInfo(cfg, `competitive-${t.rung.replace('competitive-', '')}`).noise))
+    const verdicts = [...ladder.values()].map((t) => verdictOf(t.delta[0], trackInfo(cfg, t.rung).noise))
     const kind = verdicts.includes('loss') ? 'loss' : verdicts.every((v) => v === 'win') ? 'win' : 'noise'
     return { kind, short: signed(ladder.get('d1280').delta[0]), text: `${kind} at all 4 rungs, hero-MFU matched`, title }
   }
