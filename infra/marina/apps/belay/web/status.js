@@ -207,7 +207,7 @@ function renderRunning() {
       const idea = state.ideas.find((i) => i.registry_id && i.registry_id === r.registry_id)
       const time = eta(r)
       const cells = [
-        el('span', { class: 'xid mono' }, r.registry_id ?? ''),
+        el('span', { class: 'xid mono' }, r.experiment ?? ''),
         el('span', { class: 'nm' }, el('b', {}, idea?.title ?? r.name), el('small', {}, r.name)),
         progress(r),
         el('span', { class: 'eta mono' }, r.state === 'pending' ? 'queued' : time ? `${time} left` : '—'),
@@ -285,7 +285,8 @@ function approvalDate(idea, pageIdea) {
 }
 
 function checklistRows(cfg) {
-  const live = new Map(state.runs.filter((r) => !TERMINAL.has(r.state)).map((r) => [r.registry_id, r]))
+  // The speedrun gate's run in flight: a live run of the idea itself, not of one of its ladder rungs.
+  const live = new Map(state.runs.filter((r) => !TERMINAL.has(r.state) && r.experiment === r.registry_id).map((r) => [r.registry_id, r]))
   return registry.ideas.map((idea) => {
     const pageIdea = state.ideas.find((i) => i.registry_id === idea.xid)
     // A link from before the agent log: an idea's post on the old running issue, kept in place there.
