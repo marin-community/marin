@@ -97,6 +97,25 @@ DAYTONA_SAFE_SNAPSHOT_LIMIT = 10
 """The unique-snapshot budget a source must fit to count as Daytona-safe."""
 
 
+def daytona_verdict(*, snapshot_count: int | None, execution_failures: int | None, agentic: bool) -> DaytonaSafety:
+    """Derive a source's Daytona verdict from its measurement.
+
+    Sources that provision no sandbox are safe regardless of any count. An agentic
+    source without a measured count is unassessed: a count that was never taken
+    cannot establish safety, and a declared value must not stand in for one.
+    Otherwise the source is unsafe when its unique environment count exceeds
+    ``DAYTONA_SAFE_SNAPSHOT_LIMIT`` or when the Daytona backend refuses a task's
+    declared execution requirements.
+    """
+    if not agentic:
+        return DaytonaSafety.SAFE
+    if snapshot_count is None:
+        return DaytonaSafety.UNASSESSED
+    if snapshot_count > DAYTONA_SAFE_SNAPSHOT_LIMIT or execution_failures:
+        return DaytonaSafety.UNSAFE
+    return DaytonaSafety.SAFE
+
+
 class OracleValidation(StrEnum):
     """How an admitted source was qualified when it ships no oracle solutions."""
 

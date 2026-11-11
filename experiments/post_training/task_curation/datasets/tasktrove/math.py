@@ -240,7 +240,6 @@ SOURCES = (
                 notes=(
                     "Strict trailing boxed compare. No oracle to validate against, so run a no-op gate at " "conversion."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -261,7 +260,6 @@ SOURCES = (
                 notes=(
                     "Most rigorous math verifier in the corpus (scalar/interval/set/tuple/equation), " "oracle present."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -280,7 +278,6 @@ SOURCES = (
                 tags=("agentic", "multi-turn"),
                 count=57777,
                 notes=("Scalar sympy compare, hidden gold. Overlaps the other Nemotron math sources; " "subsample."),
-                daytona_safety=DaytonaSafety.SAFE,
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -299,7 +296,6 @@ SOURCES = (
                 tags=("agentic", "multi-turn"),
                 count=2404,
                 notes="Symbolic exact compare, hidden gold. Add a numeric tolerance path at conversion.",
-                daytona_safety=DaytonaSafety.SAFE,
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -318,7 +314,6 @@ SOURCES = (
                 tags=("agentic", "multi-turn"),
                 count=110730,
                 notes=("Typed sympy comparison with oracle per task. Remove the non-boxed fallback " "extraction."),
-                daytona_safety=DaytonaSafety.SAFE,
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),

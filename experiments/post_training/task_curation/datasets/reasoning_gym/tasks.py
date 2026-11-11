@@ -382,7 +382,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn"),
                 count=14259,
                 notes="reasoning_gym library scoring is sound; remove the substring fallback at conversion.",
-                daytona_safety=DaytonaSafety.SAFE,
                 task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(

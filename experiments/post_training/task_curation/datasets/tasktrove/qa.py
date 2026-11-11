@@ -246,7 +246,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Exact gate then reference-based judge. Reference answers are real; needs the judge "
                     "in the new grader."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
             ),
         ),
         (
@@ -263,7 +262,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Reference answer plus judge. Move the reference out of the criterion text into a "
                     "data field at conversion."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
             ),
         ),
     )
@@ -298,7 +296,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                         "Held-out MCQA with regex extraction. Drop the trailing-letter fallback at conversion "
                         "and subsample hard: 617k rows is a third of the corpus."
                     ),
-                    daytona_safety=DaytonaSafety.SAFE,
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
             ),

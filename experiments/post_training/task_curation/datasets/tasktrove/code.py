@@ -235,7 +235,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     tags=("agentic", "multi-turn", "language:python"),
                     count=8728,
                     notes="Hidden test_data.json, only the first case is shown. Exact-line compare; fine.",
-                    daytona_safety=DaytonaSafety.SAFE,
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
             ),
@@ -257,7 +256,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                         "Keep rows with at least 5 test files; drop the zero-test fallback (currently full "
                         "credit for not crashing)."
                     ),
-                    daytona_safety=DaytonaSafety.SAFE,
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
             ),
@@ -276,7 +274,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     tags=("agentic", "multi-turn", "language:python"),
                     count=15713,
                     notes="50 hidden stdin/stdout cases per task. Best competitive source in the corpus.",
-                    daytona_safety=DaytonaSafety.SAFE,
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
             ),
@@ -300,7 +297,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                         "Hidden cases plus oracle. Filter to tasks with at least 5 cases and add tolerance-"
                         "aware compare where the prompt promises one."
                     ),
-                    daytona_safety=DaytonaSafety.SAFE,
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
             ),

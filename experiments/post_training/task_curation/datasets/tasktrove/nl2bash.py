@@ -72,7 +72,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     tags=("agentic", "multi-turn", "language:bash"),
                     count=1498,
                     notes="Semantic output comparison against an oracle command run in the same sandbox.",
-                    daytona_safety=DaytonaSafety.SAFE,
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
             ),

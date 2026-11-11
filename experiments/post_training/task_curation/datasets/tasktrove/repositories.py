@@ -161,7 +161,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                         "Patched trusted repository tests with deferred Docker builds. Python uses pytest; "
                         "retained non-Python sources keep their parser with exit-code credit disabled."
                     ),
-                    daytona_safety=DaytonaSafety.UNSAFE,
                     daytona_snapshot_count=17706,
                     daytona_count_basis=(
                         "pinned release per-task build-context inventory from the conversion ledger, "
@@ -189,7 +188,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                         "Trusted repository pytest tests with unresolved Docker build contexts; "
                         "original config patches remain oracle-only."
                     ),
-                    daytona_safety=DaytonaSafety.UNSAFE,
                     daytona_snapshot_count=12932,
                     daytona_count_basis=(
                         "pinned release per-task build-context inventory from the conversion ledger, "

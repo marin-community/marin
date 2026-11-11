@@ -232,7 +232,6 @@ SOURCES = {
                     "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                     "failed every task. Kept with the kata tag."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -254,7 +253,6 @@ SOURCES = {
                     "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                     "failed every task. Kept with the kata tag."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -276,7 +274,6 @@ SOURCES = {
                     "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
                     "tasks; exact instruction dedup handles overlap with the large cut."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -297,7 +294,6 @@ SOURCES = {
                     "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
                     "tasks; exact instruction dedup handles repeated katas."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -318,7 +314,6 @@ SOURCES = {
                     "Self-contained multi-file pytest tasks. In a 10-task sample, empty and trivial "
                     "submissions failed every task. Kept with the kata tag."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -339,7 +334,6 @@ SOURCES = {
                     "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                     "passed, while empty and trivial submissions failed."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -360,7 +354,6 @@ SOURCES = {
                     "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                     "passed, while empty and trivial submissions failed."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -381,7 +374,6 @@ SOURCES = {
                     "Self-contained pytest katas with shipped Python oracles. The standardized mode "
                     "passed all 10 sampled oracles and rejected all 10 empty submissions."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -402,7 +394,6 @@ SOURCES = {
                     "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                     "passed, while empty and trivial submissions failed."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
@@ -423,7 +414,6 @@ SOURCES = {
                     "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                     "failed every task. Kept with the kata tag."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
                 task_format=TaskFormat.TASKCOMPENDIUM,
             )
         ),
