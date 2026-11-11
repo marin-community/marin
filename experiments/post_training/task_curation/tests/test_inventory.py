@@ -55,8 +55,8 @@ from experiments.post_training.task_curation.inventory import (
     TASK_MANIFEST_FILENAME,
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
+    EvalLiteRecipe,
     HeldoutSource,
-    PanelRecipe,
     SelectionRecipe,
     task_selection_step,
     validation_task,
@@ -486,7 +486,7 @@ def edit_tool_call(tmp_path: Path, edit: Callable[[TaskSpec], TaskSpec]) -> None
     pq.write_table(pa.Table.from_pylist(rows), tmp_path / TOOL_CALLS)
 
 
-def panel_recipe(tmp_path: Path, benchmark: str = "mmlu") -> PanelRecipe:
+def eval_lite_recipe(tmp_path: Path, benchmark: str = "mmlu") -> EvalLiteRecipe:
     """Six Evalchemy questions and NeMo agent rows, with two training files and a development panel."""
     mmlu = benchmark == "mmlu"
     name = "evalchemy-mmlu-pro" if mmlu else "evalchemy-mbppplus"
@@ -568,8 +568,8 @@ def panel_recipe(tmp_path: Path, benchmark: str = "mmlu") -> PanelRecipe:
         for key, update in excluded.items()
     }
     family = "general" if mmlu else "competitive_coding"
-    return PanelRecipe(
-        name="test-panel",
+    return EvalLiteRecipe(
+        name="eval-lite",
         version="2026.11.04",
         seed=20261104,
         sources=(
@@ -598,12 +598,12 @@ def panel_recipe(tmp_path: Path, benchmark: str = "mmlu") -> PanelRecipe:
     )
 
 
-def publish_panel(settings: PanelRecipe, tmp_path: Path, cache: str = "artifacts") -> Path:
+def publish_eval_lite(settings: EvalLiteRecipe, tmp_path: Path, cache: str = "artifacts") -> Path:
     """Publish through the driver; a refusal raises its cause chain after checking nothing was published."""
     recipe_file = tmp_path / f"panel-{settings.version}.json"
     recipe_file.write_text(settings.model_dump_json())
     output = tmp_path / cache / "rl-data/task-selection" / settings.name / settings.version
-    arguments = ["--corpus", str(tmp_path / "corpus.json"), "--test-panel", str(recipe_file), "--run"]
+    arguments = ["--corpus", str(tmp_path / "corpus.json"), "--eval-lite", str(recipe_file), "--run"]
     result = CliRunner().invoke(main, [*arguments, "--cache-dir", str(tmp_path / cache)])
     if result.exit_code != 0:
         assert not (output / FULL_VALIDATION_FILENAME).exists()
@@ -611,7 +611,9 @@ def publish_panel(settings: PanelRecipe, tmp_path: Path, cache: str = "artifacts
     return output
 
 
-def measured_recipe(settings: PanelRecipe, tmp_path: Path, tasks: list[TaskSpec], **last: Any) -> PanelRecipe:
+def measured_eval_lite_recipe(
+    settings: EvalLiteRecipe, tmp_path: Path, tasks: list[TaskSpec], **last: Any
+) -> EvalLiteRecipe:
     """Eight-answer rates for ``tasks``, with ``last`` overriding the final row, written in reverse order."""
     rows = [
         {
@@ -628,7 +630,7 @@ def measured_recipe(settings: PanelRecipe, tmp_path: Path, tasks: list[TaskSpec]
     rows[-1].update(last)
     path = tmp_path / "pass-rates.parquet"
     pq.write_table(pa.Table.from_pylist(rows[::-1]), path)
-    return PanelRecipe.model_validate(
+    return EvalLiteRecipe.model_validate(
         {
             **settings.model_dump(),
             "version": "2026.11.04.1",
@@ -643,11 +645,11 @@ def measured_recipe(settings: PanelRecipe, tmp_path: Path, tasks: list[TaskSpec]
 
 
 @pytest.mark.parametrize("benchmark", ["mmlu", "mbpp"])
-def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evidence(tmp_path, benchmark):
-    settings = panel_recipe(tmp_path, benchmark)
+def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_evidence(tmp_path, benchmark):
+    settings = eval_lite_recipe(tmp_path, benchmark)
     questions = settings.sources[0]
     originals = {case.task.id: case.task for case in evaluation_cases(str(tmp_path / "general"))}
-    provisional = publish_panel(settings, tmp_path)
+    provisional = publish_eval_lite(settings, tmp_path)
     full, fast = read_tasks(provisional / FULL_VALIDATION_FILENAME), read_tasks(provisional / VALIDATION_FILENAME)
     agents = {task.id: task for task in tool_calls(tmp_path)}
     for task in full:
@@ -688,8 +690,8 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
     assert counts["Evalchemy:questions"]["overlap"] == counts["NeMo:predicted-action"]["overlap"] == 1
     assert counts["NeMo:predicted-action"].get("duplicate", 0) == 1 + (benchmark == "mmlu")
     assert {next(iter(originals)), "agent-0", "agent-2-copy"}.isdisjoint(families)
-    measured = measured_recipe(settings, tmp_path, full)
-    final = publish_panel(measured, tmp_path)
+    measured = measured_eval_lite_recipe(settings, tmp_path, full)
+    final = publish_eval_lite(measured, tmp_path)
     assert read_tasks(final / FULL_VALIDATION_FILENAME) == full
     assert read_tasks(final / VALIDATION_FILENAME) == fast
     final_rows = pq.read_table(final / TASK_MANIFEST_FILENAME).to_pylist()
@@ -699,7 +701,7 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
     subset = measured.model_copy(
         update={"version": "2026.11.04.2", "sources": (questions,), "fast_counts": {questions.family: 4}}
     )
-    subset_output = publish_panel(subset, tmp_path)
+    subset_output = publish_eval_lite(subset, tmp_path)
     assert read_tasks(subset_output / FULL_VALIDATION_FILENAME) == [task for task in full if task.id in originals]
     assert len(read_tasks(subset_output / VALIDATION_FILENAME)) == 4
 
@@ -711,10 +713,10 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
 
     edit_tool_call(tmp_path, other_user)
     with pytest.raises(PanelRefused, match="Pass-rate evidence measures different task content"):
-        publish_panel(measured.model_copy(update={"version": "2026.11.04.3"}), tmp_path)
+        publish_eval_lite(measured.model_copy(update={"version": "2026.11.04.3"}), tmp_path)
 
 
-LOCAL_GRADER, AGENT_SHORTFALL = "Test panel requires a local grader", "Test panel part shortfall: NeMo:predicted-action"
+LOCAL_GRADER, AGENT_SHORTFALL = "EvalLite requires a local grader", "EvalLite part shortfall: NeMo:predicted-action"
 PROXY = ("eval", "tool-call-proxy")
 TASK_EDITS: dict[str, Callable[[TaskSpec], TaskSpec]] = {
     "judge": (
@@ -748,15 +750,15 @@ TASK_EDITS: dict[str, Callable[[TaskSpec], TaskSpec]] = {
         ("docker-build", LOCAL_GRADER),
         ("development-id", AGENT_SHORTFALL),
         ("train-manifest", "Panel source is not reserved for evaluation"),
-        ("eval-tag", "Test panel source must reserve its tasks for evaluation"),
+        ("eval-tag", "EvalLite source must reserve its tasks for evaluation"),
         ("missing-rate", "Pass-rate evidence must cover every selected panel task"),
     ],
 )
-def test_panel_publication_refuses_bad_sources_overlaps_shortfalls_and_rate_evidence(tmp_path, failure, cause):
-    settings = panel_recipe(tmp_path)
+def test_eval_lite_publication_refuses_bad_sources_overlaps_shortfalls_and_rate_evidence(tmp_path, failure, cause):
+    settings = eval_lite_recipe(tmp_path)
     if failure.endswith("rate"):
-        tasks = read_tasks(publish_panel(settings, tmp_path) / FULL_VALIDATION_FILENAME)
-        settings = measured_recipe(settings, tmp_path, tasks, task_id="unknown")
+        tasks = read_tasks(publish_eval_lite(settings, tmp_path) / FULL_VALIDATION_FILENAME)
+        settings = measured_eval_lite_recipe(settings, tmp_path, tasks, task_id="unknown")
     elif failure == "train-manifest":
         (tmp_path / "agents/manifest.json").write_text(json.dumps({"intended_use": "train"}))
         write_corpus(tmp_path)
@@ -766,4 +768,4 @@ def test_panel_publication_refuses_bad_sources_overlaps_shortfalls_and_rate_evid
         excluded = read_tasks(Path(settings.development.uri))[0]
         edit_tool_call(tmp_path, lambda task: task.model_copy(update={"id": excluded.id}))
     with pytest.raises(PanelRefused, match=cause):
-        publish_panel(settings, tmp_path)
+        publish_eval_lite(settings, tmp_path)
