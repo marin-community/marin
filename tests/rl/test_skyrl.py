@@ -732,7 +732,7 @@ from marinskyrl.checkpoint_paths import policy_export_path
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
 from skyrl_train.hf_export_schema import HFExportRequest
 from skyrl_train.utils.tracking import Tracking
-from finestore.rl.run_records import CheckpointReference, read_attempt
+from finestore.rl.run_records import CheckpointReference, read_attempt, read_attempt_metrics
 
 path = Path(sys.argv[1])
 root = path.parent
@@ -759,6 +759,7 @@ original = Tracking("tests-project", "history", "records", history_config("origi
 original.start(resumed_step=None)
 for step in (0, 1, 2, 3, 8):
     original.log({"loss": step / 10}, step=step)
+assert read_attempt_metrics(str(ancestor_root), "original")[8]["loss"] == 0.8
 parent = CheckpointReference(export_root=str(ancestor_root), attempt_id="original", step=3)
 with Tracking("tests-project", "history", "records", history_config("middle", root / "exports")) as middle:
     middle.start(resumed_step=3, checkpoint=parent)
