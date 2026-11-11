@@ -283,11 +283,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                     for value in (*Outcome, "rollout_failure")
                 }
             )
-            row.pop("attempt_id", None)
-            if legacy:
-                row["attempt_id"] = attempt
-                if not generating:
-                    row["reward/rloo_n_total_groups"] = 64
+            if legacy and not generating:
+                row["reward/rloo_n_total_groups"] = 64
             if generating:
                 row = {
                     key: value
