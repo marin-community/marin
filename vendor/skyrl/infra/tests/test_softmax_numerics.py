@@ -9,7 +9,13 @@ from skyrl_train import stable_softmax
 from skyrl_train.distillation import student_topk_logprobs
 from skyrl_train.tensor_math import LOG_PROB_DELTA_CLIP
 from skyrl_train.utils.policy_math import differentiable_approx_kl
-from tests.softmax_reference import VALUE_RTOL, assert_softmax_numerics, decimal_reference, numerical_rows
+from tests.softmax_reference import (
+    GRADIENT_RTOL,
+    VALUE_RTOL,
+    assert_softmax_numerics,
+    decimal_reference,
+    numerical_rows,
+)
 
 
 def test_token_softmax_confident_values_and_gradients() -> None:
@@ -43,7 +49,7 @@ def _distributed_softmax(rank: int, rendezvous: str) -> None:
         h_gradient = (-0.3 * expected_gh * weights.double().unsqueeze(-1)).to(logits.dtype)
         expected = (lp_gradient + h_gradient).double()[..., shard]
         relative = (actual - expected).norm(dim=-1) / expected.norm(dim=-1).clamp_min(1e-300)
-        assert relative.max() < 5e-3, (
+        assert relative.max() < GRADIENT_RTOL[torch.bfloat16], (
             rank,
             relative.max().item(),
             relative.argmax().item(),
@@ -68,7 +74,7 @@ def test_selected_logprobs_confident_target_and_invalid_ids() -> None:
         lp, _, gradient, _ = decimal_reference(data, indices[..., column])
         torch.testing.assert_close(actual[..., column].double(), lp, rtol=VALUE_RTOL, atol=0)
         actual_gradient = torch.autograd.grad(actual[..., column].sum(), logits, retain_graph=True)[0].double()
-        torch.testing.assert_close(actual_gradient, gradient, rtol=5e-5, atol=0)
+        torch.testing.assert_close(actual_gradient, gradient, rtol=GRADIENT_RTOL[torch.float32], atol=0)
 
 
 def test_k3_small_ratios_clipping_mask_and_gradient_conventions() -> None:

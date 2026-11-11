@@ -6,6 +6,7 @@ from typing import NamedTuple
 import torch
 
 VALUE_RTOL = 5e-6
+GRADIENT_RTOL = {torch.bfloat16: 5e-3, torch.float32: 5e-5}
 
 
 class SoftmaxReference(NamedTuple):
@@ -83,7 +84,7 @@ def assert_softmax_numerics(
 ) -> None:
     expected_lp, expected_h, expected_glp, expected_gh = decimal_reference(data, targets)
     weights = torch.linspace(-0.7, 1.3, targets.numel(), device=data.device).reshape(targets.shape)
-    grad_tolerance = 5e-3 if data.dtype == torch.bfloat16 else 5e-5
+    grad_tolerance = GRADIENT_RTOL[data.dtype]
     for lp_weight, h_weight in ((1.0, 0.0), (0.0, 1.0), (0.7, -0.3)):
         logits = data.detach().clone().requires_grad_()
         lp, h = logprobs(logits, targets), entropy(logits)

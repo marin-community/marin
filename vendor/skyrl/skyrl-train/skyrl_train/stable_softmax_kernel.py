@@ -38,6 +38,7 @@ def _softmax_forward(
 ):
     row = tl.program_id(0).to(tl.int64)
     x_row = X + (row // SEQ) * X_BATCH_STRIDE + (row % SEQ) * X_SEQ_STRIDE
+    # Row statistics: maximum m, tail mass s = sum exp(x - m) without one argmax, moment t = sum exp(x - m) * (x - m).
     m = float("-inf")
     s = 0.0
     t = 0.0
