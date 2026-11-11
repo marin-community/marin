@@ -17,13 +17,13 @@ See [task selection](../../../docs/references/task-curation.md#final-task-select
 resume commands, and [train on a Snowball selection](../../../docs/references/task-curation.md#train-on-a-snowball-selection)
 for the handoff to [Snowball RL experiments](../../../docs/recipes/snowball-rl.md).
 
-## Test panels
+## EvalLite
 
-`--corpus <converted-corpus.json> --test-panel
-experiments/post_training/task_curation/recipes/snowball-test-panel.json`
-builds the Snowball test panel: 1,500 evaluation-only benchmark tasks that RL
+`--corpus <converted-corpus.json> --eval-lite
+experiments/post_training/task_curation/recipes/eval-lite.json`
+builds the EvalLite: 1,500 evaluation-only benchmark tasks that RL
 runs grade without containers or judges, and a 100-task fast subset. The
-[panel reference](../../../docs/references/task-curation.md#snowball-test-panel)
+[panel reference](../../../docs/references/task-curation.md#eval-lite)
 lists its parts and how to change them.
 
 ## Local conversion loop
