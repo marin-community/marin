@@ -80,11 +80,14 @@ from experiments.belay.posts import (
     updated,
 )
 from experiments.belay.registry_entry import potential_of, with_step_time
-from experiments.belay.results import Verdict, after_equal_data, change, overall_verdict, verdict
+from experiments.belay.results import Verdict, after_equal_data, change, overall_verdict, verdict, wall_step_time
 from experiments.belay.submit import (
+    HeroMfuResult,
     IrisJob,
     check_launch,
     experiment_id,
+    hero_mfu_result,
+    hero_mfu_steps,
     iris_jobs,
     launch_band,
     launch_command,
@@ -885,3 +888,44 @@ def test_run_total_steps_prefers_the_stop_step_over_the_schedule() -> None:
     assert run_total_steps(schedule) == 30389
     assert run_total_steps({**schedule, "stop_after_steps": 12000}) == 12000
     assert run_total_steps({}) is None
+
+
+def test_an_official_ladder_rung_trains_the_baseline_steps_over_the_hero_step_time_change() -> None:
+    slower = HeroMfuResult("t005", +0.05)
+    faster = HeroMfuResult("t006", -0.10)
+    assert hero_mfu_steps(Track.COMPETITIVE_D768, slower) == round(30389 / 1.05)
+    assert hero_mfu_steps(Track.COMPETITIVE_D768, faster) == round(30389 / 0.90)
+
+
+def test_the_ideas_latest_hero_mfu_result_sets_the_ladder() -> None:
+    def trial(tid: str, rung: str, delta: list[float] | None = None) -> dict:
+        return {"id": tid, "rung": rung, **({"delta": delta} if delta is not None else {})}
+
+    entry = {
+        "trials": [
+            trial("t001", "hero-mfu", [0.04]),
+            trial("t002", "speedrun", [-0.01]),
+            trial("t003", "hero-mfu", [0.02]),
+            trial("t004", "hero-mfu"),  # launched, no result yet
+        ]
+    }
+    assert hero_mfu_result(entry) == HeroMfuResult("t003", 0.02)
+    assert hero_mfu_result({"trials": [trial("t001", "speedrun", [-0.01])]}) is None
+    with pytest.raises(SystemExit, match="no step time result"):
+        hero_mfu_result({"trials": [trial("t001", "hero-mfu", [float("nan")])]})
+
+
+def test_an_official_ladder_spec_sets_the_variants_steps() -> None:
+    setting = ("--opt-set", "muonh_decay_power=0.5")
+    text = new_spec_text("X0037d768", Track.COMPETITIVE_D768, "v", [setting], num_steps=28942)
+    runs = yaml.safe_load(text)["runs"]
+    assert runs["seed0"]["flags"] == [*setting, "--num-steps", "28942"]
+    assert "flags" not in runs["control"]
+
+
+def test_hero_step_time_is_wall_clock_over_its_timed_window() -> None:
+    # Steps 0-5 compile and warm up; the timed window is steps 6-23.
+    timestamps = {step: 100.0 + (60.0 if step >= 6 else 0.0) + 11.5 * step for step in range(30)}
+    assert wall_step_time(timestamps) == pytest.approx(11.5)
+    with pytest.raises(SystemExit, match="fewer than two"):
+        wall_step_time({3: 1.0, 30: 2.0})

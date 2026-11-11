@@ -10,6 +10,7 @@ both launched with the Track's baseline command. Runs are named ``belay-<id>-<ru
 
 import dataclasses
 import itertools
+import math
 import re
 import shlex
 import subprocess
@@ -143,6 +144,34 @@ and run names. The app records a rung's run under its idea's registry id and kee
 REGISTRY_ID = re.compile(r"X\d{4}")
 
 
+@dataclass(frozen=True)
+class HeroMfuResult:
+    trial_id: str
+    step_time_change: float
+    """The variant's hero-scale s/step relative to its control: +0.05 is 5% slower."""
+
+
+def hero_mfu_result(entry: dict) -> HeroMfuResult | None:
+    """The entry's most recent hero-mfu trial with a result, else None; refuses a result that is not a number."""
+    trials = [t for t in entry.get("trials") or [] if t.get("rung") == Track.HERO_MFU.value and t.get("delta")]
+    if not trials:
+        return None
+    trial = trials[-1]
+    change = float(trial["delta"][0])
+    if not math.isfinite(change):
+        raise SystemExit(f"refusing: hero-mfu trial {trial['id']} has no step time result ({change})")
+    return HeroMfuResult(trial["id"], change)
+
+
+def hero_mfu_steps(track: Track, hero: HeroMfuResult) -> int:
+    """A ladder rung's steps at equal compute with its baseline at hero-scale MFU: a variant 5% slower per step
+    at hero scale trains 1/1.05 of the baseline's steps."""
+    assert track in LADDER_RUNGS, track
+    steps = TRACKS[track].baseline_steps
+    assert steps is not None, track
+    return round(steps / (1 + hero.step_time_change))
+
+
 def tracks_of_comment(text: str, instructions: str | None = None) -> tuple[tuple[Track, ...], bool]:
     """The Tracks an idea runs on, and whether they were defaulted (no Track named: ``speedrun``). An approver's
     instructions win over the comment's ``Track:`` line; ``ladder`` means every competitive rung."""
@@ -228,12 +257,16 @@ def new_spec_text(
     settings: list[tuple[str, str]],
     suffix: str = "",
     shared_control: str | None = None,
+    num_steps: int | None = None,
 ) -> str:
     """The run spec for one variant and its same-commit control on ``track``, after checking every setting.
     ``suffix`` (from ``run_suffix``) keeps run names unique when the id ran before; ``shared_control`` (from
-    ``shareable_control``) reuses another spec's running control instead of launching one."""
+    ``shareable_control``) reuses another spec's running control instead of launching one; ``num_steps`` sets the
+    variant's steps (an official ladder rung's, from ``hero_mfu_steps``)."""
     check_variant(variant, settings)
     flags = [part for setting in settings for part in setting]
+    if num_steps is not None:
+        flags += ["--num-steps", str(num_steps)]
     variant_run = {"seed": CONFIG.seed, "variant": variant, "flags": flags}
     control_run = {"seed": CONFIG.seed, "variant": f"{track} control", "control": True}
     if shared_control is not None:

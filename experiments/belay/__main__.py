@@ -85,6 +85,7 @@ from experiments.belay.config import (
     WEEKLY_BRANCH,
     Baseline,
     Comparison,
+    Protocol,
     Track,
 )
 from experiments.belay.page import (
@@ -174,12 +175,15 @@ from experiments.belay.submit import (
     PROBE_SKIP,
     RUN_PREFIX,
     ExperimentSpec,
+    HeroMfuResult,
     IrisJob,
     RunSpec,
     Stage,
     check_launch,
     check_variant,
     experiment_id,
+    hero_mfu_result,
+    hero_mfu_steps,
     iris_jobs,
     latest_stage,
     launch_band,
@@ -753,6 +757,7 @@ def plan_and_launch(
     state = page_state()
     existing = spec_path(experiment, repo / SPECS)
     launched = existing.exists() and "launched" in yaml.safe_load(existing.read_text())
+    hero = None if launched else ladder_hero_mfu(plan, dry_run=dry_run)
     if launched:
         text = existing.read_text()  # resuming: the committed spec decides
     else:  # a new idea, or one held at the node cap: plan its runs now, so a shared control is one still running
@@ -762,7 +767,8 @@ def plan_and_launch(
             print(f"control: the recipe's finished {plan.track} run {shared}; no new control")
         elif shared is not None:
             print(f"reusing the running control {shared} (same code and seed)")
-        text = new_spec_text(experiment, plan.track, variant, settings, run_suffix(experiment, jobs), shared)
+        steps = None if hero is None else hero_mfu_steps(plan.track, hero)
+        text = new_spec_text(experiment, plan.track, variant, settings, run_suffix(experiment, jobs), shared, steps)
     spec = write_spec(repo, branch, text, dry_run=dry_run, replace=existing.exists() and not launched)
     if launched:
         print(f"{experiment} already launched; nothing more to start")
@@ -795,21 +801,52 @@ def plan_and_launch(
     if dry_run:
         launch_stage(repo, branch, spec, data_runs, None, state, dry_run=True)
         return
+    protocol, note = trial_protocol(plan, hero)
     trial_id, path = add_trial(
         registry_id,
         spec.track,
-        "equal_steps",
+        protocol,
         variant,
         commit,
         settings_of(variant_settings(spec)),
         url,
         granted_band(state, registry_id, spec.track),
         idea.node_grant,
+        note,
     )
     commit_and_push([path], f"Belay registry: {registry_id} {trial_id} planned", dry_run=False)
     launch_stage(repo, branch, spec, data_runs, trial_id, state, dry_run=False)
     running = title(registry_id, entry["name"], spec.track, "running")
     publish_thread(registry_id, running, updated(body, running, number, section), idea.id, "plan", dry_run=False)
+
+
+def ladder_hero_mfu(plan: Plan, *, dry_run: bool) -> HeroMfuResult | None:
+    """For a ladder rung, the idea's latest hero-mfu result, which makes the rung official; else None."""
+    if plan.track not in LADDER_RUNGS or (dry_run and not plan.idea.registry_id):
+        return None
+    hero = hero_mfu_result(load_entry(plan.registry_id))
+    if hero is None:
+        print(f"{plan.experiment}: informal ladder rung at equal steps; {plan.registry_id} has no hero-mfu result")
+    else:
+        steps = hero_mfu_steps(plan.track, hero)
+        print(
+            f"{plan.experiment}: official ladder rung, {steps} steps from hero-mfu {hero.trial_id} "
+            f"({hero.step_time_change:+.1%} s/step)"
+        )
+    return hero
+
+
+def trial_protocol(plan: Plan, hero: HeroMfuResult | None) -> tuple[Protocol, str | None]:
+    """The protocol a new stage-1 trial records, and a note on how a ladder rung's steps were chosen."""
+    if plan.track not in LADDER_RUNGS:
+        return Protocol.EQUAL_STEPS, None
+    if hero is None:
+        return Protocol.EQUAL_STEPS, "informal ladder rung: equal steps, no hero-mfu result"
+    steps = hero_mfu_steps(plan.track, hero)
+    return (
+        Protocol.HERO_MFU_MATCHED,
+        f"{steps} steps from hero-mfu {hero.trial_id} ({hero.step_time_change:+.1%} s/step)",
+    )
 
 
 def post_footer(idea: Idea, registry_id: str, track: Track, defaults: str, commit: str) -> list[str]:
@@ -1512,7 +1549,7 @@ def advance(nxt: Next, *, dry_run: bool) -> None:
         trial_id, path = add_trial(
             registry_id,
             spec.track,
-            "fixed_time",
+            Protocol.FIXED_TIME,
             variant.variant,
             commit,
             settings,
@@ -1755,7 +1792,7 @@ def final_verdict(entry: dict, noise: float) -> Verdict | None:
     if not trials:
         return None
     last = trials[-1]
-    if last.get("rung") == Track.SPEEDRUN.value and last.get("protocol") == "equal_steps":
+    if last.get("rung") == Track.SPEEDRUN.value and last.get("protocol") == Protocol.EQUAL_STEPS:
         change = (last.get("step_time_change") or "0%").rstrip("%")
         if abs(float(change or 0)) > 1:
             return None  # a stage-2 run decides

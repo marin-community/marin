@@ -18,7 +18,7 @@ from pathlib import Path
 import yaml
 
 from experiments.belay.branch import current_branch, git, repo_root
-from experiments.belay.config import CONFIG, Track
+from experiments.belay.config import CONFIG, Protocol, Track
 from experiments.belay.page import Idea
 from experiments.belay.results import RunResult
 
@@ -137,17 +137,18 @@ def create_entry(idea: Idea, name: str, category: str, track: Track, *, dry_run:
 def add_trial(
     registry_id: str,
     track: Track,
-    protocol: str,
+    protocol: Protocol,
     variant: str,
     commit: str,
     settings: dict[str, str],
     comment_url: str,
     priority: str,
     node_grant: int | None = None,
+    note: str | None = None,
 ) -> tuple[str, Path]:
-    """A new trial of the entry (``protocol`` is ``equal_steps`` or ``fixed_time``); returns its id and the path.
+    """A new trial of the entry under ``protocol`` (a ``config.Protocol``); returns its id and the path.
     ``priority`` is the Iris band its runs launched at; ``node_grant`` records a maintainer's node grant the trial
-    ran under."""
+    ran under; ``note`` says how its steps were chosen."""
     path = entry_path(registry_id)
     entry = yaml.safe_load(path.read_text())
     trials = entry.setdefault("trials", [])
@@ -156,7 +157,7 @@ def add_trial(
         "id": trial_id,
         "variant": variant,
         "rung": track.value,
-        "protocol": protocol,
+        "protocol": protocol.value,
         "batch": registry_id,
         "date": datetime.date.today().isoformat(),
         "comment_url": comment_url,
@@ -167,6 +168,8 @@ def add_trial(
     }
     if node_grant is not None:
         trial["node_grant"] = node_grant
+    if note is not None:
+        trial["note"] = note
     trials.append(trial)
     entry["status"] = "running"
     path.write_text(yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120))
