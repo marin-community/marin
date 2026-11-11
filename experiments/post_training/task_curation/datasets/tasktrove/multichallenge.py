@@ -100,6 +100,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Multi-turn with four factual or formatting criteria per task. The converter "
                     "preserves the source's explicit positive or negated pass condition."
                 ),
+                daytona_safe=True,
             ),
             config=CurationRecipe(
                 name="tasktrove-multichallenge",

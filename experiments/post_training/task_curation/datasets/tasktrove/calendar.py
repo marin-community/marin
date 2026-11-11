@@ -172,6 +172,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn"),
                 count=2699,
                 notes="Deterministic schedule check. Templated; dedupe against calendar-v3.",
+                daytona_safe=True,
             ),
         ),
         (
@@ -189,6 +190,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Deterministic overlap and constraint check. Synthetic and templated; dedupe against "
                     "agent-calendar-v2."
                 ),
+                daytona_safe=True,
             ),
         ),
     )

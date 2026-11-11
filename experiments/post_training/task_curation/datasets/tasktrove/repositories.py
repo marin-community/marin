@@ -158,6 +158,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Patched trusted repository tests with deferred Docker builds. Python uses pytest; "
                     "retained non-Python sources keep their parser with exit-code credit disabled."
                 ),
+                daytona_safe=False,
             ),
         ),
         repository_source(
@@ -177,6 +178,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Trusted repository pytest tests with unresolved Docker build contexts; "
                     "original config patches remain oracle-only."
                 ),
+                daytona_safe=False,
             ),
         ),
     ]

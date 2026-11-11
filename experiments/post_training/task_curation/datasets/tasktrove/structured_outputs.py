@@ -121,6 +121,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn"),
                 count=53870,
                 notes="All formats require both a format check and a source-grounding judge.",
+                daytona_safe=True,
             ),
             config=CurationRecipe(
                 name="tasktrove-structured_outputs",

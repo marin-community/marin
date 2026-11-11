@@ -73,6 +73,14 @@ class SourceInfo:
     notes: str = ""
     dataset: SourceReference | None = None
     independent_qc: IndependentQC | None = None
+    daytona_safe: bool | None = None
+    """Whether running the source fits the Daytona-safe snapshot budget.
+
+    Each unique agent or grader image a run provisions is one Daytona snapshot. Sources
+    without the ``agentic`` tag never provision sandboxes and are always safe; for agentic
+    sources, leave this unset until the source's unique snapshot count is assessed against
+    ``DAYTONA_SAFE_SNAPSHOT_LIMIT``.
+    """
 
 
 @dataclass(frozen=True)
@@ -154,6 +162,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             status="Excluded" if "excluded" in tags else "Available",
             pipeline=invocation,
             independent_qc=info.independent_qc,
+            daytona_safe=True if "agentic" not in tags else info.daytona_safe,
         )
 
 

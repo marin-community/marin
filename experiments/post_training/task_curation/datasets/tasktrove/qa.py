@@ -244,6 +244,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Exact gate then reference-based judge. Reference answers are real; needs the judge "
                     "in the new grader."
                 ),
+                daytona_safe=True,
             ),
         ),
         (
@@ -260,6 +261,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Reference answer plus judge. Move the reference out of the criterion text into a "
                     "data field at conversion."
                 ),
+                daytona_safe=True,
             ),
         ),
     )
@@ -293,6 +295,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Held-out MCQA with regex extraction. Drop the trailing-letter fallback at conversion "
                     "and subsample hard: 617k rows is a third of the corpus."
                 ),
+                daytona_safe=True,
             ),
             config=CurationRecipe(
                 name="tasktrove-knowledge_mcqa",

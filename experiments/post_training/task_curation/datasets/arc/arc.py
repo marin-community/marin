@@ -257,6 +257,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn", "language:python"),
                 count=10000,
                 notes="Agent writes a transform, graded on held-out grids. One of the best sources here.",
+                daytona_safe=True,
             ),
             config=CurationRecipe(
                 name="tasktrove-arc_inductive",
@@ -279,6 +280,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn"),
                 count=10000,
                 notes="Direct grid answer against gold. Subsample; the inductive variant is stronger.",
+                daytona_safe=True,
             ),
             config=CurationRecipe(
                 name="tasktrove-arc_transductive",

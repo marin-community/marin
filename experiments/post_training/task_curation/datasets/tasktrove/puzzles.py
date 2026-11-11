@@ -89,6 +89,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Numeric compare on real puzzles. Gold lives in /tests, which the harness must hide; "
                     "fine under the new grader."
                 ),
+                daytona_safe=True,
             ),
             config=CurationRecipe(
                 name="tasktrove-puzzles",

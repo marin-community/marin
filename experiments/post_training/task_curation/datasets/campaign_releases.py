@@ -79,6 +79,7 @@ def sources() -> list[RlDataSource]:
                     admitted=2205,
                     evidence_url=_pinned_blob(calibforge, "manifest.json"),
                 ),
+                daytona_safe=True,
             )
         ),
         RlDataSource(
@@ -104,6 +105,7 @@ def sources() -> list[RlDataSource]:
                     admitted=324,
                     evidence_url=_pinned_blob(shared_v2, "manifest.json"),
                 ),
+                daytona_safe=True,
             )
         ),
         RlDataSource(
@@ -128,6 +130,7 @@ def sources() -> list[RlDataSource]:
                     admitted=8045,
                     evidence_url=_pinned_blob(swesmith, "manifest.json"),
                 ),
+                daytona_safe=False,
             )
         ),
         RlDataSource(
@@ -155,6 +158,7 @@ def sources() -> list[RlDataSource]:
                     reviewed=1699,
                     evidence_url=_pinned_blob(staged_v1, "manifest.json"),
                 ),
+                daytona_safe=False,
             )
         ),
         RlDataSource(
@@ -184,6 +188,7 @@ def sources() -> list[RlDataSource]:
                     reviewed=778,
                     evidence_url=_pinned_blob(staged_v2, "manifest.json"),
                 ),
+                daytona_safe=False,
             )
         ),
     ]
