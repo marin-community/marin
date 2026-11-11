@@ -17,6 +17,7 @@ from finestore.rl.curation import (
     AssessmentStatus,
     CurationCatalog,
     CurationSummary,
+    DaytonaSafety,
     IndependentQC,
     Verdict,
     register_catalog,
@@ -193,6 +194,19 @@ def test_republication_refreshes_an_inventory_only_declaration(tmp_path):
     record_attempt(root, runnable, "second", "2026-10-16T11:00:00Z", "key-a")
     publish_catalog(root, "second", [runnable, edited])
     assert selected_sources(root)[pointer.info.id].declaration.independent_qc == qc
+
+
+def test_publication_round_trips_daytona_safety_to_the_inventory(tmp_path):
+    root = str(tmp_path / "production")
+    runnable = number_source(tmp_path / "input")
+    agent = RlDataSource(
+        info=replace(runnable.info, id="fixture:agent", tags=("agentic",), daytona_safety=DaytonaSafety.UNSAFE)
+    )
+    record_attempt(root, runnable, "first", "2026-10-16T10:00:00Z", "key-a")
+    publish_catalog(root, "first", [runnable, agent])
+    rows = selected_sources(root)
+    assert rows[runnable.info.id].declaration.daytona_safety is DaytonaSafety.SAFE
+    assert rows["fixture:agent"].declaration.daytona_safety is DaytonaSafety.UNSAFE
 
 
 class ExpiredLease(LocalFileLease):
