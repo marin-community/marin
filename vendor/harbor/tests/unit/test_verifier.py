@@ -1,5 +1,6 @@
 """Unit tests for the Verifier."""
 
+import json
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -514,3 +515,34 @@ class TestVerifierWindowsScripts:
             assert commands == [
                 "(cmd /c C:\\tests\\test.bat) > C:\\logs\\verifier\\test-stdout.txt 2>&1"
             ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "record",
+    json.loads((Path(__file__).parent / "fixtures" / "swesmith_verifier_failures.json").read_text()),
+    ids=lambda record: record["trial"],
+)
+async def test_captured_swesmith_verifier_failures_do_not_become_rewards(tmp_path, record):
+    task_dir = _create_task_dir(tmp_path)
+    (task_dir / "tests" / "verifier.toml").write_text('mode = "pytest"\n')
+    task = Task(task_dir)
+    paths = TrialPaths(trial_dir=tmp_path / "trial")
+    paths.mkdir()
+    # A stale or misleading zero must not override the structured failure.
+    paths.reward_text_path.write_text("0.0")
+    verdict = record["verdict"]
+    if verdict is not None:
+        (paths.verifier_dir / "verdict.json").write_text(json.dumps(verdict))
+    environment = MagicMock()
+    environment.capabilities.mounted = True
+    environment.upload_dir = AsyncMock()
+    environment.os = TaskOS.LINUX
+    environment.exec = AsyncMock(return_value=ExecResult(return_code=0))
+    verifier = Verifier(task, paths, environment)
+    if verdict is None or verdict["status"] != "scored" or verdict["detail"].get("reason") == "setup_failed":
+        with pytest.raises(VerifierRuntimeError):
+            await verifier.verify()
+    else:
+        result = await verifier.verify()
+        assert result.rewards == {"reward": 0.0}
