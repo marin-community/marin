@@ -94,7 +94,7 @@ def build_smoke(version: str) -> MochiSmoke:
         }
         recipe["trainer"]["max_steps"] = max_steps
         if stage == "32k":
-            recipe["trainer"].update(resume_mode="latest", restore_dataloader_state=False)
+            recipe["trainer"].update(resume_mode="from_path", restore_dataloader_state=False)
             recipe["environment"]["task_sessions"]["task_spec"]["session"]["model_turn_timeout"] = 600
         data = ArtifactStep.adopt(
             f"users/romain/documents/mochi-one-rack/{stage}",
@@ -147,12 +147,8 @@ def build_smoke(version: str) -> MochiSmoke:
             else ctx.resolved(four_k).checkpoint_root
         )
         launch = yaml.safe_load(config.launch_config_yaml)
-        launch["artifacts"]["checkpoint_root"] = checkpoint_root
-        return replace(
-            config,
-            launch_config_yaml=yaml.safe_dump(launch, sort_keys=False),
-            output=replace(config.output, checkpoint_root=checkpoint_root),
-        )
+        launch["skyrl"]["trainer"]["resume_path"] = str(StoragePath(checkpoint_root) / "global_step_5")
+        return replace(config, launch_config_yaml=yaml.safe_dump(launch, sort_keys=False))
 
     thirty_two_k = replace(thirty_two_k, build_config=resume_config, deps=(*thirty_two_k.deps, four_k))
     return MochiSmoke(four_k, thirty_two_k)

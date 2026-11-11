@@ -75,8 +75,7 @@ def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpu
     # (ETP, EP, expert-DP, PP) grids. CP ranks also participate in the expert grid.
     if num_gpus % (tp * pp * cp) or num_gpus % (etp * ep * pp):
         raise ValueError(
-            f"Megatron {role} has {num_gpus} GPUs but requires {sizes}; "
-            "GPUs must be divisible by TP*PP*CP and ETP*EP*PP"
+            f"Megatron {role} has {num_gpus} GPUs but requires {sizes}; GPUs must be divisible by TP*PP*CP and ETP*EP*PP"
         )
 
 
@@ -111,7 +110,8 @@ class SkyRLRolePlan:
     def uses_expert_parallel_placement(self) -> bool:
         """Whether rollout needs the verified cross-node one-GPU EP placement path."""
         return (
-            self.inference_engine_tensor_parallel_size == 1
+            not self.colocate_all
+            and self.inference_engine_tensor_parallel_size == 1
             and self.inference_engine_pipeline_parallel_size == 1
             and self.inference_engine_expert_parallel_size
             == self.inference_engine_data_parallel_size
@@ -587,11 +587,7 @@ def _validate_skyrl_backend_constraints(
         raise ValueError("Marin SkyRL artifact topology requires generator.run_engines_locally=true")
     if not isinstance(_declared_config_value(config, "generator.backend"), str):
         raise ValueError("SkyRL config must explicitly set a non-empty generator.backend")
-    if (
-        plan.uses_expert_parallel_placement
-        and plan.inference_engine_data_parallel_size > topology.gpus_per_node
-        and _declared_config_value(config, "generator.backend") != "vllm"
-    ):
+    if plan.uses_expert_parallel_placement and _declared_config_value(config, "generator.backend") != "vllm":
         raise ValueError("cross-node TP1/PP1 expert-parallel inference requires the verified vLLM placement path")
 
     for key in ("use_conversation_multi_turn", "require_exact_chat_transport"):

@@ -20,8 +20,18 @@ from skyrl_train.callbacks.builtin import HFModelSaveCallback
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.hf_export import read_hf_export_request
 from skyrl_train.trainer import RayPPOTrainer
+from skyrl_train.utils.trainer_utils import ResumeMode
 from skyrl_train.hf_export_schema import HFExportRequest
 from marinskyrl.checkpoint_paths import selected_export_step
+
+
+def test_explicit_resume_path_rejects_missing_checkpoint(tmp_path: Path) -> None:
+    trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+    trainer.resume_mode = ResumeMode.FROM_PATH
+    trainer.cfg = OmegaConf.create({"trainer": {"resume_path": str(tmp_path / "global_step_5")}})
+
+    with pytest.raises(FileNotFoundError):
+        trainer.load_checkpoints()
 
 
 def _training_config():
