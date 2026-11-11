@@ -55,8 +55,8 @@ from forge.model.workpiece import Submission, Workpiece
 from forge.policy import Policy, load_policy, resolution_lines
 from forge.policy import sampling as policy_sampling
 from forge.resources.bundle import Resources
-from forge.resources.decision_model import CLEF_MODEL, ClefDecisionModel, DecisionModelClient, DecisionModelEngine
 from forge.resources.clock import Clock, Now, now
+from forge.resources.decision_model import CLEF_MODEL, ClefDecisionModel, DecisionModelClient, DecisionModelEngine
 from forge.resources.env import Env, EnvFactory, ShellboxEnvFactory
 from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.ids import Ids, NewId, new_id
@@ -131,7 +131,9 @@ def install(ctx: Context, resources: Resources) -> None:
         grading = replace(
             grading,
             engine=DecisionModelEngine(grading.engine, ctx, decision_model),
-            fresh_engine=DecisionModelEngine(grading.fresh_engine, ctx, decision_model) if grading.fresh_engine else None,
+            fresh_engine=(
+                DecisionModelEngine(grading.fresh_engine, ctx, decision_model) if grading.fresh_engine else None
+            ),
         )
     if (judge := resources.role_inference.get("judge")) is not None:
         rollouts = replace(rollouts, engine=JudgeEngine(rollouts.engine, ctx, judge))
@@ -328,7 +330,9 @@ def provider_policy(policy: Policy) -> Policy:
     """Reject deadlines that expire before the provider availability window, and decision_model without Clef."""
     if Verification.DECISION_MODEL in policy.setting("proposals.verifications", tuple):
         if policy.setting("decision_model.model", str) != CLEF_MODEL:
-            raise ValueError(f"proposals.verifications includes decision_model, which needs decision_model.model {CLEF_MODEL!r}")
+            raise ValueError(
+                f"proposals.verifications includes decision_model, which needs decision_model.model {CLEF_MODEL!r}"
+            )
         if policy.setting("decision_model.unavailable_wait", float) + policy.setting(
             "decision_model.request_timeout", float
         ) >= policy.setting("solver.turn_timeout", float):

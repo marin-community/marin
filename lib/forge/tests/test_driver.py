@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import argparse
 import json
 import subprocess
 import sys
@@ -15,9 +16,9 @@ from experiments.forge import run_forge
 from iris.cluster.types import JobName
 from shellbox.backends.iris.machine import IrisMachineFactory
 
-from forge import wiring
+from forge import driver, wiring
 from forge.driver import eligible, inputs, proposal_bucket, proposal_key
-from forge.model.proposal import Environment, TaskProposal, Verification
+from forge.model.proposal import TASK_PROPOSAL, Environment, TaskProposal, Verification
 from forge.policy import load_policy
 from forge.policy.defaults import DEFAULTS_DIR
 from forge.resources.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT
@@ -154,3 +155,60 @@ def test_relay_reresolves_by_job_and_model_without_exposing_token(monkeypatch: p
         wiring.endpoint_source("http://fixed/v1", "/muchanem/relay", "secret-token", "glm-5.3", pool)
     with pytest.raises(ValueError, match="exactly one"):
         wiring.endpoint_source(None, None, "secret-token", "glm-5.3", pool)
+
+
+async def test_driver_defers_decision_model_proposals_while_held_and_resumes_them_from_the_log(
+    proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kinds = {1: Verification.DECISION_MODEL, 2: Verification.CODE, 3: Verification.DECISION_MODEL, 4: Verification.CODE}
+    paths = []
+    for slot, verification in kinds.items():
+        path = tmp_path / "cap" / f"slot-{slot}.proposal.json"
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(
+            TASK_PROPOSAL.dump_json(replace(proposal, header=replace(proposal.header, verification=verification)))
+        )
+        paths.append(str(path))
+    manifest = tmp_path / "proposals.txt"
+    manifest.write_text("\n".join(paths) + "\n")
+    overlay = tmp_path / "overlay.json"
+    overlay.write_text(json.dumps({"proposals.environments": ["container"], "decision_model.retry_interval": 0.2}))
+    # Slot 1 is held twice (its first resume is the probe that finds Clef still down), then Clef answers.
+    exits = {paths[0]: [driver.DECISION_MODEL_HELD, driver.DECISION_MODEL_HELD]}
+    launches: list[tuple[str, bool]] = []
+
+    class FakeProcess:
+        def __init__(self, command: list[str]) -> None:
+            path = command[command.index("--proposals") + 1]
+            launches.append((Path(path).name.split(".")[0], "--resume-held" in command))
+            self.code = exits.get(path, [0]).pop(0) if exits.get(path) else 0
+
+        def wait(self) -> int:
+            return self.code
+
+        def poll(self) -> int:
+            return self.code
+
+    monkeypatch.setattr(driver, "configure_coreweave_s3", lambda: None)
+    monkeypatch.setattr(driver.subprocess, "Popen", FakeProcess)
+    args = argparse.Namespace(
+        proposals=str(manifest),
+        ranks=(),
+        buckets=1,
+        bucket_range=None,
+        concurrency=1,
+        policy=str(overlay),
+        arm="S",
+        output=str(tmp_path / "out"),
+        work_dir=str(tmp_path / "work"),
+        resume_held=False,
+    )
+    await driver.run(args)
+    assert launches == [
+        ("slot-1", False),  # held: Clef unavailable
+        ("slot-2", False),  # slot-3 is deferred without a launch; other kinds continue
+        ("slot-4", False),
+        ("slot-1", True),  # the one probe after retry_interval, still down
+        ("slot-3", True),  # the next probe answers
+        ("slot-1", True),
+    ]

@@ -11,9 +11,9 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 from shellbox.machine import NetworkPolicy
+from taskcompendium.grading import DecisionModelConnection
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import TaskSpec
-from taskcompendium.grading import DecisionModelConnection
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.reasoning_markup import ReasoningViolation
 

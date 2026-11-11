@@ -257,7 +257,9 @@ async def run(args: argparse.Namespace) -> None:
                         held += 1
                         down_since, probe = time.monotonic(), None
                         deferred.append(path)
-                        logging.warning("DECISION_MODEL_HELD %s: %d decision_model proposals deferred", path, len(deferred))
+                        logging.warning(
+                            "DECISION_MODEL_HELD %s: %d decision_model proposals deferred", path, len(deferred)
+                        )
                         continue
                     if path == probe:
                         logging.info("Decision model answered again; resuming %d deferred proposals", len(deferred))

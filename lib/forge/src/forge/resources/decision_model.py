@@ -97,13 +97,16 @@ class ClefDecisionModel(DecisionModelClient):
     ) -> None:
         if request_timeout <= 0 or unavailable_wait <= 0 or max_inflight < 1:
             raise ValueError("Decision-model timeouts must be positive and max_inflight at least 1")
-        self.source, self.http, self.request_timeout, self.unavailable_wait = source, http, request_timeout, unavailable_wait
+        self.source, self.http = source, http
+        self.request_timeout, self.unavailable_wait = request_timeout, unavailable_wait
         self.slots = asyncio.Semaphore(max_inflight)
         self.clock, self.sleep = clock, sleep
 
     @override
     def fingerprint(self) -> Fingerprint:
-        return Fingerprint("decision_model", digest((CLEF_MODEL, DECISION_QUESTION, DECISION_LEVELS)), ReplayPolicy.CACHE)
+        return Fingerprint(
+            "decision_model", digest((CLEF_MODEL, DECISION_QUESTION, DECISION_LEVELS)), ReplayPolicy.CACHE
+        )
 
     @override
     async def read(self, event: DecisionModelRead) -> DecisionModelLevel:
@@ -140,7 +143,7 @@ class ClefDecisionModel(DecisionModelClient):
                 await self.sleep(wait)
                 delay = min(delay * 2, RETRY_DELAY_MAX)
 
-    async def _post(self, body: dict[str, object]) -> DecisionModelLevel | tuple[str, float]:
+    async def _post(self, body: Mapping[str, object]) -> DecisionModelLevel | tuple[str, float]:
         """One read, or why the decision model is unavailable and how long it asked us to wait."""
         try:
             endpoint = await asyncio.to_thread(self.source.current)
