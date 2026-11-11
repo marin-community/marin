@@ -9,10 +9,10 @@ datasets:
     sha256: c0ed43ff6f46efb553a7fdccba9a574880d545978899d2c0cd84bbfca717b08c
   agentic:
     path: agentic.yaml
-    sha256: 81c3e8a6480fb52b86d5011364d87ac875e3ff2389e53c1788c7825938d5c9c4
+    sha256: ed96b7a96289b3e7f9aca2d036a9498a8df4e483a1211fe78d818c41a5e07aa9
   heldout:
     path: heldout.yaml
-    sha256: f5676a45aef63c0dd1a575a250f5b98120f6ae9913b78cc75a302a2c3566d313
+    sha256: df24557292e465699adfe4db85012466a98ffe7233a3ca3490c63c95311a38bc
   exclusions:
     path: exclusions.yaml
     sha256: fa32d39277ca0d9590aac8fcd30d95df9ecb694d5608fb4e9166463484d69cb2
@@ -39,10 +39,10 @@ archive:
   sha256: fbf7b18a38b9619cfe5196f8a66f1ac35c8cf1668ddb34dfe292abe86a87a142
 rl:
   path: rl.yaml
-  sha256: 71f0d7991d0b1ffa69b429a34b060707ecc540b8f24e7c22906d6f1f05ca9555
+  sha256: e94f23678d13ca4140230fd14fe63893d6bc1a747c2c8a999e1eae407df13499
 evaluation:
   path: evaluation.yaml
-  sha256: 91f0dfb3d3f2c02833e35d672524fae63be2d04985ac90a2d9b894b72a64e72e
+  sha256: a8ad92b2014deeab669c7d87096a62ecc2ff8dc1521d89248aaba0dea43da7e2
 smoke_overrides:
   sft_steps: 2
   rl_steps: 5

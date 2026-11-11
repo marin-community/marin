@@ -231,11 +231,14 @@ def _calculate_eval_metrics(
 ) -> Dict[str, float]:
     metrics = calculate_per_dataset_metrics(batch, uids, data_sources, samples_per_prompt)
     overall_avg_score, overall_pass_at_n = get_metrics_from_trajectory_batch(batch, uids)
+    raw_batch = {key: value for key, value in batch.items() if key != "exclude_from_baseline"}
+    _, raw_pass_at_n = get_metrics_from_trajectory_batch(raw_batch, uids)
     metrics.update(
         {
             "eval/all/num_attempted": float(len(batch["response_ids"])),
             "eval/all/avg_score": overall_avg_score,
             f"eval/all/pass_at_{samples_per_prompt}": overall_pass_at_n,
+            f"eval/all/raw_verifier_pass_at_{samples_per_prompt}": raw_pass_at_n,
         }
     )
     verifier_scores = normalized_verifier_scores(batch)

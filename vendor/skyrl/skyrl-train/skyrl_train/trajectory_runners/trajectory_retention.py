@@ -474,7 +474,15 @@ def build_trajectory_records(
             verification_result=(
                 output["verification_results"][final_index] if output.get("verification_results") is not None else None
             ),
-            metrics=to_jsonable(output.get("rollout_metrics") or {}),
+            metrics={
+                **to_jsonable(output.get("rollout_metrics") or {}),
+                **{
+                    f"episode/{name}": value
+                    for name, value in (
+                        output["episode_statistics"][final_index].items() if "episode_statistics" in output else ()
+                    )
+                },
+            },
             provenance=_ProvenanceTrace(
                 runner=runner_name,
                 inference_backend=config.inference_backend,

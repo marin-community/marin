@@ -176,3 +176,44 @@ five complete validation observations at that cadence, with missing observations
 rejected; the same best checkpoint goes to Micro210, HF and archive.
 Historical `.11.2` uses its immutable eight-hour callback, nine-hour task deadline
 and every-step validation. These source defaults do not modify that job.
+
+### Explicit stage settings
+
+The pinned [RL](specs/rl.yaml) and [evaluation](specs/evaluation.yaml) documents
+supply context and output limits, Pi configuration, decoding parameters, geometry,
+batch sizes, optimizer settings, validation cadence and task limits. The launcher
+validates [required fields](stage_config.py) before SkyRL composition and binds
+model/data artifacts and output paths. It does not supply experiment
+hyperparameters. The [CPU regression](tests/test_run_spec.py) builds the actual
+artifact graph, emits its launch YAML, runs the production SkyRL composition, and
+compares every supplied setting with the compiled configuration, excluding artifact
+bindings such as model and data paths.
+
+The [next-run spec](specs/round1.yaml) explicitly uses temperature 0.7 for training,
+held-out validation and final evaluation, and 16,384 output tokens per turn. In the
+stopped `/benfeuer/long-loop-full-2026.11.11.2`, training temperature is 1.0,
+validation temperature is 0.0, and the RL per-turn output limit is 8,192; final
+Micro210 has its separate 16,384 limit. The next-run settings are user-selected;
+no measured improvement from the new temperature is claimed. That trial was stopped after the conversation-boundary audit.
+
+Episode metrics distinguish all generated tokens from optimized response tokens.
+A masked trial cannot count as a pass; it remains in the attempted-task denominator.
+Scored coverage is the fraction of attempted trials with an unmasked verifier
+score. `raw_verifier_pass_at_N` retains raw verdicts for diagnosis.
+
+The `.11.2` trace audit found that Pi reserialized assistant messages and tool-call
+JSON. The strict history comparison treated those changes as a new conversation
+on each turn, leaving one turn in the selected final conversation. The repaired
+[Harbor adapter](../../../vendor/skyrl/skyrl-train/skyrl_train/rollouts/harbor_trial_session.py)
+compares message semantics, including parsed tool arguments and empty optional
+reasoning fields. Exact-token continuation keeps the tokens originally served;
+it does not reconstruct earlier actions from Pi's reserialized text. A
+[CPU regression](../../../vendor/skyrl/skyrl-train/tests/cpu/test_pi_conversation_continuity.py)
+uses captured Pi 0.87 round-trip messages for 60 turns, verifies one conversation
+and loss on every assistant action, and verifies a genuine compaction starts a
+new conversation.
+
+The next trial explicitly budgets 12 hours from its first optimizer step. Native
+checkpoints save every two updates and retain the latest three plus the selected
+best; the selection uses five validation observations at two-update intervals.
+Final evaluation, HF export and archive use that same selected best checkpoint.

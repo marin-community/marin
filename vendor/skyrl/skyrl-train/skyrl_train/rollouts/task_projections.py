@@ -40,6 +40,7 @@ from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
     RESPONSE_SPAN_TAGS_KEY,
     ROUTED_EXPERTS_KEY,
+    EpisodeStatistics,
     TrajectoryBatch,
     TaskRequestBatch,
 )
@@ -263,6 +264,15 @@ class WholeTaskProjection:
             self.runner_config,
             self.tokenizer,
             [row.metadata.metric_class for row in request.rows],
+        )
+        batch["episode_statistics"] = [episode_statistics(rollout) for rollout in rollouts]
+        batch["rollout_metrics"].update(
+            get_rollout_metrics(
+                batch["response_ids"], batch["rewards"],
+                verification_results=batch["verification_results"],
+                episode_statistics=batch["episode_statistics"],
+                excluded=batch["exclude_from_baseline"],
+            )
         )
         _attach_reasoning_violations(batch, rollouts, ends_attempt=[True] * len(rollouts))
         _merge_task_metrics(batch, rollouts, request)
@@ -577,12 +587,13 @@ def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollo
             num_masked_trajectories=sum(masked and last for masked, last in zip(excluded, final_steps, strict=True)),
         )
     )
+    episodes = [episode_statistics(rollout) for rollout in rollouts]
     counters = {
         "tasks": len(rollouts),
-        "turns": sum(len(rollout.steps) for rollout in rollouts),
-        "multi_turn_tasks": sum(len(rollout.steps) > 1 for rollout in rollouts),
-        "tool_tasks": sum(any(step.turn.message.get("tool_calls") for step in rollout.steps) for rollout in rollouts),
-        "generated_tokens": sum(sum(rollout.loss_mask) for rollout in rollouts),
+        "turns": sum(value["assistant_turns"] for value in episodes),
+        "multi_turn_tasks": sum(value["assistant_turns"] > 1 for value in episodes),
+        "tool_tasks": sum(value["tool_calls"] > 0 for value in episodes),
+        "generated_tokens": sum(value["generated_tokens"] for value in episodes),
         "missing_logprob_tokens": sum(sum(rollout.loss_mask) for rollout in rollouts if rollout.logprobs is None),
     }
     metrics.update({f"{TASK_ROLLOUT_METRIC_PREFIX}{name}": float(value) for name, value in counters.items()})
@@ -593,6 +604,23 @@ def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollo
             continue
         for key, value in rollout.metrics.items():
             metrics[key] = metrics.get(key, 0.0) + value
+
+
+def episode_statistics(rollout: TrainingRollout) -> EpisodeStatistics:
+    """Count generation across the attempt, independently of optimized conversations and masks."""
+    turns = (
+        [step.turn for conversation in rollout.conversations for step in conversation.steps]
+        if rollout.conversations
+        else [step.turn for step in rollout.steps]
+    )
+    return {
+        "generated_tokens": sum(
+            turn.usage.completion_tokens if turn.usage is not None else len(turn.response_token_ids) for turn in turns
+        ),
+        "assistant_turns": len(turns),
+        "tool_calls": sum(len(turn.message.get("tool_calls") or []) for turn in turns),
+        "conversations": len(rollout.conversations),
+    }
 
 
 def _step_rollouts(rollout: TrainingRollout) -> list[TrainingRollout]:

@@ -7,29 +7,29 @@ selected_sources:
   rows: 8045
   tasks_parquet_sha256: 20d3d9955cf624213cdf8be40a0923aad6a7c57cd34b0cd855b5e3002e947468
 candidate_manifest:
-  path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/swe-pi-nonroot-20261111-v1/manifest.json
-  sha256: 5f738a4812d1fc69f17d0fe639b69ed04455ea937ff3cfb07b482dafac3b910f
+  path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/swe-pi-agentenv-20261111-v2/manifest.json
+  sha256: 5e26d0e5b5162308e137a39a5a33429741a360b0de379184e461ceb05f2b5f2a
 train_rows: 8025
 validation_rows: 20
-normalization: Original SWE task semantics; pinned Pi runtime and non-root workspace
-  image overlay
+normalization: Original SWE task environment and verifier preserved; Pi and UID10001
+  agent-only environment overlay
 admission_pending: []
-uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-nonroot-20261111-v1/swe-pi-nonroot-20261111-v1
+uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-agentenv-20261111-v2/swe-pi-agentenv-20261111-v2
 data_file: agentic-train.parquet
 files:
-- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-nonroot-20261111-v1/swe-pi-nonroot-20261111-v1/agentic-train.parquet
-  sha256: 29b06cbe9ed991e75342126d8e528d949f4285d5772c4782539b896a4ab198a6
-- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-nonroot-20261111-v1/swe-pi-nonroot-20261111-v1/manifest.json
-  sha256: 5f738a4812d1fc69f17d0fe639b69ed04455ea937ff3cfb07b482dafac3b910f
-- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-nonroot-20261111-v1/swe-pi-nonroot-20261111-v1/agentic-train.parquet.identities.jsonl
-  sha256: f6723471124c35b4933b395862912a227a4a41dd49a341547d0f1a7a73fa0dd8
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-agentenv-20261111-v2/swe-pi-agentenv-20261111-v2/agentic-train.parquet
+  sha256: 3945ade5d40965ef32915c1bce752577f12bb11aea79eeebe570e03189de654f
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-agentenv-20261111-v2/swe-pi-agentenv-20261111-v2/manifest.json
+  sha256: 5e26d0e5b5162308e137a39a5a33429741a360b0de379184e461ceb05f2b5f2a
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-agentenv-20261111-v2/swe-pi-agentenv-20261111-v2/agentic-train.parquet.identities.jsonl
+  sha256: 89517ea0af755841d565f19c4560fd34b3738e22972968649a8be2cc69b26aa0
 overlap_admission:
   path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/overlap-admission-20261110.json
   sha256: ac2e5c18c94222404cbc39b58077572e225efdaa125a11eb5a0375d152e83872
 execution_overlay:
-  marin_revision: 14d333820a1667f8c32468ec24a477e30dd67892
+  marin_revision: 8159ee2840e69f3285e6b9e6e1ecf63ca96e7b4b
   agent: pi
-  version: 0.87.0
+  version: pi-agent-scoped-env-v2
   agent_user: longloop-agent
   agent_uid: 10001
   snapshot_contexts: 5

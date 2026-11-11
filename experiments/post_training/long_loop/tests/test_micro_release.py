@@ -35,7 +35,7 @@ def test_frozen_micro_row_converts_without_changing_prompt_or_grader():
 def test_eval_policy_locator_rejects_hf_shaped_local_path():
     source = "s3://marin-us-east-02a/test/committed-rl"
     step = ArtifactStep.adopt("test/rl", "2026.11.09", source)
-    locator = TerminalPolicy(step).resolve(StepContext.for_fingerprint(deps=(step,)))
+    locator = TerminalPolicy(step, expected_step=3).resolve(StepContext.for_fingerprint(deps=(step,)))
     validate_eval_policy(locator, source)
     with pytest.raises(ModelLocatorError, match="local metadata path"):
         validate_eval_policy(replace(locator, local_path="models/long-loop-terminal"), source)

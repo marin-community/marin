@@ -47,6 +47,9 @@ config:
     train_batch_size: 1
     policy_mini_batch_size: 1
     micro_train_batch_size_per_gpu: 1
+    distributed:
+      placement_group_timeout_seconds: 259200
+      worker_collective_timeout_seconds: 259200
   generator:
     backend: vllm
     model_dtype: bfloat16
@@ -67,7 +70,7 @@ config:
     chat_template_kwargs:
       enable_thinking: true
     sampling_params:
-      temperature: 0.6
+      temperature: 0.7
       top_p: 0.95
       logprobs: 0
       skip_special_tokens: false
@@ -75,7 +78,7 @@ config:
       - 128001
       - 128009
     eval_sampling_params:
-      temperature: 0.6
+      temperature: 0.7
       top_p: 0.95
       skip_special_tokens: false
       stop_token_ids:
@@ -105,6 +108,12 @@ config:
       max_bytes_per_step: null
       max_bytes_per_run: null
       required: true
+      publish_timeout_seconds: 259200
+      shutdown_timeout_seconds: 259200
+    engine_init_timeout_seconds: 259200
+    expert_block_sync:
+      timeout_seconds: 259200
+    weight_sync_pause_timeout_seconds: 259200
   terminal_bench:
     harbor:
       environment_type: daytona
@@ -128,6 +137,7 @@ config:
           model_info:
             max_input_tokens: 65536
             max_output_tokens: 16384
+          compaction_reserve_tokens: 16384
       setup_timeout: 360
       run_timeout: 1800
       cleanup_timeout: 60
@@ -148,6 +158,7 @@ config:
     TAU2_NL_ASSERTIONS_MODEL: openai/openai/gpt-oss-120b
     TAU2_USER_REASONING_EFFORT: low
     JUDGE_BASE_URL: runtime://minimax-judge
+    TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC: '259200'
 seed: 20261030
 gpu_variant: H100
 capability_origin: https://iris.oa.dev
@@ -266,3 +277,7 @@ attempts_per_selected_task:
   tb2-recovery: 3
   triviaqa: 1
   truthfulqa: 1
+ray_timeouts:
+  rendezvous_timeout: 259200
+  cluster_join_timeout: 259200
+  driver_liveness_timeout: 259200

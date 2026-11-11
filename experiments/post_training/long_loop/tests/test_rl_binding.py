@@ -36,6 +36,7 @@ def test_real_builder_binds_selected_model_and_attempt_trace_paths(monkeypatch):
         name=recipe["name"],
         retained=recipe["retained"],
         seed=recipe["seed"],
+        ray_timeouts=recipe["ray_timeouts"],
     )
     context = StepContext.for_run(step.path(), "s3://test/output", runtime_args=step.runtime_args, deps=step.deps)
     built = step.build_config(replace(context, is_fingerprint=True))

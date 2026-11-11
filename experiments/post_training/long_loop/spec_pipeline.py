@@ -244,6 +244,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             ArtifactDataSource(adopted[k], relative_path=datasets[k]["data_file"]) for k in ("agentic", "nonagentic")
         ),
         validation_data=(ArtifactDataSource(adopted["heldout"], relative_path=datasets["heldout"]["data_file"]),),
+        ray_timeouts=rl["ray_timeouts"],
         config=rl_config,
         plan=draccus.decode(SkyRLRolePlan, rl["role_plan"]),
         execution=rl_execution,
@@ -288,6 +289,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             capability_origin=evaluation["capability_origin"],
             data_relative_path=evaluation["data_relative_path"],
             judge_gpu_count=evaluation["judge_gpu_count"],
+            ray_timeouts=evaluation["ray_timeouts"],
         )
     )
     report = report_step(

@@ -16,10 +16,113 @@ from rigging.timing import Duration
 from experiments.post_training.long_loop import spec_pipeline
 from experiments.post_training.long_loop.__main__ import validate_graph
 from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
+from experiments.post_training.long_loop.launch_validation import validate_launch
 from experiments.post_training.long_loop.run_spec import allocation_peaks, resolve_spec, stage_blockers
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 
 SPEC = Path(__file__).parents[1] / "specs" / "round1.yaml"
+
+
+def test_emitted_rl_validation_and_eval_settings_come_from_the_pinned_spec(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://test/long-loop")
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    resolved = resolve_spec(SPEC, smoke=False)
+    # Nonstandard values expose stale recipe assignments at the real artifact boundary.
+    for stage in ("rl", "evaluation"):
+        config = resolved[stage]["config"]
+        config["context_budget"]["max_new_tokens_per_turn"] = 12288
+        agent = config["terminal_bench"]["installed_agent"]["agent"]["kwargs"]
+        agent["model_info"]["max_output_tokens"] = 12288
+        agent["compaction_reserve_tokens"] = 4096
+        config["generator"]["sampling_params"]["temperature"] = 0.7
+        config["generator"]["eval_sampling_params"]["temperature"] = 0.7
+        config["terminal_bench"]["installed_agent"]["cleanup_timeout"] = 137
+    terminal = build_spec_graph(resolved, "2026.11.12.1", through="archive")
+    stages = graph_handles([terminal])
+    for stage in ("rl", "evaluation"):
+        step = next(
+            s for s in stages if s.name == resolved[stage]["name"] or s.name.endswith("/" + resolved[stage]["name"])
+        )
+        context = StepContext.for_run(
+            str(tmp_path / stage), str(tmp_path), deps=step.deps, runtime_args=step.runtime_args
+        )
+        built = step.build_config(replace(context, is_fingerprint=True))
+        launch = built if stage == "rl" else built.skyrl
+        document = yaml.safe_load(launch.launch_config_yaml)
+        # Substitute only model-metadata I/O; the emitted recipe and role plan
+        # still come from the production graph and strict runtime composition.
+        model = tmp_path / stage / "model"
+        model.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(SPEC.parent.parent / "context-fixtures/config.json", model / "config.json")
+        document["inputs"]["model"]["uri"] = str(model)
+        validate_launch(yaml.safe_dump(document), tmp_path / stage / "strict-composition")
+        compiled = yaml.safe_load((tmp_path / stage / "strict-composition/compiled.yaml").read_text())
+        for key, value in resolved[stage]["ray_timeouts"].items():
+            assert compiled["ray"][key] == value
+        emitted = compiled["skyrl"]
+        source = yaml.safe_load(yaml.safe_dump(resolved[stage]["config"]))
+        if stage == "rl" and resolved[stage].get("wall_clock_budget") is not None:
+            source["trainer"]["callbacks"].append(
+                {
+                    "type": "wall_time_budget",
+                    **resolved[stage]["wall_clock_budget"],
+                    "groups_per_step": source["trainer"]["train_batch_size"],
+                }
+            )
+        budget = source["context_budget"]
+        assert emitted["generator"]["max_input_length"] == (
+            budget["request_window_tokens"] - budget["max_new_tokens_per_turn"]
+        )
+        assert emitted["generator"]["max_turns"] == budget["max_turns"]
+        for name in ("sampling_params", "eval_sampling_params"):
+            assert emitted["generator"][name]["max_generate_length"] == budget["max_new_tokens_per_turn"]
+
+        def compare(expected, actual, path):
+            if path in {
+                "generator.trajectory_retention.output_path",
+                "generator.trajectory_retention.run_id",
+                "terminal_bench.installed_agent.output_path",
+                "data.kind",
+                "data.train_data",
+                "data.val_data",
+            } or path.endswith(".initial_model_uri"):
+                return
+            if isinstance(expected, dict):
+                for key, value in expected.items():
+                    child = f"{path}.{key}".lstrip(".")
+                    if child in {"data.kind", "data.train_data", "data.val_data"}:
+                        continue
+                    compare(value, actual[key], child)
+            elif isinstance(expected, list):
+                assert len(expected) == len(actual), path
+                for i, (left, right) in enumerate(zip(expected, actual, strict=True)):
+                    compare(left, right, f"{path}.{i}")
+            else:
+                assert actual == expected, path
+
+        assert compiled["inputs"]["data_kind"] == source["data"]["kind"]
+        for key, value in source.items():
+            if key in {"entrypoint", "context_budget", "config_groups"}:
+                continue
+            if key == "extra_env":
+                compare(value, compiled["runtime"]["task_env"], key)
+                continue
+            compare(value, emitted["terminal_bench_config" if key == "terminal_bench" else key], key)
+
+
+def test_missing_temperature_fails_before_skyrl_supplies_a_greedy_default(tmp_path):
+    root = tmp_path / "specs"
+    shutil.copytree(SPEC.parent, root)
+    stage = root / "rl.yaml"
+    config = yaml.safe_load(stage.read_text())
+    del config["config"]["generator"]["eval_sampling_params"]["temperature"]
+    stage.write_text(yaml.safe_dump(config))
+    spec = root / SPEC.name
+    document = yaml.safe_load(spec.read_text())
+    document["rl"]["sha256"] = hashlib.sha256(stage.read_bytes()).hexdigest()
+    spec.write_text(yaml.safe_dump(document))
+    with pytest.raises(ValueError, match=r"explicitly set generator\.eval_sampling_params\.temperature"):
+        resolve_spec(spec, smoke=False)
 
 
 def test_production_and_smoke_preserve_data_context_and_quota():
@@ -187,6 +290,7 @@ def test_emitted_stage_timeouts_default_to_three_days(tmp_path, monkeypatch, ove
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
     resolved = resolve_spec(SPEC, smoke=False)
+    resolved["rl"].pop("wall_clock_budget", None)
     expected = DEFAULT_TASK_TIMEOUT_SECONDS if override is None else override
     if override is not None:
         resolved["execution"]["coordinator"].update(

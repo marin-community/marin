@@ -1,12 +1,12 @@
 admission_pending: []
 name: long-loop-full-rl
 seed: 20261020
-retained: -1
+retained: 3
 config:
   entrypoint: taskcompendium
   context_budget:
     request_window_tokens: 102400
-    max_new_tokens_per_turn: 8192
+    max_new_tokens_per_turn: 16384
     max_turns: 128
   environment:
     task_sessions:
@@ -39,7 +39,7 @@ config:
     eval_batch_size: 256
     eval_interval: 2
     resume_mode: none
-    max_ckpts_to_keep: -1
+    max_ckpts_to_keep: 3
     seed: 20261020
     logger: wandb
     project_name: marin-long-loop
@@ -102,7 +102,7 @@ config:
     rollout_buffer:
       max_staleness_steps: 2
       batch_policy: full_batch
-      max_in_flight: null
+      max_in_flight: 32
       object_store_root: null
       consumed_route_quotas:
         agentic: 32
@@ -117,7 +117,7 @@ config:
         open-athena/Snowball-Smartie-RL-2026.10.15.32-Data: nonagentic
         open-thoughts/TaskTrove: nonagentic
     eval_before_train: false
-    ckpt_interval: 1
+    ckpt_interval: 2
     eval_num_prompts: null
     dump_eval_results: true
     step_wise_training: false
@@ -129,7 +129,7 @@ config:
     hf_export_checkpoint: best
     callbacks:
     - type: checkpoint
-      save_steps: 1
+      save_steps: 2
       save_on_train_end: true
     - type: evaluation
       eval_steps: 2
@@ -144,6 +144,9 @@ config:
     - type: hf_model_save
       save_steps: -1
       save_on_train_end: true
+    distributed:
+      placement_group_timeout_seconds: 259200
+      worker_collective_timeout_seconds: 259200
   generator:
     backend: vllm
     model_dtype: bfloat16
@@ -156,6 +159,7 @@ config:
     weight_sync_transport: expert_block
     expert_block_sync:
       verify: false
+      timeout_seconds: 259200
     gpu_memory_utilization: 0.75
     max_num_seqs: 64
     max_num_batched_tokens: 8192
@@ -173,7 +177,7 @@ config:
         max_seq_len: 262144
       enable_return_routed_experts: true
     sampling_params:
-      temperature: 1.0
+      temperature: 0.7
       top_p: 1.0
       logprobs: 0
       stop_token_ids:
@@ -194,6 +198,8 @@ config:
       - 128001
       - 128009
       skip_special_tokens: false
+      temperature: 0.7
+      top_p: 1.0
     num_inference_engines: 22
     inference_engine_tensor_parallel_size: 1
     inference_engine_pipeline_parallel_size: 1
@@ -218,6 +224,10 @@ config:
       max_bytes_per_step: null
       max_bytes_per_run: null
       required: true
+      publish_timeout_seconds: 259200
+      shutdown_timeout_seconds: 259200
+    engine_init_timeout_seconds: 259200
+    weight_sync_pause_timeout_seconds: 259200
   data:
     kind: parquet
     shuffle: true
@@ -227,6 +237,7 @@ config:
     NCCL_NET: Socket
     NCCL_IB_DISABLE: '1'
     NCCL_SOCKET_FAMILY: AF_INET
+    TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC: '259200'
   terminal_bench:
     harbor:
       environment_type: daytona
@@ -249,8 +260,8 @@ config:
           thinking_format: chat-template
           model_info:
             max_input_tokens: 102400
-            max_output_tokens: 8192
-          compaction_reserve_tokens: 8192
+            max_output_tokens: 16384
+          compaction_reserve_tokens: 16384
       setup_timeout: 360
       run_timeout: 1800
       cleanup_timeout: 120
@@ -291,3 +302,10 @@ execution:
   - MARIN_PREFIX
   - MARIN_TEMP_PREFIX
   container_profile: 4
+wall_clock_budget:
+  seconds: 43200
+  drain_margin: 1800
+ray_timeouts:
+  rendezvous_timeout: 259200
+  cluster_join_timeout: 259200
+  driver_liveness_timeout: 259200
