@@ -123,6 +123,13 @@ generator:
   chat_template: null
   engine_init_kwargs:
     moe_backend: triton
+    compilation_config:
+      mode: 3
+      cudagraph_mode: PIECEWISE
+      splitting_ops:
+      - vllm::unified_attention_with_output
+      - vllm::unified_kv_cache_update
+      - vllm::grug_moe_short_conv
   sampling_params:
     temperature: 1.0
     top_p: 1.0
