@@ -14,7 +14,7 @@ from experiments.post_training.mochi_one_rack.launch import build_smoke
 def test_resumed_stage_loads_exact_step_five_and_saves_to_its_own_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    smoke = build_smoke("2026.11.11.9273", four_k_version="2026.11.11.9272")
+    smoke = build_smoke("2026.11.11.9275", four_k_version="2026.11.11.9272", save_continuation_checkpoint=False)
     prefix = str(tmp_path)
     completed = SkyRLRun(
         path=smoke.four_k.path(prefix),
@@ -44,3 +44,6 @@ def test_resumed_stage_loads_exact_step_five_and_saves_to_its_own_root(
     assert resumed["artifacts"]["checkpoint_root"] == config.output.checkpoint_root
     assert config.output.checkpoint_root.endswith(f"{step.name}/{step.version}/checkpoints")
     assert config.output.checkpoint_root != completed.checkpoint_root
+    checkpoint_callback = next(c for c in resumed["skyrl"]["trainer"]["callbacks"] if c["type"] == "checkpoint")
+    assert checkpoint_callback["save_steps"] < 0
+    assert not checkpoint_callback["save_on_train_end"]

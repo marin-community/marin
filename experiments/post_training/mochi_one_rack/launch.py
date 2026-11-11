@@ -54,7 +54,9 @@ class MochiSmoke:
     thirty_two_k: ArtifactStep[SkyRLRun]
 
 
-def build_smoke(version: str, *, four_k_version: str | None = None) -> MochiSmoke:
+def build_smoke(
+    version: str, *, four_k_version: str | None = None, save_continuation_checkpoint: bool = True
+) -> MochiSmoke:
     trial_root = StoragePath(TRIAL_ROOT)
     hf_root = str(trial_root / "hf-sft")
     model = ArtifactHfModel(
@@ -95,6 +97,11 @@ def build_smoke(version: str, *, four_k_version: str | None = None) -> MochiSmok
         recipe["trainer"]["max_steps"] = max_steps
         if stage == "32k":
             recipe["trainer"].update(resume_mode="from_path", restore_dataloader_state=False)
+            if not save_continuation_checkpoint:
+                recipe["trainer"]["ckpt_interval"] = -1
+                for callback in recipe["trainer"]["callbacks"]:
+                    if callback["type"] == "checkpoint":
+                        callback.update(save_steps=-1, save_on_train_end=False)
             recipe["environment"]["task_sessions"]["task_spec"]["session"]["model_turn_timeout"] = 600
         data = ArtifactStep.adopt(
             f"users/romain/documents/mochi-one-rack/{stage}",
@@ -157,9 +164,18 @@ def build_smoke(version: str, *, four_k_version: str | None = None) -> MochiSmok
 @click.command(help=__doc__)
 @click.option("--stage", type=click.Choice(("4k", "32k")), default="32k")
 @click.option("--four-k-version", default=None, help="Reuse a completed 4K artifact when retrying the continuation.")
+@click.option(
+    "--save-continuation-checkpoint/--skip-continuation-checkpoint",
+    default=True,
+    help="Keep the loaded 4K checkpoint and omit the final 32K save when time is bounded.",
+)
 @rl_build_options
-def main(stage: str, four_k_version: str | None) -> ArtifactStep:
-    run = build_smoke(resolve_version("mochi-one-rack", None), four_k_version=four_k_version)
+def main(stage: str, four_k_version: str | None, save_continuation_checkpoint: bool) -> ArtifactStep:
+    run = build_smoke(
+        resolve_version("mochi-one-rack", None),
+        four_k_version=four_k_version,
+        save_continuation_checkpoint=save_continuation_checkpoint,
+    )
     return run.four_k if stage == "4k" else run.thirty_two_k
 
 

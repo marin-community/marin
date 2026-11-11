@@ -1,5 +1,6 @@
 from pathlib import Path
 import time
+import weakref
 
 import pytest
 import torch
@@ -7,9 +8,28 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from skyrl_train.distributed.megatron.optimizer_checkpoint import (
+    rebind_master_parameters,
     restore_hybrid_adam_bucket_steps,
     restore_in_host_order,
 )
+
+
+def test_restored_master_follows_the_live_parameter_and_releases_obsolete_storage() -> None:
+    master = torch.nn.Parameter(torch.tensor([0.3, -0.8, 1.2]))
+    optimizer = torch.optim.AdamW([master], lr=0.01, weight_decay=0)
+    old_master = master.detach().clone()
+    old_reference = weakref.ref(old_master)
+    parameter = object()
+    state = {parameter: {"master_param": old_master}}
+    del old_master
+
+    rebind_master_parameters(state, {parameter: master})
+
+    assert old_reference() is None
+    master.grad = torch.tensor([0.1, -0.2, 0.4])
+    optimizer.step()
+    torch.testing.assert_close(state[parameter]["master_param"], master, rtol=0, atol=0)
+    assert state[parameter]["master_param"].data_ptr() == master.data_ptr()
 
 
 def checkpoint_state(steps: list[int | None]) -> dict:

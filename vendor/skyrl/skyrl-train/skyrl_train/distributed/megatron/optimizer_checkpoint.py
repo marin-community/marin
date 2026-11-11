@@ -8,6 +8,12 @@ import torch
 import torch.distributed as dist
 
 
+def rebind_master_parameters(state: dict, masters: dict) -> None:
+    """Keep optimizer state attached to the master's current storage."""
+    for parameter, values in state.items():
+        values["master_param"] = masters[parameter]
+
+
 def restore_hybrid_adam_bucket_steps(state: dict) -> None:
     """Recover omitted bucket steps from the saved optimizer group metadata."""
     children = [state] if "param_state" in state else state.values()

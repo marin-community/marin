@@ -28,6 +28,7 @@ from megatron.core.distributed import DistributedDataParallel as DDP
 from megatron.core.transformer.module import Float16Module
 from megatron.core.optimizer import ChainedOptimizer
 from megatron.core.optimizer.cpu_offloading import HybridDeviceOptimizer
+from skyrl_train.distributed.megatron.optimizer_checkpoint import rebind_master_parameters
 from megatron.core import parallel_state as mpu
 from megatron.core.utils import get_attr_wrapped_model
 from megatron.core.packed_seq_params import PackedSeqParams
@@ -391,6 +392,11 @@ def restore_offloaded_optimizer_state(optimizer) -> None:
         # Bucket tensors replace state after HDO's load hooks. Rebind moments,
         # restore FP32 masters and place state on the native optimizers' devices.
         inner._sync_hdo_state_to_sub_optimizers()
+        if inner.param_update_in_fp32:
+            # HDO copied the restored master into its newly built CPU/GPU
+            # parameter. Keeping the old tensor here retains a second master
+            # until the next step, when host memory is needed for gradients.
+            rebind_master_parameters(inner.state, inner.param_to_fp32_param)
 
 
 def preprocess_packed_seqs(

@@ -1,3 +1,4 @@
+import gc
 import os
 import math
 import random
@@ -537,6 +538,14 @@ class MegatronStrategy(DistributedStrategy):
             states = extra_state.get("client_state", {}) or {}
             self.log("Loaded client state from checkpoint.")
 
+        # The sharded descriptors retain the replaced optimizer storage until
+        # this frame exits. Drop them before returning cached pinned blocks to
+        # the host, so the first resumed update has room for CPU gradients.
+        del sharded_state_dict, model_sharded_state_dict, state_dict
+        if optimizer and load_training_state:
+            gc.collect()
+            torch.cuda.synchronize()
+            torch.accelerator.memory.empty_host_cache()
         return ckpt_dir, states
 
     def save_hf_model(self, bridge, model: MegatronModelWrapper, output_dir: str, tokenizer=None, **kwargs) -> None:
