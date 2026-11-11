@@ -322,7 +322,28 @@ built through Harbor's own task-config mapping
 Daytona factory uses to name and create snapshots. A task the production
 validation rejects (for example a Dockerfile with `ADD`, which Daytona cannot
 build) counts as a failure and is reported, not treated as safe. No Daytona API
-calls are made. `oracle_validation` separately records how execution was
+calls are made.
+
+What the measurement measures differs by whether the source can run:
+
+- A **runnable** source is measured over its **converted** tasks, because
+  conversion decides the environment a rollout actually provisions. Run every
+  pinned row through the source's own converter and name the resulting
+  `environment_requirements`: an image, a preserved build context, or the
+  pipeline's shared agent image. Route a TaskTrove archive through conversion
+  and its `environment/Dockerfile` becomes an oracle resource, so a cohort that
+  looked like thousands of builds in the raw archive can provision one shared
+  image. Measuring the raw archive there would overstate the requirement.
+- An **inventory** pointer has no conversion, so it is measured over its pinned
+  payload as published, which is the requirement anyone ingesting it inherits.
+
+A converted task that declares neither an image nor a build context leaves the
+machine to the runtime: the rollout runner resolves a package lock to the host
+image, which names no Daytona snapshot. Such a source stays `unassessed` rather
+than claiming zero or one; settle its runtime placement before recording a
+verdict.
+
+`oracle_validation` separately records how execution was
 qualified; see [Sources without oracle solutions](#sources-without-oracle-solutions).
 A
 `SourceReference` groups a
