@@ -16,16 +16,16 @@ from cloud.iris.runtime_environment import RuntimeProfile
 
 
 @pytest.mark.parametrize(
-    "target_cluster,parent_cluster_config,interface",
+    "target_cluster,parent_cluster_config,interface,logger,preemption_retries",
     [
-        ("cw-rno2a", "marin.yaml", None),
-        (None, "marin.yaml", None),
-        (None, None, None),
-        ("cw-rno2a", "marin.yaml", "eth0"),
+        ("cw-rno2a", "marin.yaml", None, "records", 0),
+        (None, "marin.yaml", None, "console", 1000),
+        (None, None, None, "console", 1000),
+        ("cw-rno2a", "marin.yaml", "eth0", "records", 0),
     ],
 )
 def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
-    tmp_path, monkeypatch, target_cluster, parent_cluster_config, interface
+    tmp_path, monkeypatch, target_cluster, parent_cluster_config, interface, logger, preemption_retries
 ):
     requests = []
 
@@ -50,7 +50,7 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
                 "entrypoint": "skyrl_train.entrypoints.main_base",
                 "task_env": {} if interface is None else {"NCCL_SOCKET_IFNAME": interface},
             },
-            "skyrl": {"trainer": {"debug_mode": "off"}},
+            "skyrl": {"trainer": {"debug_mode": "off", "logger": [logger]}},
         }
     )
     args = SimpleNamespace(
@@ -93,6 +93,16 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     [(address, request)] = requests
     assert address == "http://parent-controller:8080"
     assert request.name == result.job_id
+    assert (request.max_retries_failure, request.max_task_failures, request.max_retries_preemption) == (
+        0,
+        0,
+        preemption_retries,
+    )
+    assert request.replicas == 2
+    assert request.resources.cpu_millicores == 32000
+    assert request.resources.memory_bytes == 512 * 1024**3
+    assert request.resources.disk_bytes == 512 * 1024**3
+    assert (request.resources.device.gpu.variant, request.resources.device.gpu.count) == ("H100", 8)
     assert all(constraint.key != CLUSTER_CONSTRAINT_KEY for constraint in request.constraints)
     assert request.environment.env_vars["NCCL_SOCKET_IFNAME"] == (
         "^ibs,ibp,lo,docker,veth,cilium,lxc" if interface is None else interface

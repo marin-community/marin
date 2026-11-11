@@ -9,6 +9,8 @@ recorded checkpoint ancestors, bounded by each continuation's starting step.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -21,23 +23,10 @@ from finestore.reader import ReadView
 from finestore.schema import arrow_schema
 from finestore.store import DataStore, DataTable
 
-RESOLVED_LAUNCH_FILENAME = "resolved-launch.yaml"
-TERMINAL_RECEIPT_FILENAME = "terminal.json"
-EXPORTS_SUBDIRECTORY = "exports"
 RUN_RECORDS_SUBDIRECTORY = "run-records"
 METRICS_TABLE = "metrics"
 ATTEMPTS_TABLE = "attempts"
-ENGINE_CONFIG_KEYS = (
-    "backend",
-    "model_dtype",
-    "vllm_attention_backend",
-    "enable_prefix_caching",
-    "max_num_seqs",
-    "max_num_batched_tokens",
-    "enable_chunked_prefill",
-    "enforce_eager",
-    "engine_init_kwargs",
-)
+METRIC_METADATA_KEYS = frozenset(("step", "attempt_id", "metric_attempt_ids"))
 
 
 class LaunchState(StrEnum):
@@ -93,14 +82,22 @@ class AttemptRecord(BaseModel):
     metrics_started_at: str | None = None
     resumed_step: int | None = None
     parent: CheckpointReference | None = None
-    launch: LaunchReceipt | None = None
+    config: dict[str, Any] | None = None
+    result: LaunchResult | None = None
 
     @property
     def native(self) -> LaunchReceipt:
         """Return the native receipt of an Iris-launched attempt."""
-        if self.launch is None:
+        if self.config is None:
             raise ValueError(f"Attempt {self.attempt_id} has no native launch receipt")
-        return self.launch
+        result = self.result or LaunchResult(
+            state=LaunchState.SUBMITTED if self.started_at is not None else LaunchState.PREPARED,
+            run_id=self.run_id,
+            attempt_id=self.attempt_id,
+            iris_job_id=self.config.get("skyrl", {}).get("runtime", {}).get("iris_job_id"),
+            started_at=self.started_at,
+        )
+        return LaunchReceipt(config=self.config, result=result)
 
 
 class MetricRow(BaseModel):
@@ -112,11 +109,12 @@ class MetricRow(BaseModel):
 
 class AttemptRow(BaseModel):
     attempt_id: str
-    record_json: str
+    field: str
+    value_json: str
 
 
 ROW_MODELS: dict[str, type[BaseModel]] = {METRICS_TABLE: MetricRow, ATTEMPTS_TABLE: AttemptRow}
-PRIMARY_KEYS = {METRICS_TABLE: ("attempt_id", "step", "name"), ATTEMPTS_TABLE: ("attempt_id",)}
+PRIMARY_KEYS = {METRICS_TABLE: ("attempt_id", "step", "name"), ATTEMPTS_TABLE: ("attempt_id", "field")}
 
 
 @dataclass(frozen=True)
@@ -127,7 +125,7 @@ class RunTables:
 
 @dataclass(frozen=True)
 class AttemptHistory:
-    export_root: str
+    records_root: str
     record: AttemptRecord
     through_step: int | None
 
@@ -150,14 +148,29 @@ def register_run_tables(store: DataStore) -> RunTables:
     return RunTables(tables[METRICS_TABLE], tables[ATTEMPTS_TABLE])
 
 
-def write_attempt(table: DataTable, record: AttemptRecord) -> None:
-    """Append an attempt's complete record to its registered attempts table."""
-    table.extend([AttemptRow(attempt_id=record.attempt_id, record_json=record.model_dump_json()).model_dump()])
+def update_attempt(store: DataStore, record: AttemptRecord) -> None:
+    """Commit a fresh writer-owned update; omitted fields stay stored, explicit null clears a field."""
+    values = record.model_dump(mode="json", exclude_unset=True)
+    values.pop("attempt_id")
+    rows = [
+        AttemptRow(attempt_id=record.attempt_id, field=name, value_json=json.dumps(value)).model_dump()
+        for name, value in values.items()
+    ]
+    register_run_tables(store).attempts.extend(rows)
+    store.flush()
+
+
+def _records(rows: Iterable[dict[str, Any]]) -> dict[str, AttemptRecord]:
+    records: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        records.setdefault(row["attempt_id"], {})[row["field"]] = json.loads(row["value_json"])
+    return {attempt_id: AttemptRecord(attempt_id=attempt_id, **values) for attempt_id, values in records.items()}
 
 
 def _attempt(view: ReadView, attempt_id: str) -> AttemptRecord | None:
-    row = view.point(ATTEMPTS_TABLE, attempt_id=attempt_id)
-    return AttemptRecord.model_validate_json(row["record_json"]) if row is not None else None
+    if ATTEMPTS_TABLE not in view.table_names():
+        return None
+    return _records(view.iter_rows(ATTEMPTS_TABLE, where=[("attempt_id", "==", attempt_id)])).get(attempt_id)
 
 
 def read_attempt(export_root: str, attempt_id: str) -> AttemptRecord | None:
@@ -168,10 +181,7 @@ def read_attempt(export_root: str, attempt_id: str) -> AttemptRecord | None:
 def read_attempts(export_root: str) -> dict[str, AttemptRecord]:
     """Read the stored attempts from one export root's committed snapshot."""
     view = ReadView(run_records_root(export_root))
-    return {
-        row["attempt_id"]: AttemptRecord.model_validate_json(row["record_json"])
-        for row in view.iter_rows(ATTEMPTS_TABLE)
-    }
+    return _records(view.iter_rows(ATTEMPTS_TABLE)) if ATTEMPTS_TABLE in view.table_names() else {}
 
 
 def _lineage(export_root: str, attempt_id: str, views: dict[str, ReadView]) -> tuple[AttemptHistory, ...]:
@@ -179,31 +189,24 @@ def _lineage(export_root: str, attempt_id: str, views: dict[str, ReadView]) -> t
     seen = set()
     through_step = None
     while True:
-        export_root = export_root.rstrip("/")
-        identity = (export_root, attempt_id)
+        records_root = run_records_root(export_root)
+        identity = (records_root, attempt_id)
         if identity in seen:
             raise ValueError(f"Checkpoint ancestry contains a cycle at {identity}")
         seen.add(identity)
-        if export_root not in views:
-            views[export_root] = ReadView(run_records_root(export_root))
-        record = _attempt(views[export_root], attempt_id)
+        if records_root not in views:
+            views[records_root] = ReadView(records_root)
+        record = _attempt(views[records_root], attempt_id)
         if record is None:
-            if not history:
-                return ()
-            raise FileNotFoundError(f"Checkpoint ancestry has no attempt {attempt_id} at {export_root}")
-        history.append(AttemptHistory(export_root, record, through_step))
+            return tuple(history)
+        history.append(AttemptHistory(records_root, record, through_step))
         if record.resumed_step is None or record.resumed_step == 0:
             return tuple(history)
         if record.parent is None:
-            raise ValueError(f"Attempt {attempt_id} has no recorded checkpoint parent")
-        bound = min(record.resumed_step, record.parent.step)
+            return tuple(history)
+        bound = record.parent.step
         through_step = bound if through_step is None else min(through_step, bound)
         export_root, attempt_id = record.parent.export_root, record.parent.attempt_id
-
-
-def attempt_lineage(export_root: str, attempt_id: str) -> tuple[AttemptHistory, ...]:
-    """Return the attempt and its bounded ancestors, stopping at a fresh stage."""
-    return _lineage(export_root, attempt_id, {})
 
 
 def read_attempt_metrics(export_root: str, attempt_id: str) -> dict[int, dict[str, Any]]:
@@ -216,7 +219,9 @@ def read_attempt_metrics(export_root: str, attempt_id: str) -> dict[int, dict[st
     history = _lineage(export_root, attempt_id, views)
     metrics: dict[int, dict[str, Any]] = {}
     for entry in reversed(history):
-        for row in views[entry.export_root].iter_rows(
+        if METRICS_TABLE not in views[entry.records_root].table_names():
+            continue
+        for row in views[entry.records_root].iter_rows(
             METRICS_TABLE, where=[("attempt_id", "==", entry.record.attempt_id)]
         ):
             step = row["step"]
@@ -227,33 +232,3 @@ def read_attempt_metrics(export_root: str, attempt_id: str) -> dict[int, dict[st
             values["metric_attempt_ids"][row["name"]] = entry.record.attempt_id
             values[row["name"]] = row["value"]
     return dict(sorted(metrics.items()))
-
-
-def attempt_tracking(record: AttemptRecord) -> dict[str, Any]:
-    """Describe the native attempt's startup, engine configuration and W&B run."""
-    if record.launch is None or record.started_at is None:
-        return {}
-    config = record.launch.config
-    generator = config["skyrl"]["generator"]
-    engine = {key: generator.get(key) for key in ENGINE_CONFIG_KEYS}
-    engine.update(
-        batch_invariant=config["skyrl"]["trainer"]["algorithm"]["batch_invariant"],
-        vllm_env={key: value for key, value in config["runtime"]["task_env"].items() if key.startswith("VLLM_")},
-        vllm_version=record.vllm_version,
-    )
-    entity = config["iris"]["wandb_entity"]
-    trainer = config["skyrl"]["trainer"]
-    wandb_url = (
-        f"https://wandb.ai/{entity}/{trainer['project_name']}/runs/{record.attempt_id}"
-        if entity and "wandb" in trainer["logger"]
-        else None
-    )
-    return {
-        "run_id": record.run_id,
-        "attempt_id": record.attempt_id,
-        "iris_job_id": record.native.result.iris_job_id,
-        "coordinator_iris_job_id": config["run"].get("coordinator_iris_job_id"),
-        "started_at": record.started_at,
-        "engine": engine,
-        "wandb_url": wandb_url,
-    }
