@@ -20,13 +20,14 @@ import yaml
 from harbor.agents.base import BaseAgent  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import]
 from harbor.agents.installed.base import BaseInstalledAgent  # pyrefly: ignore[missing-import]
+from harbor.environments.daytona import DaytonaEnvironment  # pyrefly: ignore[missing-import]
 from harbor.environments.docker_translate import (  # pyrefly: ignore[missing-import]
     COMPOSE_FILENAMES,
     PINNED_IMAGE,
     import_prepared_task,
     prepared_images,
 )
-from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
+from harbor.environments.factory import EnvironmentFactory, _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.environments.model_relay import (  # pyrefly: ignore[missing-import]
     JudgeAccess,
     task_model_relays,
@@ -34,6 +35,7 @@ from harbor.environments.model_relay import (  # pyrefly: ignore[missing-import]
 from harbor.environments.resource_policies import validate_local_resources  # pyrefly: ignore[missing-import]
 from harbor.host_capabilities import (  # pyrefly: ignore[missing-import]
     CANDIDATE_MODEL_RELAY_PORT,
+    DaytonaConnection,
     HostCapabilities,
     endpoint_authentication,
     host_capabilities_from_environment,
@@ -46,6 +48,7 @@ from harbor.host_capabilities import (  # pyrefly: ignore[missing-import]
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor.models.task.config import TaskOS  # pyrefly: ignore[missing-import]
 from harbor.models.task.task import Task  # pyrefly: ignore[missing-import]
+from harbor.models.trial.paths import TrialPaths  # pyrefly: ignore[missing-import]
 from harbor.utils.env import (  # pyrefly: ignore[missing-import]
     resolve_env_vars,
     validate_task_environment,
@@ -59,6 +62,10 @@ from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyre
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
 from rigging.filesystem.s3_compat import s3_credential_options
+from shellbox.backends.daytona.environment import (
+    DaytonaTaskEnvironment,
+    DaytonaTaskEnvironmentSpec,
+)
 
 from marin.evaluation.harbor.agent_context import (
     CANDIDATE_API_KEY_ENV,
@@ -714,6 +721,42 @@ def _preflight(request_path: Path, *, host_environment: Mapping[str, str]) -> No
     sys.stdout.write(json.dumps(results, ensure_ascii=False, separators=(",", ":")))
 
 
+async def _snapshot_specs(config: JobConfig) -> list[DaytonaTaskEnvironmentSpec]:
+    """Resolve a job's effective Daytona inputs without allocating sandboxes."""
+    if config.environment.type is not EnvironmentType.DAYTONA:
+        raise ValueError("Snapshot specs require the daytona environment")
+    static_capabilities = HostCapabilities(
+        daytona=DaytonaConnection(
+            api_key="snapshot-preflight",
+            api_url="https://snapshot.invalid/api",
+            target="snapshot-preflight",
+        )
+    )
+    specs: dict[str, DaytonaTaskEnvironmentSpec] = {}
+    with tempfile.TemporaryDirectory(prefix="marin-harbor-snapshot-specs-") as jobs_dir:
+        trial_paths = TrialPaths(Path(jobs_dir) / "trial")
+        for task_config in await Job._resolve_task_configs(config):
+            task = Task(
+                task_config.get_local_path(),
+                disable_verification=config.verifier.disable or config.verifier.import_path is not None,
+            )
+            environment = EnvironmentFactory.create_environment_from_config(
+                config=config.environment,
+                environment_dir=task.paths.environment_dir,
+                environment_name=task.short_name,
+                session_id="snapshot-specs",
+                trial_paths=trial_paths,
+                task_env_config=task.config.environment,
+                host_capabilities=static_capabilities,
+                guest_environment={},
+            )
+            assert isinstance(environment, DaytonaEnvironment)
+            spec = environment.snapshot_spec()
+            name = DaytonaTaskEnvironment.from_spec(spec).snapshot_request().name
+            specs[name] = spec
+    return list(specs.values())
+
+
 async def _run(config: JobConfig, *, host_capabilities: HostCapabilities) -> None:
     job = await Job.create(config, host_capabilities=host_capabilities, guest_environment=_model_environment(config))
     _validate_job_tasks(job)
@@ -743,8 +786,12 @@ def main() -> None:
         if command == "preflight":
             _preflight(Path(sys.argv[2]), host_environment=host_environment)
             return
-        if command != "run":
+        if command not in {"run", "snapshot-specs"}:
             raise ValueError(f"unknown command {command!r}")
+        if command == "snapshot-specs":
+            config = JobConfig.model_validate(_document(Path(sys.argv[2])), extra="forbid")
+            sys.stdout.write(json.dumps(asyncio.run(_snapshot_specs(config)), ensure_ascii=False, separators=(",", ":")))
+            return
         policy = JobConfig.model_validate_json(Path(sys.argv[2]).read_text(), extra="forbid")
         overlay = RuntimeOverlay.model_validate_json(Path(sys.argv[3]).read_text())
         config = effective_job_config(policy, overlay)

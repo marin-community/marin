@@ -4,6 +4,7 @@
 """Exercise the Daytona adapter against a local process and filesystem fake."""
 
 import asyncio
+import json
 import math
 import os
 import shlex
@@ -45,6 +46,7 @@ from shellbox.backends.daytona.snapshot import (
     snapshot_resources,
     task_snapshot_source,
 )
+from shellbox.backends.daytona.snapshot_cli import _load_specs
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
@@ -1125,3 +1127,42 @@ def test_purge_revalidates_last_use_before_deleting() -> None:
     assert report.deleted == ()
     assert report.skipped == ("candidate",)
     assert "candidate" in account.snapshots
+
+
+def test_daytona_network_policy_parses_declarative_fields() -> None:
+    assert DaytonaNetworkPolicy.from_config({"mode": "block_all"}).parameters() == {"network_block_all": True}
+    assert DaytonaNetworkPolicy.from_config({"mode": "domain_allow_list", "value": "example.org"}).parameters() == {
+        "domain_allow_list": "example.org"
+    }
+    with pytest.raises(ValueError, match="Unknown Daytona network policy fields"):
+        DaytonaNetworkPolicy.from_config({"mode": "block_all", "extra": "value"})
+
+
+def test_task_environment_spec_round_trips_effective_values(tmp_path) -> None:
+    environment = DaytonaTaskEnvironment(
+        environment_dir=tmp_path,
+        docker_image="fixture:tag",
+        cpus=1,
+        memory_mb=4096,
+        storage_mb=4096,
+    )
+
+    assert DaytonaTaskEnvironment.from_spec(environment.as_spec()) == environment
+
+
+def test_snapshot_cli_accepts_long_inline_specs() -> None:
+    specs = [
+        {
+            "docker_image": f"fixture-{index}.test/task@sha256:" + "a" * 64,
+            "environment_dir": ".",
+            "cpus": 1,
+            "memory_mb": 4096,
+            "storage_mb": 4096,
+            "gpus": 0,
+        }
+        for index in range(4)
+    ]
+    payload = json.dumps(specs)
+    assert len(payload) > 255
+
+    assert _load_specs(payload) == specs

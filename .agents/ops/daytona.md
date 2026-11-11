@@ -94,8 +94,8 @@ uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshot
   --api-key-env DAYTONA_RL_API_KEY inventory
 ```
 
-Pass `--api-key-env DAYTONA_EVAL_API_KEY` to inspect the eval account used for
-declarative image builds. `--target` overrides `DAYTONA_TARGET`. `--api-url`
+Pass `--api-key-env DAYTONA_EVAL_API_KEY` to inventory or purge the eval account
+used for validation builds. `--target` overrides `DAYTONA_TARGET`. `--api-url`
 overrides `DAYTONA_API_URL`.
 
 Read the account's current quota and inventory before submission. Snapshot quota
@@ -116,31 +116,47 @@ neither is available.
    overcome a quota limit.
 2. Determine the snapshots required by the dataset and pinned backend. Count
    distinct environment contents, including fixtures, rather than assuming one
-   snapshot per task or counting Dockerfiles alone. Give the command the task
-   environments and it derives exactly the names above:
+   snapshot per task or counting Dockerfiles alone. Emit the effective inputs
+   from the job config that launches the trials:
 
    ```bash
-   cat > /tmp/required-snapshots.json <<'JSON'
-   [
-     {"docker_image": "ghcr.io/marin-community/task@sha256:...", "cpus": 4, "memory_mb": 8192, "storage_mb": 20480},
-     {"environment_dir": "experiments/data/tasks/example/environment", "cpus": 2}
-   ]
-   JSON
-   uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
-     --api-key-env DAYTONA_RL_API_KEY plan --specs /tmp/required-snapshots.json
+   PYTHONPATH=lib/marin/src uv run --isolated --project vendor/harbor --frozen \
+     --extra runtime python lib/marin/src/marin/evaluation/harbor/trial_driver.py \
+     snapshot-specs experiments/evaluation/configs/harbor/ot-tblite.yaml \
+     > /tmp/required-snapshots.json
    ```
 
-   `plan` reports each required name as `missing` or its current state. Use
-   `--specs -` to read the JSON from stdin. Creating missing snapshots is the
-   preflight itself:
+   `snapshot-specs` applies the job's `environment.override_*` values and resource
+   enforcement policy as a trial does, resolves each dataset task, and emits the
+   Shellbox spec JSON. Do not hand-write task-level CPU or memory values: the
+   snapshot name follows the effective request. For example, `ot-tblite` launches
+   at 2 CPU, 8192 MB memory and 8192 MB storage regardless of task-level values.
+   A SkyRL launcher sets the same values under `terminal_bench.harbor` as
+   `override_cpus`, `override_memory_mb` and `override_storage_mb`; use those,
+   not the task's `task.toml`. Use `--specs -` on the next commands to read stdin.
+
+   `plan` reports each required name as `missing` or its current state:
 
    ```bash
    uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
-     --api-key-env DAYTONA_EVAL_API_KEY ensure --specs /tmp/required-snapshots.json
+     --api-key-env DAYTONA_RL_API_KEY plan \
+     --specs /tmp/required-snapshots.json
    ```
 
-   `ensure` waits for every snapshot to become active. Dockerfile sources use
-   the Daytona declarative-build path, so the selected account must allow builds.
+   Creating missing snapshots is the preflight itself. Run `ensure` in the account
+   that launches the trials:
+
+   ```bash
+   uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
+     --api-key-env DAYTONA_RL_API_KEY ensure \
+     --specs /tmp/required-snapshots.json
+   ```
+
+   `ensure` waits for every snapshot to become active. The RL account rejects
+   declarative image builds, so a Dockerfile-only task must be prepared as a
+   digest-pinned registry image before preflight. Do not create trial snapshots in
+   the eval account. If validation creates declarative snapshots there, purge that
+   account with the same commands and `--api-key-env DAYTONA_EVAL_API_KEY`.
 3. On every snapshot check, classify a snapshot as stale when its last use was
    more than one hour ago (`now_utc - last_used_utc > 3600 seconds`). Use actual
    last-use evidence, not creation time, snapshot state, or an unfamiliar name.

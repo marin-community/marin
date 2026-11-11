@@ -22,6 +22,7 @@ from marin.evaluation.harbor.trial_driver import (
     _model_authentication,
     _model_environment,
     _preflight_one,
+    _snapshot_specs,
     _validate_environment,
     effective_job_config,
 )
@@ -618,3 +619,31 @@ def test_preflight_standalone_pi_requires_matching_prepared_main_image(
     )
     report = _preflight_one(path, kwargs, None, host_environment=host)
     assert report["benchmark_metadata"]["n_benchmark"] == 1
+
+
+async def test_snapshot_specs_apply_job_resource_overrides(tmp_path, prepared_task):
+    config = JobConfig.model_validate(
+        {
+            "environment": {
+                "type": "daytona",
+                "override_cpus": 1,
+                "override_memory_mb": 4096,
+                "override_storage_mb": 4096,
+            },
+            "agents": [{"name": "terminus-2"}],
+            "datasets": [{"path": str(prepared_task.parent)}],
+        }
+    )
+
+    specs = await _snapshot_specs(config)
+
+    assert specs == [
+        {
+            "environment_dir": str(prepared_task / "environment"),
+            "docker_image": "example.test/task@sha256:" + "a" * 64,
+            "cpus": 1,
+            "memory_mb": 4096,
+            "storage_mb": 4096,
+            "gpus": 0,
+        }
+    ]

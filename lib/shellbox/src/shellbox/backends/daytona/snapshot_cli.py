@@ -37,27 +37,16 @@ from shellbox.backends.daytona.snapshot import (
 def _load_specs(source: str) -> list[dict[str, Any]]:
     if source == "-":
         text = sys.stdin.read()
+    elif source.lstrip().startswith(("{", "[")):
+        text = source
     else:
-        path = Path(source)
-        text = path.read_text() if path.is_file() else source
+        text = Path(source).read_text()
     payload = json.loads(text)
     if isinstance(payload, dict):
         payload = [payload]
     if not isinstance(payload, list) or not all(isinstance(entry, dict) for entry in payload):
         raise SystemExit("Snapshot specs must be one JSON object or a list of objects")
     return payload
-
-
-def _environment(entry: dict[str, Any]) -> DaytonaTaskEnvironment:
-    environment_dir = entry.get("environment_dir")
-    return DaytonaTaskEnvironment(
-        environment_dir=Path(environment_dir) if environment_dir else Path("."),
-        docker_image=entry.get("docker_image"),
-        cpus=entry.get("cpus"),
-        memory_mb=entry.get("memory_mb"),
-        storage_mb=entry.get("storage_mb"),
-        gpus=entry.get("gpus", 0),
-    )
 
 
 def _connection(arguments: argparse.Namespace) -> DaytonaConnection:
@@ -284,7 +273,7 @@ async def _run(arguments: argparse.Namespace) -> None:
                 as_json=arguments.json,
             )
         elif arguments.command in {"plan", "ensure"}:
-            environments = [_environment(entry) for entry in _load_specs(arguments.specs)]
+            environments = [DaytonaTaskEnvironment.from_spec(entry) for entry in _load_specs(arguments.specs)]
             if arguments.command == "plan":
                 await _plan(client, environments)
             else:

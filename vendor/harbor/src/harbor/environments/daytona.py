@@ -33,7 +33,10 @@ from harbor.environments.model_relay import (
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
 from shellbox.backends.daytona.connection import DaytonaConnection
-from shellbox.backends.daytona.environment import DaytonaTaskEnvironment
+from shellbox.backends.daytona.environment import (
+    DaytonaTaskEnvironment,
+    DaytonaTaskEnvironmentSpec,
+)
 from shellbox.backends.daytona.machine import (
     DEFAULT_SANDBOX_TTL_MINUTES,
     DaytonaMachine,
@@ -148,6 +151,10 @@ class DaytonaEnvironment(BaseEnvironment):
             storage_mb=self._effective_storage_mb,
             gpus=self._effective_gpus,
         )
+
+    def snapshot_spec(self) -> DaytonaTaskEnvironmentSpec:
+        """Return the effective environment that selects this task's snapshot."""
+        return self._task_environment().as_spec()
 
     async def start(
         self, force_build: bool, *, service_tasks: asyncio.TaskGroup
