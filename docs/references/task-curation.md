@@ -911,3 +911,14 @@ setup fidelity ran on every task but whose verifier liveness ran on a sample is
 `sample`, not `full`. `independent_qc` stays separate evidence about the upstream
 release and does not raise the level.
 
+### Graders that declare a package lock cannot run on a sandbox backend
+
+An environment that declares `packages_lock` resolves to a local runtime
+(`taskcompendium/runtime/environment.py`), and `rolloutengine.machines` maps it to the
+host image. The Daytona factory accepts only a registry image or a build context, so a
+task whose grader declares a lock cannot grade there — its snapshot count is irrelevant.
+
+Two honest options for such a cohort: resolve the lock into a digest-pinned grader image
+during the pipeline build (one identity per distinct grader environment) and declare that
+image, or record the cohort as inadmissible on Daytona. CalibForge is unaffected because
+its grader names an image; the TaskTrove families are all lock-graded.
