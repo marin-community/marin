@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Type
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
-from skyrl_train.evaluation_profiles import named_evaluation_metrics, named_evaluation_profiles, parse_evaluation_profiles
+from skyrl_train.evaluation_profiles import named_evaluation_metrics, parse_evaluation_profiles
 from skyrl_train.config.callbacks import has_explicit_callbacks, hf_export_destination_configured
 from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.json_serialization import to_jsonable
@@ -311,9 +311,7 @@ class EvaluationCallback(TrainerCallback):
             Resuming at the last update reruns final evaluation. It requires a primary evaluation
             dataset, and does not run after an early stop.
         metric_groups: Output metric names mapped to source metrics whose mean is reported.
-            Groups depending on final profiles are evaluated when their inputs are available.
-        stop_when: Metrics mapped to minimum scores or gains over the first evaluation
-            with all stop metrics.
+        stop_when: Metrics mapped to minimum scores or gains over the initial evaluation.
     """
 
     error_behavior = CallbackErrorBehavior.RAISE
@@ -362,26 +360,11 @@ class EvaluationCallback(TrainerCallback):
     async def on_evaluate_async(
         self, state: TrainerState, control: TrainerControl, *, metrics: Dict[str, float], trainer, **kwargs
     ) -> TrainerControl:
-        final_prefixes = ()
-        if (self.metric_groups or self.stop_when) and not self._final_due(state):
-            final_prefixes = tuple(
-                f"eval/{name}/"
-                for name, profile in named_evaluation_profiles(trainer.cfg).items()
-                if profile.get("schedule") == "final"
-            )
-        deferred_groups: set[str] = set()
-
-        def awaiting_final(key: str) -> bool:
-            return key not in metrics and (key in deferred_groups or key.startswith(final_prefixes))
-
         for name, members in self.metric_groups.items():
-            if any(awaiting_final(member) for member in members):
-                deferred_groups.add(name)
-                continue
             metrics[name] = math.fsum(metrics[member] / len(members) for member in members)
             if not math.isfinite(metrics[name]):
                 raise ValueError(f"nonfinite evaluation metric group {name}")
-        if not self.stop_when or any(awaiting_final(name) for name in self.stop_when):
+        if not self.stop_when:
             return control
         if self._initial_step is None:
             self._initial_values = {name: metrics[name] for name in self.stop_when}
@@ -1212,6 +1195,24 @@ def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
         except ValueError as e:
             logger.error(f"Failed to create callback: {e}")
             raise
+
+    evaluations = [callback for callback in callbacks if isinstance(callback, EvaluationCallback)]
+    if any(callback.eval_steps > 0 for callback in evaluations):
+        final_prefixes = tuple(
+            f"eval/{name}/"
+            for callback in evaluations
+            for name, profile in callback.additional_evaluations.items()
+            if profile.schedule == "final"
+        )
+        for callback in evaluations:
+            inputs = set(callback.stop_when)
+            inputs.update(key for members in callback.metric_groups.values() for key in members)
+            final_inputs = sorted(key for key in inputs if key.startswith(final_prefixes))
+            if final_inputs:
+                raise ValueError(
+                    "final-only metrics in metric_groups or stop_when require eval_steps=0 on all evaluation callbacks "
+                    f"({', '.join(final_inputs)})"
+                )
 
     return callbacks
 

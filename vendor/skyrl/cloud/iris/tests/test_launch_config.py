@@ -435,6 +435,24 @@ def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) ->
     assert config.trainer.callbacks[0].additional_evaluations == profiles
 
 
+@pytest.mark.parametrize("consumer", ["metric_groups", "stop_when"])
+def test_callback_setup_rejects_final_metrics_during_periodic_evaluation(consumer: str) -> None:
+    config = get_default_config()
+    metric = "eval/full_panel/all/avg_score"
+    dependency = {"eval/reporting/avg_score": [metric]} if consumer == "metric_groups" else {metric: {"minimum": 0.5}}
+    config.trainer.callbacks = [
+        {"type": "evaluation", "eval_steps": 2, consumer: dependency},
+        {"type": "evaluation", "eval_steps": 0, "additional_evaluations": {"full_panel": {"schedule": "final"}}},
+    ]
+
+    with pytest.raises(ValueError, match=f"final-only metrics.*{metric}"):
+        create_default_callbacks(config)
+
+    # These dependencies are available when evaluation runs only at the final step.
+    config.trainer.callbacks[0].eval_steps = 0
+    create_default_callbacks(config)
+
+
 def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "evaluation.yaml"
     document = _raw_config()
