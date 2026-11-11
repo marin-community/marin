@@ -91,6 +91,16 @@ FIXED_BASES = {
     "debian:13.0-slim": "debian:13.0-slim@sha256:f2306da7a8fb6440535937baed0ce0018736742d6dc5beec9d6a31355b259726",
 }
 
+SETUP_FAILURES = {
+    # Exercised through the lowered spec's own setup command in its base image: the
+    # package install segfaults reproducibly at one worker, so the task never reaches
+    # a workspace a verifier could grade.
+    "contrastive_solver/software-engineering_20260507_093408_007": (
+        "setup_failure: segfault during pip install, reproducible at 1 worker"
+    ),
+}
+"""Tasks excluded from the cohort because their own setup does not complete."""
+
 _META_COMMANDS = {"from", "cmd", "entrypoint", "label", "expose", "stopsignal", "healthcheck", "shell"}
 _INNOCUOUS_RUN = {"mkdir", "chmod", "touch", "ln", "rm"}
 _METACHARACTERS = "$`;&|<>()*?[~"
@@ -510,6 +520,9 @@ def main() -> None:
             raw = bytes(blob.as_py() if hasattr(blob, "as_py") else blob)
             if path in excluded:
                 evidence.append({"task_id": path, "status": "excluded_decontamination"})
+                continue
+            if path in SETUP_FAILURES:
+                evidence.append({"task_id": path, "status": "excluded_setup_failure", "reason": SETUP_FAILURES[path]})
                 continue
             record: dict = {"task_id": path, "source_archive_sha256": hashlib.sha256(raw).hexdigest()}
             try:
