@@ -28,13 +28,14 @@ from dataclasses import dataclass, replace
 import click
 import pyarrow as pa
 import pyarrow.compute as pc
+from finestore.rl.run_records import attempt_tracking
 from marin.execution.artifact import Artifact, read_record
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, run
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.rl_progress import Change, Comparison, ComparisonRole, Invariant, Label, Verdict
 from marin.rl.skyrl import SkyRLReceiptLookupError, SkyRLRun, read_skyrl_launch_receipt
-from marin.rl.skyrl_records import read_skyrl_attempt_tracking, read_skyrl_launch_config, read_skyrl_metrics
+from marin.rl.skyrl_records import read_skyrl_metrics
 from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -281,7 +282,11 @@ def _window_values(preset: presets.Preset, metrics: Mapping[int, Mapping[str, fl
     )
     values = {}
     declared = {metric.key: metric.window for metric in (*preset.guards, *preset.objectives)}
-    extra = set().union(*(row.keys() for row in metrics.values())) - declared.keys() - {"step", "attempt_id"}
+    extra = (
+        set().union(*(row.keys() for row in metrics.values()))
+        - declared.keys()
+        - {"step", "attempt_id", "metric_attempt_ids"}
+    )
     for key in (*declared, *sorted(extra)):
         window = declared.get(key, presets.WindowStatistic.MEAN)
         if key.startswith("startup/"):
@@ -458,9 +463,9 @@ def _load_run(
     terminal = read_skyrl_launch_receipt(path)
     if terminal is None:
         raise FileNotFoundError(f"no launch receipt at {path}")
-    if terminal.result.state != "succeeded":
-        raise InvalidComparison(f"native job {terminal.result.iris_job_id} is {terminal.result.state}")
-    if terminal.result.provenance is None:
+    if terminal.native.result.state != "succeeded":
+        raise InvalidComparison(f"native job {terminal.native.result.iris_job_id} is {terminal.native.result.state}")
+    if terminal.native.result.provenance is None:
         raise InvalidComparison(f"run has no recorded source provenance: {path}")
     metrics = read_skyrl_metrics(path)
     generating = preset.recipe.layout.role_plan.generate_only
@@ -469,9 +474,8 @@ def _load_run(
     ]
     invariants = list(training_invariants(preset, metrics))
     answers = scoring.evaluation_answers(path) if preset.evaluations else []
-    launch = read_skyrl_launch_config(path)
-    attempt = launch["run"]["attempt_id"]
-    tracking = read_skyrl_attempt_tracking(path, attempt)
+    launch = terminal.native.config
+    tracking = attempt_tracking(terminal)
     try:
         recorded_panels = {
             evaluation.name: scoring.read_recorded_panel(launch, evaluation.name) for evaluation in preset.evaluations
@@ -548,7 +552,7 @@ def _load_run(
         values[key + "/initial"] = value
         if key in values:
             values[key + "/gain"] = values[key] - value
-    result = terminal.result
+    result = terminal.native.result
     h100_hours = None
     if result.started_at and result.finished_at:
         seconds = (presets.utc_millis(result.finished_at) - presets.utc_millis(result.started_at)) / 1000
@@ -563,7 +567,7 @@ def _load_run(
         path=path,
         version=record.version,
         panel=panel,
-        provenance=terminal.result.provenance,
+        provenance=terminal.native.result.provenance,
         values=values,
         panel_ids=panel_ids,
         invariants=tuple(invariants),
@@ -572,7 +576,7 @@ def _load_run(
         evaluation_identity=identities,
         h100_hours=h100_hours,
         engine=tracking.get("engine", {}),
-        attempt_id=attempt,
+        attempt_id=terminal.attempt_id,
     )
 
 
@@ -892,8 +896,8 @@ def _gate_artifact(
         except (FileNotFoundError, SkyRLReceiptLookupError):
             state, attempt = "unresolved", None
         else:
-            state = receipt.result.state if receipt else None
-            attempt = receipt.config["run"]["attempt_id"] if receipt else None
+            state = receipt.native.result.state if receipt else None
+            attempt = receipt.native.config["run"]["attempt_id"] if receipt else None
         attempts.append({"run": identity, "native_state": state, "attempt_id": attempt})
     name += "-evidence-" + fingerprint_hash(canonical_json(attempts))
     step = apply(

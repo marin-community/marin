@@ -41,6 +41,7 @@ from pathlib import Path
 
 import click
 import yaml
+from finestore.rl.run_records import AttemptRecord, attempt_tracking
 from iris.cli.connect import open_iris_client
 from iris.client.client import IrisClient, get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
@@ -73,8 +74,6 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.rl.skyrl_records import (
-    SkyRLLaunchReceipt,
-    read_skyrl_attempt_tracking,
     read_skyrl_metrics,
     read_stored_skyrl_receipt,
 )
@@ -136,7 +135,7 @@ def training_config(
             "eval_before_train": False,
             "resume_mode": "latest" if preset.focus == presets.Focus.TRAIN else "none",
             "seed": presets.SEED,
-            "logger": ["console", "files", "wandb"],
+            "logger": ["console", "records", "wandb"],
             "project_name": "marin-snowball-rl",
             "tracker_commit_each_step": True,
             "training_metrics": True,
@@ -479,21 +478,21 @@ def _changed_paths(ref: str, paths: tuple[str, ...]) -> tuple[list[dict[str, str
     return [{"path": path, "status": status} for status, path in zip(fields[::2], fields[1::2], strict=True)], None
 
 
-def _grafana_links(preset: presets.Preset, receipt: SkyRLLaunchReceipt | None, cluster: str) -> dict[str, str]:
-    if receipt is None or not receipt.result.iris_job_id:
+def _grafana_links(preset: presets.Preset, receipt: AttemptRecord | None, cluster: str) -> dict[str, str]:
+    if receipt is None or not receipt.native.result.iris_job_id:
         return {}
-    run_id = receipt.config.get("run", {}).get("id")
-    if not run_id or receipt.result.started_at is None:
+    run_id = receipt.native.config.get("run", {}).get("id")
+    if not run_id or receipt.native.result.started_at is None:
         return {}
-    training_type = receipt.config.get("runtime", {}).get("training_type")
+    training_type = receipt.native.config.get("runtime", {}).get("training_type")
     return presets.grafana_links(
         run_id=run_id,
         cluster=cluster,
         training_type=(
             "async" if training_type == "async" or (training_type is None and preset.recipe.staleness) else "sync"
         ),
-        started_ms=presets.utc_millis(receipt.result.started_at),
-        finished_ms=presets.utc_millis(receipt.result.finished_at) if receipt.result.finished_at else None,
+        started_ms=presets.utc_millis(receipt.native.result.started_at),
+        finished_ms=presets.utc_millis(receipt.native.result.finished_at) if receipt.native.result.finished_at else None,
     )
 
 
@@ -533,13 +532,14 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
             receipt = read_stored_skyrl_receipt(path) if stored_only else read_skyrl_launch_receipt(path)
         except SkyRLReceiptLookupError as error:
             raise click.BadParameter(str(error)) from error
-        result = receipt.result if receipt is not None else None
-        attempt = receipt.config.get("run", {}).get("attempt_id") if receipt is not None else None
-        tracking = read_skyrl_attempt_tracking(path, attempt) if attempt else {}
-        team = receipt.config.get("iris", {}).get("wandb_entity") if receipt is not None else execution.wandb_entity
+        result = receipt.native.result if receipt is not None else None
+        tracking = attempt_tracking(receipt) if receipt is not None else {}
+        team = (
+            receipt.native.config.get("iris", {}).get("wandb_entity") if receipt is not None else execution.wandb_entity
+        )
         grafana = _grafana_links(preset, receipt, execution.cluster)
         state = (
-            result.state
+            result.state.value
             if result
             else (
                 StoragePath(get_status_path(path)).read_text().strip()
