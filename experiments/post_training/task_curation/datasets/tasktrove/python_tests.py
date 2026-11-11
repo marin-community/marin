@@ -12,6 +12,7 @@ the grader packages include the same ones, so a submission that imports one ther
 
 from dataclasses import dataclass, field
 
+from finestore.rl.curation import DaytonaSafety
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
@@ -230,6 +231,7 @@ SOURCES = {
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                 "failed every task. Kept with the kata tag."
             ),
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     "curriculum_medium": PythonTestsSource(
@@ -248,6 +250,7 @@ SOURCES = {
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                 "failed every task. Kept with the kata tag."
             ),
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     "e2egit": PythonTestsSource(
@@ -266,6 +269,7 @@ SOURCES = {
                 "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
                 "tasks; exact instruction dedup handles overlap with the large cut."
             ),
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     "e2egit_large": PythonTestsSource(
@@ -283,6 +287,7 @@ SOURCES = {
                 "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
                 "tasks; exact instruction dedup handles repeated katas."
             ),
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     "multifile": PythonTestsSource(
@@ -300,6 +305,7 @@ SOURCES = {
                 "Self-contained multi-file pytest tasks. In a 10-task sample, empty and trivial "
                 "submissions failed every task. Kept with the kata tag."
             ),
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     "pymethods": PythonTestsSource(
@@ -317,6 +323,7 @@ SOURCES = {
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                 "passed, while empty and trivial submissions failed."
             ),
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     "pymethods_large": PythonTestsSource(
@@ -334,6 +341,7 @@ SOURCES = {
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                 "passed, while empty and trivial submissions failed."
             ),
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     "unitsyn": PythonTestsSource(
@@ -351,6 +359,7 @@ SOURCES = {
                 "Self-contained pytest katas with shipped Python oracles. The standardized mode "
                 "passed all 10 sampled oracles and rejected all 10 empty submissions."
             ),
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     "unitsyn_large": PythonTestsSource(
@@ -368,6 +377,7 @@ SOURCES = {
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                 "passed, while empty and trivial submissions failed."
             ),
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     "stack_pytest": PythonTestsSource(
@@ -385,6 +395,7 @@ SOURCES = {
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                 "failed every task. Kept with the kata tag."
             ),
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
 }
