@@ -57,6 +57,7 @@ from skyrl_train.inference_engines.placement import (
 )
 
 MODEL_METADATA_PATH_KEY = "_marinskyrl_metadata_path"
+ENGINE_STARTUP_POLL_SECONDS = 30.0
 
 # ---------------------------------------------------------------------------
 # #232 FIX B — NCCL flight-recorder observability env -> vLLM engine workers.
@@ -733,6 +734,14 @@ def create_ray_wrapped_inference_engines(
             placement_mode=placement_mode,
             colocated_engine_bundles=colocated_engine_bundles,
         )
+        if verify_workers:
+            logger.info(
+                "Starting inference replica {}: actor indices {} through {}, expected hosts {}",
+                i,
+                i * data_parallel_size,
+                (i + 1) * data_parallel_size - 1,
+                [node_hosts[node] for node in bundle_nodes[i]],
+            )
         if data_parallel_size > 1 and not cross_node_ep:
             _validate_node_local_dp_ranks(i, engine_pg, dp_rank_bundle_indices)
 
@@ -1047,17 +1056,28 @@ def wait_for_inference_engine_startup(
     """Wait for every startup reply, killing the actors on failure unless the caller owns teardown."""
     deadline = time.monotonic() + timeout_seconds
     pending = list(startup_refs)
+    logger.info("Waiting for {} inference engine startup replies (budget {} seconds)", len(pending), timeout_seconds)
     try:
         while pending:
             ready, pending = ray.wait(
                 pending,
                 num_returns=1,
-                timeout=max(0.0, deadline - time.monotonic()),
+                timeout=max(0.0, min(ENGINE_STARTUP_POLL_SECONDS, deadline - time.monotonic())),
                 fetch_local=False,
             )
             if not ready:
                 pending_set = set(pending)
                 pending_indices = [index for index, ref in enumerate(startup_refs) if ref in pending_set]
+                remaining = deadline - time.monotonic()
+                logger.info(
+                    "Inference engine startup: {}/{} ready; pending actor indices {}; {} seconds remaining",
+                    len(startup_refs) - len(pending),
+                    len(startup_refs),
+                    pending_indices,
+                    max(0.0, remaining),
+                )
+                if remaining > 0:
+                    continue
                 raise TimeoutError(
                     f"inference engine startup timed out after {timeout_seconds:g} seconds; "
                     f"pending engine actors: {pending_indices}"
