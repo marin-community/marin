@@ -77,7 +77,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=3,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -96,7 +98,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -114,7 +118,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -132,7 +138,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=5,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -150,7 +158,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -174,7 +184,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_RELEASE,
                 daytona_safety=DaytonaSafety.UNSAFE,
                 daytona_snapshot_count=36884,
-                daytona_count_basis="release provenance dockerfiles inventory, task-trove@ec049a4f, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned release payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -198,7 +210,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_RELEASE,
                 daytona_safety=DaytonaSafety.UNSAFE,
                 daytona_snapshot_count=8436,
-                daytona_count_basis="release provenance dockerfiles inventory, task-trove@ec049a4f, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned release payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -213,7 +227,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -231,7 +247,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -249,7 +267,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -264,7 +284,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -279,7 +301,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -294,7 +318,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -309,7 +335,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -324,7 +352,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -343,7 +373,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -358,7 +390,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -375,7 +409,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -394,7 +430,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -412,7 +450,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -430,7 +470,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -445,7 +487,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -463,7 +507,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -478,7 +524,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -497,7 +545,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -515,7 +565,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -534,7 +586,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -552,7 +606,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=4,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -571,7 +627,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=4,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -589,7 +647,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=4,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -608,7 +668,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=2,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -626,7 +688,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -641,7 +705,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -660,7 +726,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -678,7 +746,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -693,7 +763,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -708,7 +780,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -723,7 +797,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -738,7 +814,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -753,7 +831,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -771,7 +851,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -789,7 +871,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -808,7 +892,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -823,7 +909,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -841,7 +929,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -860,7 +950,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -879,7 +971,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=4,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -897,7 +991,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=5,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -915,8 +1011,10 @@ def sources() -> list[RlDataSource]:
                 ),
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
-                daytona_snapshot_count=6,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_snapshot_count=7,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -934,8 +1032,10 @@ def sources() -> list[RlDataSource]:
                 ),
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.UNSAFE,
-                daytona_snapshot_count=32,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_snapshot_count=4048,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -950,7 +1050,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -967,7 +1069,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_RELEASE,
                 daytona_safety=DaytonaSafety.UNSAFE,
                 daytona_snapshot_count=8101,
-                daytona_count_basis="release provenance dockerfiles inventory, task-trove@ec049a4f, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned release payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -985,7 +1089,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_INPUT,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="task-trove INPUT archive environments, identity counter, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -1025,7 +1131,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_RELEASE,
                 daytona_safety=DaytonaSafety.UNSAFE,
                 daytona_snapshot_count=2698,
-                daytona_count_basis="release provenance dockerfiles inventory, task-trove@ec049a4f, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned release payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -1049,7 +1157,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_RELEASE,
                 daytona_safety=DaytonaSafety.UNSAFE,
                 daytona_snapshot_count=1000,
-                daytona_count_basis="release provenance dockerfiles inventory, task-trove@ec049a4f, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned release payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -1072,8 +1182,10 @@ def sources() -> list[RlDataSource]:
                 ),
                 dataset=TASKTROVE_RELEASE,
                 daytona_safety=DaytonaSafety.UNSAFE,
-                daytona_snapshot_count=65,
-                daytona_count_basis="release provenance dockerfiles inventory, task-trove@ec049a4f, resources defaulted",
+                daytona_snapshot_count=989,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned release payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -1087,9 +1199,11 @@ def sources() -> list[RlDataSource]:
                     "Canonical prompts with the complete native ABC-to-MIDI continuous scorer; no shipped " "solutions."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                daytona_safety=DaytonaSafety.SAFE,
-                daytona_snapshot_count=1,
-                daytona_count_basis="release provenance dockerfiles inventory, task-trove@ec049a4f, resources defaulted",
+                daytona_safety=DaytonaSafety.UNSAFE,
+                daytona_snapshot_count=1000,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned release payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -1114,7 +1228,9 @@ def sources() -> list[RlDataSource]:
                 dataset=TASKTROVE_RELEASE,
                 daytona_safety=DaytonaSafety.SAFE,
                 daytona_snapshot_count=1,
-                daytona_count_basis="release provenance dockerfiles inventory, task-trove@ec049a4f, resources defaulted",
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned release payloads; task.toml environment config"
+                ),
             )
         ),
     ]

@@ -12,7 +12,6 @@ TEST_ROOTS = (
     "vendor/harbor/tests/unit",
     "lib/shellbox/tests/test_http_service.py",
     "lib/shellbox/tests/test_iris_machine.py",
-    "experiments/post_training/task_curation/tests/test_daytona_identity.py",
 )
 
 
@@ -55,6 +54,7 @@ def run_harbor_tests(repo_root: Path, extra_args: tuple[str, ...] = ()) -> int:
             *pytest_command,
             "--noconftest",
             "experiments/post_training/task_curation/tests/test_harbor_hub.py",
+            "experiments/post_training/task_curation/tests/test_daytona_identity.py",
             *extra_args,
         ],
         cwd=repo_root,
