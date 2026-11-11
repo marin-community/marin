@@ -12,10 +12,11 @@ from verifyit.spec import Constraint, JudgeSpec
 from zephyr.context import ZephyrContext
 
 from taskcompendium.convert.answers import exact_answer_task, ifeval_task, numeric_answer_task
-from taskcompendium.evaluation.corpus import chat_item
+from taskcompendium.evaluation.corpus import EvaluationCorpus, chat_item
 from taskcompendium.evaluation.spec import EvaluationProtocol, Metric, MetricKind, Sampling, SummaryKind, TrialPolicy
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import AnswerType, NoGrader, Source, TaskSpec
+from taskcompendium.pipeline import trivial_replies
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow, SourceRecipe
@@ -173,6 +174,30 @@ def test_cli_writes_grades_skips_and_the_floor_of_each_corpus(tmp_path):
         "abstain": (0.0, 0, 0),
         "echo": (0.0, 0, 0),
     }
+
+
+def test_cli_writes_each_batch_of_grades_before_reading_later_tasks(tmp_path, monkeypatch):
+    # Long-context corpora need not fit in memory; batching leaves every output file unchanged.
+    corpus = publish_lowercase_corpus(tmp_path, [f"Write poem {index} in lowercase." for index in range(3)])
+    single = tmp_path / "single"
+    main([corpus, "--output", str(single), "--grading-machines", "none"])
+
+    batched = tmp_path / "batched"
+    written_before_each_task = []
+    read_cases = EvaluationCorpus.cases
+
+    def cases(self, **kwargs):
+        for case in read_cases(self, **kwargs):
+            written_before_each_task.append(len((batched / GRADES_FILENAME).read_text().splitlines()))
+            yield case
+
+    monkeypatch.setattr(EvaluationCorpus, "cases", cases)
+    monkeypatch.setattr(trivial_replies, "BATCH_TASKS", 1, raising=False)
+    main([corpus, "--output", str(batched), "--grading-machines", "none", "--workers", "2"])
+
+    assert written_before_each_task == [0, len(ALL_REPLIES), 2 * len(ALL_REPLIES)]
+    for name in (GRADES_FILENAME, SKIPS_FILENAME, FLOORS_FILENAME):
+        assert (batched / name).read_text() == (single / name).read_text()
 
 
 def test_cli_rejects_the_same_corpus_snapshot_twice(tmp_path):

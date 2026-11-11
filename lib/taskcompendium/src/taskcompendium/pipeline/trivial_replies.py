@@ -16,7 +16,7 @@ Run ``python -m taskcompendium.pipeline.trivial_replies CORPUS... --output DIR -
 import argparse
 import json
 from collections import Counter, defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from enum import StrEnum
@@ -49,6 +49,8 @@ from taskcompendium.runtime.task_grading import grade_task
 MEMORY_MB = Controls.memory_mb
 """Memory requested for each grading machine, the curation controls' default; local machines do not bound it."""
 GENERATION_OPERATIONS = frozenset({OperationKind.CHAT_GENERATION, OperationKind.TEXT_GENERATION})
+BATCH_TASKS = 16
+"""Tasks held in memory at a time; long-context tasks can each carry megabytes of prompt and grader evidence."""
 GRADES_FILENAME = "grades.jsonl"
 SKIPS_FILENAME = "skips.jsonl"
 FLOORS_FILENAME = "floors.json"
@@ -217,16 +219,40 @@ def dataset_digest(corpus: EvaluationCorpus) -> str:
 
 
 def grade_corpus(
-    corpus: EvaluationCorpus, replies: Sequence[TrivialReply], machines: GradingMachines | None, workers: int
-) -> tuple[list[TrivialGrade], list[TaskSkip]]:
+    corpus: EvaluationCorpus,
+    replies: Sequence[TrivialReply],
+    machines: GradingMachines | None,
+    workers: int,
+    batch_tasks: int,
+) -> Iterator[tuple[list[TrivialGrade], list[TaskSkip]]]:
     """Grade every reply on every task of ``corpus`` that can be graded here, ``workers`` grades at a time.
 
-    Returns the grades in task order and, for each other task, why it was skipped. With one worker, grading runs in
-    the calling thread.
+    Holds at most ``batch_tasks`` tasks to grade at a time and yields, in task order, their grades and the tasks
+    skipped since the previous batch, with why. With one worker, grading runs in the calling thread.
     """
     dataset = dataset_digest(corpus)
     if corpus.protocol.operation not in GENERATION_OPERATIONS:
-        return [], [TaskSkip(dataset, row.task_id, row.source_row, SkipReason.LIKELIHOOD) for row in corpus.rows()]
+        yield [], [TaskSkip(dataset, row.task_id, row.source_row, SkipReason.LIKELIHOOD) for row in corpus.rows()]
+        return
+
+    def grade(pair: tuple[GradingPlan, TrivialReply]) -> GradeResult:
+        plan, reply = pair
+        return grade_reply(plan, reply_text(plan.task, reply))
+
+    def graded(plans: list[GradingPlan]) -> list[TrivialGrade]:
+        pairs = [(plan, reply) for plan in plans for reply in replies]
+        if workers == 1:
+            results = [grade(pair) for pair in pairs]
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                results = list(pool.map(grade, pairs))
+        return [
+            TrivialGrade(
+                dataset, plan.task.id, plan.task.source.row, reply, result.status, reply_score(result), result.error
+            )
+            for (plan, reply), result in zip(pairs, results, strict=True)
+        ]
+
     plans: list[GradingPlan] = []
     skips: list[TaskSkip] = []
     for case in corpus.cases():
@@ -235,24 +261,11 @@ def grade_corpus(
             skips.append(TaskSkip(dataset, case.task.id, case.task.source.row, plan))
         else:
             plans.append(plan)
-    pairs = [(plan, reply) for plan in plans for reply in replies]
-
-    def grade(pair: tuple[GradingPlan, TrivialReply]) -> GradeResult:
-        plan, reply = pair
-        return grade_reply(plan, reply_text(plan.task, reply))
-
-    if workers == 1:
-        results = [grade(pair) for pair in pairs]
-    else:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            results = list(pool.map(grade, pairs))
-    grades = [
-        TrivialGrade(
-            dataset, plan.task.id, plan.task.source.row, reply, result.status, reply_score(result), result.error
-        )
-        for (plan, reply), result in zip(pairs, results, strict=True)
-    ]
-    return grades, skips
+        if len(plans) == batch_tasks:
+            yield graded(plans), skips
+            plans, skips = [], []
+    if plans or skips:
+        yield graded(plans), skips
 
 
 def corpus_floor(
@@ -326,11 +339,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         (args.output / SKIPS_FILENAME).open("w", encoding="utf-8") as skips_file,
     ):
         for root, corpus in corpora:
-            grades, skips = grade_corpus(corpus, replies, machines, args.workers)
-            grades_file.writelines(json.dumps(asdict(grade)) + "\n" for grade in grades)
-            skips_file.writelines(json.dumps(asdict(skip)) + "\n" for skip in skips)
-            grades_file.flush()
-            skips_file.flush()
+            grades: list[TrivialGrade] = []
+            skips: list[TaskSkip] = []
+            for batch_grades, batch_skips in grade_corpus(corpus, replies, machines, args.workers, BATCH_TASKS):
+                grades_file.writelines(json.dumps(asdict(grade)) + "\n" for grade in batch_grades)
+                skips_file.writelines(json.dumps(asdict(skip)) + "\n" for skip in batch_skips)
+                grades_file.flush()
+                skips_file.flush()
+                grades.extend(batch_grades)
+                skips.extend(batch_skips)
             floors.append(corpus_floor(corpus, root, grades, skips))
             (args.output / FLOORS_FILENAME).write_text(
                 json.dumps([asdict(floor) for floor in floors], indent=1) + "\n", encoding="utf-8"
