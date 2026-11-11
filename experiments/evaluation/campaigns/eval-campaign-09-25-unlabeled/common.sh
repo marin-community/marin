@@ -447,6 +447,7 @@ assert yaml.safe_load((harbor / "tau3-pi.yaml").read_text())["agents"][0]["kwarg
 registry_prefix = f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_DATASET_REGISTRY_REVISION']}/"
 for path in harbor.glob("*.yaml"):
     document = yaml.safe_load(path.read_text())
+    assert document.get("trial_attempt_timeout_sec") == 5400, path
     for agent in document.get("agents") or []:
         assert agent.get("override_setup_timeout_sec") == 360, path
         assert agent.get("override_timeout_sec") == 1800, path
@@ -456,6 +457,7 @@ for path in harbor.glob("*.yaml"):
     assert retry.get("exclude_exceptions") == [], path
     included = set(retry.get("include_exceptions") or [])
     assert {"AgentSetupTimeoutError", "VerifierTimeoutError"} <= included, path
+    assert "TrialTimeoutError" not in included, path
     for dataset in document.get("datasets") or []:
         registry_url = dataset.get("registry_url")
         assert not registry_url or registry_url.startswith(registry_prefix), path
