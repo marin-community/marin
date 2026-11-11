@@ -154,7 +154,7 @@ def exclusion_reasons(identifier: str, text: str, index: dict, *, check_repo: bo
 
 
 def archived_task(row: dict, *, cohort: str, revision: str) -> TaskSpec:
-    """Use the maintained original-Harbor importer without changing package files."""
+    """Return a source-pinned TaskSpec preserving the archived task package."""
     # SkyRL is an optional runtime dependency, needed only during normalization.
     from skyrl_train.dataset.harbor_import import harbor_trial_task  # noqa: PLC0415 - optional SkyRL runtime
 
