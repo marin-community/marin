@@ -268,11 +268,15 @@ one, for example: the upper end of the grader's error-rate interval is below
    needs. For example, by item 5, when a review finds no error, a stratum that
    holds 70% of the population needs about 130 cases with a consensus for an
    upper end below 2%. A review round is one sample and its reviews. Draw the
-   final round from the held-out responses of step 5, or from the whole panel
-   when the audit has no replacement, because nothing was then fitted to the
-   panel. If a round prompts changes to the replacement grader, or shows the
-   first defect that calls for one, run another round on held-out responses
-   that no earlier round used.
+   final round from the held-out responses of step 5. When the audit has no
+   replacement, nothing was fitted to the panel, so a round may draw from the
+   whole panel; still leave responses unused, because a round that shows the
+   first defect calling for a replacement needs a later round on new responses.
+   If a round prompts changes to the replacement grader, or shows the first
+   defect that calls for one, run another round on held-out responses that no
+   earlier round used. When none are left and the task allows no new ones,
+   report the replacement's error rate on the reviewed responses, and say that
+   it was fitted to them.
 2. Freeze the sample: write the sha256 of the case list in the issue before
    any review starts.
 3. Render the cases into batch files. Each case shows an opaque case id, the
