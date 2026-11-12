@@ -8,15 +8,10 @@ events, not copies of the controller DB. The controller that executes
 a job writes them, after each write transaction that changes the job or
 attempt: at submit, when an attempt is created, when it starts (with its node)
 and when it finishes. A job handed off to a federation peer is written only by
-that peer. On the hub, `cluster` is the writing controller's cluster config
-name, never empty. A controller whose Finelog forwards (the CoreWeave
-clusters) leaves `cluster` empty on its regional store, because a forwarder
-ships only rows whose `cluster` is empty; the forwarder stamps them with its
-`forwarding.cluster`, which the controller requires to equal its cluster
-name. A controller whose Finelog does not forward sets `cluster` itself:
-`marin` writes straight to the hub, and `marin-dev` keeps its own store. So
-on a regional store, filter on `cluster = ''`; on the hub, on the cluster
-name.
+that peer. `cluster` is the writing controller's cluster config name, never
+empty, on its own store and on the hub. A CoreWeave cluster's Finelog
+forwards the rows named for its `forwarding.cluster`, and each cluster config
+sets that to the cluster's name, which a test checks.
 
 ## Which columns are copied
 
