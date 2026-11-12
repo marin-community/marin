@@ -1,8 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The June model's custom-VJP RMS norm (``rms_norm_impl="custom_vjp"``) against the barrier path and a float64
-reference."""
+"""Numerical checks for the June model's custom-VJP RMS norm."""
 
 import collections
 import contextlib
@@ -18,12 +17,7 @@ from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, RMSNorm, Transformer, rms_norm
 
-# The custom-VJP RMS norm (rms_norm_impl="custom_vjp") computes the barrier path's float32 forward expression, but XLA
-# may fuse its reduction with the users the barrier keeps apart, which rounds differently: a few float32 ulps, at most
-# one ulp after the cast to bfloat16. Both paths are compared with a float64 reference, to which they are equally close.
 _RMS_SHAPES = [(4, 16), (2, 8, 128), (2, 3, 4, 128), (3, 7, 2560)]
-# Largest error of each path against the float64 reference, in units of the output dtype's epsilon times the
-# reference's largest magnitude.
 _RMS_EPS_MULTIPLE = {jnp.float32: 64, jnp.bfloat16: 2}
 _RMS_FORWARD_RTOL = {
     jnp.float32: 4 * float(jnp.finfo(jnp.float32).eps),
@@ -86,7 +80,6 @@ def test_custom_vjp_rms_norm_matches_barrier_rms_norm(dtype, shape, eps):
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
 def test_custom_vjp_rms_norm_layer_matches_reference(dtype):
-    # The weight multiplies the normalized activations outside the custom VJP, so its gradient comes from AD.
     eps = 1e-5
     x, g = _rms_inputs((2, 64, 256), dtype, seed=3)
     weight = jax.random.normal(jax.random.key(4), (256,)) * 0.3 + 1
@@ -107,9 +100,7 @@ def test_custom_vjp_rms_norm_layer_matches_reference(dtype):
 
 
 def test_bf16_custom_vjp_rms_norm_scoring_is_within_one_ulp_of_differentiated_forward():
-    # Unlike the barrier path (test_bf16_rms_norm_scoring_matches_differentiated_forward in the root June model tests),
-    # the scoring forward does not output the inverse RMS, so XLA may fuse the reduction with its users there and not in
-    # the differentiated forward.
+    # The scoring and differentiated forwards may fuse the reduction differently.
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         inputs = jax.random.normal(jax.random.PRNGKey(10), (2, 2048, 2560)).astype(jnp.bfloat16)
         weight = (jax.random.normal(jax.random.PRNGKey(11), (2560,)) * 0.3 + 1).astype(jnp.bfloat16)

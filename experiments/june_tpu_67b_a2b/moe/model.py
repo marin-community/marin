@@ -128,15 +128,8 @@ class GrugModelConfig:
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives."""
     rms_norm_impl: RmsNormImpl = "barrier"
-    """How the RMS norms (the weighted ``RMSNorm`` layers and the q/k ``rms_norm``) keep AD from changing the rounding
-    of their float32 statistics. "barrier" puts an optimization barrier on the variance, which splits the reduction
-    from its elementwise users into separate kernels; the scoring forward and the forward of a differentiated step
-    then round alike, bit for bit. "custom_vjp" normalizes through ``rms_normalize``, whose forward computes
-    ``rsqrt(mean(x^2) + eps)`` once and saves it with ``x`` for its backward, so XLA may fuse the reduction with its
-    users. The forward expression is the same, but the fusion rounds it differently (a few float32 ulps), the
-    gradients differ at float32 rounding level, and a scoring forward, which does not output the saved statistic, may
-    be fused differently from the differentiated one (one bfloat16 ulp in a few elements): keep "barrier" where
-    scores must match the trained forward exactly."""
+    """Use a variance barrier for matching scoring and training forwards, or a custom VJP that lets XLA fuse the
+    reduction. Fusion can change float32 rounding and bfloat16 outputs by one ulp."""
     replicate_attn_weights: bool = False
     """If True, store w_q/w_k/w_v/w_o fully replicated (P(None, None)) instead
     of FSDP-sharded across the data axis. Attention weights are small (~128 KB
@@ -196,11 +189,7 @@ def _rms_normalize_fwd(x: jax.Array, eps: float) -> tuple[jax.Array, tuple[jax.A
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=(1,))
 def rms_normalize(x: jax.Array, eps: float) -> jax.Array:
-    """``x * rsqrt(mean(x^2) + eps)`` over the last dimension, in float32, without a weight.
-
-    The forward computes the inverse RMS once and saves it with ``x``, and the backward uses that saved value, so the
-    gradient follows the forward's rounding of the statistic without an optimization barrier between the reduction
-    and its users (``GrugModelConfig.rms_norm_impl``)."""
+    """Normalize the last dimension in float32 without a weight or variance barrier."""
     return _rms_normalize_fwd(x, eps)[0]
 
 
@@ -391,7 +380,6 @@ class RMSNorm(eqx.Module):
     weight: jax.Array
     eps: float = eqx.field(static=True)
     impl: RmsNormImpl = eqx.field(static=True, default="barrier")
-    """``GrugModelConfig.rms_norm_impl``."""
 
     @staticmethod
     def init(dim: int, eps: float, impl: RmsNormImpl = "barrier") -> "RMSNorm":

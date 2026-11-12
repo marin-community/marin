@@ -146,9 +146,7 @@ def parse_args() -> argparse.Namespace:
         "--rms-norm-impl",
         choices=get_args(RmsNormImpl),
         default="barrier",
-        help="How the RMS norms pin their float32 statistics: an optimization barrier on the variance (barrier), or a "
-        "custom VJP that saves the inverse RMS for the backward, letting XLA fuse the reduction with its users "
-        "(custom_vjp) (GrugModelConfig.rms_norm_impl).",
+        help="RMS norm implementation: variance barrier or fusible custom VJP (default: barrier).",
     )
     parser.add_argument(
         "--watch-interval", type=int, default=10, help="Steps between gradient watch steps (0 disables)."
