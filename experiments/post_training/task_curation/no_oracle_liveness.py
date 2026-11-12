@@ -31,7 +31,7 @@ import json
 import math
 import random
 from collections import defaultdict
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -104,7 +104,7 @@ async def run_one(spec: dict, base: str, factory=None, lock_url: str | None = No
         task = task.model_copy(
             update={
                 "grader": task.grader.model_copy(
-                    update={"environment": replace(task.grader.environment, packages_lock=lock_url)}
+                    update={"environment": task.grader.environment.model_copy(update={"packages_lock": lock_url})}
                 )
             }
         )
