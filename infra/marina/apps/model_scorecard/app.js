@@ -44,18 +44,21 @@ function tooltipLines(model, evalName, cell) {
   return lines;
 }
 
-function render(data) {
-  const table = document.getElementById("scorecard");
-  const head = element("tr");
-  head.append(element("th", { class: "model", scope: "col" }, "Model"));
-  data.evals.forEach((name, column) =>
-    head.append(element("th", { scope: "col", "data-col": column, title: name }, headerText(name))),
-  );
+function renderHeader(table, evals) {
   const columns = table.appendChild(element("colgroup"));
   columns.append(element("col", { class: "model-col" }));
-  for (const _ of data.evals) columns.append(element("col"));
-  table.appendChild(element("thead")).append(head);
+  for (const _ of evals) columns.append(element("col"));
 
+  const head = element("tr");
+  head.append(element("th", { class: "model", scope: "col" }, "Model"));
+  evals.forEach((name, column) =>
+    head.append(element("th", { scope: "col", "data-col": column, title: name }, headerText(name))),
+  );
+  table.appendChild(element("thead")).append(head);
+  return head.querySelectorAll("th[data-col]");
+}
+
+function renderBody(table, data) {
   const body = table.appendChild(element("tbody"));
   data.models.forEach((model, row) => {
     const tr = body.appendChild(element("tr", { "data-row": row }));
@@ -64,9 +67,12 @@ function render(data) {
     tr.append(name);
     data.evals.forEach((evalName, column) => tr.append(scoreCell(model.cells[evalName], column)));
   });
+  return body;
+}
 
+// One delegated listener drives the tooltip and the row/column highlight for every cell.
+function attachHover(body, headers, data) {
   const tooltip = document.getElementById("tooltip");
-  const headers = head.querySelectorAll("th[data-col]");
   let active = null;
 
   function clear() {
@@ -78,10 +84,10 @@ function render(data) {
   }
 
   function show(td) {
-    const row = td.parentElement;
-    const column = Number(td.dataset.col);
     if (active && active.td === td) return;
     clear();
+    const row = td.parentElement;
+    const column = Number(td.dataset.col);
     row.classList.add("active");
     headers[column].classList.add("active");
     active = { td, row, column };
@@ -102,17 +108,19 @@ function render(data) {
     tooltip.style.top = `${below ? rect.bottom + 8 : rect.top - tip.height - 8}px`;
   }
 
-  body.addEventListener("mouseover", (event) => {
+  function showFromEvent(event) {
     const td = event.target.closest("td");
     if (td) show(td);
-  });
-  body.addEventListener("focusin", (event) => {
-    const td = event.target.closest("td");
-    if (td) show(td);
-  });
+  }
+
+  body.addEventListener("mouseover", showFromEvent);
+  body.addEventListener("focusin", showFromEvent);
   body.addEventListener("mouseleave", clear);
   body.addEventListener("focusout", clear);
   window.addEventListener("scroll", clear, { passive: true, capture: true });
 }
 
-render(JSON.parse(document.getElementById("scorecard-data").textContent));
+const data = JSON.parse(document.getElementById("scorecard-data").textContent);
+const table = document.getElementById("scorecard");
+const headers = renderHeader(table, data.evals);
+attachHover(renderBody(table, data), headers, data);
