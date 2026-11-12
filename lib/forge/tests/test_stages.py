@@ -7,6 +7,7 @@ import re
 from dataclasses import replace
 from functools import partial
 from pathlib import PurePosixPath
+from typing import override
 from unittest.mock import AsyncMock
 
 import pytest
@@ -63,6 +64,7 @@ from forge.policy import GRADER_BASE_IMAGE, Policy, load_policy, sampling
 from forge.policy.defaults import DEFAULTS_DIR
 from forge.resources.bundle import Resources
 from forge.resources.clock import Clock
+from forge.resources.env import FakeEnv
 from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.ids import Ids
 from forge.resources.inference import ContextExceeded, FakeInference
@@ -759,6 +761,28 @@ async def test_adversary_interruptions_preserve_cause_and_close_environment(
         assert isinstance(decision, Incomplete) and decision.reasons == (f"finder: {reason}",)
     await ctx.drain()
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
+
+
+# full-s-20261108-dm 2026-11-12: an adversary environment whose close never returned held its workpiece.
+async def test_adversary_environment_close_is_time_bound(workpiece: Workpiece) -> None:
+    class StuckEnv(FakeEnv):
+        @override
+        async def close(self) -> None:
+            await asyncio.Event().wait()
+
+    class StuckEnvs(Environments):
+        @override
+        async def create(self, requirements: EnvironmentRequirements) -> FakeEnv:
+            return StuckEnv(requirements.model_dump_json(), {}, lambda event: None)
+
+    setup = adversary_config(RecordingHarness(Hold("unavailable")))
+    setup = replace(setup, policy=setup.policy.overlaid({"solver.cleanup_timeout": 0.01}))
+    ctx = Context(log=EventLog())
+    bundle = replace(resources(ctx), envs=StuckEnvs())
+    result = await asyncio.wait_for(
+        adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder"), 5
+    )
+    assert result == AdversaryResult("finder", False, (), ("Hold: unavailable",))
 
 
 # full-s-20261108/S at f929478063: window exhaustion after 20 turns held otherwise reviewable tasks.

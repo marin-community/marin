@@ -135,4 +135,4 @@ async def author(ctx: Context, workpiece: Workpiece, config: ForgeConfig, resour
             )
             return await config.author.run(ctx, session, resources.inference_for("author"), tools)
     finally:
-        await close_resource(env.close, ctx.emit)
+        await close_resource(env.close, ctx.emit, timeout=policy.setting("solver.cleanup_timeout", float))

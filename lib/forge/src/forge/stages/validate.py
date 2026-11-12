@@ -290,7 +290,7 @@ async def run_adversary(
                 outcome = await harness.run(ctx, answer_report(outcome.session, feedback), client, tools)
             return AdversaryResult(name, True, findings)
     finally:
-        await close_resource(env.close, ctx.emit)
+        await close_resource(env.close, ctx.emit, timeout=config.policy.setting("solver.cleanup_timeout", float))
 
 
 async def validate(ctx: Context, workpiece: Workpiece, config: ForgeConfig, resources: Resources) -> Validated:
