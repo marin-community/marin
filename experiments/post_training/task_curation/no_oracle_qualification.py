@@ -361,8 +361,7 @@ def workspace_expectations(native_payload: bytes) -> tuple[FileExpectation, ...]
     """The copied files the native recipe leaves in the workspace, read from its own tar."""
     expectations = preservation_expectations(native_payload)
     dockerfile = _native_dockerfile(native_payload)
-    if dockerfile is None:
-        return expectations
+    assert dockerfile is not None  # preservation_expectations raises when the archive has no Dockerfile
     workdir = native_workdir(dockerfile)
     removed = removed_workspace_paths(dockerfile, workdir)
     mappings = copy_mappings(dockerfile, workdir)

@@ -23,13 +23,13 @@ from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
-from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
 from taskcompendium.pipeline.conversion import normalization_columns
 from taskcompendium.pipeline.models import SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation.calibforge_publish import TASKS_FILENAME
+from experiments.post_training.task_curation.calibforge_rebuild import LoweredSpec
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.environment_fidelity import missing_environment
@@ -45,7 +45,6 @@ class PrebuiltCohort:
     repo: str
     revision: str
     expected_rows: int
-    repo_type: str = "dataset"
 
     @property
     def dataset(self) -> SourceReference:
@@ -66,9 +65,7 @@ def import_cohort(config: PrebuiltCohort) -> str:
     published cohort never qualified.
     """
     local = Path(
-        hf_hub_download(
-            repo_id=config.repo, repo_type=config.repo_type, filename=TASKS_FILENAME, revision=config.revision
-        )
+        hf_hub_download(repo_id=config.repo, repo_type="dataset", filename=TASKS_FILENAME, revision=config.revision)
     )
     rows = pq.read_table(local).to_pylist()
     if len(rows) != config.expected_rows:
@@ -76,11 +73,10 @@ def import_cohort(config: PrebuiltCohort) -> str:
     for row in rows:
         # A lowered row is the rollout envelope: the task spec plus its machine shapes.
         envelope = json.loads(row["lowered_task_spec"])
-        task = envelope.get("task") or {}
+        lowered = LoweredSpec.from_document(envelope)
         if not envelope.get("runtime"):
             raise ValueError(f"{row['path']}: envelope carries no runtime machines")
-        spec = TaskSpec.model_validate(task)
-        reason = missing_environment(spec.model_dump(mode="json"))
+        reason = missing_environment(lowered.task.model_dump(mode="json"))
         if reason is not None:
             raise ValueError(f"{row['path']}: {reason}")
     return str(local)
@@ -113,7 +109,7 @@ def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptio
         tasks_path.upload_from(str(local))
         tasks = []
         for row in pq.read_table(local).to_pylist():
-            task = TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"])
+            task = LoweredSpec.from_document(json.loads(row["lowered_task_spec"])).task
             tasks.append(normalization_columns(task.id, task.source, task, None, (), row["path"]))
         for view in ("normalize", "final"):
             folder = destination / view

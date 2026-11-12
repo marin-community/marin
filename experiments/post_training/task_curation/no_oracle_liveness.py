@@ -27,6 +27,7 @@ no code path that deletes Daytona snapshots (see ``.agents/ops/daytona.md``).
 import argparse
 import asyncio
 import json
+import logging
 import random
 import tempfile
 from collections import defaultdict
@@ -42,6 +43,8 @@ from taskcompendium.models import EnvironmentRequirements, ScriptGrader, Verifyi
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 
 from experiments.post_training.task_curation.calibforge_rebuild import LoweredSpec
+
+logger = logging.getLogger(__name__)
 
 VERIFIER_TIMEOUT = 900.0
 
@@ -119,6 +122,9 @@ async def run_one(spec: LoweredSpec, base: str, cgroup_parent: Path | None = Non
         except TimeoutError as error:
             return LivenessResult(task.id, base, "timeout", None, None, placement.snapshot, str(error))
         except Exception as error:
+            # One task's failure must not end the cohort run; the traceback separates
+            # programming errors from sandbox failures in the run log.
+            logger.exception("liveness grading failed for %s", task.id)
             return LivenessResult(
                 task.id,
                 base,
