@@ -373,8 +373,10 @@ class OracleTaskReceipt(BaseModel):
             evidence is not None
         ):
             raise ValueError("Source environment exclusions require their measured incompatibility evidence")
-        if evidence is not None and evidence.verdict_sha256 != canonical_sha256(self.calibration.attempts[-1].verdict):
-            raise ValueError("Source environment evidence belongs to another verdict")
+        if evidence is not None:
+            verdict = self.calibration.attempts[-1].verdict
+            if verdict is None or evidence.verdict_sha256 != canonical_sha256(verdict):
+                raise ValueError("Source environment evidence belongs to another verdict")
         return self
 
     @model_validator(mode="after")
