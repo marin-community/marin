@@ -1128,10 +1128,12 @@ def sources() -> list[RlDataSource]:
             )
         ),
         # RL Data Atlas QA campaigns: eight TaskTrove cohorts privately published after
-        # conversion-fidelity, grader-soundness and blinded-reference review
-        # (atlas-env-audit qa-knowledge). Conversation-only tasks import their canonical
-        # task specs without a runtime envelope; sample controls ran on the archive-wide
-        # seeded samples, not the full populations.
+        # conversion-fidelity, grader-soundness and blinded-reference review. Each
+        # pinned revision's build.json records the measured rejections, dedup collapse
+        # and row counts; the evidence strings below carry the measured results.
+        # Conversation-only tasks import their canonical task specs without a runtime
+        # envelope; sample controls ran on the archive-wide seeded samples, not the
+        # full populations.
         _tasktrove_qa_release(
             "math_oracle",
             "TaskTrove math oracle QA cohort (TaskCompendium)",
