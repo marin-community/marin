@@ -20,7 +20,6 @@ import pyarrow.parquet as pq
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
-from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -32,6 +31,7 @@ from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.evaluation import EvalDataset
+from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
@@ -42,7 +42,6 @@ from experiments.post_training.task_curation.pipeline import (
     source_recipe,
 )
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
-from experiments.post_training.task_curation.source import TaskFormat
 from experiments.post_training.task_curation.sources import all_sources
 
 logger = logging.getLogger(__name__)
@@ -51,22 +50,6 @@ PARTITION_BYTES = 64 * 1024 * 1024
 PARTITION_ROWS = 1000
 TEXT_SCHEMA = pa.schema([("id", pa.string()), ("text", pa.large_string()), ("partition_id", pa.int64())])
 SPEC_SCHEMA = pa.schema([("id", pa.string()), ("task_spec", pa.large_string()), ("runtime", pa.large_string())])
-
-
-class SourceTextPopulation(Artifact):
-    source_id: str
-    dataset_id: str
-    dataset_revision: str
-    source_version: str
-    converter_revision: str
-    text_renderer_version: str
-    task_count: int
-    text_sha256: str
-    task_specs_sha256: str
-    main_output_dir: str
-    specs_output_dir: str
-    converter_rejections: dict[str, int]
-    admission_rejections: dict[str, int]
 
 
 @dataclass(frozen=True)
@@ -90,13 +73,14 @@ def source_documents(config: SourceTextConfig, rejected: Counter, admission: Cou
     source = all_sources()[config.source_id]
     definition = source.config
     if isinstance(definition, PrebuiltCohort):
-        native = source.info.task_format == TaskFormat.HARBOR
-        column = "task_spec" if native else "lowered_task_spec"
         with (StoragePath(config.source_input) / definition.files[0]).open("rb") as stream:
-            for batch in pq.ParquetFile(stream).iter_batches(batch_size=32, columns=[column]):
+            parquet = pq.ParquetFile(stream)
+            lowered = "lowered_task_spec" in parquet.schema_arrow.names
+            column = "lowered_task_spec" if lowered else "task_spec"
+            for batch in parquet.iter_batches(batch_size=32, columns=[column]):
                 for encoded in batch.column(0).to_pylist():
                     document = json.loads(encoded)
-                    yield (document, {}) if native else (document["task"], document["runtime"])
+                    yield (document["task"], document["runtime"]) if lowered else (document, {})
         return
     recipe_config = definition.recipe if isinstance(definition, EvalDataset) else definition
     if not isinstance(recipe_config, CurationRecipe):
