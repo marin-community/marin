@@ -37,11 +37,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, open_iris_client
-from iris.client.client import IrisClient
-from iris.cluster.client.job_info import get_job_info
+from connectrpc.errors import ConnectError
+from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.cluster.config import load_config
-from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
+from iris.cluster.constraints import region_constraint
+from iris.cluster.runtime.env import SCRATCH_CACHE_PATH
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.resources.state import JobState
 from iris.rpc import job_pb2
@@ -52,8 +52,9 @@ from rigging.timing import Duration
 from cloud.iris.artifacts import terminal_checkpoint_step
 from cloud.iris.launch_config import RunMode, SubmissionMode, load_launch_config
 from cloud.iris.paths import PROJECT_ROOT
-from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, IRIS_TASK_IMAGE, MARINSKYRL_TASK_ROOT
-from cloud.iris.runtime_environment import RuntimeMode, runtime_profile_for_strategy
+from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, IRIS_TASK_IMAGE
+from cloud.iris.runtime_environment import RuntimeMode, RuntimeProfile, runtime_profile_for_strategy, task_setup_script
+from cloud.iris.submission import submission_client
 from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX, policy_export_path, selected_export_step
 from marinskyrl.resource_locator import ModelLocatorError
 from marinskyrl.resource_locator import join_resource_path
@@ -204,10 +205,6 @@ def checkpoint_export_launch_config(
         "step": request.step,
         "checkpoint_path": request.checkpoint_path,
         "export_root": request.export_path,
-        "hf_hub_repo_id": request.hf_hub_repo_id,
-        "hf_hub_private": request.hf_hub_private,
-        "hf_hub_revision": request.hf_hub_revision,
-        "hf_upload_mode": request.hf_upload_mode.value,
     }
     return config
 
@@ -428,33 +425,17 @@ def _run_hub_upload(spec: ExportJobSpec) -> None:
     workspace = find_project_root(PROJECT_ROOT)
     if workspace is None:
         raise RuntimeError("Hub publication requires a Marin checkout")
-    if get_job_info() is not None:
-        client_context = IrisClient.in_cluster(os.environ["IRIS_CONTROLLER_URL"], workspace=workspace)
-    else:
-        submit_path = (
-            Path(spec.parent_cluster_config)
-            if spec.target_cluster and spec.parent_cluster_config
-            else cluster_path
-        )
-        if spec.target_cluster:
-            constraints.append(
-                Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=spec.target_cluster)
-            )
-        client_context = open_iris_client(config_file=submit_path, workspace=workspace)
-    # Use the existing CPU dependency set, never the Megatron/CUDA export environment.
-    setup = f'''set -euo pipefail
-checkout={MARINSKYRL_TASK_ROOT}
-uv_version="$(cat "$checkout/.uv-version")"
-UV_PROJECT_ENVIRONMENT="$IRIS_VENV" uv tool run --from "uv==$uv_version" uv sync \\
-    --project "$checkout" --python 3.12 --no-python-downloads --frozen --extra cpu --no-group dev
-'''
-    with client_context as client:
+    with submission_client(
+        str(cluster_path), spec.target_cluster, spec.parent_cluster_config, workspace
+    ) as (client, cluster_pin):
+        if cluster_pin is not None:
+            constraints.append(cluster_pin)
         job = client.submit(
             name=f"{spec.job_name or 'hf-export'}-hub-step-{spec.request.step}",
-            entrypoint=Entrypoint.from_callable(publish_verified_hf_export, spec.request),
+            entrypoint=Entrypoint.from_callable(publish_verified_hf_export, spec.request, SCRATCH_CACHE_PATH),
             task_image=IRIS_TASK_IMAGE,
             resources=ResourceSpec(cpu=4, memory="8GB", disk=disk_bytes),
-            environment=EnvironmentSpec(setup_scripts=[setup]),
+            environment=EnvironmentSpec(setup_scripts=[task_setup_script(RuntimeProfile.HUB_PUBLISH)]),
             constraints=constraints,
             max_retries_failure=1,
             max_task_failures=1,
@@ -491,6 +472,8 @@ def submit_requested_export(spec: ExportJobSpec, command: list[str]) -> None:
     except BaseException as error:
         exit_code = error.returncode if isinstance(error, subprocess.CalledProcessError) else 1
         _write_hf_export_request(request.with_status(HFExportStatus.PENDING, last_exit_code=exit_code))
+        if isinstance(error, ConnectError):
+            raise subprocess.CalledProcessError(exit_code, ["publish-hf", str(request.hf_hub_repo_id)]) from error
         raise
     _write_hf_export_request(request.with_status(HFExportStatus.COMPLETE, last_exit_code=0))
 

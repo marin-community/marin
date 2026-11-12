@@ -4,20 +4,24 @@ from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 import subprocess
+import tempfile
 from types import SimpleNamespace
 
 import cloudpickle
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from fsspec.implementations.local import LocalFileSystem
 from fsspec.implementations.memory import MemoryFileSystem
 import numpy as np
 import pytest
 from safetensors.numpy import save_file
 
-from cloud.iris import export_hf_checkpoint
+from cloud.iris import export_hf_checkpoint, submission
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
 from iris.resources.state import JobState
 from marinskyrl.checkpoint_paths import policy_export_path
 from marinskyrl.model_manifest import write_local_model_manifest
+from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.hf_export import read_hf_export_request
 from skyrl_train.hf_export_schema import HFExportRequest, HFExportStatus, HFUploadMode
 from skyrl_train.io import io
@@ -37,8 +41,11 @@ def export_run(tmp_path, monkeypatch):
         io, "filesystem_and_path",
         lambda path: (store, path) if path.startswith(("s3://", "gs://")) else (LocalFileSystem(), path),
     )
-    monkeypatch.setattr(export_hf_checkpoint, "get_job_info", lambda: None)
-    events, submissions, uploads, failures = [], [], [], []
+    monkeypatch.delenv("IRIS_CONTROLLER_URL", raising=False)
+    staging = tmp_path / "disk-cache"
+    staging.mkdir()
+    monkeypatch.setattr(export_hf_checkpoint, "SCRATCH_CACHE_PATH", str(staging))
+    events, submissions, uploads, failures, connections = [], [], [], [], []
     request = HFExportRequest(
         step=10,
         checkpoint_base_path=str(tmp_path / "checkpoints"),
@@ -66,7 +73,7 @@ def export_run(tmp_path, monkeypatch):
         write_local_model_manifest(local)
         target = policy_export_path(request.export_path, request.step)
         for file in local.iterdir():
-            with store.open(f"{target}/{file.name}", "wb") as destination:
+            with store.open(join_resource_path(target, file.name), "wb") as destination:
                 destination.write(file.read_bytes())
 
     def convert(_command, **_kwargs):
@@ -87,6 +94,7 @@ def export_run(tmp_path, monkeypatch):
                 raise RuntimeError("Hub unavailable")
             assert kwargs["revision"] == "release"
             assert (Path(kwargs["folder_path"]) / "model.safetensors").is_file()
+            assert Path(kwargs["folder_path"]).is_relative_to(staging)
             uploads.append(kwargs["path_in_repo"])
 
     monkeypatch.setattr("skyrl_train.hf_publisher.HfApi", Hub)
@@ -108,6 +116,7 @@ def export_run(tmp_path, monkeypatch):
 
     @contextmanager
     def connect(*_args, **_kwargs):
+        connections.append(_kwargs)
         def submit(**kwargs):
             assert kwargs["resources"].device is None
             assert read_hf_export_request(request.checkpoint_path).status is HFExportStatus.IN_PROGRESS
@@ -115,11 +124,11 @@ def export_run(tmp_path, monkeypatch):
             return Job()
         yield SimpleNamespace(submit=submit)
 
-    monkeypatch.setattr(export_hf_checkpoint, "open_iris_client", connect)
-    monkeypatch.setattr(export_hf_checkpoint.IrisClient, "in_cluster", connect)
+    monkeypatch.setattr(submission, "open_iris_client", connect)
+    monkeypatch.setattr(submission.IrisClient, "in_cluster", connect)
     return SimpleNamespace(
         spec=spec, events=events, uploads=uploads, failures=failures,
-        store=store, submissions=submissions, save=save_export,
+        store=store, submissions=submissions, save=save_export, connections=connections,
     )
 
 
@@ -152,14 +161,50 @@ def test_failed_hub_upload_retries_on_cpu_without_reconversion(export_run):
 @pytest.mark.parametrize("inside_job", [False, True])
 def test_cpu_upload_keeps_the_export_cluster_region(export_run, monkeypatch, inside_job):
     run = export_run
-    monkeypatch.setattr(export_hf_checkpoint, "get_job_info", lambda: object() if inside_job else None)
-    monkeypatch.setenv("IRIS_CONTROLLER_URL", "http://controller")
+    if inside_job:
+        monkeypatch.setenv("IRIS_CONTROLLER_URL", "http://controller")
     export_hf_checkpoint.submit_requested_export(run.spec, ["convert"])
     constraints = run.submissions[0]["constraints"]
     assert region_constraint(["RNO2A"]) in constraints
     cluster_pin = Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value="cw-rno2a")
     assert (cluster_pin in constraints) is (not inside_job)
     assert run.uploads == [""]
+
+
+def test_federated_cpu_upload_without_explicit_parent_uses_marin(export_run):
+    run = export_run
+    spec = replace(run.spec, parent_cluster_config=None)
+    export_hf_checkpoint.submit_requested_export(spec, ["convert"])
+    assert run.connections[0]["config_file"].name == "marin.yaml"
+    assert Constraint.create(
+        key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value="cw-rno2a"
+    ) in run.submissions[0]["constraints"]
+    assert run.uploads == [""]
+
+
+def test_remote_upload_uses_disk_cache_when_default_temp_is_memory_backed(export_run, tmp_path, monkeypatch):
+    run = export_run
+    memory_tmp = tmp_path / "tmpfs"
+    memory_tmp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(memory_tmp))
+    # The Hub boundary also checks that its uploaded files came from disk-cache staging.
+    export_hf_checkpoint.submit_requested_export(run.spec, ["convert"])
+    assert run.uploads == [""]
+
+
+def test_cpu_submission_transport_failure_leaves_a_retryable_request(export_run, monkeypatch):
+    run = export_run
+    run.save()
+
+    def unavailable(**_kwargs):
+        raise ConnectError(Code.UNAVAILABLE, "controller unavailable")
+
+    monkeypatch.setattr(submission, "open_iris_client", unavailable)
+    with pytest.raises(subprocess.CalledProcessError):
+        export_hf_checkpoint.submit_requested_export(run.spec, ["convert"])
+    assert read_hf_export_request(run.spec.request.checkpoint_path).status is HFExportStatus.PENDING
+    assert run.events == []
+    assert run.submissions == []
 
 
 def test_cpu_upload_pins_the_gcs_bucket_region(export_run, monkeypatch):
@@ -195,7 +240,7 @@ def test_completed_object_store_export_needs_no_job(export_run):
 def test_corrupt_export_is_reconverted_before_cpu_upload(export_run):
     run = export_run
     run.save()
-    shard = policy_export_path(run.spec.request.export_path, run.spec.request.step) + "/model.safetensors"
+    shard = join_resource_path(policy_export_path(run.spec.request.export_path, run.spec.request.step), "model.safetensors")
     with run.store.open(shard, "ab") as destination:
         destination.write(b"truncated-or-replaced")
     export_hf_checkpoint.submit_requested_export(run.spec, ["convert"])

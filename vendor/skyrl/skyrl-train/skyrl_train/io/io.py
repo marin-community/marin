@@ -286,7 +286,7 @@ def local_work_dir(output_path: str):
 
 
 @contextmanager
-def local_read_dir(input_path: str):
+def local_read_dir(input_path: str, *, staging_dir: str | None = None):
     """
     Context manager that provides a local directory with content from input_path.
 
@@ -295,6 +295,7 @@ def local_read_dir(input_path: str):
 
     Args:
         input_path: The source path (local or cloud)
+        staging_dir: Parent for temporary staging. Use disk-backed storage for large exports.
 
     Yields:
         str: Local directory path containing the content
@@ -305,7 +306,7 @@ def local_read_dir(input_path: str):
             model = AutoModel.from_pretrained(read_dir)
     """
     if is_cloud_path(input_path):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(dir=staging_dir) as temp_dir:
             # Download everything from cloud path to temp_dir
             download_directory(input_path, temp_dir)
             logger.info(f"Downloaded directory contents from {input_path}")

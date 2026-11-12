@@ -14,7 +14,7 @@ profile="$4"
 install_mode="$5"
 
 case "$profile" in
-  megatron|megatron-export) ;;
+  megatron|megatron-export|hub-publish) ;;
   *)
     echo "unsupported runtime profile: $profile" >&2
     exit 2
@@ -30,7 +30,11 @@ case "$install_mode" in
     ;;
 esac
 
-if [[ "$profile" == *-export ]]; then
+runtime_link_mode=symlink
+if [[ "$profile" == hub-publish ]]; then
+  runtime_extras=(--extra cpu)
+  runtime_link_mode="${UV_LINK_MODE:-copy}"
+elif [[ "$profile" == *-export ]]; then
   strategy="${profile%-export}"
   runtime_extras=(--extra "$strategy")
 else
@@ -57,11 +61,16 @@ UV_PROJECT_ENVIRONMENT="$environment" uv tool run --from "uv==$uv_version" \
   --python "$system_python" \
   --no-python-downloads \
   --frozen \
-  --link-mode symlink \
+  --link-mode "$runtime_link_mode" \
   "${dependency_group[@]}" \
   "${runtime_extras[@]}"
 
 python="$environment/bin/python"
+if [[ "$profile" == hub-publish ]]; then
+  printf 'export PATH=%q${PATH:+:$PATH}\n' "$environment/bin" > "$runtime_file"
+  "$python" -c "from skyrl_train.hf_publisher import publish_verified_hf_export"
+  exit 0
+fi
 "$python" "$project_root/marinskyrl/environment_contract.py" write-frozen-cuda-runtime "$runtime_file"
 # Native JITs invoke tools such as ninja by name after bootstrap completes.
 printf 'export PATH=%q${PATH:+:$PATH}\n' "$environment/bin" >> "$runtime_file"

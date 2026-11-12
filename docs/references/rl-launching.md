@@ -125,6 +125,8 @@ export. When its request includes `hf_hub_repo_id`, the launcher waits for that
 job to exit, then submits a CPU Iris job to upload through the existing Hub
 publisher. The CPU job uses the export cluster's CoreWeave region, or the GCS
 bucket's region, and reserves staging disk from the export manifest's file sizes.
+Publication stages its temporary model copy under Iris's disk-backed `/cache`
+mount, including on Docker workers whose `/tmp` is a memory-backed filesystem.
 Hub credentials and object-store credentials use Iris's inherited secret files.
 `hf_hub_private`, `hf_hub_revision`, and both `hf_upload_mode` values are preserved.
 

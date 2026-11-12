@@ -16,7 +16,7 @@ from skyrl_train.hf_model_io import verify_completed_hf_model_export
 from skyrl_train.io import io
 
 
-def publish_verified_hf_export(request: HFExportRequest) -> None:
+def publish_verified_hf_export(request: HFExportRequest, staging_dir: str) -> None:
     """Upload an object-store export from a CPU job without loading model tensors."""
     if request.hf_hub_repo_id is None:
         raise ValueError("Hub publication requires hf_hub_repo_id")
@@ -29,6 +29,7 @@ def publish_verified_hf_export(request: HFExportRequest) -> None:
         private=request.hf_hub_private,
         revision=request.hf_hub_revision,
         upload_mode=request.hf_upload_mode,
+        staging_dir=staging_dir,
     ).publish(export_path, request.step)
     logger.info("Hub publication completed in {:.3f} seconds", time.monotonic() - started)
 
@@ -42,6 +43,7 @@ class HuggingFacePublisher:
     revision: str = DEFAULT_HF_HUB_REVISION
     upload_mode: HFUploadMode = DEFAULT_HF_UPLOAD_MODE
     api: HfApi | None = None
+    staging_dir: str | None = None
 
     def publish(self, export_path: str, step: int) -> None:
         if not io.exists(export_path):
@@ -57,7 +59,7 @@ class HuggingFacePublisher:
                 ),
                 operation=f"create Hugging Face repository {self.repo_id}",
             )
-            with io.local_read_dir(export_path) as local_dir:
+            with io.local_read_dir(export_path, staging_dir=self.staging_dir) as local_dir:
                 call_with_hugging_face_retry(
                     lambda: api.upload_folder(
                         folder_path=str(local_dir),
