@@ -3,6 +3,7 @@
 import json
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from omegaconf import OmegaConf
@@ -12,7 +13,7 @@ from rolloutengine.models import ContextWindowExceeded, ModelTurn, Prompt, Trans
 from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
 from skyrl_train.rollouts.harbor_trial_session import HarborTrialHarness
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
-from skyrl_train.rollouts.agent_backend import TRIAL_HEADER, AgentInferenceBackend
+from skyrl_train.rollouts.agent_backend import TRIAL_HEADER, AgentGenerationStopped, AgentInferenceBackend
 from skyrl_train.inference_engines.inference_engine_client_http_endpoint import create_app, set_global_state
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker, _model_turn
 from skyrl_train.trajectory_runners.model_clients import GenerationBudgetExceededError
@@ -129,7 +130,12 @@ async def test_native_step_harness_keeps_length_stopped_rollout():
 
 
 @pytest.mark.asyncio
-async def test_original_harbor_trial_keeps_sampled_tokens_and_grade_after_context_rejection():
+@pytest.mark.parametrize(
+    "reject_call,trial_error",
+    [(2, None), (1, None), (2, "ContextLengthExceededError")],
+    ids=["sampled-turn", "first-request", "agent-error-policy"],
+)
+async def test_original_harbor_trial_keeps_sampled_tokens_and_grade_after_context_rejection(reject_call, trial_error):
     """A reduced output budget starts a new prompt; rejecting it must retain the prior turn."""
 
     class Tokenizer:
@@ -143,7 +149,7 @@ async def test_original_harbor_trial_keeps_sampled_tokens_and_grade_after_contex
 
         async def generate(self, _request):
             self.calls += 1
-            if self.calls == 2:
+            if self.calls == reject_call:
                 raise GenerationBudgetExceededError([1, 2, 3, 4])
             return {
                 "token_provenance": TokenProvenance.ENGINE,
@@ -155,13 +161,15 @@ async def test_original_harbor_trial_keeps_sampled_tokens_and_grade_after_contex
             }
 
     async def trial(complete):
-        await complete(Prompt(({"role": "user", "content": "Start"},), {"max_tokens": 8}))
         try:
+            await complete(Prompt(({"role": "user", "content": "Start"},), {"max_tokens": 8}))
             await complete(Prompt(({"role": "user", "content": "Longer history"},), {"max_tokens": 1}))
-        except ContextWindowExceeded:
+        except (ContextWindowExceeded, AgentGenerationStopped):
             pass
         return SimpleNamespace(
-            trial_uri="fixture/trial", exception_info=None, verifier_result=SimpleNamespace(rewards={"reward": 0.75})
+            trial_uri="fixture/trial",
+            exception_info=None if trial_error is None else SimpleNamespace(exception_type=trial_error),
+            verifier_result=SimpleNamespace(rewards={"reward": 0.75}),
         )
 
     class InstalledAgents:
@@ -197,7 +205,9 @@ async def test_original_harbor_trial_keeps_sampled_tokens_and_grade_after_contex
         WholeTaskProjection(config, Tokenizer()),
         Client(),
         {},
-        harbor=HarborTaskSettings.from_config(OmegaConf.create({"harbor": {"max_retries": 0}})),
+        harbor=HarborTaskSettings.from_config(
+            OmegaConf.create({"harbor": {"max_retries": 0, "enable_error_classification": True}})
+        ),
         installed_agents=InstalledAgents(),
         shutdown_timeout=5,
     )
@@ -206,10 +216,15 @@ async def test_original_harbor_trial_keeps_sampled_tokens_and_grade_after_contex
         batch = await worker.training_batch(request, [result])
     finally:
         await worker.shutdown()
+    if reject_call == 1:
+        assert result.stop_reason == "length"
+        assert result.failure is None
+        assert result.response_token_ids == ()
+        return
     assert result.grade.status == Outcome.GRADED
     assert result.grade.reward == 0.75
     assert batch["response_ids"] == [[3]]
     assert batch["loss_masks"] == [[1]]
     assert batch["rollout_logprobs"][0] == pytest.approx([-0.1])
     assert batch["verification_results"][0].status == VerificationStatus.VERIFIED
-    assert batch["rewards"] == [[0.75]]
+    assert np.sum(batch["rewards"]) == (0.75 if trial_error is None else 0.0)
