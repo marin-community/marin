@@ -153,10 +153,44 @@ def test_pytest_candidate_missing_dependency_stays_unscored(tmp_path):
         grade_pytest.grade(_spec(candidate_modules=("calc",)), tmp_path, workspace)
 
 
-def test_pytest_missing_dependency_imported_by_test_is_invalid_task(tmp_path):
+@pytest.fixture
+def incomplete_environment(tmp_path):
+    environment = tmp_path / "python-environment"
+    venv.EnvBuilder(system_site_packages=True).create(environment)
+    packages = environment / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+    (packages / "test-dependencies.pth").write_text(str(Path(pytest.__file__).parent.parent) + "\n")
+    metadata = packages / "task_dependencies-1.0.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text("Name: task-dependencies\nVersion: 1.0\n")
+    # Model an installed lock distribution whose module payload is missing.
+    (metadata / "top_level.txt").write_text("missing_test_dependency\nmissing_task_dependency\n")
+    return str(environment / "bin" / "python")
+
+
+@pytest.mark.parametrize("phase", ["startup", "collection", "mixed"])
+def test_pytest_missing_installed_dependency_is_invalid_task(tmp_path, incomplete_environment, phase):
     workspace = _project(tmp_path, FIXED, "import missing_test_dependency\n")
+    if phase == "startup":
+        (workspace / "conftest.py").write_text("import missing_test_dependency\n")
+    elif phase == "mixed":
+        (workspace / "tests/test_candidate.py").write_text("import missing_candidate\n")
     with pytest.raises(InvalidTask, match="missing_test_dependency"):
-        grade_pytest.grade(_spec(paths=("tests/test_calc.py",)), tmp_path, workspace)
+        grade_pytest.grade(_spec(python=incomplete_environment, paths=("tests",)), tmp_path, workspace)
+
+
+@pytest.mark.parametrize("phase", ["startup", "collection"])
+@pytest.mark.parametrize("paths", [("tests/test_calc.py",), ()])
+def test_pytest_missing_module_inferred_from_test_scores_zero_then_implementation_passes(tmp_path, phase, paths):
+    workspace = _project(tmp_path, FIXED)
+    (workspace / "calc.py").unlink()
+    if phase == "startup":
+        (workspace / "conftest.py").write_text("from calc import add\n")
+    spec = _spec(paths=paths)
+    failure = grade_pytest.grade(spec, tmp_path, workspace)
+    assert (failure.status, failure.reward) == (Status.SCORED, 0.0)
+    (workspace / "calc.py").write_text(FIXED)
+    success = grade_pytest.grade(spec, tmp_path, workspace)
+    assert (success.status, success.reward) == (Status.SCORED, 1.0)
 
 
 @pytest.mark.parametrize("module", ["calc", "arithmetic.calc"])
@@ -421,7 +455,9 @@ def test_pytest_candidate_added_file_in_restored_directory_scores_zero(tmp_path)
 
 
 @pytest.mark.parametrize("candidate_phase", ["startup", "collection", "no_tests"])
-def test_pytest_early_candidate_failure_cannot_hide_later_trusted_failure(tmp_path, candidate_phase):
+def test_pytest_early_candidate_failure_cannot_hide_later_trusted_failure(
+    tmp_path, incomplete_environment, candidate_phase
+):
     workspace = _project(tmp_path, FIXED)
     if candidate_phase == "startup":
         (workspace / "early").mkdir()
@@ -433,7 +469,9 @@ def test_pytest_early_candidate_failure_cannot_hide_later_trusted_failure(tmp_pa
     trusted = tmp_path / "trusted"
     (trusted / "tests").mkdir(parents=True)
     (trusted / "tests/test_protected.py").write_text("import missing_task_dependency\n")
-    spec = _spec(paths=(first, "tests/test_protected.py"), batch_size=1, restore=("tests",))
+    spec = _spec(
+        python=incomplete_environment, paths=(first, "tests/test_protected.py"), batch_size=1, restore=("tests",)
+    )
     with pytest.raises(InvalidTask, match="missing_task_dependency"):
         grade_pytest.grade(spec, trusted, workspace)
 

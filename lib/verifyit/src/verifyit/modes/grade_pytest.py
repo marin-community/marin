@@ -192,6 +192,8 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
                 if remaining <= 0:
                     return scored(0.0, reason="timeout", passed=0, total=0)
                 files = _candidate_error_files(failures, directory, protected, spec.candidate_modules)
+                if not files:
+                    files = _validate_test_dependencies(failures, paths, directory, spec.python, remaining)
                 if files and _pytest_available(spec.python, Path(scratch), remaining):
                     candidate_failure = scored(
                         0.0,
@@ -204,7 +206,6 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
                         total=0,
                     )
                     continue
-                _validate_test_dependencies(failures, paths, directory)
                 raise RuntimeError(
                     f"pytest wrote no json report (exit {result.returncode}): {_tail(result.stderr or result.stdout)}"
                 )
@@ -220,7 +221,10 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
                     raise RuntimeError("pytest collection failure has no exception provenance")
                 files = _candidate_error_files(collection_failures, directory, protected, spec.candidate_modules)
                 if not files:
-                    _validate_test_dependencies(collection_failures, paths, directory)
+                    files = _validate_test_dependencies(
+                        collection_failures, paths, directory, spec.python, max(0.0, deadline - time.monotonic())
+                    )
+                if not files:
                     raise RuntimeError(
                         "pytest collection failed in trusted code or dependencies: "
                         f"{_tail(result.stderr or result.stdout)}"
@@ -366,22 +370,48 @@ def _candidate_module_path(module: str, workspace: Path) -> str:
     return module.removeprefix(workspace.name + ".").replace(".", "/")
 
 
-def _validate_test_dependencies(failures: list[_PytestFailure], paths: tuple[str, ...], workspace: Path) -> None:
-    """Reject missing imports raised directly by a collected test module."""
+def _validate_test_dependencies(
+    failures: list[_PytestFailure], paths: tuple[str, ...], workspace: Path, python: str, timeout: float
+) -> list[str]:
+    """Infer missing candidate imports in tests, rejecting absent installed dependencies."""
     if not failures or any(failure.kind != _FailureKind.DEPENDENCY for failure in failures):
-        return
-    test_paths = {(path if path.is_absolute() else workspace / path).resolve() for path in map(Path, paths)}
+        return []
+    root = workspace.resolve()
+    test_paths = {(root / path.split("::", 1)[0]).resolve() for path in paths} or {root}
     for failure in failures:
         if not failure.filename:
-            return
-        filename = Path(failure.filename)
-        if not filename.is_absolute():
-            filename = workspace / filename
-        if filename.resolve() not in test_paths:
-            return
+            return []
+        filename = (root / failure.filename).resolve()
+        if not any(
+            filename == path
+            or (path.is_dir() and filename.is_relative_to(path) and filename.match("test*.py"))
+            or (filename.name == "conftest.py" and path.is_relative_to(filename.parent))
+            for path in test_paths
+        ):
+            return []
     missing = sorted({failure.missing_module for failure in failures if failure.missing_module})
-    if missing:
-        raise InvalidTask(f"pytest tests require modules missing from the grader environment: {', '.join(missing)}")
+    if not missing:
+        return []
+    # Inspect the selected grader interpreter outside the workspace: task modules can
+    # shadow stdlib imports, and the caller's installed packages can differ from its lock.
+    result = run_command(
+        [
+            python,
+            "-I",
+            "-c",
+            "import importlib.metadata, json, sys; "
+            "print(json.dumps(sorted(set(importlib.metadata.packages_distributions()) | sys.stdlib_module_names)))",
+        ],
+        Path(tempfile.gettempdir()),
+        timeout,
+    )
+    if result.timed_out or result.returncode != 0:
+        raise RuntimeError(f"cannot inspect pytest dependency providers: {_tail(result.stderr or result.stdout)}")
+    provided = set(json.loads(result.stdout))
+    dependencies = [module for module in missing if module.partition(".")[0] in provided]
+    if dependencies:
+        raise InvalidTask(f"pytest tests require modules missing from the grader environment: {', '.join(dependencies)}")
+    return [module.replace(".", "/") for module in missing]
 
 
 def _match_partial_ids(outcomes: dict[str, bool], reported_ids: set[str], required: tuple[str, ...]) -> dict[str, bool]:
