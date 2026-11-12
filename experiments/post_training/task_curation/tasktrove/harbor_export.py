@@ -23,6 +23,7 @@ import tomlkit
 from finestore.schema import arrow_schema
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.script_grader import GRADE_ARGV
+from taskcompendium.grading_environment import SharedGradingPolicy
 from taskcompendium.models import (
     DOCKER_IMAGE_PATTERN,
     AnswerType,
@@ -67,6 +68,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     VERIFYIT_VERDICT_REWARD,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import VERIFYIT_CONTEXT
+from experiments.post_training.task_curation.tasktrove.shared_swe import harden_shared_swe
 from experiments.post_training.task_curation.tasktrove.source_images import ARC_SOURCES, PYTEST_ENV, source_actor_build
 
 
@@ -398,6 +400,7 @@ def harbor_payload(
     grader_image: str | None,
     family: str,
     verifyit_package_root: Path | None = None,
+    shared_policy: SharedGradingPolicy | None = None,
 ) -> HarborPayload:
     """Lower tasks to Harbor, retaining TaskTrove's shared actor and grader environment."""
     if grader_image is not None and re.fullmatch(DOCKER_IMAGE_PATTERN, grader_image) is None:
@@ -408,6 +411,8 @@ def harbor_payload(
     environment = task.environment_requirements
     grader = task.grader
     repository_state = task.answer_type == AnswerType.WORKSPACE_STATE
+    if repository_state and shared_policy is None:
+        raise UnsupportedHarborTask("Shared SWE lowering requires an explicit dependency-state policy")
     verifier = _verifier_program(task, grader_image, environment_mode)
     assert isinstance(grader, (ScriptGrader, VerifyitGrader))
     files = verifier.files
@@ -570,6 +575,13 @@ def harbor_payload(
         tags=[tag for tag in task.tags if not tag.startswith("language:")],
         has_solution=bool(solution),
     )
+    if repository_state:
+        if not isinstance(spec, PytestSpec):
+            raise UnsupportedHarborTask(
+                "Shared SWE script runners need a qualified language-specific integrity contract"
+            )
+        assert shared_policy is not None
+        harden_shared_swe(files, spec=spec, dependency_state=shared_policy.dependency_state)
     return HarborPayload(record_metadata, files, modes, solution, solution_modes)
 
 
@@ -579,6 +591,7 @@ def harbor_record(
     grader_image: str | None,
     family: str,
     verifyit_package_root: Path | None = None,
+    shared_policy: SharedGradingPolicy | None = None,
 ) -> HarborRecord:
     """Package the shared file assembly into the TaskTrove parquet record."""
     payload = harbor_payload(
@@ -586,6 +599,7 @@ def harbor_record(
         grader_image=grader_image,
         family=family,
         verifyit_package_root=verifyit_package_root,
+        shared_policy=shared_policy,
     )
     return HarborRecord(
         **asdict(payload.metadata),

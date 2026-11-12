@@ -43,6 +43,8 @@ from verifyit.spec import (
     spec_from_table,
 )
 
+from taskcompendium.integrity import SharedIntegrityContract
+
 SCHEMA_VERSION = "0.30"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 TOOL_ARGUMENTS_OBJECT_ERROR = "Tool arguments must be a JSON object"
@@ -951,6 +953,7 @@ class TaskSpec(BaseModel):
     resources: ResourceGroups = Field(default_factory=ResourceGroups)
     tags: tuple[str, ...] = ()
     labels: dict[str, str] = Field(default_factory=dict)
+    integrity_contract: SharedIntegrityContract | None = None
 
     @model_validator(mode="after")
     def validate_specification(self) -> "TaskSpec":

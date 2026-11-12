@@ -443,6 +443,51 @@ the isolated network. LOCAL accepts only root commands (None, root, 0
 or 0:0). A task requiring another user needs a supporting environment rather
 than a user override.
 
+### Grading-environment trust model
+
+New SHARED SWE pytest packages use the versioned `SharedIntegrityContract` in
+TaskCompendium. The dependency-state field is explicitly `AGENT_MUTABLE`; it
+has no default. The agent runs as UID 10001 and may change dependencies and
+filesystem state outside the protected harness. Grading uses that same container,
+with its pytest child running as a separate UID, 10002.
+
+Before agent access, the harness captures the task-reference tests and conftests,
+pytest and its declared plugin implementations, the test interpreter and the
+control program. On every grading launch it kills agent-UID processes, overwrites
+the reference tests, removes added conftests, and supplies a protected pytest
+configuration with an explicit root directory. The runner imports protected
+pytest/plugins first, disables plugin autoload, and clears the test environment,
+including PYTHONPATH, PYTEST_ADDOPTS, LD_PRELOAD and user-site loading. Verifyit
+classifies missing candidate modules using its exception-provenance rules.
+
+The root controller owns the structured verdict directory. Test stdout is
+retained as diagnostic output and cannot serve as the verdict. Per-trial
+`site-packages-diff.json` and `startup-hooks-diff.json` compare dependency files
+and startup hooks to the pre-agent baseline. The contract records these audit
+probes and the known open `.pth` and `sitecustomize` hook gaps.
+
+This policy temporarily gives greater weight to avoiding bad RL signal from
+ignoring dependency changes than to preventing sophisticated tampering. It is
+subject to change. Planned LLM tamper audits will examine the dependency/hook
+diffs and the submitted changes; the present harness does not certify those
+open hooks against deliberate manipulation.
+
+Ingestion renders the agent-facing preamble from the same contract and prepends
+it to the task instruction. It explains the restored tests and pinned grading
+infrastructure, permits dependency and other filesystem changes, and takes
+precedence over contradictory later instructions. Auditor-only gaps do not
+appear in the preamble. The published TaskSpec records the contract ID, version
+and full configuration; native task.toml metadata carries the identical record.
+Changing the contract or preamble requires a new dataset version and renewed QA.
+
+The maintained Python SWE lowering is `harbor_payload` or `harbor_record` with
+`shared_policy=SharedGradingPolicy(dependency_state=SharedDependencyState.AGENT_MUTABLE)`.
+It moves the exact initial repository/dependency setup into Harbor's pre-agent
+setup and uses common actor images. Publish the resulting native package, copy
+its metadata integrity contract into the TaskSpec, then run full-population
+Harbor ORACLE filtering and SAMPLE/FULL QA. Legacy non-Python script runners
+remain unsupported until their language-specific contracts are qualified.
+
 An `Environment` declares grader build inputs. The converter records agent and
 grader requirements on each TaskSpec; execution selects suitable Shellbox machines.
 

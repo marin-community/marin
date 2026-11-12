@@ -5,11 +5,14 @@ import gzip
 from typing import cast
 
 import pytest
+import tomlkit
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.harbor.snapshots import file_map_snapshot, task_snapshot
+from taskcompendium.integrity import SharedDependencyState, SharedIntegrityContract, shared_preamble
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ResourceGroups, Source, TaskSpec
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import inline_resource
+from verifyit.spec import PytestSpec
 
 from experiments.post_training.task_curation.tasktrove.harbor_export import (
     UnsupportedHarborTask,
@@ -19,6 +22,7 @@ from experiments.post_training.task_curation.tasktrove.harbor_export import (
     harbor_payload,
     harbor_record,
 )
+from experiments.post_training.task_curation.tasktrove.shared_swe import harden_shared_swe
 
 
 @pytest.mark.parametrize(
@@ -136,3 +140,24 @@ def test_harbor_export_rejects_a_task_without_its_own_environment():
     row = {"task_json": task.model_dump_json(), "source_row": source.row, "original_path": "missing"}
     with pytest.raises(UnsupportedHarborTask, match="declares no environment"):
         harbor_payload(row, grader_image="grader@sha256:" + "a" * 64, family="fixture")
+
+
+def test_shared_ingestion_preamble_and_harness_share_the_published_contract():
+    files = {
+        "instruction.md": b"Repair the broken function.\n",
+        "environment/Dockerfile": b"FROM example.test/python@sha256:" + b"a" * 64 + b"\n",
+        "task.toml": b'[metadata]\n[environment]\n[agent]\n[verifier]\nenvironment_mode="shared"\n',
+        "tests/test.sh": b"true\n",
+    }
+    contract = harden_shared_swe(
+        files, spec=PytestSpec(paths=("tests/test_case.py",)), dependency_state=SharedDependencyState.AGENT_MUTABLE
+    )
+    config = tomlkit.parse(files["task.toml"].decode())
+    published = SharedIntegrityContract.model_validate(config["metadata"]["integrity_contract"].unwrap())
+    assert files["instruction.md"].decode().startswith(shared_preamble(published))
+    assert published == contract
+    assert files["instruction.md"].decode().endswith("Repair the broken function.\n")
+    assert all(gap not in files["instruction.md"].decode() for gap in contract.known_open_gaps)
+    assert config["agent"]["user"] == str(contract.agent_uid)
+    assert config["verifier"]["environment_mode"] == "shared"
+    assert config["verifier"]["user"] == "root"
