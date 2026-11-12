@@ -3,6 +3,8 @@
 
 """The task catalog: training and evaluation dataset declarations, keyed by name."""
 
+from dataclasses import replace
+
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
     structure_closure,
@@ -41,9 +43,11 @@ from experiments.post_training.task_curation.datasets.tasktrove import qa as tas
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
 from experiments.post_training.task_curation.source import GRANDFATHERED_MARINSKYRL_SOURCES, RlDataSource, TaskFormat
+from experiments.post_training.task_curation.source_coverage import load_coverage, require_coverage
 
 
-def all_sources() -> dict[str, RlDataSource]:
+def declared_sources() -> dict[str, RlDataSource]:
+    """Every declaration as written, before its measured coverage is attached."""
     sources = [
         *eval_code.sources(),
         *eval_harness.sources(),
@@ -85,6 +89,17 @@ def all_sources() -> dict[str, RlDataSource]:
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")
     return {source.info.id: source for source in sources}
+
+
+def all_sources() -> dict[str, RlDataSource]:
+    """Every declaration with its measured coverage; a source without coverage is rejected."""
+    coverage = load_coverage()
+    sources = {}
+    for source_id, source in declared_sources().items():
+        attached = replace(source, info=replace(source.info, coverage=coverage.get(source_id)))
+        require_coverage(source_id, attached.info.coverage)
+        sources[source_id] = attached
+    return sources
 
 
 def require_accepted_task_format(source: RlDataSource) -> None:

@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from .curriculum import register_curriculum_routes, source_coverage
+from .quality import daytona, quality, result
 from .schema import SCHEMA_SQL
 
 
@@ -105,6 +106,21 @@ def cohort_summaries(connection: Connection, load_id: str, pipeline_key: str) ->
     )
 
 
+def declared_coverage(declaration: dict[str, Any]) -> dict[str, Any] | None:
+    """A declaration's measured coverage in the shape the curriculum release serves."""
+    coverage = declaration.get("coverage")
+    if coverage is None:
+        return None
+    area = coverage["top_area"]
+    return {
+        "example_count": coverage["example_count"],
+        "intended_use": coverage["intended_use"],
+        "basis": coverage["basis"],
+        "unavailable_reason": coverage["unavailable_reason"],
+        "top_area": {**area, "node_id": f"subject:{area['subject_id']}"} if area else None,
+    }
+
+
 def create_api(services: AppletServices) -> FastAPI:
     api = FastAPI()
     engine = services.engine()
@@ -136,12 +152,19 @@ def create_api(services: AppletServices) -> FastAPI:
             ).mappings()
             inventory = []
             for row in rows:
+                declaration = row["declaration"]
+                grade = ((row["cohorts"] or {}).get("admitted") or {}).get("grade") if row["assessment_key"] else None
+                level = quality(declaration, row["curation"])
                 inventory.append(
                     {
-                        **row["declaration"],
+                        **declaration,
                         "task_count": row["task_count"],
                         "curation": row["curation"],
-                        "coverage": coverage.get(row["id"]),
+                        "coverage": declared_coverage(declaration) or coverage.get(row["id"]),
+                        "quality": level,
+                        "result": result(declaration, row["curation"], grade, level),
+                        "daytona": daytona(declaration, DAYTONA_SAFE_SNAPSHOT_LIMIT),
+                        "updated_at": metadata["loaded_at"],
                         "assessment": {
                             "status": "complete" if row["assessment_key"] else row["latest_attempt_status"],
                             "pipeline_key": row["assessment_key"],
@@ -235,6 +258,67 @@ def create_api(services: AppletServices) -> FastAPI:
             "packet": json.loads(row["packet"]),
             "omissions": row["omissions"],
             "exclusion_reason": row["exclusion_reason"],
+        }
+
+    @api.get("/source")
+    def source_evidence(source_id: str) -> dict[str, Any]:
+        """Every quality-evidence pointer the catalog holds for one source."""
+        with engine.connect() as connection:
+            source = source_record(connection, source_id)
+            assessment = None
+            summaries: dict[str, Any] = {}
+            if source["assessment_key"] is not None:
+                parameters = {"load_id": source["load_id"], "pipeline_key": source["assessment_key"]}
+                assessment = dict(
+                    connection.execute(
+                        text(
+                            """
+                    SELECT pipeline_key, scope, model, rubric, curation_uri, traces,
+                        (SELECT COUNT(*) FROM atlas_items i WHERE i.load_id = a.load_id
+                            AND i.pipeline_key = a.pipeline_key) AS sample_items
+                    FROM atlas_assessments a WHERE load_id = :load_id AND pipeline_key = :pipeline_key
+                """
+                        ),
+                        parameters,
+                    )
+                    .mappings()
+                    .one()
+                )
+                summaries = cohort_summaries(connection, **parameters)
+            reviews = [
+                dict(row)
+                for row in connection.execute(
+                    text(
+                        """
+                SELECT id, updated_at, jsonb_array_length(collection->'reviews') AS review_count
+                FROM catalog_reviews WHERE source_id = :source_id ORDER BY updated_at
+            """
+                    ),
+                    {"source_id": source_id},
+                ).mappings()
+            ]
+            load = loaded_catalog(connection)
+        declaration = source["declaration"]
+        grade = (summaries.get("admitted") or {}).get("grade")
+        level = quality(declaration, source["curation"])
+        return {
+            "declaration": declaration,
+            "coverage": declared_coverage(declaration),
+            "curation": source["curation"],
+            "diagnostics": source["diagnostics"],
+            "latest_attempt": {
+                "key": source["latest_attempt_key"],
+                "status": source["latest_attempt_status"],
+                "reason": source["reason"],
+            },
+            "assessment": assessment,
+            "cohorts": summaries,
+            "archived_reviews": reviews,
+            "quality": level,
+            "result": result(declaration, source["curation"], grade, level),
+            "daytona": daytona(declaration, DAYTONA_SAFE_SNAPSHOT_LIMIT),
+            "updated_at": load["loaded_at"],
+            "catalog": {"root": load["catalog_root"], "snapshot_id": load["snapshot_id"]},
         }
 
     @api.get("/archive")

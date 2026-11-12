@@ -15,6 +15,7 @@ from finestore.rl.curation import (
     OversightEvidence,
     OversightLevel,
     PipelineReference,
+    SourceCoverage,
     SourceDeclaration,
     daytona_verdict,
 )
@@ -167,7 +168,15 @@ class SourceInfo:
     oversight: OversightEvidence | None = None
     """The review this source's admission rests on, with its evidence pointers."""
 
+
     grading_environment: GradingEnvironmentEvidence | None = None
+
+    coverage: SourceCoverage | None = None
+    """Use, converted example count and leading curriculum subject, measured from a curriculum release.
+
+    ``all_sources()`` attaches it from ``source_coverage.json``; declarations do not write it by hand.
+    """
+
 
 
 @dataclass(frozen=True)
@@ -292,6 +301,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             daytona_snapshot_threshold=(
                 DAYTONA_SAFE_SNAPSHOT_LIMIT if info.daytona_snapshot_count is not None else None
             ),
+            coverage=info.coverage,
         )
 
 

@@ -20,24 +20,6 @@ function summary(report) {
   target.append(section);
 }
 function samples(report) {
-  for (const cohort of ["admitted", "excluded"]) {
-    const section = node("section"); section.append(node("h2", cohort === "admitted" ? "Retained sample" : "Excluded sample"));
-    for (const sample of report.evidence.samples.filter(item => item.cohort === cohort)) {
-      const details = node("details", undefined, "assessment-card"), heading = node("summary", `${labels[sample.verdict]} · ${sample.task_id}`), content = node("div");
-      details.append(heading, content); section.append(details);
-      details.addEventListener("toggle", async () => {
-        if (!details.open || content.childNodes.length) return;
-        content.append(node("p", "Loading task evidence…"));
-        try {
-          const data = await json(`api/evidence?source_id=${encodeURIComponent(source)}&task_id=${encodeURIComponent(sample.task_id)}`);
-          content.replaceChildren(node("p", data.judgment.explanation), node("p", `Citations: ${data.judgment.evidence_ids.join(", ")}`));
-          if (data.exclusion_reason) content.append(node("p", `Excluded: ${data.exclusion_reason}`));
-          if (data.omissions.length) content.append(node("p", `Omissions: ${data.omissions.join("; ")}`));
-          const packet = node("details"), title = node("summary", "Task and pipeline evidence packet"); packet.append(title, node("pre", JSON.stringify(data.packet, null, 2))); content.append(packet);
-        } catch (error) {content.replaceChildren(node("p", error.message));}
-      });
-    }
-    $("samples").append(section);
-  }
+  $('samples').append(taskReviews(source, report.evidence.samples));
 }
 (async () => {try {const data = await json(`api/assessment?source_id=${encodeURIComponent(source)}`); $("title").textContent = data.source; $("message").textContent = `Sampled model opinions · ${data.report.scope} curation`; summary(data.report); samples(data.report); $("report").textContent = JSON.stringify(data.report, null, 2);} catch (error) {$("title").textContent = "Assessment unavailable"; $("message").textContent = error.message;}})();

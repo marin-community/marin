@@ -10,12 +10,12 @@ from typing import Any
 
 from finestore.rl.curation import (
     ASSESSMENTS,
-    ATTEMPTS,
     CURRENT,
     INVENTORY,
     ITEMS,
     MAX_UNAVAILABLE_JUDGMENT_SHARE,
     POPULATIONS,
+    RUNS,
     SNAPSHOTS,
     AdmissionCounts,
     ArchivedFile,
@@ -43,7 +43,6 @@ from taskcompendium.pipeline.assessment import assessment_inputs, assessment_jud
 from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.campaign import CampaignStatus
-from experiments.post_training.task_curation.curation_catalog import RUNS
 from experiments.post_training.task_curation.source import RlDataSource
 
 
@@ -147,28 +146,6 @@ def publish_assessment(store: DataStore, catalog: CurationCatalog, attempt: Asse
     return assessment
 
 
-def published_source_starts(catalog: CurationCatalog) -> dict[str, datetime]:
-    """Return each source's latest published campaign start from retained run history."""
-    published = {key[0] for key in catalog.view.keys(SNAPSHOTS)}
-    starts = {
-        row["run_id"]: row["started_at"]
-        for row in catalog.view.iter_rows(RUNS, columns=["run_id", "started_at"])
-        if row["run_id"] in published
-    }
-    latest: dict[str, datetime] = {}
-    for row in catalog.view.iter_rows(ATTEMPTS, columns=["run_id", "source_id", "status"]):
-        if row["run_id"] not in starts or row["source_id"] is None or row["status"] == AssessmentStatus.SKIPPED:
-            continue
-        started_at = starts[row["run_id"]]
-        if started_at is None:
-            raise ValueError(f"Published campaign {row['run_id']} has no start time")
-        started = datetime.fromisoformat(started_at)
-        source_id = row["source_id"]
-        if source_id not in latest or started > latest[source_id]:
-            latest[source_id] = started
-    return latest
-
-
 def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> CatalogSnapshot:
     """Archive selected outputs before publishing their typed catalog snapshot."""
     declarations = [source.declaration for source in sources]
@@ -201,7 +178,7 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
             started = datetime.fromisoformat(run["started_at"])
             superseded = {
                 source_id
-                for source_id, prior_start in published_source_starts(catalog).items()
+                for source_id, prior_start in catalog.source_starts().items()
                 if source_id in selected and source_id in previous and started < prior_start
             }
             declarations.extend(row.declaration for source_id, row in previous.items() if source_id not in by_id)

@@ -77,7 +77,8 @@ release and vectors stay in object storage.
 The curation driver defaults to `s3://marin-us-east-02a/marin` on CoreWeave.
 `--artifact-root URL` selects another root explicitly and overrides the ambient
 `MARIN_PREFIX`. Local `--cache-dir PATH` takes precedence for local execution.
-`--output-root`, `--report-path` and `--review-cache` remain explicit locations;
+`--output-root` and `--report-path` remain explicit locations, and `--review-cache`
+defaults to `<artifact-root>/rl-data/review-cache`;
 use the same CW bucket for retained remote runs and a new versioned output
 directory for each campaign.
 
@@ -99,8 +100,8 @@ campaigns use `--publish-catalog s3://marin-us-east-02a/marin/rl-data/catalog/pr
 to accumulate results across versioned report directories, with assessment enabled.
 `--cache-dir` selects local execution and a local artifact root, so shared
 publication rejects it; local and SAMPLE runs keep separate catalogs. Remote runs
-reuse completed artifacts under `--artifact-root` and model requests under the
-explicit `--review-cache`. Reuse those locations, pinned inputs, recipe versions,
+reuse completed artifacts under `--artifact-root` and model requests under
+`--review-cache`. Reuse those locations, pinned inputs, recipe versions,
 rubric and model revisions across campaigns. A new report directory or enabling
 assessment does not force recomputation of completed work. Switching artifact
 roots does not copy completed work or model-request caches; verify their reuse
@@ -536,6 +537,58 @@ Built environments export gzip layers, including inherited base-image layers,
 for Docker and OCI consumers. Compression enters built-image cache
 identity; lock-backed worker environments retain their existing identities.
 
+## Environment fidelity and repair
+
+An agentic task's environment specification is part of the task data. A converted
+task runs in exactly the environment its source specifies, in one of two forms:
+
+- **Built:** `environment_requirements.docker_build` carries the archive's own
+  Dockerfile and build context.
+- **Lowered:** `lower_environment` in
+  [`environment_fidelity.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/environment_fidelity.py)
+  expresses the recipe on a digest-pinned base from `PINNED_BASES`. Each `RUN`
+  becomes a setup command, the last `WORKDIR` becomes the working directory and
+  `ENV` assignments become environment variables. The lowering refuses a recipe
+  it cannot express, such as one with `COPY`, `ADD`, `USER` or `ENTRYPOINT`.
+
+A conversion never substitutes a shared image, such as `iris-task`, for a task's
+own environment. A task may declare the agent image in place of its Dockerfile
+only when `provably_no_op_against` proves that the Dockerfile changes nothing:
+exactly one `FROM` of that digest, no step other than `WORKDIR` and no copied
+fixtures. That change ships as a new dataset version. `missing_environment`
+rejects an agentic task that declares no environment, because it would otherwise
+run in the host image. A source declaration cannot supply the missing
+environment. `environment_unused` reports a converted task that ignores the
+environment its archive defines.
+
+A source is **repaired** when its published specification completely describes
+how its tasks run. A conversion may change how a task is delivered, for example
+by lowering its recipe or by a reply-only rewrite that grades the assistant
+response in place of `/app/answer.txt`. Such a change is acceptable only with
+SAMPLE or FULL [oversight](#curation-modes-and-oversight-levels) evidence.
+Audits classify each source:
+
+| Class | Specification | QA evidence | Action |
+|---|---|---|---|
+| (a) | Describes runtime behavior | SAMPLE or FULL | Record the evidence |
+| (b) | Describes runtime behavior | Missing | Run SAMPLE or FULL QA before the source stays runnable |
+| (c) | Differs from runtime: a substituted image, a missing environment resolved to the host or an ignored declared environment | Not applicable | Build or lower the true environment, publish a new version and qualify it |
+
+SAMPLE or FULL QA establishes these facts, and the oversight evidence points at each:
+
+- **Conversion fidelity:** converted TaskSpecs match the source archive's
+  instruction, answer contract, environment and grader.
+- **Controls:** a golden or reference answer scores 1 wherever the source has
+  one, and an empty or wrong answer scores 0 ([graders and controls](#graders-and-controls)).
+- **Verifier execution:** the grader actually ran. A zero reward alone is not
+  proof; [sources without oracle solutions](#sources-without-oracle-solutions)
+  defines the liveness check.
+- **Blinded review:** a review of a frozen sample, at least 20 tasks for SAMPLE,
+  finds no systematic mis-grading.
+- **Drop accounting:** every conversion drop has a count and a reason.
+- **Decontamination:** overlap with the tracked evaluation sets is checked where
+  a decontamination path exists, and reported as unchecked where none exists.
+
 ## Graders and controls
 
 A task's grader is one of three kinds:
@@ -681,10 +734,27 @@ environments; uv retains its configured package cache.
 
 ## LLM-judged sources
 
-An LLM judge is part of a task's grading semantics. A judged TaskSpec whose
-`JudgeSpec.model` is empty, or whose rubric and judge settings are unstated, does
-not describe what grades the task. Such a source is unrepaired, whatever its
-sample review found, and stays at oversight `none`.
+
+An LLM judge can be part of a task's grading semantics. It is distinct from the
+GLM reviewer that grades a curation panel: the reviewer produces QA evidence,
+while a task's judge produces the reward the task trains on. A judged task
+whose judge model is empty, or whose rubric and settings are unstated, does not
+describe what grades it.
+
+The implemented judge contract lives in
+[`verifyit.modes.grade_judge`](https://github.com/marin-community/marin/blob/main/lib/verifyit/src/verifyit/modes/grade_judge.py).
+A judge specification states the rubric (`reference`, `checklist` or `labels`),
+what the judge sees (question, answer, references, context and whether
+reasoning is removed), the context and completion budgets, the reasoning
+effort, the harness (API, prompts, label parsing), and the request timeout and
+retry budget. It deliberately says nothing about the endpoint:
+`JudgeConnection` supplies the URL and key at run time, so the connection can
+change independently of the specification. Revalidate grading behavior when the
+serving implementation or the effective model revision changes; matching a
+model name does not establish equal weights, revisions or verdicts. Judge
+controls pass only after a remote verdict, and remote verdicts are not reused
+across verification runs
+([graders and controls](#graders-and-controls)).
 
 ### Choose a judge tier
 
@@ -785,6 +855,7 @@ or validated leaves the source at oversight `none`.
 The production reference and checklist graders retain each parsed provider
 response, including token usage, under `judge_responses`. Confirm that every
 remote prompt plus its completion budget fits the tier's declared context.
+
 
 ## Sources without oracle solutions
 
@@ -1003,14 +1074,18 @@ Run the driver inside an Iris job whose `EnvironmentSpec` includes
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   experiments.post_training.task_curation.driver \
-  --review-mode chat --model-revision YOUR_GLM_REVISION \
-  --review-cache CACHE_PREFIX --mode sample \
-  --max-workers 64 --coordinator-memory 16g --concurrent-sources 10 \
-  --normalized-shards 32 \
-  --image-backend gvisor \
-  --worker-image ghcr.io/marin-community/iris-task@sha256:DIGEST \
+  --review-mode chat --model-revision YOUR_GLM_REVISION --mode sample \
+  --concurrent-sources 10 --image-backend gvisor \
   --report-path CAMPAIGN_PREFIX/sample.json
 ```
+
+Iris execution defaults to `--max-workers 64`, `--coordinator-memory 16g`,
+`--normalized-shards 32` and `--review-cache <artifact-root>/rl-data/review-cache`.
+Review cache keys hash the model, its revision and the complete request, so one
+shared cache cannot return a judgment for a different prompt or model. Without
+`--worker-image`, Zephyr workers run the cluster's configured task image
+(`default_task_image`, `ghcr.io/marin-community/iris-task:latest`). Pass a
+digest-pinned `--worker-image` to record an exact image in the artifact identity.
 
 Build the [registered environments](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/images/README.md#building)
 first, with `MARIN_PREFIX` set to the driver's artifact root:
@@ -1173,12 +1248,76 @@ setup fidelity ran on every task but whose verifier liveness ran on a sample is
 `sample`, not `full`. `independent_qc` stays separate evidence about the upstream
 release and does not raise the level.
 
+
 Runnable agentic sources require an accepted task format, a production snapshot-identity
 measurement and its basis, an execution-requirement failure count, and SAMPLE or FULL
 oversight with verification evidence. Sources missing these records remain visible as
 Inventory. The grandfathered MarinSkyRL sources retain their existing admission policy.
 Conversion and sampled review can collect evidence before a source becomes runnable.
 Deprecated sources retain their history and name their qualified replacement.
+
+
+### Quality and result
+
+The Atlas labels every source with a **Quality** level and a **Result**. Quality
+says how much executed QA examined the source. Result says what that QA found.
+The rules live in `infra/marina/apps/rl_data_catalog/server/quality.py` and read
+only loaded catalog records.
+
+Quality is the stronger of two measurements:
+
+| Quality | Declared oversight | Executed grader controls in a SAMPLE or FULL pass |
+|---|---|---|
+| `FULL` | `full` | `validated`: every eligible task was validated individually |
+| `SAMPLE` | `sample` | `passed`: the control sample passed, so unsampled tasks skipped validation |
+| `QUICK` | `none` | none, `skipped` or `inconclusive` |
+
+Inventory pointers, QUICK conversions and independent QC by an upstream release
+are all `QUICK`: none of them executed this repository's QA.
+
+Result applies the first matching rule:
+
+1. `BAD` when the source is Excluded, its grader controls were `rejected`, or the
+   sampled assessment of its admitted cohort is Bad.
+2. The sampled assessment grade when it is Good or Some issues.
+3. For `SAMPLE` or `FULL` Quality, `SOME_ISSUES` when the sampled assessment is
+   Unknown, and `GOOD` otherwise: the executed controls or declared oversight
+   passed and no review found a defect.
+4. For `QUICK` Quality, the independent QC verdict when one exists.
+5. Otherwise no Result: no QA evidence exists.
+
+The Atlas colours the Result. By default it hides `QUICK` sources and `BAD`
+results; viewers can show them.
+
+### Coverage
+
+Every declaration carries a `SourceCoverage` record: its intended use
+(`train` or `eval`), its converted example count and the curriculum subject that
+the most of its converted tasks match. The values are measured and live in the
+generated table `experiments/post_training/task_curation/source_coverage.json`.
+`all_sources()` attaches each entry to its declaration and fails when a source
+has no entry. Sources without an existing measurement record a typed gap (`CoverageGap`): no conversion pipeline, not
+yet embedded, or no pinned row count. In that case the example count comes from
+the pinned declaration.
+
+`regenerate_coverage` writes the table from curriculum releases built by
+`--embed coverage`. The example count is the release's converted row count. The
+leading subject is the subject with the most placed tasks, ties broken by subject
+ID. The basis string names the release. After adding a source, run QUICK with
+`--embed coverage` on it, then regenerate the table with that release last:
+
+```bash
+uv run python -m experiments.post_training.task_curation.regenerate_coverage \
+  --release OLDER/release.json --coverage OLDER/coverage.json \
+  --release NEW/release.json --coverage NEW/coverage.json
+```
+
+A QUICK pass over a published cohort (`import_prebuilt` or
+`import_harbor_prebuilt`) validates the pinned cohort and writes its tasks as the
+converted view, so cohorts are embedded the same way.
+
+### Graders that declare a package lock cannot run on a sandbox backend
+
 
 Conversion rejects machine tasks without a declared image, build context, package lock
 or package spec, including workspace tasks with an empty capability list. Conversation-only

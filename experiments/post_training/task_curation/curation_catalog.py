@@ -14,14 +14,13 @@ from functools import partial
 from typing import Any
 
 from finestore.layout import CommitToken
-from finestore.rl.curation import ATTEMPTS, AssessmentAttempt, AssessmentPaths, AssessmentStatus, register_catalog
+from finestore.rl.curation import ATTEMPTS, RUNS, AssessmentAttempt, AssessmentPaths, AssessmentStatus, register_catalog
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.execution_telemetry import TELEMETRY_FILENAME
 
 CATALOG_DIRECTORY = "catalog"
-RUNS = "runs"
 MANIFEST_FILENAME = "manifest.json"
 FILTER_MANIFEST_FILENAME = "work/filtered/manifest.json"
 REVIEW_MANIFEST_FILENAME = "review/manifest.json"

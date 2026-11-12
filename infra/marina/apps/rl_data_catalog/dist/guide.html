@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Getting started · RL Data Atlas</title>
+  <link rel="stylesheet" href="style.css"><link rel="stylesheet" href="guide.css">
+  <script src="common.js" defer></script><script src="guide.js" defer></script>
+</head>
+<body class="guide">
+<main>
+  <header class="atlas-header"><a class="atlas-name" href="./">RL Data Atlas</a><a href="archive.html">Review archive</a></header>
+  <nav class="atlas-tabs" aria-label="Atlas views"><a href="./">By source</a><a href="curriculum.html">By curriculum</a><a href="guide.html" aria-current="page">Getting started</a></nav>
+
+  <section class="page-heading guide-heading">
+    <div>
+      <h1>From a candidate dataset to an Atlas source</h1>
+      <p id="message" role="status" aria-live="polite">Loading the catalog…</p>
+    </div>
+  </section>
+
+  <div class="guide-body">
+  <section class="lede">
+    <p>The RL Data Atlas lists every RL task source that <em>Marin</em> — the open training project whose job scheduler, dataset processing and app host this Atlas runs on — has declared, with its review state and evidence. A <em>source</em> is one pinned population of tasks, for example one Hugging Face dataset revision. A <em>task</em> is one RL problem stored as a <a href="https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/models.py">TaskSpec</a>: the prompt, the machine environment the agent works in, the answer contract and the grader (also called the verifier).</p>
+    <p>This page shows each path a dataset can take into the Atlas and what each outcome lets you rely on. Being listed is not the same as being approved for training: see the <a href="#eligibility">eligibility matrix</a>, and the <a href="#use-a-source">reader workflow</a> for using an existing source. The counts come from the catalog snapshot that the Atlas currently serves, so they change when an operator loads a new snapshot. The normative rules live in the <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md">task curation reference</a>; each step below links to its section and to the code that enforces it.</p>
+  </section>
+
+  <section aria-labelledby="flow-title">
+    <h2 id="flow-title">The paths</h2>
+    <p class="hint">Solid edges are the path a candidate takes; dashed edges leave it for an outcome or an alternate route. Agentic tasks need a machine (a shell, files or tools); reply-only and conversation tasks skip steps 2 and 3. Select an outcome to list its sources.</p>
+    <div class="flow-scroller" tabindex="0" aria-label="Flow diagram, scrolls sideways on narrow screens">
+    <svg class="flow" viewBox="0 0 1000 1240" role="img" aria-labelledby="flow-svg-title flow-svg-desc">
+      <title id="flow-svg-title">Ingestion paths for an RL Data Atlas source</title>
+      <desc id="flow-svg-desc">Seven steps from a candidate dataset to an admitted source. Non-agentic sources bypass the format and environment gates. Environment failures drop one task while the surviving tasks continue. Deprecation is drawn on the older source a qualified release replaces. Each admitted outcome states what its evidence covers: a documented sample at SAMPLE oversight, every retained task at FULL oversight.</desc>
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker>
+      </defs>
+
+      <!-- spine connectors -->
+      <g class="edge">
+        <path d="M245,78 V116" marker-end="url(#arrow)"/>
+        <path d="M245,188 V228" marker-end="url(#arrow)"/>
+        <path d="M245,314 V368" marker-end="url(#arrow)"/>
+        <path d="M245,492 V530" marker-end="url(#arrow)"/>
+        <path d="M245,602 V640" marker-end="url(#arrow)"/>
+        <path d="M245,808 V846" marker-end="url(#arrow)"/>
+        <path d="M245,932 V970" marker-end="url(#arrow)"/>
+        <path d="M245,1056 V1098" marker-end="url(#arrow)"/>
+        <path d="M245,1056 V1078 H742 V1098" marker-end="url(#arrow)"/>
+        <!-- non-agentic bypass around the agentic format and environment gates -->
+        <path d="M30,160 H16 V576 H28" marker-end="url(#arrow)"/>
+      </g>
+      <!-- per-task drop-and-continue loop -->
+      <g class="edge exit">
+        <path d="M680,454 V520 H253" marker-end="url(#arrow)"/>
+      </g>
+      <!-- exits -->
+      <g class="edge exit">
+        <path d="M460,152 H588" marker-end="url(#arrow)"/>
+        <path d="M460,250 H524 V260 H588" marker-end="url(#arrow)"/>
+        <path d="M460,296 H524 V340 H588" marker-end="url(#arrow)"/>
+        <path d="M460,422 H588" marker-end="url(#arrow)"/>
+        <path d="M460,562 H588" marker-end="url(#arrow)"/>
+        <path d="M460,680 H588" marker-end="url(#arrow)"/>
+        <path d="M460,744 H524 V776 H588" marker-end="url(#arrow)"/>
+        <path d="M460,1013 H524 V1002 H588" marker-end="url(#arrow)"/>
+      </g>
+      <g class="elabel">
+        <text x="253" y="212">pipeline present</text>
+        <text x="255" y="345">accepted format</text>
+        <text x="270" y="514">drop this task; survivors continue</text>
+        <text x="255" y="624">SAMPLE or FULL assessment</text>
+        <text x="255" y="830">qualification passed</text>
+        <text x="255" y="1092">evidence covers a documented sample</text>
+        <text x="480" y="1070">evidence covers every retained task</text>
+        <text transform="rotate(-90 12 400)" x="12" y="400">non-agentic: go to 4</text>
+      </g>
+
+      <!-- spine nodes -->
+      <g class="node start"><rect x="30" y="20" width="430" height="58" rx="10"/>
+        <text x="50" y="45" class="nt">Candidate dataset</text>
+        <text x="50" y="66" class="ns">Pinned HF commit, URL + SHA-256, or Harbor Hub digest</text></g>
+
+      <g class="node"><rect x="30" y="116" width="430" height="72" rx="10"/>
+        <text x="50" y="141" class="nt"><tspan class="step">1</tspan> Declare an RlDataSource</text>
+        <text x="50" y="162" class="ns">Registered: stable ID, pinned input, origin, family</text>
+        <text x="50" y="179" class="ns">Registration alone is Inventory; pipelines enable QA</text></g>
+
+      <g class="node"><rect x="30" y="228" width="430" height="86" rx="10"/>
+        <text x="50" y="253" class="nt"><tspan class="step">2</tspan> Task format gate (agentic only)</text>
+        <text x="50" y="274" class="ns">Accepted: TaskCompendium or Harbor task directories</text>
+        <text x="50" y="291" class="ns">MarinSkyRL blends only from the frozen list</text>
+        <text x="50" y="307" class="ns muted-text">Checked by runnable_sources() before any run starts</text></g>
+
+      <g class="node"><rect x="30" y="368" width="430" height="124" rx="10"/>
+        <text x="50" y="393" class="nt"><tspan class="step">3</tspan> Environment fidelity, per task</text>
+        <text x="50" y="414" class="ns">Each task runs in exactly its specified environment:</text>
+        <text x="62" y="433" class="ns">· built: docker_build with the archive's Dockerfile</text>
+        <text x="62" y="451" class="ns">· lowered: recipe as setup commands on a pinned base</text>
+        <text x="62" y="469" class="ns">· shared image only with a mechanical no-op proof</text>
+        <text x="50" y="486" class="ns muted-text">an unsupported recipe or missing environment rejects the task</text></g>
+
+      <g class="node"><rect x="30" y="530" width="430" height="72" rx="10"/>
+        <text x="50" y="555" class="nt"><tspan class="step">4</tspan> Choose a curation mode</text>
+        <text x="50" y="576" class="ns">QUICK converts only; SAMPLE and FULL can admit</text>
+        <text x="50" y="593" class="ns muted-text" data-fill="modes">Modes in this snapshot: loading…</text></g>
+
+      <g class="node"><rect x="30" y="640" width="430" height="168" rx="10"/>
+        <text x="50" y="665" class="nt"><tspan class="step">5</tspan> Qualify at SAMPLE or FULL oversight</text>
+        <text x="62" y="687" class="ns">· conversion fidelity and drop accounting</text>
+        <text x="62" y="706" class="ns">· controls: golden answer = 1, empty or wrong = 0</text>
+        <text x="62" y="725" class="ns">· no oracle: payload, setup and verifier liveness</text>
+        <text x="62" y="744" class="ns">· judge spec: pinned model, rubric, end-to-end check</text>
+        <text x="62" y="763" class="ns">· blinded sample review; overlap checked or UNCHECKED</text>
+        <text x="50" y="789" class="ns muted-text" data-fill="oracle">Oracle: loading…</text></g>
+
+      <g class="node"><rect x="30" y="846" width="430" height="86" rx="10"/>
+        <text x="50" y="871" class="nt"><tspan class="step">6</tspan> Daytona capacity and compatibility</text>
+        <text x="50" y="892" class="ns">Static: snapshot identities from the declared specs</text>
+        <text x="50" y="909" class="ns">via the naming path; no API calls, no quota tested</text>
+        <text x="50" y="926" class="ns" data-fill="daytona-rule">beyond the snapshot cap or refused: still ingested</text></g>
+
+      <g class="node"><rect x="30" y="970" width="430" height="86" rx="10"/>
+        <text x="50" y="995" class="nt"><tspan class="step">7</tspan> Publish, then load</text>
+        <text x="50" y="1016" class="ns">Private open-athena HF release, TaskCompendium format</text>
+        <text x="50" y="1033" class="ns">FULL publishes a snapshot; an operator loads it</text>
+        <text x="50" y="1050" class="ns muted-text">qualified ≠ published ≠ loaded, three separate operations</text></g>
+
+      <!-- outcome pills -->
+      <g class="pill inventory" data-leaf="inventory" tabindex="0" role="button" aria-label="Inventory only: list sources"><rect x="590" y="116" width="380" height="64" rx="10"/>
+        <text x="608" y="136" class="pc">No pipeline</text><text x="608" y="156" class="pt">Inventory only</text>
+        <text x="608" y="173" class="pn" data-count="inventory">…</text></g>
+
+      <g class="pill rejected"><rect x="590" y="228" width="380" height="64" rx="10"/>
+        <text x="608" y="248" class="pc">No declared format, or MarinSkyRL off the list</text><text x="608" y="268" class="pt">Rejected at selection</text>
+        <text x="608" y="285" class="pn">Fails before any run; not cataloged as runnable</text></g>
+
+      <g class="pill grandfathered" data-leaf="grandfathered" tabindex="0" role="button" aria-label="Grandfathered blends: list sources"><rect x="590" y="308" width="380" height="64" rx="10"/>
+        <text x="608" y="328" class="pc">MarinSkyRL blend on the frozen grandfather list</text><text x="608" y="348" class="pt">Grandfathered blend</text>
+        <text x="608" y="365" class="pn" data-count="grandfathered">…</text></g>
+
+      <g class="pill rejected"><rect x="590" y="390" width="380" height="64" rx="10"/>
+        <text x="608" y="410" class="pc">Runtime differs from spec: class (c)</text><text x="608" y="430" class="pt">Task rejected, source continues</text>
+        <text x="608" y="447" class="pn">Drop the task, keep the reason, survivors continue</text></g>
+
+      <g class="pill inventory" data-leaf="inventory" tabindex="0" role="button" aria-label="Inventory only: list sources"><rect x="590" y="530" width="380" height="64" rx="10"/>
+        <text x="608" y="550" class="pc">QUICK pass: oversight none</text><text x="608" y="570" class="pt">Inventory only, not admissible</text>
+        <text x="608" y="587" class="pn" data-count="inventory">…</text></g>
+
+      <g class="pill needs-qa" data-leaf="unreviewed" tabindex="0" role="button" aria-label="Oversight not recorded: list sources"><rect x="590" y="648" width="380" height="64" rx="10"/>
+        <text x="608" y="668" class="pc">Snapshots predating the oversight field</text><text x="608" y="688" class="pt">Oversight not recorded</text>
+        <text x="608" y="705" class="pn" data-count="unreviewed">…</text></g>
+
+      <g class="pill excluded" data-leaf="excluded" tabindex="0" role="button" aria-label="Excluded: list sources"><rect x="590" y="744" width="380" height="64" rx="10"/>
+        <text x="608" y="764" class="pc">QA finds a defect or a duplicate</text><text x="608" y="784" class="pt">Excluded, with the reason</text>
+        <text x="608" y="801" class="pn" data-count="excluded">…</text></g>
+
+      <g class="pill deprecated" data-leaf="deprecated" tabindex="0" role="button" aria-label="Deprecated: list sources"><rect x="590" y="970" width="380" height="64" rx="10"/>
+        <text x="608" y="990" class="pc">The qualified release replaces it, or it is withdrawn</text><text x="608" y="1010" class="pt">Older source: Deprecated</text>
+        <text x="608" y="1027" class="pn" data-count="deprecated">…</text></g>
+
+      <!-- admitted outcomes -->
+      <g class="pill admitted" data-leaf="sample" tabindex="0" role="button" aria-label="Admitted at SAMPLE oversight: list sources"><rect x="30" y="1100" width="455" height="118" rx="12"/>
+        <text x="50" y="1126" class="pt">Admitted, oversight SAMPLE</text>
+        <text x="50" y="1148" class="ns">All retained tasks passed checks; execution sampled</text>
+        <text x="50" y="1172" class="pn" data-count="sample">…</text>
+        <text x="50" y="1194" class="pn" data-coverage="sample">…</text>
+        <text x="50" y="1216" class="pn" data-daytona="sample">…</text></g>
+
+      <g class="pill admitted full" data-leaf="full" tabindex="0" role="button" aria-label="Admitted at FULL oversight: list sources"><rect x="515" y="1100" width="455" height="118" rx="12"/>
+        <text x="535" y="1126" class="pt">Admitted, oversight FULL</text>
+        <text x="535" y="1148" class="ns">Every retained task ran; semantic review stays sampled</text>
+        <text x="535" y="1172" class="pn" data-count="full">…</text>
+        <text x="535" y="1194" class="pn" data-coverage="full">…</text>
+        <text x="535" y="1216" class="pn" data-daytona="full">…</text></g>
+    </svg>
+    </div>
+    <div class="flow-legend" aria-hidden="true">
+      <span><i class="edge-sample"></i>the candidate's required path</span>
+      <span><i class="edge-sample dashed"></i>exit into an outcome, or an alternate route such as the non-agentic bypass</span>
+    </div>
+  </section>
+
+  <section aria-labelledby="leaves-title">
+    <h2 id="leaves-title">What each outcome guarantees</h2>
+    <p>The <a href="./">By source</a> view labels every source with a <strong>Quality</strong> level — <code>QUICK</code>, <code>SAMPLE</code> or <code>FULL</code> — saying how much executed QA examined it, where independent QC by an upstream release also counts as <code>QUICK</code> because this repository did not execute it. Each source also carries a <strong>Result</strong> — <code>GOOD</code>, <code>SOME_ISSUES</code> or <code>BAD</code> — saying what that QA found. The rules live in <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#quality-and-result">Quality and result</a>. Each row links to an evidence page showing the recorded pointers behind those labels; evidence that was never recorded, or that lives in a private release you cannot open, shows as missing or restricted.</p>
+    <p>Being admitted is evidence, not eligibility. A training run can select only sources that are runnable, not deprecated or excluded, whose manifests record a <code>mode: full</code> artifact, and that a <a href="#selection">selection recipe</a> names. Oversight describes the execution evidence behind admission; <code>SAMPLE</code> oversight and a <code>FULL</code>-mode artifact are different axes, and selection requires the artifact. The Daytona label applies to admitted and runnable sources; it describes where a source can run, not whether it is admitted.</p>
+    <div class="table-wrap">
+    <table class="leaf-table" id="eligibility">
+      <caption class="hint">Eligibility at a glance: what lists a source in the Atlas, and what additionally selects it for training.</caption>
+      <thead><tr><th scope="col">Source</th><th scope="col">Listed in the Atlas</th><th scope="col">Selectable for training additionally requires</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Ordinary source</th>
+          <td>A declaration or a published snapshot that contains it.</td>
+          <td>Runnable and not deprecated or excluded; a <code>mode: full</code> artifact; a selection recipe naming it.</td></tr>
+        <tr><th scope="row">Grandfathered blend</th>
+          <td>Membership in the frozen <code>GRANDFATHERED_MARINSKYRL_SOURCES</code> list.</td>
+          <td>The same FULL-artifact and recipe rules. Only the format gate is waived; measured environments and Daytona counts are still not established.</td></tr>
+        <tr><th scope="row">Oversight not recorded (legacy)</th>
+          <td>A snapshot loaded before the oversight field existed, or a source without declared oversight.</td>
+          <td>The same FULL-artifact and recipe rules. Without oversight evidence this page cannot establish what covered the retained tasks; inspect the linked campaign record.</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <div class="table-wrap">
+    <table class="leaf-table">
+      <thead><tr><th scope="col">Outcome</th><th scope="col">You can rely on</th><th scope="col">You cannot rely on</th><th scope="col" class="num">Sources</th></tr></thead>
+      <tbody>
+        <tr><th scope="row"><span class="swatch rejected"></span>Rejected</th>
+          <td>Nothing from it reaches training. A rejected agentic source fails <code>runnable_sources()</code>. A rejected task is a typed rejection whose reason the source <code>manifest.json</code> counts, and the surviving tasks continue.</td>
+          <td>Seeing it as a row here. Task-level rejections appear only in the source manifest and its Atlas source details.</td>
+          <td class="num muted">—</td></tr>
+        <tr><th scope="row"><span class="swatch inventory"></span>Inventory only</th>
+          <td>A pinned reference, a declared row count where known and any independent QC that the upstream release recorded.</td>
+          <td>Any execution evidence. Quality shows <code>QUICK</code> (or its independent QC verdict as the Result). The source cannot be selected for training; it can still qualify through a later SAMPLE or FULL pass.</td>
+          <td class="num"><button class="count" data-leaf="inventory" data-count="inventory-n">…</button></td></tr>
+        <tr><th scope="row"><span class="swatch grandfathered"></span>Grandfathered blend</th>
+          <td>Membership is exactly the frozen <code>GRANDFATHERED_MARINSKYRL_SOURCES</code> list: the Nemotron Ultra mixture components that predate the task-directory requirement. No new source can join the list.</td>
+          <td>A measured environment, a snapshot count or the environment-fidelity rules; these blends predate them and sit outside the current audit. Their training eligibility follows the same FULL-artifact rule as any other source.</td>
+          <td class="num"><button class="count" data-leaf="grandfathered" data-count="grandfathered-n">…</button></td></tr>
+        <tr><th scope="row"><span class="swatch needs-qa"></span>Oversight not recorded</th>
+          <td>The source passed the format gate and is runnable. A non-agentic row may rest on a campaign record you can open in its source details.</td>
+          <td>A declared oversight level or its evidence. This snapshot does not establish execution coverage: absent metadata does not prove either that QA passed or that it never ran. An agentic source here still owes its SAMPLE or FULL QA (class (b)) before it stays runnable.</td>
+          <td class="num"><button class="count" data-leaf="unreviewed" data-count="unreviewed-n">…</button></td></tr>
+        <tr><th scope="row"><span class="swatch excluded"></span>Excluded</th>
+          <td>The source notes say which defect or duplicate the review found. Its history stays in the Atlas.</td>
+          <td>Any of its tasks in a run. Excluded sources are not runnable.</td>
+          <td class="num"><button class="count" data-leaf="excluded" data-count="excluded-n">…</button></td></tr>
+        <tr><th scope="row"><span class="swatch deprecated"></span>Deprecated</th>
+          <td>A named replacement or withdrawal reason in the notes, and the retained history.</td>
+          <td>Any of its tasks in a run. <code>runnable_sources()</code> drops deprecated sources.</td>
+          <td class="num"><button class="count" data-leaf="deprecated" data-count="deprecated-n">…</button></td></tr>
+        <tr><th scope="row"><span class="swatch admitted"></span>Admitted, SAMPLE</th>
+          <td>Every retained task passed the mechanical admission checks, including environment fidelity. Controls, verifier execution and a blinded review cover a documented sample of that retained cohort; the oversight evidence names the campaign, the recipe revision and the reviewed and admitted counts. Unsampled execution stays unverified.</td>
+          <td>That every task's verifier works. Without a positive control, neither label certifies solvability. Evaluation overlap may be recorded UNCHECKED, and admission can coexist with it.</td>
+          <td class="num"><button class="count" data-leaf="sample" data-count="sample-n">…</button></td></tr>
+        <tr><th scope="row"><span class="swatch full"></span>Admitted, FULL</th>
+          <td>Every retained task ran end to end, including its verifier — declared oversight <code>full</code>, or executed controls that validated every eligible task.</td>
+          <td>Grader correctness beyond the controls and review: a live verifier can still mis-grade, and semantic review remains sampled. Selection removes exact heldout matches; it does not do semantic decontamination.</td>
+          <td class="num"><button class="count" data-leaf="full" data-count="full-n">…</button></td></tr>
+      </tbody>
+    </table>
+    </div>
+    <dl class="daytona-labels">
+      <div><dt><span class="chip quality-good">Daytona check: fits budget</span></dt><dd data-fill="daytona-safe">The source's declared environments map to at most the snapshot limit of unique identities and pass the recorded capability rules. Static measurement only: no provisioning, quota headroom or rollout was tested.</dd></div>
+      <div><dt><span class="chip quality-bad">Exceeds budget</span></dt><dd data-fill="daytona-unsafe">A run would need more snapshots than the limit, or asks for something the capability rules refuse. The source stays ingested; gVisor or a rebuilt, digest-pinned image are options to validate, not guaranteed remedies.</dd></div>
+      <div><dt><span class="chip quality-unassessed">Not measured</span></dt><dd>An agentic source without a recorded snapshot count: its Daytona behavior is unknown. Non-agentic sources provision no sandbox, so the label is N/A for them.</dd></div>
+    </dl>
+
+    <section id="leaf-list" class="leaf-list" hidden aria-live="polite">
+      <div class="leaf-list-head"><h3 id="leaf-list-title"></h3><button id="leaf-list-close" class="text-button" type="button">Close list</button></div>
+      <div class="table-wrap"><table class="leaf-sources">
+        <thead><tr><th scope="col">Source</th><th scope="col">Origin</th><th scope="col">Oversight</th><th scope="col">Daytona check</th><th scope="col">Oracle validation</th></tr></thead>
+        <tbody id="leaf-rows"></tbody>
+      </table></div>
+    </section>
+  </section>
+
+  <section aria-labelledby="steps-title" class="steps">
+    <h2 id="steps-title">The steps in detail</h2>
+
+    <article id="declare">
+      <h3><span class="step-badge">1</span> Declare the source</h3>
+      <p>Each dataset is one <code>RlDataSource</code> in a module under <a href="https://github.com/marin-community/marin/tree/main/experiments/post_training/task_curation/datasets"><code>datasets/</code></a>, collected by <code>all_sources()</code> in <a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py"><code>sources.py</code></a>. Its <code>SourceInfo</code> gives a stable ID, a title, an <code>origin</code> (where the rows came from, such as the Hugging Face organization), a <code>family</code> (the task family that selection quotas draw from), search tags and notes; the measured <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#coverage">curriculum coverage</a> is a separate record attached at load time, not another name for the family. Its input is pinned to an immutable revision.</p>
+      <p>A <em>pipeline</em> is the executable conversion procedure: one graph-building callable (usually <code>process_rows</code>) that reads the pinned rows and produces TaskSpecs and typed rejections. A source without a <code>pipeline</code> is <em>Inventory</em>: listed with its evidence, never admitted. The tag <code>deprecated</code> marks it Deprecated and <code>excluded</code> marks it Excluded; the notes carry the reason. Declaration, qualification and loading are independent: registering a source makes it visible; only a qualified release and an operator's load put its rows in the served snapshot.</p>
+<pre><code>RlDataSource(
+    info=SourceInfo(id="Task Trove:example-calendar-v1", title="Example calendar tasks",
+                    origin="open-athena", family="calendar", tags=("agentic",)),
+    config=CurationRecipe(...),   # pinned input, converter, controls
+    pipeline=process_rows,        # omitted = Inventory only
+)</code></pre>
+      <p class="refs">Rule: <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#declarations">Declarations</a>. Code: <a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py"><code>source.py</code></a>.</p>
+    </article>
+
+    <article id="format">
+      <h3><span class="step-badge">2</span> Task format gate</h3>
+      <p>An agentic source declares <code>SourceInfo.task_format</code>. A new agentic source must ingest TaskCompendium or Harbor task directories — in either format a task is one directory holding <code>task.toml</code>, its environment and its verifier. <code>MARINSKYRL</code> is Marin's internal blend format: JSONL rows produced by Marin's own RL pipeline before task directories existed, so a blend has no per-task directory to check. It is accepted only for the sources in <code>GRANDFATHERED_MARINSKYRL_SOURCES</code>, a frozen list of Nemotron Ultra components admitted before the requirement. The check raises for any other agentic source when the registry is built, so it fails before a run starts.</p>
+      <p class="refs">Rule: <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#declarations">Declarations</a>. Code: <code>require_accepted_task_format</code> in <a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py"><code>sources.py</code></a>.</p>
+    </article>
+
+    <article id="environment">
+      <h3><span class="step-badge">3</span> Environment fidelity</h3>
+      <p>An agentic task's environment specification is part of the data, and the check runs per task: a task that fails is dropped and counted while the surviving tasks continue. <em>Lowering</em> translates a supported environment recipe into setup commands on a digest-pinned base; operations the lowering cannot express (<code>COPY</code>, <code>ADD</code>, <code>USER</code>, <code>VOLUME</code>, <code>ENTRYPOINT</code> and others) are refused. Fidelity preserves the declared recipe; it does not pin whatever unpinned external dependencies the recipe fetches from the network at build time. A task qualifies in one of two forms: built from the archive's own Dockerfile (<code>docker_build</code>), or lowered onto a pinned base with each <code>RUN</code> as a setup command and the recipe's working directory and environment variables. A shared image such as <code>iris-task</code> — the worker's own base image — never stands in for a task's environment. The one exception: when <code>provably_no_op_against</code> proves the Dockerfile changes nothing relative to that image (one <code>FROM</code> of its digest, no steps beyond <code>WORKDIR</code>, no copied fixtures), the task may declare the image, and the change ships as a new dataset version.</p>
+      <p>An agentic task that declares no environment is rejected; it would otherwise run in the host image. A source declaration cannot supply the missing environment.</p>
+      <p>A source is <strong>repaired</strong> when its published spec completely describes how its tasks run. A conversion may change delivery at ingestion, for example a reply-only rewrite that grades the assistant response in place of <code>/app/answer.txt</code>, but only with SAMPLE or FULL QA behind it, recorded as its own qualified transformation rather than an unmarked continuation. Audits sort sources into three classes:</p>
+      <ul class="classes">
+        <li><span class="class-tag ok">(a) OK</span> The spec describes runtime behavior and SAMPLE or FULL QA evidence exists.</li>
+        <li><span class="class-tag qa">(b) Needs QA</span> The spec describes runtime behavior, but QA evidence is missing.</li>
+        <li><span class="class-tag repair">(c) Needs repair</span> Runtime behavior differs from the spec: a substituted image, a missing environment resolved to the host, or a declared environment that the conversion ignores.</li>
+      </ul>
+      <p class="refs">Rule: <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#environment-fidelity-and-repair">Environment fidelity and repair</a>. Code: <a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/environment_fidelity.py"><code>environment_fidelity.py</code></a> (<code>lower_environment</code>, <code>provably_no_op_against</code>, <code>missing_environment</code>, <code>environment_unused</code>).</p>
+    </article>
+
+    <article id="modes">
+      <h3><span class="step-badge">4</span> Curation modes and oversight</h3>
+      <p>The curation driver requires <code>--mode quick|sample|full</code>. QUICK converts rows to TaskSpecs and records typed rejections; it reviews nothing and admits nothing, so a QUICK-only source has oversight <code>none</code> and stays inventory. SAMPLE reviews a bounded panel of at most 100 rows. FULL expands an accepted source to every row and verifies the kept tasks.</p>
+      <p>Mode and oversight are different axes. The <em>mode</em> is processing scope: how much of the source this pass examined. The <em>oversight level</em>, <code>none</code>, <code>sample</code> or <code>full</code>, is the weakest review the admission rests on, with evidence that points at the campaign, recipe revision and verification summary. A cohort whose setup ran on every task but whose verifier liveness ran on a sample is <code>sample</code>; a FULL-mode campaign can carry SAMPLE oversight. Independent QC by the upstream release does not raise the level.</p>
+      <p><strong>Planned: oracle filtering.</strong> The policy this page is moving to runs an oracle agent over every task that ships an oracle, in both SAMPLE and FULL, and the admitted cohort becomes exactly the passing subset; execution routes through Harbor on DAYTONA when the task's snapshots fit the cap, or Harbor LOCAL otherwise. It is not implemented on this branch: today, executed controls sample at most 20 kept rows, and at a 95% control pass fraction the unsampled tasks skip validation.</p>
+      <p class="refs">Rule: <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#curation-modes-and-oversight-levels">Curation modes and oversight levels</a>, <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#oracle-filtering-planned">oracle filtering (planned)</a>. Code: <code>CurationMode</code>, <code>OversightLevel</code> and <code>OversightEvidence</code> in <a href="https://github.com/marin-community/marin/blob/main/lib/finestore/src/finestore/rl/curation.py"><code>finestore.rl.curation</code></a>.</p>
+    </article>
+
+    <article id="qualify">
+      <h3><span class="step-badge">5</span> Qualify the source</h3>
+      <p>SAMPLE or FULL QA must establish each of these, and the oversight evidence points at the result. One negative-control rule covers every grader: on an untouched workspace the verifier must return a well-formed negative verdict — exit code 0 and a trailing numeric reward below 1. A reward at or above 1 means the verifier rewards an unsolved workspace: the task is defective, not live. A crash, timeout or unparsable report is an infrastructure error, never a zero.</p>
+      <ul>
+        <li><strong>Conversion fidelity.</strong> Converted TaskSpecs match the archive's instruction, answer contract, environment and grader.</li>
+        <li><strong>Controls.</strong> A golden or reference answer scores 1 wherever the source has one. An empty or wrong answer scores 0, unless the declaration records an expected partial reward for it. An empty answer that scores above 0 marks the task defective (<code>check:empty</code>).</li>
+        <li><strong>Verifier execution.</strong> A reward of 0 alone does not prove the verifier ran; the negative-verdict rule above does. Executed controls sample at most 20 kept rows, and at a 95% control pass fraction the unsampled tasks skip validation.</li>
+        <li><strong>Blinded review</strong> of a frozen sample, at least 20 tasks for SAMPLE, estimates the residual mis-grading rate: the <a href="https://github.com/marin-community/marin/blob/main/.agents/skills/audit-grader/SKILL.md"><code>audit-grader</code></a> method seeds and hash-freezes the cases, conceals model, verdict and reviewer labels, and runs two independent reviews. It bounds the error rate on that sample; it does not certify every grader decision.</li>
+        <li><strong>Drop accounting.</strong> <code>input_rows</code> equals converted rows plus rejections, and every rejection has a reason.</li>
+        <li><strong>Evaluation overlap.</strong> Overlap with the tracked evaluation sets is checked with exact matching where a check exists, and recorded <code>UNCHECKED</code> otherwise. Admission may coexist with unchecked overlap; selection removes exact matches to the recipe's heldout set and does not establish semantic decontamination.</li>
+      </ul>
+      <h4 id="no-oracle">Sources without oracle solutions</h4>
+      <p>When no row ships a solution, three checks replace the golden control. <em>Payload preservation</em> (offline): every file the native recipe copies appears in the rebuilt setup with identical bytes and mode. <em>Setup execution</em> (local Docker): the lowered setup commands, run in the declared base image, write those same files. <em>Verifier liveness</em> (sandbox): the task's own verifier runs in its graded environment on the untouched workspace and returns the well-formed negative verdict defined above — exit code 0, trailing reward below 1. A crash, timeout, unparsable report or a reward of 1 or more is a failure. Every sampled task must pass, 20 per base image by default. Each sampled task's recorded exit code and trailing reward form its liveness receipt. The result sets <code>oracle_validation</code>:</p>
+      <ul class="tight">
+        <li><code>executed</code>: shipped oracle solutions ran and scored their expected reward.</li>
+        <li><code>verifier_executed</code>: no oracle exists, and the checks above passed. Successful solutions are not certified.</li>
+        <li><code>skipped</code>: neither ran, so execution is not certified. This is the default for a source without oracles.</li>
+      </ul>
+      <p class="refs">Rule: <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#sources-without-oracle-solutions">Sources without oracle solutions</a>. Code: <a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/no_oracle_qualification.py"><code>no_oracle_qualification.py</code></a>, <a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/no_oracle_liveness.py"><code>no_oracle_liveness.py</code></a>.</p>
+      <h4 id="judged">LLM-judged sources</h4>
+      <p>An LLM judge can be part of a task's grading semantics — distinct from the GLM reviewer that grades the curation panel, which is QA evidence, not the task's reward. A judged task whose judge model is empty, or whose rubric and settings are unstated, does not describe what grades it; the policy under development holds such a source at oversight <code>none</code> until it is repaired. To repair one, the repairer judges ten tasks from the frozen sample by hand, then pins the source to a judge tier. <strong>Planned: the tier table.</strong> Tiers are not yet implemented on this branch; the intended table (<code>JUDGE_TIERS</code>) is <code>LIGHT</code> for surface checks with a clear contract, <code>MEDIUM</code> for comparison with a reference or checklist, and <code>HEAVY</code> for multi-step verification that needs deep domain reasoning — every tier at temperature 0.7, or recording <em>API default</em> where the API cannot take a temperature.</p>
+      <p>What exists today is the judge contract the tiers will pin: the judge specification states the rubric, what the judge sees (question, answer, references, context and whether reasoning is removed), the context length, completion tokens and reasoning effort, the harness (API, prompts, label parsing), the turns, the request timeout and the retry budget. It says nothing about the endpoint: <code>JudgeConnection</code> supplies the URL and key at run time, so the connection can change independently of the judge specification. Revalidate grading behavior whenever the serving implementation or the effective model revision changes; matching a model name alone does not establish equal weights, revision or verdicts. End-to-end validation through the production grader must show a reference scores 1, a wrong or empty answer scores 0, agreement with the hand verdicts and a blinded review, and a parsed verdict for every request.</p>
+      <p class="refs">Rule: <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#llm-judged-sources">LLM-judged sources</a>. Code: <a href="https://github.com/marin-community/marin/blob/main/lib/verifyit/src/verifyit/modes/grade_judge.py"><code>verifyit.modes.grade_judge</code></a>.</p>
+    </article>
+
+    <article id="daytona">
+      <h3><span class="step-badge">6</span> Daytona capacity and compatibility</h3>
+      <p>Marin's RL rollouts can run on Daytona, a hosted sandbox service whose organization caps how many snapshots (prebuilt environments) exist at once. This step is a <strong>static capacity and compatibility check</strong>, not a provisioning test: it materializes each task's declared agent and grader environments, derives their snapshot identities through the same <code>snapshot_identity</code> function that the Daytona factory uses to name snapshots, and applies the recorded capability rules. It makes no Daytona API calls and is never declared by hand, so it cannot observe current quota headroom, image availability, startup success or a completed rollout. <span data-fill="daytona-text">A source exceeds the budget when its tasks need more unique snapshots than the limit, or when the capability rules refuse a task's declared requirements.</span> A grader placed by a package lock runs in the local bubblewrap runtime on the worker, which Daytona cannot provision, so its snapshot count is irrelevant. An over-budget source stays ingested with its label.</p>
+      <p class="refs">Rule: <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#declarations">Declarations</a>, <a href="https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#making-a-dataset-daytona-safe">Making a dataset Daytona-safe</a>. Code: <a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/daytona_identity.py"><code>daytona_identity.py</code></a>, <code>daytona_verdict</code> in <code>finestore.rl.curation</code>.</p>
+    </article>
+
+    <article id="publish">
+      <h3><span class="step-badge">7</span> Publish, deprecate and load</h3>
+      <p>Qualified, published and loaded are three separate operations, and only the last one changes the Atlas. A conversion first publishes its cohort to the <code>open-athena</code> Hugging Face organization as a <strong>private</strong> repository named <code>open-athena/&lt;family&gt;-&lt;format&gt;-&lt;YYYYMMDD&gt;</code>, in TaskCompendium format (native Harbor packages can also be imported directly). The card records provenance, excluded counts with reasons, the license and a research-artifact warning. Verification reads the upload back through the same login and compares file hashes. An importer that converts nothing brings the cohort into the catalog: <code>import_prebuilt</code> validates every TaskCompendium row under the admission predicates, and <code>import_harbor_prebuilt</code> requires a scored control receipt in <code>controls.jsonl</code> for every native Harbor package.</p>
+      <p>A FULL campaign with <code>--publish-catalog</code> writes the shared catalog snapshot. When a qualified release replaces an older source, the <strong>older</strong> source gets the <code>deprecated</code> tag and a note that names its replacement; a source can also be withdrawn without a replacement, with the reason in its notes. The Atlas changes only when an operator runs its loader on that snapshot, and the UI can legitimately disagree with the catalog until that load happens.</p>
+      <p class="refs">Rule: <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#declarations">Declarations</a>, <a href="https://github.com/marin-community/marin/blob/main/docs/references/rl-data-atlas.md#updating-atlas">Updating Atlas</a>. Code: <a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/prebuilt.py"><code>prebuilt.py</code></a>, <a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/datasets/campaign_releases.py"><code>campaign_releases.py</code></a>.</p>
+    </article>
+
+    <article id="selection">
+      <h3>After admission: selection</h3>
+      <p>Admission does not put a source in a training run. A selection recipe (<code>--selection RECIPE.json</code>) names the sources and family quotas and pins a heldout set. Selection reads only <code>final/*.parquet</code> from sources whose manifests record <code>mode: full</code>; SAMPLE panels and QUICK conversions cannot supply the training population. Before sampling it removes tasks that match the complete heldout set by task ID, public text or exact conversation, and duplicates across sources. These are exact overlap checks.</p>
+      <h4 id="before-a-run">Before a training run</h4>
+      <ol>
+        <li>Confirm the source is runnable, not deprecated or excluded, in the <a href="./">By source</a> view.</li>
+        <li>Read its <strong>Quality</strong> and <strong>Result</strong> labels, then open the evidence page for the oversight pointers, control outcomes and reviewed/admitted counts behind them.</li>
+        <li>Check coverage: intended use, converted example count and leading curriculum area.</li>
+        <li>Check the backend: the Daytona check, plus the row's <code>backend_capabilities</code> map when it carries one. Package-lock graders run locally, never on Daytona.</li>
+        <li>Check the recorded evaluation-overlap status and the license; obtain access to the private release (Marin team members use their Hugging Face login; others ask the maintainers named in the source notes).</li>
+        <li>Write the selection recipe and require the FULL-mode artifact; the <a href="https://github.com/marin-community/marin/blob/main/docs/recipes/quick-rl-loop.md">quick RL loop</a> shows the handoff from the selection artifact to a training run.</li>
+      </ol>
+      <p class="refs">Rule: <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#final-task-selection">Final task selection</a>. Code: <a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/inventory.py"><code>inventory.py</code></a>. Recipe example: <a href="https://github.com/marin-community/marin/blob/main/docs/recipes/quick-rl-loop.md">quick RL loop</a>.</p>
+    </article>
+  </section>
+
+  <section aria-labelledby="practice-title" class="practice">
+    <h2 id="practice-title">Using and adding sources</h2>
+
+    <article id="use-a-source">
+      <h3>Use an existing source</h3>
+      <p>To use data that is already in the Atlas you do not need to declare anything:</p>
+      <ol>
+        <li><strong>Find it.</strong> Search the <a href="./">By source</a> view; filters hide QUICK-quality and BAD-result sources by default, and you can turn that off.</li>
+        <li><strong>Identify the retained release.</strong> Open the source: the entry pins the dataset, its revision and the private converted release it came from.</li>
+        <li><strong>Inspect the evidence.</strong> Open its evidence page for control, verifier and review coverage, and the campaign and recipe revision behind the oversight label.</li>
+        <li><strong>Check the constraints.</strong> License, recorded evaluation-overlap status, and backend requirements (Daytona check, <code>backend_capabilities</code> when present).</li>
+        <li><strong>Get access.</strong> Private <code>open-athena</code> releases need a Hugging Face login with membership; ask the maintainers named in the source notes if you are outside the team.</li>
+        <li><strong>Select and launch.</strong> Follow the <a href="#before-a-run">before-a-run checklist</a> and the <a href="https://github.com/marin-community/marin/blob/main/docs/recipes/quick-rl-loop.md">quick RL loop</a> recipe from a selection artifact to a training run.</li>
+      </ol>
+    </article>
+
+    <article id="access">
+      <h3>Access you need</h3>
+      <ol>
+        <li><strong>All stages:</strong> Python 3.12 or later, <code>uv</code> and Git. Clone the repository and run <code>uv sync --all-packages</code> (<a href="https://github.com/marin-community/marin/blob/main/docs/tutorials/installation.md">installation guide</a>).</li>
+        <li><strong>QUICK:</strong> a local computer. Public sources need no Hugging Face token.</li>
+        <li><strong>SAMPLE with review:</strong> an OpenAI-compatible endpoint for a GLM-compatible review model — any endpoint serving the named model revision with an OpenAI chat API; the review model is QA tooling, distinct from a task's own judge. Pass <code>--base-url</code>, <code>--model</code> (default <code>glm-5.3</code>) and <code>--model-revision</code>, and put the key in <code>GLM_BULK_TOKEN</code>. Without <code>--base-url</code> the driver looks up Marin's internal relay job, which works only inside Marin's Iris cluster.</li>
+        <li><strong>FULL and production:</strong> Iris access (<a href="https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#authentication-headless--ci">authentication</a>) and CoreWeave object-storage credentials in <code>CW_KEY_ID</code> and <code>CW_KEY_SECRET</code>.</li>
+        <li><strong>Executable-environment cohorts:</strong> a Docker daemon, or a Linux dev box (below).</li>
+      </ol>
+      <p>Marin team members can check everything at once with the <a href="https://github.com/marin-community/marin/blob/main/.agents/skills/onboard-marin/SKILL.md"><code>onboard-marin</code></a> skill. Never print a token or key in a log, report or commit.</p>
+    </article>
+
+    <article id="first-source">
+      <h3>Your first source</h3>
+      <ol>
+        <li><strong>Declare it.</strong> Follow <a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/datasets/README.md#adding-a-dataset">adding a dataset</a>: add one <code>RlDataSource</code> to the nearest family module, pin its input, set <code>config=CurationRecipe(...)</code> and <code>pipeline=process_rows</code>, record the license in the notes, and register a new module in <code>all_sources()</code>. Agentic sources also declare <code>task_format</code>.</li>
+        <li><strong>Test the conversion</strong> with a behavioral test in the family's test module:
+<pre><code>uv run --with-editable './lib/taskcompendium[pipeline]' pytest \
+  experiments/post_training/task_curation/tests/test_&lt;family&gt;.py \
+  experiments/post_training/task_curation/tests/test_catalog.py</code></pre></li>
+        <li><strong>Find the invocation name.</strong> <code>--source</code> takes <code>config.name</code>, not the stable ID:
+<pre><code>uv run python -c 'from experiments.post_training.task_curation.sources import runnable_sources; print("\n".join(runnable_sources()))'</code></pre></li>
+        <li><strong>Run QUICK locally</strong> and check that <code>input_rows</code> in each <code>manifest.json</code> equals <code>converted_rows</code> plus the sum of <code>rejections</code>:
+<pre><code>uv run --with-editable './lib/taskcompendium[pipeline]' python \
+  -m experiments.post_training.task_curation.driver --mode quick --run \
+  --source YOUR_SOURCE --output-root /tmp/task-curation-first</code></pre></li>
+        <li><strong>Run SAMPLE with review.</strong> A 5-row panel is a conversion and review smoke check only; it does not meet the admission-review minimum of 20 tasks. Record the panel size and seed and carry both into the FULL campaign. QUICK outputs live under <code>--output-root</code>; SAMPLE and FULL retain artifacts under <code>--cache-dir</code> (locally) or <code>--artifact-root</code>, and a later pass reuses completed conversions from there.
+<pre><code>uv run --with-editable './lib/taskcompendium[pipeline]' python \
+  -m experiments.post_training.task_curation.driver \
+  --mode sample --cache-dir ~/.cache/marin/rl-curation \
+  --source YOUR_SOURCE --quality-sample-size 5 --seed YOUR_SEED --assess \
+  --review-mode chat --model-revision GLM_REVISION --base-url GLM_ENDPOINT --run</code></pre></li>
+      </ol>
+    </article>
+
+    <article id="devbox">
+      <h3>Debug on a Linux dev box</h3>
+      <p>Bubblewrap graders, Docker inside a pod and verifier liveness need Linux. <a href="https://github.com/marin-community/marin/blob/main/scripts/iris/dev_cpu.py"><code>scripts/iris/dev_cpu.py</code></a> holds a privileged, non-preemptible CPU pod on a CoreWeave cluster, with the same container profile as curation workers. Name, size, priority and lifetime have no defaults. <code>allocate</code> returns once the pod runs; Iris ends the holder at <code>--max-lifetime</code>.</p>
+<pre><code>uv run python -m scripts.iris.dev_cpu --config lib/iris/config/cw-rno2a.yaml --name NAME \
+  allocate --cpu 16 --memory 64GB --disk 200GB --priority interactive --max-lifetime 259200
+uv run python -m scripts.iris.dev_cpu --name NAME exec -- bash -lc 'bwrap --version; docker info'
+uv run python -m scripts.iris.dev_cpu --name NAME cp-to ./grader.py /tmp/grader.py
+uv run python -m scripts.iris.dev_cpu --name NAME release</code></pre>
+      <p class="refs">Reference: <a href="https://github.com/marin-community/marin/blob/main/.agents/skills/use-iris/references/dev-accelerators.md#cpu">CPU dev boxes</a>.</p>
+    </article>
+
+    <article id="campaign">
+      <h3>Run a production FULL campaign</h3>
+      <p>Run FULL in an Iris job. Keep the SAMPLE run's <code>--quality-sample-size</code> and <code>--seed</code> so FULL reviews the same panel. Omit <code>--run</code> to print the plan with every resolved default. <code>--publish-catalog</code> requires FULL with assessment and no <code>--cache-dir</code>.</p>
+<pre><code>uv run iris --cluster=marin job run --target-cluster YOUR-CW-REGION \
+  --extra cpu --cpu 0.5 --memory 2GB --timeout 259200 \
+  -e GLM_BULK_TOKEN "$GLM_BULK_TOKEN" -e HF_HUB_DISABLE_XET 1 \
+  -- python -m experiments.post_training.task_curation.driver \
+  --mode full --source YOUR_SOURCE \
+  --review-mode chat --model-revision GLM_REVISION \
+  --report-path s3://marin-us-east-02a/marin/rl-data/campaigns/YYYY-MM-DD-N/campaign.json \
+  --publish-catalog s3://marin-us-east-02a/marin/rl-data/catalog/production --run</code></pre>
+      <p>Iris runs default to 64 workers, a 16g coordinator, 32 normalized shards and the review cache <code>&lt;artifact-root&gt;/rl-data/review-cache</code>, whose keys hash the model revision and the complete request. Without <code>--worker-image</code>, workers use the cluster's <code>default_task_image</code>; pass a digest to record an exact image in the artifact identity.</p>
+      <p>Read the campaign report before loading: a failed FULL campaign also publishes a snapshot. Then load the Atlas:</p>
+<pre><code>uv run python infra/marina/apps/rl_data_catalog/load.py \
+  --app-id fb11c931-5861-4878-8bb5-a964d652b45f</code></pre>
+      <p class="refs">Reference: <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#run-a-campaign">Run a campaign</a>, <a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#reviewed-local-loop-on-real-sources">reviewed local loop</a>, <a href="https://github.com/marin-community/marin/blob/main/docs/references/rl-data-atlas.md#updating-atlas">Updating Atlas</a>.</p>
+    </article>
+
+    <article id="executable">
+      <h3>Executable-environment cohorts (advanced authoring)</h3>
+      <p>Advanced authoring only: these tools build new task cohorts and register nothing as training-approved. Some cohorts need live containers and hidden-test separation, with positive and negative controls before any task is trusted. Each writes everything under the <code>--output</code> you choose:</p>
+      <ul>
+        <li><strong>Staged SWE-Smith:</strong> <code>swesmith_staged</code> pilots one parent (<code>--pilot TASK:IMPORT:DEPENDENCY_COMMAND</code>), <code>swesmith_staged_cohort</code> extends validated repositories, <code>swesmith_staged_v2</code> builds shared-image repair handoffs, and <code>swesmith_handoff</code> validates a submitted workspace against the private contract. Gold patches and contracts stay under <code>private/</code>.</li>
+        <li><strong>CalibForge:</strong> <code>calibforge_environment</code>, <code>calibforge_fixtures</code>, <code>calibforge_native_references</code>, <code>calibforge_captured_fixtures</code>, <code>calibforge_equivalence</code> and <code>calibforge_release</code> inventory, freeze, compare and package fixtures; <code>calibforge_rebuild</code> lowers recipes onto pinned bases.</li>
+      </ul>
+      <p>Docker images these tools commit are host-local until an operator publishes them; exports record image IDs in <code>local-images.json</code>.</p>
+    </article>
+
+    <article id="evidence">
+      <h3>Where the evidence lives</h3>
+      <div class="table-wrap"><table class="evidence-table">
+        <thead><tr><th scope="col">What</th><th scope="col">Location</th></tr></thead>
+        <tbody>
+          <tr><td>Pinned source bytes</td><td>The declared revision, cached under <code>~/.cache/marin</code> or <code>--cache-dir</code>. On CoreWeave, set <code>HF_HUB_DISABLE_XET=1</code>.</td></tr>
+          <tr><td>Per-source outputs</td><td><code>data/rl/&lt;name&gt;-&lt;hash&gt;/</code>: <code>normalize/</code>, <code>review/</code>, <code>verify/report.json</code>, <code>final/</code>, <code>manifest.json</code>, <code>identity.json</code> (<a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#outputs">outputs</a>)</td></tr>
+          <tr><td>Production campaigns</td><td><code>s3://marin-us-east-02a/marin/rl-data/campaigns/&lt;date&gt;-&lt;n&gt;</code>, one new directory per attempt</td></tr>
+          <tr><td>Published catalog</td><td><code>s3://marin-us-east-02a/marin/rl-data/catalog/production</code>, read through <code>finestore.rl.curation.CurationCatalog</code></td></tr>
+          <tr><td>Oversight evidence</td><td><code>SourceInfo.oversight</code> on the declaration: campaign, recipe revision, verification summary, reviewed and admitted counts</td></tr>
+          <tr><td>Repaired and converted cohorts</td><td>Private <code>open-athena/&lt;family&gt;-&lt;format&gt;-&lt;YYYYMMDD&gt;</code> repositories, with <code>controls.jsonl</code> or liveness receipts beside <code>tasks.parquet</code></td></tr>
+          <tr><td>Earlier public cohorts</td><td><a href="https://huggingface.co/datasets/open-athena/task-trove"><code>open-athena/task-trove</code></a> releases; Snowball Smartie campaign archive <a href="https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-Campaign-Artifacts-2026/tree/cbaf7daa55670c81eaf12aabbedc8b08c2ecf553/artifacts/data">artifacts</a> and <a href="https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-Campaign-Artifacts-2026/blob/cbaf7daa55670c81eaf12aabbedc8b08c2ecf553/REPRODUCING.md"><code>REPRODUCING.md</code></a></td></tr>
+          <tr><td>This Atlas</td><td>Marina app <code>fb11c931-5861-4878-8bb5-a964d652b45f</code>, a Postgres copy of one catalog snapshot plus the curriculum release. Query it with <code>uv run marina apps sql fb11c931-5861-4878-8bb5-a964d652b45f "SQL"</code>.</td></tr>
+        </tbody>
+      </table></div>
+    </article>
+
+    <article id="lessons">
+      <h3>Lessons from earlier campaigns</h3>
+      <ul>
+        <li>Expect most first attempts to fail on job submission, credentials or grading before they touch the data. Use a new report directory for each attempt.</li>
+        <li>An inventory-only source reaches production only through a FULL campaign that publishes a snapshot containing it. Run it on a small runnable source if nothing else needs curating.</li>
+        <li>A failed campaign can move the catalog's <code>CURRENT</code> pointer. Read the report before loading.</li>
+        <li>Credentials given to the driver pod do not always reach the worker pods its coordinator starts. Check that the workers receive them.</li>
+        <li>Use an <code>iris</code> client that matches the deployed controller.</li>
+        <li>Retrying a failed review step returns the same cached judgments unless the grader or cache key changes.</li>
+        <li>Merging Atlas code changes nothing in production until someone runs <code>marina release</code>.</li>
+      </ul>
+      <p class="refs">Full case study: <a href="https://github.com/marin-community/marin/pull/11198">#11198</a> history.</p>
+    </article>
+  </section>
+
+  <section aria-labelledby="glossary-title" class="glossary">
+    <h2 id="glossary-title">Terms</h2>
+    <dl>
+      <div><dt>Agentic task</dt><dd>A task whose agent works in a machine: a shell, files or tools. Reply-only and conversation tasks need no agent machine.</dd></div>
+      <div><dt>Harbor, Harbor Hub</dt><dd>A task-directory format and runner: one directory per task with <code>task.toml</code>, an environment and a verifier. The Hub (hub.harborframework.com) hosts task releases; a digest pins one release's bytes.</dd></div>
+      <div><dt>TaskCompendium</dt><dd>Marin's task library and format; its <code>TaskSpec</code> is the canonical record of one task.</dd></div>
+      <div><dt>MarinSkyRL blend</dt><dd>Marin's internal RL format: JSONL rows from Marin's own RL pipeline, with no per-task directory. Accepted only for the frozen grandfather list.</dd></div>
+      <div><dt>Nemotron Ultra mix</dt><dd>The historical Marin RL mixture whose components make up the grandfather list; the listed source IDs are its admitted components.</dd></div>
+      <div><dt>Oracle, golden</dt><dd>A reference solution. A golden control grades it and expects reward 1.</dd></div>
+      <div><dt>Controls</dt><dd>Grader checks before admission: golden scores 1, empty or wrong scores 0.</dd></div>
+      <div><dt>Oversight level</dt><dd>The weakest review an admission rests on: <code>none</code>, <code>sample</code> or <code>full</code>. Distinct from the curation mode, which is processing scope.</dd></div>
+      <div><dt>Quality, Result</dt><dd>Atlas labels. Quality (<code>QUICK</code>, <code>SAMPLE</code>, <code>FULL</code>) is how much executed QA examined the source; independent upstream QC counts as <code>QUICK</code>. Result (<code>GOOD</code>, <code>SOME_ISSUES</code>, <code>BAD</code>) is what that QA found.</dd></div>
+      <div><dt>Lowering</dt><dd>Translating a supported environment recipe into setup commands on a digest-pinned base. Unsupported operations are refused; the declared recipe is preserved, not unpinned external dependency contents.</dd></div>
+      <div><dt>Shared image</dt><dd>A base image reused by many tasks (for example the worker's <code>iris-task</code>). A task may declare it only with a mechanical no-op proof.</dd></div>
+      <div><dt>Snapshot (catalog)</dt><dd>One published state of the curation catalog. The Atlas serves one at a time.</dd></div>
+      <div><dt>Snapshot (Daytona)</dt><dd>A prebuilt sandbox environment. Each unique agent or grader environment is one; <code>snapshot_identity</code> is the production naming rule.</dd></div>
+      <div><dt>Runnable</dt><dd>Has a pipeline and an Available status, and passes the format gate. Runnable for curation is not the same as runnable on a backend, and neither implies training-eligible.</dd></div>
+      <div><dt>Campaign</dt><dd>One driver invocation of the source procedure over selected sources; a coordinator schedules workers that process normalized shards.</dd></div>
+      <div><dt>Cohort</dt><dd>A named set of tasks published together as a versioned release. Authoring tools write candidate cohorts that register nothing; the catalog's admitted and excluded cohorts are curation populations.</dd></div>
+      <div><dt>Selection recipe</dt><dd>A JSON file that names sources and quotas for training and pins the heldout set.</dd></div>
+      <div><dt>CurationCatalog, CURRENT</dt><dd>The typed reader over one FineStore catalog view; <code>CURRENT</code> is its moving pointer to the latest published snapshot, which a load selects and copies.</dd></div>
+      <div><dt>Artifact identity</dt><dd>The resolved input, converter, grader and execution identities recorded in <code>identity.json</code>; artifacts are named <code>&lt;name&gt;-&lt;hash&gt;</code> under the artifact root.</dd></div>
+      <div><dt>Curriculum release</dt><dd>A published embedding-and-matching pass that measures each source's subject areas; it informs coverage display, not admission.</dd></div>
+      <div><dt>marina release vs loader</dt><dd><code>marina release</code> deploys the Atlas app's code; the loader imports catalog data into its Postgres. Neither implies the other.</dd></div>
+      <div><dt>Task Trove, Snowball Smartie</dt><dd>Open-athena cohorts. Task Trove is an active source family in the catalog; Snowball Smartie is an earlier campaign whose artifacts and <code>REPRODUCING.md</code> remain published.</dd></div>
+      <div><dt>Iris, Zephyr, Marina</dt><dd>Marin's job scheduler, dataset-processing framework and internal app host.</dd></div>
+    </dl>
+  </section>
+  <p id="snapshot-info" class="snapshot-info"></p>
+  </div>
+</main>
+</body>
+</html>
