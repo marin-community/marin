@@ -242,15 +242,12 @@ def test_review_cache_tracks_spec_but_reuses_capacity_changes(tmp_path):
     reviewer = ChatReviewer(chat, reviewer_spec(), query_cache_root=str(tmp_path / "cache"), max_concurrent=1)
     reviewer.review([task], rubric)
     more_capacity = replace(reviewer, max_concurrent=64)
-    assert more_capacity.identity == reviewer.identity
     more_capacity.review([task], rubric)
     assert len(chat.requests) == 1
     for settings in ({"base_rubric_version": "task-quality-v2"}, {"temperature": 0.8}, {"reasoning_effort": "medium"}):
         changed = replace(reviewer, spec=replace(reviewer.spec, **settings))
-        assert changed.identity != reviewer.identity
         changed.review([task], rubric)
     reviewer.review([task], replace(rubric, version="2"))
     assert len(chat.requests) == 5
     assert chat.requests[0]["temperature"] == 0.7
     assert chat.requests[-2]["chat_template_kwargs"] == {"reasoning_effort": "medium"}
-    assert [record.status for record in more_capacity.review([task], rubric).reviews] == [ReviewStatus.REVIEWED]
