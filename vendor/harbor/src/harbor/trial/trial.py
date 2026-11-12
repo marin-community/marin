@@ -1136,6 +1136,8 @@ class Trial(ABC):
 
     def _init_agent(self) -> None:
         extra_kwargs = {}
+        if self.config.agent.name == "oracle":
+            extra_kwargs.update(task_dir=self.task.paths.task_dir, trial_paths=self.paths, agent_timeout_sec=self._agent_timeout_sec)
         mcp_servers = {
             server.name: server
             for server in [
