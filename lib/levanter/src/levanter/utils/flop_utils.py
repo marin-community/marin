@@ -6,12 +6,10 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class AttentionFlops:
-    """Forward FLOPs per token of the attention maps (scores, mask and value mixing), summed over layers."""
+    """Attention-map FLOPs per token across all layers, with full-span and causal key counts."""
 
     noncausal: float
-    """The count ``lm_flops_per_token`` includes: every query attends to its layer's whole span."""
     causal: float
-    """Only the keys a causal mask keeps: ``min(i + 1, span)`` for the query at position ``i``."""
 
 
 def _full_attention_layer_count(
@@ -84,7 +82,6 @@ def lm_flops_per_token(
         return 2 * hidden_dim * (num_heads * head_dim + 2 * kv_heads * head_dim)
 
     def _attn_per_token(attn_span: int) -> float:
-        # The attention map over ``attn_span`` keys per query, divided back to per-token.
         return _attention_map_flops(seq_len * attn_span, num_heads, head_dim) / seq_len
 
     num_global_layers = _full_attention_layer_count(
@@ -115,9 +112,8 @@ def lm_attention_flops_per_token(
 ) -> AttentionFlops:
     """Forward attention-map FLOPs per token: the part of ``lm_flops_per_token`` that depends on the mask.
 
-    Takes the same shape and layer-schedule arguments as ``lm_flops_per_token``. The QKV and output projections
-    are not included. Subtracting ``noncausal`` from ``lm_flops_per_token`` and adding ``causal`` gives the count
-    with causal masking charged exactly.
+    ``noncausal`` counts each query's full layer span, as ``lm_flops_per_token`` does. ``causal`` counts
+    ``min(i + 1, span)`` keys at query position ``i``. Projections are excluded.
     """
     head_dim = hidden_dim / num_heads
     num_global_layers = _full_attention_layer_count(
