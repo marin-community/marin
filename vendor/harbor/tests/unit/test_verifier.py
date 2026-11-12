@@ -24,13 +24,17 @@ from harbor.verifier.verifier import (
 @pytest.mark.unit
 @pytest.mark.parametrize("status", [None, "invalid_task", "infra_error", "scored"])
 @pytest.mark.parametrize("config_name", ["verifier.toml", "taskcompendium-verifier.toml"])
-async def test_structured_infrastructure_zero_is_not_a_scored_reward(tmp_path, status, config_name):
+@pytest.mark.parametrize("numeric_reward", [None, "1.0"])
+async def test_structured_verdict_controls_reward_and_failure_status(
+    tmp_path, status, config_name, numeric_reward
+):
     task_dir = _create_task_dir(tmp_path)
     (task_dir / "tests" / config_name).write_text('mode = "pytest"\n')
     task = Task(task_dir)
     paths = TrialPaths(trial_dir=tmp_path / "trial")
     paths.mkdir()
-    paths.reward_text_path.write_text("0.0")
+    if numeric_reward is not None:
+        paths.reward_text_path.write_text(numeric_reward)
     if status is not None:
         (paths.verifier_dir / "verdict.json").write_text(
             json.dumps({"status": status, "reward": 0.0, "detail": {}})

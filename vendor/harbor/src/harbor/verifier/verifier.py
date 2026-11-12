@@ -99,7 +99,7 @@ class Verifier(BaseVerifier):
         )
         if requires_verdict and not verdict_path.exists():
             raise VerifierRuntimeError("Structured verifier produced no verdict")
-        if verdict_path.exists():
+        if requires_verdict:
             try:
                 verdict = json.loads(verdict_path.read_text())
             except (ValueError, TypeError) as error:
@@ -113,6 +113,14 @@ class Verifier(BaseVerifier):
                 raise VerifierRuntimeError(
                     f"Structured verifier did not score the candidate: {verdict}"
                 )
+            reward = verdict.get("reward")
+            if (
+                not isinstance(reward, (float, int))
+                or isinstance(reward, bool)
+                or not math.isfinite(reward)
+            ):
+                raise VerifierOutputParseError("Invalid structured verifier reward")
+            return {"reward": reward}
         if self.trial_paths.reward_json_path.exists():
             return self._parse_reward_json()
         elif self.trial_paths.reward_text_path.exists():
