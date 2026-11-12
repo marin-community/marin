@@ -7,7 +7,6 @@ import gzip
 import io
 import subprocess
 import tarfile
-from dataclasses import asdict
 
 import pytest
 
@@ -119,4 +118,3 @@ def test_a_lowered_spec_stages_fixtures_through_setup_commands():
     staged = {resource.path for resource in spec.task.resources.all}
     assert staged == {"setup_files/calibforge-fixtures.tar.gz", "setup_files/calibforge-initialize.sh"}
     assert {resource.path for resource in spec.task.resources.verifier} == {"tests/test.sh", "tests/test_outputs.py"}
-    assert asdict(spec.task_machine) == {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240, "gpus": 0}

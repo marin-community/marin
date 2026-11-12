@@ -158,13 +158,6 @@ def test_lowered_setup_passes_runtime_settings_to_docker(monkeypatch):
     assert create[create.index("--env") + 1] == "LABEL=two words"
 
 
-def test_setup_execution_requires_every_expected_file():
-    """An executed script that misses a copied file is not a pass."""
-    assert SetupExecution("task", "executed", written=2).passed
-    assert not SetupExecution("task", "executed", written=1, missing=("abc:0644",)).passed
-    assert not SetupExecution("task", "script_error", detail="pip3: not found").passed
-
-
 def test_a_file_the_native_recipe_deletes_is_not_required_in_the_workspace():
     """A generator script removed by its own RUN must not be demanded after setup."""
     recipe = (

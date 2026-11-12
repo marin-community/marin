@@ -75,12 +75,7 @@ def setup_script_name(command: str) -> str:
 
 
 def fixture_generator(arguments: list[str], copied_files: set[str]) -> bool:
-    """Whether this RUN invokes a staged fixture-generating script.
-
-    A fixture-generating run is ``python3 /app/<script>.py`` where ``<script>``
-    is a file the COPY staging already copied; the script's own writes are its
-    output, so the run may execute it.
-    """
+    """Whether a staged Python script may generate workspace fixtures."""
     return (
         len(arguments) == 2
         and arguments[0] == "python3"
