@@ -28,6 +28,7 @@ from finestore.reader import ReadView
 from tokenizers import Tokenizer, models, pre_tokenizers
 
 from eval.chat_benchmarks.GraphWalks import eval_instruct as graphwalks
+from eval.chat_benchmarks.PDBThink.eval_instruct import PDBThinkBenchmark
 from eval.chat_benchmarks.MATH500.eval_instruct import MATH500Benchmark
 from eval.chat_benchmarks.AIME24.eval_instruct import AIME24Benchmark
 from eval.chat_benchmarks.MMLUPro.eval_instruct import MMLUProBenchmark, generate_cot_prompt
@@ -44,6 +45,7 @@ from eval.execution.grading import Graders
 from eval.graders.specs import GRADERS
 from eval.limits import ContextWindowExceededError
 from tests.contracts.source_harness import MemoryCheckpoints
+from tests.contracts.pdbthink_records import record as pdbthink_record
 
 LOCAL_CHAT_COMPLETIONS = "local-chat-completions"
 LOCAL_COMPLETIONS = "local-completions"
@@ -90,6 +92,47 @@ def _model(endpoint, model_class, model_name="served", **kwargs):
         tokenized_requests=False,
         **kwargs,
     )
+
+
+def test_pdbthink_wire_preserves_prompts_tools_and_budget_in_saved_results(endpoint, tmp_path, pdbthink_bundle):
+    row = pdbthink_record()
+    benchmark = PDBThinkBenchmark()
+    benchmark.dataset_cache = pdbthink_bundle([row])
+    tokenizer_dir = tmp_path / "tokenizer"
+    tokenizer_dir.mkdir()
+    tokenizer = Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]"))
+    tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+    tokenizer.save(str(tokenizer_dir / "tokenizer.json"))
+    (tokenizer_dir / "tokenizer_config.json").write_text(json.dumps({
+        "tokenizer_class": "TokenizersBackend", "unk_token": "[UNK]",
+        "chat_template": "{% for message in messages %}{{ message['role'] + ' ' + message['content'] }}{% endfor %} assistant",
+    }))
+    model = LocalChatCompletion(
+        model="served", tokenizer=str(tokenizer_dir), tokenizer_backend="huggingface", tokenized_requests=False,
+        base_url=f"http://127.0.0.1:{endpoint.server_port}/v1/chat/completions", max_length=128,
+    )
+    endpoint.outputs = ["FINAL: 2"] * 3
+    root = str(tmp_path / "results")
+    with FineStoreOutput(root, "pdbthink-wire", ["PDBThink"]) as output:
+        result = evaluate(
+            model, SimpleNamespace(get_benchmark=lambda _task: benchmark), None,
+            ["PDBThink"], {"PDBThink": "Evalchemy chat benchmark"}, [1],
+            args=Namespace(model="api", model_args="", max_length=128, gen_kwargs={"temperature": 0.7}),
+            output_sink=output,
+        )
+        output.finish(result)
+    saved = read_finestore_output(root, "pdbthink-wire")
+    assert saved["results"]["PDBThink"]["macro_score"] == 1.0
+    budget = saved["results"]["PDBThink"]["pdbthink"]["budgets"][0]
+    assert len(endpoint.requests) == 3
+    for payload in endpoint.requests:
+        assert payload["messages"] == row["messages"]
+        # vLLM rejects an empty tools array; no tools are offered on the wire.
+        assert "tools" not in payload
+        assert payload["tool_choice"] == "none"
+        assert payload["temperature"] == 0.7
+        assert payload["max_tokens"] == budget["output_tokens"]
+        assert payload["max_tokens"] + budget["input_tokens"] < 128
 
 
 @pytest.mark.parametrize("model_class", [

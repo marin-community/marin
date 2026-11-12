@@ -641,6 +641,7 @@ benchmarks = [
     { name = "lark" },
     { name = "nltk" },
     { name = "patsy" },
+    { name = "pdbthink" },
     { name = "pyext" },
     { name = "regex" },
     { name = "swebench" },
@@ -677,6 +678,9 @@ nupa-loose = [
 nupa5k-loose = [
     { name = "ijson" },
 ]
+pdbthink = [
+    { name = "pdbthink" },
+]
 repobench = [
     { name = "fuzzywuzzy" },
 ]
@@ -704,7 +708,7 @@ requires-dist = [
     { name = "alpaca-eval", marker = "extra == 'alpaca-eval'", editable = "eval/chat_benchmarks/alpaca_eval" },
     { name = "datasets" },
     { name = "emoji", marker = "extra == 'ifbench'" },
-    { name = "evalchemy", extras = ["aime24", "aime25", "aiw", "amc23", "bigcodebench", "codeelo", "codeforces", "cruxeval", "financebench", "gpqadiamond", "gsm8kperturbed", "graphwalks", "hle", "hmmt", "humaneval", "humanevalplus", "ifbench", "ifeval", "jeebench", "livebench", "livecodebench", "livecodebenchv5", "livecodebenchv5-official", "math500", "mbpp", "mbppplus", "mmlupro", "mrcr", "mtbench", "mixeval", "multiple", "nupa-loose", "nupa5k-loose", "olympiadbench", "olympiadbenchdeterministic", "olympiadbenchfull", "repobench", "simpleqa", "simpleqamini", "swebench", "wildbench", "alpaca-eval", "zeroeval"], marker = "extra == 'benchmarks'" },
+    { name = "evalchemy", extras = ["aime24", "aime25", "aiw", "amc23", "bigcodebench", "codeelo", "codeforces", "cruxeval", "financebench", "gpqadiamond", "gsm8kperturbed", "graphwalks", "hle", "hmmt", "humaneval", "humanevalplus", "ifbench", "ifeval", "jeebench", "livebench", "livecodebench", "livecodebenchv5", "livecodebenchv5-official", "math500", "mbpp", "mbppplus", "mmlupro", "mrcr", "mtbench", "mixeval", "multiple", "nupa-loose", "nupa5k-loose", "olympiadbench", "olympiadbenchdeterministic", "olympiadbenchfull", "pdbthink", "repobench", "simpleqa", "simpleqamini", "swebench", "wildbench", "alpaca-eval", "zeroeval"], marker = "extra == 'benchmarks'" },
     { name = "fuzzywuzzy", marker = "extra == 'repobench'" },
     { name = "huggingface-hub" },
     { name = "ijson", marker = "extra == 'nupa-loose'" },
@@ -724,6 +728,7 @@ requires-dist = [
     { name = "nltk", marker = "extra == 'livebench'" },
     { name = "numpy" },
     { name = "patsy", marker = "extra == 'alpaca-eval'" },
+    { name = "pdbthink", marker = "extra == 'pdbthink'", git = "https://github.com/Open-Athena/pdbthink?rev=c00271fe049d60dc0d671b999d8c2fb595086166" },
     { name = "protobuf" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pyext", marker = "extra == 'livebench'", git = "https://github.com/penfever/PyExt" },
@@ -740,7 +745,7 @@ requires-dist = [
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", url = "https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl" },
     { name = "transformers", specifier = ">=5.17,<6" },
 ]
-provides-extras = ["serve-eval", "bigcodebench", "cruxeval", "humaneval", "humanevalplus", "ifeval", "ifbench", "livebench", "mbpp", "mbppplus", "mtbench", "mixeval", "graphwalks", "mrcr", "multiple", "repobench", "swebench", "wildbench", "alpaca-eval", "zeroeval", "aime24", "aime25", "aiw", "amc23", "codeelo", "codeforces", "financebench", "gpqadiamond", "gsm8kperturbed", "hle", "hmmt", "jeebench", "livecodebench", "livecodebenchv5", "livecodebenchv5-official", "math500", "mmlupro", "nupa-loose", "nupa5k-loose", "olympiadbench", "olympiadbenchdeterministic", "olympiadbenchfull", "simpleqa", "simpleqamini", "benchmarks"]
+provides-extras = ["serve-eval", "bigcodebench", "cruxeval", "humaneval", "humanevalplus", "ifeval", "ifbench", "livebench", "mbpp", "mbppplus", "mtbench", "mixeval", "graphwalks", "mrcr", "pdbthink", "multiple", "repobench", "swebench", "wildbench", "alpaca-eval", "zeroeval", "aime24", "aime25", "aiw", "amc23", "codeelo", "codeforces", "financebench", "gpqadiamond", "gsm8kperturbed", "hle", "hmmt", "jeebench", "livecodebench", "livecodebenchv5", "livecodebenchv5-official", "math500", "mmlupro", "nupa-loose", "nupa5k-loose", "olympiadbench", "olympiadbenchdeterministic", "olympiadbenchfull", "simpleqa", "simpleqamini", "benchmarks"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -861,6 +866,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d0/08/cb32ace6483b8016e8954f009f133799d299dc1bb35b310ced04bd46a925/gcsfs-2026.8.1.tar.gz", hash = "sha256:738da7dcc74817c7668d032f932598482a23cce1b061c537e54278be44d2fff8", size = 1090574, upload-time = "2026-09-11T08:02:18.931Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/e1/1db9ecfb9f22a71624413ee158b933c18538aacfde77acbb7413cea21a6e/gcsfs-2026.8.1-py3-none-any.whl", hash = "sha256:66e6316690b17e1887a4f4bc0902eee53f5b3fd860cc3f0377d65c5be3313b1f", size = 91383, upload-time = "2026-09-11T08:02:17.135Z" },
+]
+
+[[package]]
+name = "gemmi"
+version = "0.7.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/60/38/a79d9e672b837ceefa7da1921c33b10479362603c4c6370bc004d69558d6/gemmi-0.7.5.tar.gz", hash = "sha256:3328f26c8a8a0ef6a7fc8bb28e167818e324e4239dd4197d6b6066ae2b6315fe", size = 1523171, upload-time = "2026-03-02T08:27:31.157Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0b/72/7e33f0c1871d648088e3dd67ce47366ed942d625300f6d966730da92a7d7/gemmi-0.7.5-cp312-cp312-macosx_10_14_x86_64.whl", hash = "sha256:2da5d5c1d31fc8c3bffe7530c697c97f8389edff57e8b12898218c588c4f0dac", size = 2845071, upload-time = "2026-03-02T08:31:31.413Z" },
+    { url = "https://files.pythonhosted.org/packages/b0/3e/a6497e1c2c9bc6ed2b79e0f2d31a4ce509fd2a9eed4e4f7ac63eda8113cb/gemmi-0.7.5-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:5682920985109c6a08616ae9aae080f8b46a9714534dc864b535e3e6d203d5b8", size = 2720607, upload-time = "2026-03-02T08:31:33.778Z" },
+    { url = "https://files.pythonhosted.org/packages/df/31/704e6c7ffc251d1dc1a19a8cd2e30881a83978c6df8668ba052523fa1720/gemmi-0.7.5-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:255ca0b0a7f6fb0bf4322f2d69c5f94edf6e95fb801bc1d120ca8dd93b646065", size = 2624986, upload-time = "2026-03-02T08:31:35.902Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/88/5a431cd1ea7587408a66947384b39beb2ab2bcc1c87b7c4082f05036719f/gemmi-0.7.5-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:217bb9ac9da7c90704026dacfc0a0652a38f4df1e318225d8f35c75f1f8c7ebf", size = 2982717, upload-time = "2026-03-02T08:31:37.781Z" },
+    { url = "https://files.pythonhosted.org/packages/36/e0/ca646b4e22b3d6129ce56a087a9031f7a7843d47425f0adc38a7ab789b24/gemmi-0.7.5-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:74e1b5177b626aadb819fd8168f5d6064c04a2a1e45c87f357a96d30ddafc749", size = 3146031, upload-time = "2026-03-02T08:31:39.744Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/cc/47e6039859393175a9b38f9a72732c018a3052d838fecf1ff635d8b84d95/gemmi-0.7.5-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:6d30fa7ae889149c22dbb58899e77117e6548edc6e8ccfae3b4b2a259464d2ee", size = 3505196, upload-time = "2026-03-02T08:31:41.651Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/f2/53be7a4ba5816e13c39be0f728facac4bcb39cf4903ceeec54b006511c8f/gemmi-0.7.5-cp312-cp312-win_amd64.whl", hash = "sha256:a1fdb6f72006495b5119e3a8bb5c3185efa708b785bd4a5ce4397ef7abb3fec7", size = 2270488, upload-time = "2026-03-02T08:31:43.898Z" },
 ]
 
 [[package]]
@@ -2016,6 +2036,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/08/e3/950e513affdfe1c1864397b4f40d6ed06ec1b54f608e462c27f151dd72df/patsy-1.0.3.tar.gz", hash = "sha256:79ebf4c93ff4d296e58a9d5be2b2ee31bd49d737cf11d70ffbd8a44b2de42e65", size = 399992, upload-time = "2026-08-29T21:35:32.258Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/20/70/cd3cf5cff538323076a879edef02cce6f13f7d75e03d12f211b0a0dbd178/patsy-1.0.3-py2.py3-none-any.whl", hash = "sha256:d3dbebe8fd5f46e29912d030b63c6268647b59bf788a99e2af28a30234cf357c", size = 233318, upload-time = "2026-08-29T21:35:30.913Z" },
+]
+
+[[package]]
+name = "pdbthink"
+version = "0.1.0"
+source = { git = "https://github.com/Open-Athena/pdbthink?rev=c00271fe049d60dc0d671b999d8c2fb595086166#c00271fe049d60dc0d671b999d8c2fb595086166" }
+dependencies = [
+    { name = "gemmi" },
+    { name = "jinja2" },
+    { name = "numpy" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "scipy" },
 ]
 
 [[package]]

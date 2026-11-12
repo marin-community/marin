@@ -317,6 +317,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         runtime=EvalchemyRuntimeConfig(
             extras=(*EVALCHEMY_REQUIRED_EXTRAS, *config.runtime_extras),
             memory=config.runtime_memory if config.runtime_memory is not None else EvalchemyRuntimeConfig.memory,
+            dataset_cache=config.dataset_cache,
         ),
         judge=config.judge,
     )
@@ -326,6 +327,7 @@ EvaluationDefinition = EvalchemyDefinition | HarborDefinition
 
 
 _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
+    "pdbthink",
     "mmlu",
     "arc-challenge",
     "hellaswag",

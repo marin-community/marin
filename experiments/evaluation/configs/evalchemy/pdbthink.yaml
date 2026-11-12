@@ -1,0 +1,16 @@
+tasks: [PDBThink]
+dataset_cache: gs://marin-us-west1/evaluation/datasets
+task_options:
+  PDBThink:
+    num_fewshot: 0
+    task_alias: pdbthink
+    generation: true
+apply_chat_template: true
+chat_tokenizer_backend: huggingface
+prompt_budget_preflight: true
+batch_size: 1
+seed: 42
+gen_kwargs: temperature=0.7
+extra_model_args:
+  num_concurrent: 8
+runtime_extras: [pdbthink]

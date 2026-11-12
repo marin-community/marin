@@ -99,6 +99,7 @@ class EvalchemyConfig(BaseModel):
     max_tokens: int | None = None
     runtime_memory: str | None = None
     runtime_extras: tuple[str, ...] = ()
+    dataset_cache: str | None = None
     judge: EvalchemyJudgeConfig | None = None
 
     @model_validator(mode="after")

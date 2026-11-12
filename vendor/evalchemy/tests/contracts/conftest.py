@@ -1,6 +1,8 @@
 """Keep source contracts offline at the Hugging Face file boundary."""
 
 import csv
+import gzip
+import hashlib
 import json
 from pathlib import Path
 
@@ -10,6 +12,7 @@ from eval.chat_benchmarks.IFEval import eval_instruct as ifeval
 from eval.chat_benchmarks.MATH500 import eval_instruct as math500
 from eval.chat_benchmarks.MixEval import eval_instruct as mixeval
 from eval.chat_benchmarks.SimpleQA import eval_instruct as simpleqa
+from eval.chat_benchmarks.PDBThink import data as pdbthink_data
 
 
 @pytest.fixture(scope="session")
@@ -47,3 +50,24 @@ def offline_other_hf_files(monkeypatch, simpleqa_csv, math500_jsonl, request):
 
     for module in (simpleqa, mixeval, ifeval, math500):
         monkeypatch.setattr(module, "fetch_hf", fetch_fixture)
+
+
+@pytest.fixture
+def pdbthink_bundle(tmp_path, monkeypatch):
+    """Serve invented benchmark records through the real checksum-verified loader."""
+    manifest_path = tmp_path / "manifest.json"
+    monkeypatch.setattr(pdbthink_data, "MANIFEST_PATH", manifest_path)
+    pdbthink_data.manifest.cache_clear()
+
+    def write(records):
+        payload = gzip.compress(json.dumps({"renders": records}).encode(), mtime=0)
+        path = tmp_path / pdbthink_data.BUNDLE_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        manifest_path.write_text(json.dumps({"bundle_sha256": hashlib.sha256(payload).hexdigest(),
+                                             "n_renders": len(records)}))
+        pdbthink_data.manifest.cache_clear()
+        return str(tmp_path)
+
+    yield write
+    pdbthink_data.manifest.cache_clear()
