@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
@@ -159,14 +160,59 @@ def import_harbor_prebuilt(
     return prebuilt_artifact(source, options, import_harbor_cohort)
 
 
+QUICK_VIEW_VERSION = "2026.11.12"
+"""Format version of the converted view a QUICK pass writes; the cohort revision is in the step identity."""
+COHORT_INTENDED_USE = "train"
+"""Published campaign cohorts are RL training populations."""
+
+
+def cohort_task_json(tasks: Path) -> list[str]:
+    """Each row's TaskSpec as canonical JSON, from a lowered envelope or a native Harbor package."""
+    columns = pq.ParquetFile(tasks).schema_arrow.names
+    rows = pq.read_table(tasks).to_pylist()
+    if "lowered_task_spec" in columns:
+        return [TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"]).model_dump_json() for row in rows]
+    return [TaskSpec.model_validate_json(row["task_spec"]).model_dump_json() for row in rows]
+
+
+def _quick_view(config: PrebuiltCohort, tasks: Path, destination: Path) -> CampaignArtifact:
+    """Write the validated cohort as the converted view that QUICK consumers, such as embedding, read.
+
+    QUICK admits nothing. Every published row is a converted task, so there are no rejections.
+    """
+    task_json = cohort_task_json(tasks)
+    normalize = destination / "normalize"
+    normalize.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.table({"task_json": task_json}), normalize / "part-00000.parquet")
+    manifest = {
+        "status": "completed",
+        "mode": SourceProcessingMode.QUICK.value,
+        "repo": config.repo,
+        "revision": config.revision,
+        "intended_use": COHORT_INTENDED_USE,
+        "input_rows": len(task_json),
+        "converted_rows": len(task_json),
+        "rejections": {},
+    }
+    (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    return CampaignArtifact(
+        status="completed",
+        result=PipelineResult(
+            status="completed",
+            outputs={"normalize": str(normalize)},
+            evidence={"manifest": str(destination / "manifest.json")},
+            stages=("download", "validate", "normalize"),
+        ),
+    )
+
+
 def prebuilt_artifact(
     source: RlDataSource[PrebuiltCohort], options: PipelineOptions, load: Callable[[PrebuiltCohort], str]
 ) -> ArtifactStep[CampaignArtifact]:
     """Publish a validated cohort without rewriting its task bytes."""
     config = source.config
     assert config is not None
-    if options.mode is SourceProcessingMode.QUICK:
-        raise ValueError(f"A published cohort is imported for admission, not for a quick pass: {source.name}")
+    quick = options.mode is SourceProcessingMode.QUICK
 
     def build_config(context) -> str:
         return context.output_path
@@ -175,6 +221,8 @@ def prebuilt_artifact(
         local = Path(load(config))
         destination = Path(output_path)
         destination.mkdir(parents=True, exist_ok=True)
+        if quick:
+            return _quick_view(config, local, destination)
         shutil.copyfile(local, destination / TASKS_FILENAME)
         manifest = {
             "status": "completed",
@@ -196,7 +244,7 @@ def prebuilt_artifact(
 
     return ArtifactStep(
         name=config.name,
-        version=config.version,
+        version=QUICK_VIEW_VERSION if quick else config.version,
         artifact_type=CampaignArtifact,
         run=partial(run),
         build_config=build_config,
