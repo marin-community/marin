@@ -12,6 +12,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.rl.curation import DaytonaSafety
 from marin.execution.lazy import run
 from taskcompendium.grading_environment import assess_grading_environment
 from taskcompendium.models import Source, TaskSpec
@@ -24,9 +25,10 @@ from taskcompendium.runtime.resources import resource_bytes
 from experiments.post_training.task_curation import native_release
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import PipelineOptions
+from experiments.post_training.task_curation.datasets import native_releases
 from experiments.post_training.task_curation.datasets.native_harbor import native_task, unpack_native
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 
 @pytest.mark.parametrize("separate_solution", [False, True])
@@ -98,7 +100,12 @@ def test_native_package_round_trip_keeps_state_boundary_private_files_and_modes(
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
     source = RlDataSource(
-        info=SourceInfo(id="native", title="Native", origin="fixture"),
+        info=SourceInfo(
+            origin=SourceOrigin.MARIN,
+            upstream_dataset="native",
+            upstream_name="Native",
+            build_path="native import fixture",
+        ),
         config=PrebuiltCohort(
             name="native", version="2026.11.12.1", repo="fixture/native", revision="pin", expected_rows=1
         ),
@@ -113,3 +120,49 @@ def test_native_package_round_trip_keeps_state_boundary_private_files_and_modes(
     manifest = json.loads((output / "manifest.json").read_text())
     assert manifest["mode"] == "quick"
     assert manifest["grading_environment"]["assessed_tasks"] == manifest["converted_rows"] == 1
+
+
+@pytest.mark.parametrize(
+    "source_id",
+    [
+        "Harbor Hub:skill2env",
+        "Task Trove:DCAgent__exp_rle_adversarial-v6",
+        "Campaign Release:smartie-swesmith-admitted",
+    ],
+)
+def test_native_registration_requires_actor_receipt_for_its_private_pin(source_id, tmp_path, monkeypatch):
+    entry = next(
+        entry for entry in json.loads(native_releases.LEDGER.read_text())["entries"] if entry["id"] == source_id
+    )
+    release = entry["disposition_release"]
+    ledger = tmp_path / "ledger.json"
+    monkeypatch.setattr(native_releases, "LEDGER", ledger)
+    ledger.write_text(json.dumps({"entries": [entry]}))
+    assert native_releases.sources() == []
+
+    measurement = {
+        "dataset_id": release["repo"],
+        "dataset_revision": "0" * 40,
+        "daytona_snapshot_count": 1,
+        "daytona_machine_slots": release["converted_rows"],
+        "daytona_execution_failures": 1,
+        "daytona_count_basis": "fixture actor census over the exact private pin",
+        "daytona_unsafe_reasons": ["execution_requirement"],
+        "daytona_unsafe_details": {"execution_requirement": "fixture unsupported actor requirement"},
+        "daytona_unsafe_counts": {"execution_requirement": 1},
+    }
+    release["daytona_measurement"] = measurement
+    ledger.write_text(json.dumps({"entries": [entry]}))
+    with pytest.raises(ValueError, match="does not cover the private source pin"):
+        native_releases.sources()
+
+    measurement["dataset_revision"] = release["revision"]
+    ledger.write_text(json.dumps({"entries": [entry]}))
+    (source,) = native_releases.sources()
+    declaration = source.declaration
+    assert declaration.id == source_id
+    assert declaration.current_release.repo == release["repo"]
+    assert declaration.current_release.revision == release["revision"]
+    assert declaration.daytona_safety is DaytonaSafety.UNSAFE
+    assert declaration.daytona_unsafe_counts == {"execution_requirement": 1}
+    assert "excluded" not in source.info.tags

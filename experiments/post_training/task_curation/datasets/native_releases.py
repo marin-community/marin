@@ -8,10 +8,12 @@ from pathlib import Path
 
 from finestore.rl.curation import (
     ConvertedExamples,
+    DatasetRelease,
     DaytonaMeasurement,
     GradingEnvironmentEvidence,
     IndependentQC,
     OracleValidation,
+    SourceOrigin,
 )
 
 from experiments.post_training.task_curation.native_release import import_native_quick
@@ -19,6 +21,11 @@ from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 LEDGER = Path(__file__).parents[1] / "retired-inventory-only.json"
+RETIRED_ORIGINS = {
+    "Harbor Hub": SourceOrigin.HARBOR_HUB,
+    "Task Trove": SourceOrigin.TASKTROVE,
+    "Snowball Smartie RL": SourceOrigin.TASKTROVE,
+}
 
 
 def sources() -> list[RlDataSource[PrebuiltCohort]]:
@@ -41,14 +48,23 @@ def sources() -> list[RlDataSource[PrebuiltCohort]]:
             expected_rows=release["converted_rows"],
         )
         tags = tuple(tag for tag in entry["tags"] if tag != "excluded")
+        origin = RETIRED_ORIGINS[entry["origin"]]
         result.append(
             RlDataSource(
                 config=config,
                 pipeline=import_native_quick,
                 info=SourceInfo(
                     id=entry["id"],
-                    title=entry["display_name"],
-                    origin=entry["origin"],
+                    origin=origin,
+                    upstream_dataset=entry["dataset_id"] if origin is SourceOrigin.HARBOR_HUB else entry["name"],
+                    upstream_name=entry["display_name"],
+                    upstream_url=entry["url"],
+                    build_path="Native Harbor QUICK conversion",
+                    current_release=DatasetRelease(
+                        repo=release["repo"],
+                        revision=release["revision"],
+                        url=f"https://huggingface.co/datasets/{release['repo']}/tree/{release['revision']}",
+                    ),
                     family=entry["family"],
                     tags=tags,
                     task_format=TaskFormat.HARBOR,
@@ -57,7 +73,8 @@ def sources() -> list[RlDataSource[PrebuiltCohort]]:
                         entry["notes"].split(" Admission blocked:")[0]
                         + " Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. "
                         "QUICK is unreviewed and supplies no oracle or admission claim. "
-                        "Native image tags and build downloads may remain mutable. Source defects remain recorded."
+                        "Native Dockerfile base tags and build downloads may remain mutable. "
+                        "Source defects remain recorded."
                     ),
                     independent_qc=(
                         IndependentQC.model_validate(entry["independent_qc"]) if entry["independent_qc"] else None
@@ -70,6 +87,7 @@ def sources() -> list[RlDataSource[PrebuiltCohort]]:
                     daytona_roles=measurement.daytona_roles,
                     daytona_unsafe_reasons=tuple(measurement.daytona_unsafe_reasons),
                     daytona_unsafe_details=measurement.daytona_unsafe_details,
+                    daytona_unsafe_counts=measurement.daytona_unsafe_counts,
                     grading_environment=GradingEnvironmentEvidence(
                         **release["grading_environment"], evidence_url=evidence
                     ),

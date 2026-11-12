@@ -345,4 +345,88 @@ PENDING_SOURCE_ID_RETIREMENTS: dict[str, str] = {
     "Campaign Release:tasktrove-safety-qa": "TaskTrove:tasktrove-safety-qa",
     "Campaign Release:tasktrove-knowledge-openqa-qa": "TaskTrove:tasktrove-knowledge-openqa-qa",
     "Campaign Release:tasktrove-science-openqa-qa": "TaskTrove:tasktrove-science-openqa-qa",
+    # Historical publications restored through the retired native-source ledger.
+    "Campaign Release:smartie-calibforge-shared-v2": "TaskTrove:smartie-calibforge-shared-v2",
+    "Campaign Release:smartie-swesmith-admitted": "TaskTrove:smartie-swesmith-admitted",
+    "Harbor Hub:skill2env": "Harbor Hub:skill2env/skill2env",
+    "Task Trove:DCAgent__exp_rle_adversarial-v6": "TaskTrove:DCAgent__exp_rle_adversarial-v6",
+    "Task Trove:DCAgent__exp_rpt_nemotron-cpp": "TaskTrove:DCAgent__exp_rpt_nemotron-cpp",
+    "Task Trove:DCAgent__inferredbugs-sandboxes-verifier": "TaskTrove:DCAgent__inferredbugs-sandboxes-verifier",
+    "Task Trove:DCAgent__mix_h4_binary_easy": "TaskTrove:DCAgent__mix_h4_binary_easy",
+    "Task Trove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3": (
+        "TaskTrove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3"
+    ),
+    "Task Trove:GAIR__OpenSWE__openswe_oss": "TaskTrove:GAIR__OpenSWE__openswe_oss",
+    "Task Trove:GAIR__OpenSWE__openswe_other": "TaskTrove:GAIR__OpenSWE__openswe_other",
+    "Task Trove:laion__codeelo-v2": "TaskTrove:laion__codeelo-v2",
+    "Task Trove:laion__exp_rpt_bugsinpy-v4": "TaskTrove:laion__exp_rpt_bugsinpy-v4",
+    "Task Trove:laion__exp_rpt_codenet-python-v4": "TaskTrove:laion__exp_rpt_codenet-python-v4",
+    "Task Trove:laion__exp_rpt_crosscodeeval-csharp-v4": "TaskTrove:laion__exp_rpt_crosscodeeval-csharp-v4",
+    "Task Trove:laion__exp_rpt_crosscodeeval-java-v3": "TaskTrove:laion__exp_rpt_crosscodeeval-java-v3",
+    "Task Trove:laion__exp_rpt_crosscodeeval-python-v2": "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2",
+    "Task Trove:laion__exp_rpt_crosscodeeval-typescript-v2": "TaskTrove:laion__exp_rpt_crosscodeeval-typescript-v2",
+    "Task Trove:laion__exp_rpt_ghactions-v3": "TaskTrove:laion__exp_rpt_ghactions-v3",
+    "Task Trove:laion__exp_rpt_methods2test-large-v4": "TaskTrove:laion__exp_rpt_methods2test-large-v4",
+    "Task Trove:laion__exp_rpt_nemotron-junit-v6": "TaskTrove:laion__exp_rpt_nemotron-junit-v6",
+    "Task Trove:laion__exp_rpt_scaffold-v3": "TaskTrove:laion__exp_rpt_scaffold-v3",
+    "Task Trove:laion__exp_rpt_stack-cpp-v4": "TaskTrove:laion__exp_rpt_stack-cpp-v4",
+    "Task Trove:laion__exp_rpt_stack-dockerfile-gpt5mini-v7": "TaskTrove:laion__exp_rpt_stack-dockerfile-gpt5mini-v7",
+    "Task Trove:laion__exp_rpt_stack-go-v5": "TaskTrove:laion__exp_rpt_stack-go-v5",
+    "Task Trove:laion__exp_rpt_stack-jest-v5": "TaskTrove:laion__exp_rpt_stack-jest-v5",
+    "Task Trove:laion__exp_rpt_stack-junit-v6": "TaskTrove:laion__exp_rpt_stack-junit-v6",
+    "Task Trove:laion__exp_rpt_stack-php-large-v9": "TaskTrove:laion__exp_rpt_stack-php-large-v9",
+    "Task Trove:laion__exp_rpt_stack-pytest-large-v3": "TaskTrove:laion__exp_rpt_stack-pytest-large-v3",
+    "Task Trove:laion__exp_rpt_stack-rspec-v4": "TaskTrove:laion__exp_rpt_stack-rspec-v4",
+    "Task Trove:laion__magicoder-v4": "TaskTrove:laion__magicoder-v4",
+    "Task Trove:laion__mix_h10_reward_proportional-v2": "TaskTrove:laion__mix_h10_reward_proportional-v2",
+    "Task Trove:laion__mix_h11_single_skill_only-v2": "TaskTrove:laion__mix_h11_single_skill_only-v2",
+    "Task Trove:laion__mix_h8_original_tests-v2": "TaskTrove:laion__mix_h8_original_tests-v2",
+    "Task Trove:laion__nemotron-gym-agentic-function-calling-pivot-v3": (
+        "TaskTrove:laion__nemotron-gym-agentic-function-calling-pivot-v3"
+    ),
+    "Task Trove:laion__nemotron-gym-agentic-indirect-prompt-injection-v3": (
+        "TaskTrove:laion__nemotron-gym-agentic-indirect-prompt-injection-v3"
+    ),
+    "Task Trove:laion__nemotron-gym-agentic-swe-pivot-v4": "TaskTrove:laion__nemotron-gym-agentic-swe-pivot-v4",
+    "Task Trove:laion__nemotron-gym-cfbench-v4": "TaskTrove:laion__nemotron-gym-cfbench-v4",
+    "Task Trove:laion__nemotron-gym-identity-following-v4": "TaskTrove:laion__nemotron-gym-identity-following-v4",
+    "Task Trove:laion__nemotron-gym-instruction-following-adversarial-v5": (
+        "TaskTrove:laion__nemotron-gym-instruction-following-adversarial-v5"
+    ),
+    "Task Trove:laion__nemotron-gym-instruction-following-citation-v2": (
+        "TaskTrove:laion__nemotron-gym-instruction-following-citation-v2"
+    ),
+    "Task Trove:laion__nemotron-gym-instruction-following-freeform-v2": (
+        "TaskTrove:laion__nemotron-gym-instruction-following-freeform-v2"
+    ),
+    "Task Trove:laion__nemotron-gym-instruction-following-multiturnchat-v4": (
+        "TaskTrove:laion__nemotron-gym-instruction-following-multiturnchat-v4"
+    ),
+    "Task Trove:laion__nemotron-gym-inverse-ifeval-v4": "TaskTrove:laion__nemotron-gym-inverse-ifeval-v4",
+    "Task Trove:laion__nemotron-gym-knowledge-web-search-mcqa-v2": (
+        "TaskTrove:laion__nemotron-gym-knowledge-web-search-mcqa-v2"
+    ),
+    "Task Trove:laion__nemotron-gym-litmus-bench-v2": "TaskTrove:laion__nemotron-gym-litmus-bench-v2",
+    "Task Trove:laion__nemotron-gym-math-advanced-calculations-v4": (
+        "TaskTrove:laion__nemotron-gym-math-advanced-calculations-v4"
+    ),
+    "Task Trove:laion__nemotron-gym-multichallenge-vanilla-v3": (
+        "TaskTrove:laion__nemotron-gym-multichallenge-vanilla-v3"
+    ),
+    "Task Trove:laion__nemotron-gym-qa-abstention-v4": "TaskTrove:laion__nemotron-gym-qa-abstention-v4",
+    "Task Trove:laion__nemotron-gym-sysbench-v4": "TaskTrove:laion__nemotron-gym-sysbench-v4",
+    "Task Trove:laion__openswe-tasks-patched-v7-oracle-success": (
+        "TaskTrove:laion__openswe-tasks-patched-v7-oracle-success"
+    ),
+    "Task Trove:laion__r2egym-patched-full-oracle-v3": "TaskTrove:laion__r2egym-patched-full-oracle-v3",
+    "Task Trove:laion__swegym-tasks-patched-validated-v5": "TaskTrove:laion__swegym-tasks-patched-validated-v5",
+    "Task Trove:laion__toolscale-v4": "TaskTrove:laion__toolscale-v4",
+    "Task Trove:laion__tulu3-sft-personas-math-sandboxes-verified-v3": (
+        "TaskTrove:laion__tulu3-sft-personas-math-sandboxes-verified-v3"
+    ),
+    "Task Trove:R2E-Gym__R2E-Gym-V1": "TaskTrove:R2E-Gym__R2E-Gym-V1",
+    "Task Trove:SankalpKJ__nemotron-code-oracle-filtered": "TaskTrove:SankalpKJ__nemotron-code-oracle-filtered",
+    "Task Trove:SWE-Gym__SWE-Gym": "TaskTrove:SWE-Gym__SWE-Gym",
+    "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__general": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__general",
+    "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__music": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__music",
 }
