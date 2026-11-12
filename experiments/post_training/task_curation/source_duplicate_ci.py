@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Require changed source declarations to have published fingerprints and reviewed overlap flags."""
+"""Validate changed-source fingerprints and prepare inputs for bounded overlap review."""
 
 import argparse
 import hashlib
