@@ -65,8 +65,8 @@ pytest_plugins = ("lib.verifyit.tests.test_judge",)
 
 RECIPES = {
     source.name: cast(CurationRecipe, source.config)
-    for module in (code, python_tests, nl2bash, structured_outputs)
-    for source in module.sources()
+    for candidates in (code.sources, python_tests.sources, nl2bash.sources, structured_outputs.candidate_sources)
+    for source in candidates()
 }
 
 CODENET = (Path(__file__).parent / "fixtures/codenet.tar.gz").read_bytes()

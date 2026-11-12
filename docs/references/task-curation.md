@@ -374,6 +374,14 @@ scored bug-zero/reference-one controls for the complete population. It retains
 package bytes and executes no controls during import. Infrastructure-error zeros
 cannot admit a task. Lowered TaskCompendium envelopes use `prebuilt.import_prebuilt`.
 
+Canonical TaskCompendium cohorts use `prebuilt.import_taskcompendium_prebuilt`.
+Their Parquet rows contain `task_spec` and `task_sha256`; import validates every
+hash, task identity and required environment, rejects duplicate IDs and population
+count changes, and writes the original task strings into the corpus views.
+Conversation-only tasks need no runtime envelope or machine. The pinned source
+declaration must record its qualification and SAMPLE/FULL oversight; importing a
+published cohort does not supply missing reviews or execute its controls.
+
 Native Harbor execution runs `environment.setup.command` with its declared
 `timeout_sec` before agent access. Task `agent.env` values apply only to the
 agent; conflicting trial-level values fail. A structured verifier's non-scored

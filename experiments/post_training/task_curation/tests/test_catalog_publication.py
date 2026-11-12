@@ -328,6 +328,7 @@ def test_retirement_materializes_legacy_missing_defaults_without_changing_archiv
             }
             for source in (kept, retired)
         ]
+
         records[0]["declaration"]["daytona_safety"] = None
         records[0]["declaration"]["oversight"] = None
         with store.transaction() as transaction:
