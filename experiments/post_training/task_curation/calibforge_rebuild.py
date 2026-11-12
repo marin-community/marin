@@ -49,9 +49,11 @@ from tomlkit.items import Table
 from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT, SETUP_SCRIPT
 from experiments.post_training.task_curation.environment import dockerfile_lines
 from experiments.post_training.task_curation.environment_fidelity import PINNED_BASES
+from experiments.post_training.task_curation.tasktrove.harbor_export import archive_bytes
 
 ENVIRONMENT_PREFIX = "environment/"
 REBUILT = "rebuilt_pending_oracle_and_admission"
+REQUIRES_LARGER_MACHINE_SHAPE = "requires_larger_machine_shape"
 
 NORMALIZED_CPUS = 2
 NORMALIZED_MEMORY_MB = 4096
@@ -305,15 +307,10 @@ def compile_recipe(instructions: list[Instruction], files: dict[str, bytes], mod
     commands.append(f"rmdir {SETUP_ROOT}")
     if env_exports:
         commands[2:2] = env_exports
-    payload = io.BytesIO()
-    with tarfile.open(fileobj=payload, mode="w") as archive:
-        for name in sorted(resources):
-            content = resources[name]
-            info = tarfile.TarInfo(name)
-            info.size = len(content)
-            info.mode = modes.get(name, 0o644)
-            archive.addfile(info, io.BytesIO(content))
-    return CompiledRecipe(base_ref, workdir, "\n".join(commands) + "\n", gzip.compress(payload.getvalue(), mtime=0))
+    payload = archive_bytes(
+        resources, {name: format(modes.get(name, 0o644), "o") for name in resources}, compression_level=9
+    )
+    return CompiledRecipe(base_ref, workdir, "\n".join(commands) + "\n", payload)
 
 
 def rebuild_task(task_binary: bytes) -> RebuiltTask:
@@ -350,16 +347,11 @@ def rebuild_task(task_binary: bytes) -> RebuiltTask:
     output_files["environment/Dockerfile"] = f"FROM {base_ref}\nWORKDIR {workdir}\n".encode()
     output_files[f"setup_files/{FIXTURE_ARCHIVE}"] = payload
     output_files[f"setup_files/{SETUP_SCRIPT}"] = setup_script.encode()
-    packed = io.BytesIO()
-    with tarfile.open(fileobj=packed, mode="w") as archive:
-        for name in sorted(output_files):
-            content = output_files[name]
-            info = tarfile.TarInfo(name)
-            info.size = len(content)
-            info.mode = modes.get(name, 0o644)
-            archive.addfile(info, io.BytesIO(content))
+    packed = archive_bytes(
+        output_files, {name: format(modes.get(name, 0o644), "o") for name in output_files}, compression_level=9
+    )
     return RebuiltTask(
-        task_binary=gzip.compress(packed.getvalue(), mtime=0),
+        task_binary=packed,
         base_ref=base_ref,
         workdir=workdir,
         payload_sha256=hashlib.sha256(payload).hexdigest(),
@@ -398,11 +390,11 @@ def _rewrite_task_toml(original: bytes | None, base_ref: str, workdir: str) -> b
     if environment.get("gpus") or environment.get("tpu"):
         raise DeferredRebuild("requires_accelerator_machine")
     if (environment.get("cpus") or 0) > NORMALIZED_CPUS:
-        raise DeferredRebuild("requires_larger_machine_shape")
+        raise DeferredRebuild(REQUIRES_LARGER_MACHINE_SHAPE)
     if (_size_mb(environment.get("memory")) or 0) > NORMALIZED_MEMORY_MB:
-        raise DeferredRebuild("requires_larger_machine_shape")
+        raise DeferredRebuild(REQUIRES_LARGER_MACHINE_SHAPE)
     if (_size_mb(environment.get("storage")) or 0) > NORMALIZED_STORAGE_MB:
-        raise DeferredRebuild("requires_larger_machine_shape")
+        raise DeferredRebuild(REQUIRES_LARGER_MACHINE_SHAPE)
     document = tomlkit.parse(original.decode(errors="replace"))
     table = document["environment"]
     assert isinstance(table, Table)

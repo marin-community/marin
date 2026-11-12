@@ -5,18 +5,15 @@
 
 from typing import Any
 
-from finestore.rl.source_identity import canonical_source_id
-from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
-
 
 def daytona(declaration: dict[str, Any], limit: int) -> dict[str, Any]:
     """Return the v75 rendering vocabulary while retaining typed measurement evidence."""
     safety = declaration.get("daytona_safety")
-    if canonical_source_id(declaration.get("id", "")) in GRANDFATHERED_MARINSKYRL_SOURCES:
+    if exemption := declaration.get("daytona_exemption"):
         return {
             "state": "na",
             "exempt": True,
-            "reason": "Grandfathered blend; Daytona safety is exempt and no verdict is asserted",
+            "reason": exemption,
         }
     slots = declaration.get("daytona_machine_slots")
     if (

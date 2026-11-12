@@ -30,12 +30,15 @@ from finestore.rl.curation import (
     source_title,
 )
 from finestore.rl.source_identity import canonical_source_id
-from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from marin.execution.lazy import ArtifactStep
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.decontamination import require_private_release
+from experiments.post_training.task_curation.source_policy import (
+    GRANDFATHERED_DAYTONA_EXEMPTION,
+    GRANDFATHERED_MARINSKYRL_SOURCES,
+)
 
 
 class PinnedReference(Protocol):
@@ -365,6 +368,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             pipeline=invocation,
             independent_qc=info.independent_qc,
             daytona_safety=safety,
+            daytona_exemption=GRANDFATHERED_DAYTONA_EXEMPTION if info.id in GRANDFATHERED_MARINSKYRL_SOURCES else None,
             daytona_snapshot_count=info.daytona_snapshot_count,
             daytona_count_basis=info.daytona_count_basis,
             oracle_validation=info.oracle_validation,

@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 from finestore.rl.curation import OversightEvidence, OversightLevel
-from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 
 from experiments.post_training.task_curation.source import (
     RlDataSource,
@@ -16,6 +15,7 @@ from experiments.post_training.task_curation.source import (
     SourceOrigin,
     TaskFormat,
 )
+from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from experiments.post_training.task_curation.sources import all_sources, require_accepted_task_format, runnable_sources
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
@@ -103,3 +103,5 @@ def test_existing_internal_blend_selection_does_not_require_new_audit_evidence(m
     monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: {source_id: source})
     assert runnable_sources()[source.name] is source
     assert source.declaration.status == "Available"
+    assert source.declaration.daytona_exemption
+    assert source.declaration.daytona_safety is None

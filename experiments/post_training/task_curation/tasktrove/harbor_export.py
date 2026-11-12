@@ -160,7 +160,7 @@ def archive_file_mode(name: str, modes: dict[str, str]) -> int:
     return int(modes.get(name, "755" if name.endswith(".sh") else "644"), 8)
 
 
-def archive_bytes(files: dict[str, bytes], modes: dict[str, str]) -> bytes:
+def archive_bytes(files: dict[str, bytes], modes: dict[str, str], *, compression_level: int = 1) -> bytes:
     """Write deterministic regular-file archives without inheriting host ownership."""
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
@@ -169,7 +169,7 @@ def archive_bytes(files: dict[str, bytes], modes: dict[str, str]) -> bytes:
             entry.size = len(data)
             entry.mode = archive_file_mode(name, modes)
             archive.addfile(entry, io.BytesIO(data))
-    return gzip.compress(buffer.getvalue(), compresslevel=1, mtime=0)
+    return gzip.compress(buffer.getvalue(), compresslevel=compression_level, mtime=0)
 
 
 @cache

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Frozen catalog exceptions shared by ingestion and the Atlas API."""
+"""Fixed task-curation admission exceptions for retained MarinSkyRL populations."""
 
 GRANDFATHERED_MARINSKYRL_SOURCES: frozenset[str] = frozenset(
     {
@@ -33,3 +33,5 @@ GRANDFATHERED_MARINSKYRL_SOURCES: frozenset[str] = frozenset(
         "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
     }
 )
+
+GRANDFATHERED_DAYTONA_EXEMPTION = "Grandfathered blend; Daytona safety is exempt and no verdict is asserted"
