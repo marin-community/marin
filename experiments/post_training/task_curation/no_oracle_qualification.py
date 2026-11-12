@@ -5,8 +5,9 @@
 
 A source whose tasks carry no oracle solution (``has_solution`` false, or an
 empty ``solution_binary``) cannot be qualified by executing its oracle. This
-module supports the checks that replace it when a cohort has been rebuilt onto
-shared environments:
+module checks payload preservation and setup execution for cohorts rebuilt onto
+shared environments. Verifier liveness runs separately through
+``no_oracle_liveness``:
 
 1. **Payload preservation** (offline). Every file the native recipe copies into
    the workspace must appear in the rebuilt task's setup payload with identical
@@ -15,9 +16,9 @@ shared environments:
 2. **Setup execution** (local Docker). Run the rebuilt setup script in the task's
    own base image and compare the files it writes against the same expectation
    set. Preservation proves the bytes travel; this proves the script lands them.
-   Package installation runs normally; ``--stub-apt`` explicitly opts into a
-   structural check that cannot establish package provisioning.
-3. **Verifier liveness** (sandbox). The task's own verifier must execute and
+   Package installation runs by default. ``--stub-apt`` skips installs for a
+   payload-only diagnostic and does not establish dependency provisioning.
+3. **Verifier liveness** (separate command). The task's own verifier must execute and
    return a well-formed negative verdict on the untouched workspace. A crash, a
    timeout or unparsable output is an infrastructure error, not a pass.
 
@@ -33,11 +34,9 @@ Run the offline phase with::
         --rebuild-out /path/to/rebuild-output \
         --output /path/to/qc-report.json
 
-Run ``experiments.post_training.task_curation.no_oracle_liveness`` separately
-for the verifier-liveness phase. It needs the placement's credentials and creates
-one grading machine per sampled task. This module's ``--sandbox`` option refuses
-execution. Retain Daytona snapshots and hand their names to the operator as
-described in ``.agents/ops/daytona.md``.
+The reserved ``--sandbox`` option exits without running verifier liveness.
+Use ``no_oracle_liveness`` through the reviewed procedure in
+``docs/references/task-curation.md`` for that separate qualification step.
 """
 
 import argparse

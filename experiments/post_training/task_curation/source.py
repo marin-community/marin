@@ -156,17 +156,15 @@ class SourceInfo:
     """A campaign run that executed this source on the Daytona RL org, when one exists."""
 
     oracle_validation: OracleValidation | None = None
+    """How the source's grader was qualified.
+
+    ``executed`` runs the shipped oracle solutions; ``verifier_executed`` records
+    a negative verdict on an untouched submission without certifying an oracle;
+    ``skipped`` certifies neither. The Atlas shows this value beside the catalog.
+    """
 
     oversight: OversightEvidence | None = None
     """The review this source's admission rests on, with its evidence pointers."""
-
-    """How execution was qualified when the source ships no oracle solutions.
-
-    ``executed`` runs the shipped oracle solutions; ``verifier_executed`` runs the
-    grader against an untouched workspace when no oracle exists; ``skipped``
-    certifies nothing. A negative verifier verdict establishes liveness, not correctness.
-    The Atlas shows the value beside the catalog.
-    """
 
 
 @dataclass(frozen=True)

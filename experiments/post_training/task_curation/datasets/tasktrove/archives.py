@@ -6,7 +6,7 @@
 from dataclasses import dataclass, replace
 
 from taskcompendium.convert.tasks import shell_environment
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import CONVERSATION_ANSWERS, EnvironmentRequirements, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Converter, ImportFailureKind, ImportRejection, NormalizedTask, RawRow
 
@@ -48,10 +48,15 @@ class TaskTroveConverter:
         if isinstance(converted, ImportRejection):
             return converted
         task = converted.task if isinstance(converted, NormalizedTask) else converted
-        # An archived build may name its verified registry output. Reconstruct the
-        # archived context before accepting the pin, including file modes and the
-        # verifier-install recipe. The pin retains its frozen bundled verifier.
-        if task.environment_requirements.docker_image in BUILT_IMAGES.values():
+        # Reply-only tasks have no agent machine; their archive remains oracle evidence.
+        reply_only = (
+            task.answer_type in CONVERSATION_ANSWERS and task.environment_requirements == EnvironmentRequirements()
+        )
+        if reply_only:
+            reused = None
+        elif task.environment_requirements.docker_image in BUILT_IMAGES.values():
+            # Reconstruct source files, modes and the verifier-install recipe before
+            # accepting the registry output, which retains its frozen bundled verifier.
             expected = archive_build_environment(row.data)
             reused = (
                 None

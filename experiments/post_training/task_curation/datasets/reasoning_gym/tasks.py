@@ -387,7 +387,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name="tasktrove-reasoning-gym",
                 source=tasktrove_source(TASKTROVE_CONFIG),
                 convert=TaskTroveConverter(TASKTROVE_CONFIG, convert_tasktrove),
-                version="3",
+                version="4",
                 intended_use=IntendedUse.TRAIN,
                 rubric=TASKTROVE_RUBRIC,
                 controls=TASKTROVE_CONTROLS,

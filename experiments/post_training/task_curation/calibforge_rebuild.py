@@ -61,9 +61,8 @@ Snapshot identity includes the resource shape, so leaving each task's declared
 shape in place multiplies the cohort's snapshots by every distinct size. Tasks
 that need more than this shape are deferred rather than silently shrunk."""
 
-# Fixed base set: one image per runtime family in the V1 FROM census. Digests
-# are resolved and recorded at packaging time; the rebuild stages references
-# and refuses unmapped families.
+# Fixed base set: one digest-pinned image per runtime family in the V1 FROM
+# census. The rebuild refuses unmapped families.
 FIXED_BASES = {
     # Every base is digest-pinned: a lowered task spec rejects a floating tag, and a
     # digest change is a deliberate edit here rather than a silent rebuild.

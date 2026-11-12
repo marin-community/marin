@@ -191,9 +191,10 @@ def daytona_execution_failure(requirements: Mapping) -> str | None:
 def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> SnapshotIdentityCount:
     """Count snapshot identities for lowered Harbor task specs.
 
-    Each spec contributes verifier and task-machine identities for its declared
-    registry image or materialized ``environment/`` context, using each slot's
-    runtime machine shape.
+    Each spec contributes a verifier identity — its registry image or its
+    materialized ``environment/`` context with the verifier machine shape —
+    and a task-machine identity on its declared registry image or archived
+    Dockerfile context with the task machine shape.
     """
     sizes: Counter[str] = Counter()
     failures: list[tuple[str, str]] = []

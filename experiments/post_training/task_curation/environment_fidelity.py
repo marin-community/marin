@@ -71,10 +71,9 @@ def environment_unused(
 ) -> str | None:
     """Why a converted task ignores its archive's environment, if it does.
 
-    ``spec`` is a TaskCompendium task dict. An archived Dockerfile must remain
-    a build context or be replayed as exact setup steps on its pinned base.
-    Dataset-specific guards validate prebuilt outputs against their archived
-    contexts before calling this generic lowering check.
+    ``spec`` is a TaskCompendium task dict. A task whose archive defines
+    ``environment/Dockerfile`` must declare its build context or replay its lowered
+    steps, working directory and variables on the matching digest-pinned base.
     """
     dockerfile = dockerfile_of(archive_files)
     if dockerfile is None:

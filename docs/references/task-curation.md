@@ -413,6 +413,11 @@ uv run --isolated --project vendor/harbor --extra runtime --no-default-groups --
 An `Environment` declares grader build inputs. The converter records agent and
 grader requirements on each TaskSpec; execution selects suitable Shellbox machines.
 
+TaskTrove conversions that request only an assistant response and declare no agent
+environment retain the archived Dockerfile as private oracle evidence. They need
+no agent machine; their grader still uses its declared environment. Environment
+fidelity checks apply to conversions that require an agent machine.
+
 TaskTrove's Python-test sources lower each archived `environment/Dockerfile` onto
 its digest-pinned base. `RUN` steps become setup commands, `WORKDIR` sets the
 working directory, and `ENV` assignments remain in `environment_variables` for
