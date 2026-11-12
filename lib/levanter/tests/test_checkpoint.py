@@ -158,6 +158,14 @@ def test_checkpointer_changing_policy():
         assert _get_checkpoint_steps(tmpdir) == [2, 4, 6, 8, 10, 15, 20, 30, 40]
 
 
+def test_checkpointer_barrier_timeout_is_an_int():
+    # Configs decode async_timeout_seconds as a float; the distributed barrier rejects a float timeout.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        checkpointer = Checkpointer(tmpdir, None, [], async_timeout_seconds=259200.0)
+        assert type(checkpointer._manager._timeout_in_ms) is int
+        assert checkpointer._manager._timeout_in_ms == 259_200_000
+
+
 def test_checkpointer_temporal_policy():
     fake_now = datetime.datetime(2021, 1, 1, 0, 0, 0)
 
