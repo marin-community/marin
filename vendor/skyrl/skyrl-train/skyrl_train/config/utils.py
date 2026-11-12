@@ -1,6 +1,6 @@
 from pathlib import Path
 from hydra import compose, initialize_config_dir
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 
 CONFIG_DIR = Path(__file__).parent  # skyrl-train/config
 DEFAULT_CONFIG_NAME = "ppo_base_config.yaml"
@@ -13,9 +13,17 @@ def generation_context_limit(config: DictConfig) -> int:
     return configured if model_limit is None else min(configured, int(model_limit))
 
 
+def normalize_logging_backends(config: DictConfig) -> None:
+    """Resolve a loaded logger choice to the native collection representation."""
+    selected = config.trainer.logger
+    with open_dict(config):
+        config.trainer.logger = (selected,) if isinstance(selected, str) else tuple(selected)
+
+
 def get_default_config():
     with initialize_config_dir(config_dir=str(CONFIG_DIR)):
         cfg = compose(config_name=DEFAULT_CONFIG_NAME)
+    normalize_logging_backends(cfg)
     return cfg
 
 

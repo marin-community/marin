@@ -249,7 +249,9 @@ def test_launch_config_composes_and_loads_as_structured_hydra(
     }
     if probe_enabled:
         # The direct engine returns exact model tokens without a transport flag.
-        trainer["mismatch_probe"].update(enabled=True, prompts={"count": 2, "samples_per_prompt": 1}, seed=17, updates=0)
+        trainer["mismatch_probe"].update(
+            enabled=True, prompts={"count": 2, "samples_per_prompt": 1}, seed=17, updates=0
+        )
         raw["skyrl"]["generator"].update(
             sampling_params={"temperature": 1.0, "logprobs": 0},
             engine_init_kwargs={"logprobs_mode": "processed_logprobs", "generation_config": "vllm"},
@@ -385,7 +387,7 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
     document = raw_launch_config()
     document["run"]["coordinator_iris_job_id"] = "/tests/coordinator"
     document["iris"]["max_retries"] = 0
-    document["skyrl"]["trainer"]["logger"] = ["records"]
+    document["skyrl"]["trainer"]["logger"] = "records" if entrypoint == "standard" else ["console", "records"]
     document["skyrl"]["entrypoint"] = entrypoint
     document["artifacts"]["export_root"] = str(tmp_path / "exports")
     contents = yaml.safe_dump(document).encode()
@@ -407,7 +409,7 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
         assert config.runtime.iris_job_id == "/tests/bootstrap-trainer"
         if fail:
             raise RuntimeError("workload initialization failed")
-        with Tracking("project", "display-name", "records", config) as tracker:
+        with Tracking("project", "display-name", config.trainer.logger, config) as tracker:
             tracker.start(resumed_step=None)
             tracker.log({"startup/ready": 1}, step=0)
 
@@ -421,7 +423,9 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
         raise skyrl_entrypoint.PackageNotFoundError(name)
 
     monkeypatch.setattr(skyrl_entrypoint, "version", installed_version)
-    module = "skyrl_train.entrypoints.main_generate" if entrypoint == "generate" else "skyrl_train.entrypoints.main_base"
+    module = (
+        "skyrl_train.entrypoints.main_generate" if entrypoint == "generate" else "skyrl_train.entrypoints.main_base"
+    )
     monkeypatch.setitem(sys.modules, module, SimpleNamespace(run=workload))
     with pytest.raises(RuntimeError, match="workload initialization failed"):
         skyrl_entrypoint.run_config(destination)
@@ -494,27 +498,57 @@ def test_callback_setup_rejects_final_metrics_during_periodic_evaluation(consume
         ("final-schedule", {"schedule": "final"}, None),
         (
             "sampling-domain",
-            {"sampling_params": {
-                "allowed_token_ids": [7], "bad_words": ["bad"],
-                "custom_params": {"nested": {"enabled": True}}, "detokenize": True,
-                "ebnf": None, "extra_args": {"choice": {"json": {"type": "object"}}},
-                "flat_logprobs": False, "frequency_penalty": 0.5, "ignore_eos": False,
-                "include_stop_str_in_output": True, "json_schema": None,
-                "logit_bias": {"7": -0.1}, "logprob_token_ids": [7], "logprobs": -1,
-                "max_generate_length": 64, "max_new_tokens": None, "max_tokens": None,
-                "min_new_tokens": 0, "min_p": 0.1, "min_tokens": 1, "n": 1,
-                "no_stop_trim": False, "output_kind": 0, "output_text_buffer_length": 0,
-                "presence_penalty": 0.25, "prompt_logprobs": None, "regex": None,
-                "repetition_detection": {"max_pattern_size": 4, "min_pattern_size": 2, "min_count": 3},
-                "repetition_penalty": 1.1, "routed_experts_prompt_start": 0,
-                "sampling_seed": 17, "seed": 42, "skip_clone": False,
-                "skip_reading_prefix_cache": None, "skip_special_tokens": False,
-                "spaces_between_special_tokens": True, "stop": ["domain-stop"],
-                "stop_regex": None, "stop_token_ids": [7], "stream_interval": None,
-                "structured_outputs": {"json": {"type": "object", "properties": {"answer": {"type": "integer"}}}},
-                "temperature": 0.1, "thinking_token_budget": None,
-                "top_k": -1, "top_p": 0.8, "trace_decode_token_ids": None, "watermarking": False,
-            }},
+            {
+                "sampling_params": {
+                    "allowed_token_ids": [7],
+                    "bad_words": ["bad"],
+                    "custom_params": {"nested": {"enabled": True}},
+                    "detokenize": True,
+                    "ebnf": None,
+                    "extra_args": {"choice": {"json": {"type": "object"}}},
+                    "flat_logprobs": False,
+                    "frequency_penalty": 0.5,
+                    "ignore_eos": False,
+                    "include_stop_str_in_output": True,
+                    "json_schema": None,
+                    "logit_bias": {"7": -0.1},
+                    "logprob_token_ids": [7],
+                    "logprobs": -1,
+                    "max_generate_length": 64,
+                    "max_new_tokens": None,
+                    "max_tokens": None,
+                    "min_new_tokens": 0,
+                    "min_p": 0.1,
+                    "min_tokens": 1,
+                    "n": 1,
+                    "no_stop_trim": False,
+                    "output_kind": 0,
+                    "output_text_buffer_length": 0,
+                    "presence_penalty": 0.25,
+                    "prompt_logprobs": None,
+                    "regex": None,
+                    "repetition_detection": {"max_pattern_size": 4, "min_pattern_size": 2, "min_count": 3},
+                    "repetition_penalty": 1.1,
+                    "routed_experts_prompt_start": 0,
+                    "sampling_seed": 17,
+                    "seed": 42,
+                    "skip_clone": False,
+                    "skip_reading_prefix_cache": None,
+                    "skip_special_tokens": False,
+                    "spaces_between_special_tokens": True,
+                    "stop": ["domain-stop"],
+                    "stop_regex": None,
+                    "stop_token_ids": [7],
+                    "stream_interval": None,
+                    "structured_outputs": {"json": {"type": "object", "properties": {"answer": {"type": "integer"}}}},
+                    "temperature": 0.1,
+                    "thinking_token_budget": None,
+                    "top_k": -1,
+                    "top_p": 0.8,
+                    "trace_decode_token_ids": None,
+                    "watermarking": False,
+                }
+            },
             None,
         ),
         ("duplicate", {}, "duplicate evaluation profile: sampled"),
@@ -537,7 +571,9 @@ def test_callback_setup_rejects_final_metrics_during_periodic_evaluation(consume
         ("null-callback", {}, r"trainer.callbacks\[0\] must be a mapping"),
     ],
 )
-def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: Path, monkeypatch, case, patch, error) -> None:
+def test_named_evaluation_data_is_staged_and_bound_in_training_driver(
+    tmp_path: Path, monkeypatch, case, patch, error
+) -> None:
     path = tmp_path / "evaluation.yaml"
     document = raw_launch_config()
     document["run"]["export_hf"] = False
@@ -545,12 +581,20 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: 
     document["skyrl"]["entrypoint"] = "generate"
     generator = document["skyrl"].setdefault("generator", {})
     generator["eval_sampling_params"] = {
-        "temperature": 0.5, "stop": ["base-stop"], "top_p": 0.73,
+        "temperature": 0.5,
+        "stop": ["base-stop"],
+        "top_p": 0.73,
         "skip_special_tokens": False,
     }
     generator["eval_n_samples_per_prompt"] = 2
     profile = {
-        "sampling_params": {"temperature": 0.0, "stop": None, "seed": 42, "frequency_penalty": 0.5, "stop_token_ids": [7]},
+        "sampling_params": {
+            "temperature": 0.0,
+            "stop": None,
+            "seed": 42,
+            "frequency_penalty": 0.5,
+            "stop_token_ids": [7],
+        },
         "n_samples_per_prompt": None,
     }
     profile = {**profile, **patch} if isinstance(patch, dict) else patch
@@ -558,9 +602,7 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: 
         profile.pop("sampling_params")
     if case == "final-schedule":
         document["skyrl"]["entrypoint"] = "standard"
-    document["skyrl"]["trainer"]["callbacks"] = [
-        {"type": "evaluation", "additional_evaluations": {"sampled": profile}}
-    ]
+    document["skyrl"]["trainer"]["callbacks"] = [{"type": "evaluation", "additional_evaluations": {"sampled": profile}}]
     sources = []
     for name, identifier in (("primary", "throughput-only"), ("panel", "panel-only")):
         directory = tmp_path / name
