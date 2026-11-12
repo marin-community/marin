@@ -1,16 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The June model's fused residual add + RMS norm + GatedNorm (``fused_norm_impl``) and its GatedNorm options.
-
-The fused path computes the same expressions as the separate modules: the norm in float32 from the residual sum, its
-output rounded once, the GatedNorm and its matmuls as ``GatedNorm`` writes them. Its backward adds the same cotangent
-terms in one pass. In float32 the loss and every gradient agree with the separate modules to float32 rounding; with
-bfloat16 activations the norm output may differ by one bfloat16 ulp where the statistic rounds differently. The Pallas
-gate kernels (``gated_norm_impl``) compute GatedNorm's own expressions; the saved down projection
-(``gated_norm_remat``) and head-gate logits (``head_gate_remat``) give the same values as rerunning them. The kernels
-themselves are tested in ``lib/levanter/tests/kernels/test_pallas_add_rms_norm.py`` and ``test_pallas_gated_norm.py``.
-"""
+"""Value, gradient and checkpoint behavior of the June model's fused norms."""
 
 import dataclasses
 
@@ -120,6 +111,7 @@ def test_fused_norm_matches_separate_modules_float32(impl, stacked):
 
 
 @pytest.mark.parametrize("impl", ["xla", "pallas"])
+@pytest.mark.timeout(300)
 def test_fused_norm_matches_separate_modules_bfloat16(impl):
     base_loss, base_grads = _loss_and_grads(_SMALL, jnp.bfloat16)
     loss, grads = _loss_and_grads(dataclasses.replace(_SMALL, fused_norm_impl=impl), jnp.bfloat16)
@@ -150,6 +142,7 @@ def test_pallas_gate_matches_xla_gate_float32(fused):
     _assert_grads_close(grads, base_grads, rtol=1e-4)
 
 
+@pytest.mark.timeout(300)
 def test_pallas_gate_in_bfloat16_is_as_close_to_float32_as_xla_gate():
     # bfloat16 rounds the two paths differently; each leaf of the kernels' run must be about as close to a float32
     # run as the JAX ops' run is.
@@ -214,8 +207,7 @@ def test_saved_head_gate_skips_its_gemm_rerun():
     ],
 )
 def test_fused_norm_options_on_four_devices_match_separate_modules(overrides):
-    # Batch-sharded activations: the fused kernels run per device under a shard_map and their weight gradients sum
-    # the devices' partial sums.
+    # Batch-sharded activations must agree with the separate path, including weight gradients summed across devices.
     if overrides.get("fused_norm_impl") == "pallas" and jax.default_backend() == "tpu":
         pytest.skip("Pallas-Triton kernels run on GPU (and in the interpreter on CPU)")
     base = GrugModelConfig(

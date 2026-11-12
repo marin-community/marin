@@ -1,35 +1,12 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GatedNorm's up projection with its gate and product (forward), and its gate backward, one pass each.
+"""Fuse GatedNorm's up projection, sigmoid and product, and its gate backward.
 
-GatedNorm computes, for rows ``n`` [R, D] (a normalized activation), ``w_down`` [D, K] and ``w_up`` [K, D] with a small
-rank K (128 in the June model), ``out = n * g`` with ``g = sigmoid(silu(a) w_up)`` and ``a = n w_down``. The kernels
-here cover the two places where XLA writes an extra [R, D] tensor; the rank-K down projection and the matmuls that
-produce only [R, K] or [K, D] results stay in XLA, whose GEMMs run them about as fast as a fused kernel would.
-
-Forward (``gated_norm_gate_fwd``), given ``n`` and ``a``::
-
-    s = silu(a)                                    (rounded to n.dtype)
-    g = sigmoid(s w_up)                            (rounded to n.dtype)
-    out = n * g                                    (rounded to n.dtype)
-
-returns ``(out, g)``. XLA fuses the up projection, the sigmoid and the product into one GEMM only while ``g`` has no
-other user; when the backward keeps ``g`` (a rematerialized forward), it writes ``g`` from the GEMM and multiplies in a
-separate kernel that reads ``n`` and ``g`` again. Here one kernel writes both.
-
-Backward (``gated_norm_gate_bwd``), given the cotangent ``d_out`` of ``out``::
-
-    dz = (d_out * n) * g * (1 - g)                 (d_out * n and dz rounded to n.dtype)
-    da = (dz w_up^T) * silu'(a)                    (both rounded to n.dtype)
-
-returns ``(dz, da)``. XLA writes ``dz`` in one kernel and reads it again in the ``dz w_up^T`` GEMM; here the GEMM's
-rows accumulate tile by tile as ``dz`` is formed. The caller finishes with plain matmuls: ``d_n = d_out * g + da
-w_down^T``, ``d_w_down = n^T da``, ``d_w_up = s^T dz`` (no atomics: deterministic).
-
-Each program takes a block of rows and loops over column tiles. ``impl``: ``"xla"`` (the same math in JAX ops) or
-``"pallas"`` (Pallas-Triton kernels for GPU; on CPU they run in the Pallas interpreter, on TPU they raise). Both
-compute in float32 between the roundings listed above, so they agree up to float32 summation order.
+For normalized rows ``n`` and down-projection output ``a``, the forward returns ``n * g`` and ``g``, where
+``g = sigmoid(silu(a) @ w_up)``. The backward returns the up-projection cotangent and the cotangent of ``a``. The
+down projection and weight-gradient GEMMs remain in XLA. ``xla`` supplies the JAX reference; ``pallas`` uses Triton
+kernels on GPU, the Pallas interpreter on CPU, and raises on TPU.
 """
 
 import functools
@@ -94,8 +71,7 @@ def gated_norm_silu(a: Float[Array, "... K"]) -> Float[Array, "... K"]:
     return _silu_and_grad(a.astype(jnp.float32))[0].astype(a.dtype)
 
 
-# --------------------------------------------------------------------------------------------------------------------
-# JAX formulation (the "xla" implementation and the reference for the kernels).
+# JAX reference for the kernels.
 
 
 def _fwd_xla(n, a, w_up):
@@ -113,8 +89,7 @@ def _bwd_xla(n, a, g, w_up, d_out):
     return dz, da
 
 
-# --------------------------------------------------------------------------------------------------------------------
-# Pallas-Triton kernels. Refs are whole arrays (no block specs).
+# Pallas-Triton programs use whole-array refs.
 
 
 def _fwd_kernel(n_ref, a_ref, wu_ref, out_ref, g_ref, *, block_rows: int, block_n: int):
@@ -222,10 +197,6 @@ def _bwd_pallas(n, a, g, w_up, d_out, interpret):
         name="gated_norm_gate_bwd",
     )(n, a.astype(dtype), g, d_out, w_up.astype(dtype).T)
     return dz, da
-
-
-# --------------------------------------------------------------------------------------------------------------------
-# Public entry points.
 
 
 def gated_norm_gate_fwd(

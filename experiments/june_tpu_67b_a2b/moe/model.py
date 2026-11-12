@@ -65,11 +65,8 @@ _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
 RematMode = Literal["recompute_all", "save_moe"]
 FusedNormImpl = Literal["off", "xla", "pallas"]
-# GatedNorm's rank-128 down projection ``n w_down``: a remat policy that saves it skips the down GEMM when the backward
-# reruns the block (``GrugModelConfig.gated_norm_remat``).
 GATED_NORM_REMAT_SAVE_NAME = "gated_norm_hidden"
 GatedNormRemat = Literal["recompute", "save_hidden"]
-# The attention's head-gate logits ``x attn_gate`` ([B, S, num_heads]; ``GrugModelConfig.head_gate_remat``).
 HEAD_GATE_REMAT_SAVE_NAME = "attn_head_gate"
 HeadGateRemat = Literal["recompute", "save"]
 
@@ -144,34 +141,15 @@ class GrugModelConfig:
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives."""
     fused_norm_impl: FusedNormImpl = "off"
-    """How each ``RMSNorm`` followed by its ``GatedNorm`` runs (the two per block, and the embedding and final norms),
-    together with the residual add before the block's MLP norm. "off": the separate modules and a plain add. "xla" and
-    "pallas": ``fused_norm_and_gate``, one ``jax.custom_vjp`` per norm whose forward returns the residual sum ``h`` and
-    the gated output and whose backward hands the GatedNorm's two cotangent terms and the residual's cotangent to a
-    single RMS-norm backward, written in JAX ops ("xla") or as Pallas-Triton kernels for GPU, one per direction
-    ("pallas", ``levanter.kernels.pallas.add_rms_norm``). Both compute the norm in float32 from the unrounded residual
-    sum and round its outputs once, so they differ from "off" at bfloat16 rounding level (measured at [8, 4096, 2560]
-    against a float32 run: the same error in ``h``, ``dx`` and the norm weight's gradient as "off", within 1.4x of it
-    in the GatedNorm output and weight gradients)."""
+    """Fuse the residual add, RMSNorm and GatedNorm with a custom VJP. ``xla`` uses JAX ops; ``pallas`` uses GPU
+    kernels. ``off`` keeps the separate operations. Fused bfloat16 results may differ at rounding boundaries."""
     gated_norm_impl: GatedNormImpl = "xla"
-    """How the fused norm (``fused_norm_impl`` "xla" or "pallas") runs GatedNorm's gate. "xla": JAX ops, the backward
-    keeping the [B, S, D] gate. Under remat that gate has two users, so XLA writes it from the up-projection GEMM and
-    multiplies it into the output in a separate kernel, and in the backward writes the up projection's cotangent in one
-    kernel and reads it again in its GEMM. "pallas": the up projection, sigmoid and product in one Pallas-Triton kernel
-    that writes the output and the gate, and a backward kernel that forms the up projection's cotangent and its
-    rank-128 GEMM in one pass (``levanter.kernels.pallas.gated_norm``); the down projection and the weight-gradient
-    GEMMs stay in XLA (deterministic). Float32 between roundings to the activation dtype, so the gate and its gradients
-    differ from "xla" at bfloat16 rounding level. Needs ``fused_norm_impl`` "xla" or "pallas"."""
+    """Use JAX ops or GPU kernels for GatedNorm's gate within a fused norm. The Pallas path requires a hidden width
+    divisible by 128 and may differ from ``xla`` at bfloat16 rounding boundaries."""
     gated_norm_remat: GatedNormRemat = "recompute"
-    """Whether the per-block gradient checkpoint saves GatedNorm's rank-128 down projection ``n w_down`` (bfloat16
-    [B, S, 128], 8 MiB per norm per layer at 8 x 4096 tokens per device): "recompute" (the remat reruns the down GEMM)
-    or "save_hidden" (adds it to the ``remat_mode`` policy; the backward's rerun of the block skips the down GEMM).
-    Same values either way."""
+    """Save GatedNorm's rank-128 down projection in the block checkpoint with ``save_hidden``."""
     head_gate_remat: HeadGateRemat = "recompute"
-    """Whether the per-block gradient checkpoint saves the attention's head-gate logits ``x attn_gate`` ([B, S,
-    num_heads], 1.3 MiB per layer at 8 x 4096 tokens per device in bfloat16): "recompute" (the backward's rerun of the
-    block reruns that N=num_heads GEMM over the full hidden width) or "save" (adds them to the ``remat_mode``
-    policy). Same values either way."""
+    """Save attention head-gate logits in the block checkpoint with ``save``."""
     replicate_attn_weights: bool = False
     """If True, store w_q/w_k/w_v/w_o fully replicated (P(None, None)) instead
     of FSDP-sharded across the data axis. Attention weights are small (~128 KB
@@ -436,7 +414,6 @@ class GatedNorm(eqx.Module):
 
 
 def _gated_norm_gate(x: jax.Array, w_down: jax.Array, w_up: jax.Array) -> jax.Array:
-    """``GatedNorm``'s gate ``sigmoid(silu(x w_down) w_up)``."""
     # TODO: silu activation here isn't explored, just cargo-culted from Qwen. Likely low-hanging ablation fruit
     # (e.g. compare no activation, relu, etc.).
     gate_hidden = jax.nn.silu(_gated_norm_hidden(x, w_down))
@@ -449,9 +426,7 @@ def _gated_norm_hidden(x: jax.Array, w_down: jax.Array) -> jax.Array:
 
 
 def _per_device(fn, *args, out_specs):
-    """``fn`` on each device's rows: ``args`` are activations [B, S, D] (batch-sharded; None passes through) or
-    replicated vectors and matrices; ``fn`` sees activations as rows [b * s, D] and returns rows (or [n, D] partial
-    sums, ``out_specs`` "partials", one per device in the result's leading dimension)."""
+    """Run ``fn`` on local activation rows and keep weight-gradient partials separate by device."""
     mesh = get_abstract_mesh()
     first = next(a for a in args if a is not None and a.ndim == 3)
     act_spec = jax.typeof(first).sharding.spec
@@ -510,13 +485,10 @@ def _norm_and_gate_fwd(x, residual, weight, w_down, w_up, eps, impl, gate_impl, 
 def _norm_and_gate(
     x, residual, weight, w_down, w_up, eps: float, impl: AddRmsNormImpl, gate_impl: GatedNormImpl, return_h: bool
 ):
-    """``fused_norm_and_gate``'s custom VJP."""
     return _norm_and_gate_fwd(x, residual, weight, w_down, w_up, eps, impl, gate_impl, return_h)[0]
 
 
 def _gate_bwd_pallas(n, d_out, a, gate, w_down, w_up, gate_impl):
-    """``(d_n_from_gate, d_w_down, d_w_up)`` through the gate kernels' backward, then XLA GEMMs for the rest (the
-    transposes of GatedNorm's own matmuls)."""
     dz, da = _per_device(
         lambda n, a, gate, w_up, d_out: gated_norm_gate_bwd(n, a, gate, w_up, d_out, impl=gate_impl),
         n,
@@ -569,14 +541,10 @@ def fused_norm_and_gate(
     return_h: bool,
     gate_impl: GatedNormImpl = "xla",
 ):
-    """``out = gated(norm(h))`` with ``h = x + residual`` (``h = x`` without a residual); ``(h, out)`` if
-    ``return_h``, else ``out``.
+    """Fuse ``h = x + residual`` with ``gated(norm(h))`` and their backward passes.
 
-    One ``jax.custom_vjp`` over the add, the RMS norm and the GatedNorm (``GrugModelConfig.fused_norm_impl``). Its
-    backward adds ``h``'s own cotangent (from the caller's later uses of ``h``) inside the norm's backward kernel, so
-    callers that use ``x`` again should use the returned ``h`` instead. The norm's kernels, and with ``gate_impl``
-    "pallas" (``GrugModelConfig.gated_norm_impl``) the gate's, run per device under a ``shard_map`` over the
-    activations' batch sharding; GatedNorm's other matmuls stay global, as in ``GatedNorm``."""
+    Returns ``(h, gated_output)`` when ``return_h`` is true. Callers that reuse the residual sum must use this
+    returned ``h`` so its cotangent joins the norm backward. Kernels run on local batch shards."""
     return _norm_and_gate(
         x, residual, unshard(norm.weight), gated.w_down, gated.w_up, norm.eps, impl, gate_impl, return_h
     )

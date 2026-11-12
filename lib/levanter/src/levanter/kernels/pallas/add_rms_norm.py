@@ -1,33 +1,12 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Residual add + weighted RMS norm, forward and backward, one row-wise pass each.
+"""Residual add and weighted RMS norm in one row-wise forward or backward pass.
 
-Forward, for rows of ``x`` (and optionally ``residual``) and a weight ``w`` over the last dimension::
-
-    s = f32(x) + f32(residual)                    (s = f32(x) without a residual)
-    h = s                                         (rounded to x.dtype)
-    inv_rms = rsqrt(mean(s^2) + eps)              (float32, one per row)
-    n = (s * inv_rms) * f32(w)                    (rounded to x.dtype)
-
-The statistic and ``n`` use the unrounded sum, as XLA computes them when it fuses ``x + residual`` (in ``x.dtype``)
-into the norm (it may skip a rounding between fused ops); the backward uses the rounded ``h``.
-
-Backward, given the cotangent of ``n`` as ``d_n * gate + d_n_extra`` (the form a gated consumer such as the June
-model's GatedNorm hands back; ``gate`` and ``d_n_extra`` are optional) and optionally the cotangent ``d_h`` of ``h``::
-
-    g = f32(d_n) * f32(gate) + f32(d_n_extra)
-    dx = inv_rms * (g w - f32(h) inv_rms^2 mean(g w f32(h))) + f32(d_h)      (rounded to h.dtype)
-    dw = sum over rows of g * f32(h) * inv_rms                               (float32)
-
-``dx`` is also the residual's cotangent. Written as separate JAX ops, XLA runs the backward as a row reduction plus an
-elementwise kernel (with the weight-gradient column sums), each reading every operand again, and the forward's
-statistic stays a separate kernel wherever another kernel needs it. Here each direction is one kernel: a program
-holds whole rows in registers, so every operand is read once.
-
-``impl``: ``"xla"`` (the same math in JAX ops, which XLA fuses as it can) or ``"pallas"`` (Pallas-Triton kernels for
-GPU; on CPU they run in the Pallas interpreter, on TPU they raise). Both compute in float32 and round only the outputs,
-so they agree up to the float32 summation order of the row statistics.
+The forward computes the norm statistic from the unrounded float32 residual sum and rounds the sum and norm output to
+the activation dtype. The backward combines the gate and residual cotangents with the RMS norm gradient; its input
+gradient also applies to the residual. ``xla`` supplies the JAX reference. ``pallas`` uses Triton kernels on GPU, the
+Pallas interpreter on CPU, and raises on TPU.
 """
 
 import functools
@@ -78,8 +57,7 @@ def _check(x: jax.Array, weight: jax.Array, *others: jax.Array | None) -> None:
             raise ValueError(f"operand shape {o.shape} does not match {x.shape}")
 
 
-# --------------------------------------------------------------------------------------------------------------------
-# JAX formulation (the "xla" implementation and the reference for the kernels).
+# JAX reference for the kernels.
 
 
 def _fwd_xla(x, residual, weight, eps):
@@ -114,8 +92,7 @@ def _bwd_xla(h, inv_rms, weight, d_n, gate, d_n_extra, d_h):
     return dx.astype(h.dtype), dw
 
 
-# --------------------------------------------------------------------------------------------------------------------
-# Pallas-Triton kernels. Refs are whole arrays (no block specs); each program loads its rows in column tiles.
+# Pallas-Triton programs use whole-array refs and load rows in column tiles.
 
 
 def _load(ref, row0, block_rows, col0, chunk, ok):
@@ -286,10 +263,6 @@ def _bwd_pallas(h, inv_rms, weight, d_n, gate, d_n_extra, d_h, interpret):
         name="rms_norm_bwd",
     )(*operands)
     return dx, jnp.sum(dw, axis=0)
-
-
-# --------------------------------------------------------------------------------------------------------------------
-# Public entry points.
 
 
 def add_rms_norm_fwd(

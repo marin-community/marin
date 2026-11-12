@@ -153,31 +153,25 @@ def parse_args() -> argparse.Namespace:
         "--fused-norm-impl",
         choices=get_args(FusedNormImpl),
         default="off",
-        help="Run each RMS norm with its GatedNorm (and the residual add before the MLP norm) as one custom VJP whose "
-        "backward does the whole RMS-norm backward in one pass, in JAX ops (xla) or Pallas-Triton kernels (pallas); "
-        "off keeps the separate modules (GrugModelConfig.fused_norm_impl).",
+        help="Fuse residual add, RMSNorm and GatedNorm with JAX ops or GPU kernels (default: off).",
     )
     parser.add_argument(
         "--gated-norm-impl",
         choices=get_args(GatedNormImpl),
         default="xla",
-        help="With a fused norm, run GatedNorm's up projection, sigmoid and product, and its gate backward, as JAX ops "
-        "(xla) or as two Pallas-Triton kernels that write no extra [B, S, D] tensors under remat (pallas) "
-        "(GrugModelConfig.gated_norm_impl).",
+        help="Use JAX ops or GPU kernels for GatedNorm's gate within a fused norm.",
     )
     parser.add_argument(
         "--gated-norm-remat",
         choices=get_args(GatedNormRemat),
         default="recompute",
-        help="Save GatedNorm's rank-128 down projection in the per-block checkpoint so the backward's rerun of the "
-        "block skips that GEMM (save_hidden), or rerun it (recompute) (GrugModelConfig.gated_norm_remat).",
+        help="Save GatedNorm's down projection in the block checkpoint (save_hidden).",
     )
     parser.add_argument(
         "--head-gate-remat",
         choices=get_args(HeadGateRemat),
         default="recompute",
-        help="Save the attention's head-gate logits in the per-block checkpoint so the backward's rerun of the block "
-        "skips that GEMM (save), or rerun it (recompute) (GrugModelConfig.head_gate_remat).",
+        help="Save attention head-gate logits in the block checkpoint (save).",
     )
     parser.add_argument(
         "--watch-interval", type=int, default=10, help="Steps between gradient watch steps (0 disables)."
