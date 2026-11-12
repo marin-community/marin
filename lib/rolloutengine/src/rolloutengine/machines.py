@@ -215,6 +215,27 @@ class _AttemptMachineFactory:
 
 
 @asynccontextmanager
+async def grading_machine_factory(
+    factory: MachineFactory, runtime: MachineRuntimeSpec, *, cleanup_timeout: float
+) -> AsyncIterator[MachineFactory]:
+    """Own grading machines until exit and enforce their declared startup and cleanup deadlines.
+
+    Cleanup failures raise after a successful body or attach a note to its exception.
+    A runtime cleanup deadline overrides the caller's fallback deadline.
+    """
+    cleanup = _Cleanup(cleanup_timeout)
+    try:
+        async with AsyncExitStack() as owned:
+            yield _AttemptMachineFactory(runtime, {runtime.backend: factory}, cleanup, owned)
+    except BaseException as error:
+        if cleanup.errors:
+            error.add_note(f"Machine cleanup failed: {[failure.operation for failure in cleanup.errors]}")
+        raise
+    if cleanup.errors:
+        raise RuntimeError(f"Machine cleanup failed: {[error.operation for error in cleanup.errors]}")
+
+
+@asynccontextmanager
 async def task_machine(
     task: TaskSpec, factory: MachineFactory, runtime: MachineRuntimeSpec, *, cleanup_timeout: float
 ) -> AsyncIterator[Machine]:

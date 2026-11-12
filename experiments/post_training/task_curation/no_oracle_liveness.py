@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Literal
 
 import pyarrow.parquet as pq
+from rolloutengine.machines import grading_machine_factory
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import HostImage, MachineSpec, NetworkPolicy
@@ -46,6 +47,7 @@ from taskcompendium.runtime.grading import grade_empty_in_sandbox, grade_in_sand
 
 VERIFIER_COMMAND = "bash /tests/test.sh"
 REWARD_PATH = "/logs/verifier/reward.txt"
+QUALIFICATION_CLEANUP_TIMEOUT = 120.0
 
 
 @dataclass(frozen=True)
@@ -107,7 +109,7 @@ async def run_one(
                 "gpus": 0,
                 "user": None,
                 "startup_timeout": 900.0,
-                "cleanup_timeout": 120.0,
+                "cleanup_timeout": QUALIFICATION_CLEANUP_TIMEOUT,
                 **(spec["runtime"].get("verifier_machine") or {}),
             }
         )
@@ -177,14 +179,17 @@ async def run_one(
             grading_factory = factory or DaytonaMachineFactory()
         spec_machine = replace(spec_machine, startup_timeout=runtime.startup_timeout)
         try:
-            if submission_files is None:
-                result = await grade_empty_in_sandbox(task, grading_factory, spec_machine, timeout=verifier_timeout)
-            else:
-                attempt = GradingAttempt(
-                    ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))),
-                    files=submission_files,
-                )
-                result = await grade_in_sandbox(task, attempt, grading_factory, spec_machine, timeout=verifier_timeout)
+            async with grading_machine_factory(
+                grading_factory, runtime, cleanup_timeout=QUALIFICATION_CLEANUP_TIMEOUT
+            ) as owned_factory:
+                if submission_files is None:
+                    result = await grade_empty_in_sandbox(task, owned_factory, spec_machine, timeout=verifier_timeout)
+                else:
+                    attempt = GradingAttempt(
+                        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))),
+                        files=submission_files,
+                    )
+                    result = await grade_in_sandbox(task, attempt, owned_factory, spec_machine, timeout=verifier_timeout)
         except TimeoutError as error:
             return LivenessResult(task.id, base, "timeout", None, None, snapshot, str(error))
         except Exception as error:
