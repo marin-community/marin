@@ -7,7 +7,7 @@ import json
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -56,8 +56,44 @@ class AssessmentPaths:
     judgments_root: str
 
 
+def _record_value(value: Any, annotation: Any) -> Any:
+    if value is None:
+        return None
+    arguments = get_args(annotation)
+    if type(None) in arguments:
+        annotation = next(argument for argument in arguments if argument is not type(None))
+        arguments = get_args(annotation)
+    if get_origin(annotation) is dict:
+        entries = value.items() if isinstance(value, dict) else value
+        result = {}
+        for key, item in entries:
+            if key in result:
+                raise ValueError(f"Duplicate catalog map key: {key}")
+            result[key] = _record_value(item, arguments[1])
+        return result
+    if get_origin(annotation) is list:
+        return [_record_value(item, arguments[0]) for item in value]
+    return value
+
+
 class CatalogRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _arrow_values(cls, value: Any) -> Any:
+        """Restore map values and implicit defaults materialized as null by Arrow schema evolution."""
+        if not isinstance(value, dict):
+            return value
+        result = dict(value)
+        for name, field in cls.model_fields.items():
+            if name not in result:
+                continue
+            if result[name] is None and not field.is_required() and field.default is not None:
+                result.pop(name)
+                continue
+            result[name] = _record_value(result[name], field.annotation)
+        return result
 
 
 class IndependentQC(CatalogRecord):
@@ -90,6 +126,7 @@ class DaytonaSafety(StrEnum):
 
     SAFE = "safe"
     UNSAFE = "unsafe"
+    NOT_APPLICABLE = "not_applicable"
     UNASSESSED = "unassessed"
 
 
@@ -177,6 +214,169 @@ class GradingEnvironmentEvidence(CatalogRecord):
     evidence_url: str
 
 
+class DaytonaUnsafeReason(StrEnum):
+    TOO_MANY_SNAPSHOTS = "too_many_snapshots"
+    UNBUILT_IMAGE = "unbuilt_image"
+    HOST_IMAGE_REQUIRED = "host_image_required"
+    EXECUTION_REQUIREMENT = "execution_requirement"
+
+
+class RoleExecutionEvidence(CatalogRecord):
+    machine_slots: int = Field(ge=0)
+    failures: dict[str, int]
+
+
+class DaytonaMeasurement(CatalogRecord):
+    dataset_id: str
+    dataset_revision: str
+    daytona_snapshot_count: int = Field(ge=0)
+    daytona_machine_slots: int = Field(ge=0)
+    daytona_execution_failures: int = Field(ge=0)
+    daytona_count_basis: str = Field(min_length=1)
+    daytona_unsafe_reasons: list[DaytonaUnsafeReason]
+    daytona_unsafe_details: dict[str, str]
+    daytona_roles: dict[str, dict[str, RoleExecutionEvidence]] | None = None
+
+    @property
+    def safety(self) -> DaytonaSafety:
+        if self.daytona_machine_slots == 0:
+            return DaytonaSafety.NOT_APPLICABLE
+        if self.daytona_snapshot_count > DAYTONA_SAFE_SNAPSHOT_LIMIT or self.daytona_execution_failures:
+            return DaytonaSafety.UNSAFE
+        return DaytonaSafety.SAFE
+
+    @model_validator(mode="after")
+    def _measured_reasons(self) -> "DaytonaMeasurement":
+        reasons = set(self.daytona_unsafe_reasons)
+        if self.daytona_machine_slots == 0 and (self.daytona_snapshot_count or self.daytona_execution_failures):
+            raise ValueError("A source without an actor cannot have actor snapshots or refusals")
+        over_budget = self.daytona_snapshot_count > DAYTONA_SAFE_SNAPSHOT_LIMIT
+        if (DaytonaUnsafeReason.TOO_MANY_SNAPSHOTS in reasons) != over_budget:
+            raise ValueError("Snapshot-budget reason disagrees with the measured count")
+        refusal_reasons = reasons - {DaytonaUnsafeReason.TOO_MANY_SNAPSHOTS}
+        if bool(refusal_reasons) != bool(self.daytona_execution_failures):
+            raise ValueError("Actor refusal reasons disagree with the refused-task count")
+        if set(self.daytona_unsafe_details) != {reason.value for reason in reasons}:
+            raise ValueError("Every unsafe reason requires its measured detail")
+        if any(not detail.strip() for detail in self.daytona_unsafe_details.values()):
+            raise ValueError("Unsafe details must describe the measured failure")
+        return self
+
+
+class ConvertedExamples(CatalogRecord):
+    count: int = Field(ge=0)
+    input_rows: int = Field(ge=0)
+    rejections: dict[str, int]
+    admission_rejections: dict[str, int]
+    source_dataset_id: str
+    source_revision: str
+    converter_revision: str
+    converter_version: str
+    evidence_url: str
+    failure_reason: str | None = None
+
+    @model_validator(mode="after")
+    def _conversion_ledger(self) -> "ConvertedExamples":
+        if self.count > self.input_rows:
+            raise ValueError("Converted examples exceed selected input rows")
+        if self.count == 0 and not self.failure_reason:
+            raise ValueError("Zero converted examples require the ingestion failure reason")
+        return self
+
+
+class DeconReceiptStatus(StrEnum):
+    CLEAN = "clean"
+    REMEDIATED = "remediated"
+
+
+class DeconAdmissionReceipt(CatalogRecord):
+    private: bool
+    format: str
+    status: DeconReceiptStatus
+    dataset_id: str
+    dataset_revision: str
+    retained_tasks: int = Field(ge=0)
+    dropped_tasks: int = Field(ge=0)
+    drop_manifest_uri: str | None
+    original_private_dataset_id: str | None
+    original_private_dataset_revision: str | None
+
+    @model_validator(mode="after")
+    def _remediation_provenance(self) -> "DeconAdmissionReceipt":
+        if not self.private or self.format != "taskcompendium" or not self.dataset_id.startswith("open-athena/"):
+            raise ValueError("Admission requires a private open-athena TaskCompendium release")
+        if self.status is DeconReceiptStatus.CLEAN and self.dropped_tasks:
+            raise ValueError("A clean receipt cannot drop contaminated tasks")
+        if self.status is DeconReceiptStatus.REMEDIATED:
+            if (
+                not self.drop_manifest_uri
+                or not self.original_private_dataset_id
+                or not self.original_private_dataset_revision
+            ):
+                raise ValueError("Remediation requires the drop manifest and exact original private pin")
+            if not self.dataset_id.startswith("open-athena/") or not self.original_private_dataset_id.startswith(
+                "open-athena/"
+            ):
+                raise ValueError("Remediation inputs and outputs must be private open-athena TaskCompendium releases")
+            if (self.dataset_id, self.dataset_revision) == (
+                self.original_private_dataset_id,
+                self.original_private_dataset_revision,
+            ):
+                raise ValueError("Remediation requires a new dataset pin")
+        return self
+
+
+class LexicalContaminationEvidence(CatalogRecord):
+    version: int = Field(ge=1, le=1)
+    input_dataset_id: str
+    input_dataset_revision: str
+    converter_revision: str
+    text_renderer_version: str
+    measured_tasks: int = Field(ge=0)
+    contaminated_tasks: int = Field(ge=0)
+    contaminated_fraction: float = Field(ge=0, le=1)
+    max_overlap: float = Field(ge=0, le=1)
+    mean_max_overlap: float = Field(ge=0, le=1)
+    p95_max_overlap: float = Field(ge=0, le=1)
+    matched_evals: dict[str, int]
+    eval_corpus_version: str
+    eval_bloom_uri: str
+    eval_hash_index_uri: str
+    feature_filter_version: int
+    ngram_length: int = Field(ge=13, le=13)
+    overlap_threshold: float = Field(ge=0.5, le=0.5)
+    min_matched_features: int = Field(ge=2, le=2)
+    drop_set_uris: list[str]
+    task_flags_uri: str
+    evidence_url: str
+    receipt: DeconAdmissionReceipt | None = None
+
+    @model_validator(mode="after")
+    def _receipt_matches_measurement(self) -> "LexicalContaminationEvidence":
+        if self.contaminated_tasks > self.measured_tasks:
+            raise ValueError("Contaminated tasks exceed the measured population")
+        expected = self.contaminated_tasks / self.measured_tasks if self.measured_tasks else 0.0
+        if abs(self.contaminated_fraction - expected) > 1e-12:
+            raise ValueError("Contamination fraction disagrees with its numerator and denominator")
+        receipt = self.receipt
+        if receipt is None:
+            return self
+        if receipt.retained_tasks + receipt.dropped_tasks != self.measured_tasks:
+            raise ValueError("Decontamination receipt does not conserve the measured population")
+        if receipt.status is DeconReceiptStatus.CLEAN and self.contaminated_tasks:
+            raise ValueError("A flagged population cannot carry a clean receipt")
+        if receipt.status is DeconReceiptStatus.REMEDIATED and receipt.dropped_tasks != self.contaminated_tasks:
+            raise ValueError("Remediation must drop every flagged task")
+        return self
+
+    def admission_blocker(self, dataset_id: str | None, dataset_revision: str | None) -> str | None:
+        if self.receipt is None:
+            return "clean or remediated decontamination receipt is missing"
+        if (self.receipt.dataset_id, self.receipt.dataset_revision) != (dataset_id, dataset_revision):
+            return "decontamination receipt belongs to a different dataset pin"
+        return None
+
+
 class SourceDeclaration(CatalogRecord):
     id: str
     name: str
@@ -198,7 +398,7 @@ class SourceDeclaration(CatalogRecord):
     independent_qc: IndependentQC | None = None
     # Non-agentic sources never provision Daytona sandboxes; an agentic source stays
     # UNASSESSED until its unique snapshot count is assessed against DAYTONA_SAFE_SNAPSHOT_LIMIT.
-    daytona_safety: DaytonaSafety = DaytonaSafety.UNASSESSED
+    daytona_safety: DaytonaSafety | None = DaytonaSafety.UNASSESSED
     # Measured distinct snapshot identities and the rule applied, required for any agentic
     # SAFE/UNSAFE verdict. A verdict without these stays UNASSESSED; counts are never inferred.
     daytona_snapshot_count: int | None = None
@@ -210,6 +410,13 @@ class SourceDeclaration(CatalogRecord):
     oversight: OversightLevel = OversightLevel.NONE
     oversight_evidence: OversightEvidence | None = None
     grading_environment: GradingEnvironmentEvidence | None = None
+    converted_examples: ConvertedExamples | None = None
+    lexical_contamination: LexicalContaminationEvidence | None = None
+    daytona_machine_slots: int | None = None
+    daytona_roles: dict[str, dict[str, RoleExecutionEvidence]] | None = None
+    daytona_execution_failures: int | None = None
+    daytona_unsafe_reasons: list[DaytonaUnsafeReason] = Field(default_factory=list)
+    daytona_unsafe_details: dict[str, str] = Field(default_factory=dict)
 
 
 class AdmissionCounts(CatalogRecord):
