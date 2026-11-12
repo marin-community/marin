@@ -122,7 +122,7 @@ class BaseEnvironment(ABC):
         self._scope_transports[scope.directory] = transport
 
     async def prepare_process_supervisor(self) -> str:
-        """Resolve the supervisor interpreter without changing the task environment."""
+        """Resolve the supervisor interpreter, uploading a private runtime if needed."""
         if self._supervisor_python is None:
             probe = await self.exec(
                 "command -v python3 || { "
