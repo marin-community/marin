@@ -539,6 +539,7 @@ def test_source_launch_preserves_nested_open_mappings(tmp_path):
 
 def test_first_train_submission_validates_recipe_and_resolved_reload(tmp_path):
     raw = raw_launch_config()
+    raw["runtime"]["entrypoint"] = ""
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
     loaded = load_launch_config(path)
