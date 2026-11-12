@@ -35,6 +35,7 @@ from levanter.grug._moe.common import (
 )
 from levanter.grug._moe.ep_common import _assignment_sources, _combine_gather_sum_impl
 from levanter.grug._moe.ep_ring import _combine_rows, _dispatch_rows, _select_local_assignments
+from levanter.grug._moe.pallas_routing_metadata import MoeRoutingMetadata, expert_rows, send_slots
 
 
 def destination_hit_fraction(*, num_experts: int, local_experts: int, topk: int) -> float:
@@ -140,6 +141,7 @@ def _moe_mlp_ep_ring_filtered_local(
     capacity_factor: float,
     transport_capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
+    routing_metadata: MoeRoutingMetadata = "xla",
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Filtered all-to-all dispatch, ring's grouped expert MLP, expert-side combine.
 
@@ -153,6 +155,10 @@ def _moe_mlp_ep_ring_filtered_local(
     can drop on another. ``capacity_factor`` keeps ring's meaning: each expert shard
     runs at most ``capacity_factor * Tlocal * K`` assignments, allocated in local-expert order
     (receiver drops).
+
+    ``routing_metadata`` picks how the integer routing maps (send slots, expert rows, group sizes, drop counts) are
+    built from the top-k expert ids: XLA fusions ("xla") or the Pallas-Triton counting sorts of
+    ``pallas_routing_metadata`` ("pallas"), with the same values.
     """
     tokens, topk = selected_experts_local.shape
     hidden_dim = x_local.shape[1]
@@ -170,45 +176,16 @@ def _moe_mlp_ep_ring_filtered_local(
     expert_capacity = min(received_assignments, max(local_experts, math.ceil(capacity_factor * tokens * topk)))
 
     with jax.named_scope("dispatch"):
-        selected = selected_experts_local.astype(jnp.int32)
-        destination = selected // local_experts
-        shard_ids = jnp.arange(ep_size, dtype=jnp.int32)
-        hit = jnp.any(destination[:, :, None] == shard_ids, axis=1) & token_valid_local[:, None]
-        rank = jnp.cumsum(hit, axis=0, dtype=jnp.int32) - 1
-        valid_tokens = jnp.sum(token_valid_local, dtype=jnp.int32)
-        logical_pair_capacity = _scaled_capacity(
-            valid_tokens,
-            capacity_factor=transport_capacity_factor * hit_fraction,
-            maximum=pair_capacity,
+        slot, safe_source, slot_valid, metadata, sender_dropped = _send_routing(
+            selected_experts_local,
+            token_valid_local,
+            combine_weights_local,
+            local_experts=local_experts,
+            destinations=ep_size,
+            pair_capacity=pair_capacity,
+            pair_capacity_factor=transport_capacity_factor * hit_fraction,
+            routing_metadata=routing_metadata,
         )
-        keep = hit & (rank < logical_pair_capacity)
-        # slot[t, d]: the token's row in the flat [ep, C] send buffer, or the `send_rows` sentinel.
-        slot = jnp.where(keep, shard_ids * pair_capacity + rank, send_rows)
-        token_ids = jnp.broadcast_to(jnp.arange(tokens, dtype=jnp.int32)[:, None], slot.shape)
-        source = jnp.full((send_rows,), tokens, jnp.int32).at[slot.reshape(-1)].set(token_ids.reshape(-1), mode="drop")
-
-        assignment_valid = jnp.broadcast_to(token_valid_local[:, None], selected.shape)
-        valid_assignments = jnp.sum(assignment_valid, dtype=jnp.int32)
-        sent_assignments = jnp.sum(jnp.take_along_axis(keep, destination, axis=1) & assignment_valid, dtype=jnp.int32)
-        sender_dropped = valid_assignments - sent_assignments
-
-        # Per send row: the token's combine weights and local expert ids on that destination.
-        slot_valid = source < tokens
-        safe_source = jnp.minimum(source, tokens - 1)
-        slot_destination = jnp.arange(send_rows, dtype=jnp.int32) // pair_capacity
-        slot_selected = selected[safe_source]
-        on_destination = slot_valid[:, None] & (slot_selected // local_experts == slot_destination[:, None])
-        slot_local_ids = jnp.where(on_destination, slot_selected - slot_destination[:, None] * local_experts, -1)
-        # assignment_slot[t, k]: the send slot carrying assignment (t, k), or the `send_rows` sentinel.
-        assignment_slot = jnp.take_along_axis(slot, destination, axis=1)
-        slot_weights = _slot_weights(combine_weights_local, safe_source, on_destination, assignment_slot)
-        metadata = jnp.concatenate([slot_weights, slot_local_ids.astype(jnp.float32)], axis=1)
-        metadata = metadata.reshape(ep_size, pair_capacity, 2 * topk)
-        # One trailer row per destination carries this shard's valid demand, which the receiver
-        # sums into ring's logical capacity without a separate psum.
-        trailer = jnp.zeros((ep_size, 1, 2 * topk), jnp.float32).at[:, 0, 0].set(valid_assignments.astype(jnp.float32))
-        metadata = jnp.concatenate([metadata, trailer], axis=1)
-
         received_metadata = jax.lax.all_to_all(metadata, "expert", split_axis=0, concat_axis=0, tiled=True)
         received_metadata = tree_checkpoint_name(received_metadata, _CHECKPOINT_DISPATCH_INPUT)
 
@@ -218,31 +195,15 @@ def _moe_mlp_ep_ring_filtered_local(
         ).reshape(send_rows, hidden_dim)
 
     with jax.named_scope("expert_dispatch"):
-        group_valid_assignments = jnp.sum(received_metadata[:, pair_capacity, 0]).astype(jnp.int32)
-        received_weights = received_metadata[:, :pair_capacity, :topk].reshape(send_rows, topk)
-        received_ids = jax.lax.stop_gradient(received_metadata[:, :pair_capacity, topk:])
-        received_ids = jnp.round(received_ids).astype(jnp.int32).reshape(received_assignments)
-        assignment_mask = received_ids >= 0
-        local_expert = jnp.where(assignment_mask, received_ids, 0)
-        logical_capacity = _scaled_capacity(
-            group_valid_assignments,
-            capacity_factor=capacity_factor,
-            divisor=ep_size,
-            minimum=local_experts,
-            maximum=expert_capacity,
+        received_weights, group_sizes, receiver_dropped, picked, dispatch_valid, dispatch_row, position = (
+            _expert_routing(
+                received_metadata,
+                local_experts=local_experts,
+                capacity_factor=capacity_factor,
+                expert_capacity=expert_capacity,
+                routing_metadata=routing_metadata,
+            )
         )
-        group_sizes, receiver_dropped, picked, dispatch_valid = _select_local_assignments(
-            local_expert,
-            assignment_mask,
-            local_experts=local_experts,
-            logical_capacity=logical_capacity,
-            physical_capacity=expert_capacity,
-        )
-        picked = jnp.where(dispatch_valid, picked, received_assignments)
-        dispatch_row = jnp.where(dispatch_valid, picked // topk, send_rows)
-        # position[r, j]: the dispatch row of received row r's j-th assignment, or the sentinel.
-        position = _assignment_sources(picked, send_size=received_assignments).reshape(send_rows, topk)
-
         x_dispatch = _dispatch_rows(received_x, jnp.minimum(dispatch_row, send_rows - 1), dispatch_valid, position)
         x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
 
@@ -265,3 +226,137 @@ def _moe_mlp_ep_ring_filtered_local(
         out_local = _combine_rows(returned, safe_source, slot_valid, slot).astype(x_local.dtype)
         drops = jax.lax.psum(jnp.stack([sender_dropped, receiver_dropped]), token_sharding_axes)
     return out_local, CapacityDrops(sender_dropped=drops[0], receiver_dropped=drops[1])
+
+
+def _send_routing(
+    selected_experts_local: Int[Array, "T K"],
+    token_valid_local: Bool[Array, "T"],
+    combine_weights_local: Float[Array, "T K"],
+    *,
+    local_experts: int,
+    destinations: int,
+    pair_capacity: int,
+    pair_capacity_factor: float,
+    routing_metadata: MoeRoutingMetadata,
+) -> tuple[Int[Array, "T D"], Int[Array, "R"], Bool[Array, "R"], Float[Array, "D C1 K2"], Int[Array, ""]]:
+    """The sender's routing maps and the metadata it sends.
+
+    Returns each token's send row per destination (``slot``), each send row's token (clamped) and validity, the f32
+    [destinations, C + 1, 2K] metadata buffer for the all-to-all (combine weights, local expert ids or -1, and a
+    trailer row carrying this shard's valid demand) and the sender drops.
+    """
+    tokens, topk = selected_experts_local.shape
+    send_rows = destinations * pair_capacity
+    selected = selected_experts_local.astype(jnp.int32)
+    destination = selected // local_experts
+    valid_tokens = jnp.sum(token_valid_local, dtype=jnp.int32)
+    logical_pair_capacity = _scaled_capacity(valid_tokens, capacity_factor=pair_capacity_factor, maximum=pair_capacity)
+    assignment_valid = jnp.broadcast_to(token_valid_local[:, None], selected.shape)
+    valid_assignments = jnp.sum(assignment_valid, dtype=jnp.int32)
+    if routing_metadata == "pallas":
+        send_maps = send_slots(
+            selected,
+            token_valid_local,
+            logical_pair_capacity,
+            local_experts=local_experts,
+            destinations=destinations,
+            pair_capacity=pair_capacity,
+        )
+        slot, source = send_maps.slot, send_maps.source
+        sender_dropped = valid_assignments - send_maps.kept_assignments
+    else:
+        shard_ids = jnp.arange(destinations, dtype=jnp.int32)
+        hit = jnp.any(destination[:, :, None] == shard_ids, axis=1) & token_valid_local[:, None]
+        rank = jnp.cumsum(hit, axis=0, dtype=jnp.int32) - 1
+        keep = hit & (rank < logical_pair_capacity)
+        # slot[t, d]: the token's row in the flat [ep, C] send buffer, or the `send_rows` sentinel.
+        slot = jnp.where(keep, shard_ids * pair_capacity + rank, send_rows)
+        token_ids = jnp.broadcast_to(jnp.arange(tokens, dtype=jnp.int32)[:, None], slot.shape)
+        source = jnp.full((send_rows,), tokens, jnp.int32).at[slot.reshape(-1)].set(token_ids.reshape(-1), mode="drop")
+        sent_assignments = jnp.sum(jnp.take_along_axis(keep, destination, axis=1) & assignment_valid, dtype=jnp.int32)
+        sender_dropped = valid_assignments - sent_assignments
+
+    slot_valid = source < tokens
+    safe_source = jnp.minimum(source, tokens - 1)
+    # Per send row: the token's combine weights and local expert ids on that destination.
+    slot_destination = jnp.arange(send_rows, dtype=jnp.int32) // pair_capacity
+    slot_selected = selected[safe_source]
+    on_destination = slot_valid[:, None] & (slot_selected // local_experts == slot_destination[:, None])
+    slot_local_ids = jnp.where(on_destination, slot_selected - slot_destination[:, None] * local_experts, -1)
+    # assignment_slot[t, k]: the send slot carrying assignment (t, k), or the `send_rows` sentinel.
+    assignment_slot = jnp.take_along_axis(slot, destination, axis=1)
+    slot_weights = _slot_weights(combine_weights_local, safe_source, on_destination, assignment_slot)
+    metadata = jnp.concatenate([slot_weights, slot_local_ids.astype(jnp.float32)], axis=1)
+    metadata = metadata.reshape(destinations, pair_capacity, 2 * topk)
+    # One trailer row per destination carries this shard's valid demand, which the receiver
+    # sums into ring's logical capacity without a separate psum.
+    trailer = (
+        jnp.zeros((destinations, 1, 2 * topk), jnp.float32).at[:, 0, 0].set(valid_assignments.astype(jnp.float32))
+    )
+    metadata = jnp.concatenate([metadata, trailer], axis=1)
+    return slot, safe_source, slot_valid, metadata, sender_dropped
+
+
+def _expert_routing(
+    received_metadata: Float[Array, "D C1 K2"],
+    *,
+    local_experts: int,
+    capacity_factor: float,
+    expert_capacity: int,
+    routing_metadata: MoeRoutingMetadata,
+) -> tuple[
+    Float[Array, "R K"],
+    Int[Array, "Elocal"],
+    Int[Array, ""],
+    Int[Array, "P"],
+    Bool[Array, "P"],
+    Int[Array, "P"],
+    Int[Array, "R K"],
+]:
+    """The receiver's routing maps from the received metadata.
+
+    Returns the received combine weights, the ``ragged_dot`` group sizes (as ``_select_local_assignments`` gives them),
+    the receiver drops, the received assignment in each expert row (``picked``, the assignment count for padding
+    rows), which expert rows are valid, each expert row's received row (``dispatch_row``, the received row count for
+    padding rows) and each received assignment's expert row (``position``, ``expert_capacity`` for none).
+    """
+    ep_size, pair_capacity = received_metadata.shape[0], received_metadata.shape[1] - 1
+    topk = received_metadata.shape[2] // 2
+    send_rows = ep_size * pair_capacity
+    received_assignments = send_rows * topk
+    group_valid_assignments = jnp.sum(received_metadata[:, pair_capacity, 0]).astype(jnp.int32)
+    received_weights = received_metadata[:, :pair_capacity, :topk].reshape(send_rows, topk)
+    logical_capacity = _scaled_capacity(
+        group_valid_assignments,
+        capacity_factor=capacity_factor,
+        divisor=ep_size,
+        minimum=local_experts,
+        maximum=expert_capacity,
+    )
+    if routing_metadata == "pallas":
+        rows = expert_rows(
+            received_metadata, logical_capacity, local_experts=local_experts, physical_capacity=expert_capacity
+        )
+        accepted_total = jnp.sum(rows.group_sizes, dtype=jnp.int32)
+        dispatch_valid = jnp.arange(expert_capacity, dtype=jnp.int32) < accepted_total
+        # Like _select_local_assignments: the padding rows past the accepted ones count toward the last expert.
+        group_sizes = rows.group_sizes.at[-1].add(expert_capacity - accepted_total)
+        receiver_dropped, picked, position = rows.dropped, rows.picked, rows.position
+    else:
+        received_ids = jax.lax.stop_gradient(received_metadata[:, :pair_capacity, topk:])
+        received_ids = jnp.round(received_ids).astype(jnp.int32).reshape(received_assignments)
+        assignment_mask = received_ids >= 0
+        local_expert = jnp.where(assignment_mask, received_ids, 0)
+        group_sizes, receiver_dropped, picked, dispatch_valid = _select_local_assignments(
+            local_expert,
+            assignment_mask,
+            local_experts=local_experts,
+            logical_capacity=logical_capacity,
+            physical_capacity=expert_capacity,
+        )
+        picked = jnp.where(dispatch_valid, picked, received_assignments)
+        position = _assignment_sources(picked, send_size=received_assignments)
+    dispatch_row = jnp.where(dispatch_valid, picked // topk, send_rows)
+    # position[r, j]: the dispatch row of received row r's j-th assignment, or the sentinel.
+    position = position.reshape(send_rows, topk)
+    return received_weights, group_sizes, receiver_dropped, picked, dispatch_valid, dispatch_row, position

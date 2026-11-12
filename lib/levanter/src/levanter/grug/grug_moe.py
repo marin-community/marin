@@ -16,7 +16,7 @@ Implementation overview:
 
 from collections.abc import Callable
 from functools import partial
-from typing import cast
+from typing import cast, get_args
 
 import equinox as eqx
 import jax
@@ -60,6 +60,7 @@ from levanter.grug._moe.ep_ring import (
 )
 from levanter.grug._moe.ep_ring_filtered import _moe_mlp_ep_ring_filtered_local
 from levanter.grug._moe.local import _moe_mlp_local
+from levanter.grug._moe.pallas_routing_metadata import MoeRoutingMetadata, resolve_interpret
 from levanter.grug.sharding import (
     _axis_names,
     _token_spec_from_x,
@@ -369,6 +370,7 @@ class MoEExpertMlp(eqx.Module):
     pooled_transport_capacity_factor: float | None = eqx.field(static=True, default=None)
     expert_chunks: int = eqx.field(static=True, default=1)
     num_expert_waves: int = eqx.field(static=True, default=1)
+    routing_metadata: MoeRoutingMetadata = eqx.field(static=True, default="xla")
 
     @staticmethod
     def init(
@@ -385,6 +387,7 @@ class MoEExpertMlp(eqx.Module):
         pooled_transport_capacity_factor: float | None = None,
         expert_chunks: int = 1,
         num_expert_waves: int = 1,
+        routing_metadata: MoeRoutingMetadata = "xla",
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -408,6 +411,7 @@ class MoEExpertMlp(eqx.Module):
             pooled_transport_capacity_factor=pooled_transport_capacity_factor,
             expert_chunks=expert_chunks,
             num_expert_waves=num_expert_waves,
+            routing_metadata=routing_metadata,
         )
 
     @named_call
@@ -437,6 +441,7 @@ class MoEExpertMlp(eqx.Module):
             report_capacity_overflow=report_capacity_overflow,
             expert_chunks=self.expert_chunks,
             num_expert_waves=self.num_expert_waves,
+            routing_metadata=self.routing_metadata,
         )
 
 
@@ -457,6 +462,7 @@ def moe_mlp(
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
     num_expert_waves: int = 1,
+    routing_metadata: MoeRoutingMetadata = "xla",
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -493,8 +499,20 @@ def moe_mlp(
     destination pool (`fixed_pooled_wave_all_to_all`) or destination shard
     (`ring_filtered`). `num_expert_waves` sets the static wave count for the
     fixed pooled-wave implementation.
+
+    `routing_metadata="pallas"` builds `ring_filtered`'s integer routing maps (send slots, expert rows, group sizes,
+    drop counts) with Pallas-Triton counting sorts instead of XLA fusions, with the same values (`ring_filtered` only;
+    GPU, or the Pallas interpreter on CPU). It requires power-of-two destination shard and local expert counts.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
+    if routing_metadata not in get_args(MoeRoutingMetadata):
+        raise ValueError(f"routing_metadata must be one of {get_args(MoeRoutingMetadata)}, got {routing_metadata!r}")
+    if routing_metadata == "pallas":
+        if resolved_implementation != "ring_filtered":
+            raise ValueError(
+                f"routing_metadata='pallas' requires ring_filtered, got implementation={resolved_implementation!r}"
+            )
+        resolve_interpret(None)  # fails fast on backends without Pallas-Triton
 
     if mesh is None:
         mesh = _current_mesh()
@@ -597,6 +615,7 @@ def moe_mlp(
             shard_local_fn = partial(
                 _moe_mlp_ep_ring_filtered_local,
                 transport_capacity_factor=pooled_transport_capacity_factor,
+                routing_metadata=routing_metadata,
             )
         elif resolved_implementation == "ragged_all_to_all":
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
