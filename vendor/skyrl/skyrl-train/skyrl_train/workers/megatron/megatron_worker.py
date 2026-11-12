@@ -17,6 +17,7 @@ from megatron.bridge import AutoBridge
 from megatron.core.optimizer import ChainedOptimizer, DistributedOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.tensor_parallel.random import get_cuda_rng_tracker
+from megatron.core.transformer.enums import AttnBackend
 from omegaconf import OmegaConf
 from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
 from skyrl_train.distributed.dispatch import MeshRank
@@ -140,7 +141,7 @@ class MegatronWorker:
         # FlashAttention preserves the scoring/training parity PPO requires.
         flash_attn = flash_attn or (bf16 and getattr(hf_config, "model_type", None) == GRUG_MOE_MODEL_TYPE)
         transformer_config_kwargs = OmegaConf.to_container(transformer_config_kwargs, resolve=True)
-        transformer_config_kwargs["attention_backend"] = "flash" if flash_attn else "fused"
+        transformer_config_kwargs["attention_backend"] = AttnBackend.flash if flash_attn else AttnBackend.fused
 
         if not self.cfg.trainer.gradient_checkpointing:
             for key in ("recompute_granularity", "recompute_method", "recompute_num_layers"):
