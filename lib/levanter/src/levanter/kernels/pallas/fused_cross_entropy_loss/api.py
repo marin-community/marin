@@ -46,6 +46,8 @@ from .batched_xla import (
 Implementation: TypeAlias = Literal[
     "pallas_tpu",
     "batched_xla",
+    "batched_xla_in_place_dw",
+    "batched_xla_f32_dw",
     "xla",
     "xla_fast_bwd",
     "reference",
@@ -157,6 +159,18 @@ except ImportError:
 
 IMPLEMENTATIONS["batched_xla"] = linear_softmax_cross_entropy_loss_batched_xla
 _CANONICAL_BACKEND_IMPLEMENTATIONS["batched_xla"] = linear_softmax_cross_entropy_loss_batched_xla
+# "batched_xla" whose streaming backward writes the weight gradient into its [H, V] result block by block instead of
+# stacking the blocks: same forward and arithmetic, less backward memory. It takes the block sizes "batched_xla" would
+# (inferred, tuned or autotuned under the "batched_xla" name), so switching to it changes nothing else.
+IMPLEMENTATIONS["batched_xla_in_place_dw"] = partial(
+    linear_softmax_cross_entropy_loss_batched_xla, in_place_weight_grad=True
+)
+# "batched_xla" whose streaming backward computes each block's weight gradient in float32 and stacks it in the weight's
+# dtype, so a float32 weight keeps a float32 gradient; with a bfloat16 weight it matches "batched_xla".
+IMPLEMENTATIONS["batched_xla_f32_dw"] = partial(
+    linear_softmax_cross_entropy_loss_batched_xla, float32_weight_grad=True
+)
+_BLOCK_SIZES_FROM: dict[str, str] = {"batched_xla_in_place_dw": "batched_xla", "batched_xla_f32_dw": "batched_xla"}
 
 
 @lru_cache(maxsize=1)
@@ -854,17 +868,21 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             block_sizes_for_impl = resolved_block_sizes
         elif impl_for_call in ("xla", "xla_fast_bwd", "reference"):
             block_sizes_for_impl = None
-        elif isinstance(impl_for_call, str) and impl_for_call in ("pallas_tpu", "batched_xla"):
+        elif isinstance(impl_for_call, str) and _BLOCK_SIZES_FROM.get(impl_for_call, impl_for_call) in (
+            "pallas_tpu",
+            "batched_xla",
+        ):
             assert inferred is not None
-            fn = IMPLEMENTATIONS.get(impl_for_call)
-            if fn is None or not _implementation_matches_current_backend(impl_for_call, fn=fn):
+            tuned_impl = _BLOCK_SIZES_FROM.get(impl_for_call, impl_for_call)
+            fn = IMPLEMENTATIONS.get(tuned_impl)
+            if fn is None or not _implementation_matches_current_backend(tuned_impl, fn=fn):
                 block_sizes_for_impl = inferred
             elif has_tuned_match:
                 block_sizes_for_impl = inferred
             else:
                 try:
                     block_sizes_for_impl = _autotune_block_sizes_on_miss(
-                        impl_name=impl_for_call,
+                        impl_name=tuned_impl,
                         fn=fn,
                         x=x,
                         labels=labels,

@@ -117,10 +117,9 @@ class GrugModelConfig:
     num_expert_waves: int = 1
     """Static wave count for ``fixed_pooled_wave_all_to_all``; must divide the local expert count."""
     ce_implementation: str | None = None
-    """Fused cross-entropy backend selection (levanter fused_cross_entropy_loss). None keeps the
-    backend default (GPU: full-logits ``xla`` path). Set ``"batched_xla"`` to use the blocked-vocab
-    (cut) CE that avoids materializing the [tokens, vocab] logits tile -- large HBM saving at long
-    context. None is byte-identical to the prior behaviour."""
+    """Fused cross-entropy implementation. None uses Levanter's backend default.
+    ``"batched_xla_in_place_dw"`` writes the weight gradient directly to ``[H, V]``; ``"batched_xla_f32_dw"`` computes it
+    in float32 and stacks it in the weight's dtype."""
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
