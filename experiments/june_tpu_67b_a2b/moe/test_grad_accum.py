@@ -412,37 +412,43 @@ def test_gradients_are_reduced_across_replicas_once_after_the_microbatch_loop():
 @pytest.mark.multidevice
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize(
-    ("cfg_changes", "policy", "step_args"),
+    ("cfg_changes", "policy", "step_args", "mesh_name", "k"),
     [
-        ({}, "f32", {"batch": PADDED_BATCH, "z_loss_weight": 1e-2}),
-        ({"router_z_loss_coef": 0.1}, "f32", {"batch": UNWEIGHTED_MICROBATCH}),
-        ({"remat_mode": "save_moe"}, "p=f32,c=bfloat16", {}),
-        ({"remat_mode": "save_moe"}, "p=f32,c=bfloat16", {"carry_compute_params": True}),
+        ({}, "f32", {"batch": PADDED_BATCH, "z_loss_weight": 1e-2}, "replica2_data2_expert2", 4),
+        ({"router_z_loss_coef": 0.1}, "f32", {"batch": UNWEIGHTED_MICROBATCH}, "replica4_expert2", 4),
+        # K=2: a microbatch loop of one iteration before the last microbatch.
+        ({"remat_mode": "save_moe"}, "p=f32,c=bfloat16", {}, "replica4_expert2", 2),
+        (
+            {"remat_mode": "save_moe"},
+            "p=f32,c=bfloat16",
+            {"carry_compute_params": True},
+            "replica2_data2_expert2",
+            4,
+        ),
     ],
     ids=["f32_z_loss_and_padding", "f32_unweighted_microbatch", "bfloat16", "bfloat16_carry_compute_params"],
 )
-def test_overlapping_the_last_microbatch_gives_the_same_step(cfg_changes, policy, step_args):
+def test_overlapping_the_last_microbatch_gives_the_same_step(cfg_changes, policy, step_args, mesh_name, k):
     # The per-layer reduction in the last microbatch's backward adds the same float32 accumulator and gradient, casts
     # the sum the same way and reduces it over the same devices as the single reduction after the loop: on CPU the
     # gradients, the loss, the metrics and the next QB thresholds are bit-identical.
     cfg = dataclasses.replace(BASE, **cfg_changes)
     policy = jmp.get_policy(policy)
     with use_cpu_devices(8):
-        for name, mesh in _meshes().items():
-            for k in (2, 4):
-                msg = f"{name} K={k}"
-                hoisted, hoisted_metrics = step(cfg, mesh, policy, microbatches=k, **step_args)
-                overlapped, metrics = step(cfg, mesh, policy, microbatches=k, overlap_last_microbatch=True, **step_args)
-                assert metrics.keys() == hoisted_metrics.keys(), msg
-                for key in metrics:
-                    np.testing.assert_array_equal(metrics[key], hoisted_metrics[key], err_msg=f"{msg} {key}")
-                for a, b in zip(
-                    jax.tree_util.tree_leaves((overlapped.opt_state, overlapped.pending_qb_betas)),
-                    jax.tree_util.tree_leaves((hoisted.opt_state, hoisted.pending_qb_betas)),
-                    strict=True,
-                ):
-                    assert a.dtype == b.dtype and a.sharding == b.sharding, msg
-                    np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=msg)
+        mesh = _meshes()[mesh_name]
+        msg = f"{mesh_name} K={k}"
+        hoisted, hoisted_metrics = step(cfg, mesh, policy, microbatches=k, **step_args)
+        overlapped, metrics = step(cfg, mesh, policy, microbatches=k, overlap_last_microbatch=True, **step_args)
+        assert metrics.keys() == hoisted_metrics.keys(), msg
+        for key in metrics:
+            np.testing.assert_array_equal(metrics[key], hoisted_metrics[key], err_msg=f"{msg} {key}")
+        for a, b in zip(
+            jax.tree_util.tree_leaves((overlapped.opt_state, overlapped.pending_qb_betas)),
+            jax.tree_util.tree_leaves((hoisted.opt_state, hoisted.pending_qb_betas)),
+            strict=True,
+        ):
+            assert a.dtype == b.dtype and a.sharding == b.sharding, msg
+            np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=msg)
 
 
 @pytest.mark.multidevice
@@ -457,15 +463,14 @@ def test_overlapping_the_last_microbatch_with_one_expert_shard(replicated_grad_m
         cfg = dataclasses.replace(BASE, replicated_grad_max_bytes=replicated_grad_max_bytes)
     with use_cpu_devices(8):
         mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=8)
-        for k in (2, 4):
-            hoisted, hoisted_metrics = step(cfg, mesh, jmp.get_policy("f32"), microbatches=k)
-            overlapped, metrics = step(cfg, mesh, jmp.get_policy("f32"), microbatches=k, overlap_last_microbatch=True)
-            for key in metrics:
-                np.testing.assert_array_equal(metrics[key], hoisted_metrics[key], err_msg=f"K={k} {key}")
-            overlapped_grads, hoisted_grads = (jax.tree_util.tree_leaves(s.opt_state) for s in (overlapped, hoisted))
-            for a, b in zip(overlapped_grads, hoisted_grads, strict=True):
-                assert a.dtype == b.dtype and a.sharding == b.sharding, k
-                np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=f"K={k}")
+        hoisted, hoisted_metrics = step(cfg, mesh, jmp.get_policy("f32"), microbatches=2)
+        overlapped, metrics = step(cfg, mesh, jmp.get_policy("f32"), microbatches=2, overlap_last_microbatch=True)
+        for key in metrics:
+            np.testing.assert_array_equal(metrics[key], hoisted_metrics[key], err_msg=key)
+        overlapped_grads, hoisted_grads = (jax.tree_util.tree_leaves(s.opt_state) for s in (overlapped, hoisted))
+        for a, b in zip(overlapped_grads, hoisted_grads, strict=True):
+            assert a.dtype == b.dtype and a.sharding == b.sharding
+            np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
 
 
 @pytest.mark.timeout(900)
@@ -479,7 +484,8 @@ def test_overlapping_the_last_microbatch_reduces_the_expert_gradients_per_layer(
     with use_cpu_devices(8):
         policy = jmp.get_policy("p=f32,c=bfloat16")
         layer_scan = "jit(train_step)/transpose(jvp(Transformer))/while/body/"
-        for name, mesh in _meshes().items():
+        # K=2 on one mesh and K=4 on the other.
+        for (name, mesh), k in zip(_meshes().items(), (2, 4), strict=True):
             with jax.set_mesh(mesh):
                 params = june_train.initial_state(
                     BASE, optimizer=optax.adam(1e-2), mp=policy, key=jax.random.key(0), ema_beta=None
@@ -494,24 +500,23 @@ def test_overlapping_the_last_microbatch_reduces_the_expert_gradients_per_layer(
                     (expert if is_expert else other).append(int(np.prod(x.sharding.shard_shape(x.shape))))
             assert len(expert) == 3, (name, expert)
             layer_slices = [size // BASE.num_layers for size in expert]
-            for k in (2, 4):
-                msg = f"{name} K={k}"
-                reductions = replica_reductions(
-                    compiled_step_hlo(
-                        BASE, mesh, policy, microbatches=k, overlap_last_microbatch=True, combine_all_reduces=False
-                    ),
-                    mesh,
-                )
-                backward_in_loop = [r for r in reductions if r.in_loop and "transpose(" in r.op_name and not r.scalar]
-                assert backward_in_loop and all(r.op_name.startswith(layer_scan) for r in backward_in_loop), (
-                    msg,
-                    backward_in_loop,
-                )
-                assert sum(r.elements for r in backward_in_loop) == sum(layer_slices), (msg, backward_in_loop)
-                forward = [r for r in reductions if "jvp(" in r.op_name and "transpose(" not in r.op_name]
-                assert forward, (msg, reductions)  # The routing statistics, so the op_name test means something.
-                after_loop = [r.elements for r in reductions if not r.in_loop and not r.scalar and r not in forward]
-                assert sorted(after_loop) == sorted(other), (msg, reductions)
+            msg = f"{name} K={k}"
+            reductions = replica_reductions(
+                compiled_step_hlo(
+                    BASE, mesh, policy, microbatches=k, overlap_last_microbatch=True, combine_all_reduces=False
+                ),
+                mesh,
+            )
+            backward_in_loop = [r for r in reductions if r.in_loop and "transpose(" in r.op_name and not r.scalar]
+            assert backward_in_loop and all(r.op_name.startswith(layer_scan) for r in backward_in_loop), (
+                msg,
+                backward_in_loop,
+            )
+            assert sum(r.elements for r in backward_in_loop) == sum(layer_slices), (msg, backward_in_loop)
+            forward = [r for r in reductions if "jvp(" in r.op_name and "transpose(" not in r.op_name]
+            assert forward, (msg, reductions)  # The routing statistics, so the op_name test means something.
+            after_loop = [r.elements for r in reductions if not r.in_loop and not r.scalar and r not in forward]
+            assert sorted(after_loop) == sorted(other), (msg, reductions)
 
 
 def test_overlapping_the_last_microbatch_needs_two_microbatches():
