@@ -58,6 +58,18 @@ GRUG_ROUTER_RENORM_EPS = 1e-9
 GRUG_SUPPORTED_TRAINING_STRATEGIES = frozenset({"megatron"})
 
 
+def select_routed_expert_schema(declared_schema: int, weight_keys: set[str] | None) -> int:
+    """Select the routed layout from checkpoint keys while retaining the declared shared layout."""
+
+    if weight_keys is None:
+        return declared_schema
+    stacked = "model.layers.0.mlp.experts.gate_proj.weight" in weight_keys
+    split = "model.layers.0.mlp.experts.0.gate_proj.weight" in weight_keys
+    if stacked == split:
+        raise ValueError("Grug checkpoint must have exactly one routed-expert weight layout")
+    return GRUG_STACKED_EXPERT_SCHEMA_VERSION if stacked else GRUG_SPLIT_EXPERT_SCHEMA_VERSION
+
+
 def is_grug_router_bias(model_type: str | None, name: str) -> bool:
     """Return whether a state entry is Grug's persistent FP32 router bias."""
 
