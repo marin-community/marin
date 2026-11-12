@@ -21,7 +21,8 @@ import re
 import shlex
 import tarfile
 import tomllib
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 
 import pyarrow as pa
@@ -52,6 +53,7 @@ from experiments.post_training.task_curation.calibforge_fixtures import (
     SETUP_ROOT,
     SETUP_SCRIPT,
     SETUP_SCRIPT_PREAMBLE,
+    SHELL_METACHARACTERS,
     fixture_generator,
 )
 from experiments.post_training.task_curation.environment import dockerfile_lines
@@ -64,6 +66,26 @@ from experiments.post_training.task_curation.environment_fidelity import (
 from experiments.post_training.task_curation.task_tars import open_task_tar
 
 REBUILT = "rebuilt_pending_oracle_and_admission"
+
+
+@dataclass(frozen=True)
+class MachineShape:
+    """The cpus, memory, storage and gpu count a runtime declares for one machine."""
+
+    cpus: int | None = None
+    memory_mb: int | None = None
+    storage_mb: int | None = None
+    gpus: int = 0
+
+    @classmethod
+    def from_mapping(cls, shape: Mapping) -> "MachineShape":
+        return cls(
+            cpus=shape.get("cpus"),
+            memory_mb=shape.get("memory_mb"),
+            storage_mb=shape.get("storage_mb"),
+            gpus=shape.get("gpus", 0),
+        )
+
 
 NORMALIZED_CPUS = 2
 NORMALIZED_MEMORY_MB = 4096
@@ -87,7 +109,6 @@ SETUP_FAILURES = {
 
 _META_COMMANDS = {"from", "cmd", "entrypoint", "label", "expose", "stopsignal", "healthcheck", "shell"}
 _INNOCUOUS_RUN = {"mkdir", "chmod", "touch", "ln", "rm"}
-_METACHARACTERS = "$`;&|<>()*?[~"
 
 
 class DeferredRebuild(ValueError):
@@ -175,7 +196,7 @@ def _dependency_run(arguments: list[str]) -> bool:
 
 
 def _has_shell_metacharacters(arguments: list[str]) -> bool:
-    return any(character in argument for argument in arguments for character in _METACHARACTERS)
+    return any(character in argument for argument in arguments for character in SHELL_METACHARACTERS)
 
 
 @dataclass(frozen=True)
@@ -448,7 +469,7 @@ def _rewrite_task_toml(original: bytes | None, base_ref: str, workdir: str) -> b
     return tomlkit.dumps(document).encode()
 
 
-LOWERED_RUNTIME = {"cpus": NORMALIZED_CPUS, "memory_mb": NORMALIZED_MEMORY_MB, "storage_mb": NORMALIZED_STORAGE_MB}
+LOWERED_RUNTIME = MachineShape(cpus=NORMALIZED_CPUS, memory_mb=NORMALIZED_MEMORY_MB, storage_mb=NORMALIZED_STORAGE_MB)
 """The machine shape every lowered task declares."""
 
 
@@ -462,23 +483,26 @@ class LoweredSpec:
     """One lowered task envelope: its validated TaskSpec and runtime machine shapes."""
 
     task: TaskSpec
-    task_machine: dict
-    verifier_machine: dict
+    task_machine: MachineShape
+    verifier_machine: MachineShape
 
     @classmethod
     def from_document(cls, document: dict) -> "LoweredSpec":
         runtime = document.get("runtime") or {}
         return cls(
             TaskSpec.model_validate(document.get("task") or {}),
-            runtime.get("task_machine") or {},
-            runtime.get("verifier_machine") or {},
+            MachineShape.from_mapping(runtime.get("task_machine") or {}),
+            MachineShape.from_mapping(runtime.get("verifier_machine") or {}),
         )
 
     def envelope(self) -> dict:
         """The JSON envelope the rollout runtime and the measurement code consume."""
         return {
             "task": self.task.model_dump(mode="json"),
-            "runtime": {"task_machine": self.task_machine, "verifier_machine": self.verifier_machine},
+            "runtime": {
+                "task_machine": asdict(self.task_machine),
+                "verifier_machine": asdict(self.verifier_machine),
+            },
         }
 
 

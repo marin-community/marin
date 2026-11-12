@@ -212,14 +212,13 @@ re-measurement; none changes a task's own instruction, files or grader.
    declare one shape (for example 2 CPU / 4096 MB / 10240 MB) for task and
    verifier machines. Differing shapes multiply snapshot names without changing
    the environment.
-3. **Prove a no-op before re-declaring the agent image.** A task may declare
-   `iris-task` only when
-   `experiments/post_training/task_curation/environment_fidelity.py` proves its
-   recipe changes nothing: a single `FROM` equal to the digest-pinned agent
-   image, no `RUN`/`COPY`/`ADD`/`ENV`/`ARG`/`USER`/`ENTRYPOINT`/`CMD` step, and
-   no copied fixtures. That rewrite is a conversion, so it ships as a new dataset
-   version whose declaration records the basis. Anything unproven keeps its own
-   environment and is built.
+3. **Keep the archive's environment in the converted task.** A converted task
+   runs in the environment its archive specifies:
+   `environment_fidelity.environment_unused` rejects a spec that replaces the
+   archive's recipe with another image, and a replayed recipe must lower onto the
+   digest-pinned base with the archive's steps, working directory and variables.
+   A conversion that changes the environment is a rewrite, so it ships as a new
+   dataset version whose declaration records the basis.
 4. **Build the archived environment as the task image.** When lowering cannot
    express the recipe and the image is available to the RL org, build it, pin the
    resulting digest, and count each distinct image as one identity.

@@ -17,7 +17,7 @@ import base64
 import tempfile
 import tomllib
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,9 +36,9 @@ from shellbox.machine import (
     MachineSpec,
     NetworkPolicy,
 )
-from taskcompendium.models import EnvironmentRequirements, require_resolved_environment
+from taskcompendium.models import EnvironmentRequirements, ScriptGrader, VerifyitGrader, require_resolved_environment
 
-from experiments.post_training.task_curation.calibforge_rebuild import LoweredSpec
+from experiments.post_training.task_curation.calibforge_rebuild import LoweredSpec, MachineShape
 from experiments.post_training.task_curation.environment_fidelity import ENVIRONMENT_PREFIX
 from experiments.post_training.task_curation.task_tars import open_task_tar
 
@@ -150,9 +150,11 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, LoweredSpec]]) -> S
     factory = DaytonaMachineFactory()
     for task_id, spec in tasks:
         grader = spec.task.grader
+        # Only a grader that runs in a machine declares one; the other kinds borrow none.
+        grader_environment = grader.environment if isinstance(grader, ScriptGrader | VerifyitGrader) else None
         slots = (
             ("agent", spec.task.environment_requirements, spec.task_machine),
-            ("grader", getattr(grader, "environment", None), spec.verifier_machine),
+            ("grader", grader_environment, spec.verifier_machine),
         )
         mapping_errors: list[str] = []
         execution_errors: list[str] = []
@@ -182,25 +184,6 @@ class _DeclaredIdentity:
     execution_error: str | None = None
 
 
-@dataclass(frozen=True)
-class MachineShape:
-    """The cpus, memory, storage and gpu count a runtime declares for one machine."""
-
-    cpus: int | None = None
-    memory_mb: int | None = None
-    storage_mb: int | None = None
-    gpus: int = 0
-
-    @classmethod
-    def from_mapping(cls, shape: Mapping) -> "MachineShape":
-        return cls(
-            cpus=shape.get("cpus"),
-            memory_mb=shape.get("memory_mb"),
-            storage_mb=shape.get("storage_mb"),
-            gpus=shape.get("gpus", 0),
-        )
-
-
 def declared_machine(
     requirements: EnvironmentRequirements,
     context: Path,
@@ -214,8 +197,10 @@ def declared_machine(
     """The shellbox MachineSpec a task's declared requirements and machine shape resolve to.
 
     A Docker build context is materialized into ``context``; a registry image, package
-    spec or host requirement maps onto the matching source. Graders run this same
-    resolution when they execute, so measurement and execution agree on the machine.
+    spec or host requirement maps onto the matching source. Sandbox graders resolve
+    their declared requirements through this same path when they execute, so
+    measurement and execution agree on the machine; lock-based graders run locally
+    instead and never name a sandbox.
     """
     if requirements.docker_build is not None:
         for resource in requirements.docker_build.files:
@@ -246,29 +231,30 @@ def declared_machine(
 
 
 def _declared_identity(
-    role: str, declared: Mapping | None, shape: Mapping | None, factory: DaytonaMachineFactory
+    role: str,
+    declared: EnvironmentRequirements | None,
+    shape: MachineShape | None,
+    factory: DaytonaMachineFactory,
 ) -> _DeclaredIdentity:
     """Measure one declared agent or grader machine through the production identity."""
     if declared is None or shape is None:
         return _DeclaredIdentity()
-    requirements = EnvironmentRequirements.model_validate(declared)
-    machine_shape = MachineShape.from_mapping(shape)
     with tempfile.TemporaryDirectory() as tmp:
         try:
             machine = declared_machine(
-                requirements,
+                declared,
                 Path(tmp),
                 network=NetworkPolicy.ALLOW,
-                cpus=machine_shape.cpus,
-                memory_mb=machine_shape.memory_mb,
-                storage_mb=machine_shape.storage_mb,
-                gpus=machine_shape.gpus,
+                cpus=shape.cpus,
+                memory_mb=shape.memory_mb,
+                storage_mb=shape.storage_mb,
+                gpus=shape.gpus,
             )
         except ValueError as error:
             return _DeclaredIdentity(mapping_error=f"{role}: {error}", execution_error=f"{role}: {error}")
         try:
-            factory.check_environment(requirements, machine)
-            require_resolved_environment(requirements)
+            factory.check_environment(declared, machine)
+            require_resolved_environment(declared)
         except UnsupportedMachineSpec as error:
             # An execution refusal still reports the identity: snapshot counts measure
             # what the cohort would provision, whether or not Daytona would run it.

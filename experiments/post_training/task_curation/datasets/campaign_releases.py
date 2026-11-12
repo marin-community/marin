@@ -87,12 +87,44 @@ SINGLE_ENVIRONMENT_SPREAD = "drawn across the cohort's single environment"
 MULTI_ENVIRONMENT_SPREAD = "across the cohort's environments"
 
 
-def _rebuilt_cohort(config: PrebuiltCohort, info: SourceInfo) -> RlDataSource[PrebuiltCohort]:
-    """Derive inventory identity and row counts from the pinned import configuration."""
+def _rebuilt_cohort(
+    config: PrebuiltCohort,
+    info: SourceInfo,
+    *,
+    agent_identities: int | None = None,
+    sampled: int | None = None,
+    spread: str | None = None,
+    oversight_campaign: str | None = None,
+    oversight_recipe_revision: str | None = None,
+    oversight_level: OversightLevel | None = None,
+) -> RlDataSource[PrebuiltCohort]:
+    """Derive the inventory identity and row counts from the pinned import configuration.
+
+    When a cohort's evidence follows the standard lock-grader shape, pass its
+    oversight pointers and the measured agent identities and sample size; the
+    task counts then come from the import configuration the artifact is read
+    back through. Cohorts with different evidence declare their fields directly.
+    """
+    rows = config.expected_rows
+    if agent_identities is not None:
+        oversight = OversightEvidence(
+            campaign=oversight_campaign,
+            recipe_revision=oversight_recipe_revision,
+            verification=_rebuilt_verification(rows, sampled, environments=spread),
+            level=oversight_level,
+            reviewed=rows,
+            admitted=rows,
+        )
+        info = replace(
+            info,
+            daytona_count_basis=_lock_grader_count_basis(agent_identities, rows),
+            daytona_execution_failures=rows,
+            oversight=oversight,
+        )
     return RlDataSource(
         pipeline=import_prebuilt,
         config=config,
-        info=replace(info, count=config.expected_rows, dataset=config.dataset),
+        info=replace(info, count=rows, dataset=config.dataset),
     )
 
 
@@ -201,17 +233,7 @@ def sources() -> list[RlDataSource]:
                 tags=("agentic", "multi-turn", "language:bash", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
-                daytona_count_basis=_lock_grader_count_basis(1, 1498),
-                daytona_execution_failures=1498,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
-                    campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/nl2bash.py @ e6be97168d",
-                    verification=_rebuilt_verification(1498, 20, environments=SINGLE_ENVIRONMENT_SPREAD),
-                    reviewed=1498,
-                    admitted=1498,
-                    level=OversightLevel.NONE,
-                ),
                 notes=(
                     "1,498 nl2bash tasks converted to run in the environment their archives specify: the "
                     "ubuntu:24.04 recipe each task ships is lowered onto the digest-pinned base and its RUN "
@@ -223,6 +245,12 @@ def sources() -> list[RlDataSource]:
                     "submission at this revision. The repository is private pending release."
                 ),
             ),
+            agent_identities=1,
+            sampled=20,
+            spread=SINGLE_ENVIRONMENT_SPREAD,
+            oversight_campaign="RL Data Atlas",
+            oversight_recipe_revision="datasets/tasktrove/nl2bash.py @ e6be97168d",
+            oversight_level=OversightLevel.NONE,
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -240,17 +268,7 @@ def sources() -> list[RlDataSource]:
                 tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
-                daytona_count_basis=_lock_grader_count_basis(1, 9745),
-                daytona_execution_failures=9745,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
-                    campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/code.py @ e6be97168d",
-                    verification=_rebuilt_verification(9745, 20, environments=SINGLE_ENVIRONMENT_SPREAD),
-                    reviewed=9745,
-                    admitted=9745,
-                    level=OversightLevel.NONE,
-                ),
                 notes=(
                     "9,745 codeforces tasks converted to run in the environment their archives specify: "
                     "the ubuntu:24.04 recipe each task ships is lowered onto the digest-pinned base and "
@@ -263,6 +281,12 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
+            agent_identities=1,
+            sampled=20,
+            spread=SINGLE_ENVIRONMENT_SPREAD,
+            oversight_campaign="RL Data Atlas",
+            oversight_recipe_revision="datasets/tasktrove/code.py @ e6be97168d",
+            oversight_level=OversightLevel.NONE,
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -280,17 +304,7 @@ def sources() -> list[RlDataSource]:
                 tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
-                daytona_count_basis=_lock_grader_count_basis(1, 13973),
-                daytona_execution_failures=13973,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
-                    campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/code.py @ e6be97168d",
-                    verification=_rebuilt_verification(13973, 20, environments=SINGLE_ENVIRONMENT_SPREAD),
-                    reviewed=13973,
-                    admitted=13973,
-                    level=OversightLevel.NONE,
-                ),
                 notes=(
                     "13,973 competitive-coding tasks converted to run in the environment their archives "
                     "specify: the ubuntu:24.04 recipe each task ships is lowered onto the digest-pinned "
@@ -304,6 +318,12 @@ def sources() -> list[RlDataSource]:
                     "The repository is private pending release."
                 ),
             ),
+            agent_identities=1,
+            sampled=20,
+            spread=SINGLE_ENVIRONMENT_SPREAD,
+            oversight_campaign="RL Data Atlas",
+            oversight_recipe_revision="datasets/tasktrove/code.py @ e6be97168d",
+            oversight_level=OversightLevel.NONE,
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -321,17 +341,7 @@ def sources() -> list[RlDataSource]:
                 tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=2,
-                daytona_count_basis=_lock_grader_count_basis(2, 505),
-                daytona_execution_failures=505,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
-                    campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_rebuilt_verification(505, 20, environments=MULTI_ENVIRONMENT_SPREAD),
-                    reviewed=505,
-                    admitted=505,
-                    level=OversightLevel.NONE,
-                ),
                 notes=(
                     "505 curriculum-easy tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision "
@@ -341,6 +351,12 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
+            agent_identities=2,
+            sampled=20,
+            spread=MULTI_ENVIRONMENT_SPREAD,
+            oversight_campaign="RL Data Atlas",
+            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+            oversight_level=OversightLevel.NONE,
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -358,17 +374,7 @@ def sources() -> list[RlDataSource]:
                 tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
-                daytona_count_basis=_lock_grader_count_basis(1, 488),
-                daytona_execution_failures=488,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
-                    campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_rebuilt_verification(488, 20, environments=MULTI_ENVIRONMENT_SPREAD),
-                    reviewed=488,
-                    admitted=488,
-                    level=OversightLevel.NONE,
-                ),
                 notes=(
                     "488 curriculum-medium tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision "
@@ -378,6 +384,12 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
+            agent_identities=1,
+            sampled=20,
+            spread=MULTI_ENVIRONMENT_SPREAD,
+            oversight_campaign="RL Data Atlas",
+            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+            oversight_level=OversightLevel.NONE,
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -440,17 +452,7 @@ def sources() -> list[RlDataSource]:
                 tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
-                daytona_count_basis=_lock_grader_count_basis(1, 4993),
-                daytona_execution_failures=4993,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
-                    campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_rebuilt_verification(4993, 20, environments=MULTI_ENVIRONMENT_SPREAD),
-                    reviewed=4993,
-                    admitted=4993,
-                    level=OversightLevel.NONE,
-                ),
                 notes=(
                     "4,993 e2egit-large tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_e2egit-large @ "
@@ -459,6 +461,12 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
+            agent_identities=1,
+            sampled=20,
+            spread=MULTI_ENVIRONMENT_SPREAD,
+            oversight_campaign="RL Data Atlas",
+            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+            oversight_level=OversightLevel.NONE,
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -476,17 +484,7 @@ def sources() -> list[RlDataSource]:
                 tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
-                daytona_count_basis=_lock_grader_count_basis(1, 4842),
-                daytona_execution_failures=4842,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
-                    campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_rebuilt_verification(4842, 20, environments=MULTI_ENVIRONMENT_SPREAD),
-                    reviewed=4842,
-                    admitted=4842,
-                    level=OversightLevel.NONE,
-                ),
                 notes=(
                     "4,842 multifile tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_multifile-v3 @ "
@@ -495,6 +493,12 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
+            agent_identities=1,
+            sampled=20,
+            spread=MULTI_ENVIRONMENT_SPREAD,
+            oversight_campaign="RL Data Atlas",
+            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+            oversight_level=OversightLevel.NONE,
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -512,17 +516,7 @@ def sources() -> list[RlDataSource]:
                 tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
-                daytona_count_basis=_lock_grader_count_basis(1, 500),
-                daytona_execution_failures=500,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
-                    campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_rebuilt_verification(500, 20, environments=MULTI_ENVIRONMENT_SPREAD),
-                    reviewed=500,
-                    admitted=500,
-                    level=OversightLevel.NONE,
-                ),
                 notes=(
                     "500 pymethods2test tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision "
@@ -532,6 +526,12 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
+            agent_identities=1,
+            sampled=20,
+            spread=MULTI_ENVIRONMENT_SPREAD,
+            oversight_campaign="RL Data Atlas",
+            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+            oversight_level=OversightLevel.NONE,
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -549,17 +549,7 @@ def sources() -> list[RlDataSource]:
                 tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
-                daytona_count_basis=_lock_grader_count_basis(1, 4990),
-                daytona_execution_failures=4990,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
-                    campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_rebuilt_verification(4990, 20, environments=MULTI_ENVIRONMENT_SPREAD),
-                    reviewed=4990,
-                    admitted=4990,
-                    level=OversightLevel.NONE,
-                ),
                 notes=(
                     "4,990 pymethods2test-large tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision "
@@ -569,6 +559,12 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
+            agent_identities=1,
+            sampled=20,
+            spread=MULTI_ENVIRONMENT_SPREAD,
+            oversight_campaign="RL Data Atlas",
+            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+            oversight_level=OversightLevel.NONE,
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -586,17 +582,7 @@ def sources() -> list[RlDataSource]:
                 tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
-                daytona_count_basis=_lock_grader_count_basis(1, 492),
-                daytona_execution_failures=492,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
-                    campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_rebuilt_verification(492, 20, environments=MULTI_ENVIRONMENT_SPREAD),
-                    reviewed=492,
-                    admitted=492,
-                    level=OversightLevel.NONE,
-                ),
                 notes=(
                     "492 stack-pytest tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision "
@@ -606,6 +592,12 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
+            agent_identities=1,
+            sampled=20,
+            spread=MULTI_ENVIRONMENT_SPREAD,
+            oversight_campaign="RL Data Atlas",
+            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+            oversight_level=OversightLevel.NONE,
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -623,17 +615,7 @@ def sources() -> list[RlDataSource]:
                 tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
-                daytona_count_basis=_lock_grader_count_basis(1, 4991),
-                daytona_execution_failures=4991,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
-                    campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_rebuilt_verification(4991, 20, environments=MULTI_ENVIRONMENT_SPREAD),
-                    reviewed=4991,
-                    admitted=4991,
-                    level=OversightLevel.NONE,
-                ),
                 notes=(
                     "4,991 unitsyn-python tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision "
@@ -643,6 +625,12 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
+            agent_identities=1,
+            sampled=20,
+            spread=MULTI_ENVIRONMENT_SPREAD,
+            oversight_campaign="RL Data Atlas",
+            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+            oversight_level=OversightLevel.NONE,
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -660,17 +648,7 @@ def sources() -> list[RlDataSource]:
                 tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
-                daytona_count_basis=_lock_grader_count_basis(1, 4991),
-                daytona_execution_failures=4991,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
-                    campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_rebuilt_verification(4991, 20, environments=MULTI_ENVIRONMENT_SPREAD),
-                    reviewed=4991,
-                    admitted=4991,
-                    level=OversightLevel.NONE,
-                ),
                 notes=(
                     "4,991 unitsyn-python-large tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision "
@@ -680,6 +658,12 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
+            agent_identities=1,
+            sampled=20,
+            spread=MULTI_ENVIRONMENT_SPREAD,
+            oversight_campaign="RL Data Atlas",
+            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+            oversight_level=OversightLevel.NONE,
         ),
         RlDataSource(
             info=SourceInfo(

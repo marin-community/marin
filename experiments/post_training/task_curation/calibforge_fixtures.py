@@ -17,6 +17,10 @@ FIXTURE_ARCHIVE = "calibforge-fixtures.tar.gz"
 SETUP_SCRIPT = "calibforge-initialize.sh"
 SETUP_ROOT = "/setup_files"
 
+SHELL_METACHARACTERS = "$`;&|<>()*?[~"
+"""Shell syntax a conservative setup step may not carry."""
+
+
 SETUP_SCRIPT_PREAMBLE = (
     "#!/bin/sh",
     "set -eu",
@@ -95,7 +99,7 @@ def fixture_bundle(context: Path, instructions: list[dict]) -> FixtureBundle:
             if (
                 not arguments
                 or not (arguments[0] in {"mkdir", "chmod", "touch"} or generates_fixture or remove_generator)
-                or any(any(character in argument for character in "$`;&|<>()*?[~") for argument in arguments)
+                or any(any(character in argument for character in SHELL_METACHARACTERS) for argument in arguments)
             ):
                 raise DeferredEnvironment("requires_dependency_or_complex_run_support")
             if generates_fixture:

@@ -47,9 +47,8 @@ Callers with generation stop metadata remove configured terminal markers before 
 The `pytest` mode scores startup and collection errors attributed to editable candidate code as failed attempts.
 `PytestSpec.candidate_modules` names modules the task asks the candidate to implement.
 Missing imports of those modules score zero, including an empty submission.
-Modules imported directly by tests or their conftest are also inferred as candidate modules
-when no installed distribution or standard-library provider supplies their top-level package.
-Provider metadata is read from the spec's Python interpreter outside the task workspace.
+Only the modules the spec names in ``candidate_modules`` (and their submodules) count as
+candidate code; imports are never guessed from distribution metadata.
 Missing modules with an installed provider remain invalid tasks.
 Workspace-qualified candidate packages add the workspace parent to Python's import path.
 Missing dependencies imported by implementation code, errors in restored task files, and genuine interruptions remain unscored.

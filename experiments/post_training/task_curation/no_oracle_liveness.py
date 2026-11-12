@@ -168,7 +168,7 @@ def _verifier_runtime(spec: LoweredSpec) -> MachineRuntimeSpec:
             "user": None,
             "startup_timeout": 900.0,
             "cleanup_timeout": 120.0,
-            **spec.verifier_machine,
+            **asdict(spec.verifier_machine),
         }
     )
 
