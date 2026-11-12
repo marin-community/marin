@@ -1460,11 +1460,14 @@ shards with:
 ```bash
 uv run python -m experiments.post_training.task_curation.census_binding \
   --censuses actor-censuses.json \
+  --integrity-censuses integrity-censuses.json \
   --output-dir experiments/post_training/task_curation/datasets/daytona_census_receipts
 ```
 
 Integrity-contract summaries are optional and independent of actor safety.
-Only refreshed summaries distinguish required SHARED tasks missing a contract
+The optional `--integrity-censuses` input requires the same source, normalized
+artifact, converter identity and task count as its actor receipt. Only refreshed
+summaries distinguish required SHARED tasks missing a contract
 from all tasks without a contract. Full contract groups stay in the referenced
 artifact; catalog summaries retain at most 64 groups and one 16 KiB example.
 

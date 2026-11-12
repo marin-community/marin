@@ -9,7 +9,28 @@
       "measured_tasks": 6926,
       "task_specs_sha256": "0497321b74eaac59cf4317125efc20b83c8aa7a7cd108b00cc51fac1072b4baa"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 6926,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/c343e240955847b51bf3/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 6926,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "0497321b74eaac59cf4317125efc20b83c8aa7a7cd108b00cc51fac1072b4baa"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -37,7 +58,28 @@
       "measured_tasks": 500,
       "task_specs_sha256": "d1f763f05a7449f834cd708196995f7882db5651ef78fbbc3541db4a0d9e4289"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 500,
+      "dataset_id": "open-athena/task-trove-laion-codeelo-v2-6889e089-taskcompendium-20261112",
+      "dataset_revision": "0e69f13daa2c805789d015637ad0cee9190a6fae",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/cb5853979599a468dd18/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 500,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 500,
+      "shared_missing_contract_tasks": 500,
+      "task_specs_sha256": "d1f763f05a7449f834cd708196995f7882db5651ef78fbbc3541db4a0d9e4289"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-codeelo-v2-6889e089-taskcompendium-20261112",
       "dataset_revision": "0e69f13daa2c805789d015637ad0cee9190a6fae",
@@ -70,7 +112,28 @@
       "measured_tasks": 9745,
       "task_specs_sha256": "3533c26d2a18d9c9f77bbbf24b59a2c47dd97667d13bbb5facffbffeebfa2d11"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 9745,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/3e3b4614f2864ebfa9a5/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 9745,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "3533c26d2a18d9c9f77bbbf24b59a2c47dd97667d13bbb5facffbffeebfa2d11"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -110,7 +173,28 @@
       "measured_tasks": 479,
       "task_specs_sha256": "72a9022bdee84865602ce8fb47d826d97b4ebc79acf95a22901b3c3c8e1bcf3f"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 479,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-bugsinpy-v4-0d77757a-taskcompendium-20261112",
+      "dataset_revision": "b5bf846ac107cffe961a041800b5212f02ea7b13",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/5808e120a72416ed0f56/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 479,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 479,
+      "shared_missing_contract_tasks": 479,
+      "task_specs_sha256": "72a9022bdee84865602ce8fb47d826d97b4ebc79acf95a22901b3c3c8e1bcf3f"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-bugsinpy-v4-0d77757a-taskcompendium-20261112",
       "dataset_revision": "b5bf846ac107cffe961a041800b5212f02ea7b13",
@@ -143,7 +227,28 @@
       "measured_tasks": 6975,
       "task_specs_sha256": "3e6cd267ec9e05ab62d00a5eb311a4983c80b7f595f042965a73574aa362e22d"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 6975,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-codenet-python-v4-36a8f53c-taskcompendium-20261112",
+      "dataset_revision": "339b44af844aa0742706a9f8ab8a4d6a145f36f0",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/e069777951e3140cf497/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 6975,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 6975,
+      "shared_missing_contract_tasks": 6975,
+      "task_specs_sha256": "3e6cd267ec9e05ab62d00a5eb311a4983c80b7f595f042965a73574aa362e22d"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-codenet-python-v4-36a8f53c-taskcompendium-20261112",
       "dataset_revision": "339b44af844aa0742706a9f8ab8a4d6a145f36f0",
@@ -176,7 +281,28 @@
       "measured_tasks": 1768,
       "task_specs_sha256": "0fffddc729f8cd160a2e9b0c98d66139adb014625926bfd510299171dc02613c"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 1768,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-csharp-v4-600ade46-taskcompendium-20261112",
+      "dataset_revision": "663f98ee95ef60f218a236e2c28aafb8027240ac",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/0a9ec61e9600c2fbcbd9/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 1768,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 1768,
+      "shared_missing_contract_tasks": 1768,
+      "task_specs_sha256": "0fffddc729f8cd160a2e9b0c98d66139adb014625926bfd510299171dc02613c"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-csharp-v4-600ade46-taskcompendium-20261112",
       "dataset_revision": "663f98ee95ef60f218a236e2c28aafb8027240ac",
@@ -209,7 +335,28 @@
       "measured_tasks": 2139,
       "task_specs_sha256": "d2852a57b06f75dacc427a8835d87c922317f86d7d8edd3bd12b645b058eac30"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 2139,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-java-v3-d4f66a66-taskcompendium-20261112",
+      "dataset_revision": "397522f49f8f0cdf8a4f95df5ad9ec0a7722f6c7",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/8fe8c203a3a9e875d768/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 2139,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 2139,
+      "shared_missing_contract_tasks": 2139,
+      "task_specs_sha256": "d2852a57b06f75dacc427a8835d87c922317f86d7d8edd3bd12b645b058eac30"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-java-v3-d4f66a66-taskcompendium-20261112",
       "dataset_revision": "397522f49f8f0cdf8a4f95df5ad9ec0a7722f6c7",
@@ -242,7 +389,28 @@
       "measured_tasks": 500,
       "task_specs_sha256": "dafe1c08f29eb599bac3398496313e94be634f9fe2bbd3f7947d334ffd20e8bb"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 500,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-python-v2-dc0ebee3-taskcompendium-20261112",
+      "dataset_revision": "a953f93bc830704525ff2cce0b296dd262009662",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/b5d2abe06afc8a793318/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 500,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 500,
+      "shared_missing_contract_tasks": 500,
+      "task_specs_sha256": "dafe1c08f29eb599bac3398496313e94be634f9fe2bbd3f7947d334ffd20e8bb"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-python-v2-dc0ebee3-taskcompendium-20261112",
       "dataset_revision": "a953f93bc830704525ff2cce0b296dd262009662",
@@ -275,7 +443,28 @@
       "measured_tasks": 3356,
       "task_specs_sha256": "1ddf0fe5a29deb1b6ba7e7dbc6eb47d1dc593b5278a62e6036d8acc54ce09a47"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 3356,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-typescript-v2-d0a1cbe1-taskcompendium-20261112",
+      "dataset_revision": "f19d39a3923b02712d5674485f6eb230b1888372",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/66eacfa201a4723674cb/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 3356,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 3356,
+      "shared_missing_contract_tasks": 3356,
+      "task_specs_sha256": "1ddf0fe5a29deb1b6ba7e7dbc6eb47d1dc593b5278a62e6036d8acc54ce09a47"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-typescript-v2-d0a1cbe1-taskcompendium-20261112",
       "dataset_revision": "f19d39a3923b02712d5674485f6eb230b1888372",
@@ -308,7 +497,28 @@
       "measured_tasks": 9930,
       "task_specs_sha256": "e53d2e102d201be903f568c6312a49874dbcac0dedd0828fe89ce25f8da92f0c"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 9930,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-ghactions-v3-398f0582-taskcompendium-20261112",
+      "dataset_revision": "d8ed772114021e7ad484bb51db5dc919b09bc676",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/dbed90574012db40ff47/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 9930,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 9930,
+      "shared_missing_contract_tasks": 9930,
+      "task_specs_sha256": "e53d2e102d201be903f568c6312a49874dbcac0dedd0828fe89ce25f8da92f0c"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-ghactions-v3-398f0582-taskcompendium-20261112",
       "dataset_revision": "d8ed772114021e7ad484bb51db5dc919b09bc676",
@@ -341,7 +551,28 @@
       "measured_tasks": 1194,
       "task_specs_sha256": "5b80f36cb2b01432a1895ac164e81cba777054381dd7489d0f89e37cc367a64a"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 1194,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-methods2test-large-v4-2879780c-taskcompendium-20261112",
+      "dataset_revision": "c226cc9adc5b086935d385f6592c354c3fd9f1b2",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/df6ff565e9a45cea1fba/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 1194,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 1194,
+      "shared_missing_contract_tasks": 1194,
+      "task_specs_sha256": "5b80f36cb2b01432a1895ac164e81cba777054381dd7489d0f89e37cc367a64a"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-methods2test-large-v4-2879780c-taskcompendium-20261112",
       "dataset_revision": "c226cc9adc5b086935d385f6592c354c3fd9f1b2",
@@ -374,7 +605,28 @@
       "measured_tasks": 447,
       "task_specs_sha256": "24f2dca17d69393c8f27f870f82ee0d5084989abfb3a90cc625530bc4c67d67c"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 447,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-nemotron-junit-v6-2fbbabc0-taskcompendium-20261112",
+      "dataset_revision": "92731ca6f403ec471f923d60e112e98c2e8b40d8",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/a37af6aed4b58b418ea6/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 447,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 447,
+      "shared_missing_contract_tasks": 447,
+      "task_specs_sha256": "24f2dca17d69393c8f27f870f82ee0d5084989abfb3a90cc625530bc4c67d67c"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-nemotron-junit-v6-2fbbabc0-taskcompendium-20261112",
       "dataset_revision": "92731ca6f403ec471f923d60e112e98c2e8b40d8",
@@ -407,7 +659,28 @@
       "measured_tasks": 3121,
       "task_specs_sha256": "fe61d7da09a36af80b5a9c4731d837ff40319ea15598fcc53760a25f08242ff3"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 3121,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-scaffold-v3-fad5ea9a-taskcompendium-20261112",
+      "dataset_revision": "223f8887d937df94b60aa65d7b67617a3b206e46",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/8ecffb5088098925b4b3/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 3121,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 3121,
+      "shared_missing_contract_tasks": 3121,
+      "task_specs_sha256": "fe61d7da09a36af80b5a9c4731d837ff40319ea15598fcc53760a25f08242ff3"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-scaffold-v3-fad5ea9a-taskcompendium-20261112",
       "dataset_revision": "223f8887d937df94b60aa65d7b67617a3b206e46",
@@ -440,7 +713,28 @@
       "measured_tasks": 7878,
       "task_specs_sha256": "c279974fa95777bdcae0f9879d377993a7a09efec5d4c16f7ae77409597d37e5"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 7878,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-cpp-v4-ed820df1-taskcompendium-20261112",
+      "dataset_revision": "216031e9222ae909857db0233ab47699ee7c26f7",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/b66f694b1e95540d577e/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 7878,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 7878,
+      "shared_missing_contract_tasks": 7878,
+      "task_specs_sha256": "c279974fa95777bdcae0f9879d377993a7a09efec5d4c16f7ae77409597d37e5"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-cpp-v4-ed820df1-taskcompendium-20261112",
       "dataset_revision": "216031e9222ae909857db0233ab47699ee7c26f7",
@@ -473,7 +767,28 @@
       "measured_tasks": 587,
       "task_specs_sha256": "6d089caa12aebee3b956546657dcf1403ecde3660c221316bed092a056838357"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 587,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-dockerfile-gpt5mini-v7-91a3784f-taskcompendium-20261112",
+      "dataset_revision": "3f39ebf6056ae868ed8ca0f010b9941941837874",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/552c63d5821ceaca0720/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 587,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 587,
+      "shared_missing_contract_tasks": 587,
+      "task_specs_sha256": "6d089caa12aebee3b956546657dcf1403ecde3660c221316bed092a056838357"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-dockerfile-gpt5mini-v7-91a3784f-taskcompendium-20261112",
       "dataset_revision": "3f39ebf6056ae868ed8ca0f010b9941941837874",
@@ -506,7 +821,28 @@
       "measured_tasks": 2275,
       "task_specs_sha256": "8e4dcb9fae66b034a9479642af37c17e01987f7317168c059ba17b166e55f00a"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 2275,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-go-v5-da0f0f78-taskcompendium-20261112",
+      "dataset_revision": "0532c59438e78c43fca0b5aaa8e2d3d8fab6d031",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/8ef0801bbe67bc7742fb/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 2275,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 2275,
+      "shared_missing_contract_tasks": 2275,
+      "task_specs_sha256": "8e4dcb9fae66b034a9479642af37c17e01987f7317168c059ba17b166e55f00a"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-go-v5-da0f0f78-taskcompendium-20261112",
       "dataset_revision": "0532c59438e78c43fca0b5aaa8e2d3d8fab6d031",
@@ -539,7 +875,28 @@
       "measured_tasks": 424,
       "task_specs_sha256": "3e56bef80e81e250e2925fef34b0f1ad4964d57f1eefb22e16f9d791ea06b498"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 424,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-jest-v5-6819fa0d-taskcompendium-20261112",
+      "dataset_revision": "ec48b8fa719706dfe2051d1b87f38661d63ce719",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/74eeddd79d33937c7e7a/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 424,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 424,
+      "shared_missing_contract_tasks": 424,
+      "task_specs_sha256": "3e56bef80e81e250e2925fef34b0f1ad4964d57f1eefb22e16f9d791ea06b498"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-jest-v5-6819fa0d-taskcompendium-20261112",
       "dataset_revision": "ec48b8fa719706dfe2051d1b87f38661d63ce719",
@@ -572,7 +929,28 @@
       "measured_tasks": 843,
       "task_specs_sha256": "0c50e4a7a5224c1779b04d08c818ae2434810b941b4d06bd3dad060ee934ecd7"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 843,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-junit-v6-7c8684a8-taskcompendium-20261112",
+      "dataset_revision": "52420879e9c2c58e1435c93c7477c023f4658392",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/9b400f339b1d09742f45/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 843,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 843,
+      "shared_missing_contract_tasks": 843,
+      "task_specs_sha256": "0c50e4a7a5224c1779b04d08c818ae2434810b941b4d06bd3dad060ee934ecd7"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-junit-v6-7c8684a8-taskcompendium-20261112",
       "dataset_revision": "52420879e9c2c58e1435c93c7477c023f4658392",
@@ -605,7 +983,28 @@
       "measured_tasks": 462,
       "task_specs_sha256": "e53e793e6746eceaece106a7e39988f4b1db3bf49be9b30e7ef8d8f6eb1af291"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 462,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-php-large-v9-1989cf5b-taskcompendium-20261112",
+      "dataset_revision": "e5a78f38a3513b90a8a47a53d98fb2e90b99ea08",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/97cc082c7e368838cf0c/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 462,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 462,
+      "shared_missing_contract_tasks": 462,
+      "task_specs_sha256": "e53e793e6746eceaece106a7e39988f4b1db3bf49be9b30e7ef8d8f6eb1af291"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-php-large-v9-1989cf5b-taskcompendium-20261112",
       "dataset_revision": "e5a78f38a3513b90a8a47a53d98fb2e90b99ea08",
@@ -638,7 +1037,28 @@
       "measured_tasks": 1782,
       "task_specs_sha256": "960204b1c88fe1aae89c253c68982e1cd025056478c8eae8ea47644a2ac3cbfb"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 1782,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-pytest-large-v3-768234a1-taskcompendium-20261112",
+      "dataset_revision": "552bb443070fe2a919372a2bcd8f96181f89efce",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/c026a0f78984e90b04c8/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 1782,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 1782,
+      "shared_missing_contract_tasks": 1782,
+      "task_specs_sha256": "960204b1c88fe1aae89c253c68982e1cd025056478c8eae8ea47644a2ac3cbfb"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-pytest-large-v3-768234a1-taskcompendium-20261112",
       "dataset_revision": "552bb443070fe2a919372a2bcd8f96181f89efce",
@@ -671,7 +1091,28 @@
       "measured_tasks": 8860,
       "task_specs_sha256": "dce63e85dd84f9f6c189ced9b2d5e73043e73c9c40c150f616e1f36d524cfa31"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 8860,
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-rspec-v4-b5c5329d-taskcompendium-20261112",
+      "dataset_revision": "681af469d02a5fd3e3c6f208bdb5dfeb4f7552a0",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/41840f7a8c5673583a71/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 8860,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 8860,
+      "shared_missing_contract_tasks": 8860,
+      "task_specs_sha256": "dce63e85dd84f9f6c189ced9b2d5e73043e73c9c40c150f616e1f36d524cfa31"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-rspec-v4-b5c5329d-taskcompendium-20261112",
       "dataset_revision": "681af469d02a5fd3e3c6f208bdb5dfeb4f7552a0",
@@ -704,7 +1145,28 @@
       "measured_tasks": 5114,
       "task_specs_sha256": "a37bc34a6b53822ab0fe56e7aa29014c32e77303de221c378425b04f5cefea83"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 5114,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/830c0882cb57e4529088/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 5114,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "a37bc34a6b53822ab0fe56e7aa29014c32e77303de221c378425b04f5cefea83"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -742,7 +1204,28 @@
       "measured_tasks": 4096,
       "task_specs_sha256": "c646dcb4a0c000e313df0a977a54d8a7ae1f81714c6542855fc44b6bbed7ac27"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 4096,
+      "dataset_id": "open-athena/task-trove-laion-magicoder-v4-0b581308-taskcompendium-20261112",
+      "dataset_revision": "5a0bb0ebcb7e9d343287966369326d247fc15ec2",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/09d2cb6910c273e42151/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 4096,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 4096,
+      "shared_missing_contract_tasks": 4096,
+      "task_specs_sha256": "c646dcb4a0c000e313df0a977a54d8a7ae1f81714c6542855fc44b6bbed7ac27"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-magicoder-v4-0b581308-taskcompendium-20261112",
       "dataset_revision": "5a0bb0ebcb7e9d343287966369326d247fc15ec2",
@@ -775,7 +1258,28 @@
       "measured_tasks": 2858,
       "task_specs_sha256": "d6245d18eecbec8e5511128806d00b973892429d751ea16ebd45f70a2f2eb26e"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 2858,
+      "dataset_id": "open-athena/task-trove-laion-mix-h10-reward-proportional-v2-ba26a9b1-taskcompendium-20261112",
+      "dataset_revision": "9f0028ec352e0ca4d9111e029cf8da9ab8710d91",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/666717602d7c349405c9/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 2858,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 2858,
+      "shared_missing_contract_tasks": 2858,
+      "task_specs_sha256": "d6245d18eecbec8e5511128806d00b973892429d751ea16ebd45f70a2f2eb26e"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-mix-h10-reward-proportional-v2-ba26a9b1-taskcompendium-20261112",
       "dataset_revision": "9f0028ec352e0ca4d9111e029cf8da9ab8710d91",
@@ -808,7 +1312,28 @@
       "measured_tasks": 2859,
       "task_specs_sha256": "033bf6c1c98f2f20f640805034b3b176b08f4901a90e88f194575687087e9721"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 2859,
+      "dataset_id": "open-athena/task-trove-laion-mix-h11-single-skill-only-v2-8d3e081c-taskcompendium-20261112",
+      "dataset_revision": "60243d1122a66a5aba5bd0fe66921898d446e4da",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/edf6613196845a615e20/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 2859,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 2859,
+      "shared_missing_contract_tasks": 2859,
+      "task_specs_sha256": "033bf6c1c98f2f20f640805034b3b176b08f4901a90e88f194575687087e9721"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-mix-h11-single-skill-only-v2-8d3e081c-taskcompendium-20261112",
       "dataset_revision": "60243d1122a66a5aba5bd0fe66921898d446e4da",
@@ -841,7 +1366,28 @@
       "measured_tasks": 2848,
       "task_specs_sha256": "dada04040b27b1ab9a006071f9348a99e1ea64426798fcd89a47504a5bd28ab4"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 2848,
+      "dataset_id": "open-athena/task-trove-laion-mix-h8-original-tests-v2-0a779549-taskcompendium-20261112",
+      "dataset_revision": "e0f2098e30198a8611bcca6372555a98a44596e6",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/8922fc9604971516e06a/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 2848,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 2848,
+      "shared_missing_contract_tasks": 2848,
+      "task_specs_sha256": "dada04040b27b1ab9a006071f9348a99e1ea64426798fcd89a47504a5bd28ab4"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-mix-h8-original-tests-v2-0a779549-taskcompendium-20261112",
       "dataset_revision": "e0f2098e30198a8611bcca6372555a98a44596e6",
@@ -874,7 +1420,28 @@
       "measured_tasks": 2402,
       "task_specs_sha256": "6ee42e2c34187b585a48ea72958c5a097b3980b0a37cb7d6a1dacf0b49868d07"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 2402,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/994c52465a4fe43cd183/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 2402,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "6ee42e2c34187b585a48ea72958c5a097b3980b0a37cb7d6a1dacf0b49868d07"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -907,7 +1474,28 @@
       "measured_tasks": 2699,
       "task_specs_sha256": "66bfa2c0c99a37033d4c98b0716557e2d2f6749eafe856bb127a09134fe5d3ad"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 2699,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/1206c26594abe648af81/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 2699,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "66bfa2c0c99a37033d4c98b0716557e2d2f6749eafe856bb127a09134fe5d3ad"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -942,7 +1530,28 @@
       "measured_tasks": 9579,
       "task_specs_sha256": "d04e9788a9e1798909b3d12fd39487aee717126d08790b16213f33f9304a6579"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 9579,
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-agentic-function-calling-pivot-v3-85b3be47-taskcompendium-20261112",
+      "dataset_revision": "4d6516b2c9385f2ce10f344db0f1e4112ae0e0f9",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/02676bdeec23d54f45d1/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 9579,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 9579,
+      "shared_missing_contract_tasks": 9579,
+      "task_specs_sha256": "d04e9788a9e1798909b3d12fd39487aee717126d08790b16213f33f9304a6579"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-nemotron-gym-agentic-function-calling-pivot-v3-85b3be47-taskcompendium-20261112",
       "dataset_revision": "4d6516b2c9385f2ce10f344db0f1e4112ae0e0f9",
@@ -975,7 +1584,28 @@
       "measured_tasks": 1272,
       "task_specs_sha256": "1f0cf77d415b325d7374469bb83def2d6f5abadbeb1f007e6fa4b0e3cb949a44"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 1272,
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-agentic-indirect-prompt-injection-8109e8f1-taskcompendium-20261112",
+      "dataset_revision": "8a2380bcd1a453c11a7cd6a638d3fc993ddd8ea1",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/d57a96d6673c18b4c7cc/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 1272,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 1272,
+      "shared_missing_contract_tasks": 1272,
+      "task_specs_sha256": "1f0cf77d415b325d7374469bb83def2d6f5abadbeb1f007e6fa4b0e3cb949a44"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-nemotron-gym-agentic-indirect-prompt-injection-8109e8f1-taskcompendium-20261112",
       "dataset_revision": "8a2380bcd1a453c11a7cd6a638d3fc993ddd8ea1",
@@ -1008,7 +1638,28 @@
       "measured_tasks": 1541,
       "task_specs_sha256": "9a86a1639a0a25b9b29d8a6849ab7472bfec95def12f97f270dfb72e5ad973c8"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 1541,
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-agentic-swe-pivot-v4-a95a3ee3-taskcompendium-20261112",
+      "dataset_revision": "56a2cb293a88f050443610cb9130d081357bfd92",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/58c9986a88b00b66aa47/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 1541,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 1541,
+      "shared_missing_contract_tasks": 1541,
+      "task_specs_sha256": "9a86a1639a0a25b9b29d8a6849ab7472bfec95def12f97f270dfb72e5ad973c8"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-nemotron-gym-agentic-swe-pivot-v4-a95a3ee3-taskcompendium-20261112",
       "dataset_revision": "56a2cb293a88f050443610cb9130d081357bfd92",
@@ -1041,7 +1692,28 @@
       "measured_tasks": 10000,
       "task_specs_sha256": "cc8ee415a87c7f08e1478a6e35c389669e86a3e3f712176984c9b2f768632298"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 10000,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/e2c41fc3e354394820b3/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 10000,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 10000,
+      "shared_missing_contract_tasks": 10000,
+      "task_specs_sha256": "cc8ee415a87c7f08e1478a6e35c389669e86a3e3f712176984c9b2f768632298"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -1089,7 +1761,28 @@
       "measured_tasks": 10000,
       "task_specs_sha256": "7ec3ac36dfe13365b3fadd78e0a3bb9729121f6e1c9f6a39108d07106b1a2532"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 10000,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/e6c48d2fc45af135df6a/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 10000,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "7ec3ac36dfe13365b3fadd78e0a3bb9729121f6e1c9f6a39108d07106b1a2532"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -1137,7 +1830,28 @@
       "measured_tasks": 468,
       "task_specs_sha256": "08693a7ad4df755f4215a03de2ffea02ce2e69987183caa9940f280c41dd5f7d"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 468,
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-cfbench-v4-740a5919-taskcompendium-20261112",
+      "dataset_revision": "9dc0efb7aa5261f36e1ea3248467da9aac46ca5a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/e05502172ecb2c5df067/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 468,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 468,
+      "shared_missing_contract_tasks": 468,
+      "task_specs_sha256": "08693a7ad4df755f4215a03de2ffea02ce2e69987183caa9940f280c41dd5f7d"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-nemotron-gym-cfbench-v4-740a5919-taskcompendium-20261112",
       "dataset_revision": "9dc0efb7aa5261f36e1ea3248467da9aac46ca5a",
@@ -1170,7 +1884,28 @@
       "measured_tasks": 13973,
       "task_specs_sha256": "5add5f0d13ffbd0697279f5e00a1c28d76f5614f3762d294ba64ec7615f6f5a6"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 13973,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/41bb3c736795396bb921/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 13973,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "5add5f0d13ffbd0697279f5e00a1c28d76f5614f3762d294ba64ec7615f6f5a6"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -1210,7 +1945,28 @@
       "measured_tasks": 21660,
       "task_specs_sha256": "78c825b855418acefeaad225f0298503a6faf955c3be65409ff09da7b6624fa2"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 21660,
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-identity-following-v4-d2250e1e-taskcompendium-20261112",
+      "dataset_revision": "5192cf64e1469dd8db94fbfef7c99958a86e18e8",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/900eff4ca3c487a869c1/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 21660,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 21660,
+      "shared_missing_contract_tasks": 21660,
+      "task_specs_sha256": "78c825b855418acefeaad225f0298503a6faf955c3be65409ff09da7b6624fa2"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-nemotron-gym-identity-following-v4-d2250e1e-taskcompendium-20261112",
       "dataset_revision": "5192cf64e1469dd8db94fbfef7c99958a86e18e8",
@@ -1243,7 +1999,28 @@
       "measured_tasks": 1000,
       "task_specs_sha256": "dc9271a2d4064059714300b0d0200038d2b1ac7556be7e18ce44473ed67e17b8"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 1000,
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-instruction-following-adversarial-ab67f6a5-taskcompendium-20261112",
+      "dataset_revision": "622e4c0e18d26c04171784b35119717dfc507da7",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/fd61af78228363e4b26b/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 1000,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 1000,
+      "shared_missing_contract_tasks": 1000,
+      "task_specs_sha256": "dc9271a2d4064059714300b0d0200038d2b1ac7556be7e18ce44473ed67e17b8"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-nemotron-gym-instruction-following-adversarial-ab67f6a5-taskcompendium-20261112",
       "dataset_revision": "622e4c0e18d26c04171784b35119717dfc507da7",
@@ -1276,7 +2053,28 @@
       "measured_tasks": 5673,
       "task_specs_sha256": "e5c9bfbdee7fadfa0cf3d1cca61c565be7fc5a1b0379cc29746ae1c17b8f09f3"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 5673,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/cfa583e70c9df055dbe1/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 5673,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "e5c9bfbdee7fadfa0cf3d1cca61c565be7fc5a1b0379cc29746ae1c17b8f09f3"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -1311,7 +2109,28 @@
       "measured_tasks": 9033,
       "task_specs_sha256": "fdd5ad468e04b5294a1908369baa77e356835b0c4b921c663bc9b10944da29c8"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 9033,
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-instruction-following-citation-v2-dec39027-taskcompendium-20261112",
+      "dataset_revision": "95c70b72caed9842dc3dd8ddc08a03e7e7723b90",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/fa62f39c347e88e4ecd7/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 9033,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 9033,
+      "shared_missing_contract_tasks": 9033,
+      "task_specs_sha256": "fdd5ad468e04b5294a1908369baa77e356835b0c4b921c663bc9b10944da29c8"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-nemotron-gym-instruction-following-citation-v2-dec39027-taskcompendium-20261112",
       "dataset_revision": "95c70b72caed9842dc3dd8ddc08a03e7e7723b90",
@@ -1344,7 +2163,28 @@
       "measured_tasks": 8869,
       "task_specs_sha256": "af6d6965541a92a141768bd1390ad292fc97836d78c7e362aa30046c5c3bf7d5"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 8869,
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-instruction-following-freeform-v2-27f1f95f-taskcompendium-20261112",
+      "dataset_revision": "ea528c6db3751e3f72f561c2520660a225291c79",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/9a96a0c2c646a5f2f844/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 8869,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 8869,
+      "shared_missing_contract_tasks": 8869,
+      "task_specs_sha256": "af6d6965541a92a141768bd1390ad292fc97836d78c7e362aa30046c5c3bf7d5"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-nemotron-gym-instruction-following-freeform-v2-27f1f95f-taskcompendium-20261112",
       "dataset_revision": "ea528c6db3751e3f72f561c2520660a225291c79",
@@ -1377,7 +2217,28 @@
       "measured_tasks": 1982,
       "task_specs_sha256": "3864eae98352374a3cc7101921f2479ff7cd637d04890aec3184d5bce0389692"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 1982,
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-instruction-following-multiturnch-4204a7e6-taskcompendium-20261112",
+      "dataset_revision": "fa863430ce6894ee333ddf5505ee87878a69fdbe",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/596990a6831850a1c1fa/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 1982,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 1982,
+      "shared_missing_contract_tasks": 1982,
+      "task_specs_sha256": "3864eae98352374a3cc7101921f2479ff7cd637d04890aec3184d5bce0389692"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-nemotron-gym-instruction-following-multiturnch-4204a7e6-taskcompendium-20261112",
       "dataset_revision": "fa863430ce6894ee333ddf5505ee87878a69fdbe",
@@ -1410,7 +2271,28 @@
       "measured_tasks": 9008,
       "task_specs_sha256": "e4b7dc261cf1f235567b270f70eecdd8829ff4353e15846cb330fc272abe6f83"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 9008,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/79ea10360335df0417d0/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 9008,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "e4b7dc261cf1f235567b270f70eecdd8829ff4353e15846cb330fc272abe6f83"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -1438,7 +2320,28 @@
       "measured_tasks": 46242,
       "task_specs_sha256": "42a4d15d6dd32eefc67300beb33db107a9a0d4566df85ed7ef62d9dedc807249"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 46242,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/3d54c17887ad1c3009be/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 46242,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "42a4d15d6dd32eefc67300beb33db107a9a0d4566df85ed7ef62d9dedc807249"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -1466,7 +2369,28 @@
       "measured_tasks": 1000,
       "task_specs_sha256": "d64267702ced556eed4297617b5f0fc23300fa4f5b1438754205863221765440"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 1000,
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-inverse-ifeval-v4-ed4f230d-taskcompendium-20261112",
+      "dataset_revision": "bdd5f7ede9001a8e4ce2edf07f8d98402b73c96b",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/c51da2e84e63296c8551/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 1000,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 1000,
+      "shared_missing_contract_tasks": 1000,
+      "task_specs_sha256": "d64267702ced556eed4297617b5f0fc23300fa4f5b1438754205863221765440"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-nemotron-gym-inverse-ifeval-v4-ed4f230d-taskcompendium-20261112",
       "dataset_revision": "bdd5f7ede9001a8e4ce2edf07f8d98402b73c96b",
@@ -1499,7 +2423,28 @@
       "measured_tasks": 613002,
       "task_specs_sha256": "c085a67f10e9ad8bf80d40818cdbffa268a31d0fb4e6eec9ce95cdf46d6b4f95"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 613002,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/77fef2f6504161e9a6f0/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 613002,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "c085a67f10e9ad8bf80d40818cdbffa268a31d0fb4e6eec9ce95cdf46d6b4f95"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -1527,7 +2472,28 @@
       "measured_tasks": 122357,
       "task_specs_sha256": "3dd8b9128e9054e5ba2ff6fc4ecc943d077ca4e32e3caf50a4ce9f66000113f9"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 122357,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/61ead038087e39b5e4e9/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 122357,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "3dd8b9128e9054e5ba2ff6fc4ecc943d077ca4e32e3caf50a4ce9f66000113f9"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -1562,7 +2528,28 @@
       "measured_tasks": 2915,
       "task_specs_sha256": "d9cfdbfe0abf677f0d99fb20f02ae43b4c7402d1c69ab43eacce715ef7905a81"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 2915,
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-knowledge-web-search-mcqa-v2-cf7653cf-taskcompendium-20261112",
+      "dataset_revision": "f6ed25ba8058ac0fdc418cbb08c9a4c23c104583",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/3e37b13257fba4f990e0/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 2915,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 2915,
+      "shared_missing_contract_tasks": 2915,
+      "task_specs_sha256": "d9cfdbfe0abf677f0d99fb20f02ae43b4c7402d1c69ab43eacce715ef7905a81"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-nemotron-gym-knowledge-web-search-mcqa-v2-cf7653cf-taskcompendium-20261112",
       "dataset_revision": "f6ed25ba8058ac0fdc418cbb08c9a4c23c104583",
@@ -1595,7 +2582,28 @@
       "measured_tasks": 5232,
       "task_specs_sha256": "ad886571c55c05d5585c1b70eba9a9193aa51d1f74480b100834bd9fefb764a0"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 5232,
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-litmus-bench-v2-ab16deee-taskcompendium-20261112",
+      "dataset_revision": "3853f45c40511a136bff8c4e678de55867e9651a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/de1e3d9442317cd613a5/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 5232,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 5232,
+      "shared_missing_contract_tasks": 5232,
+      "task_specs_sha256": "ad886571c55c05d5585c1b70eba9a9193aa51d1f74480b100834bd9fefb764a0"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-nemotron-gym-litmus-bench-v2-ab16deee-taskcompendium-20261112",
       "dataset_revision": "3853f45c40511a136bff8c4e678de55867e9651a",
@@ -1628,7 +2636,28 @@
       "measured_tasks": 5291,
       "task_specs_sha256": "bd773cc6c536032f597c9b8c45fff62bd2ce31b9aaecec91ad548e4292724764"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 5291,
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-math-advanced-calculations-v4-73ac1999-taskcompendium-20261112",
+      "dataset_revision": "94d7747fed57139e68e9ce09ed1b2d8c5a9b6a50",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/d560ca817263834188cf/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 5291,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 5291,
+      "shared_missing_contract_tasks": 5291,
+      "task_specs_sha256": "bd773cc6c536032f597c9b8c45fff62bd2ce31b9aaecec91ad548e4292724764"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-nemotron-gym-math-advanced-calculations-v4-73ac1999-taskcompendium-20261112",
       "dataset_revision": "94d7747fed57139e68e9ce09ed1b2d8c5a9b6a50",
@@ -1661,7 +2690,28 @@
       "measured_tasks": 42621,
       "task_specs_sha256": "981b4c295d18b335a5d008c9dc3e4f7277a5e9e9e5f1aa7e9cda2cbba66ad8a8"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 42621,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/79b48167a791efb3a04a/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 42621,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "981b4c295d18b335a5d008c9dc3e4f7277a5e9e9e5f1aa7e9cda2cbba66ad8a8"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -1696,7 +2746,28 @@
       "measured_tasks": 110604,
       "task_specs_sha256": "ff824c8da61bee2f4742daabb1fdd3045357b6bd8ff1dd6aaadd1ca235e99a35"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 110604,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/4fdbef24502dc5fc71e8/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 110604,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "ff824c8da61bee2f4742daabb1fdd3045357b6bd8ff1dd6aaadd1ca235e99a35"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -1731,7 +2802,28 @@
       "measured_tasks": 3941,
       "task_specs_sha256": "e871a9944c7762bd44644eb6f17f0b0469d20b3a069daa2769eb92ff31461aa7"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 3941,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/07cde821b9324106d558/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 3941,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "e871a9944c7762bd44644eb6f17f0b0469d20b3a069daa2769eb92ff31461aa7"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -1766,7 +2858,28 @@
       "measured_tasks": 1068,
       "task_specs_sha256": "b0eea974246e7aedbea6b72d2234bad3339ccf8a438b523b8f6f1667411b6848"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 1068,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/120ee561261046b5bd60/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 1068,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "b0eea974246e7aedbea6b72d2234bad3339ccf8a438b523b8f6f1667411b6848"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -1801,7 +2914,28 @@
       "measured_tasks": 1050,
       "task_specs_sha256": "a767276023b72771fa0eab691d47d20c7b1eb0f1c4d02acda1d8720fe08f6ea5"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 1050,
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-multichallenge-vanilla-v3-750d2afa-taskcompendium-20261112",
+      "dataset_revision": "f942306720990197fbc2a0eeea676fccfc825d09",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/b261dbbc7eb0b9966780/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 1050,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 1050,
+      "shared_missing_contract_tasks": 1050,
+      "task_specs_sha256": "a767276023b72771fa0eab691d47d20c7b1eb0f1c4d02acda1d8720fe08f6ea5"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-nemotron-gym-multichallenge-vanilla-v3-750d2afa-taskcompendium-20261112",
       "dataset_revision": "f942306720990197fbc2a0eeea676fccfc825d09",
@@ -1834,7 +2968,28 @@
       "measured_tasks": 3150,
       "task_specs_sha256": "42579aeed7f4078c7e2e3b15282186505078410a86b533955865dafcf80be305"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 3150,
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-qa-abstention-v4-da254a94-taskcompendium-20261112",
+      "dataset_revision": "ffd2a82011192c8ae2896ea37065ae3e1eb04987",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/42547c630d51290fd2b6/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 3150,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 3150,
+      "shared_missing_contract_tasks": 3150,
+      "task_specs_sha256": "42579aeed7f4078c7e2e3b15282186505078410a86b533955865dafcf80be305"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-nemotron-gym-qa-abstention-v4-da254a94-taskcompendium-20261112",
       "dataset_revision": "ffd2a82011192c8ae2896ea37065ae3e1eb04987",
@@ -1867,7 +3022,28 @@
       "measured_tasks": 14259,
       "task_specs_sha256": "9c46bc3249a33ad33a0daf223042449a9d2749786f1673e11b2cd79fd3e8338d"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 14259,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/afb9822c0f7fcc62c930/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 14259,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "9c46bc3249a33ad33a0daf223042449a9d2749786f1673e11b2cd79fd3e8338d"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -1902,7 +3078,28 @@
       "measured_tasks": 89066,
       "task_specs_sha256": "7a787ff02da1bc5bd35eeaadc0aa6b1c9d0e479e76e92c099b5cf299f22a22a3"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 89066,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/3711fe05c4d197d92d52/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 89066,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "7a787ff02da1bc5bd35eeaadc0aa6b1c9d0e479e76e92c099b5cf299f22a22a3"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -1937,7 +3134,28 @@
       "measured_tasks": 150644,
       "task_specs_sha256": "d5a19f7e7f9988941aae9d53df240e8395b9024ea22e968d4bee91b8cb48e869"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 150644,
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/6c5eb3b41f3e32edb01e/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 150644,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "d5a19f7e7f9988941aae9d53df240e8395b9024ea22e968d4bee91b8cb48e869"
+    },
     "measurement": {
       "dataset_id": "open-thoughts/TaskTrove",
       "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
@@ -1972,7 +3190,28 @@
       "measured_tasks": 1010,
       "task_specs_sha256": "8f68160dcdd8ed3d6e7d3e98380b0f502c29af95d80b41cdaa38f710203abf50"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 1010,
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-sysbench-v4-c970685e-taskcompendium-20261112",
+      "dataset_revision": "b88f28b27180193ab8dfdce4ca479ac033a58abc",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/697776f5e1dd50417fff/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 1010,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 1010,
+      "shared_missing_contract_tasks": 1010,
+      "task_specs_sha256": "8f68160dcdd8ed3d6e7d3e98380b0f502c29af95d80b41cdaa38f710203abf50"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-nemotron-gym-sysbench-v4-c970685e-taskcompendium-20261112",
       "dataset_revision": "b88f28b27180193ab8dfdce4ca479ac033a58abc",
@@ -2005,7 +3244,28 @@
       "measured_tasks": 11730,
       "task_specs_sha256": "746d028e243efcb4907d32829bbe93c904067112c5fb67f6096c894ba28dd210"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 11730,
+      "dataset_id": "open-athena/task-trove-laion-openswe-tasks-patched-v7-oracle-success-e8190b4c-taskcompendium-20261112",
+      "dataset_revision": "6178d686e6b736a9b112f7d06262b488da131ed2",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/9ff8b9b2dd2607b5c060/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 11730,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 11730,
+      "shared_missing_contract_tasks": 11730,
+      "task_specs_sha256": "746d028e243efcb4907d32829bbe93c904067112c5fb67f6096c894ba28dd210"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-openswe-tasks-patched-v7-oracle-success-e8190b4c-taskcompendium-20261112",
       "dataset_revision": "6178d686e6b736a9b112f7d06262b488da131ed2",
@@ -2038,7 +3298,28 @@
       "measured_tasks": 2574,
       "task_specs_sha256": "cb3f5cbd1c2d82420c79d85b9461dbcd92e130282da46695fe2148bfd71d36bf"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 2574,
+      "dataset_id": "open-athena/task-trove-laion-r2egym-patched-full-oracle-v3-f80aff0d-taskcompendium-20261112",
+      "dataset_revision": "77c0df7718f6e7d8bab9b71432407ac0428fe2fc",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/2e37b002ecc5f4b110ed/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 2574,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 2574,
+      "shared_missing_contract_tasks": 2574,
+      "task_specs_sha256": "cb3f5cbd1c2d82420c79d85b9461dbcd92e130282da46695fe2148bfd71d36bf"
+    },
     "measurement": {
       "dataset_id": "open-athena/task-trove-laion-r2egym-patched-full-oracle-v3-f80aff0d-taskcompendium-20261112",
       "dataset_revision": "77c0df7718f6e7d8bab9b71432407ac0428fe2fc",
@@ -2071,7 +3352,28 @@
       "measured_tasks": 10000,
       "task_specs_sha256": "6448eb5cfca3fa7ed827e9df63439efab8d3d63d6665f4a55cc1544e0495b62b"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 10000,
+      "dataset_id": "open-athena/tasktrove-codereview-medium-quick-20261112",
+      "dataset_revision": "52c90a79a59262b1a25f76992430a1d81e42f0e4",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-rno2a/rl-data/atlas/integrity-census/9f8bd77b7f9f3e4a392c/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 10000,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "6448eb5cfca3fa7ed827e9df63439efab8d3d63d6665f4a55cc1544e0495b62b"
+    },
     "measurement": {
       "dataset_id": "open-athena/tasktrove-codereview-medium-quick-20261112",
       "dataset_revision": "52c90a79a59262b1a25f76992430a1d81e42f0e4",
@@ -2099,7 +3401,28 @@
       "measured_tasks": 10000,
       "task_specs_sha256": "a52a234547fdef61f8574908a8a490612107d46e446c885bff13077b3b906983"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 10000,
+      "dataset_id": "open-athena/tasktrove-stack_overflow-medium-quick-20261112",
+      "dataset_revision": "07603684451d8db4caef836dbb07c89a4a7e0588",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-rno2a/rl-data/atlas/integrity-census/3883f7e6e3dc926e01a5/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 10000,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "a52a234547fdef61f8574908a8a490612107d46e446c885bff13077b3b906983"
+    },
     "measurement": {
       "dataset_id": "open-athena/tasktrove-stack_overflow-medium-quick-20261112",
       "dataset_revision": "07603684451d8db4caef836dbb07c89a4a7e0588",
@@ -2127,7 +3450,28 @@
       "measured_tasks": 10000,
       "task_specs_sha256": "784d87e0b55e575be1b8bb08d44fc5605a303e02042b379ea96c44c0d91a3415"
     },
-    "integrity_contracts": null,
+    "integrity_contracts": {
+      "absent_contract_tasks": 10000,
+      "dataset_id": "open-athena/tasktrove-superuser-medium-quick-20261112",
+      "dataset_revision": "01237834f87d26f4c26f92d0e876904071dd2dd1",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-rno2a/rl-data/atlas/integrity-census/7d072a4776115e40dd3b/2026.11.12.7/integrity-contracts.json",
+      "example": null,
+      "groups": [
+        {
+          "count": 10000,
+          "dependency_state": null,
+          "harness_policy_sha256": null,
+          "id": null,
+          "native_family": null,
+          "present": false,
+          "version": null
+        }
+      ],
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "784d87e0b55e575be1b8bb08d44fc5605a303e02042b379ea96c44c0d91a3415"
+    },
     "measurement": {
       "dataset_id": "open-athena/tasktrove-superuser-medium-quick-20261112",
       "dataset_revision": "01237834f87d26f4c26f92d0e876904071dd2dd1",
