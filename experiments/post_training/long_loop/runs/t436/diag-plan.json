@@ -1,0 +1,1687 @@
+{
+  "storage": {
+    "output_prefix": "s3://marin-rno2a/tmp/ttl=14d/long-loop-t436",
+    "temporary_prefix": "s3://marin-rno2a/tmp/ttl=3d/long-loop-t436"
+  },
+  "name": "long-loop/t436-contrib",
+  "marin_revision": "1be93bcb100321752ecfec5ea38b323daa0e4210",
+  "spec_sha256": "db9a94a9322e25721c2ef27194bba10826881f4f922a17ee044265c9504a6735",
+  "smoke": true,
+  "datasets": {
+    "sft": {
+      "data": {
+        "tokenizer": "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18",
+        "vocab_size": null,
+        "cache_dir": null,
+        "enforce_eos": false,
+        "auto_build_caches": false,
+        "chat_template": null,
+        "shuffle": false,
+        "block_cross_document_attention": true,
+        "stop_strategy": "restart",
+        "mixture_block_size": 2,
+        "components": {
+          "epoch-0": {
+            "type": "cached",
+            "cache_dir": "s3://marin-rno2a/tmp/ttl=14d/long-loop-436/contrib-v01-packed262k/epoch-0/train",
+            "format": {
+              "type": "prebuilt",
+              "input_ids_key": "input_ids",
+              "loss_weights_key": "loss_weights"
+            },
+            "pack": false,
+            "split": "train",
+            "flat_cache": true
+          },
+          "epoch-1": {
+            "type": "cached",
+            "cache_dir": "s3://marin-rno2a/tmp/ttl=14d/long-loop-436/contrib-v01-packed262k/epoch-1/train",
+            "format": {
+              "type": "prebuilt",
+              "input_ids_key": "input_ids",
+              "loss_weights_key": "loss_weights"
+            },
+            "pack": false,
+            "split": "train",
+            "flat_cache": true
+          },
+          "epoch-2": {
+            "type": "cached",
+            "cache_dir": "s3://marin-rno2a/tmp/ttl=14d/long-loop-436/contrib-v01-packed262k/epoch-2/train",
+            "format": {
+              "type": "prebuilt",
+              "input_ids_key": "input_ids",
+              "loss_weights_key": "loss_weights"
+            },
+            "pack": false,
+            "split": "train",
+            "flat_cache": true
+          }
+        },
+        "train_weights": [
+          [
+            0,
+            {
+              "epoch-0": 1.0,
+              "epoch-1": 0.0,
+              "epoch-2": 0.0
+            }
+          ],
+          [
+            226,
+            {
+              "epoch-0": 0.0,
+              "epoch-1": 1.0,
+              "epoch-2": 0.0
+            }
+          ],
+          [
+            452,
+            {
+              "epoch-0": 0.0,
+              "epoch-1": 0.0,
+              "epoch-2": 1.0
+            }
+          ]
+        ]
+      },
+      "files": [
+        {
+          "uri": "s3://marin-rno2a/tmp/ttl=14d/long-loop-436/contrib-v01-packed262k/epoch-0/train/shard_ledger.json",
+          "sha256": "232477641413cd7858417e7b575fe97e3b1d00aa6845cb4913b68a267b0be63a"
+        },
+        {
+          "uri": "s3://marin-rno2a/tmp/ttl=14d/long-loop-436/contrib-v01-packed262k/epoch-1/train/shard_ledger.json",
+          "sha256": "232477641413cd7858417e7b575fe97e3b1d00aa6845cb4913b68a267b0be63a"
+        },
+        {
+          "uri": "s3://marin-rno2a/tmp/ttl=14d/long-loop-436/contrib-v01-packed262k/epoch-2/train/shard_ledger.json",
+          "sha256": "232477641413cd7858417e7b575fe97e3b1d00aa6845cb4913b68a267b0be63a"
+        },
+        {
+          "uri": "s3://marin-rno2a/tmp/ttl=14d/long-loop-436/contrib-v01-packed262k/summary.json",
+          "sha256": "2d848c515a37d007832c3509c6e95631a72daab080f6ef0f67b0ba11b1a67209"
+        }
+      ],
+      "provenance": {
+        "source": "s3://marin-us-east-02a/marin/experiments/sft-shootout/rows/t202-contrib-v01-20261022/plain",
+        "manifest_sha256_prefix": "507e73f0",
+        "packing": "8 consecutive 32,768-token rows per 262,144-token row; runs/t436/build_packed_cache.py",
+        "rows_per_epoch": 3616,
+        "packed_rows_per_epoch": 452,
+        "updates_per_epoch": 226,
+        "supervised_tokens_per_epoch": 16137263
+      },
+      "sections": {}
+    },
+    "agentic": {
+      "source_names": [
+        "long-loop-smartie-swesmith"
+      ],
+      "selected_sources": [
+        {
+          "repo": "open-athena/task-trove",
+          "revision": "0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c",
+          "path": "releases/smartie-continuation-20261016/swesmith",
+          "rows": 8045,
+          "tasks_parquet_sha256": "20d3d9955cf624213cdf8be40a0923aad6a7c57cd34b0cd855b5e3002e947468"
+        }
+      ],
+      "candidate_manifest": {
+        "path": "/Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/swe-pi-taskpython-20261111-v3/manifest.json",
+        "sha256": "819c1cd8fe8f9b498e381222c3e20d91c970b5d81f809be24e9726890c94896b"
+      },
+      "train_rows": 8025,
+      "validation_rows": 20,
+      "normalization": "Original task Python shared for non-root installs; Pi control runtime isolated; original verifier unchanged",
+      "admission_pending": [],
+      "uri": "s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3",
+      "data_file": "agentic-train.parquet",
+      "files": [
+        {
+          "uri": "s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3/agentic-train.parquet",
+          "sha256": "22a8ff921f6e9ed288f18337aedc730117993806c82ee5442410d8f0e6ee229e"
+        },
+        {
+          "uri": "s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3/manifest.json",
+          "sha256": "819c1cd8fe8f9b498e381222c3e20d91c970b5d81f809be24e9726890c94896b"
+        },
+        {
+          "uri": "s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3/agentic-train.parquet.identities.jsonl",
+          "sha256": "a0fd598e051c46eae91b21eb1811611b93b5adb8a8b41cef967429b552f4a775"
+        }
+      ],
+      "overlap_admission": {
+        "path": "/Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/overlap-admission-20261110.json",
+        "sha256": "ac2e5c18c94222404cbc39b58077572e225efdaa125a11eb5a0375d152e83872"
+      },
+      "execution_overlay": {
+        "marin_revision": "91c49019eb078b039eb98a1837626cacad603059",
+        "agent": "pi",
+        "version": "pi-task-python-shared-v3",
+        "agent_user": "longloop-agent",
+        "agent_uid": 10001,
+        "snapshot_contexts": 5,
+        "row_order_and_source_identity": "preserved",
+        "upstream_manifest_sha256": "cf4050ab35a497d4189552883f2e234a66a7c31fa833615b7baa8c3616bd8db4"
+      }
+    },
+    "nonagentic": {
+      "uri": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/rl-data/smartie-mixed-20261110-v1",
+      "data_file": "nonagentic-train.parquet",
+      "source_names": [
+        "PRIME-RL/Eurus-2-RL-Data",
+        "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "nvidia/OpenScience",
+        "https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl",
+        "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data",
+        "open-thoughts/TaskTrove"
+      ],
+      "files": [
+        {
+          "uri": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/rl-data/smartie-mixed-20261110-v1/nonagentic-train.parquet",
+          "sha256": "c8948b3c13957ee054b4b8b5553127f75c44a50577b5b2b798261e9f8a5abc45"
+        },
+        {
+          "uri": "s3://marin-us-east-02a/marin/users/benfeuer/long-loop/rl-data/smartie-mixed-20261110-v1/manifest.json",
+          "sha256": "94f21b06fedc6dce7184e783dab1349f1c14fed05fab3d47fcace61d2386701a"
+        }
+      ],
+      "admission_pending": [],
+      "overlap_admission": {
+        "path": "/Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/overlap-admission-20261110.json",
+        "sha256": "ac2e5c18c94222404cbc39b58077572e225efdaa125a11eb5a0375d152e83872"
+      }
+    },
+    "heldout": {
+      "candidate_uri": "/Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/swe-pi-taskpython-20261111-v3",
+      "data_file": "validation.parquet",
+      "rows": 120,
+      "seed": 20261109,
+      "agentic_selection": "Original20 SWE-smith heldouts retained; CalibForge absent",
+      "composition": {
+        "swesmith": 20,
+        "snowball-100k": 100
+      },
+      "files": [
+        {
+          "uri": "s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3/validation.parquet",
+          "sha256": "5b85b07f8e200132da942fae0175989362fd5e60e3debb637162e73e06fafe91"
+        },
+        {
+          "uri": "s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3/manifest.json",
+          "sha256": "819c1cd8fe8f9b498e381222c3e20d91c970b5d81f809be24e9726890c94896b"
+        },
+        {
+          "uri": "s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3/validation.parquet.identities.jsonl",
+          "sha256": "7cc73be4c665ac36802fe0575297c7d83dd18df7a6b75f3ef9b26246a616ff04"
+        }
+      ],
+      "admission_pending": [],
+      "overlap_admission": {
+        "path": "/Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/overlap-admission-20261110.json",
+        "sha256": "ac2e5c18c94222404cbc39b58077572e225efdaa125a11eb5a0375d152e83872"
+      },
+      "uri": "s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3",
+      "execution_overlay": {
+        "marin_revision": "91c49019eb078b039eb98a1837626cacad603059",
+        "agent": "pi",
+        "version": "pi-task-python-shared-v3",
+        "agent_user": "longloop-agent",
+        "agent_uid": 10001,
+        "snapshot_contexts": 5,
+        "row_order_and_source_identity": "preserved",
+        "upstream_manifest_sha256": "cf4050ab35a497d4189552883f2e234a66a7c31fa833615b7baa8c3616bd8db4"
+      }
+    },
+    "exclusions": {
+      "selected_micro_rows": 210,
+      "policy_index_rows": 840,
+      "legacy_rl_heldout_rows": 910,
+      "covered_pinned_agentic_universes": {
+        "bixbench-pi": 205,
+        "ot-tblite-recovery": 100,
+        "ds-1000-local": 1000,
+        "bfclparity-pi": 123,
+        "tau3-pi": 375,
+        "swebench-verified": 500,
+        "terminal-bench-2": 89
+      },
+      "current_hf_universes": {
+        "cruxeval": {
+          "rows": 800,
+          "revision": "b96af0450242eb4da433032b90998f25588a5d0f",
+          "historical_pin_verified": true
+        },
+        "humanevalplus": {
+          "rows": 164,
+          "revision": "d32357cf319e50e9c8d8dab5ea876c72b0fd321b",
+          "historical_pin_verified": true
+        },
+        "gsm8k-0shot": {
+          "rows": 1319,
+          "revision": "740312add88f781978c0658806c59bc2815b9866",
+          "historical_pin_verified": false
+        },
+        "ifbench": {
+          "rows": 300,
+          "revision": "ed7c12452594b7028b15807b86d3938150b663ae",
+          "historical_pin_verified": false
+        },
+        "truthfulqa": {
+          "rows": 817,
+          "revision": "741b8276f2d1982aa3d5b832d3ee81ed3b896490",
+          "historical_pin_verified": false
+        },
+        "olympiadbench": {
+          "rows": 2126,
+          "revision": "c24a1391397fcfe50afaea9210d2c29066494b69",
+          "historical_pin_verified": false
+        },
+        "triviaqa": {
+          "rows": 29257,
+          "revision": "0f7faf33a3908546c6fd5b73a660e0f8ff173c2f",
+          "historical_pin_verified": false
+        },
+        "gpqa-diamond": {
+          "rows": 198,
+          "revision": "83022cefff930aea54f654c0b282e74b9eeda5c6",
+          "historical_pin_verified": false
+        },
+        "math500": {
+          "rows": 500,
+          "revision": "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be",
+          "historical_pin_verified": true
+        },
+        "mmlu-pro": {
+          "rows": 12032,
+          "revision": "b189ec765aa7ed75c8acfea42df31fdae71f97be",
+          "historical_pin_verified": false
+        },
+        "mbppplus": {
+          "rows": 378,
+          "revision": "b2d74c91837c3f2a20c1299ae98133cbe7cfa077",
+          "historical_pin_verified": true
+        },
+        "mrcr": {
+          "rows": 2400,
+          "revision": "f4c69fae7cf81f7ca26b9fee34b392a50f6b8a1d",
+          "historical_pin_verified": true
+        },
+        "NUPA": {
+          "rows": 2387501,
+          "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7",
+          "historical_pin_verified": true
+        },
+        "aime24": {
+          "rows": 30,
+          "revision": "d5d2f92ce4866c431063bd123ea31a3865530809",
+          "historical_pin_verified": true
+        }
+      },
+      "candidate_manifest": {
+        "path": "/Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/normalized-v4/manifest.json",
+        "sha256": "f6ef37195dc2af85adfa7dbd4d715498b20ecb9759bb9a6a5a8aebd5c2af483f"
+      },
+      "limitations": [
+        "Exact IDs, normalized full prompts/questions and conservative SWE repository matches only; no semantic decontamination",
+        "NUPA full test split2387501 rows checked by complete-event/line equality; MRCR2400 nonce tokens checked exactly; AIME30 archived original questions checked as substrings",
+        "Question substring filter covers original strings with at least8 words and40 characters; short questions remain covered only by task IDs or full prompt hashes",
+        "No semantic/paraphrase decontamination",
+        "Original unpinned HF revision is not reconstructed or fabricated",
+        "Ancient dataset scripts referenced external mutable files; historical external file contents are not certified by repository history",
+        "Actual evaluation TaskSpecs and archived source docs are pinned independently of those unknown revisions"
+      ],
+      "admission_pending": [],
+      "special_universe_scan": {
+        "path": "/Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/special-universe-scan.json",
+        "sha256": "1874d059dc12fa07577788a83354dd72bf4b3b6d99cdd7861084857074f56646"
+      },
+      "overlap_admission": {
+        "path": "/Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/overlap-admission-20261110.json",
+        "sha256": "ac2e5c18c94222404cbc39b58077572e225efdaa125a11eb5a0375d152e83872",
+        "decision": "admit exact-overlap checks using pinned actual evaluation tasks plus conservative historical question union; original seven HF revisions remain unknown",
+        "rows_excluded": 0
+      },
+      "historical_question_union": {
+        "path": "/Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/inputs/historical-question-union.json",
+        "sha256": "32fe908b96f1bddc47ea8248024623f957eaa5aa6a41787e1ed9bddd4e629216",
+        "file_versions": 79,
+        "unique_questions": 28622,
+        "scan_path": "/Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/historical-union-scan.json",
+        "scan_sha256": "e588fbf98bed7440cde2654daeb778b1cc370e7df2cb129b65de96e0e8a2eaa7"
+      },
+      "triviaqa_config": "rc.nocontext (vendored override; both no-context validation universes excluded)",
+      "selection_override": "CalibForge entirely removed from train and validation"
+    },
+    "evaluation": {
+      "repo": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "wheels_revision": "d5dd315d58f0f47514dd0a2208e90e2a48541328",
+      "files": []
+    }
+  },
+  "blockers": [],
+  "adopted_sft": null,
+  "adopted_handoff": null,
+  "adopted_endpoint": null,
+  "sft": {
+    "eval": null,
+    "flops_baseline": null,
+    "max_retries_failure": 0,
+    "max_task_failures": 0,
+    "model": {
+      "attention_implementation": "gpu_fa4_cute",
+      "capacity_factor": 1.0,
+      "ce_grad_in_forward_token_block_size": null,
+      "expert_chunks": 1,
+      "global_every": 4,
+      "global_kv_heads": null,
+      "head_dim": 128,
+      "hidden_dim": 2560,
+      "initializer_std": 0.009882117688026186,
+      "intermediate_dim": 1280,
+      "latent_dim": null,
+      "layer_norm_eps": 1e-05,
+      "local_kv_heads": null,
+      "max_seq_len": 262144,
+      "moe_implementation": "sonic",
+      "num_expert_waves": 1,
+      "num_experts": 256,
+      "num_experts_per_token": 4,
+      "num_heads": 20,
+      "num_kv_heads": 5,
+      "num_layers": 26,
+      "num_shared_experts": 1,
+      "pooled_transport_capacity_factor": null,
+      "qb_estimator": "topk",
+      "qb_hist_bins": 1000,
+      "qk_mult": 1.75,
+      "qk_mult_long_scale": 1.0,
+      "remat_mode": "recompute_all",
+      "report_capacity_overflow": false,
+      "rope": {
+        "scaling_factor": null,
+        "theta": 10000.0
+      },
+      "rope_fused": false,
+      "sconv": false,
+      "sconv_kernel": 4,
+      "sconv_sites": [
+        "k",
+        "attn",
+        "mlp"
+      ],
+      "shared_expert_intermediate_dim": 2560,
+      "sliding_window": 2048,
+      "vocab_size": 128256
+    },
+    "optimizer": {
+      "type": "adam",
+      "learning_rate": 1e-06,
+      "beta1": 0.9,
+      "beta2": 0.999,
+      "epsilon": 1e-08,
+      "weight_decay": 0.0,
+      "max_grad_norm": 1.0,
+      "warmup": 0,
+      "lr_schedule": "constant",
+      "min_lr_ratio": 1.0
+    },
+    "processes_per_task": 8,
+    "resources": {
+      "container_profile": null,
+      "cpu": 64,
+      "device": {
+        "count": 8,
+        "kind": "gpu",
+        "variant": "H100"
+      },
+      "disk": "500GB",
+      "image": null,
+      "preemptible": false,
+      "ram": "1500GB",
+      "replicas": 2,
+      "target_cluster": "cw-rno2a",
+      "zone": null
+    },
+    "stop_after_steps": 2,
+    "tensorstore_cache_bytes": 2147483648,
+    "trainer": {
+      "anchor_token_ids": [
+        3560,
+        1984,
+        1781,
+        4320,
+        5507,
+        842,
+        128001
+      ],
+      "balance_attention_rows": false,
+      "context_axis_size": 8,
+      "data_seed": 42,
+      "ema_beta": null,
+      "expert_axis_size": 1,
+      "gc_interval": 1,
+      "log_every": 1,
+      "master_param_mode": "device",
+      "offload_opt_state": true,
+      "replica_axis_size": 1,
+      "save_checkpoints": true,
+      "sharding_dump_path": null,
+      "special_token_ids": [
+        128006,
+        128007,
+        128002,
+        128003,
+        128005,
+        128011,
+        128009
+      ],
+      "special_token_lr_multiplier": 1.0,
+      "trainer": {
+        "allow_nondivisible_batch_size": false,
+        "allow_partial_checkpoint": false,
+        "checkpointer": {
+          "append_run_id_to_base_path": false,
+          "base_path": "UNBOUND",
+          "debug": {
+            "dump_stacks_after": null,
+            "enabled": false,
+            "flush_logs": true,
+            "force_gc_before_serialize": true,
+            "log_interval": 60.0,
+            "top_allocations": 8,
+            "tracemalloc_frames": 25
+          },
+          "delete_old_temp_checkpoints": true,
+          "keep": [],
+          "keep_last_temporary_checkpoints": 2,
+          "save_interval": "30m",
+          "temporary_base_path": "UNBOUND",
+          "write": {
+            "cache_pool_bytes": 1073741824,
+            "data_copy_concurrency": 16,
+            "max_chunk_bytes": 536870912,
+            "max_staged_host_bytes": 17179869184,
+            "max_write_replicas": 1024,
+            "min_replica_slice_bytes": 16777216
+          }
+        },
+        "crash_on_inf": true,
+        "crash_on_nan": true,
+        "distributed": {
+          "coordinator_address": null,
+          "initialize_jax_distributed": true,
+          "local_device_ids": null,
+          "num_processes": null,
+          "process_id": null
+        },
+        "id": "UNBOUND",
+        "initialize_from": "UNBOUND",
+        "jax_compilation_cache_dir": null,
+        "jax_config": {
+          "jax_softmax_custom_jvp": true,
+          "jax_threefry_partitionable": true
+        },
+        "load_checkpoint": false,
+        "load_checkpoint_path": [],
+        "log_dir": "logs",
+        "log_jaxprs": true,
+        "log_xla_hlo": true,
+        "max_eval_batches": null,
+        "mesh": {
+          "axes": {
+            "context": 8,
+            "data": -1,
+            "model": 1,
+            "replica": 1
+          },
+          "batch_axis_name": "batch",
+          "compute_mapping": {},
+          "dcn_axes": {
+            "replica_dcn": -1
+          },
+          "param_mapping": {
+            "embed": "data"
+          },
+          "shared_mapping": {}
+        },
+        "model_averaging": null,
+        "mp": "compute=bfloat16,params=float32,output=bfloat16",
+        "num_train_steps": 678,
+        "per_device_eval_parallelism": -1,
+        "per_device_parallelism": -1,
+        "profiler": {
+          "create_perfetto_trace": false,
+          "enabled": false,
+          "num_steps": 25,
+          "perfetto_link": false,
+          "process_index": null,
+          "profile_options": {
+            "advanced_configuration": {},
+            "device_tracer_level": null,
+            "enable_hlo_proto": false,
+            "host_tracer_level": null,
+            "include_dataset_ops": null,
+            "python_tracer_level": null
+          },
+          "start_step": 5,
+          "upload": {
+            "enabled": true,
+            "service_url": "https://iris.oa.dev/proxy/xprof",
+            "ttl_days": 30
+          }
+        },
+        "progress_watchdog": {
+          "diagnostic_timeout": null,
+          "startup_grace_period": "1s"
+        },
+        "quantization": null,
+        "require_accelerator": true,
+        "seed": 42,
+        "shutdown_at_exit": false,
+        "steps_per_eval": 1000,
+        "tracker": {
+          "background": true,
+          "background_finish_timeout": 120.0,
+          "background_max_queue_size": 10000,
+          "entity": null,
+          "fork_from": null,
+          "group": null,
+          "id": null,
+          "mode": "online",
+          "name": null,
+          "project": "marin-long-loop",
+          "replicate_path": null,
+          "resume": "allow",
+          "save_code": false,
+          "service_teardown_timeout": 60.0,
+          "tags": [
+            "long-loop",
+            "t436",
+            "contributor-sft"
+          ],
+          "type": "wandb"
+        },
+        "train_batch_size": 2,
+        "use_explicit_mesh_axes": true,
+        "wandb": null,
+        "watch": {
+          "include_histograms": false,
+          "include_norms": true,
+          "include_per_parameter_norms": true,
+          "interval": 0,
+          "split_scan_layers": true,
+          "watch_targets": [
+            "grads",
+            "params"
+          ]
+        },
+        "xla_dump_upload": {
+          "enabled": false,
+          "ttl_days": 30
+        }
+      },
+      "training_data_mode": "mixture",
+      "watch_mode": "inline",
+      "z_loss_weight": 0.0,
+      "gradient_accumulation_steps": 1,
+      "reseed_special_token_rows": false
+    },
+    "max_retries_preemption": 0,
+    "first_checkpoint_restore_step": 1,
+    "data": {
+      "tokenizer": "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18",
+      "vocab_size": null,
+      "cache_dir": null,
+      "enforce_eos": false,
+      "auto_build_caches": false,
+      "chat_template": null,
+      "shuffle": false,
+      "block_cross_document_attention": true,
+      "stop_strategy": "restart",
+      "mixture_block_size": 2,
+      "components": {
+        "epoch-0": {
+          "type": "cached",
+          "cache_dir": "s3://marin-rno2a/tmp/ttl=14d/long-loop-436/contrib-v01-packed262k/epoch-0/train",
+          "format": {
+            "type": "prebuilt",
+            "input_ids_key": "input_ids",
+            "loss_weights_key": "loss_weights"
+          },
+          "pack": false,
+          "split": "train",
+          "flat_cache": true
+        },
+        "epoch-1": {
+          "type": "cached",
+          "cache_dir": "s3://marin-rno2a/tmp/ttl=14d/long-loop-436/contrib-v01-packed262k/epoch-1/train",
+          "format": {
+            "type": "prebuilt",
+            "input_ids_key": "input_ids",
+            "loss_weights_key": "loss_weights"
+          },
+          "pack": false,
+          "split": "train",
+          "flat_cache": true
+        },
+        "epoch-2": {
+          "type": "cached",
+          "cache_dir": "s3://marin-rno2a/tmp/ttl=14d/long-loop-436/contrib-v01-packed262k/epoch-2/train",
+          "format": {
+            "type": "prebuilt",
+            "input_ids_key": "input_ids",
+            "loss_weights_key": "loss_weights"
+          },
+          "pack": false,
+          "split": "train",
+          "flat_cache": true
+        }
+      },
+      "train_weights": [
+        [
+          0,
+          {
+            "epoch-0": 1.0,
+            "epoch-1": 0.0,
+            "epoch-2": 0.0
+          }
+        ],
+        [
+          226,
+          {
+            "epoch-0": 0.0,
+            "epoch-1": 1.0,
+            "epoch-2": 0.0
+          }
+        ],
+        [
+          452,
+          {
+            "epoch-0": 0.0,
+            "epoch-1": 0.0,
+            "epoch-2": 1.0
+          }
+        ]
+      ]
+    }
+  },
+  "rl": {
+    "admission_pending": [],
+    "name": "long-loop-full-rl",
+    "seed": 20261020,
+    "retained": 3,
+    "config": {
+      "entrypoint": "taskcompendium",
+      "context_budget": {
+        "request_window_tokens": 102400,
+        "max_new_tokens_per_turn": 16384,
+        "max_turns": 128
+      },
+      "environment": {
+        "task_sessions": {
+          "local": {},
+          "daytona": {
+            "api_key_env": "DAYTONA_RL_API_KEY",
+            "ttl_minutes": 60,
+            "eval_api_key_env": "DAYTONA_EVAL_API_KEY"
+          },
+          "remote_judge": {
+            "base_url": "https://api.together.xyz/v1",
+            "api_key_env": "TOGETHER_API_KEY"
+          },
+          "task_spec": {
+            "session": {
+              "max_turns": 128,
+              "attempt_timeout": 2520,
+              "total_turn_timeout": 1800,
+              "model_turn_timeout": 1800
+            },
+            "harness_by_dataset": {
+              "long-loop-smartie-swesmith": "harbor_trial"
+            }
+          }
+        }
+      },
+      "trainer": {
+        "strategy": "megatron",
+        "flash_attn": false,
+        "use_sample_packing": true,
+        "gradient_checkpointing": true,
+        "offload_optimizer_during_rollouts": false,
+        "epochs": 50,
+        "max_steps": 2,
+        "update_epochs_per_batch": 1,
+        "micro_forward_batch_size_per_gpu": 1,
+        "eval_batch_size": 256,
+        "eval_interval": 2,
+        "resume_mode": "none",
+        "max_ckpts_to_keep": 3,
+        "seed": 20261020,
+        "logger": "wandb",
+        "project_name": "marin-long-loop",
+        "tracker_commit_each_step": true,
+        "training_metrics": true,
+        "rollout_spans": true,
+        "policy_train_spans": true,
+        "algorithm": {
+          "advantage_estimator": "rloo_n",
+          "policy_loss_type": "regular",
+          "loss_reduction": "token_mean",
+          "use_kl_loss": false,
+          "use_kl_in_reward": false,
+          "kl_estimator_type": "k3_unbiased_gradient",
+          "off_policy_correction": "tis",
+          "eps_clip_low": 0.2,
+          "eps_clip_high": 0.2,
+          "group_advantage_min_size": 2,
+          "advantage_batch_normalize": false,
+          "rloo_n_filter_zero_reward_groups": true,
+          "use_entropy_loss": false,
+          "tis_splice": true
+        },
+        "policy": {
+          "optimizer_config": {
+            "optimizer": "AdamW",
+            "lr": 1e-06,
+            "weight_decay": 0.0,
+            "max_grad_norm": 0.5,
+            "adam_betas": [
+              0.9,
+              0.999
+            ],
+            "scheduler": "constant_with_warmup",
+            "num_warmup_steps": 0
+          },
+          "megatron_config": {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 2,
+            "context_parallel_size": 5,
+            "expert_model_parallel_size": 8,
+            "expert_tensor_parallel_size": 1,
+            "transformer_config_kwargs": {
+              "cp_comm_type": "a2a",
+              "moe_router_fusion": false
+            },
+            "moe_router_replay": true
+          }
+        },
+        "ref": {
+          "megatron_config": {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 2,
+            "context_parallel_size": 5,
+            "expert_model_parallel_size": 8,
+            "expert_tensor_parallel_size": 1,
+            "transformer_config_kwargs": {
+              "cp_comm_type": "a2a"
+            }
+          }
+        },
+        "placement": {
+          "colocate_all": false,
+          "colocate_policy_ref": true,
+          "policy_num_nodes": 10,
+          "policy_num_gpus_per_node": 8,
+          "ref_num_nodes": 10,
+          "ref_num_gpus_per_node": 8
+        },
+        "rollout_buffer": {
+          "max_staleness_steps": 2,
+          "batch_policy": "full_batch",
+          "max_in_flight": 32,
+          "object_store_root": null,
+          "consumed_route_quotas": {
+            "agentic": 32,
+            "nonagentic": 32
+          },
+          "source_routes": {
+            "long-loop-smartie-swesmith": "agentic",
+            "PRIME-RL/Eurus-2-RL-Data": "nonagentic",
+            "nvidia/Nemotron-RL-Ultra-Training-Blends": "nonagentic",
+            "nvidia/OpenScience": "nonagentic",
+            "https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl": "nonagentic",
+            "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": "nonagentic",
+            "open-thoughts/TaskTrove": "nonagentic"
+          }
+        },
+        "eval_before_train": false,
+        "ckpt_interval": 2,
+        "eval_num_prompts": null,
+        "dump_eval_results": true,
+        "step_wise_training": false,
+        "dump_data_batch": true,
+        "train_batch_size": 64,
+        "policy_mini_batch_size": 64,
+        "micro_train_batch_size_per_gpu": 1,
+        "dump_training_order": true,
+        "hf_export_checkpoint": "best",
+        "callbacks": [
+          {
+            "type": "checkpoint",
+            "save_steps": 2,
+            "save_on_train_end": true
+          },
+          {
+            "type": "evaluation",
+            "eval_steps": 2,
+            "eval_before_train": false,
+            "eval_on_train_end": true
+          },
+          {
+            "type": "best_checkpoint",
+            "initial_model_uri": "PENDING_PRECEDING_SFT_EXPORT",
+            "expected_tasks": 120,
+            "minimum_scored_tasks": 120,
+            "ema_window": 5,
+            "evaluation_interval": 2
+          },
+          {
+            "type": "hf_model_save",
+            "save_steps": -1,
+            "save_on_train_end": true
+          }
+        ],
+        "distributed": {
+          "placement_group_timeout_seconds": 259200,
+          "worker_collective_timeout_seconds": 259200
+        }
+      },
+      "generator": {
+        "backend": "vllm",
+        "model_dtype": "bfloat16",
+        "vllm_attention_backend": "FLASH_ATTN",
+        "run_engines_locally": true,
+        "weight_sync_backend": "nccl",
+        "weight_sync_pause": {
+          "mode": "keep",
+          "clear_cache": true
+        },
+        "weight_sync_transport": "expert_block",
+        "expert_block_sync": {
+          "verify": false,
+          "timeout_seconds": 259200
+        },
+        "gpu_memory_utilization": 0.75,
+        "max_num_seqs": 64,
+        "max_num_batched_tokens": 8192,
+        "enable_prefix_caching": true,
+        "enable_chunked_prefill": true,
+        "enforce_eager": false,
+        "enable_http_endpoint": false,
+        "chat_template": null,
+        "engine_init_kwargs": {
+          "enable_auto_tool_choice": true,
+          "tool_call_parser": "hermes",
+          "moe_backend": "triton",
+          "hf_overrides": {
+            "max_position_embeddings": 262144,
+            "max_seq_len": 262144
+          },
+          "enable_return_routed_experts": true
+        },
+        "sampling_params": {
+          "temperature": 0.7,
+          "top_p": 1.0,
+          "logprobs": 0,
+          "stop_token_ids": [
+            128001,
+            128009
+          ],
+          "skip_special_tokens": false
+        },
+        "trajectory_reward_shaping": {
+          "enabled": true,
+          "overlong": {
+            "penalty_scale": 0.0
+          },
+          "reasoning_span": {
+            "penalty": 0.1,
+            "target": "marker"
+          }
+        },
+        "chat_template_kwargs": {
+          "enable_thinking": true
+        },
+        "eval_sampling_params": {
+          "stop_token_ids": [
+            128001,
+            128009
+          ],
+          "skip_special_tokens": false,
+          "temperature": 0.7,
+          "top_p": 1.0
+        },
+        "num_inference_engines": 22,
+        "inference_engine_tensor_parallel_size": 1,
+        "inference_engine_pipeline_parallel_size": 1,
+        "inference_engine_data_parallel_size": 8,
+        "inference_engine_expert_parallel_size": 8,
+        "n_samples_per_prompt": 8,
+        "trajectory_retention": {
+          "enabled": true,
+          "output_path": "PENDING_RUN_TRACE_URI",
+          "run_id": "PENDING_RUN_ID",
+          "phases": [
+            "train",
+            "eval"
+          ],
+          "sample_fraction": 0.1,
+          "eval_sample_fraction": 1.0,
+          "sample_count_per_step": 0,
+          "always_retain_failures": false,
+          "always_retain_non_terminating": false,
+          "always_retain_loops": false,
+          "reward_below": null,
+          "reward_above": null,
+          "max_bytes_per_step": null,
+          "max_bytes_per_run": null,
+          "required": true,
+          "publish_timeout_seconds": 259200,
+          "shutdown_timeout_seconds": 259200
+        },
+        "engine_init_timeout_seconds": 259200,
+        "weight_sync_pause_timeout_seconds": 259200
+      },
+      "data": {
+        "kind": "parquet",
+        "shuffle": true
+      },
+      "extra_env": {
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+        "VERIFYIT_JUDGE_MODEL": "openai/gpt-oss-120b",
+        "NCCL_NET": "Socket",
+        "NCCL_IB_DISABLE": "1",
+        "NCCL_SOCKET_FAMILY": "AF_INET",
+        "TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC": "259200"
+      },
+      "terminal_bench": {
+        "harbor": {
+          "environment_type": "daytona",
+          "daytona_api_key_env": "DAYTONA_RL_API_KEY",
+          "eval_daytona_api_key_env": "DAYTONA_EVAL_API_KEY",
+          "override_timeout_sec": 1800,
+          "eval_timeout_override_sec": 1800,
+          "verifier_override_timeout_sec": 900,
+          "trial_attempt_timeout_sec": 5400,
+          "n_concurrent_trials": 256,
+          "max_retries": 1,
+          "enable_reward_shaping": false
+        },
+        "installed_agent": {
+          "agent": {
+            "name": "pi",
+            "override_setup_timeout_sec": 360,
+            "kwargs": {
+              "version": "0.87.0",
+              "mcp_adapter_version": "7.0.0",
+              "thinking": "high",
+              "thinking_format": "chat-template",
+              "model_info": {
+                "max_input_tokens": 102400,
+                "max_output_tokens": 16384
+              },
+              "compaction_reserve_tokens": 16384
+            }
+          },
+          "setup_timeout": 360,
+          "run_timeout": 1800,
+          "cleanup_timeout": 120,
+          "service_startup_timeout": 60,
+          "service_shutdown_timeout": 60,
+          "trial_reward_key": "reward",
+          "output_path": "PENDING_RUN_AGENT_TRACE_URI"
+        }
+      }
+    },
+    "role_plan": {
+      "colocate_all": false,
+      "policy_num_nodes": 10,
+      "policy_num_gpus_per_node": 8,
+      "num_inference_engines": 22,
+      "inference_engine_tensor_parallel_size": 1,
+      "inference_engine_pipeline_parallel_size": 1,
+      "inference_engine_data_parallel_size": 8,
+      "inference_engine_expert_parallel_size": 8,
+      "train_batch_size": 64,
+      "policy_mini_batch_size": 64,
+      "micro_train_batch_size_per_gpu": 1,
+      "n_samples_per_prompt": 8,
+      "reference_num_nodes": null
+    },
+    "execution": {
+      "cluster": "cw-rno2a",
+      "cluster_config": "lib/iris/config/cw-rno2a.yaml",
+      "cpu": 32,
+      "memory": "1800GB",
+      "disk": "2TB",
+      "priority": "interactive",
+      "max_retries": 0,
+      "target_cluster": "cw-rno2a",
+      "parent_cluster_config": "lib/iris/config/marin.yaml",
+      "wandb_entity": "marin-community",
+      "required_env_vars": [
+        "DAYTONA_RL_API_KEY",
+        "DAYTONA_EVAL_API_KEY",
+        "DAYTONA_TARGET",
+        "TOGETHER_API_KEY",
+        "MARIN_PREFIX",
+        "MARIN_TEMP_PREFIX"
+      ],
+      "container_profile": 4
+    },
+    "wall_clock_budget": {
+      "seconds": 43200,
+      "drain_margin": 1800
+    },
+    "ray_timeouts": {
+      "rendezvous_timeout": 259200,
+      "cluster_join_timeout": 259200,
+      "driver_liveness_timeout": 259200
+    }
+  },
+  "evaluation": {
+    "name": "long-loop/micro-full",
+    "config": {
+      "entrypoint": "generate",
+      "config_groups": {
+        "terminal_bench_config": "terminal_bench"
+      },
+      "context_budget": {
+        "request_window_tokens": 65536,
+        "max_new_tokens_per_turn": 16384,
+        "max_turns": 1024
+      },
+      "environment": {
+        "task_sessions": {
+          "local": {},
+          "remote_judge": {
+            "base_url": "runtime://minimax-judge",
+            "api_key_env": "JUDGE_API_KEY"
+          }
+        }
+      },
+      "trainer": {
+        "strategy": "megatron",
+        "evaluation_runner": "task",
+        "eval_interval": 1,
+        "eval_batch_size": 32,
+        "resume_mode": "none",
+        "seed": 20261030,
+        "algorithm": {
+          "use_kl_loss": false
+        },
+        "policy": {
+          "megatron_config": {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 1,
+            "context_parallel_size": 1,
+            "expert_model_parallel_size": 8,
+            "expert_tensor_parallel_size": 1
+          }
+        },
+        "ref": {
+          "megatron_config": {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 1,
+            "context_parallel_size": 1,
+            "expert_model_parallel_size": 8,
+            "expert_tensor_parallel_size": 1
+          }
+        },
+        "logger": "console",
+        "placement": {
+          "colocate_all": true,
+          "colocate_policy_ref": true,
+          "policy_num_nodes": 1,
+          "policy_num_gpus_per_node": 8,
+          "ref_num_nodes": 1,
+          "ref_num_gpus_per_node": 8
+        },
+        "train_batch_size": 1,
+        "policy_mini_batch_size": 1,
+        "micro_train_batch_size_per_gpu": 1,
+        "distributed": {
+          "placement_group_timeout_seconds": 259200,
+          "worker_collective_timeout_seconds": 259200
+        }
+      },
+      "generator": {
+        "backend": "vllm",
+        "model_dtype": "bfloat16",
+        "max_num_seqs": 8,
+        "engine_init_kwargs": {
+          "enable_auto_tool_choice": true,
+          "tool_call_parser": "hermes",
+          "hf_overrides": {
+            "max_position_embeddings": 262144,
+            "max_seq_len": 262144
+          }
+        },
+        "run_engines_locally": true,
+        "enable_http_endpoint": false,
+        "gpu_memory_utilization": 0.85,
+        "enforce_eager": false,
+        "chat_template": {
+          "source": "name",
+          "name_or_path": null
+        },
+        "chat_template_kwargs": {
+          "enable_thinking": true
+        },
+        "sampling_params": {
+          "temperature": 0.7,
+          "top_p": 0.95,
+          "logprobs": 0,
+          "skip_special_tokens": false,
+          "stop_token_ids": [
+            128001,
+            128009
+          ]
+        },
+        "eval_sampling_params": {
+          "temperature": 0.7,
+          "top_p": 0.95,
+          "skip_special_tokens": false,
+          "stop_token_ids": [
+            128001,
+            128009
+          ]
+        },
+        "eval_n_samples_per_prompt": 1,
+        "num_inference_engines": 1,
+        "inference_engine_tensor_parallel_size": 1,
+        "inference_engine_pipeline_parallel_size": 1,
+        "inference_engine_data_parallel_size": 8,
+        "inference_engine_expert_parallel_size": 8,
+        "n_samples_per_prompt": 1,
+        "trajectory_retention": {
+          "enabled": true,
+          "output_path": "s3://marin-us-east-08a/marin/long-loop/traces/2026.11.09/eval",
+          "run_id": "2026.11.09",
+          "phases": [
+            "eval"
+          ],
+          "sample_fraction": 1.0,
+          "eval_sample_fraction": 1.0,
+          "sample_count_per_step": 0,
+          "always_retain_failures": false,
+          "always_retain_non_terminating": false,
+          "always_retain_loops": false,
+          "reward_below": null,
+          "reward_above": null,
+          "max_bytes_per_step": null,
+          "max_bytes_per_run": null,
+          "required": true,
+          "publish_timeout_seconds": 259200,
+          "shutdown_timeout_seconds": 259200
+        },
+        "engine_init_timeout_seconds": 259200,
+        "expert_block_sync": {
+          "timeout_seconds": 259200
+        },
+        "weight_sync_pause_timeout_seconds": 259200
+      },
+      "terminal_bench": {
+        "harbor": {
+          "environment_type": "daytona",
+          "daytona_api_key_env": "DAYTONA_EVAL_API_KEY",
+          "eval_daytona_api_key_env": "DAYTONA_EVAL_API_KEY",
+          "verifier_override_timeout_sec": 300,
+          "override_timeout_sec": 1800,
+          "eval_timeout_override_sec": 1800,
+          "trial_attempt_timeout_sec": 2460,
+          "n_concurrent_trials": 8,
+          "max_retries": 0
+        },
+        "installed_agent": {
+          "agent": {
+            "name": "pi",
+            "override_setup_timeout_sec": 360,
+            "kwargs": {
+              "version": "0.87.0",
+              "mcp_adapter_version": "7.0.0",
+              "thinking": "high",
+              "thinking_format": "chat-template",
+              "model_info": {
+                "max_input_tokens": 65536,
+                "max_output_tokens": 16384
+              },
+              "compaction_reserve_tokens": 16384
+            }
+          },
+          "setup_timeout": 360,
+          "run_timeout": 1800,
+          "cleanup_timeout": 60,
+          "service_startup_timeout": 60,
+          "service_shutdown_timeout": 60,
+          "judge_model": "MiniMaxAI/MiniMax-M3-MXFP8",
+          "trial_reward_key": "reward"
+        }
+      },
+      "trajectory_runner": {
+        "max_concurrent_tasks": 128
+      },
+      "data": {
+        "kind": "parquet",
+        "shuffle": false,
+        "train_data": [],
+        "val_data": []
+      },
+      "extra_env": {
+        "OPENAI_BASE_URL": "https://api.together.xyz/v1",
+        "TAU2_USER_MODEL": "openai/openai/gpt-oss-120b",
+        "TAU2_NL_ASSERTIONS_MODEL": "openai/openai/gpt-oss-120b",
+        "TAU2_USER_REASONING_EFFORT": "low",
+        "JUDGE_BASE_URL": "runtime://minimax-judge",
+        "TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC": "259200"
+      }
+    },
+    "seed": 20261030,
+    "gpu_variant": "H100",
+    "capability_origin": "https://iris.oa.dev",
+    "data_relative_path": "rollouts.parquet",
+    "judge_gpu_count": 8,
+    "role_plan": {
+      "colocate_all": true,
+      "policy_num_nodes": 1,
+      "policy_num_gpus_per_node": 8,
+      "num_inference_engines": 1,
+      "inference_engine_tensor_parallel_size": 1,
+      "inference_engine_pipeline_parallel_size": 1,
+      "inference_engine_data_parallel_size": 8,
+      "inference_engine_expert_parallel_size": 8,
+      "train_batch_size": 1,
+      "policy_mini_batch_size": 1,
+      "micro_train_batch_size_per_gpu": 1,
+      "n_samples_per_prompt": 1,
+      "reference_num_nodes": null
+    },
+    "execution": {
+      "cluster": "cw-rno2a",
+      "cluster_config": "lib/iris/config/cw-rno2a.yaml",
+      "cpu": 32,
+      "memory": "512GB",
+      "disk": "256GB",
+      "priority": "interactive",
+      "max_retries": 0,
+      "target_cluster": "cw-rno2a",
+      "parent_cluster_config": "lib/iris/config/marin.yaml",
+      "wandb_entity": null,
+      "required_env_vars": [
+        "DAYTONA_EVAL_API_KEY",
+        "DAYTONA_TARGET",
+        "TOGETHER_API_KEY",
+        "MARIN_PREFIX",
+        "MARIN_TEMP_PREFIX"
+      ],
+      "container_profile": 4
+    },
+    "judge": {
+      "name": "minimax-m3-mxfp8-olympiadbench-judge-131k",
+      "location": "MiniMaxAI/MiniMax-M3-MXFP8",
+      "identity": null,
+      "revision": "c5454eb03678d8710e54a4e0fc681b9f3b4a3dba",
+      "tokenizer": null,
+      "tokenizer_revision": null,
+      "apply_chat_template": true,
+      "resource_hint": {
+        "hbm_gb": null,
+        "gpu": {
+          "H100": 8
+        },
+        "cpu": 64.0,
+        "memory": "512g",
+        "disk": "600g"
+      },
+      "serve": {
+        "backend": "vllm",
+        "tensor_parallel_size": 8,
+        "data_parallel_size": null,
+        "pipeline_parallel_size": 1,
+        "instances": 1,
+        "gpu_memory_utilization": null,
+        "max_model_len": 131072,
+        "max_num_batched_tokens": 8192,
+        "max_num_seqs": 16,
+        "hf_overrides": null,
+        "limit_mm_per_prompt": "{\"image\":0,\"video\":0}",
+        "tool_call_parser": null,
+        "reasoning_parser": "minimax_m3",
+        "vllm_batch_invariant": null,
+        "vllm_use_flashinfer_sampler": null,
+        "runai_streamer_concurrency": null,
+        "runai_streamer_s3_request_timeout_ms": null,
+        "hf_hub_disable_xet": false,
+        "vllm_source": null,
+        "vllm_version": null,
+        "vllm_plugin_requirements": [],
+        "object_store_load_mode": "stage_local",
+        "vllm_extra_args": [
+          "--block-size",
+          "128",
+          "--language-model-only",
+          "--enable-prefix-caching"
+        ],
+        "speculative": null,
+        "chat_template": null,
+        "auto_overrides": true
+      },
+      "generation": {
+        "max_gen_toks": null,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {},
+        "thinking_off_template_kwargs": {}
+      },
+      "agent": {
+        "agent_kwargs": {}
+      },
+      "evalchemy_num_concurrent": null
+    },
+    "tasks_per_benchmark": 1,
+    "expected_source_rows": 20,
+    "expected_expanded_attempt_count": 44,
+    "admission_pending": [],
+    "supported_path_count": 20,
+    "expected_rollouts": 44,
+    "attempts_per_selected_task": {
+      "NUPA": 1,
+      "aime24": 10,
+      "bfclparity-pi": 1,
+      "bixbench-pi": 1,
+      "cruxeval": 1,
+      "ds-1000-local": 1,
+      "gpqa-diamond": 3,
+      "gsm8k-0shot": 1,
+      "humanevalplus": 1,
+      "ifbench": 1,
+      "math500": 1,
+      "mbppplus": 1,
+      "mmlu-pro": 1,
+      "mrcr": 1,
+      "olympiadbench": 10,
+      "ot-tblite-recovery": 3,
+      "swebench-verified": 1,
+      "tb2-recovery": 3,
+      "triviaqa": 1,
+      "truthfulqa": 1
+    },
+    "ray_timeouts": {
+      "rendezvous_timeout": 259200,
+      "cluster_join_timeout": 259200,
+      "driver_liveness_timeout": 259200
+    }
+  },
+  "endpoint": {
+    "model_config": "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/model-configs/laion-snowball-67b-a2b-relay-sft-acont-step999.yaml",
+    "window": 102400,
+    "tokenizer_repo": "marin-community/marin-tokenizer-tools",
+    "gpu_count": 8,
+    "cluster_config": "lib/iris/config/marin.yaml",
+    "priority": "interactive"
+  },
+  "archive": {
+    "source_repository": "https://github.com/marin-community/marin",
+    "native_checkpoint_ttl": "14d",
+    "hf_upload": {
+      "repo_prefix": "open-athena/Snowball-LongLoop-Round1",
+      "local_directory": "/tmp/long-loop-hf-archive",
+      "license_file": "s3://marin-us-east-08a/marin/long-loop/archive-inputs/2026.11.09.10-hf1/LICENSE",
+      "workers": 8
+    },
+    "evaldash": {
+      "records_prefix": "s3://marin-us-east-08a/marin/evals",
+      "run_prefix": "long-loop-round1",
+      "user": "benfeuer",
+      "model_name": "Snowball long-loop selected checkpoint",
+      "eval_name": "Micro210 supported paths (Tau3 excluded)",
+      "hardware": {
+        "platform": "coreweave",
+        "accelerator": "H100",
+        "region_or_cluster": "cw-rno2a"
+      }
+    },
+    "stage_files": {
+      "sft": [
+        {
+          "path": "consumed-config.json",
+          "category": "config"
+        },
+        {
+          "path": "selected.json",
+          "category": "config"
+        }
+      ],
+      "rl": [
+        {
+          "path": "resolved-launch.yaml",
+          "category": "config"
+        },
+        {
+          "path": "terminal.json",
+          "category": "config"
+        }
+      ],
+      "eval": [
+        {
+          "path": "resolved-launch.yaml",
+          "category": "config"
+        },
+        {
+          "path": "terminal.json",
+          "category": "config"
+        }
+      ],
+      "eval_inputs": [
+        {
+          "path": "environment.json",
+          "category": "config"
+        },
+        {
+          "path": "selection.json",
+          "category": "dataset"
+        },
+        {
+          "path": "rollouts.parquet",
+          "category": "dataset"
+        }
+      ],
+      "report": [
+        {
+          "path": "evaluation.json",
+          "category": "eval_trace"
+        },
+        {
+          "path": "timing.md",
+          "category": "timing"
+        },
+        {
+          "path": "timing-sources.json",
+          "category": "timing"
+        }
+      ]
+    },
+    "additional_evidence": [],
+    "wandb": {
+      "package": "git+https://github.com/Open-Athena/wandb-archive.git@2e38b721856b67e7a8ee1d7ba6f8b6dccbee7a8a",
+      "include": {
+        "histories": true,
+        "system_metrics": true,
+        "tables": true,
+        "media": true,
+        "run_files": "safe",
+        "logged_artifacts": "metadata",
+        "used_artifacts": "references",
+        "code": false,
+        "console_logs": false
+      }
+    },
+    "admission_pending": [],
+    "runtime_evidence_requirements": [
+      "Resolve exact SFT and RL W&B run identities from producer metadata or hash-pinned run-reference receipts; strict exporter runs only against these identities.",
+      "Missing strict W&B history or required evidence seals a partial archive and blocks all native checkpoint cleanup.",
+      "Preserve native SFT attempt archives and extracted timing journals through additional_evidence pins; stage-wall timing is not native phase coverage.",
+      "Retention archives are enumerated from consumed launch configs and their committed ledgers; no checkpoint payloads enter the evidence archive."
+    ]
+  },
+  "initializer": {
+    "uri": "s3://marin-rno2a/tmp/ttl=14d/long-loop-436/native-1005",
+    "evidence": "native_copy",
+    "source": "gs://marin-us-central2/users/held/grug_sft/grug-67b-sft-20260929-special-token-lr-full-ab-4750-grouped/checkpoints/step-161750",
+    "hf_release": {
+      "repository": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "revision": "ac60d9401820953943f5a56e06f36e13c86b12d6"
+    },
+    "files": [
+      {
+        "uri": "s3://marin-rno2a/tmp/ttl=14d/long-loop-436/native-1005/copy-receipt/receipt.json",
+        "sha256": "a68824fc4256521fddedd969a3ff5f984a58670104a71124f1ff00997757e8cf"
+      },
+      {
+        "uri": "s3://marin-rno2a/tmp/ttl=14d/long-loop-436/native-1005/native/step-0/metadata.json",
+        "sha256": "c462604c60c17c30dba5e71c107a9b8e644b91f4026b0459b91ab3386db6f697"
+      },
+      {
+        "uri": "s3://marin-rno2a/tmp/ttl=14d/long-loop-436/native-1005/native/step-0/manifest.json",
+        "sha256": "cbe1fb6b4f524d9f27544273c4981f3f286fff58063bc65a12811235cd90017d"
+      }
+    ]
+  },
+  "tokenizer": {
+    "uri": "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18",
+    "repo": "marin-community/marin-tokenizer-tools",
+    "revision": "3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09",
+    "context_limit": 262144
+  },
+  "execution": {
+    "inputs": {
+      "cpu": 32,
+      "ram": "128GB",
+      "disk": "512GB",
+      "device": {
+        "variant": "H100",
+        "kind": "gpu",
+        "count": 8
+      },
+      "preemptible": true,
+      "regions": null,
+      "zone": null,
+      "target_cluster": null,
+      "replicas": 1,
+      "device_alternatives": null,
+      "image": null,
+      "container_profile": null
+    },
+    "export": {
+      "cpu": 32,
+      "ram": "512GB",
+      "disk": "256GB",
+      "device": {
+        "variant": "H100",
+        "kind": "gpu",
+        "count": 8
+      },
+      "preemptible": true,
+      "regions": null,
+      "zone": null,
+      "target_cluster": null,
+      "replicas": 1,
+      "device_alternatives": null,
+      "image": null,
+      "container_profile": null
+    },
+    "eval_inputs": {
+      "cpu": 32,
+      "ram": "128GB",
+      "disk": "512GB",
+      "device": {
+        "variant": "H100",
+        "kind": "gpu",
+        "count": 8
+      },
+      "preemptible": true,
+      "regions": null,
+      "zone": null,
+      "target_cluster": null,
+      "replicas": 1,
+      "device_alternatives": null,
+      "image": null,
+      "container_profile": null
+    },
+    "archive": {
+      "cpu": 32,
+      "ram": "64GB",
+      "disk": "500GB",
+      "device": {
+        "variant": "H100",
+        "kind": "gpu",
+        "count": 8
+      },
+      "preemptible": true,
+      "regions": null,
+      "zone": null,
+      "target_cluster": null,
+      "replicas": 1,
+      "device_alternatives": null,
+      "image": null,
+      "container_profile": null
+    },
+    "coordinator": {
+      "cluster": "cw-rno2a",
+      "cluster_config": "lib/iris/config/cw-rno2a.yaml",
+      "cpu": 32,
+      "memory": "512GB",
+      "disk": "512GB",
+      "priority": "interactive",
+      "max_retries": 0,
+      "target_cluster": "cw-rno2a",
+      "parent_cluster_config": "lib/iris/config/marin.yaml",
+      "coordinator_name": "long-loop-full",
+      "coordinator_gpu": null,
+      "wandb_entity": null,
+      "required_env_vars": [
+        "MARIN_PREFIX",
+        "MARIN_TEMP_PREFIX",
+        "HF_TOKEN"
+      ],
+      "container_profile": 4
+    },
+    "sandbox": {
+      "cpu": 4,
+      "ram": "32GB",
+      "disk": "128GB",
+      "device": {
+        "variant": "H100",
+        "kind": "gpu",
+        "count": 1
+      },
+      "preemptible": true,
+      "regions": null,
+      "zone": null,
+      "target_cluster": null,
+      "replicas": 1,
+      "device_alternatives": null,
+      "image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "container_profile": "CONTAINER_PROFILE_PRIVILEGED"
+    }
+  },
+  "scale_overrides": {
+    "sft_steps": 2,
+    "rl_steps": 2,
+    "eval_tasks_per_benchmark": 1,
+    "eval_replicas": 1
+  },
+  "gpu_peaks": {
+    "export": 8,
+    "eval_inputs": 8,
+    "archive": 8,
+    "sft": 16,
+    "rl": 256,
+    "evaluation": 16
+  },
+  "resolved_sha256": "c371a4fd2a7a57174d3779d2bc89ec9317febf62edae2aa7d27b97c32a1f0e9b",
+  "through": "export",
+  "active_stage_blockers": []
+}
