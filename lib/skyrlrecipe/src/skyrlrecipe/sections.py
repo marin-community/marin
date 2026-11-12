@@ -719,6 +719,8 @@ class SamplingParams(Section):
     top_k: int = field(-1)
     logprobs: NonNegativeInt | None = field(None)
     stop: tuple[str, ...] | None = field(None)
+    stop_token_ids: tuple[int, ...] | None = field(None)
+    skip_special_tokens: bool = field(True)
     min_tokens: NonNegativeInt = unset_field()
 
 
@@ -817,8 +819,9 @@ class Generator(Section):
     weight_sync_transport: Literal["broadcast", "expert_block"] = field("broadcast")
     """How weights reach the engines. "broadcast": trainer rank 0 sends every tensor to every engine. "expert_block":
     each MoE expert matrix is broadcast from a Megatron rank that holds it to the vLLM workers that serve it.
-    Needs engines that are not colocated with training, a Grug MoE on the megatron strategy at TP=1 and ETP=1,
-    local vLLM engines at TP=1 with EP=DP>=1, the NCCL weight-sync backend and vLLM's TRITON MoE backend."""
+    Needs a Grug MoE on Megatron at TP=ETP=1, local vLLM engines at TP=1 with EP=DP>=1, NCCL, and vLLM's TRITON
+    MoE backend. Colocation is limited to one four-GPU node with policy PP=1 EP=4, one TP=PP=1 DP=EP=4 engine, and
+    expert_block_sync.verify=true."""
     expert_block_sync: ExpertBlockSync = Field(default_factory=ExpertBlockSync)
     fuse_weights: bool = field(False)
     r3_transport: Literal["by_value", "resident", "decentral"] = field("decentral")
