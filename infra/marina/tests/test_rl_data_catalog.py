@@ -720,11 +720,12 @@ def test_atlas_cleanup_preserves_a_load_started_after_its_cutover(catalog_query,
             continue_load.set()
         assert later is not None
         assert later.result(timeout=30)["changed"]
+    # The three snapshots retain all three assessments and their three packets each.
     assert catalog_query(
         "SELECT l.snapshot_id, count(p.*) AS packets FROM atlas_current c JOIN atlas_loads l USING(load_id) "
         "JOIN atlas_packets p USING(load_id) GROUP BY l.snapshot_id",
         {},
-    )["rows"] == [{"snapshot_id": "later", "packets": 3}]
+    )["rows"] == [{"snapshot_id": "later", "packets": 9}]
 
 
 @pytest.mark.parametrize(

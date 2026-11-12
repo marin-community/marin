@@ -18,6 +18,8 @@ from taskcompendium.backend_requirements import BackendSurvey, backend_schema_sh
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
+from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
+
 MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
 DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
@@ -231,6 +233,9 @@ def load_catalog(
                 }
 
     counts["packets"] = insert("packets", packet_rows())
+    if expected_load_id is not None:
+        for table, copied in retain_prior_assessments(execute, TABLE_COLUMNS, expected_load_id, load_id).items():
+            counts[table] += copied
     packet_sizes = execute(
         """
         SELECT COALESCE(SUM(octet_length(packet)), 0) AS packet_bytes,
