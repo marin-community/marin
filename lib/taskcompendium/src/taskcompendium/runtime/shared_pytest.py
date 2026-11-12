@@ -234,12 +234,18 @@ def bootstrap(input_path: Path) -> None:
     # Freeze pytest, explicitly allowed plugins and their implementation dependencies only.
     # Candidate dependencies remain in the live site directories recorded below.
     package_probe = """import importlib.metadata as m,json,pathlib,packaging.requirements
-plugins=sorted(set(__import__('sys').argv[1:]) | {e.value for e in m.entry_points(group='pytest11')})
+distributions=list(m.distributions())
+plugins=sorted(set(__import__('sys').argv[1:]) | {
+ e.value for d in distributions for e in d.entry_points if e.group=='pytest11'})
 if any(':' in plugin for plugin in plugins): raise ValueError('Function-valued pytest plugins need explicit lowering')
 roots={'pytest','pytest-json-report'}
-mapping=m.packages_distributions()
-for plugin in plugins: roots.update(mapping.get(plugin.split('.')[0], []))
-for d in m.distributions():
+for d in distributions:
+ top=set((d.read_text('top_level.txt') or '').splitlines())
+ top.update(
+  str(f).split('/')[0].split('.')[0] for f in d.files or []
+  if not str(f).startswith('..') and '.dist-info/' not in str(f) and '.egg-info/' not in str(f))
+ if any(plugin.split('.')[0] in top for plugin in plugins): roots.add(d.metadata['Name'])
+for d in distributions:
  if any(e.group=='pytest11' and e.value.split(':')[0] in plugins for e in d.entry_points): roots.add(d.metadata['Name'])
 seen=set(); files=[]
 while roots:
