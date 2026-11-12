@@ -189,6 +189,34 @@ class ResourceCalibrationReceipt(BaseModel):
         return self.attempts[-1].execution_requirements
 
 
+class NoOracleLivenessReceipt(BaseModel):
+    """A separate empty-submission verifier run, bound to the admitted task and runtime."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    task_id: str
+    task_sha256: str
+    runtime_sha256: str | None
+    submission_kind: Literal["empty", "candidate"]
+    outcome: str
+    exit_code: int | None
+    reward: float | None = Field(allow_inf_nan=False)
+    tests_executed: int
+    base: str = ""
+    snapshot: str = ""
+    detail: str = ""
+
+    @property
+    def passed(self) -> bool:
+        return (
+            self.submission_kind == "empty"
+            and self.outcome == "negative_verdict"
+            and self.exit_code == 0
+            and self.reward is not None
+            and self.reward < 1
+            and self.tests_executed > 0
+        )
+
+
 class OracleTaskReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     task_sha256: str
@@ -197,12 +225,24 @@ class OracleTaskReceipt(BaseModel):
     has_oracle: bool
     trials: tuple[OracleTrialReceipt, ...]
     calibration: ResourceCalibrationReceipt
+    no_oracle_liveness: NoOracleLivenessReceipt | None = None
     exclusion_reason: str | None = None
 
     @property
     def passed(self) -> bool:
-        return self.calibration.passed and (
-            not self.has_oracle or any(trial.passed(self.harbor_task_checksum) for trial in self.trials)
+        if not self.calibration.passed:
+            return False
+        if self.has_oracle:
+            return self.calibration.oracle_kind == "original" and any(
+                trial.passed(self.harbor_task_checksum) for trial in self.trials
+            )
+        liveness = self.no_oracle_liveness
+        return (
+            self.calibration.oracle_kind == "calibration_only"
+            and liveness is not None
+            and liveness.passed
+            and liveness.task_sha256 == self.task_sha256
+            and liveness.runtime_sha256 == self.runtime_sha256
         )
 
 
@@ -220,6 +260,8 @@ class OracleFilterReceipt(BaseModel):
         if len(self.tasks) + self.conversion_rejections != self.input_rows:
             raise ValueError("Oracle filter receipt does not cover the full input population")
         for task_id, entry in self.tasks.items():
+            if entry.no_oracle_liveness is not None and entry.no_oracle_liveness.task_id != task_id:
+                raise ValueError(f"No-oracle liveness receipt belongs to another task: {task_id}")
             if not entry.passed and not entry.exclusion_reason:
                 raise ValueError(f"Oracle exclusion has no reason: {task_id}")
             if not entry.has_oracle and entry.trials:
@@ -259,6 +301,7 @@ def load_oracle_filter(path: str) -> OracleFilterReceipt:
 
 
 def require_oracle_filter(task: TaskSpec, receipt: OracleFilterReceipt | None, runtime: dict | None = None) -> bool:
+    """Require calibration and original-oracle or separate empty-submission liveness evidence."""
     if task.execution_requirements is None:
         raise ValueError(f"SAMPLE/FULL admission requires explicit execution requirements: {task.id}")
     if receipt is None:

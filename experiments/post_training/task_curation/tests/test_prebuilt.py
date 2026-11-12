@@ -42,8 +42,15 @@ def _write(tmp_path, rows: list[dict]):
     specs = [TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"]) for row in rows]
     receipt = oracle_receipt(specs)
     for row, spec in zip(rows, specs, strict=True):
+        runtime_sha256 = canonical_sha256(json.loads(row["lowered_task_spec"]).get("runtime"))
+        liveness = receipt.tasks[spec.id].no_oracle_liveness
         receipt.tasks[spec.id] = receipt.tasks[spec.id].model_copy(
-            update={"runtime_sha256": canonical_sha256(json.loads(row["lowered_task_spec"]).get("runtime"))}
+            update={
+                "runtime_sha256": runtime_sha256,
+                "no_oracle_liveness": (
+                    liveness.model_copy(update={"runtime_sha256": runtime_sha256}) if liveness else None
+                ),
+            }
         )
     (tmp_path / prebuilt.ORACLE_FILTER_FILENAME).write_text(receipt.model_dump_json())
     return path
@@ -225,6 +232,27 @@ def test_reply_only_rewrite_needs_no_agent_machine(tmp_path, monkeypatch):
     path = _write(tmp_path, [row])
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
     assert prebuilt.import_cohort(_cohort(1)) == str(path)
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+def test_prebuilt_rejects_calibration_only_success_without_no_oracle_liveness(tmp_path, monkeypatch, mode):
+    published = _write(tmp_path, [prebuilt_task("calibration-only")])
+    receipt_path = published.parent / prebuilt.ORACLE_FILTER_FILENAME
+    document = json.loads(receipt_path.read_text())
+    entry = document["tasks"]["calibration-only"]
+    entry["no_oracle_liveness"] = None
+    entry["exclusion_reason"] = "no_oracle_liveness_missing"
+    receipt_path.write_text(json.dumps(document))
+    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(published.parent / kwargs["filename"]))
+    source = RlDataSource(
+        config=_cohort(1),
+        pipeline=prebuilt.import_prebuilt,
+        info=SourceInfo(id="fixture:calibration", title="calibration", origin="fixture"),
+    )
+    step = prebuilt.import_prebuilt(source, PipelineOptions(mode, CampaignRuntime()))
+    invocation = step.build_config(StepContext.for_run(str(tmp_path / "admitted"), str(tmp_path)))
+    with pytest.raises(ValueError, match="no-oracle liveness qualification"):
+        step.run(invocation)
 
 
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])

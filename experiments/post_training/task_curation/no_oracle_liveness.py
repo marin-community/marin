@@ -33,12 +33,14 @@ import tempfile
 from collections import defaultdict
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from typing import Literal
 
 import pyarrow.parquet as pq
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import HostImage, MachineSpec, NetworkPolicy
 from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ConversationTrace, GradingAttempt, NoGrader, TaskSpec, TextMessage
 from taskcompendium.runtime.grading import grade_empty_in_sandbox, grade_in_sandbox
 
@@ -56,6 +58,9 @@ class LivenessResult:
     snapshot: str
     detail: str = ""
     tests_executed: int = 0
+    task_sha256: str | None = None
+    runtime_sha256: str | None = None
+    submission_kind: Literal["empty", "candidate"] = "candidate"
 
     @property
     def passed(self) -> bool:
@@ -217,6 +222,12 @@ async def run(
     with output.open("a") as handle:
         for index, task_id in enumerate(task_ids, start=1):
             result = await run_one(specs[task_id], bases.get(task_id, "<unknown>"), cgroup_parent=cgroup_parent)
+            result = replace(
+                result,
+                task_sha256=canonical_sha256(TaskSpec.model_validate(specs[task_id]["task"]).model_dump(mode="json")),
+                runtime_sha256=canonical_sha256(specs[task_id]["runtime"]),
+                submission_kind="empty",
+            )
             handle.write(json.dumps(asdict(result)) + "\n")
             handle.flush()
             print(f"[{index}/{len(task_ids)}] {task_id}: {result.outcome}", flush=True)

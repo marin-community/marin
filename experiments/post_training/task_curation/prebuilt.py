@@ -235,7 +235,10 @@ def prebuilt_artifact(
                     else None
                 ),
             ):
-                raise ValueError(f"Published cohort includes a failed oracle task: {task.id}")
+                raise ValueError(
+                    "Published cohort includes a failed oracle task or lacks no-oracle liveness qualification: "
+                    f"{task.id}"
+                )
             tasks.append(
                 {
                     **normalization_columns(task.id, task.source, task, None, (), original_path),

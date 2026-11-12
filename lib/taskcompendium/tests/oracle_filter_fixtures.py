@@ -7,6 +7,7 @@ from taskcompendium.grading_environment import GradingEnvironmentMode
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import (
+    NoOracleLivenessReceipt,
     OracleFilterReceipt,
     OracleTaskReceipt,
     OracleTrialReceipt,
@@ -16,7 +17,13 @@ from taskcompendium.pipeline.oracle_filter import (
 )
 
 
-def oracle_receipt(tasks: list[TaskSpec], recipe_identity: str | None = None, *, failed: frozenset[str] = frozenset()):
+def oracle_receipt(
+    tasks: list[TaskSpec],
+    recipe_identity: str | None = None,
+    *,
+    failed: frozenset[str] = frozenset(),
+    no_oracle_liveness: bool = True,
+):
     entries = {}
     for task in tasks:
         reward = 0 if task.id in failed else 1
@@ -57,7 +64,25 @@ def oracle_receipt(tasks: list[TaskSpec], recipe_identity: str | None = None, *,
                 oracle_kind="original" if has_oracle_solution(task) else "calibration_only",
                 attempts=(trial,),
             ),
-            exclusion_reason="oracle_failed" if reward == 0 else None,
+            no_oracle_liveness=(
+                NoOracleLivenessReceipt(
+                    task_id=task.id,
+                    task_sha256=canonical_sha256(task.model_dump(mode="json")),
+                    runtime_sha256=None,
+                    submission_kind="empty",
+                    outcome="negative_verdict",
+                    exit_code=0,
+                    reward=0,
+                    tests_executed=2,
+                )
+                if not has_oracle_solution(task) and no_oracle_liveness
+                else None
+            ),
+            exclusion_reason=(
+                "oracle_failed"
+                if reward == 0
+                else "no_oracle_liveness_missing" if not has_oracle_solution(task) and not no_oracle_liveness else None
+            ),
         )
     return OracleFilterReceipt(
         recipe_identity=recipe_identity,

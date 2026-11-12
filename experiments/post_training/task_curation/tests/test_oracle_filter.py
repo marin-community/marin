@@ -14,7 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
-from taskcompendium.pipeline.oracle_filter import require_oracle_filter
+from taskcompendium.pipeline.oracle_filter import NoOracleLivenessReceipt, require_oracle_filter
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.oracle_filter import (
@@ -31,17 +31,18 @@ from .prebuilt_fixtures import prebuilt_task
 def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_path):
     rows = []
     mappings = {}
-    for task_id in ("pass", "failed-solution", "missing-exit", "infra"):
+    for task_id in ("pass", "failed-solution", "missing-exit", "infra", "calibration-only", "live"):
         row = prebuilt_task(task_id)
         envelope = json.loads(row["lowered_task_spec"])
         task = TaskSpec.model_validate(envelope["task"])
-        task = task.model_copy(
-            update={
-                "resources": task.resources.model_copy(
-                    update={"oracle": (inline_resource("solution/solve.sh", b"true\n"),)}
-                )
-            }
-        )
+        if task_id not in {"calibration-only", "live"}:
+            task = task.model_copy(
+                update={
+                    "resources": task.resources.model_copy(
+                        update={"oracle": (inline_resource("solution/solve.sh", b"true\n"),)}
+                    )
+                }
+            )
         envelope["task"] = task.model_dump(mode="json")
         row["lowered_task_spec"] = json.dumps(envelope)
         rows.append(row)
@@ -107,10 +108,28 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
     pq.write_table(pa.Table.from_pylist(rows), cohort)
     task_map = tmp_path / "task-map.json"
     task_map.write_text(json.dumps(mappings))
+    live = TaskSpec.model_validate(json.loads(rows[-1]["lowered_task_spec"])["task"])
+    proof = NoOracleLivenessReceipt(
+        task_id=live.id,
+        task_sha256=canonical_sha256(live.model_dump(mode="json")),
+        runtime_sha256=canonical_sha256(json.loads(rows[-1]["lowered_task_spec"])["runtime"]),
+        submission_kind="empty",
+        outcome="negative_verdict",
+        exit_code=0,
+        reward=0,
+        tests_executed=3,
+    )
+    liveness = tmp_path / "liveness.jsonl"
+    liveness.write_text(proof.model_dump_json() + "\n")
     output = tmp_path / "filtered/tasks.parquet"
-    receipt = filter_cohort(cohort, task_map, tmp_path / "jobs", output)
-    assert [row["path"] for row in pq.read_table(output).to_pylist()] == ["pass"]
-    assert receipt.input_rows == 4
+    receipt = filter_cohort(cohort, task_map, tmp_path / "jobs", output, no_oracle_liveness=liveness)
+    assert [row["path"] for row in pq.read_table(output).to_pylist()] == ["pass", "live"]
+    assert receipt.input_rows == 6
+    calibration_only = receipt.tasks["calibration-only"]
+    assert calibration_only.calibration.passed and not calibration_only.passed
+    assert calibration_only.exclusion_reason == "no_oracle_liveness_missing_or_failed"
+    assert receipt.tasks["live"].trials == ()
+    assert require_oracle_filter(live, receipt, json.loads(rows[-1]["lowered_task_spec"])["runtime"])
     assert receipt.tasks["failed-solution"].trials[0].oracle_exit_code == 7
     assert not receipt.tasks["failed-solution"].passed
     assert not receipt.tasks["infra"].passed

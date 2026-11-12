@@ -937,7 +937,15 @@ For tasks without original solutions, write calibration-only `solve.sh` scripts
 under `CALIBRATION_SOLUTIONS/TASK_ID/` and supply `--calibration-solutions`.
 These scripts run through the same production Trial path but remain outside the
 TaskSpec's original oracle resources and cannot supply oracle admission evidence.
-Normal SAMPLE or FULL QA still supplies admission evidence.
+For a task without an original oracle, admission additionally requires a separate
+`no_oracle_liveness` receipt from an empty-submission verifier run: exit zero,
+reward below one, and a positive executed-test count. The receipt binds the
+TaskSpec after its final shape is assigned and the runtime deployment settings;
+subsequent changes invalidate the proof.
+Calibration attempts and candidate submissions cannot supply this liveness proof.
+Pass the JSONL emitted by `no_oracle_liveness` to `collect --no-oracle-liveness`.
+Tasks without a receipt satisfying these conditions remain excluded. Prebuilt
+imports enforce the same requirement.
 
 For both SAMPLE and FULL, run the production Harbor Trial with the restored
 ORACLE agent over the complete converted population. The filter retains exactly

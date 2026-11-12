@@ -95,10 +95,35 @@ def test_calibration_only_oracle_cannot_supply_admission_evidence():
     current = task().model_copy(update={"resources": ResourceGroups()})
     with pytest.raises(ValueError, match="full-population Harbor oracle filter"):
         require_oracle_filter(current, None)
-    receipt = oracle_receipt([current])
+    receipt = oracle_receipt([current], no_oracle_liveness=False)
     assert receipt.tasks[current.id].trials == ()
-    assert require_oracle_filter(current, receipt)
+    assert receipt.tasks[current.id].calibration.passed
+    assert not receipt.tasks[current.id].passed
+    assert not require_oracle_filter(current, receipt)
     document = receipt.model_dump(mode="json")
     document["tasks"][current.id]["calibration"]["oracle_kind"] = "original"
     with pytest.raises(ValidationError, match=r"calibration-only|Calibration-only"):
         OracleFilterReceipt.model_validate(document)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {},
+        {"submission_kind": "candidate"},
+        {"exit_code": 1},
+        {"reward": 1},
+        {"tests_executed": 0},
+        {"task_sha256": "other-task"},
+        {"runtime_sha256": "other-runtime"},
+    ],
+)
+def test_no_oracle_admission_requires_exact_empty_submission_liveness(changes):
+    current = task().model_copy(update={"resources": ResourceGroups()})
+    document = oracle_receipt([current]).model_dump(mode="json")
+    entry = document["tasks"][current.id]
+    entry["no_oracle_liveness"].update(changes)
+    if changes:
+        entry["exclusion_reason"] = "no_oracle_liveness_failed"
+    receipt = OracleFilterReceipt.model_validate(document)
+    assert require_oracle_filter(current, receipt) is (not changes)

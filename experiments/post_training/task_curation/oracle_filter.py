@@ -20,6 +20,7 @@ from taskcompendium.grading_environment import GradingEnvironmentMode
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
 from taskcompendium.pipeline.oracle_filter import (
+    NoOracleLivenessReceipt,
     OracleFilterReceipt,
     OracleTaskReceipt,
     OracleTrialReceipt,
@@ -180,7 +181,12 @@ def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]
 
 
 def filter_cohort(
-    cohort: Path, task_map: Path, jobs: Path, output: Path, conversion_manifest: Path | None = None
+    cohort: Path,
+    task_map: Path,
+    jobs: Path,
+    output: Path,
+    conversion_manifest: Path | None = None,
+    no_oracle_liveness: Path | None = None,
 ) -> OracleFilterReceipt:
     """Filter exact converted bytes; missing tasks, stale maps and incomplete populations fail closed."""
     for path in (output, output.parent / "oracle-filter.json", output.parent / "oracle-filter-summary.json"):
@@ -190,6 +196,15 @@ def filter_cohort(
     if not isinstance(mappings, dict):
         raise ValueError("Task map must map TaskSpec IDs to Harbor task_name and task_checksum")
     trials = collect_trials(jobs)
+    liveness = {}
+    if no_oracle_liveness is not None:
+        for line in no_oracle_liveness.read_text().splitlines():
+            if not line.strip():
+                continue
+            proof = NoOracleLivenessReceipt.model_validate_json(line)
+            if proof.task_id in liveness:
+                raise ValueError(f"Duplicate no-oracle liveness task: {proof.task_id}")
+            liveness[proof.task_id] = proof
     original_packages = harbor_inspection("tasks", [mapping["task_path"] for mapping in mappings.values()])
     paths = sorted(cohort.glob("*.parquet")) if cohort.is_dir() else [cohort]
     kept = []
@@ -287,14 +302,20 @@ def filter_cohort(
                     has_oracle=oracle,
                     trials=(calibration.attempts[-1],) if oracle else (),
                     calibration=calibration,
+                    no_oracle_liveness=liveness.get(task.id),
                     exclusion_reason=reason,
                 )
+                if not oracle and calibration.passed and not entry.passed:
+                    entry = entry.model_copy(update={"exclusion_reason": "no_oracle_liveness_missing_or_failed"})
                 entries[task.id] = entry
                 if entry.passed:
                     kept.append(row)
     extra = set(mappings) - set(entries)
     if extra:
         raise ValueError(f"Task map contains unknown TaskSpecs: {sorted(extra)[:5]}")
+    extra_liveness = set(liveness) - {task_id for task_id, entry in entries.items() if not entry.has_oracle}
+    if extra_liveness:
+        raise ValueError(f"Liveness receipts do not belong to no-oracle tasks: {sorted(extra_liveness)[:5]}")
     manifest = json.loads(conversion_manifest.read_text()) if conversion_manifest is not None else None
     if manifest is not None and manifest["converted_rows"] != len(entries):
         raise ValueError("Converted cohort does not match the full conversion manifest")
@@ -536,6 +557,7 @@ def main() -> None:
     collect.add_argument("--jobs-dir", type=Path, required=True)
     collect.add_argument("--output", type=Path, required=True)
     collect.add_argument("--conversion-manifest", type=Path)
+    collect.add_argument("--no-oracle-liveness", type=Path, help="separate empty-submission liveness JSONL receipts")
     calibrate = commands.add_parser("calibrate")
     calibrate.add_argument("--cohort", type=Path, required=True)
     calibrate.add_argument("--task-map", type=Path, required=True)
@@ -559,7 +581,9 @@ def main() -> None:
             args.calibration_solutions,
         )
         return
-    filter_cohort(args.cohort, args.task_map, args.jobs_dir, args.output, args.conversion_manifest)
+    filter_cohort(
+        args.cohort, args.task_map, args.jobs_dir, args.output, args.conversion_manifest, args.no_oracle_liveness
+    )
 
 
 if __name__ == "__main__":
