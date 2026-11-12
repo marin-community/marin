@@ -75,7 +75,6 @@ def test_recipe_round_trip_preserves_immutable_containers_and_mapping_order():
         with pytest.raises(ValueError, match="mapping keys must be strings"):
             schema.SkyRLRecipe.from_document(document)
         assert list(document["generator"]["engine_init_kwargs"].items()) == original_routes
-    assert "micro_forward_batch_size_per_gpu" not in sections.Trainer().model_dump(mode="json")
 
 
 def test_settings_merge_required_sections_and_preserve_empty_mappings(base_recipe):

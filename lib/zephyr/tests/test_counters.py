@@ -9,7 +9,7 @@ import threading
 import pytest
 import zephyr.coordinator as coordinator_module
 from zephyr import counters
-from zephyr.coordinator import ZephyrCoordinator, ZephyrExecutionResult, _PipelineExecution
+from zephyr.coordinator import ZephyrCoordinator, _PipelineExecution
 from zephyr.counters import ScopedCounters
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.stage_io import ZephyrTaskResources
@@ -95,20 +95,6 @@ def test_set_counter_noop_outside_worker():
         assert counters.pipeline.get_counters() == {}
     finally:
         _worker_ctx_var.reset(token)
-
-
-def test_zephyr_execution_result_fields():
-    """ZephyrExecutionResult exposes both results and counters."""
-    result = ZephyrExecutionResult(results=["a.jsonl", "b.jsonl"], counters={"docs": 7})
-    assert result.results == ["a.jsonl", "b.jsonl"]
-    assert result.counters == {"docs": 7}
-
-
-def test_zephyr_execution_result_empty():
-    """ZephyrExecutionResult handles empty results and counters (e.g. dry_run)."""
-    result = ZephyrExecutionResult(results=[], counters={})
-    assert result.results == []
-    assert result.counters == {}
 
 
 def test_stage_scoped_counters():
@@ -457,16 +443,6 @@ def test_update_counter_first_call_initialises():
         counters.pipeline.set_aggregation("x", Aggregation.MAX)
         counters.pipeline.update_counter("x", 42)
         assert counters.pipeline.get_counters()["x"] == 42
-    finally:
-        _worker_ctx_var.reset(token)
-
-
-def test_update_counter_noop_outside_worker():
-    """update_counter is a no-op when called outside a worker context."""
-    token = _worker_ctx_var.set(None)
-    try:
-        counters.pipeline.update_counter("anything", 999)
-        assert counters.pipeline.get_counters() == {}
     finally:
         _worker_ctx_var.reset(token)
 

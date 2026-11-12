@@ -24,9 +24,16 @@ from cloud.iris.rl_config_translation import (
 )
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
 from cloud.iris.runtime_environment import RuntimeMode, runtime_profile_for_strategy
-from marinskyrl.distillation import validate_generation_logprobs
+from marinskyrl.distillation import (
+    TeacherModelSpec,
+    TeacherSource,
+    compile_distillation_plan_from_config,
+    validate_generation_logprobs,
+)
 from marinskyrl.entrypoints import RL_ENTRYPOINTS
-from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
+from marinskyrl.hf_model import HuggingFaceModelCache
+from marinskyrl.resource_locator import is_cloud_uri, is_hugging_face_repo_id, join_resource_path
+from marinskyrl.runtime_options import WeightSyncTransport
 from marinskyrl.task_sources import data_source
 
 DEFAULT_DRAFT_MODEL_CACHE_TTL_DAYS = 14
@@ -147,6 +154,7 @@ class InputsConfig:
     """Immutable model and data locators resolved by Marin."""
 
     model: LaunchModelLocator = field(default_factory=LaunchModelLocator)
+    hugging_face_models: list[HuggingFaceModelCache] = field(default_factory=list)
     data_kind: str = MISSING
     train_data: list[dict[str, Any]] = field(default_factory=list)
     validation_data: list[dict[str, Any]] = field(default_factory=list)
@@ -242,6 +250,21 @@ def load_launch_config(path: Path) -> DictConfig:
     return config
 
 
+def hugging_face_models(config: DictConfig) -> tuple[TeacherModelSpec, ...]:
+    """Select Hub policy and local-inference teachers before GPU allocation."""
+    policy = config.skyrl.get("trainer", {}).get("policy", {}).get("model", {})
+    models = [TeacherModelSpec(str(config.inputs.model.uri), str(policy.get("revision") or "main"))]
+    if config.run.mode != RunMode.CHECKPOINT_EXPORT:
+        plan = compile_distillation_plan_from_config(config.skyrl)
+        if plan is not None:
+            models.extend(teacher.model for teacher in plan.teachers if teacher.source is TeacherSource.LOCAL_INFERENCE)
+    return tuple(
+        dict.fromkeys(
+            model for model in models if is_hugging_face_repo_id(model.path) and not Path(model.path).is_dir()
+        )
+    )
+
+
 def _resolved_config(config: DictConfig) -> dict[str, Any]:
     value = OmegaConf.to_container(config, resolve=True, throw_on_missing=True)
     if not isinstance(value, dict):
@@ -310,11 +333,7 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
         raise ValueError("iris.timeout cannot be negative")
     _validate_inputs(raw["inputs"])
     ray = raw["ray"]
-    if (
-        ray["rendezvous_timeout"] <= 0
-        or ray["cluster_join_timeout"] <= 0
-        or ray["driver_liveness_timeout"] < 0
-    ):
+    if ray["rendezvous_timeout"] <= 0 or ray["cluster_join_timeout"] <= 0 or ray["driver_liveness_timeout"] < 0:
         raise ValueError(
             "ray rendezvous timeout and cluster join timeout must be positive; "
             "driver liveness timeout cannot be negative"
@@ -333,6 +352,12 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     runtime = raw["runtime"]
     entrypoint = runtime["entrypoint"]
     registered_rl_entrypoint_module(entrypoint)
+    if (
+        skyrl.get("generator", {}).get("weight_sync_transport") == WeightSyncTransport.EXPERT_BLOCK
+        and skyrl.get("trainer", {}).get("placement", {}).get("colocate_all")
+        and entrypoint != RL_ENTRYPOINTS[RLEntrypoint.STANDARD]
+    ):
+        raise ValueError("colocated expert_block requires the standard training entrypoint")
     validate_generation_logprobs(config.skyrl)
     validate_mismatch_probe_config(
         skyrl,

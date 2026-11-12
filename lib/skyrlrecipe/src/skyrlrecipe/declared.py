@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, Field, PlainSerializer, PositiveInt
 
-from .model import FrozenMap, OpenMap, Section, SectionMap, thaw, unset_field
+from .model import FrozenMap, NumberMap, OpenMap, Section, SectionMap, thaw, unset_field
 from .sampling import EvalSamplingParams
 
 
@@ -98,9 +98,12 @@ class CheckpointCallback(Section):
 
 class BestCheckpointCallback(Section):
     type: Literal["best_checkpoint"]
-    initial_model_uri: str
-    expected_tasks: int
-    minimum_scored_tasks: int
+    initial_model_uri: str = unset_field()
+    expected_tasks: int = unset_field()
+    minimum_scored_tasks: int = unset_field()
+    selection_metric: str = unset_field()
+    save_after_fraction: int | float = unset_field()
+    preservation_max_drop: NumberMap | None = unset_field()
 
 
 class DistillationTokenBudgetCallback(Section):

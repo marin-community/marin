@@ -119,6 +119,71 @@ tested batch shape, but both retained existing batch-shape sensitivity. This
 option does not establish exact batch invariance; see the
 [numerical checks](https://marin-us-east-02a.cwobject.com/marin/users/romain/hero-nccl-invariance-01a13c0f/reports/HERO-NCCL-BATCH-INVARIANCE.md).
 
+## Expert-block weight sync placement
+
+Expert-block sync publishes each Grug expert from the Megatron rank that owns it to the
+vLLM expert-parallel rank that serves it. The local vLLM engine must use the TRITON MoE
+backend, NCCL weight sync, TP=1, and EP equal to DP. Megatron needs TP=ETP=1 and
+`nccl_max_channels` unset or set to 1.
+
+| Placement | Supported layout | Lifecycle |
+| --- | --- | --- |
+| Separate policy and inference GPUs | Local TP=1 vLLM, EP=DP; trainer and receiver parallel sizes may differ | Receivers stay awake; placement and transfer groups are checked at startup. |
+| Shared GPUs (`colocate_all=true`) | Standard training entrypoint on one four-GPU node; Megatron TP=PP=ETP=1, EP=4; one vLLM TP=PP=1, DP=EP=4 engine; no LoRA or eager mode | Level-2 sleep during training; receiver placement and Gloo transfer groups are rechecked and rebuilt after each weight wake. Verification is required before generation resumes. |
+
+Colocated transfer groups use Gloo's CUDA broadcast support because the pinned NCCL
+2.29 runtime rejects two ranks on one physical GPU. [NCCL's shared-GPU rank mode](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-multi-rank-gpu-enable)
+starts in 2.30 and is experimental. The config's
+`weight_sync_backend: nccl` remains required for the vLLM weight-sync interface; the
+expert-block transport selects Gloo only for its colocated groups.
+
+Other colocated shapes fail during launch validation, before GPU allocation. A colocated
+recipe must explicitly declare these settings in its SkyRL YAML:
+
+```yaml
+trainer:
+  strategy: megatron
+  placement:
+    colocate_all: true
+    policy_num_nodes: 1
+    policy_num_gpus_per_node: 4
+  policy:
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 1
+      expert_tensor_parallel_size: 1
+      expert_model_parallel_size: 4
+generator:
+  backend: vllm
+  run_engines_locally: true
+  weight_sync_backend: nccl
+  weight_sync_transport: expert_block
+  expert_block_sync:
+    verify: true
+  num_inference_engines: 1
+  inference_engine_tensor_parallel_size: 1
+  inference_engine_pipeline_parallel_size: 1
+  inference_engine_data_parallel_size: 4
+  inference_engine_expert_parallel_size: 4
+  engine_init_kwargs:
+    kernel_config:
+      moe_backend: triton
+```
+
+The four-GPU gate is
+`skyrl-train/tests/gpu/test_grug_megatron.py::test_grug_megatron_four_gpu_colocated_expert_block_matches_fresh_load_after_two_updates`.
+It runs an initial publication and two train/sleep/wake/publication/generation cycles.
+After each update it exports the policy checkpoint, then compares the serving ranks'
+dense and expert tensors byte-for-byte with a fresh vLLM load of that export. Fixed-input
+prompt log-probabilities use a maximum absolute tolerance of `2e-3` for BF16 kernel-order
+variation; stale or swapped experts must still fail the exact tensor comparison. Run this
+gate on four H100s before relying on a new runtime revision for colocated training:
+
+```bash
+gh workflow run marin-skyrl-nightly.yaml --ref <branch> \
+  -f grug_tests='skyrl-train/tests/gpu/test_grug_megatron.py::test_grug_megatron_four_gpu_colocated_expert_block_matches_fresh_load_after_two_updates'
+```
+
 ## Train, resume, and evaluate through Marin
 
 The artifact smoke uses Qwen2.5-0.5B-Instruct, procedural CatCount training

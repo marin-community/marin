@@ -205,6 +205,60 @@ conflicts = [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-fray", group = "fray_tpu_test" },
     ],
+    # The ROCm extras run JAX 0.12; every other accelerator stack and the
+    # test groups below pin an older JAX.
+    [
+        { package = "marin-levanter", extra = "rocm" },
+        { package = "marin-core", extra = "gpu" },
+    ],
+    [
+        { package = "marin-levanter", extra = "rocm" },
+        { package = "marin-core", extra = "tpu" },
+    ],
+    [
+        { package = "marin-levanter", extra = "rocm" },
+        { package = "marin-core", extra = "cpu" },
+    ],
+    [
+        { package = "marin-core", extra = "rocm" },
+        { package = "marin-levanter", extra = "gpu" },
+    ],
+    [
+        { package = "marin-core", extra = "rocm" },
+        { package = "marin-levanter", extra = "tpu" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-levanter", extra = "rocm" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-core", extra = "rocm" },
+    ],
+    [
+        { package = "marin-levanter", extra = "rocm" },
+        { package = "marin-fray", group = "fray_tpu_test" },
+    ],
+    [
+        { package = "marin-levanter", extra = "rocm" },
+        { package = "marin-iris", group = "dev" },
+    ],
+    [
+        { package = "marin-levanter", extra = "rocm" },
+        { package = "marin-iris", group = "test" },
+    ],
+    [
+        { package = "marin-core", extra = "rocm" },
+        { package = "marin-fray", group = "fray_tpu_test" },
+    ],
+    [
+        { package = "marin-core", extra = "rocm" },
+        { package = "marin-iris", group = "dev" },
+    ],
+    [
+        { package = "marin-core", extra = "rocm" },
+        { package = "marin-iris", group = "test" },
+    ],
 ]
 
 [tool.uv.workspace]
@@ -267,6 +321,11 @@ torch = [{ index = "pytorch-cpu", extra = "pipeline", marker = "sys_platform == 
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
+rocm = { index = "rocm" }
+rocm-sdk-core = { index = "rocm" }
+rocm-sdk-libraries = { index = "rocm" }
+rocm-sdk-device-gfx942 = { index = "rocm" }
+rocm-sdk-device-gfx950 = { index = "rocm" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
@@ -286,6 +345,12 @@ explicit = true
 name = "pytorch-cpu-fallback"
 url = "https://download.pytorch.org/whl/cpu/torch/"
 format = "flat"
+
+# AMD's TheRock ROCm runtime wheels, used only by the `rocm` extras.
+[[tool.uv.index]]
+name = "rocm"
+url = "https://stable.repo.amd.com/rocm/core/whl-next/"
+explicit = true
 
 [tool.iris.bundle]
 include = ["vendor/harbor/src/**/*", "lib/rigging/src/**/*", "lib/finestore/src/**/*"]
