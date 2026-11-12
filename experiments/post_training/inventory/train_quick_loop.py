@@ -25,6 +25,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
+from skyrlrecipe import SkyRLRecipe
 
 from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, training_config
 from experiments.post_training.task_curation.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
@@ -36,7 +37,7 @@ MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT
 DEFAULT_STEPS = 25
 ARTIFACT_NAME = "checkpoints/snowball-inventory"
 SELECTION_PREFIX = "rl-data/task-selection"
-DEFAULT_SELECTION_URI = "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.10.23.2"
+DEFAULT_SELECTION_URI = "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04"
 CLUSTER = "cw-us-east-02a"
 SEED = 20261020
 REQUEST_WINDOW_TOKENS = 24_576
@@ -81,7 +82,6 @@ def training_recipe(steps: int) -> dict:
     }
     trainer = config["trainer"]
     trainer.update(
-        seed=SEED,
         project_name="marin-snowball-curriculum",
         eval_num_prompts=None,
         dump_eval_results=True,
@@ -101,7 +101,7 @@ def training_recipe(steps: int) -> dict:
         scheduler="constant_with_warmup",
         num_warmup_steps=0,
     )
-    return config
+    return SkyRLRecipe.from_document(config).to_skyrl()
 
 
 def build_run(

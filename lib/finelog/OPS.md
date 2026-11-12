@@ -70,7 +70,7 @@ down together. For the GCE hub:
 ```bash
 gcloud compute ssh finelog-marin --project hai-gcp-models --zone us-central1-a \
   --tunnel-through-iap \
-  --command='sudo docker logs --since 5m finelog 2>&1 | grep -E "slow FetchLogs RPC stage|slow Query RPC stage|object cache activity|object cache sweep"'
+  --command='sudo docker logs --since 5m finelog 2>&1 | grep -E "read execution report|slow FetchLogs RPC stage|slow Query RPC stage|object cache activity|object cache sweep"'
 ```
 
 Large `visibility_wait_ms` means the request waited for a structural storage
@@ -79,10 +79,14 @@ used by active scans; it does not acquire the global visibility lock. Object
 compaction also updates its accounting view without queuing a visibility writer.
 Legacy file replacement and table deletion still require that lock.
 
-Query and FetchLogs RPCs have a ten-second default budget covering admission,
+Query and FetchLogs RPCs have a 30-second default budget covering admission,
 visibility waits, snapshot/provider setup, execution, and response encoding. A
 shorter caller deadline wins. `FINELOG_QUERY_TIMEOUT_MS` changes the server
-ceiling; object snapshot retention can impose a tighter execution bound.
+ceiling. Each object snapshot carries an absolute deadline derived from that
+same snapshot's retention policy, starting before snapshot acquisition.
+Planning consumes this lifetime; a later policy change cannot extend the read.
+Query, FetchLogs, and local forwarding reads share this bound and guard their
+optional fills against cancellation.
 Optional background warming uses immediately available download slots and is
 cancelled when the request fails or times out. After a successful response,
 admitted fills can finish within the original request deadline. The allowance
@@ -95,9 +99,24 @@ I/O. Uncached Parquet is scanned directly through GCS/S3 range reads.
 
 Index headers and requested sections use the unified object's `read_range`
 interface: resident ranges are read under cache-file pins, and misses go
-directly to GCS/S3 without filling a whole bundle. Segment pruning reads up to
-32 bundles concurrently under a shared 500 ms index-I/O budget. It reads key
-sections first and skips other sections when a segment is already excluded.
+directly to GCS/S3 without filling a whole bundle. Object-backed plans use file
+descriptors from the captured catalog without listing objects or opening
+footers and bundles. Execution checks indexes as it reaches each file.
+DataFusion keeps one current file and one lookahead open per active partition;
+file preparation stops when downstream operators finish, including after an
+unordered LIMIT has enough exact matches. Global sorts and aggregates may
+still require all candidates. The Query RPC returns one collected response.
+
+Each file's optional index reads and parsing have up to 500 ms, capped by the read deadline.
+Later files get their own optional budget; already parsed cache entries remain
+usable after it expires. Preparation reads key sections first and skips other
+sections when a segment is already excluded. Cache-local I/O and parsing use
+bounded workers whose permits remain held until the actual work finishes,
+including after async cancellation. Each store has eight cache-read workers and
+an independent pool of eight cache-fill writers, so warming cannot occupy the
+read pool. Parsed indexes have eight workers shared by the index cache. Remote
+range reads rely on DataFusion's per-query file window rather than a separate
+store-wide request cap. Already-running filesystem work may finish.
 Parsed sections share the memory-bounded index cache. Source footers needed to
 map spans or exact postings to row groups also use this range interface.
 Object-backed Parquet scans, covering projections, and maintenance reads use
@@ -148,16 +167,20 @@ row-group pruning worked and file metadata is the remaining cost. The
 tasks, not CPU time, so they overlap and do not sum to wall clock — treat a large
 one as a place to look, not as a measured cost.
 
-`EXPLAIN` itself can be slow when planning reads large trigram sections. If
-`EXPLAIN ANALYZE` reports little scan time and few scanned bytes, compare its
-wall time with plain `EXPLAIN` before tuning Parquet reads. For predicates on
-several indexed columns, Finelog checks range-constrained columns first and
-stops reading a segment's other index sections once its span mask is empty.
-Before loading trigram sections, bounded integer predicates also exclude cached
-local segments using complete Parquet min/max statistics. Missing source files
-or statistics retain the segment for the ordinary scan. The planner retains
-each segment's computed span mask through source planning, so a cache eviction
-does not cause a second index load for the same query.
+For ordinary object-backed scans, `EXPLAIN` performs no object I/O. Legacy
+filesystem scans still inspect local metadata. A required object missing when
+execution reaches it fails the query; a LIMIT that finishes earlier need not
+validate unread objects. Derived index failures retain the source scan.
+
+`read execution report` survives read failure and cancellation. Compare
+`phase`, `logical_plan_ms`, `physical_plan_ms`, and `execution_ms`, then
+`candidate_files`, `prepared_files`, `pruned_files`, and `source_opens`.
+`first_batch_ms` is the first nonempty engine result batch since context
+creation, before the unary RPC response is encoded. Source/index range byte
+and request counts describe requests through the unified interface, including
+cache hits; they do not measure only remote network traffic. Index cache hits
+and unavailable, timeout, corrupt, stale, or missing-bundle counters explain
+why pruning was declined. Several scans can share one request's counters.
 
 For log searches, `epoch_ms` is not the catalog key: `log` is keyed by task
 `key`. A time bound can therefore still require footer reads for old segments.
@@ -429,7 +452,7 @@ local rebuild investigation. A time bound remains the fastest containment:
 telemetry namespaces are keyed on `timestamp_ms`, so bounded queries can prune
 before any secondary method runs.
 
-`finelog query` applies a client deadline just past the server's own 10s one.
+`finelog query` applies a client deadline just past the server's own 30s one.
 Raise both with `--timeout` and `FINELOG_QUERY_TIMEOUT_MS` if a query genuinely
 needs longer.
 
@@ -526,7 +549,9 @@ forwarding:
 The public key in `marin.yaml` must be the public half of `forwarding.signing_key` —
 that pairing is what authenticates the sender, and a wrong key is a 401 on every
 push. `forwarding.cluster` is the origin name the sender stamps on every forwarded
-row; keep it equal to the hub key entry's `cluster` label so reads line up.
+row; keep it equal to the hub key entry's `cluster` label so reads line up. A sender
+forwards rows whose `cluster` is empty or already its own `forwarding.cluster`, and
+skips rows naming any other cluster.
 
 Roll the **hub first** (a sender whose key the hub does not yet trust gets 401),
 then the sender. `deploy sync-secret` resolves `signing_key` from Secret Manager

@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::ops::Range;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -18,9 +19,11 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::errors::{ParquetError, Result as ParquetResult};
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 
-use crate::store::object_store::{ObjectReference, ObjectStore};
+use crate::store::object_store::{CachePins, ObjectReference, ObjectStore};
 
 pub(crate) struct ObjectRangeReader {
+    scope: Option<Arc<super::read_scope::ReadScope>>,
+    cache_pins: CachePins,
     store: Arc<dyn ObjectStore>,
     reference: ObjectReference,
     metadata_size_hint: Option<usize>,
@@ -31,6 +34,8 @@ pub(crate) struct ObjectRangeReader {
 impl ObjectRangeReader {
     pub fn new(store: Arc<dyn ObjectStore>, reference: ObjectReference) -> Self {
         Self {
+            scope: None,
+            cache_pins: CachePins::default(),
             store,
             reference,
             metadata_size_hint: Some(super::file_scan::REMOTE_FOOTER_SIZE_HINT),
@@ -45,6 +50,13 @@ impl AsyncFileReader for ObjectRangeReader {
         &mut self,
         ranges: Vec<Range<u64>>,
     ) -> BoxFuture<'_, ParquetResult<Vec<Bytes>>> {
+        if let Some(scope) = &self.scope {
+            scope.range_reads.fetch_add(1, Ordering::Relaxed);
+            scope.range_bytes.fetch_add(
+                ranges.iter().map(|range| range.end - range.start).sum(),
+                Ordering::Relaxed,
+            );
+        }
         if let Some(metrics) = &self.metrics {
             metrics.bytes_scanned.add(
                 ranges
@@ -66,6 +78,12 @@ impl AsyncFileReader for ObjectRangeReader {
     }
 
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, ParquetResult<Bytes>> {
+        if let Some(scope) = &self.scope {
+            scope.range_reads.fetch_add(1, Ordering::Relaxed);
+            scope
+                .range_bytes
+                .fetch_add(range.end - range.start, Ordering::Relaxed);
+        }
         if let Some(metrics) = &self.metrics {
             metrics
                 .bytes_scanned
@@ -88,6 +106,10 @@ impl AsyncFileReader for ObjectRangeReader {
         options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, ParquetResult<Arc<ParquetMetaData>>> {
         async move {
+            self.store
+                .pin_cached_path(&self.reference, &self.cache_pins)
+                .await
+                .map_err(|error| ParquetError::External(Box::new(error)))?;
             let cache = super::shared_runtime_env()
                 .cache_manager
                 .get_file_metadata_cache();
@@ -146,6 +168,7 @@ impl Drop for ObjectRangeReader {
 }
 
 pub(crate) struct ObjectReaders {
+    pub scope: Arc<super::read_scope::ReadScope>,
     pub store: Arc<dyn ObjectStore>,
     pub references: BTreeMap<String, ObjectReference>,
 }
@@ -177,6 +200,7 @@ impl ParquetFileReaderFactory for ObjectReaders {
                 ))
             })?;
         let mut reader = ObjectRangeReader::new(Arc::clone(&self.store), reference.clone());
+        reader.scope = Some(Arc::clone(&self.scope));
         reader.metrics = Some(ParquetFileMetrics::new(
             partition_index,
             file.object_meta.location.as_ref(),

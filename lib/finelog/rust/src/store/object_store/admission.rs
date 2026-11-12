@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 
 use tokio::task::AbortHandle;
 
-use super::cached::CachePins;
 use super::{ObjectId, ObjectReference};
 
 const QUERY_WARM_BYTES: u64 = 256 * 1024 * 1024;
@@ -27,7 +26,6 @@ pub(super) enum AdmissionDecision {
 /// Shared by every table and scan in one query's SessionConfig.
 pub struct QueryCacheAdmission {
     state: Mutex<QueryBudget>,
-    pub(super) pins: CachePins,
     fills: Mutex<Option<Vec<AbortHandle>>>,
 }
 
@@ -53,7 +51,6 @@ impl QueryCacheAdmission {
                 remaining_objects: objects,
                 fill_deadline: None,
             }),
-            pins: CachePins::default(),
             fills: Mutex::new(Some(Vec::new())),
         }
     }

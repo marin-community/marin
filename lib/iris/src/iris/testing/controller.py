@@ -379,6 +379,9 @@ def make_direct_job_request(
     task_image: str = "",
     coscheduling_group_by: str = "",
     priority_band: int = 0,
+    max_retries_failure: int = 0,
+    max_retries_preemption: int = 0,
+    max_task_failures: int = 0,
 ) -> controller_pb2.Controller.LaunchJobRequest:
     job_name = JobName.root("test-user", name)
     req = controller_pb2.Controller.LaunchJobRequest(
@@ -389,6 +392,9 @@ def make_direct_job_request(
         replicas=replicas,
         task_image=task_image,
         priority_band=priority_band,
+        max_retries_failure=max_retries_failure,
+        max_retries_preemption=max_retries_preemption,
+        max_task_failures=max_task_failures,
     )
     if coscheduling_group_by:
         req.coscheduling.group_by = coscheduling_group_by
@@ -403,6 +409,9 @@ def submit_direct_job(
     task_image: str = "",
     coscheduling_group_by: str = "",
     priority_band: int = 0,
+    max_retries_failure: int = 0,
+    max_retries_preemption: int = 0,
+    max_task_failures: int = 0,
 ) -> list[JobName]:
     jid = JobName.root("test-user", name)
     req = make_direct_job_request(
@@ -411,6 +420,9 @@ def submit_direct_job(
         task_image=task_image,
         coscheduling_group_by=coscheduling_group_by,
         priority_band=priority_band,
+        max_retries_failure=max_retries_failure,
+        max_retries_preemption=max_retries_preemption,
+        max_task_failures=max_task_failures,
     )
     with state._db.transaction() as cur:
         ops.job.submit(

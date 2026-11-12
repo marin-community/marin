@@ -360,7 +360,9 @@ async def test_installed_candidate_relay_buffers_sdk_events_and_keeps_judge_sepa
             host_capabilities=HostCapabilities(
                 daytona=None,
                 model_authentication={
-                    "https://candidate.example/proxy/t/host-capability/serve/v1": "candidate-private",
+                    "https://candidate.example/proxy/t/host-capability/serve/v1": (
+                        "candidate-private"
+                    ),
                     "https://judge.example/v1": "judge-private",
                 },
             ),
@@ -386,7 +388,11 @@ async def test_installed_candidate_relay_buffers_sdk_events_and_keeps_judge_sepa
 import json, os, urllib.request, urllib.error
 assert os.environ['OPENAI_API_KEY'] == 'EMPTY'
 assert os.environ['OPENAI_BASE_URL'] == 'http://127.0.0.1:{candidate_port}/v1'
-assert not any('private' in value or 'host-capability' in value for value in os.environ.values())
+assert not any(
+    secret in value
+    for value in os.environ.values()
+    for secret in ('candidate-private', 'judge-private', 'host-capability')
+)
 def post(path, payload, port={candidate_port}):
     request = urllib.request.Request('http://127.0.0.1:'+str(port)+path, data=json.dumps(payload).encode(), headers={{'Authorization':'Bearer EMPTY'}})
     with urllib.request.urlopen(request) as response:
@@ -556,7 +562,9 @@ print('ok')
             400,
             {
                 "code": 400,
-                "message": "This model's maximum context length is 131072 tokens: host-private details",
+                "message": (
+                    "This model's maximum context length is 131072 tokens: host-private details"
+                ),
             },
             BadRequestError,
             "context_length_exceeded",

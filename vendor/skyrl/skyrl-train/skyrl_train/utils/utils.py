@@ -805,7 +805,6 @@ def _validate_dcp_cfg(cfg: DictConfig):
         f"inference_engine_decode_context_parallel_size must satisfy 1 <= dcp <= "
         f"inference_engine_tensor_parallel_size; got dcp={dcp}, tp={tp}"
     )
-    # DCP uses the vLLM backend.
     assert gen.backend == "vllm", (
         f"decode context parallel (inference_engine_decode_context_parallel_size={dcp}) "
         f"is only supported with generator.backend='vllm', got '{gen.backend}'"

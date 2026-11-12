@@ -3,7 +3,7 @@
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import httpx
@@ -237,6 +237,25 @@ async def test_assistant_prefix_rejects_reasoning_parsed_by_a_chat_endpoint(chan
     finally:
         await model.client.close()
     assert caught.value.rollout.failure.exception_type == "ValueError"
+
+
+async def test_an_uncapped_chat_request_omits_both_output_limit_fields():
+    server = ChatServer([completion({"content": "12"})])
+    model = replace(server.model(), max_tokens=None)
+    async with model.client:
+        result = await model(ModelRequest(messages=({"role": "user", "content": "Return 12"},), options={}))
+    assert result.message["content"] == "12"
+    assert "max_tokens" not in server.requests[0] and "max_completion_tokens" not in server.requests[0]
+
+
+@pytest.mark.parametrize(("context_window", "stop_reason"), [(17, "length"), (18, "tool_calls"), (None, "tool_calls")])
+async def test_a_tool_call_that_fills_the_context_window_is_a_length_stop(context_window, stop_reason):
+    tool_call = {"id": "call-1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+    server = ChatServer([completion({"content": None, "tool_calls": [tool_call]}, finish_reason="tool_calls")])
+    model = replace(server.model(), context_window=context_window)
+    async with model.client:
+        turn = await model(ModelRequest(messages=({"role": "user", "content": "What is a?"},), options={}))
+    assert turn.stop_reason == stop_reason
 
 
 async def test_exact_chat_preserves_source_conversation_without_appending_submission_instructions():

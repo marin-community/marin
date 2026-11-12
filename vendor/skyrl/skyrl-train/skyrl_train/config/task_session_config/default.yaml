@@ -19,8 +19,6 @@ session:
 # A launch may override the verifier backend without rewriting the task artifact.
 task_spec:
   default_harness: shellbox
-  harness_by_dataset:
-    structure-closure: assistant_prefix
   session:
     max_turns: 1
     max_total_tokens: null

@@ -736,9 +736,9 @@ class InferenceEngineClient(InferenceEngineInterface):
                 finish_reason = ABORT_FINISH_REASON
                 continue
 
-            # Error responses have an error object instead of completion choices.
+            # Error responses have an "error" field or object="error", rather than "choices".
             if is_engine_error_response(partial_response):
-                error_info = partial_response["error"]
+                error_info = partial_response.get("error", partial_response)
                 error_msg = (
                     error_info.get("message", str(error_info)) if isinstance(error_info, dict) else str(error_info)
                 )
@@ -1352,7 +1352,7 @@ def _completion_engine_error_response(results: List[Dict[str, Any]]) -> Optional
     """Return the first vLLM completion error as a client error, or None."""
     for result in results:
         if is_engine_error_response(result):
-            error_details = result["error"]
+            error_details = result.get("error", result)
             return ErrorResponse(
                 error=ErrorInfo(
                     message=f"In one of the engines that SkyRL manages, an error occurred: {error_details['message']}",

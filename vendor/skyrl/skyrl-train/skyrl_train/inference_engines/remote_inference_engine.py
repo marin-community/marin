@@ -8,7 +8,6 @@ from skyrl_train.inference_engines.base import (
 from skyrl_train.weight_sync.weight_loader import WeightLoader
 from typing import List, Optional, Any, Dict
 import json
-from transformers import PreTrainedTokenizerBase
 
 
 class RemoteWeightLoader(WeightLoader):
@@ -23,7 +22,7 @@ class RemoteWeightLoader(WeightLoader):
 
         Args:
             url: Base URL of the remote inference server.
-            engine_backend: The vLLM backend ("vllm").
+            engine_backend: Inference backend ("vllm").
         """
         self._url = url
         self._engine_backend = engine_backend
@@ -121,7 +120,6 @@ class RemoteInferenceEngine(InferenceEngineInterface):
         url: str,
         model_name: str,
         engine_backend: str,
-        tokenizer: PreTrainedTokenizerBase,
         tp_size: Optional[int] = None,
         pp_size: Optional[int] = None,
         dp_size: Optional[int] = None,
@@ -144,7 +142,6 @@ class RemoteInferenceEngine(InferenceEngineInterface):
         self._dp_size = dp_size
         self._ep_size = ep_size
         self._dcp_size = dcp_size
-        self.tokenizer = tokenizer
 
         # Create weight loader for coordinating weight updates
         self._weight_loader = RemoteWeightLoader(self.url, engine_backend)
@@ -192,33 +189,44 @@ class RemoteInferenceEngine(InferenceEngineInterface):
                 payload = sampling_params.copy()
                 payload["model"] = self.model_name
                 payload["prompt"] = prompt_token_ids
+                payload["return_token_ids"] = True
+                payload.setdefault("logprobs", 0)
                 request_url = f"{self.url}/v1/completions"
             else:
                 raise ValueError(f"Invalid engine backend: {self.engine_backend}")
             async with session.post(request_url, json=payload, headers=headers) as resp:
+                resp.raise_for_status()
                 response = await resp.json()
 
         # 3. Parse outputs
         outputs = []
         output_ids = []
         finish_reasons = []
+        response_logprobs = None
 
         if self.engine_backend == "vllm":
+            if len(response["choices"]) != len(prompt_token_ids):
+                raise ValueError("Remote completion count does not match the prompt batch")
+            if payload["logprobs"] is not None:
+                response_logprobs = []
             for i, choice in enumerate(response.get("choices", [])):
                 # Since n=1, index i represents the output for `prompt[i]`
                 assert choice["index"] == i, "Expect the choices to be ordered by index."
                 text = choice["text"]
                 outputs.append(text)
                 finish_reasons.append(choice["finish_reason"])
-                # TODO(Charlie): this is not token-in-token-out because vLLM does not support
-                # returning token IDs via HTTP requests. Fix after this vLLM PR is merged:
-                # https://github.com/vllm-project/vllm/pull/22587
-                output_ids.append(self.tokenizer.encode(text, add_special_tokens=False))
+                token_ids = choice["token_ids"]
+                output_ids.append(token_ids)
+                if response_logprobs is not None:
+                    logprobs = choice["logprobs"]["token_logprobs"]
+                    if len(logprobs) != len(token_ids) or any(value is None for value in logprobs):
+                        raise ValueError("Remote sampled-token logprobs must align with the returned token IDs")
+                    response_logprobs.append(logprobs)
         else:
             raise ValueError(f"Invalid engine backend: {self.engine_backend}")
 
         return InferenceEngineOutput(
-            responses=outputs, stop_reasons=finish_reasons, response_ids=output_ids, response_logprobs=None
+            responses=outputs, stop_reasons=finish_reasons, response_ids=output_ids, response_logprobs=response_logprobs
         )
 
     async def chat_completion(self, request_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -313,7 +321,6 @@ def create_remote_inference_engines(
     urls: List[str],
     model_name: str,
     engine_backend: str,
-    tokenizer: PreTrainedTokenizerBase,
     tensor_parallel_size: Optional[int] = None,
     pipeline_parallel_size: Optional[int] = None,
     data_parallel_size: Optional[int] = None,
@@ -328,7 +335,6 @@ def create_remote_inference_engines(
         RemoteInferenceEngine(
             url=url,
             model_name=model_name,
-            tokenizer=tokenizer,
             engine_backend=engine_backend,
             tp_size=tensor_parallel_size,
             pp_size=pipeline_parallel_size,

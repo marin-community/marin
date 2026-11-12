@@ -26,9 +26,9 @@ the test starts itself (those are the Iris smokes in `iris-smoke-*.yaml`, marker
 - `run_test_job` — submits a `JobRequest`, bounds its queue/runtime waits, and
   terminates it on interruption. Used by the vLLM e2es.
 
-No workflow runs the `cluster` marker today: #8605 deleted Marin Cluster Smoke after 38
-consecutive scheduled runs timed out. Everything here is launched by hand until #8704
-gives accelerator tests a runner again.
+The Snowball serving nightly runs the vLLM backend-parity arms (H100 pp1/pp2
+and v4-32 TP16) through one Iris CPU parent per cluster. It reuses the canary monitor for
+capacity shutdown and Slack handling. The Levanter arm remains available by hand.
 
 `iris_client` and `marin_gpu_client` build on `open_cluster_client(name)`, which skips
 when no credential reaches the cluster: a missing kubeconfig (`ConfigException`,

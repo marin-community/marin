@@ -1316,7 +1316,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         self._validate_rollout_logprob_sampling = wrapper_kwargs.pop(ROLLOUT_LOGPROB_VALIDATION_KEY, False)
         if self._openai_sampling_params:
             logger.warning(
-                f"OpenAI API sampling params overridden: "
+                f"OpenAI API sampling defaults: "
                 f"temperature={self._openai_sampling_params.get('temperature', 1.0)}, "
                 f"top_p={self._openai_sampling_params.get('top_p', 1.0)}, "
                 f"top_k={self._openai_sampling_params.get('top_k', -1)}"
@@ -1637,13 +1637,12 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         request_id = headers.get("x-request-id") or uuid4().hex
         exact_prompt_token_ids = body.pop(EXACT_PROMPT_TOKEN_IDS_KEY, None)
 
-        # Apply configured sampling params from generator config.
-        # Harbor requests may include their own sampling params; we override
-        # with the SkyRL generator config so rollout exploration is consistent.
-        apply_openai_sampling(body, self._openai_sampling_params, self._validate_rollout_logprob_sampling)
+        # Explicit request sampling takes precedence for both training and evaluation.
+        # Requests for rollout logprobs must still match the training distribution.
 
         # 1. Build request
         try:
+            apply_openai_sampling(body, self._openai_sampling_params, self._validate_rollout_logprob_sampling)
             if endpoint == "/chat/completions":
                 request = ChatCompletionRequest(**body)
             else:
@@ -1773,7 +1772,13 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         headers = request_payload.get("headers", {})
         exact_prompt_token_ids = body.pop(EXACT_PROMPT_TOKEN_IDS_KEY, None)
 
-        apply_openai_sampling(body, self._openai_sampling_params, self._validate_rollout_logprob_sampling)
+        try:
+            apply_openai_sampling(body, self._openai_sampling_params, self._validate_rollout_logprob_sampling)
+        except ValueError as e:
+            err = _build_error_response(str(e), HTTPStatus.BAD_REQUEST.phrase, HTTPStatus.BAD_REQUEST.value)
+            yield f"data: {json.dumps(err)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
         body["stream"] = True
         body["return_token_ids"] = True  # force vLLM to emit per-chunk token_ids
 
