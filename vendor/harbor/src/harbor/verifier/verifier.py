@@ -90,6 +90,29 @@ class Verifier(BaseVerifier):
         are SYNCHRONOUS fsspec I/O on a remote (``s3://``) trial dir. Invoked via
         ``asyncio.to_thread`` from :meth:`verify` so the event loop stays free.
         """
+        verdict_path = self.trial_paths.verifier_dir / "verdict.json"
+        test_dirs, _, _ = self._resolve_tests()
+        requires_verdict = any(
+            (directory / filename).exists()
+            for directory in test_dirs
+            for filename in ("verifier.toml", "taskcompendium-verifier.toml")
+        )
+        if requires_verdict and not verdict_path.exists():
+            raise VerifierRuntimeError("Structured verifier produced no verdict")
+        if verdict_path.exists():
+            try:
+                verdict = json.loads(verdict_path.read_text())
+            except (ValueError, TypeError) as error:
+                raise VerifierOutputParseError("Invalid structured verifier verdict") from error
+            if not isinstance(verdict, dict) or not isinstance(verdict.get("detail"), dict):
+                raise VerifierOutputParseError("Invalid structured verifier verdict fields")
+            # The task's verifier owns setup responsibility. A scored setup
+            # failure can be an agent failure (for example, not cloning a repo).
+            # Infrastructure failures are explicitly non-scored verdicts.
+            if verdict.get("status") != "scored":
+                raise VerifierRuntimeError(
+                    f"Structured verifier did not score the candidate: {verdict}"
+                )
         if self.trial_paths.reward_json_path.exists():
             return self._parse_reward_json()
         elif self.trial_paths.reward_text_path.exists():

@@ -23,8 +23,8 @@ from experiments.post_training.task_curation.datasets.tasktrove.built_images imp
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
     DOCKERFILE,
     INSTRUCTION,
-    TEST_SH_REWARD,
     VERIFIER_DATA,
+    VERIFYIT_VERDICT_REWARD,
     TaskFiles,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.code_contests import convert_code_contests
@@ -155,7 +155,7 @@ def source_stdio_task(row: RawRow, convert: ConvertFn) -> NormalizedTask | Impor
                 cwd=converted.spec.workspace,
                 environment=environment,
                 answer_path=None,
-                reward=TEST_SH_REWARD,
+                reward=VERIFYIT_VERDICT_REWARD,
                 timeout=SOURCE_GRADER_TIMEOUT,
             ),
             "resources": task.resources.model_copy(update={"verifier": verifier}),
@@ -242,16 +242,19 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "DCAgent__code-contests-noblock",
             convert_code_contests_task,
             CODE_CONTESTS_RUBRIC,
-            version="3",
+            version="4",
             grader=None,
             info=SourceInfo(
                 id="Task Trove:DCAgent__code-contests-noblock",
                 title="DCAgent/code-contests-noblock",
                 origin="Task Trove",
                 family="competitive-programming",
-                tags=("agentic", "multi-turn", "language:python"),
+                tags=("agentic", "multi-turn", "language:python", "excluded"),
                 count=8728,
-                notes="Hidden test_data.json, only the first case is shown. Exact-line compare; fine.",
+                notes=(
+                    "Excluded pending SAMPLE/FULL QA of converter version 4. "
+                    "Hidden test_data.json, only the first case is shown. Exact-line compare; fine."
+                ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
             ),
         ),
@@ -296,16 +299,17 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "laion__exp_rpt_taco-v2",
             convert_taco_task,
             TACO_RUBRIC,
-            version="3",
+            version="4",
             grader=None,
             info=SourceInfo(
                 id="Task Trove:laion__exp_rpt_taco-v2",
                 title="laion/exp_rpt_taco-v2",
                 origin="Task Trove",
                 family="stdin-stdout",
-                tags=("agentic", "multi-turn", "language:python"),
+                tags=("agentic", "multi-turn", "language:python", "excluded"),
                 count=10000,
                 notes=(
+                    "Excluded pending SAMPLE/FULL QA of converter version 4. "
                     "Hidden cases plus oracle. Filter to tasks with at least 5 cases and add tolerance-"
                     "aware compare where the prompt promises one."
                 ),

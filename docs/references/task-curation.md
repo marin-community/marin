@@ -931,8 +931,14 @@ recipe. The image freezes its bundled VerifyIT revision; changing the checkout's
 VerifyIT does not change the installed grader in that pin. Unrecognized contexts
 retain explicit build declarations. Both sources declare a script grader that
 invokes the image-installed `verifyit` tool with the preserved stdio configuration.
-System Python remains the candidate program interpreter. The archive admission guard reconstructs the
-context before accepting a known image pin.
+System Python remains the candidate program interpreter. The script grader reads
+`verdict.json`, preserving invalid-task and infrastructure-error outcomes even
+when the CLI also writes numeric reward zero. The archive admission guard
+reconstructs the context before accepting a known image pin.
+
+The original pinned CodeContests and TACO releases read numeric rewards only.
+They remain excluded until a new immutable release carries the structured
+protocol and robust SAMPLE/FULL qualification.
 
 The images live in the non-public `marin-community/task-curation-tasktrove` GHCR
 package. Daytona needs an organization registry credential for `ghcr.io` before

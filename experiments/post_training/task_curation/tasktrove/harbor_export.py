@@ -64,6 +64,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     DOCKERFILE,
     TASKTROVE_REPO,
     TEST_SH,
+    VERIFYIT_VERDICT_REWARD,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import VERIFYIT_CONTEXT
 from experiments.post_training.task_curation.tasktrove.source_images import ARC_SOURCES, PYTEST_ENV, source_actor_build
@@ -323,8 +324,11 @@ def _verifier_program(
             if len(grader.reward.files) != 1:
                 raise UnsupportedHarborTask("Script graders must emit one Harbor reward file")
             reward = grader.reward.files[0]
-            if reward.path != HARBOR_REWARD_PATH or reward.format != "number":
-                raise UnsupportedHarborTask("Script graders must emit Harbor's numeric reward.txt")
+            if grader.reward == VERIFYIT_VERDICT_REWARD:
+                if not any("tests/" + resource.path == VERIFIER_SPEC_PATH for resource in task.resources.verifier):
+                    raise UnsupportedHarborTask("Structured Verifyit rewards require their verifier configuration")
+            elif reward.path != HARBOR_REWARD_PATH or reward.format != "number":
+                raise UnsupportedHarborTask("Unsupported Harbor script reward contract")
         else:
             raise UnsupportedHarborTask("Unsupported script command or reward contract")
         answer_path = grader.answer_path

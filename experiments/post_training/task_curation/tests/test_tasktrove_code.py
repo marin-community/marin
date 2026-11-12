@@ -3,6 +3,7 @@
 
 """TaskTrove executable, structured-output and repository sources turn archives into graded tasks."""
 
+import asyncio
 import json
 import os
 import subprocess
@@ -12,8 +13,20 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, verifyit_spec
+from shellbox.image import RegistryImage
+from shellbox.machine import MachineSpec
+from taskcompendium.grading_result import Outcome
+from taskcompendium.models import (
+    ConversationTrace,
+    GradingAttempt,
+    ScriptGrader,
+    TaskSpec,
+    TextMessage,
+    VerifyitGrader,
+    verifyit_spec,
+)
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, RawRow
+from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.grade import Status, grade
 from verifyit.spec import ScriptSpec, StdioSpec, parse_spec
@@ -46,6 +59,7 @@ from experiments.post_training.task_curation.tests.conversion import (
     fixture_context,
     tasktrove_row,
 )
+from experiments.post_training.task_curation.tests.test_tasktrove_executable import GradingMachines
 
 pytest_plugins = ("lib.verifyit.tests.test_judge",)
 
@@ -472,6 +486,20 @@ def test_archived_build_pin_requires_matching_recipe_and_permissions(name, docke
     assert task.environment_requirements.docker_image is not None
     assert task.environment_requirements.docker_build is None
     assert task.grader.environment.docker_image == task.environment_requirements.docker_image
+    attempt = GradingAttempt(
+        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done"))),
+        files={"/app/solution.py": b""},
+    )
+    for status, expected in (("invalid_task", Outcome.INVALID_TASK), ("infra_error", Outcome.INFRA_ERROR)):
+        result = asyncio.run(
+            grade_in_sandbox(
+                task,
+                attempt,
+                GradingMachines(verdict_status=status),
+                MachineSpec(RegistryImage(task.grader.environment.docker_image)),
+            )
+        )
+        assert (result.status, result.reward) == (expected, None)
     record = harbor_record(
         {"task_json": task.model_dump_json(), "original_path": "fixture", "source_row": f"{name}/tasks.parquet:0"},
         grader_image=None,

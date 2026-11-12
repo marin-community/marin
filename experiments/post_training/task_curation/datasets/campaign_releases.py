@@ -75,11 +75,10 @@ def sources() -> list[RlDataSource]:
     staged_v1 = _public_release("smartie-swesmith-staged-v1", PUBLIC_STAGED_REVISION)
     staged_v2 = _public_release("smartie-swesmith-staged-v2", PUBLIC_STAGED_REVISION)
     return [
-        RlDataSource(
-            pipeline=import_prebuilt,
+        _rebuilt_cohort(
             config=PrebuiltCohort(
                 name="code-contests-built-image",
-                version="2026.11.12",
+                version="2026.11.12.1",
                 repo="open-athena/tasktrove-code-contests-taskcompendium-20261112",
                 revision="5b43c6f4c2322a5808e4dbdfaf4f0052037d3607",
                 expected_rows=8222,
@@ -89,9 +88,8 @@ def sources() -> list[RlDataSource]:
                 title="TaskTrove CodeContests built-image cohort (TaskCompendium)",
                 origin="Task Trove",
                 family="competitive-programming",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
-                count=8222,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
                     "production daytona_identity, Harbor machine_spec and Shellbox snapshot_identity over "
@@ -103,11 +101,12 @@ def sources() -> list[RlDataSource]:
                     "https://huggingface.co/datasets/open-athena/tasktrove-code-contests-taskcompendium-20261112"
                     "/blob/5b43c6f4c2322a5808e4dbdfaf4f0052037d3607/liveness.jsonl"
                 ),
-                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oracle_validation=OracleValidation.SKIPPED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/code.py version 3; frozen VerifyIT @ d8cdda47f4",
                     verification=(
+                        "Withdrawn qualification: numeric-only rewards did not preserve unscored verifier errors. "
                         "all 8222 rows match their native archive's built context, including file bytes "
                         "and modes; all rendered stdio configurations equal their original typed graders. "
                         "The declared script invokes the image-installed VerifyIT CLI, preserving the "
@@ -117,28 +116,23 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=8222,
                     admitted=8222,
-                    level=OversightLevel.SAMPLE,
+                    level=OversightLevel.NONE,
                 ),
                 notes=(
+                    "Excluded: the pinned payload reads only numeric rewards and can hide verifier failures. "
+                    "Republish with converter version 4 and robust SAMPLE/FULL controls before admission. "
                     "8222 tasks retain the exact built output of their archived environment for both "
                     "actor and grader. Registry manifests were read back and pulled image IDs matched "
                     "the local builds. The private release includes setup fidelity, stdio parity, "
                     "sampled liveness, retained exclusions and frozen build contexts. "
                     "No oracle solution or model-quality assessment ran"
                 ),
-                dataset=SourceReference(
-                    "open-athena/tasktrove-code-contests-taskcompendium-20261112",
-                    "5b43c6f4c2322a5808e4dbdfaf4f0052037d3607",
-                    "https://huggingface.co/datasets/open-athena/tasktrove-code-contests-taskcompendium-20261112"
-                    "/tree/5b43c6f4c2322a5808e4dbdfaf4f0052037d3607",
-                ),
             ),
         ),
-        RlDataSource(
-            pipeline=import_prebuilt,
+        _rebuilt_cohort(
             config=PrebuiltCohort(
                 name="taco-built-image",
-                version="2026.11.12",
+                version="2026.11.12.1",
                 repo="open-athena/tasktrove-taco-taskcompendium-20261112",
                 revision="c96a95bc94e4824fae425811f246501f64abfadd",
                 expected_rows=5116,
@@ -148,9 +142,8 @@ def sources() -> list[RlDataSource]:
                 title="TaskTrove TACO built-image cohort (TaskCompendium)",
                 origin="Task Trove",
                 family="competitive-programming",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
-                count=5116,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
                     "production daytona_identity, Harbor machine_spec and Shellbox snapshot_identity over "
@@ -162,11 +155,12 @@ def sources() -> list[RlDataSource]:
                     "https://huggingface.co/datasets/open-athena/tasktrove-taco-taskcompendium-20261112"
                     "/blob/c96a95bc94e4824fae425811f246501f64abfadd/liveness.jsonl"
                 ),
-                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oracle_validation=OracleValidation.SKIPPED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/code.py version 3; frozen VerifyIT @ d8cdda47f4",
                     verification=(
+                        "Withdrawn qualification: numeric-only rewards did not preserve unscored verifier errors. "
                         "all 5116 rows match their native archive's built context, including file bytes "
                         "and modes; all rendered stdio configurations equal their original typed graders. "
                         "The declared script invokes the image-installed VerifyIT CLI, preserving the "
@@ -176,20 +170,16 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=5116,
                     admitted=5116,
-                    level=OversightLevel.SAMPLE,
+                    level=OversightLevel.NONE,
                 ),
                 notes=(
+                    "Excluded: the pinned payload reads only numeric rewards and can hide verifier failures. "
+                    "Republish with converter version 4 and robust SAMPLE/FULL controls before admission. "
                     "5116 tasks retain the exact built output of their archived environment for both "
                     "actor and grader. Registry manifests were read back and pulled image IDs matched "
                     "the local builds. The private release includes setup fidelity, stdio parity, "
                     "sampled liveness, retained exclusions and frozen build contexts. "
                     "No oracle solution or model-quality assessment ran"
-                ),
-                dataset=SourceReference(
-                    "open-athena/tasktrove-taco-taskcompendium-20261112",
-                    "c96a95bc94e4824fae425811f246501f64abfadd",
-                    "https://huggingface.co/datasets/open-athena/tasktrove-taco-taskcompendium-20261112"
-                    "/tree/c96a95bc94e4824fae425811f246501f64abfadd",
                 ),
             ),
         ),
