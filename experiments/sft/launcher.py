@@ -68,7 +68,6 @@ from __future__ import annotations
 
 import hashlib
 import math
-import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -80,6 +79,7 @@ import jax.numpy as jnp
 import jmp
 from fray.types import ANY_REGION, GpuConfig, ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.compat.hf_checkpoints import is_hf_model_id
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
 from levanter.data.text.formats import ChatLmDatasetFormat
 from levanter.main.train_lm import TrainLmConfig
@@ -281,19 +281,16 @@ def _levanter_train_job(pod_config: TrainLmOnPodConfig) -> None:
     remote(run_levanter_train_lm, resources=pod_config.resources)(pod_config)
 
 
-def _is_hub_ref(model_ref: str) -> bool:
-    """True for a Hub repo ref (``org/model[@rev]``); False for an object-store URL or a local path.
-
-    ``org/model`` and a relative directory have the same shape, so an existing local directory wins.
-    """
-    if "://" in model_ref or model_ref.startswith(("/", ".")):
-        return False
-    return not os.path.isdir(model_ref)
-
-
 def _hf_mirror_step(model_ref: str) -> ArtifactStep[LevanterCheckpoint] | None:
-    """The CPU step that copies a pinned Hub repo to the regional prefix, or None for a path ref."""
-    if not _is_hub_ref(model_ref):
+    """The CPU step that copies a pinned Hub repo to the regional prefix, or None for a path ref.
+
+    Hub-vs-path uses Levanter's own rule (:func:`is_hf_model_id`), so the launcher and the loader agree.
+    """
+    if model_ref.startswith("hf://"):
+        raise ValueError(
+            f"HFModel would stream an hf:// ref from the Hub on the accelerator; use org/model@<sha>: {model_ref!r}"
+        )
+    if not is_hf_model_id(model_ref):
         return None
     repo, _, revision = model_ref.partition("@")
     if not _HF_COMMIT_SHA.fullmatch(revision):

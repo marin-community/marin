@@ -104,7 +104,7 @@ def _convert_to_hf_url(model_id: str, revision: Optional[str] = None) -> str:
     return f"hf://{model_id}"
 
 
-def _is_hf_model_id(path: str) -> bool:
+def is_hf_model_id(path: str) -> bool:
     """Check if a path looks like a HuggingFace model ID (not a URL or local path)."""
     # If it contains "://", it's already a URL
     if "://" in path:
@@ -813,7 +813,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             return self._load_from_remote(id, dtype)
 
         # Convert HF model IDs to hf:// URLs and stream directly
-        if _is_hf_model_id(id):
+        if is_hf_model_id(id):
             hf_url = _convert_to_hf_url(id, rev)
             logger.info(f"Loading from HuggingFace Hub: {hf_url}")
             return self._load_from_remote(hf_url, dtype)

@@ -171,6 +171,12 @@ def test_hf_model_rejects_unpinned_hub_ref(model_ref):
         HFModel(model_ref)
 
 
+def test_hf_model_rejects_hf_url():
+    """An hf:// ref would skip the CPU mirror and stream from the Hub on the accelerator."""
+    with pytest.raises(ValueError, match="hf:// ref"):
+        HFModel("hf://Qwen/Qwen3-0.6B@" + "c" * 40)
+
+
 def test_fingerprint_tracks_preparation_inputs():
     """Identity changes when the renames / revision / seed change, and is stable otherwise."""
     base = _prepared_step().fingerprint()
