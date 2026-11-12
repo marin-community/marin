@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pyarrow as pa
@@ -12,6 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import DaytonaSafety, OversightEvidence, OversightLevel
 from marin.execution.lazy import run
+from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -35,6 +37,7 @@ from experiments.post_training.task_curation import prebuilt
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.driver import _write_corpus
+from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
@@ -251,3 +254,53 @@ def test_reply_only_rewrite_needs_no_agent_machine(tmp_path, monkeypatch):
     path = _write(tmp_path, [row])
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
     assert prebuilt.import_cohort(_cohort(1)) == str(path)
+
+
+@pytest.mark.parametrize("change", ["none", "hash", "duplicate", "missing_environment"])
+def test_canonical_judged_release_preserves_tasks_without_a_runtime_envelope(tmp_path, monkeypatch, change):
+    task = TaskSpec.model_validate(json.loads(_task("reply")["lowered_task_spec"])["task"])
+    if change != "missing_environment":
+        task = task.model_copy(
+            update={
+                "environment_requirements": EnvironmentRequirements(),
+                "grader": (
+                    verifyit_package(
+                        replace(
+                            JUDGE_TIERS[JudgeTier.MEDIUM].spec, question="Do the task.", references=("Correct answer.",)
+                        )
+                    ).grader
+                ),
+            }
+        )
+    else:
+        task = task.model_copy(update={"environment_requirements": EnvironmentRequirements()})
+        task = task.model_copy(
+            update={"grader": task.grader.model_copy(update={"environment": EnvironmentRequirements()})}
+        )
+    serialized = task.model_dump_json()
+    row = {"task_spec": serialized, "task_sha256": hashlib.sha256(serialized.encode()).hexdigest()}
+    rows = [row, row] if change == "duplicate" else [row]
+    if change == "hash":
+        row["task_spec"] = task.model_copy(update={"labels": {"changed": "after-publication"}}).model_dump_json()
+    path = tmp_path / "tasks.parquet"
+    pq.write_table(pa.Table.from_pylist(rows), path)
+    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
+    if change != "none":
+        with pytest.raises(ValueError, match=r"recorded hash|Duplicate published task|grading environment requires"):
+            prebuilt.import_taskcompendium_cohort(_cohort(len(rows)))
+        return
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
+    source = RlDataSource(
+        config=_cohort(1),
+        pipeline=prebuilt.import_taskcompendium_prebuilt,
+        info=SourceInfo(id="reply", title="reply", origin="fixture", task_format=TaskFormat.TASKCOMPENDIUM),
+    )
+    artifact = run(
+        prebuilt.import_taskcompendium_prebuilt(source, PipelineOptions(SourceProcessingMode.SAMPLE, CampaignRuntime()))
+    )[0]
+    destination = Path(artifact.path)
+    assert (destination / "tasks.parquet").read_bytes() == path.read_bytes()
+    for view in ("normalize", "final"):
+        admitted = pq.read_table(next((destination / view).glob("*.parquet"))).to_pylist()
+        assert [r["task_json"] for r in admitted] == [serialized]
