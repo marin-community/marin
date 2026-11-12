@@ -12,6 +12,7 @@ from pathlib import Path
 
 from daytona import DaytonaError, DaytonaNotFoundError, SessionExecuteRequest
 from daytona._async.process import AsyncProcess
+from rigging.redaction import redact_string
 
 from shellbox import process_framing
 from shellbox.backends.daytona import bridge
@@ -91,7 +92,8 @@ class DaytonaProcessSession(StreamProcessSession):
             self._stdout_frames.finish()
             self._stderr_frames.finish()
             if self._code is None:
-                raise RuntimeError("Daytona process stream ended without a complete exit frame")
+                diagnostic = redact_string(self.stderr.decode("utf-8", errors="replace"))
+                raise RuntimeError(f"Daytona process stream ended without a complete exit frame; stderr: {diagnostic}")
         except asyncio.CancelledError:
             if self._closing is None:
                 self._error = MachineTerminated("Daytona process stream was interrupted")

@@ -1,6 +1,7 @@
 """Installed-agent runtime admission through the real Harbor trial boundary."""
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 
 import pytest
@@ -39,14 +40,20 @@ class UnusedDecoder:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["train", "eval"])
 @pytest.mark.parametrize("with_judge", [False, True])
-async def test_original_trial_uses_captured_phase_connection_at_provider_startup(tmp_path, monkeypatch, phase, with_judge):
+@pytest.mark.parametrize("declares_judge", [False, True])
+async def test_original_trial_uses_captured_phase_connection_at_provider_startup(
+    tmp_path, monkeypatch, phase, with_judge, declares_judge
+):
     package = tmp_path / "package"
     package.mkdir()
     (package / "environment").mkdir()
     (package / "tests").mkdir()
     (package / "tests" / "test.sh").write_text("#!/bin/sh\nexit 0\n")
     (package / "instruction.md").write_text("Write an answer.")
-    (package / "task.toml").write_text('[environment]\ndocker_image = "fixture/image:latest"\n')
+    (package / "task.toml").write_text(
+        '[environment]\ndocker_image = "fixture/image:latest"\n'
+        + ('[verifier.env]\nOPENAI_BASE_URL = "${OPENAI_BASE_URL}"\n' if declares_judge else "")
+    )
     task = harbor_trial_task(package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"))
     lowered = lowered_task(task, "harbor_trial", attempt_timeout=15, total_turn_timeout=5)
     settings = InstalledAgentSettings(
@@ -119,6 +126,12 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     assert len(attempts) == 1
     assert (attempts[0] / "identity.json").is_file()
     assert list((attempts[0] / "trials").glob("*/result.json"))
+    consumed = json.loads(next((attempts[0] / "trials").glob("*/config.json")).read_text())
+    # The provider-facing trial must not require a Python relay for shell-only
+    # verifiers merely because this run has a judge available.
+    expected_endpoint = "http://127.0.0.1:2/v1" if with_judge and declares_judge else None
+    assert consumed["environment"]["kwargs"].get("model_endpoint") == expected_endpoint
+
 
 
 @pytest.mark.asyncio
@@ -159,7 +172,10 @@ async def test_verifier_guest_relay_binding_keeps_real_credentials_on_host(tmp_p
     (package / "tests").mkdir()
     (package / "tests/test.sh").write_text("#!/bin/sh\nexit 0\n")
     (package / "instruction.md").write_text("Answer in answer.txt")
-    (package / "task.toml").write_text('[environment]\ndocker_image = "fixture/image:latest"\n')
+    (package / "task.toml").write_text(
+        '[environment]\ndocker_image = "fixture/image:latest"\n'
+        '[verifier.env]\nOPENAI_BASE_URL = "${OPENAI_BASE_URL}"\n'
+    )
     task = harbor_trial_task(package, source=Source(dataset="bixbench-fixture", revision="1", row="0", importer_revision="1"))
     lowered = lowered_task(task, "harbor_trial", attempt_timeout=15, total_turn_timeout=5)
     settings = InstalledAgentSettings(agent=AgentConfig(name="pi"), judge_model="fixture-judge",

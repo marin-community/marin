@@ -19,6 +19,7 @@ pytest.importorskip("daytona")
 
 from daytona import DaytonaNotFoundError
 from shellbox.backends.daytona.machine import DaytonaMachine
+from shellbox.backends.daytona.process import DaytonaProcessSession
 from shellbox.http_service import HttpResponse, serve_http
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec
@@ -307,5 +308,48 @@ def test_daytona_process_rejects_corrupt_or_truncated_provider_stream_and_stops_
             assert all(child.returncode is not None for child in api.children)
         finally:
             await machine.close()
+
+    asyncio.run(scenario())
+
+
+def test_daytona_unframed_startup_failure_preserves_redacted_stderr():
+    secret = "hf_" + "Q" * 32
+
+    class FailedStartup:
+        deleted = False
+
+        async def create_session(self, name, request_timeout):
+            pass
+
+        async def execute_session_command(self, name, request, timeout):
+            return SimpleNamespace(cmd_id="failed-startup")
+
+        async def get_session_command_logs_async(self, name, command, stdout, stderr):
+            await stderr(f"sh: python3: command not found; token={secret}\n")
+
+        async def delete_session(self, name, request_timeout):
+            self.deleted = True
+
+    async def scenario():
+        provider = FailedStartup()
+
+        async def failed_cleanup():
+            pass
+
+        session = DaytonaProcessSession(
+            provider,
+            "fixture-startup",
+            stderr_limit=4096,
+            release=lambda session: None,
+            failed_cleanup=failed_cleanup,
+        )
+        try:
+            await session.start(("python3", "-c", "pass"), "/", {})
+            with pytest.raises(RuntimeError, match="python3: command not found") as error:
+                await session.read(1)
+            assert secret not in str(error.value)
+        finally:
+            await session.close()
+        assert provider.deleted
 
     asyncio.run(scenario())

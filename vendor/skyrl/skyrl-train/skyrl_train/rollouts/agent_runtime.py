@@ -13,8 +13,8 @@ from harbor.agents.factory import AgentFactory
 from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.literal.native_api import NativeAPILimits
 from harbor.literal.proxy import RecordProxy
-from harbor.models.task.config import EnvironmentConfig
-from harbor.host_capabilities import DaytonaConnection, HostCapabilities, task_model_environment
+from harbor.models.task.config import EnvironmentConfig, TaskConfig as PackageTaskConfig
+from harbor.host_capabilities import DaytonaConnection, HostCapabilities, model_api_url, task_model_environment
 from harbor.utils.env import protected_environment_values
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
@@ -29,6 +29,7 @@ from rolloutengine.models import ModelTurn, Prompt
 from rolloutengine.models import TaskRolloutSpec
 from shellbox.machine import Machine, NetworkPolicy
 from taskcompendium.submission import conversation_messages
+from taskcompendium.runtime.resources import resource_bytes
 from verifyit.modes.grade_judge import JudgeConnection
 
 from skyrl_train.inference_engines.inference_engine_client_http_endpoint import create_app, set_global_state
@@ -177,7 +178,20 @@ class InstalledAgentRuntime:
         connection = self.eval_daytona_connection if phase == "eval" else self.daytona_connection
         authentication = {}
         protected = self.protected_values
-        if self.judge is not None and self.settings.judge_model is not None:
+        package_config = PackageTaskConfig.model_validate_toml(
+            resource_bytes(
+                next(resource for resource in lowered.task.resources.verifier if resource.path == "task.toml")
+            ).decode()
+        )
+        verifier_environment = dict(package_config.verifier.env)
+        binding = self.settings.task_bindings.get(lowered.task.id)
+        if binding is not None and binding.verifier_environment is not None:
+            verifier_environment.update(binding.verifier_environment)
+        if (
+            (model_api_url(verifier_environment) is not None or model_api_url(package_config.environment.env) is not None)
+            and self.judge is not None
+            and self.settings.judge_model is not None
+        ):
             kwargs.update(model_endpoint=self.judge.base_url, model_name=self.settings.judge_model)
             authentication[self.judge.base_url] = self.judge.api_key
             protected = protected | protected_environment_values({"OPENAI_API_KEY": self.judge.api_key})
@@ -262,7 +276,10 @@ class InstalledAgentRuntime:
                     host_capabilities=host_capabilities,
                     guest_environment=(
                         task_model_environment(self.settings.judge_model)
-                        if self.judge is not None and self.settings.judge_model is not None else {}
+                        if self.judge is not None
+                        and self.settings.judge_model is not None
+                        and config.environment.kwargs.get("model_endpoint") is not None
+                        else {}
                     ),
                 )
                 result = await run_harbor_trial(trial, self.backend, complete, evidence / "engine")
