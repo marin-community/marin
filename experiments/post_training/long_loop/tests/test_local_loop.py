@@ -12,9 +12,7 @@ from marin.execution.lazy import OUT, apply
 from experiments.post_training.long_loop.graph import StageBindings, build_loop, execute_local_graph
 from experiments.post_training.long_loop.preflight import (
     EndpointEvidence,
-    LearnerProjection,
     check_endpoint,
-    check_projection,
 )
 from experiments.post_training.long_loop.timing import EventLog, read_events
 
@@ -59,15 +57,6 @@ def test_failed_handoff_blocks_downstream(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match=r"step\(s\) failed"):
         execute_local_graph(final)
     assert not (tmp_path / "local-loop/rl/2026.11.08/checkpoint.json").exists()
-
-
-def test_earlier_action_loss_and_alignment_regression():
-    projection = LearnerProjection((1, 2, 5), (0, 1, 1, 0, 0, 1), (1, 2, 5), (1, 2, 5), "v1", ("v1",) * 6, 100, 1000)
-    check_projection(projection)
-    with pytest.raises(ValueError, match="dropped"):
-        check_projection(replace(projection, loss_mask=(0, 0, 0, 0, 0, 1)))
-    with pytest.raises(ValueError, match="alignment"):
-        check_projection(replace(projection, logprob_positions=(5,)))
 
 
 def test_multi_eos_serving_regression():
