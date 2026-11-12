@@ -233,6 +233,7 @@ def test_execution_cost_census_keeps_task_specs_rejected_by_the_grading_boundary
 @pytest.mark.usefixtures("taskcompendium_environment")
 def test_actor_unsafe_reasons_distinguish_snapshot_budget_build_and_host_image():
     from experiments.post_training.task_curation.daytona_census import (  # noqa: PLC0415
+        daytona_unsafe_counts,
         daytona_unsafe_reasons,
         measure_envelopes,
     )
@@ -245,6 +246,7 @@ def test_actor_unsafe_reasons_distinguish_snapshot_budget_build_and_host_image()
         for index in range(11)
     )
     assert set(daytona_unsafe_reasons(budget)) == {"too_many_snapshots"}
+    assert daytona_unsafe_counts(budget) == {"too_many_snapshots": 11}
     build = measure_envelopes(
         [
             (
@@ -269,5 +271,6 @@ def test_actor_unsafe_reasons_distinguish_snapshot_budget_build_and_host_image()
         ]
     )
     assert "Unresolved Docker build context" in daytona_unsafe_reasons(build)["unbuilt_image"]
+    assert daytona_unsafe_counts(build) == {"unbuilt_image": 1}
     locked = measure_envelopes([(actor({"command_semantics": "linux_process", "packages_lock": "actor.lock"}), {})])
     assert "requires a registry image or Docker build context" in daytona_unsafe_reasons(locked)["host_image_required"]
