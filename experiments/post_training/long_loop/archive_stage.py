@@ -372,7 +372,7 @@ def derive_archive_plan(
     record("dataset-referents.json", resolved_spec["datasets"], "dataset")
     for stage in ("rl", "eval"):
         launch = documents[(stage, "resolved-launch.yaml")]
-        retention = launch["config"]["generator"]["trajectory_retention"]
+        retention = launch["config"]["skyrl"]["generator"]["trajectory_retention"]
         prefix = retention["output_path"]
         ledger_uri = prefix_join(prefix, "_retention_ledger.json")
         ledger = _read_document(ledger_uri)
@@ -407,7 +407,8 @@ def derive_archive_plan(
         inputs.append(_input(uri, f"timing/journals/{index:06d}.jsonl", "timing"))
     limitations.append("Stage timing journals do not establish complete native phase or allocation coverage.")
     launch = documents[("rl", "resolved-launch.yaml")]
-    order_root = prefix_join(launch["config"]["trainer"]["export_path"], "training_order")
+    trainer = launch["config"]["skyrl"]["trainer"]
+    order_root = prefix_join(trainer["export_path"], "training_order")
     order_fs, order_prefix = filesystem_for(order_root)
     orders = sorted(order_fs.glob(prefix_join(order_prefix, "step-*.json")))
     for key in orders:
@@ -436,13 +437,13 @@ def derive_archive_plan(
         {
             "stage": "rl",
             "entity": resolved_spec["rl"]["execution"].get("wandb_entity"),
-            "project": launch["config"]["trainer"].get("project_name"),
+            "project": trainer.get("project_name"),
             "id": None,
-            "experiment_name": launch["config"]["trainer"].get("run_name"),
+            "experiment_name": trainer.get("run_name"),
             "identity_source": prefix_join(trained, "resolved-launch.yaml"),
         },
     ]
-    rl_wandb = prefix_join(launch["config"]["trainer"]["export_path"], "wandb-run.json")
+    rl_wandb = prefix_join(trainer["export_path"], "wandb-run.json")
     wandb_fs, wandb_key = filesystem_for(rl_wandb)
     if wandb_fs.isfile(wandb_key):
         ref = _read_document(rl_wandb)
@@ -517,6 +518,7 @@ def derive_archive_plan(
         "native_checkpoint_ttl": settings["native_checkpoint_ttl"],
         "provenance": {
             "marin_commit": revision,
+            "rl_terminal": documents[("rl", "terminal.json")]["result"],
             "evaluation_complete": True,
             "wandb_runs": wandb_status,
             "missing_evidence": missing,

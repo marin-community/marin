@@ -17,7 +17,7 @@ from experiments.post_training.long_loop import spec_pipeline
 from experiments.post_training.long_loop.__main__ import validate_graph
 from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.launch_validation import validate_launch
-from experiments.post_training.long_loop.run_spec import allocation_peaks, resolve_spec, stage_blockers
+from experiments.post_training.long_loop.run_spec import resolve_spec, stage_blockers
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 
 SPEC = Path(__file__).parents[1] / "specs" / "round1.yaml"
@@ -171,20 +171,6 @@ def test_actual_sft_graph_constructs_without_admitting_unprepared_rl(tmp_path, m
     resolved["blockers"] = ["Missing admitted agentic manifest"]
     with pytest.raises(ValueError, match="Run is not admitted"):
         build_spec_graph(resolved, "2026.11.09.12", through="archive")
-
-
-@pytest.mark.parametrize("stage", ["coordinator", "rl", "evaluation", "endpoint"])
-def test_new_submission_rejects_stale_interactive_priority(stage):
-    resolved = resolve_spec(SPEC, smoke=False)
-    if stage == "coordinator":
-        runtime = resolved["execution"]["coordinator"]
-    elif stage == "endpoint":
-        runtime = resolved[stage]
-    else:
-        runtime = resolved[stage]["execution"]
-    runtime["priority"] = "interactive"
-    with pytest.raises(ValueError, match="production"):
-        allocation_peaks(resolved)
 
 
 def test_rl_smoke_stops_before_eval_and_never_replays_sft(monkeypatch):

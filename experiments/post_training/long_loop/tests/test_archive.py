@@ -205,8 +205,9 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(tmp_
 
 
 @pytest.mark.parametrize("incomplete_wandb_history", [False, True])
+@pytest.mark.parametrize("rl_state", ["succeeded", "failed"])
 def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
-    tmp_path, monkeypatch, incomplete_wandb_history
+    tmp_path, monkeypatch, incomplete_wandb_history, rl_state
 ):
     def document(path, value):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -232,6 +233,8 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
     for stage, entries in settings["stage_files"].items():
         for entry in entries:
             document(Path(roots[stage]) / entry["path"], {})
+    terminal = {"state": rl_state, "failure": "GroupAdmissionStalledError" if rl_state == "failed" else None}
+    document(Path(trained) / "terminal.json", {"result": terminal})
     tracker = {"entity": None, "project": "test", "id": None}
     rows = [{"_step": 4, "loss": 0.4, "nested": {"key": "é"}}, {"other": 12}, {"_step": 2, "loss": 0.6}]
     if incomplete_wandb_history:
@@ -278,8 +281,10 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
             Path(roots[stage]) / "resolved-launch.yaml",
             {
                 "config": {
-                    "generator": {"trajectory_retention": {"output_path": str(retention)}},
-                    "trainer": {"export_path": str(tmp_path / ("exports-" + stage)), "project_name": "test"},
+                    "skyrl": {
+                        "generator": {"trajectory_retention": {"output_path": str(retention)}},
+                        "trainer": {"export_path": str(tmp_path / ("exports-" + stage)), "project_name": "test"},
+                    },
                 }
             },
         )
@@ -300,6 +305,7 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
         completed_report=roots["report"],
     )
     assert plan["hf_upload"]["repo_id"].endswith("-2026.11.10")
+    assert plan["provenance"]["rl_terminal"] == terminal
     assert set(plan["provenance"]["missing_evidence"]) == {"timing", "wandb"}
     assert any(item["name"] == "eval_inputs/selection.json" for item in plan["inputs"])
     assert sum(item["name"].endswith("trace.zip") for item in plan["inputs"]) == 2

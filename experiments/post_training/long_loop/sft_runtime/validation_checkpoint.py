@@ -62,6 +62,7 @@ class BestValidationCheckpoint:
             StoragePath(prefix_join(self.path, "best.json")).write_text(json.dumps(asdict(self.best), indent=2) + "\n")
 
     def consider(self, model: PyTree, step: int, score: float) -> ValidationSelection | None:
+        """Commit and return an improved selection, or return None without saving."""
         if not math.isfinite(score):
             raise ValueError(f"Nonfinite checkpoint selection metric {self.metric}: {score}")
         if self.best is not None and score >= self.best.score:
