@@ -69,13 +69,6 @@ from harbor.verifier.base import BaseVerifier
 
 TrialHookCallback = Callable[[TrialHookEvent], Awaitable[None]]
 
-# Terminal-Bench 2.1 ref 6 resolves to these task content digests.
-_SERVER_DEPENDENT_DATASET = "terminal-bench/terminal-bench-2-1"
-_SERVER_DEPENDENT_TASKS = {
-    "terminal-bench/qemu-alpine-ssh": "sha256:60b7050b0e0aa51641208cf65766743d340e59575db2c4d2f8628240846c2a28",
-    "terminal-bench/git-multibranch": "sha256:7759a92a373c967dd31535975bad8659410644025673fe62385444fd2605c5fa",
-}
-
 _MAX_VERIFIER_ENV_SESSION_ID_LEN = 63
 
 # Wall-clock bound on environment teardown. A healthy stop (including the
@@ -679,7 +672,10 @@ class Trial(ABC):
 
     def _keep_agent_services_for_verifier(self) -> bool:
         task = self.config.task
-        return task.source == _SERVER_DEPENDENT_DATASET and task.ref == _SERVER_DEPENDENT_TASKS.get(task.name)
+        return any(
+            task.source == pinned.source and task.name == pinned.name and task.ref == pinned.ref
+            for pinned in self.config.verifier.retain_agent_services_for_tasks
+        )
 
     async def _cleanup_agents(self) -> None:
         try:

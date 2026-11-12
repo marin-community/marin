@@ -317,6 +317,14 @@ class EnvironmentConfig(BaseModel):
         return v
 
 
+class RetainedAgentServiceTask(BaseModel):
+    """A pinned task whose verifier needs services started by the agent."""
+
+    source: str
+    name: str
+    ref: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
 class VerifierConfig(BaseModel):
     model_name: str | None = Field(
         default=None,
@@ -335,6 +343,7 @@ class VerifierConfig(BaseModel):
     import_path: str | None = Field(default=None, exclude_if=lambda v: v is None)
     kwargs: dict[str, Any] = Field(default_factory=dict, exclude_if=lambda v: not v)
     disable: bool = False
+    retain_agent_services_for_tasks: list[RetainedAgentServiceTask] = Field(default_factory=list)
 
     def identity_fingerprint(self) -> dict[str, Any]:
         """Compare the recorded judge model and grading settings independently of placement."""

@@ -22,6 +22,7 @@ from harbor.host_capabilities import HostCapabilities
 from harbor.models.trial.config import (
     AgentConfig,
     EnvironmentConfig,
+    RetainedAgentServiceTask,
     TaskConfig,
     TrialConfig,
     VerifierConfig,
@@ -162,6 +163,20 @@ async def test_server_dependent_tb2_tasks_keep_agent_service_until_verification(
             source="terminal-bench/terminal-bench-2-1",
         ),
         agent=AgentConfig(name="terminus-2"),
+        verifier=VerifierConfig(
+            retain_agent_services_for_tasks=[
+                RetainedAgentServiceTask(
+                    source="terminal-bench/terminal-bench-2-1",
+                    name="terminal-bench/qemu-alpine-ssh",
+                    ref=_QEMU_TASK_REF,
+                ),
+                RetainedAgentServiceTask(
+                    source="terminal-bench/terminal-bench-2-1",
+                    name="terminal-bench/git-multibranch",
+                    ref=_GIT_TASK_REF,
+                ),
+            ]
+        ),
         trial_name="server-lifetime",
     )
     trial.task = SimpleNamespace(name=task_name)
@@ -347,6 +362,15 @@ async def test_tb2_timeout_retains_agent_service_for_actual_verifier(tmp_path, m
         "open(os.environ['TEST_REWARD_PATH'], 'w').write('1')\nPY\n"
     )
     trial = await Trial.create(config)
+    # The local task fixture supplies processes; the pinned package identity
+    # selects the verifier's service-lifetime policy.
+    trial.config.verifier.retain_agent_services_for_tasks = [
+        RetainedAgentServiceTask(
+            source="terminal-bench/terminal-bench-2-1",
+            name="terminal-bench/git-multibranch",
+            ref=_GIT_TASK_REF,
+        )
+    ]
     trial.config.task = TaskConfig(
         name="terminal-bench/git-multibranch",
         ref=_GIT_TASK_REF,
@@ -358,6 +382,9 @@ async def test_tb2_timeout_retains_agent_service_for_actual_verifier(tmp_path, m
     assert result.exception_info.exception_type == "AgentTimeoutError"
     assert result.verifier_result.rewards == {"reward": 1.0}
     assert factory.machine.closed
+    async with httpx.AsyncClient(timeout=1) as client:
+        with pytest.raises(httpx.ConnectError):
+            await client.get(f"http://127.0.0.1:{port}/answer")
 
 
 async def test_verifier_judge_is_unavailable_to_candidate_but_available_to_actual_grader(

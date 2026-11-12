@@ -111,6 +111,7 @@ class ProcessMachine:
                 except ProcessLookupError:
                     pass
                 await process.wait()
+                self.commands.discard(process)
                 raise
             stdout_file.seek(0)
             stderr_file.seek(0)
@@ -127,7 +128,9 @@ class ProcessMachine:
         for process in self.commands:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
+                # A completed command's group ID can be reused by an unrelated
+                # process before this test transport closes.
                 pass
             await process.wait()
 

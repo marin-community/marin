@@ -18,6 +18,14 @@ retry:
   max_wait_sec: 60.0
 environment:
   type: daytona
+verifier:
+  retain_agent_services_for_tasks:
+    - source: terminal-bench/terminal-bench-2-1
+      name: terminal-bench/qemu-alpine-ssh
+      ref: sha256:60b7050b0e0aa51641208cf65766743d340e59575db2c4d2f8628240846c2a28
+    - source: terminal-bench/terminal-bench-2-1
+      name: terminal-bench/git-multibranch
+      ref: sha256:7759a92a373c967dd31535975bad8659410644025673fe62385444fd2605c5fa
 agents:
   - name: terminus-2
     kwargs:

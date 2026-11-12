@@ -302,6 +302,12 @@ arrives. Some Codex features need routes outside this contract.
 local execution stops remaining agent command groups. A grader needing both a live agent
 service and private judge access needs separate isolation. Daytona's per-command process
 groups do not contain detached descendants; Harbor uses a phase scope for agent cleanup.
+For verifiers that depend on an agent-started service, the trusted Harbor job config can
+list the exact dataset, task name, and content digest under
+`verifier.retain_agent_services_for_tasks`. Harbor retains those services through grading
+after a completed or timed-out agent turn, then closes the task environment. Explicit
+trial cancellation still stops the environment. Do not grant service retention to a
+task whose verifier needs private judge access in the same environment.
 
 `judge_access: runtime` keeps the judge available during execution. Direct callers must
 request it. Every peer sharing the task network can
