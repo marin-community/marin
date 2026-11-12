@@ -147,7 +147,7 @@ def parse_args() -> argparse.Namespace:
         "--ce-implementation",
         choices=get_args(CrossEntropyImplementation),
         default=None,
-        help="Fused cross-entropy backend (default: the backend's default order) (GrugModelConfig.ce_implementation).",
+        help="Fused cross-entropy implementation (default: Levanter's backend default).",
     )
     parser.add_argument(
         "--watch-interval", type=int, default=10, help="Steps between gradient watch steps (0 disables)."

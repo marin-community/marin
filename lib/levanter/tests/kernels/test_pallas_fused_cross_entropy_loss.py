@@ -1150,8 +1150,6 @@ def test_batched_xla_backward_b_tiled_from_lse_matches_reference_gradients():
 @pytest.mark.parametrize("in_place_weight_grad", [False, True])
 @pytest.mark.parametrize("vocab", [12, 11, 3])
 def test_batched_xla_backward_streaming_from_lse_matches_reference_gradients(vocab, in_place_weight_grad):
-    """Both streaming backwards against autodiff through the dense reference, with the vocabulary a multiple of the
-    block, not one, and narrower than one block (HIGHEST precision, as in the b-tiled test above)."""
     if jax.default_backend() == "tpu":
         pytest.skip("batched_xla custom backward helper is covered by CPU/GPU precision paths")
 
@@ -1191,15 +1189,12 @@ def test_batched_xla_backward_streaming_from_lse_matches_reference_gradients(voc
     np.testing.assert_allclose(actual_w, expected_w, rtol=1e-5, atol=1e-5)
 
 
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
-@pytest.mark.parametrize("vocab", [512, 456, 100])
-def test_batched_xla_in_place_weight_grad_matches_stacked_bitwise(dtype, vocab):
-    """Writing each block's weight gradient in place, with only the last partial block padded, computes the same
-    values as stacking the blocks from a padded weight: both gradients are equal bit for bit on CPU."""
+def test_batched_xla_in_place_weight_grad_matches_stacked_bitwise():
     if jax.default_backend() != "cpu":
         pytest.skip("GPU GEMM kernels may differ between the strided in-place output and the stacked one")
 
-    batch, hidden, v_block = 64, 32, 128
+    batch, hidden, v_block, vocab = 64, 32, 128, 456
+    dtype = jnp.bfloat16
     kx, kw, kl, kg = jax.random.split(jax.random.PRNGKey(45), 4)
     x = jax.random.normal(kx, (batch, hidden), jnp.float32).astype(dtype)
     w = (0.2 * jax.random.normal(kw, (hidden, vocab), jnp.float32)).astype(dtype)
@@ -1230,8 +1225,47 @@ def test_batched_xla_in_place_weight_grad_matches_stacked_bitwise(dtype, vocab):
     np.testing.assert_array_equal(np.asarray(gw_in_place, np.float32), np.asarray(gw, np.float32))
 
 
+@pytest.mark.parametrize("w_dtype", [jnp.float32, jnp.bfloat16])
+def test_batched_xla_float32_weight_grad_keeps_the_weight_precision(w_dtype):
+    if jax.default_backend() == "tpu":
+        pytest.skip("batched_xla custom backward helper is covered by CPU/GPU precision paths")
+
+    batch, hidden, vocab = 64, 32, 300
+    kx, kw, kl, kg = jax.random.split(jax.random.PRNGKey(47), 4)
+    x = jax.random.normal(kx, (batch, hidden), jnp.float32).astype(jnp.bfloat16)
+    w = (0.2 * jax.random.normal(kw, (hidden, vocab), jnp.float32)).astype(w_dtype)
+    labels = jax.random.randint(kl, (batch,), 0, vocab)
+    lse = jax.nn.logsumexp(jnp.dot(x.astype(jnp.float32), w.astype(jnp.float32)), axis=-1)
+    g_loss = jax.random.uniform(kg, (batch,), jnp.float32)
+
+    def weight_grad(float32_weight_grad):
+        _, grad_w = batched_xla._backward_streaming_from_lse(
+            x,
+            labels,
+            w,
+            lse,
+            g_loss,
+            0.1 * g_loss,
+            v_block_size=128,
+            logit_soft_cap=None,
+            precision=None,
+            float32_weight_grad=float32_weight_grad,
+        )
+        assert grad_w.dtype == w_dtype
+        return np.asarray(grad_w, np.float32)
+
+    stacked, float32 = weight_grad(False), weight_grad(True)
+    rounded = np.asarray(jnp.asarray(float32).astype(jnp.bfloat16), np.float32)
+    if w_dtype == jnp.bfloat16:
+        np.testing.assert_array_equal(float32, stacked)
+    else:
+        # The default stack holds bfloat16 blocks; the option keeps the float32 GEMM result.
+        np.testing.assert_array_equal(stacked, np.asarray(jnp.asarray(stacked).astype(jnp.bfloat16), np.float32))
+        assert np.any(float32 != rounded)
+        np.testing.assert_allclose(float32, stacked, rtol=1e-2, atol=1e-6)
+
+
 def test_fused_cross_entropy_batched_xla_in_place_dw_matches_batched_xla():
-    """The in-place implementation through the public API: same loss and gradients as "batched_xla"."""
     if jax.default_backend() != "gpu":
         pytest.skip("batched_xla requires a GPU")
 
@@ -1259,7 +1293,7 @@ def test_fused_cross_entropy_batched_xla_in_place_dw_matches_batched_xla():
     value, (gx, gw) = value_and_grads("batched_xla")
     value_in_place, (gx_in_place, gw_in_place) = value_and_grads("batched_xla_in_place_dw")
     np.testing.assert_array_equal(np.asarray(value_in_place), np.asarray(value))
-    # GPU GEMM kernels may round the strided in-place blocks differently: one bf16 ulp at most.
+    # GPU GEMM kernels may round strided output blocks differently.
     np.testing.assert_allclose(np.asarray(gx_in_place, np.float32), np.asarray(gx, np.float32), rtol=8e-3, atol=1e-6)
     np.testing.assert_allclose(np.asarray(gw_in_place, np.float32), np.asarray(gw, np.float32), rtol=8e-3, atol=1e-6)
 

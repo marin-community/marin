@@ -47,6 +47,7 @@ Implementation: TypeAlias = Literal[
     "pallas_tpu",
     "batched_xla",
     "batched_xla_in_place_dw",
+    "batched_xla_f32_dw",
     "xla",
     "xla_fast_bwd",
     "reference",
@@ -164,7 +165,12 @@ _CANONICAL_BACKEND_IMPLEMENTATIONS["batched_xla"] = linear_softmax_cross_entropy
 IMPLEMENTATIONS["batched_xla_in_place_dw"] = partial(
     linear_softmax_cross_entropy_loss_batched_xla, in_place_weight_grad=True
 )
-_BLOCK_SIZES_FROM: dict[str, str] = {"batched_xla_in_place_dw": "batched_xla"}
+# "batched_xla" whose streaming backward computes each block's weight gradient in float32 and stacks it in the weight's
+# dtype, so a float32 weight keeps a float32 gradient; with a bfloat16 weight it matches "batched_xla".
+IMPLEMENTATIONS["batched_xla_f32_dw"] = partial(
+    linear_softmax_cross_entropy_loss_batched_xla, float32_weight_grad=True
+)
+_BLOCK_SIZES_FROM: dict[str, str] = {"batched_xla_in_place_dw": "batched_xla", "batched_xla_f32_dw": "batched_xla"}
 
 
 @lru_cache(maxsize=1)
