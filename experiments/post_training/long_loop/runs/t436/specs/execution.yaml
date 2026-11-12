@@ -1,0 +1,102 @@
+inputs:
+  cpu: 32
+  ram: 128GB
+  disk: 512GB
+  device:
+    variant: H100
+    kind: gpu
+    count: 8
+  preemptible: true
+  regions: null
+  zone: null
+  target_cluster: null
+  replicas: 1
+  device_alternatives: null
+  image: null
+  container_profile: null
+export:
+  cpu: 32
+  ram: 512GB
+  disk: 256GB
+  device:
+    variant: H100
+    kind: gpu
+    count: 8
+  preemptible: true
+  regions: null
+  zone: null
+  target_cluster: null
+  replicas: 1
+  device_alternatives: null
+  image: null
+  container_profile: null
+eval_inputs:
+  cpu: 32
+  ram: 128GB
+  disk: 512GB
+  device:
+    variant: H100
+    kind: gpu
+    count: 8
+  preemptible: true
+  regions: null
+  zone: null
+  target_cluster: null
+  replicas: 1
+  device_alternatives: null
+  image: null
+  container_profile: null
+archive:
+  cpu: 32
+  ram: 64GB
+  disk: 500GB
+  device:
+    variant: H100
+    kind: gpu
+    count: 8
+  preemptible: true
+  regions: null
+  zone: null
+  target_cluster: null
+  replicas: 1
+  device_alternatives: null
+  image: null
+  container_profile: null
+coordinator:
+  cluster: cw-rno2a
+  cluster_config: lib/iris/config/cw-rno2a.yaml
+  cpu: 32
+  memory: 512GB
+  disk: 512GB
+  priority: interactive
+  max_retries: 0
+  target_cluster: cw-rno2a
+  parent_cluster_config: lib/iris/config/marin.yaml
+  coordinator_name: long-loop-full
+  coordinator_gpu: null
+  wandb_entity: null
+  required_env_vars:
+  - MARIN_PREFIX
+  - MARIN_TEMP_PREFIX
+  - HF_TOKEN
+  - DAYTONA_RL_API_KEY
+  - DAYTONA_EVAL_API_KEY
+  - DAYTONA_TARGET
+  - TOGETHER_API_KEY
+  container_profile: 4
+sandbox:
+  cpu: 4
+  ram: 32GB
+  disk: 128GB
+  device:
+    variant: H100
+    kind: gpu
+    count: 1
+  preemptible: true
+  regions: null
+  zone: null
+  target_cluster: null
+  replicas: 1
+  device_alternatives: null
+  image: ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8
+  container_profile: CONTAINER_PROFILE_PRIVILEGED

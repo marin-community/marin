@@ -1,0 +1,283 @@
+name: long-loop/micro-full
+config:
+  entrypoint: generate
+  config_groups:
+    terminal_bench_config: terminal_bench
+  context_budget:
+    request_window_tokens: 65536
+    max_new_tokens_per_turn: 16384
+    max_turns: 1024
+  environment:
+    task_sessions:
+      local: {}
+      remote_judge:
+        base_url: runtime://minimax-judge
+        api_key_env: JUDGE_API_KEY
+  trainer:
+    strategy: megatron
+    evaluation_runner: task
+    eval_interval: 1
+    eval_batch_size: 32
+    resume_mode: none
+    seed: 20261030
+    algorithm:
+      use_kl_loss: false
+    policy:
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 1
+        context_parallel_size: 1
+        expert_model_parallel_size: 8
+        expert_tensor_parallel_size: 1
+    ref:
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 1
+        context_parallel_size: 1
+        expert_model_parallel_size: 8
+        expert_tensor_parallel_size: 1
+    logger: console
+    placement:
+      colocate_all: true
+      colocate_policy_ref: true
+      policy_num_nodes: 16
+      policy_num_gpus_per_node: 8
+      ref_num_nodes: 16
+      ref_num_gpus_per_node: 8
+    train_batch_size: 1
+    policy_mini_batch_size: 1
+    micro_train_batch_size_per_gpu: 1
+    distributed:
+      placement_group_timeout_seconds: 259200
+      worker_collective_timeout_seconds: 259200
+  generator:
+    backend: vllm
+    model_dtype: bfloat16
+    max_num_seqs: 8
+    engine_init_kwargs:
+      enable_auto_tool_choice: true
+      tool_call_parser: hermes
+      hf_overrides:
+        max_position_embeddings: 262144
+        max_seq_len: 262144
+    run_engines_locally: true
+    enable_http_endpoint: false
+    gpu_memory_utilization: 0.85
+    enforce_eager: false
+    chat_template:
+      source: name
+      name_or_path: null
+    chat_template_kwargs:
+      enable_thinking: true
+    sampling_params:
+      temperature: 0.7
+      top_p: 0.95
+      logprobs: 0
+      skip_special_tokens: false
+      stop_token_ids:
+      - 128001
+      - 128009
+    eval_sampling_params:
+      temperature: 0.7
+      top_p: 0.95
+      skip_special_tokens: false
+      stop_token_ids:
+      - 128001
+      - 128009
+    eval_n_samples_per_prompt: 1
+    num_inference_engines: 16
+    inference_engine_tensor_parallel_size: 1
+    inference_engine_pipeline_parallel_size: 1
+    inference_engine_data_parallel_size: 8
+    inference_engine_expert_parallel_size: 8
+    n_samples_per_prompt: 1
+    trajectory_retention:
+      enabled: true
+      output_path: s3://marin-us-east-08a/marin/long-loop/traces/2026.11.09/eval
+      run_id: 2026.11.09
+      phases:
+      - eval
+      sample_fraction: 1.0
+      eval_sample_fraction: 1.0
+      sample_count_per_step: 0
+      always_retain_failures: false
+      always_retain_non_terminating: false
+      always_retain_loops: false
+      reward_below: null
+      reward_above: null
+      max_bytes_per_step: null
+      max_bytes_per_run: null
+      required: true
+      publish_timeout_seconds: 259200
+      shutdown_timeout_seconds: 259200
+    engine_init_timeout_seconds: 259200
+    expert_block_sync:
+      timeout_seconds: 259200
+    weight_sync_pause_timeout_seconds: 259200
+  terminal_bench:
+    harbor:
+      environment_type: daytona
+      daytona_api_key_env: DAYTONA_EVAL_API_KEY
+      eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY
+      verifier_override_timeout_sec: 300
+      override_timeout_sec: 1800
+      eval_timeout_override_sec: 1800
+      trial_attempt_timeout_sec: 2460
+      n_concurrent_trials: 8
+      max_retries: 0
+    installed_agent:
+      agent:
+        name: pi
+        override_setup_timeout_sec: 360
+        kwargs:
+          version: 0.87.0
+          mcp_adapter_version: 7.0.0
+          thinking: high
+          thinking_format: chat-template
+          model_info:
+            max_input_tokens: 65536
+            max_output_tokens: 16384
+          compaction_reserve_tokens: 16384
+      setup_timeout: 360
+      run_timeout: 1800
+      cleanup_timeout: 60
+      service_startup_timeout: 60
+      service_shutdown_timeout: 60
+      judge_model: MiniMaxAI/MiniMax-M3-MXFP8
+      trial_reward_key: reward
+  trajectory_runner:
+    max_concurrent_tasks: 128
+  data:
+    kind: parquet
+    shuffle: false
+    train_data: []
+    val_data: []
+  extra_env:
+    OPENAI_BASE_URL: https://api.together.xyz/v1
+    TAU2_USER_MODEL: openai/openai/gpt-oss-120b
+    TAU2_NL_ASSERTIONS_MODEL: openai/openai/gpt-oss-120b
+    TAU2_USER_REASONING_EFFORT: low
+    JUDGE_BASE_URL: runtime://minimax-judge
+    TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC: '259200'
+seed: 20261030
+gpu_variant: H100
+capability_origin: https://iris.oa.dev
+data_relative_path: rollouts.parquet
+judge_gpu_count: 8
+role_plan:
+  colocate_all: true
+  policy_num_nodes: 16
+  policy_num_gpus_per_node: 8
+  num_inference_engines: 16
+  inference_engine_tensor_parallel_size: 1
+  inference_engine_pipeline_parallel_size: 1
+  inference_engine_data_parallel_size: 8
+  inference_engine_expert_parallel_size: 8
+  train_batch_size: 1
+  policy_mini_batch_size: 1
+  micro_train_batch_size_per_gpu: 1
+  n_samples_per_prompt: 1
+  reference_num_nodes: null
+execution:
+  cluster: cw-rno2a
+  cluster_config: lib/iris/config/cw-rno2a.yaml
+  cpu: 32
+  memory: 512GB
+  disk: 256GB
+  priority: interactive
+  max_retries: 0
+  target_cluster: cw-rno2a
+  parent_cluster_config: lib/iris/config/marin.yaml
+  wandb_entity: null
+  required_env_vars:
+  - DAYTONA_EVAL_API_KEY
+  - DAYTONA_TARGET
+  - TOGETHER_API_KEY
+  - MARIN_PREFIX
+  - MARIN_TEMP_PREFIX
+  container_profile: 4
+judge:
+  name: minimax-m3-mxfp8-olympiadbench-judge-131k
+  location: MiniMaxAI/MiniMax-M3-MXFP8
+  identity: null
+  revision: c5454eb03678d8710e54a4e0fc681b9f3b4a3dba
+  tokenizer: null
+  tokenizer_revision: null
+  apply_chat_template: true
+  resource_hint:
+    hbm_gb: null
+    gpu:
+      H100: 8
+    cpu: 64.0
+    memory: 512g
+    disk: 600g
+  serve:
+    backend: vllm
+    tensor_parallel_size: 8
+    data_parallel_size: null
+    pipeline_parallel_size: 1
+    instances: 1
+    gpu_memory_utilization: null
+    max_model_len: 131072
+    max_num_batched_tokens: 8192
+    max_num_seqs: 16
+    hf_overrides: null
+    limit_mm_per_prompt: '{"image":0,"video":0}'
+    tool_call_parser: null
+    reasoning_parser: minimax_m3
+    vllm_batch_invariant: null
+    vllm_use_flashinfer_sampler: null
+    runai_streamer_concurrency: null
+    runai_streamer_s3_request_timeout_ms: null
+    hf_hub_disable_xet: false
+    vllm_source: null
+    vllm_version: null
+    vllm_plugin_requirements: []
+    object_store_load_mode: stage_local
+    vllm_extra_args:
+    - --block-size
+    - '128'
+    - --language-model-only
+    - --enable-prefix-caching
+    speculative: null
+    chat_template: null
+    auto_overrides: true
+  generation:
+    max_gen_toks: null
+    extra_gen_kwargs: {}
+    chat_template_kwargs: {}
+    thinking_off_template_kwargs: {}
+  agent:
+    agent_kwargs: {}
+  evalchemy_num_concurrent: null
+tasks_per_benchmark: 10
+expected_source_rows: 200
+expected_expanded_attempt_count: 440
+admission_pending: []
+supported_path_count: 20
+expected_rollouts: 440
+attempts_per_selected_task:
+  NUPA: 1
+  aime24: 10
+  bfclparity-pi: 1
+  bixbench-pi: 1
+  cruxeval: 1
+  ds-1000-local: 1
+  gpqa-diamond: 3
+  gsm8k-0shot: 1
+  humanevalplus: 1
+  ifbench: 1
+  math500: 1
+  mbppplus: 1
+  mmlu-pro: 1
+  mrcr: 1
+  olympiadbench: 10
+  ot-tblite-recovery: 3
+  swebench-verified: 1
+  tb2-recovery: 3
+  triviaqa: 1
+  truthfulqa: 1
+ray_timeouts:
+  rendezvous_timeout: 259200
+  cluster_join_timeout: 259200
+  driver_liveness_timeout: 259200

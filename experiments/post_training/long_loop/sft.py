@@ -37,6 +37,8 @@ TOKENIZER_REPO = "marin-community/marin-tokenizer-tools"
 TOKENIZER_REVISION = "3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09"
 TOKENIZER_URI = "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18"
 SMOKE_CONFIG = Path(__file__).with_name("sft-smoke.yaml")
+# Loop-produced exports place the HF files below this directory of the stage output.
+HANDOFF_DIR = "hf"
 
 
 def read_json(uri: str) -> dict:
@@ -70,11 +72,32 @@ def fresh_sft_config(*, output: str, initializer: str, recipe: dict, run_id: str
     return draccus.decode(GrugRunConfig, config)
 
 
-def sft_run(*, output: str, initializer: str, recipe: dict, run_id: str) -> None:
+def check_native_copy(initializer: str) -> None:
+    """Require the copied native step to hold exactly the receipt's verified objects."""
+    receipt = read_json(prefix_join(initializer, "copy-receipt/receipt.json"))
+    checkpoint = prefix_join(initializer, "native/step-0")
+    if receipt["destination"] != checkpoint or not receipt["objects"]:
+        raise ValueError("Copy receipt does not describe this initializer's native step")
+    fs, key = filesystem_for(checkpoint)
+    found = {path[len(key) :].lstrip("/"): info["size"] for path, info in fs.find(key, detail=True).items()}
+    if found != {entry["path"]: entry["bytes"] for entry in receipt["objects"]}:
+        raise ValueError("Copied native step differs from its verified receipt")
+
+
+def check_initializer(initializer: str, evidence: str) -> None:
+    if evidence == "hf_import":
+        verification = read_json(prefix_join(initializer, "native/verification.json"))
+        if not verification["exact_parity"] or len(verification["tensors"]) != 502:
+            raise ValueError("Base import did not verify all 502 tensors")
+    elif evidence == "native_copy":
+        check_native_copy(initializer)
+    else:
+        raise ValueError(f"Unknown initializer evidence: {evidence}")
+
+
+def sft_run(*, output: str, initializer: str, recipe: dict, run_id: str, evidence: str = "hf_import") -> None:
     configure_coreweave_s3()
-    verification = read_json(prefix_join(initializer, "native/verification.json"))
-    if not verification["exact_parity"] or len(verification["tensors"]) != 502:
-        raise ValueError("Base import did not verify all 502 tensors")
+    check_initializer(initializer, evidence)
     config = fresh_sft_config(output=output, initializer=initializer, recipe=recipe, run_id=run_id)
     (StoragePath(output) / "consumed-config.json").write_text(json.dumps(draccus.encode(config), indent=2))
     run_grug(config)
@@ -108,18 +131,35 @@ def restore_frozen(
     return jax.block_until_ready(state["params"])
 
 
-def validate_handoff(root: str) -> None:
+def check_expert_tensors(config: dict, weight_map: dict) -> None:
     """Reject schema declarations that would cause Bridge to omit expert weights."""
-    config = read_json(prefix_join(root, "hf/config.json"))
-    weight_map = read_json(prefix_join(root, "hf/model.safetensors.index.json"))["weight_map"]
-    if config["grugmoe_artifact_schema_version"] != 2:
-        raise ValueError("Long-loop handoff requires split-expert schema 2")
-    for layer in range(config["num_hidden_layers"]):
-        for expert in range(config["num_experts"]):
-            for projection in ("gate_proj", "up_proj", "down_proj"):
-                name = f"model.layers.{layer}.mlp.experts.{expert}.{projection}.weight"
-                if name not in weight_map:
-                    raise ValueError(f"Invalid SFT export: schema-2 tensor missing: {name}")
+    schema = config["grugmoe_artifact_schema_version"]
+    if schema == 2:
+        names = [
+            f"model.layers.{layer}.mlp.experts.{expert}.{projection}.weight"
+            for layer in range(config["num_hidden_layers"])
+            for expert in range(config["num_experts"])
+            for projection in ("gate_proj", "up_proj", "down_proj")
+        ]
+    elif schema == 1:
+        names = [
+            f"model.layers.{layer}.mlp.experts.{projection}.weight"
+            for layer in range(config["num_hidden_layers"])
+            for projection in ("gate_proj", "up_proj", "down_proj")
+        ]
+    else:
+        raise ValueError(f"Long-loop handoff requires Grug expert schema 1 or 2, not {schema}")
+    for name in names:
+        if name not in weight_map:
+            raise ValueError(f"Invalid SFT export: schema-{schema} tensor missing: {name}")
+
+
+def validate_handoff(root: str, relative_path: str = HANDOFF_DIR) -> None:
+    hf = prefix_join(root, relative_path) if relative_path else root
+    check_expert_tensors(
+        read_json(prefix_join(hf, "config.json")),
+        read_json(prefix_join(hf, "model.safetensors.index.json"))["weight_map"],
+    )
 
 
 def export_sft(
@@ -137,13 +177,13 @@ def export_sft(
         selected["checkpoint"],
         selected["metadata_digest"],
         draccus.decode(GrugModelConfig, model),
-        prefix_join(output, "hf"),
+        prefix_join(output, HANDOFF_DIR),
         source_revision,
         max_position_embeddings=context_limit,
     )
     export_weights(config, restore_frozen, weights_kind="snowball_sft_frozen_router")
     fs, prefix = filesystem_for(tokenizer_uri)
-    destination_fs, destination = filesystem_for(prefix_join(output, "hf"))
+    destination_fs, destination = filesystem_for(prefix_join(output, HANDOFF_DIR))
     for name in ("tokenizer.json", "tokenizer_config.json", "chat_template.jinja"):
         content = fs.cat_file(prefix_join(prefix, name))
         destination_fs.pipe_file(prefix_join(destination, name), content)
@@ -157,7 +197,7 @@ def export_sft(
             }
         ).encode(),
     )
-    manifest = read_json(prefix_join(output, "hf/export-manifest.json"))
+    manifest = read_json(prefix_join(output, f"{HANDOFF_DIR}/export-manifest.json"))
     for shard in manifest["shards"]:
         with destination_fs.open(prefix_join(destination, shard["filename"]), "rb") as stream:
             actual = hashlib.file_digest(stream, "sha256").hexdigest()

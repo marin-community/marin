@@ -79,6 +79,17 @@ def test_sft_update_preserves_router_and_scales_selected_rows():
                 for actual, expected in zip(jax.tree.leaves(loaded.params), jax.tree.leaves(seeded), strict=True):
                     np.testing.assert_array_equal(actual, expected)
                 assert int(loaded.step) == 0
+                kept = initialize_snowball_sft(
+                    fresh,
+                    directory,
+                    mesh,
+                    GrugTrainerConfig(
+                        special_token_ids=(30, 31), anchor_token_ids=(2, 3), reseed_special_token_rows=False
+                    ),
+                )
+                np.testing.assert_array_equal(kept.params.output_proj, before_head)
+                for actual, expected in zip(jax.tree.leaves(kept.params), jax.tree.leaves(state.params), strict=True):
+                    np.testing.assert_array_equal(actual, expected)
                 for actual, expected in zip(
                     jax.tree.leaves(loaded.opt_state), jax.tree.leaves(fresh.opt_state), strict=True
                 ):

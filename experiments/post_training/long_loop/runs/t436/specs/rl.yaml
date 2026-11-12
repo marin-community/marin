@@ -1,0 +1,312 @@
+admission_pending: []
+name: long-loop-full-rl
+seed: 20261020
+retained: 3
+config:
+  entrypoint: taskcompendium
+  context_budget:
+    request_window_tokens: 102400
+    max_new_tokens_per_turn: 16384
+    max_turns: 128
+  environment:
+    task_sessions:
+      local: {}
+      daytona:
+        api_key_env: DAYTONA_RL_API_KEY
+        ttl_minutes: 60
+        eval_api_key_env: DAYTONA_EVAL_API_KEY
+      remote_judge:
+        base_url: https://api.together.xyz/v1
+        api_key_env: TOGETHER_API_KEY
+      task_spec:
+        session:
+          max_turns: 128
+          attempt_timeout: 2520
+          total_turn_timeout: 1800
+          model_turn_timeout: 1800
+        harness_by_dataset:
+          long-loop-smartie-swesmith: harbor_trial
+  trainer:
+    strategy: megatron
+    flash_attn: false
+    use_sample_packing: true
+    gradient_checkpointing: true
+    offload_optimizer_during_rollouts: false
+    epochs: 50
+    max_steps: 10000
+    update_epochs_per_batch: 1
+    micro_forward_batch_size_per_gpu: 1
+    eval_batch_size: 256
+    eval_interval: 2
+    resume_mode: none
+    max_ckpts_to_keep: 3
+    seed: 20261020
+    logger: wandb
+    project_name: marin-long-loop
+    tracker_commit_each_step: true
+    training_metrics: true
+    rollout_spans: true
+    policy_train_spans: true
+    algorithm:
+      advantage_estimator: rloo_n
+      policy_loss_type: regular
+      loss_reduction: token_mean
+      use_kl_loss: false
+      use_kl_in_reward: false
+      kl_estimator_type: k3_unbiased_gradient
+      off_policy_correction: tis
+      eps_clip_low: 0.2
+      eps_clip_high: 0.2
+      group_advantage_min_size: 2
+      advantage_batch_normalize: false
+      rloo_n_filter_zero_reward_groups: true
+      use_entropy_loss: false
+      tis_splice: true
+    policy:
+      optimizer_config:
+        optimizer: AdamW
+        lr: 1.0e-06
+        weight_decay: 0.0
+        max_grad_norm: 0.5
+        adam_betas:
+        - 0.9
+        - 0.999
+        scheduler: constant_with_warmup
+        num_warmup_steps: 0
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 2
+        context_parallel_size: 5
+        expert_model_parallel_size: 8
+        expert_tensor_parallel_size: 1
+        transformer_config_kwargs:
+          cp_comm_type: a2a
+          moe_router_fusion: false
+        moe_router_replay: true
+    ref:
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 2
+        context_parallel_size: 5
+        expert_model_parallel_size: 8
+        expert_tensor_parallel_size: 1
+        transformer_config_kwargs:
+          cp_comm_type: a2a
+    placement:
+      colocate_all: false
+      colocate_policy_ref: true
+      policy_num_nodes: 10
+      policy_num_gpus_per_node: 8
+      ref_num_nodes: 10
+      ref_num_gpus_per_node: 8
+    rollout_buffer:
+      max_staleness_steps: 2
+      batch_policy: full_batch
+      max_in_flight: 32
+      object_store_root: null
+      consumed_route_quotas:
+        agentic: 32
+        nonagentic: 32
+      source_routes:
+        long-loop-smartie-swesmith: agentic
+        PRIME-RL/Eurus-2-RL-Data: nonagentic
+        nvidia/Nemotron-RL-Ultra-Training-Blends: nonagentic
+        nvidia/OpenScience: nonagentic
+        ? https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl
+        : nonagentic
+        open-athena/Snowball-Smartie-RL-2026.10.15.32-Data: nonagentic
+        open-thoughts/TaskTrove: nonagentic
+    eval_before_train: false
+    ckpt_interval: 2
+    eval_num_prompts: null
+    dump_eval_results: true
+    step_wise_training: false
+    dump_data_batch: true
+    train_batch_size: 64
+    policy_mini_batch_size: 64
+    micro_train_batch_size_per_gpu: 1
+    dump_training_order: true
+    hf_export_checkpoint: best
+    callbacks:
+    - type: checkpoint
+      save_steps: 2
+      save_on_train_end: true
+    - type: evaluation
+      eval_steps: 2
+      eval_before_train: false
+      eval_on_train_end: true
+    - type: best_checkpoint
+      initial_model_uri: PENDING_PRECEDING_SFT_EXPORT
+      expected_tasks: 120
+      minimum_scored_tasks: 120
+      ema_window: 5
+      evaluation_interval: 2
+    - type: hf_model_save
+      save_steps: -1
+      save_on_train_end: true
+    distributed:
+      placement_group_timeout_seconds: 259200
+      worker_collective_timeout_seconds: 259200
+  generator:
+    backend: vllm
+    model_dtype: bfloat16
+    vllm_attention_backend: FLASH_ATTN
+    run_engines_locally: true
+    weight_sync_backend: nccl
+    weight_sync_pause:
+      mode: keep
+      clear_cache: true
+    weight_sync_transport: expert_block
+    expert_block_sync:
+      verify: false
+      timeout_seconds: 259200
+    gpu_memory_utilization: 0.75
+    max_num_seqs: 64
+    max_num_batched_tokens: 8192
+    enable_prefix_caching: true
+    enable_chunked_prefill: true
+    enforce_eager: false
+    enable_http_endpoint: false
+    chat_template: null
+    engine_init_kwargs:
+      enable_auto_tool_choice: true
+      tool_call_parser: hermes
+      moe_backend: triton
+      hf_overrides:
+        max_position_embeddings: 262144
+        max_seq_len: 262144
+      enable_return_routed_experts: true
+    sampling_params:
+      temperature: 0.7
+      top_p: 1.0
+      logprobs: 0
+      stop_token_ids:
+      - 128001
+      - 128009
+      skip_special_tokens: false
+    trajectory_reward_shaping:
+      enabled: true
+      overlong:
+        penalty_scale: 0.0
+      reasoning_span:
+        penalty: 0.1
+        target: marker
+    chat_template_kwargs:
+      enable_thinking: true
+    eval_sampling_params:
+      stop_token_ids:
+      - 128001
+      - 128009
+      skip_special_tokens: false
+      temperature: 0.7
+      top_p: 1.0
+    num_inference_engines: 22
+    inference_engine_tensor_parallel_size: 1
+    inference_engine_pipeline_parallel_size: 1
+    inference_engine_data_parallel_size: 8
+    inference_engine_expert_parallel_size: 8
+    n_samples_per_prompt: 8
+    trajectory_retention:
+      enabled: true
+      output_path: PENDING_RUN_TRACE_URI
+      run_id: PENDING_RUN_ID
+      phases:
+      - train
+      - eval
+      sample_fraction: 0.1
+      eval_sample_fraction: 1.0
+      sample_count_per_step: 0
+      always_retain_failures: false
+      always_retain_non_terminating: false
+      always_retain_loops: false
+      reward_below: null
+      reward_above: null
+      max_bytes_per_step: null
+      max_bytes_per_run: null
+      required: true
+      publish_timeout_seconds: 259200
+      shutdown_timeout_seconds: 259200
+    engine_init_timeout_seconds: 259200
+    weight_sync_pause_timeout_seconds: 259200
+  data:
+    kind: parquet
+    shuffle: true
+  extra_env:
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    VERIFYIT_JUDGE_MODEL: openai/gpt-oss-120b
+    NCCL_NET: Socket
+    NCCL_IB_DISABLE: '1'
+    NCCL_SOCKET_FAMILY: AF_INET
+    TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC: '259200'
+  terminal_bench:
+    harbor:
+      environment_type: daytona
+      daytona_api_key_env: DAYTONA_RL_API_KEY
+      eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY
+      override_timeout_sec: 1800
+      eval_timeout_override_sec: 1800
+      verifier_override_timeout_sec: 900
+      trial_attempt_timeout_sec: 5400
+      n_concurrent_trials: 256
+      max_retries: 1
+      enable_reward_shaping: false
+    installed_agent:
+      agent:
+        name: pi
+        override_setup_timeout_sec: 360
+        kwargs:
+          version: 0.87.0
+          mcp_adapter_version: 7.0.0
+          thinking: high
+          thinking_format: chat-template
+          model_info:
+            max_input_tokens: 102400
+            max_output_tokens: 16384
+          compaction_reserve_tokens: 16384
+      setup_timeout: 360
+      run_timeout: 1800
+      cleanup_timeout: 120
+      service_startup_timeout: 60
+      service_shutdown_timeout: 60
+      trial_reward_key: reward
+      output_path: PENDING_RUN_AGENT_TRACE_URI
+role_plan:
+  colocate_all: false
+  policy_num_nodes: 10
+  policy_num_gpus_per_node: 8
+  num_inference_engines: 22
+  inference_engine_tensor_parallel_size: 1
+  inference_engine_pipeline_parallel_size: 1
+  inference_engine_data_parallel_size: 8
+  inference_engine_expert_parallel_size: 8
+  train_batch_size: 64
+  policy_mini_batch_size: 64
+  micro_train_batch_size_per_gpu: 1
+  n_samples_per_prompt: 8
+  reference_num_nodes: null
+execution:
+  cluster: cw-rno2a
+  cluster_config: lib/iris/config/cw-rno2a.yaml
+  cpu: 32
+  memory: 1800GB
+  disk: 2TB
+  priority: interactive
+  max_retries: 0
+  target_cluster: cw-rno2a
+  parent_cluster_config: lib/iris/config/marin.yaml
+  wandb_entity: marin-community
+  required_env_vars:
+  - DAYTONA_RL_API_KEY
+  - DAYTONA_EVAL_API_KEY
+  - DAYTONA_TARGET
+  - TOGETHER_API_KEY
+  - MARIN_PREFIX
+  - MARIN_TEMP_PREFIX
+  container_profile: 4
+wall_clock_budget:
+  seconds: 43200
+  drain_margin: 1800
+ray_timeouts:
+  rendezvous_timeout: 259200
+  cluster_join_timeout: 259200
+  driver_liveness_timeout: 259200

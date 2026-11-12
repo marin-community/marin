@@ -339,6 +339,9 @@ class GrugTrainerConfig:
     data_seed: int | None = None
     special_token_ids: tuple[int, ...] = (128006, 128007, 128002, 128003, 128005, 128011, 128009)
     anchor_token_ids: tuple[int, ...] = (3560, 1984, 1781, 4320, 5507, 842, 128001)
+    # Copy anchor-token output columns into the special-token columns at initialization. This
+    # suits the base model, whose special tokens were never trained; an SFT start must keep its own.
+    reseed_special_token_rows: bool = True
     special_token_lr_multiplier: float = math.sqrt(32)
     gradient_accumulation_steps: int = 1
     log_every: int = 1
@@ -755,7 +758,7 @@ def scale_special_token_updates(updates: Transformer, token_ids: tuple[int, ...]
 def initialize_snowball_sft(
     state: GrugTrainState, checkpoint: str, mesh: Mesh, config: GrugTrainerConfig
 ) -> GrugTrainState:
-    """Load the legacy single-shared-expert base and seed the SFT LM-head rows."""
+    """Load a legacy single-shared-expert checkpoint and, if configured, seed the SFT LM-head rows."""
     shared = state.params.stacked_blocks.stacked.shared
     if shared is None or len(shared) != 1:
         raise ValueError("The Snowball base has exactly one shared expert")
@@ -769,7 +772,8 @@ def initialize_snowball_sft(
         loaded.params,
         (loaded.params.stacked_blocks.stacked.shared,),
     )
-    params = reseed_lm_head(params, config.special_token_ids, config.anchor_token_ids)
+    if config.reseed_special_token_rows:
+        params = reseed_lm_head(params, config.special_token_ids, config.anchor_token_ids)
     return dataclasses.replace(loaded, params=params, ema_params=params if state.ema_params is not None else None)
 
 

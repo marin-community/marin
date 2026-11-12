@@ -58,6 +58,9 @@ class RunSpec:
     adopted_endpoint: FilePin | None = None
 
 
+# Interactive runs need no owner gate; production is granted per experiment.
+ALLOWED_PRIORITIES = frozenset({"interactive", "production"})
+
 # Geometry, context, group mix and data are deliberately absent. A smoke must
 # exercise the production path; only its duration and evaluation fanout shrink.
 SCALE_PATHS = {
@@ -168,11 +171,12 @@ def resolve_spec(path: Path, *, smoke: bool) -> dict:
 def allocation_peaks(resolved: dict) -> dict[str, int]:
     """Count serialized stage allocations, including the co-hosted eval judge."""
     execution = resolved["execution"]
-    for runtime in (execution["coordinator"], resolved["rl"]["execution"], resolved["evaluation"]["execution"]):
-        if runtime["priority"] != "production" or runtime["cluster"] != "cw-rno2a":
-            raise ValueError("This experiment is authorized only on RNO2A at production priority")
-    if resolved["endpoint"]["priority"] != "production":
-        raise ValueError("Endpoint priority must remain production")
+    runtimes = (execution["coordinator"], resolved["rl"]["execution"], resolved["evaluation"]["execution"])
+    if any(runtime["cluster"] != "cw-rno2a" for runtime in runtimes):
+        raise ValueError("This experiment is authorized only on RNO2A")
+    priorities = {runtime["priority"] for runtime in runtimes} | {resolved["endpoint"]["priority"]}
+    if len(priorities) != 1 or not priorities <= ALLOWED_PRIORITIES:
+        raise ValueError(f"All runtimes must share one priority from {sorted(ALLOWED_PRIORITIES)}: {priorities}")
     coordinator_gpu = execution["coordinator"]["coordinator_gpu"]
     coordinator_count = coordinator_gpu["count"] if coordinator_gpu else 0
     resources = {key: execution[key] for key in ("export", "eval_inputs", "archive")}
@@ -199,10 +203,13 @@ def allocation_peaks(resolved: dict) -> dict[str, int]:
 
 
 def stage_blockers(resolved: dict, through: str) -> list[str]:
-    if through in {"rl", "archive"}:
+    """Blockers for the stages up to ``through``; ``sft`` and ``export`` need only the SFT inputs."""
+    if through in {"rl", "eval", "archive"}:
         blockers = list(resolved["blockers"])
         if through == "rl":
             blockers = [item for item in blockers if not item.startswith(("archive:", "evaluation:"))]
+        if through == "eval":
+            blockers = [item for item in blockers if not item.startswith("archive:")]
         return blockers
     documents = {
         "sft": resolved["datasets"]["sft"],

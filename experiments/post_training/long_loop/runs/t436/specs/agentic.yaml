@@ -1,0 +1,37 @@
+source_names:
+- long-loop-smartie-swesmith
+selected_sources:
+- repo: open-athena/task-trove
+  revision: 0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c
+  path: releases/smartie-continuation-20261016/swesmith
+  rows: 8045
+  tasks_parquet_sha256: 20d3d9955cf624213cdf8be40a0923aad6a7c57cd34b0cd855b5e3002e947468
+candidate_manifest:
+  path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/swe-pi-taskpython-20261111-v3/manifest.json
+  sha256: 819c1cd8fe8f9b498e381222c3e20d91c970b5d81f809be24e9726890c94896b
+train_rows: 8025
+validation_rows: 20
+normalization: Original task Python shared for non-root installs; Pi control runtime
+  isolated; original verifier unchanged
+admission_pending: []
+uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3
+data_file: agentic-train.parquet
+files:
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3/agentic-train.parquet
+  sha256: 22a8ff921f6e9ed288f18337aedc730117993806c82ee5442410d8f0e6ee229e
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3/manifest.json
+  sha256: 819c1cd8fe8f9b498e381222c3e20d91c970b5d81f809be24e9726890c94896b
+- uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3/agentic-train.parquet.identities.jsonl
+  sha256: a0fd598e051c46eae91b21eb1811611b93b5adb8a8b41cef967429b552f4a775
+overlap_admission:
+  path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/overlap-admission-20261110.json
+  sha256: ac2e5c18c94222404cbc39b58077572e225efdaa125a11eb5a0375d152e83872
+execution_overlay:
+  marin_revision: 91c49019eb078b039eb98a1837626cacad603059
+  agent: pi
+  version: pi-task-python-shared-v3
+  agent_user: longloop-agent
+  agent_uid: 10001
+  snapshot_contexts: 5
+  row_order_and_source_identity: preserved
+  upstream_manifest_sha256: cf4050ab35a497d4189552883f2e234a66a7c31fa833615b7baa8c3616bd8db4

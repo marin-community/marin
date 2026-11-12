@@ -7,6 +7,7 @@ import shutil
 from dataclasses import replace
 from pathlib import Path
 
+import jax.numpy as jnp
 import pytest
 import yaml
 from marin.execution.lazy import StepContext
@@ -18,6 +19,7 @@ from experiments.post_training.long_loop.__main__ import validate_graph
 from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.launch_validation import validate_launch
 from experiments.post_training.long_loop.run_spec import allocation_peaks, resolve_spec, stage_blockers
+from experiments.post_training.long_loop.sft import check_initializer
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 
 SPEC = Path(__file__).parents[1] / "specs" / "round1.yaml"
@@ -173,17 +175,27 @@ def test_actual_sft_graph_constructs_without_admitting_unprepared_rl(tmp_path, m
         build_spec_graph(resolved, "2026.11.09.12", through="archive")
 
 
-@pytest.mark.parametrize("stage", ["coordinator", "rl", "evaluation", "endpoint"])
-def test_new_submission_rejects_stale_interactive_priority(stage):
+def runtimes(resolved: dict) -> list[dict]:
+    return [
+        resolved["execution"]["coordinator"],
+        resolved["rl"]["execution"],
+        resolved["evaluation"]["execution"],
+        resolved["endpoint"],
+    ]
+
+
+@pytest.mark.parametrize("index", range(4))
+def test_runtimes_must_share_one_allowed_priority(index):
     resolved = resolve_spec(SPEC, smoke=False)
-    if stage == "coordinator":
-        runtime = resolved["execution"]["coordinator"]
-    elif stage == "endpoint":
-        runtime = resolved[stage]
-    else:
-        runtime = resolved[stage]["execution"]
-    runtime["priority"] = "interactive"
-    with pytest.raises(ValueError, match="production"):
+    runtimes(resolved)[index]["priority"] = "interactive"
+    with pytest.raises(ValueError, match="share one priority"):
+        allocation_peaks(resolved)
+    for runtime in runtimes(resolved):
+        runtime["priority"] = "interactive"
+    allocation_peaks(resolved)
+    for runtime in runtimes(resolved):
+        runtime["priority"] = "batch"
+    with pytest.raises(ValueError, match="share one priority"):
         allocation_peaks(resolved)
 
 
@@ -342,3 +354,82 @@ def test_emitted_stage_timeouts_default_to_three_days(tmp_path, monkeypatch, ove
     resolved["rl"]["execution"]["job_timeout_seconds"] = 32400
     with pytest.raises(ValueError, match="exceed the explicit budget"):
         build_spec_graph(resolved, "2026.11.13", through="rl")
+
+
+def test_hf_export_adoption_hands_the_mirror_to_rl_without_export(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
+    resolved = resolve_spec(SPEC, smoke=True)
+    resolved["adopted_sft"] = yaml.safe_load((SPEC.parent / "adopted-sft-20261005.yaml").read_text())
+    terminal = build_spec_graph(resolved, "2026.11.10.1", through="rl")
+    steps = {step.name: step for step in graph_handles([terminal])}
+    mirror = steps["long-loop/round1/sft-hf"]
+    assert mirror.adopt_source == resolved["adopted_sft"]["uri"]
+    assert steps["long-loop/round1/adopt-sft"] in mirror.deps
+    assert not any(name.endswith(("/sft", "/sft-handoff", "/base")) or "micro-" in name for name in steps)
+    rl = next(step for step in steps.values() if step.name.endswith(resolved["rl"]["name"]))
+    assert mirror in graph_handles([rl])
+    with pytest.raises(ValueError, match="stop at --through eval"):
+        build_spec_graph({**resolved, "blockers": []}, "2026.11.10.1", through="archive")
+
+
+def test_export_stop_runs_sft_and_export_only(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
+    resolved = resolve_spec(SPEC, smoke=True)
+    assert stage_blockers(resolved, "export") == stage_blockers(resolved, "sft")
+    terminal = build_spec_graph(resolved, "2026.11.12.2", through="export")
+    names = [step.name.rsplit("/", 1)[-1] for step in graph_handles([terminal])]
+    assert sorted(names) == ["base", "inputs", "sft", "sft-handoff"]
+    assert terminal.name.endswith("/sft-handoff")
+    assert terminal.runtime_args["skyrl_execution"].coordinator_name == "long-loop-full-2026.11.12.2"
+
+
+def test_eval_stop_excludes_report_and_archive(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
+    resolved = resolve_spec(SPEC, smoke=True)
+    resolved["blockers"] = ["archive: publication not approved"]
+    assert stage_blockers(resolved, "eval") == []
+    resolved["adopted_sft"] = {"version": "2026.11.09.12", "uri": "s3://test/committed-sft"}
+    terminal = build_spec_graph(resolved, "2026.11.12.3", through="eval")
+    names = [step.name for step in graph_handles([terminal])]
+    assert terminal.name == resolved["evaluation"]["name"] or terminal.name.endswith(resolved["evaluation"]["name"])
+    assert not any("report" in name or "archive" in name for name in names)
+
+
+def test_contributor_spec_builds_a_fresh_sft_from_the_copied_native_start(monkeypatch, tmp_path):
+    """The task-436 recipe decodes into the trainer config and stops after the export."""
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-08a/marin/users/karan/long-loop-t436")
+    spec = SPEC.parents[1] / "runs/t436/specs/round1.yaml"
+    resolved = resolve_spec(spec, smoke=True)
+    assert all(reason.startswith(("sft:", "initializer:")) for reason in stage_blockers(resolved, "export"))
+    resolved["datasets"]["sft"]["admission_pending"] = []
+    resolved["initializer"]["admission_pending"] = []
+    terminal = build_spec_graph(resolved, "2026.11.12.4", through="export")
+    assert any(step.name.endswith("/sft") for step in graph_handles([terminal]))
+    config = spec_pipeline.fresh_sft_config(
+        output="/tmp/t436/sft", initializer=resolved["initializer"]["uri"], recipe=resolved["sft"], run_id="t436"
+    )
+    assert config.trainer.trainer.initialize_from == resolved["initializer"]["uri"] + "/native/step-0"
+    assert config.trainer.trainer.train_batch_size == 2 and config.stop_after_steps == 2
+    assert config.trainer.reseed_special_token_rows is False
+    assert config.trainer.trainer.mp.param_dtype == jnp.float32
+    assert config.optimizer.learning_rate == 1e-6 and config.optimizer.lr_schedule == "constant"
+    assert [stage for stage, _ in config.data.train_weights] == [0, 226, 452]
+    assert all(runtime["priority"] == "interactive" for runtime in runtimes(resolved))
+
+
+def test_copied_native_start_must_match_its_receipt(tmp_path):
+    root = tmp_path / "native-1005"
+    step = root / "native/step-0"
+    (step / "d").mkdir(parents=True)
+    (step / "metadata.json").write_text('{"step": 161750, "is_temporary": false}')
+    (step / "d/blob").write_bytes(b"weights")
+    (root / "copy-receipt").mkdir()
+    objects = [{"path": "metadata.json", "bytes": 39}, {"path": "d/blob", "bytes": 7}]
+    receipt = {"destination": str(step), "objects": objects}
+    (root / "copy-receipt/receipt.json").write_text(json.dumps(receipt))
+    check_initializer(str(root), "native_copy")
+    (step / "d/blob").write_bytes(b"weights!")
+    with pytest.raises(ValueError, match="differs from its verified receipt"):
+        check_initializer(str(root), "native_copy")
+    with pytest.raises(ValueError, match="Unknown initializer evidence"):
+        check_initializer(str(root), "guess")

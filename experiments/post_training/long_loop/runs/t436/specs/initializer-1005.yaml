@@ -1,0 +1,10 @@
+uri: s3://marin-rno2a/tmp/ttl=14d/long-loop-436/native-1005
+evidence: native_copy
+source: gs://marin-us-central2/users/held/grug_sft/grug-67b-sft-20260929-special-token-lr-full-ab-4750-grouped/checkpoints/step-161750
+hf_release:
+  repository: open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05
+  revision: ac60d9401820953943f5a56e06f36e13c86b12d6
+files: []
+admission_pending:
+- copy not run; pin copy-receipt/receipt.json, metadata.json and manifest.json in
+  files
