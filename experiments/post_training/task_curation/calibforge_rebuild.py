@@ -53,7 +53,10 @@ from experiments.post_training.task_curation.calibforge_fixtures import (
     SETUP_SCRIPT,
     SETUP_SCRIPT_PREAMBLE,
     SHELL_METACHARACTERS,
+    copy_commands,
+    copy_target,
     fixture_generator,
+    teardown_commands,
 )
 from experiments.post_training.task_curation.environment import dockerfile_lines
 from experiments.post_training.task_curation.environment_fidelity import (
@@ -229,8 +232,7 @@ def compile_recipe(instructions: list[Instruction], files: dict[str, bytes], mod
         raise DeferredRebuild("requires_multistage_support")
     base_ref = _resolved_base(bases[0])
     workdir, steps = _recipe_body(instructions, files)
-    steps.commands.append(f"rm -f {SETUP_ROOT}/{FIXTURE_ARCHIVE} {SETUP_ROOT}/{SETUP_SCRIPT}")
-    steps.commands.append(f"rmdir {SETUP_ROOT}")
+    steps.commands.extend(teardown_commands())
     if steps.env_exports:
         steps.commands[2:2] = steps.env_exports
     return CompiledRecipe(base_ref, workdir, "\n".join(steps.commands) + "\n", _pack_tar(steps.resources, modes))
@@ -350,8 +352,7 @@ def _stage_copy(item: Instruction, workdir: str, files: dict[str, bytes], steps:
         dynamic = dynamic_copy_error(destination, source_name)
         if dynamic is not None:
             raise DeferredRebuild(dynamic)
-    target = str(PurePosixPath(workdir) / destination)
-    directory_target = destination.endswith("/") or len(sources) > 1
+    target, directory_target = copy_target(workdir, destination, len(sources))
     for source_name in sources:
         prefix = source_name.rstrip("/") + "/"
         matches = [name for name in files if name == source_name or name.startswith(prefix)]
@@ -365,17 +366,15 @@ def _stage_copy(item: Instruction, workdir: str, files: dict[str, bytes], steps:
                 # the script copies the staged directory, not the build context.
                 steps.resources[name] = files[name]
                 steps.copied_files.add(str(PurePosixPath(target) / name[len(prefix) :]))
-            steps.commands.append("mkdir -p " + shlex.quote(target))
-            steps.commands.append(
-                "cp -a " + f'"$stage"/{shlex.quote(directory_source)}' + "/. " + shlex.quote(target + "/")
+            steps.commands.extend(
+                copy_commands('"$stage"/' + shlex.quote(directory_source), target, into_directory=True)
             )
             continue
         name = matches[0]
         steps.resources[name] = files[name]
         file_target = str(PurePosixPath(target) / PurePosixPath(name).name) if directory_target else target
         steps.copied_files.add(file_target)
-        steps.commands.append("mkdir -p " + shlex.quote(str(PurePosixPath(file_target).parent)))
-        steps.commands.append("cp -a " + f'"$stage"/{shlex.quote(name)}' + " " + shlex.quote(file_target))
+        steps.commands.extend(copy_commands('"$stage"/' + shlex.quote(name), file_target, into_directory=False))
 
 
 def rebuild_task(task_binary: bytes) -> RebuiltTask:

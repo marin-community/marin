@@ -250,7 +250,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             is_benchmark="benchmark" in tags,
             kind="Generator" if "generator" in tags else "Dataset",
             status=next(
-                (label for tag, label in (("deprecated", "Deprecated"), ("excluded", "Excluded")) if tag in tags),
+                (label for tag, label in (("deprecated", "Deprecated"), (EXCLUDED_TAG, "Excluded")) if tag in tags),
                 "Inventory" if pipeline is None else "Available",
             ),
             pipeline=invocation,

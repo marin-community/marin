@@ -46,6 +46,31 @@ class DeferredEnvironment(ValueError):
     """A native recipe needs a lowering contract not yet qualified."""
 
 
+def copy_target(workdir: str, destination: str, source_count: int) -> tuple[str, bool]:
+    """Where Docker places one COPY inside the workdir, and whether it fills a directory.
+
+    A trailing slash or more than one source means Docker copies into the
+    destination directory rather than onto the destination path.
+    """
+    target = str(PurePosixPath(workdir) / destination)
+    return target, destination.endswith("/") or source_count > 1
+
+
+def copy_commands(staged: str, target: str, *, into_directory: bool) -> tuple[str, ...]:
+    """The setup lines that place one staged source at its target."""
+    if into_directory:
+        return ("mkdir -p " + shlex.quote(target), "cp -a " + staged + "/. " + shlex.quote(target + "/"))
+    return (
+        "mkdir -p " + shlex.quote(str(PurePosixPath(target).parent)),
+        "cp -a " + staged + " " + shlex.quote(target),
+    )
+
+
+def teardown_commands() -> tuple[str, str]:
+    """The setup lines that remove the staged archive and script after setup ran."""
+    return (f"rm -f {SETUP_ROOT}/{FIXTURE_ARCHIVE} {SETUP_ROOT}/{SETUP_SCRIPT}", f"rmdir {SETUP_ROOT}")
+
+
 def fixture_generator(arguments: list[str], copied_files: set[str]) -> bool:
     """Whether this RUN invokes a staged fixture-generating script.
 
@@ -116,8 +141,7 @@ def fixture_bundle(context: Path, instructions: list[dict]) -> FixtureBundle:
             dynamic = dynamic_copy_error(destination, source)
             if dynamic is not None:
                 raise DeferredEnvironment(dynamic)
-        target = str(PurePosixPath(workdir) / destination)
-        directory_target = destination.endswith("/") or len(sources) > 1
+        target, directory_target = copy_target(workdir, destination, len(sources))
         for source in sources:
             path = context / source
             if not path.exists():
@@ -134,16 +158,12 @@ def fixture_bundle(context: Path, instructions: list[dict]) -> FixtureBundle:
                     for member in members
                     if member.is_file()
                 )
-                commands.extend(
-                    ["mkdir -p " + shlex.quote(target), "cp -a " + staged + "/. " + shlex.quote(target + "/")]
-                )
+                commands.extend(copy_commands(staged, target, into_directory=True))
             else:
-                copied_files.add(str(PurePosixPath(target) / path.name) if directory_target else target)
-                parent = target if directory_target else str(PurePosixPath(target).parent)
-                commands.append("mkdir -p " + shlex.quote(parent))
-                commands.append("cp -a " + staged + " " + shlex.quote(target + ("/" if directory_target else "")))
-    commands.append(f"rm -f {SETUP_ROOT}/{FIXTURE_ARCHIVE} {SETUP_ROOT}/{SETUP_SCRIPT}")
-    commands.append(f"rmdir {SETUP_ROOT}")
+                file_target = str(PurePosixPath(target) / path.name) if directory_target else target
+                copied_files.add(file_target)
+                commands.extend(copy_commands(staged, file_target, into_directory=False))
+    commands.extend(teardown_commands())
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w") as archive:
         for name, path in sorted(resources.items()):

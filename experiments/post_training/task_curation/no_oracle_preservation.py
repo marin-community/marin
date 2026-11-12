@@ -81,12 +81,7 @@ def _copy_steps(dockerfile: str) -> list[tuple[list[str], str]]:
 
 
 def copied_paths(dockerfile: str) -> list[str]:
-    """The context-relative sources a native recipe copies into the workspace.
-
-    These scans read the recipe as written rather than through ``parse_instructions``:
-    the preservation check must describe the literal archive even when the rebuild
-    would defer on it, so a malformed recipe still yields a report instead of a crash.
-    """
+    """The context-relative sources a native recipe copies into the workspace."""
     if ADD_SOURCE.search(dockerfile):
         raise ValueError("ADD recipes have no preservation contract")
     return [
