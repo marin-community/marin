@@ -110,13 +110,19 @@ def run_shard(
                 contexts = {image_context_digest(item.task) for item in prepared}
                 if len(contexts) != 1:
                     raise ValueError("An admission shard must preserve one original image context")
-                image = build_image(prepared[0], root)
+                image = build_image(prepared[0], root, network="host")
                 (StoragePath(output) / "build-ready.json").write_text(json.dumps({"image": image, "at": time.time()}))
                 results = []
-                with ThreadPoolExecutor(max_workers=2) as pool:
+                # Share this pod's network, never the node namespace. One task
+                # at a time prevents fixed-port test servers colliding.
+                with ThreadPoolExecutor(max_workers=1) as pool:
                     futures = {
                         pool.submit(
-                            run_controls, item, image, root / "tasks" / hashlib.sha256(item.task.id.encode()).hexdigest()
+                            run_controls,
+                            item,
+                            image,
+                            root / "tasks" / hashlib.sha256(item.task.id.encode()).hexdigest(),
+                            network="host",
                         ): item
                         for item in prepared
                     }

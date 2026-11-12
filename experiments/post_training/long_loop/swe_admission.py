@@ -53,7 +53,7 @@ def materialize(task: TaskSpec, directory: Path) -> None:
         target.write_bytes(resource_bytes(resource))
 
 
-def build_image(prepared: PreparedTask, output: Path) -> str:
+def build_image(prepared: PreparedTask, output: Path, *, network: str) -> str:
     digest = image_context_digest(prepared.task)
     directory = output / "images" / digest
     directory.mkdir(parents=True, exist_ok=True)
@@ -68,6 +68,8 @@ def build_image(prepared: PreparedTask, output: Path) -> str:
             str(directory / "image.id"),
             "--platform",
             "linux/amd64",
+            "--network",
+            network,
             "-f",
             str(directory / "environment/Dockerfile"),
             str(directory / "environment"),
@@ -82,7 +84,7 @@ def build_image(prepared: PreparedTask, output: Path) -> str:
     return image
 
 
-def run_controls(prepared: PreparedTask, image: str, directory: Path) -> dict:
+def run_controls(prepared: PreparedTask, image: str, directory: Path, *, network: str) -> dict:
     """Use the production bootstrap and grader for both controls, retaining failures."""
     directory.mkdir(parents=True, exist_ok=True)
     identity = hashlib.sha256(prepared.task.model_dump_json().encode()).hexdigest()
@@ -99,6 +101,7 @@ def run_controls(prepared: PreparedTask, image: str, directory: Path) -> dict:
         "task_sha256": identity,
         "pins": asdict(prepared.pins),
         "image": image,
+        "network": network,
         "started_unix": started,
         "status": "excluded",
     }
@@ -115,6 +118,8 @@ def run_controls(prepared: PreparedTask, image: str, directory: Path) -> dict:
                 "-d",
                 "--platform",
                 "linux/amd64",
+                "--network",
+                network,
                 "--cpus",
                 str(resources.get("cpus", 1)),
                 "--memory",
@@ -198,6 +203,7 @@ def main() -> None:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--workers", type=int, required=True)
+    parser.add_argument("--network", required=True, choices=("host", "bridge"))
     parser.add_argument("--setup-timeout", type=int, required=True)
     parser.add_argument("--verifier-timeout", type=int, required=True)
     parser.add_argument("--harbor-verifier-timeout", type=int, required=True)
@@ -248,7 +254,7 @@ def main() -> None:
     for item in prepared:
         context = image_context_digest(item.task)
         if context not in images:
-            images[context] = build_image(item, args.output)
+            images[context] = build_image(item, args.output, network=args.network)
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = [
             pool.submit(
@@ -256,6 +262,7 @@ def main() -> None:
                 item,
                 images[image_context_digest(item.task)],
                 args.output / "tasks" / hashlib.sha256(item.task.id.encode()).hexdigest(),
+                network=args.network,
             )
             for item in prepared
         ]
