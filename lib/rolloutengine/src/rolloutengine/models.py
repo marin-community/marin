@@ -136,6 +136,22 @@ class ContextWindowExceeded(RuntimeError):
     """Reject one request while allowing the harness to compact and send another."""
 
 
+class ContextRecovery(StrEnum):
+    """When a session lets the harness recover from a transport's context rejection."""
+
+    NEVER = "never"
+    ALWAYS = "always"
+    AFTER_TURN = "after_turn"
+
+
+class ContextRejected(Exception):
+    """A context rejection whose original error applies when recovery is not selected."""
+
+    def __init__(self, error: Exception, message: str):
+        self.error = error
+        super().__init__(message)
+
+
 class GenerationLimitReached(Exception):
     """The rendered prompt leaves no permitted generation budget.
 

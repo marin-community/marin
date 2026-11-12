@@ -13,7 +13,7 @@ from taskcompendium.models import TaskSpec
 from rolloutengine.cleanup import _retain_task
 from rolloutengine.harness.core import HarnessContext, ModelSession
 from rolloutengine.harness.shell import task_prompt
-from rolloutengine.models import ModelTurn, Prompt, RolloutEnded, RolloutLimits
+from rolloutengine.models import ContextRecovery, ModelTurn, Prompt, RolloutEnded, RolloutLimits
 
 
 class AgentCompletion(Protocol):
@@ -100,9 +100,13 @@ class _Completions:
                     and prompt.options == last.prompt.options
                     and prompt.messages[: len(history)] == history
                 ):
-                    turn = await self.session.reply(prompt.messages[len(history) :], token_ids=prompt.token_ids)
+                    turn = await self.session.reply(
+                        prompt.messages[len(history) :],
+                        token_ids=prompt.token_ids,
+                        context_recovery=ContextRecovery.ALWAYS,
+                    )
                 else:
-                    turn = await self.session.start(prompt)
+                    turn = await self.session.start(prompt, context_recovery=ContextRecovery.ALWAYS)
             except RolloutEnded:
                 self.end()
             else:

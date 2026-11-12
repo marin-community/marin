@@ -176,6 +176,19 @@ and token limits:
   requests: final observations that the model never receives, the harness's data, and metrics. A turn with
   recorded observations takes no `reply`.
 
+`start` and `reply` also accept `context_recovery=ContextRecovery.NEVER`. A model adapter can raise
+`ContextRejected(original_error, message)` when a context request is refused before generation. The session
+applies the original error unless the harness selects `ALWAYS`, or `AFTER_TURN` after a model turn has
+completed anywhere in this attempt. Recovery raises `ContextWindowExceeded` without recording the refused
+request. The session owns this attempt state; no caller tracks another sampled-turn flag. Each attempt
+starts with fresh state, and a rejection does not spend a model turn or reset cumulative limits or deadlines.
+
+The generic agent harness selects `ALWAYS`. Full Harbor trials select `AFTER_TURN`, so an initial generation
+budget rejection still ends with `length` and an initial serving failure keeps its original error. Later
+rejections leave the sampled evidence available while Harbor finishes verification. Existing reward and
+error treatments still apply to the trial result. Explicit `ContextWindowExceeded` and unwrapped
+`GenerationLimitReached` from other adapters retain their existing meanings.
+
 The session applies these rules:
 
 - One request can be open at a time. A second one raises `RuntimeError`.

@@ -10,7 +10,7 @@ from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
 from rolloutengine.harness.core import HarnessContext, ModelSession
 from rolloutengine.harness.external import AgentCompletion
-from rolloutengine.models import LimitReached, ModelTurn, Prompt, RolloutEnded, RolloutLimits
+from rolloutengine.models import ContextRecovery, LimitReached, ModelTurn, Prompt, RolloutEnded, RolloutLimits
 from taskcompendium.models import TaskSpec
 from skyrl_gym.task_records import StepReward
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -94,9 +94,13 @@ class HarborTrialHarness:
                         and prompt.options == last[0].options
                         and prompt.messages[: len(history)] == history
                     ):
-                        turn = await session.reply(prompt.messages[len(history) :], token_ids=prompt.token_ids)
+                        turn = await session.reply(
+                            prompt.messages[len(history) :],
+                            token_ids=prompt.token_ids,
+                            context_recovery=ContextRecovery.AFTER_TURN,
+                        )
                     else:
-                        turn = await session.start(prompt)
+                        turn = await session.start(prompt, context_recovery=ContextRecovery.AFTER_TURN)
                 except LimitReached as error:
                     stopped = error.stop_reason
                     raise AgentGenerationStopped(stopped) from error

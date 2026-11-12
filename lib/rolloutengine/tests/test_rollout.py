@@ -76,6 +76,7 @@ from rolloutengine.models import (
     LENGTH_STOP_REASON,
     AttemptEnded,
     AttemptStarted,
+    ContextRejected,
     ContextWindowExceeded,
     ConversationStarted,
     GenerationLimitReached,
@@ -3750,11 +3751,15 @@ async def test_a_grading_failure_after_a_model_failure_keeps_the_model_failure()
     )
 
 
-async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one():
+@pytest.mark.parametrize("wrapped", [False, True], ids=["generation-limit", "transport-rejection"])
+async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one(wrapped):
     class LimitedModel(ReplayModel):
         async def complete(self, request):
             if self.requests:
-                raise GenerationLimitReached((70, 71))
+                error = GenerationLimitReached((70, 71))
+                if wrapped:
+                    raise ContextRejected(error, "Maximum context length exceeded") from error
+                raise error
             return await super().complete(request)
 
     record = await engine(
@@ -3782,7 +3787,8 @@ async def test_an_unlimited_agent_can_finish_beyond_the_old_turn_limit():
 
 
 @pytest.mark.parametrize("compact", [False, True])
-async def test_context_rejection_allows_a_shorter_request_without_ending_the_attempt(compact):
+@pytest.mark.parametrize("wrapped", [False, True], ids=["explicit-recovery", "transport-rejection"])
+async def test_context_rejection_allows_a_shorter_request_without_ending_the_attempt(compact, wrapped):
     first = ({"role": "user", "content": "Start."},)
     replay = ReplayModel([{"role": "assistant", "content": "Working."}, {"role": "assistant", "content": "12"}])
     rejected = []
@@ -3790,6 +3796,9 @@ async def test_context_rejection_allows_a_shorter_request_without_ending_the_att
     async def model(request):
         if request.messages[-1].get("content") == "Oversized tool output":
             rejected.append(request)
+            if wrapped:
+                error = GenerationLimitReached((70, 71))
+                raise ContextRejected(error, "Maximum context length exceeded") from error
             raise ContextWindowExceeded("Maximum context length exceeded")
         return await replay.complete(request)
 
@@ -3812,3 +3821,21 @@ async def test_context_rejection_allows_a_shorter_request_without_ending_the_att
     assert len(replay.requests) == 2
     assert len(result.rollout.conversations) == (2 if compact else 1)
     assert all("Oversized tool output" not in str(record.messages) for record in result.rollout.conversations)
+
+
+async def test_unrecovered_context_rejection_preserves_the_original_serving_error():
+    error = RuntimeError("Serving rejected the context")
+
+    class RejectedModel(ReplayModel):
+        async def complete(self, request):
+            if self.requests:
+                raise ContextRejected(error, "Maximum context length exceeded") from error
+            return await super().complete(request)
+
+    with pytest.raises(GradedRolloutInterrupted) as caught:
+        await engine(
+            RejectedModel([{"role": "assistant", "content": "12"}]), harnesses={"fixture": StartsTwice()}
+        ).run_task(rollout_spec(arithmetic_task(), harness="fixture"))
+    assert caught.value.operation == RolloutOperation.MODEL
+    assert caught.value.__cause__ is error
+    assert caught.value.grade.reward == 1.0

@@ -15,7 +15,7 @@ from typing import Any, Protocol
 from shellbox.machine import Machine
 from taskcompendium.models import TaskSpec
 
-from rolloutengine.models import EventSink, ModelTurn, Prompt, RolloutLimits
+from rolloutengine.models import ContextRecovery, EventSink, ModelTurn, Prompt, RolloutLimits
 
 
 class HarnessCleanup(Protocol):
@@ -62,21 +62,29 @@ class ModelSession(Protocol):
     raises, so a harness that asks again in a loop does not stop other attempts.
     """
 
-    async def start(self, prompt: Prompt) -> ModelTurn:
+    async def start(self, prompt: Prompt, *, context_recovery: ContextRecovery = ContextRecovery.NEVER) -> ModelTurn:
         """Start a new conversation with ``prompt`` and return the model's turn.
 
         A later ``start`` replaces the chat, for example after the harness makes its history shorter or
         changes its tools. The rollout keeps the earlier conversations.
+        ``context_recovery`` selects when a transport's ``ContextRejected`` becomes a non-mutating
+        ``ContextWindowExceeded``. Otherwise the session applies its original error. ``AFTER_TURN``
+        counts completed model turns across all conversations in this attempt.
         """
         ...
 
     async def reply(
-        self, observations: tuple[dict[str, Any], ...], *, token_ids: tuple[int, ...] | None = None
+        self,
+        observations: tuple[dict[str, Any], ...],
+        *,
+        token_ids: tuple[int, ...] | None = None,
+        context_recovery: ContextRecovery = ContextRecovery.NEVER,
     ) -> ModelTurn:
         """Send ``observations`` after the model's last message, and return the next turn.
 
         ``token_ids`` pins the exact tokens of the next prompt. They must start with the tokens served so far:
         under ``TraceMode.EXACT_TOKENS``, other tokens break the token contract before the request is sent.
+        ``context_recovery`` has the same meaning as on ``start``.
         """
         ...
 

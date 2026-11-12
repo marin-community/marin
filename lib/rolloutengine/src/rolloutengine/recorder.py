@@ -22,6 +22,8 @@ from rolloutengine.models import (
     MAX_TURNS_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
     TRACE_METRIC,
+    ContextRecovery,
+    ContextRejected,
     ContextWindowExceeded,
     Continuation,
     ConversationRecord,
@@ -208,7 +210,7 @@ class _Recorder:
             return tuple(conversation.messages)
         return next((record.messages for record in reversed(self.earlier) if record.steps), None)
 
-    async def start(self, prompt: Prompt) -> ModelTurn:
+    async def start(self, prompt: Prompt, *, context_recovery: ContextRecovery = ContextRecovery.NEVER) -> ModelTurn:
         await self._enter()
         current = self.conversation
         if current is not None and (
@@ -222,10 +224,14 @@ class _Recorder:
             deadlines.total.reschedule(asyncio.get_running_loop().time() + self.limits.total_turn_timeout)
         conversation = _Conversation(prompt, self.mode)
         request = _Request(self.step_observations, None, conversation, self._waited())
-        return await self._send(request, conversation.request((), prompt.token_ids))
+        return await self._send(request, conversation.request((), prompt.token_ids), context_recovery)
 
     async def reply(
-        self, observations: tuple[dict[str, Any], ...], *, token_ids: tuple[int, ...] | None = None
+        self,
+        observations: tuple[dict[str, Any], ...],
+        *,
+        token_ids: tuple[int, ...] | None = None,
+        context_recovery: ContextRecovery = ContextRecovery.NEVER,
     ) -> ModelTurn:
         await self._enter()
         conversation = self.conversation
@@ -247,7 +253,7 @@ class _Recorder:
             self.model_error = RolloutContractError("Pinned prompt tokens must start with the tokens served so far")
             raise RolloutEnded("The pinned prompt broke the token contract") from self.model_error
         request = _Request(observations, token_ids, None, self._waited())
-        return await self._send(request, conversation.request(observations, token_ids))
+        return await self._send(request, conversation.request(observations, token_ids), context_recovery)
 
     def record(
         self,
@@ -333,7 +339,9 @@ class _Recorder:
         self.stopped = True
         raise LimitReached(self.stop_reason)
 
-    async def _send(self, request: _Request, model_request: ModelRequest) -> ModelTurn:
+    async def _send(
+        self, request: _Request, model_request: ModelRequest, context_recovery: ContextRecovery
+    ) -> ModelTurn:
         self.request = request
         self._set_tool_deadline(None)
         started = time.monotonic()
@@ -344,7 +352,14 @@ class _Recorder:
         try:
             try:
                 async with call:
-                    outcome: ModelTurn | Exception = await self.model(model_request)
+                    try:
+                        outcome: ModelTurn | Exception = await self.model(model_request)
+                    except ContextRejected as rejection:
+                        if context_recovery == ContextRecovery.ALWAYS or (
+                            context_recovery == ContextRecovery.AFTER_TURN and self.has_response
+                        ):
+                            raise ContextWindowExceeded(str(rejection)) from rejection.error
+                        outcome = rejection.error
             except Exception as error:
                 outcome = error
             if task.cancelling() > cancelling:
