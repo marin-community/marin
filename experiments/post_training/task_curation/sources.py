@@ -4,6 +4,8 @@
 """The task catalog: training and evaluation dataset declarations, keyed by name."""
 
 
+from pathlib import Path
+
 from experiments.post_training.task_curation.census_binding import bind_actor_census
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
@@ -48,6 +50,9 @@ from experiments.post_training.task_curation.lexical_binding import bind_lexical
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
 from experiments.post_training.task_curation.source import RlDataSource, TaskFormat
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
+from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
+
+WITHIN_SOURCE_DEDUP_RECEIPTS = read_dedup_receipts(Path(__file__).with_name("datasets") / "within_source_dedup.json")
 
 
 def all_sources() -> dict[str, RlDataSource]:
@@ -93,6 +98,7 @@ def all_sources() -> dict[str, RlDataSource]:
         bind_lexical_measurement(source, LEXICAL_MEASUREMENTS.get(source.info.id), source_lexical_use(source))
         for source in sources
     ]
+    sources = [bind_within_source_dedup(source, WITHIN_SOURCE_DEDUP_RECEIPTS[source.info.id]) for source in sources]
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")

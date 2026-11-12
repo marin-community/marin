@@ -4,6 +4,7 @@
 """Exercise the Daytona adapter against a local process and filesystem fake."""
 
 import asyncio
+import json
 import os
 import shlex
 import shutil
@@ -30,6 +31,7 @@ from daytona import (
 )
 from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.machine import (
+    PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
     DaytonaMachine,
     DaytonaMachineFactory,
     DaytonaNetworkMode,
@@ -377,6 +379,41 @@ def test_daytona_output_count_ignores_provider_diagnostics(tmp_path: Path) -> No
         try:
             result = await machine.run(Command(("printf", "output"), output_limit_bytes=3))
             assert (result.exit_code, result.stdout, result.stdout_truncated) == (0, b"out", True)
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("oversized", [False, True])
+def test_daytona_output_capture_preserves_provider_startup_failure(tmp_path: Path, oversized: bool) -> None:
+    diagnostic = "Provider rejected the command before opening its output files"
+    if oversized:
+        diagnostic += "x" * (2 * PROVIDER_DIAGNOSTIC_CHAR_LIMIT)
+
+    class RejectedCommandProcess(LocalProcess):
+        async def exec(self, command, cwd=None, env=None, timeout=None):
+            if env is not None:
+                return SimpleNamespace(exit_code=126, result=diagnostic)
+            return await super().exec(command, cwd=cwd, env=env, timeout=timeout)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = RejectedCommandProcess()
+        machine = DaytonaMachine(
+            client.sandbox, MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path)), AsyncExitStack()
+        )
+        try:
+            with pytest.raises(RuntimeError, match="Failed to measure command output") as caught:
+                await machine.run(Command(("printf", "not executed")))
+            note = next(note for note in caught.value.__notes__ if note.startswith("Daytona exec response: "))
+            response = json.loads(note.removeprefix("Daytona exec response: "))
+            assert response["exit_code"] == 126
+            assert response["diagnostic"].startswith("Provider rejected the command")
+            assert len(response["diagnostic"]) <= PROVIDER_DIAGNOSTIC_CHAR_LIMIT
+            assert response["diagnostic_truncated"] is oversized
+            if not oversized:
+                assert response["diagnostic"] == diagnostic
         finally:
             await machine.close()
 

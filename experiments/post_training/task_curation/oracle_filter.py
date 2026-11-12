@@ -404,7 +404,11 @@ def filter_cohort(
     manifest = json.loads(conversion_manifest.read_text()) if conversion_manifest is not None else None
     if manifest is not None and manifest["converted_rows"] != len(entries):
         raise ValueError("Converted cohort does not match the full conversion manifest")
-    input_rows = manifest["input_rows"] if manifest else len(entries)
+    input_rows = (
+        manifest["input_rows"] - manifest["within_source_dedup"]["within_source_duplicates"]
+        if manifest
+        else len(entries)
+    )
     cohort_hash = (
         file_sha256(StoragePath(str(paths[0])))
         if len(paths) == 1

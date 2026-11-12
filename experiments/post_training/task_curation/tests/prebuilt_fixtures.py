@@ -26,6 +26,7 @@ from taskcompendium.models import (
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_prebuilt
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
 
@@ -35,6 +36,8 @@ def prebuilt_source(info: SourceInfo) -> RlDataSource[PrebuiltCohort]:
     return RlDataSource(
         info=replace(
             info,
+            within_source_dedup=info.within_source_dedup
+            or deduplication_evidence("open-athena/fixture-tasks", "a" * 40, "fixture-1", count),
             lexical_contamination=info.lexical_contamination
             or decontamination_evidence("open-athena/fixture-tasks", "a" * 40, count),
         ),

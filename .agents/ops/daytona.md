@@ -165,6 +165,12 @@ failure. Very short or empty attempts suggest a broken request path or agent
 loop. Incoherent output following weight synchronization requires correlation
 with reload logs and importance-ratio metrics before concluding learning failed.
 
+When command-output capture fails, Shellbox retains the exception and adds a
+`Daytona exec response:` JSON note with the provider's `exit_code`, the first
+4,096 diagnostic characters, and `diagnostic_truncated`. Inspect that response
+before attributing a missing `/tmp/.shellbox-*/out` file to the task. A capture
+failure supplies no task score.
+
 Fresh inference heartbeats, trace counts, and a running controller job can
 coexist with a stalled trainer. Require advancing trainer phases/steps and
 durable artifacts for training progress. Report dispatched, completed, scored,
