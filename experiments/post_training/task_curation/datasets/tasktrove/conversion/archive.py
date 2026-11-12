@@ -32,14 +32,15 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection
 from taskcompendium.runtime.resources import inline_resource
 
-from experiments.post_training.task_curation.environment_fidelity import archive_environment
+from experiments.post_training.task_curation.environment_fidelity import ENVIRONMENT_DOCKERFILE, archive_environment
 
 TASKS_FILE = "tasks.parquet"
 TASKTROVE_REPO = "open-thoughts/TaskTrove"
 
 INSTRUCTION = "instruction.md"
 TASK_TOML = "task.toml"
-DOCKERFILE = "environment/Dockerfile"
+DOCKERFILE = ENVIRONMENT_DOCKERFILE
+"""The archive-relative Dockerfile path; ``environment_fidelity`` owns the layout."""
 TEST_SH = "tests/test.sh"
 VERIFIER_DATA = "tests/verifier_data.json"
 SOLUTION_DIR = "solution/"

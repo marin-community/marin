@@ -37,7 +37,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.machine import LocalMachineFactory
-from shellbox.machine import HostImage, MachineSpec, NetworkPolicy
+from shellbox.machine import HostImage, MachineFactory, MachineSpec, NetworkPolicy
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements, TaskSpec
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
@@ -99,17 +99,17 @@ async def run_one(spec: dict, base: str, cgroup_parent: Path | None = None) -> L
             return LivenessResult(
                 task.id, base, "infra_error", None, None, "", "Explicit runtime users require rollout execution"
             )
-        grading_factory, spec_machine, snapshot = _grader_placement(requirements, runtime, Path(context), cgroup_parent)
-        spec_machine = replace(spec_machine, startup_timeout=runtime.startup_timeout)
+        placement = _grader_placement(requirements, runtime, Path(context), cgroup_parent)
+        spec_machine = replace(placement.machine, startup_timeout=runtime.startup_timeout)
         try:
-            result = await grade_empty_in_sandbox(task, grading_factory, spec_machine, timeout=VERIFIER_TIMEOUT)
+            result = await grade_empty_in_sandbox(task, placement.factory, spec_machine, timeout=VERIFIER_TIMEOUT)
         except TimeoutError as error:
-            return LivenessResult(task.id, base, "timeout", None, None, snapshot, str(error))
+            return LivenessResult(task.id, base, "timeout", None, None, placement.snapshot, str(error))
         except Exception as error:
             return LivenessResult(
-                task.id, base, "infra_error", None, None, snapshot, f"{type(error).__name__}: {error}"[:500]
+                task.id, base, "infra_error", None, None, placement.snapshot, f"{type(error).__name__}: {error}"[:500]
             )
-        return classify_result(task.id, base, snapshot, result)
+        return classify_result(task.id, base, placement.snapshot, result)
 
 
 def _verifier_runtime(spec: dict) -> MachineRuntimeSpec:
@@ -126,10 +126,19 @@ def _verifier_runtime(spec: dict) -> MachineRuntimeSpec:
     )
 
 
+@dataclass(frozen=True)
+class _GraderPlacement:
+    """Where and how the grader runs: its machine factory, machine spec and snapshot."""
+
+    factory: MachineFactory
+    machine: MachineSpec
+    snapshot: str
+
+
 def _grader_placement(
     requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec, context: Path, cgroup_parent: Path | None
-) -> tuple:
-    """Return the machine factory, machine spec, and snapshot name for the grader."""
+) -> _GraderPlacement:
+    """Resolve the machine factory, machine spec, and snapshot name for the grader."""
     if requirements.packages_lock is not None:
         # A packaged grader runs in the local bubblewrap runtime; no sandbox backend and
         # no snapshot identity are involved, so the Daytona pieces are never imported.
@@ -144,7 +153,7 @@ def _grader_placement(
         # A worker whose own cgroup is threaded cannot host the grading cgroups
         # (cgroup.procs is unwritable there), so an explicit parent overrides discovery.
         factory = LocalMachineFactory(cgroup_parent=cgroup_parent) if cgroup_parent else LocalMachineFactory()
-        return factory, machine, ""
+        return _GraderPlacement(factory, machine, "")
     from harbor.environments.daytona import machine_spec  # noqa: PLC0415
     from harbor_config.models.task.config import EnvironmentConfig  # noqa: PLC0415
     from shellbox.backends.daytona.machine import (  # noqa: PLC0415
@@ -176,7 +185,9 @@ def _grader_placement(
         memory_mb=runtime.memory_mb,
         storage_mb=runtime.storage_mb,
     )
-    return DaytonaMachineFactory(), machine, snapshot_identity(machine.source, snapshot_resources(machine))
+    return _GraderPlacement(
+        DaytonaMachineFactory(), machine, snapshot_identity(machine.source, snapshot_resources(machine))
+    )
 
 
 def classify_result(task_id: str, base: str, snapshot: str, result: GradeResult) -> LivenessResult:

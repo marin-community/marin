@@ -16,6 +16,15 @@ from pathlib import Path, PurePosixPath
 FIXTURE_ARCHIVE = "calibforge-fixtures.tar.gz"
 SETUP_SCRIPT = "calibforge-initialize.sh"
 SETUP_ROOT = "/setup_files"
+
+SETUP_SCRIPT_PREAMBLE = (
+    "#!/bin/sh",
+    "set -eu",
+    "stage=$(mktemp -d /tmp/calibforge-setup.XXXXXXXX)",
+    "trap 'rm -rf \"$stage\"' EXIT",
+    f'tar -xzf {SETUP_ROOT}/{FIXTURE_ARCHIVE} -C "$stage"',
+)
+"""Every compiled setup script starts by unpacking the staged fixtures."""
 COMPILED_PENDING = "compiled_pending_equivalence_and_admission"
 
 
@@ -45,13 +54,7 @@ def fixture_bundle(context: Path, instructions: list[dict]) -> FixtureBundle:
     if ignore.exists() and ignore.read_text().strip():
         raise DeferredEnvironment("requires_dockerignore_support")
     workdir = "/"
-    commands = [
-        "#!/bin/sh",
-        "set -eu",
-        "stage=$(mktemp -d /tmp/calibforge-setup.XXXXXXXX)",
-        "trap 'rm -rf \"$stage\"' EXIT",
-        f'tar -xzf {SETUP_ROOT}/{FIXTURE_ARCHIVE} -C "$stage"',
-    ]
+    commands = list(SETUP_SCRIPT_PREAMBLE)
     resources: dict[str, Path] = {}
     copied_files: set[str] = set()
     executed_scripts: set[str] = set()

@@ -59,7 +59,11 @@ from pathlib import Path
 import pyarrow.parquet as pq
 
 from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT
-from experiments.post_training.task_curation.environment_fidelity import DEFAULT_WORKDIR, ENVIRONMENT_PREFIX
+from experiments.post_training.task_curation.environment_fidelity import (
+    DEFAULT_WORKDIR,
+    ENVIRONMENT_DOCKERFILE,
+    ENVIRONMENT_PREFIX,
+)
 from experiments.post_training.task_curation.no_oracle_liveness import load_specs
 
 COPY_SOURCE = re.compile(r"^\s*COPY\s+(?:--\S+\s+)*(?P<sources>.+)$", re.IGNORECASE | re.MULTILINE)
@@ -232,7 +236,7 @@ def _read_tar(payload: bytes) -> tarfile.TarFile:
 def _native_dockerfile(native_payload: bytes) -> str | None:
     """The native recipe's Dockerfile text, or None when the tar carries none."""
     with _read_tar(native_payload) as archive:
-        member = next((item for item in archive.getmembers() if item.name == f"{ENVIRONMENT_PREFIX}Dockerfile"), None)
+        member = next((item for item in archive.getmembers() if item.name == ENVIRONMENT_DOCKERFILE), None)
         if member is None:
             return None
         return archive.extractfile(member).read().decode(errors="replace")
@@ -279,12 +283,11 @@ def copied_destinations(dockerfile: str, workdir: str) -> tuple[str, ...]:
 
 def preservation_expectations(native_payload: bytes) -> tuple[FileExpectation, ...]:
     """Files and modes the native recipe copies, read from its own tar."""
+    dockerfile = _native_dockerfile(native_payload)
+    if dockerfile is None:
+        raise ValueError("native task has no environment/Dockerfile")
     with _read_tar(native_payload) as archive:
         members = {member.name: member for member in archive.getmembers() if member.isfile()}
-        dockerfile_member = members.get(f"{ENVIRONMENT_PREFIX}Dockerfile")
-        if dockerfile_member is None:
-            raise ValueError("native task has no environment/Dockerfile")
-        dockerfile = archive.extractfile(dockerfile_member).read().decode(errors="replace")
         expectations: list[FileExpectation] = []
         for source in copied_paths(dockerfile):
             source_path = f"{ENVIRONMENT_PREFIX}{source}"
@@ -713,6 +716,30 @@ def _execute_lowered(
         return list(pool.map(run, sorted(lowered)))
 
 
+def _wanted_task_ids(args: argparse.Namespace, rebuilt: dict[str, bytes]) -> set[str]:
+    """The task ids this run should cover: explicit ids plus a previous report's failures."""
+    wanted = set(args.task)
+    if args.retry_failed is not None:
+        previous = json.loads(args.retry_failed.read_text())
+        wanted |= {row["task_id"] for row in previous["execution"] if not row["passed"]}
+        wanted |= {row["task_id"] for row in previous["preservation"] if not row["passed"]}
+    return wanted & set(rebuilt)
+
+
+def _merge_liveness_receipts(report: QualificationReport, path: Path, native: dict[str, bytes]) -> None:
+    """Append each liveness receipt as a verifier result; every task must be known once."""
+    seen: set[str] = set()
+    for row in (json.loads(line) for line in path.read_text().splitlines() if line.strip()):
+        if row["task_id"] not in native or row["task_id"] in seen:
+            raise ValueError(f"unknown or duplicate liveness task: {row['task_id']}")
+        seen.add(row["task_id"])
+        report.verifier.append(
+            VerifierResult(
+                row["task_id"], row["outcome"], row["exit_code"], row.get("detail", ""), row.get("tests_executed", 0)
+            )
+        )
+
+
 def main() -> None:
     """Check preservation, execute setup in Docker or the lowered runtime, and merge liveness receipts."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -729,18 +756,12 @@ def main() -> None:
     parser.add_argument("--liveness", type=Path, help="JSONL receipts from no_oracle_liveness")
     args = parser.parse_args()
 
-    rebuilt_path = args.rebuild_out / "pending-tasks.parquet"
     manifest = json.loads((args.rebuild_out / "manifest.json").read_text())
     bases = {row["task_id"]: row["base_ref"] for row in manifest["tasks"] if row.get("status", "").startswith("rebuilt")}
-
-    rebuilt = dict(_native_tasks(rebuilt_path))
+    rebuilt = dict(_native_tasks(args.rebuild_out / "pending-tasks.parquet"))
 
     report = QualificationReport(bases=bases)
-    wanted = set(args.task)
-    if args.retry_failed is not None:
-        previous = json.loads(args.retry_failed.read_text())
-        wanted |= {row["task_id"] for row in previous["execution"] if not row["passed"]}
-        wanted |= {row["task_id"] for row in previous["preservation"] if not row["passed"]}
+    wanted = _wanted_task_ids(args, rebuilt)
     native = {
         task_id: payload
         for task_id, payload in _native_tasks(args.cohort)
@@ -759,17 +780,7 @@ def main() -> None:
         )
 
     if args.liveness is not None:
-        receipts = [json.loads(line) for line in args.liveness.read_text().splitlines() if line.strip()]
-        seen = set()
-        for row in receipts:
-            if row["task_id"] not in native or row["task_id"] in seen:
-                raise ValueError(f"unknown or duplicate liveness task: {row['task_id']}")
-            seen.add(row["task_id"])
-            report.verifier.append(
-                VerifierResult(
-                    row["task_id"], row["outcome"], row["exit_code"], row.get("detail", ""), row.get("tests_executed", 0)
-                )
-            )
+        _merge_liveness_receipts(report, args.liveness, native)
 
     summary = summarize(report)
     args.output.write_text(json.dumps({"summary": summary, **report.to_dict()}, indent=1) + "\n")

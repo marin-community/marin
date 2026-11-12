@@ -46,7 +46,12 @@ from taskcompendium.models import (
 )
 from tomlkit.items import Table
 
-from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT, SETUP_SCRIPT
+from experiments.post_training.task_curation.calibforge_fixtures import (
+    FIXTURE_ARCHIVE,
+    SETUP_ROOT,
+    SETUP_SCRIPT,
+    SETUP_SCRIPT_PREAMBLE,
+)
 from experiments.post_training.task_curation.environment import dockerfile_lines
 from experiments.post_training.task_curation.environment_fidelity import (
     DEFAULT_WORKDIR,
@@ -201,7 +206,9 @@ def compile_recipe(instructions: list[Instruction], files: dict[str, bytes], mod
     Unlike :func:`environment_fidelity.lower_environment` — which only checks
     that a spec replays a recipe's simple steps — this compiles the task's full
     native recipe, including COPY staging and package installs, and keeps a
-    digest the original FROM already carried.
+    digest the original FROM already carried. It compiles faithfully what
+    :func:`calibforge_fixtures.fixture_bundle` compiles conservatively at the
+    fixture-extraction stage; the two share only the setup-script preamble.
     """
     bases = [item for item in instructions if item.command == "from"]
     if len(bases) != 1:
@@ -239,15 +246,7 @@ class _RecipeSteps:
 
 def _recipe_body(instructions: list[Instruction], files: dict[str, bytes]) -> tuple[str, _RecipeSteps]:
     """Lower the recipe's steps, returning the final workdir and accumulated steps."""
-    steps = _RecipeSteps(
-        commands=[
-            "#!/bin/sh",
-            "set -eu",
-            "stage=$(mktemp -d /tmp/calibforge-setup.XXXXXXXX)",
-            "trap 'rm -rf \"$stage\"' EXIT",
-            f'tar -xzf {SETUP_ROOT}/{FIXTURE_ARCHIVE} -C "$stage"',
-        ]
-    )
+    steps = _RecipeSteps(commands=list(SETUP_SCRIPT_PREAMBLE))
     workdir = "/"
     for item in instructions:
         if item.command in _META_COMMANDS:

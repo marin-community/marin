@@ -13,7 +13,6 @@ source's oversight level and evidence describe the qualification the publish rec
 """
 
 import json
-import shutil
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -108,17 +107,19 @@ def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptio
 
     def run(invocation: PrebuiltImport) -> CampaignArtifact:
         local = Path(import_cohort(invocation.cohort))
-        destination = Path(invocation.output_path)
-        destination.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(local, destination / TASKS_FILENAME)
+        destination = StoragePath(invocation.output_path)
+        destination.mkdirs(exist_ok=True)
+        tasks_path = destination / TASKS_FILENAME
+        tasks_path.upload_from(str(local))
         tasks = []
         for row in pq.read_table(local).to_pylist():
             task = TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"])
             tasks.append(normalization_columns(task.id, task.source, task, None, (), row["path"]))
         for view in ("normalize", "final"):
             folder = destination / view
-            folder.mkdir()
-            pq.write_table(pa.Table.from_pylist(tasks, schema=NORMALIZED_SCHEMA), folder / "part-00000.parquet")
+            folder.mkdirs(exist_ok=True)
+            with (folder / "part-00000.parquet").open("wb") as handle:
+                pq.write_table(pa.Table.from_pylist(tasks, schema=NORMALIZED_SCHEMA), handle)
         manifest = {
             "mode": invocation.mode.value,
             "intended_use": "train",
@@ -130,7 +131,7 @@ def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptio
             "repo": config.repo,
             "revision": config.revision,
             "row_count": config.expected_rows,
-            "tasks_sha256": file_sha256(StoragePath(str(destination / TASKS_FILENAME))),
+            "tasks_sha256": file_sha256(tasks_path),
         }
         (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         return CampaignArtifact(

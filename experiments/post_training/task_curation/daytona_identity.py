@@ -3,12 +3,13 @@
 
 """Count the distinct Daytona snapshots a task cohort provisions.
 
-Measurement runs the production naming path: each pinned task's environment
-is materialized to a build context, the shellbox ``MachineSpec`` is built
-through Harbor's own task-config mapping, and the snapshot name comes from
-``shellbox.backends.daytona.machine.snapshot_identity`` — the same function
-the Daytona factory uses to name and create snapshots. A task the production
-validation rejects is counted as a failure and reported; it is not
+Measurement runs the production naming path. Native cohort tars are
+materialized to a build context and mapped through Harbor's task-config
+mapping; lowered TaskCompendium specs build the shellbox ``MachineSpec``
+directly from their declared requirements. Either way the snapshot name comes
+from ``shellbox.backends.daytona.machine.snapshot_identity`` — the same
+function the Daytona factory uses to name and create snapshots. A task the
+production validation rejects is counted as a failure and reported; it is not
 Daytona-safe. No Daytona API calls are made.
 """
 
@@ -146,13 +147,13 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
         mapping_errors: list[str] = []
         execution_errors: list[str] = []
         for role, declared, shape in slots:
-            name, mapping_error, execution_error = _declared_identity(role, declared, shape, factory)
-            if name is not None:
-                sizes[name] += 1
-            if mapping_error is not None:
-                mapping_errors.append(mapping_error)
-            if execution_error is not None:
-                execution_errors.append(execution_error)
+            measured = _declared_identity(role, declared, shape, factory)
+            if measured.name is not None:
+                sizes[measured.name] += 1
+            if measured.mapping_error is not None:
+                mapping_errors.append(measured.mapping_error)
+            if measured.execution_error is not None:
+                execution_errors.append(measured.execution_error)
         if mapping_errors:
             failures.append((task_id, "; ".join(mapping_errors)))
         if execution_errors:
@@ -162,12 +163,21 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
     )
 
 
+@dataclass(frozen=True)
+class _DeclaredIdentity:
+    """One declared machine's snapshot name, mapping refusal and execution refusal."""
+
+    name: str | None = None
+    mapping_error: str | None = None
+    execution_error: str | None = None
+
+
 def _declared_identity(
     role: str, declared: Mapping | None, shape: Mapping | None, factory: DaytonaMachineFactory
-) -> tuple[str | None, str | None, str | None]:
-    """One declared machine's snapshot name, mapping refusal and execution refusal."""
+) -> _DeclaredIdentity:
+    """Measure one declared agent or grader machine through the production identity."""
     if declared is None or shape is None:
-        return None, None, None
+        return _DeclaredIdentity()
     # Native Harbor counting also runs in Harbor's standalone environment, which
     # does not install TaskCompendium. Only lowered TaskCompendium inputs need it.
     from taskcompendium.models import EnvironmentRequirements, require_resolved_environment  # noqa: PLC0415
@@ -191,7 +201,8 @@ def _declared_identity(
         elif requirements.package_spec is not None:
             source = requirements.package_spec
         else:
-            return None, f"{role}: no declared environment", f"{role}: no declared environment"
+            error = f"{role}: no declared environment"
+            return _DeclaredIdentity(mapping_error=error, execution_error=error)
         machine = MachineSpec(
             source=source,
             workdir=requirements.working_directory or "",
@@ -201,21 +212,23 @@ def _declared_identity(
             storage_mb=shape.get("storage_mb"),
             gpus=shape.get("gpus", 0),
         )
-        mapping_error = None
         try:
             factory.check_environment(requirements, machine)
             require_resolved_environment(requirements)
         except UnsupportedMachineSpec as error:
+            # An execution refusal still reports the identity: snapshot counts measure
+            # what the cohort would provision, whether or not Daytona would run it.
             execution_error = f"{role}: {error}"
         else:
             execution_error = None
         if not isinstance(source, RegistryImage | DockerfileSource):
-            return None, mapping_error, execution_error
+            return _DeclaredIdentity(execution_error=execution_error)
         try:
-            name = snapshot_identity(source, snapshot_resources(machine))
+            return _DeclaredIdentity(
+                snapshot_identity(source, snapshot_resources(machine)), execution_error=execution_error
+            )
         except UnsupportedMachineSpec as error:
-            return None, f"{role}: {error}", execution_error
-        return name, mapping_error, execution_error
+            return _DeclaredIdentity(mapping_error=f"{role}: {error}", execution_error=execution_error)
 
 
 def count_registry_identities(references: Iterable[str]) -> SnapshotIdentityCount:
