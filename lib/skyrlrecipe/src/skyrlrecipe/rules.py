@@ -43,20 +43,8 @@ SKYRL_INTERNAL_ENGINE_KWARGS = frozenset(
         "bundle_indices",  # Calculated from parallelism config
         "num_gpus",  # Ray resource allocation
         "noset_visible_devices",  # Ray CUDA_VISIBLE_DEVICES handling
-        # SGLang-specific (if using SGLang backend)
-        "model_path",  # Set from trainer.policy.model.path
-        "tp_size",  # Alias for tensor_parallel_size
-        "mem_fraction_static",  # Alias for gpu_memory_utilization
-        "random_seed",  # Alias for seed
-        "disable_radix_cache",  # Inverse of enable_prefix_caching
-        "max_prefill_tokens",  # Alias for max_num_batched_tokens
-        "max_running_requests",  # Alias for max_num_seqs
-        "mm_attention_backend",  # Hardcoded "fa3"
-        "attention_backend",  # Hardcoded "fa3"
-        "enable_memory_saver",  # Set from inference_engine_enable_sleep
-        "tokenizer",  # Passed from external tokenizer
-        "custom_weight_loader",  # Hardcoded SkyRL path
-        "skip_tokenizer_init",  # Hardcoded True for SGLang
+        "attention_backend",  # Set from generator.vllm_attention_backend
+        "tokenizer",  # Set from trainer.policy.model.tokenizer_path
         "speculative_config",  # Derived from generator.speculative_decoding
     }
 )
