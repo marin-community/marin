@@ -12,7 +12,7 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
-from typing import Literal
+from typing import ClassVar, Literal
 from urllib.parse import urlencode
 
 import click
@@ -105,7 +105,6 @@ _DEFAULT_PATCH = RecipePatch(
             loss_reduction="token_mean",
             use_kl_loss=False,
             kl_estimator_type="k3_unbiased_gradient",
-            off_policy_correction="none",
             eps_clip_low=0.2,
             eps_clip_high=0.2,
             group_advantage_min_size=2,
@@ -124,7 +123,7 @@ _DEFAULT_PATCH = RecipePatch(
                 num_warmup_steps=0,
             ),
         ),
-        rollout_buffer=sections.RolloutBuffer(batch_policy="full_batch", object_store_root=None),
+        rollout_buffer=sections.RolloutBuffer(object_store_root=None),
         ckpt_interval=0,
         hf_save_interval=-1,
     ),
@@ -225,13 +224,62 @@ class Layout:
 
 
 @dataclass(frozen=True)
+class Sync:
+    max_staleness_steps: ClassVar[int] = 0
+    correction: ClassVar[Literal["none"]] = "none"
+
+
+@dataclass(frozen=True)
+class Async:
+    max_staleness_steps: int
+    correction: Literal["none", "custom", "icepop", "outlier_mask", "seq_mask_tis", "tis"]
+
+    def __post_init__(self) -> None:
+        if self.max_staleness_steps <= 0:
+            raise ValueError("asynchronous training requires positive max_staleness_steps")
+
+
+_MODE_KEYS = (
+    "trainer.rollout_buffer.max_staleness_steps",
+    "trainer.rollout_buffer.batch_policy",
+    "trainer.algorithm.off_policy_correction",
+)
+
+
+def training_mode_patch(mode: Sync | Async, *patches: RecipePatch) -> RecipePatch:
+    configured = RecipePatch(
+        trainer=sections.Trainer(
+            rollout_buffer=sections.RolloutBuffer(
+                max_staleness_steps=mode.max_staleness_steps, batch_policy="full_batch"
+            ),
+            algorithm=sections.Algorithm(off_policy_correction=mode.correction),
+        )
+    )
+    expected = configured.to_skyrl()
+    for patch in patches:
+        document = patch.to_skyrl()
+        for path in _MODE_KEYS:
+            value = get_path(document, path)
+            if value is not MISSING and value != get_path(expected, path):
+                raise ValueError(f"{path} is chosen by Recipe.mode")
+    return configured
+
+
+@dataclass(frozen=True)
 class Recipe:
     layout: Layout
     request_window_tokens: int
     max_new_tokens: int
     fixed_reply_tokens: int | None
-    staleness: int
+    mode: Sync | Async
     config: RecipePatch = _DEFAULT_PATCH
+
+    def __post_init__(self) -> None:
+        training_mode_patch(self.mode, self.config)
+        if isinstance(self.mode, Async) and (
+            isinstance(self.layout.role_plan, SkyRLGenerationPlan) or self.layout.role_plan.colocate_all
+        ):
+            raise ValueError("asynchronous training requires separate policy and rollout roles")
 
 
 @dataclass(frozen=True)
@@ -274,6 +322,7 @@ class Preset:
     budget: str = "hours to days"
 
     def __post_init__(self) -> None:
+        training_mode_patch(self.recipe.mode, self.patch)
         for evaluation in self.evaluations[1:]:
             if evaluation.every is not None or evaluation.at_start:
                 raise ValueError(f"non-primary evaluation {evaluation.name} accepts neither every nor at_start")
@@ -359,15 +408,10 @@ _LEARNING = Recipe(
     request_window_tokens=24576,
     max_new_tokens=8192,
     fixed_reply_tokens=None,
-    staleness=0,
+    mode=Sync(),
 )
-_ASYNC_P40 = replace(
-    _LEARNING,
-    staleness=2,
-    config=_DEFAULT_PATCH.merge(
-        RecipePatch(trainer=sections.Trainer(algorithm=sections.Algorithm(off_policy_correction="tis")))
-    ),
-)
+_ASYNC_P40 = replace(_LEARNING, mode=Async(2, "tis"))
+
 _GAPS = (
     Gap.AAII_COVERAGE,
     Gap.NO_AGENTIC_TASKS,
@@ -382,18 +426,22 @@ _BATCH_KEYS = frozenset(
         "trainer.micro_train_batch_size_per_gpu",
     }
 )
-_OWNED_KEYS = frozenset(
-    {
-        "entrypoint",
-        "trainer.resume_mode",
-        "trainer.placement",
-        "generator.trajectory_retention",
-        "generator.run_engines_locally",
-        "trainer.callbacks",
-        "trainer.ckpt_interval",
-        "trainer.hf_save_interval",
-    }
-) | (frozenset(_P40_PLAN.config_values()) - _BATCH_KEYS)
+_OWNED_KEYS = (
+    frozenset(
+        {
+            "entrypoint",
+            "trainer.resume_mode",
+            "trainer.placement",
+            "generator.trajectory_retention",
+            "generator.run_engines_locally",
+            "trainer.callbacks",
+            "trainer.ckpt_interval",
+            "trainer.hf_save_interval",
+        }
+    )
+    | (frozenset(_P40_PLAN.config_values()) - _BATCH_KEYS)
+    | frozenset(_MODE_KEYS)
+)
 _GATED_KEYS = frozenset(
     {
         "trainer.max_steps",
@@ -422,17 +470,17 @@ _LEARNING_MEDIUM = Preset(
     owned_keys=_OWNED_KEYS | _GATED_KEYS,
     setting_sections=None,
     data_settings=frozenset({"shuffle", "sampling"}),
-    revision="2026.11.11.1",
+    revision="2026.11.12.1",
     focus=Focus.LEARNING,
     duration=Duration.MEDIUM,
-    recipe=_LEARNING,
+    recipe=_ASYNC_P40,
     updates=25,
     measured=range(21, 26),
     evaluations=(replace(EVALUATIONS["eval_lite"], at_start=True),),
     guards=(Metric("eval_lite/family_mean", True),),
     objectives=(Metric("eval_lite/family_mean", True), Metric("eval_lite/family_mean/gain_per_h100_hour", True)),
     gaps=_GAPS,
-    budget="105-120 min; 70-80 H100-h",
+    budget="asynchronous runtime unmeasured",
 )
 PRESETS = MappingProxyType(
     {
@@ -491,7 +539,7 @@ PRESETS = MappingProxyType(
                 budget="10-15 min; 2 H100-h",
             ),
             Preset(
-                revision="2026.11.11.1",
+                revision="2026.11.12.1",
                 tasks_input="forbidden",
                 accepts_settings=True,
                 accepts_init=False,
@@ -509,7 +557,7 @@ PRESETS = MappingProxyType(
                 duration=Duration.MEDIUM,
                 objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.MEDIAN),),
                 recipe=replace(
-                    _LEARNING,
+                    _ASYNC_P40,
                     fixed_reply_tokens=4096,
                     config=_DEFAULT_PATCH.merge(
                         RecipePatch(
@@ -526,7 +574,7 @@ PRESETS = MappingProxyType(
                     Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
                 ),
                 gaps=(*_GAPS, Gap.MISMATCH_IS_AGREEMENT, Gap.LAYOUT_P40_ONLY),
-                budget="35-40 min; 25 H100-h",
+                budget="asynchronous runtime unmeasured",
             ),
             Preset(
                 revision="2026.11.11.1",

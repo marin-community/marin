@@ -13,11 +13,13 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlparse
 
 import click
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+import yaml
 from click.testing import CliRunner
 from iris.client.client import IrisClient
 from iris.cluster.client.job_info import set_job_info
@@ -423,6 +425,8 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
     "case,expected",
     [
         ("pass", 0),
+        ("recorded-sync", 2),
+        ("recorded-unknown", 2),
         ("fail", 1),
         ("invalid", 2),
         ("missing", 3),
@@ -452,6 +456,13 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
             fingerprint=built.runs[0].fingerprint(),
         )
     )
+    if case.startswith("recorded-"):
+        receipt = json.loads((source / "terminal.json").read_text())
+        if case == "recorded-sync":
+            receipt["config"]["runtime"]["training_type"] = "sync"
+        else:
+            receipt["config"]["runtime"].pop("training_type")
+        write_receipt(source, receipt)
     if case == "invalid":
         receipt = json.loads((source / "terminal.json").read_text())
         receipt["result"]["provenance"] = None
@@ -508,6 +519,13 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     finally:
         set_job_info(None)
     assert result.exit_code == expected, (result.output, result.exception)
+    if case.startswith("recorded-"):
+        status = yaml.safe_load(result.output[result.output.rfind("\npreset: ") + 1 :].split("\n\n", 1)[0])
+        if case == "recorded-unknown":
+            assert "grafana_links" not in status["runs"][0]
+        else:
+            query = parse_qs(urlparse(status["runs"][0]["grafana_links"]["run"]).query)
+            assert query["var-training_type"] == ["sync"]
     if case.startswith("stale-control"):
         assert "skyrl.trainer.policy.optimizer_config.lr" in result.output
     if "candidate-compose" in case:
@@ -538,6 +556,9 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
         ("--set", "generator.unrecognised_knob=1"),
         ("--set", "trainer.policy.optimizer_config.lr=wrong"),
         ("--set", "+generator.engine_init_kwargs.probe={}"),
+        ("--set", "trainer.rollout_buffer.max_staleness_steps=0"),
+        ("--set", 'trainer={"algorithm":{"off_policy_correction":"none"}}'),
+        ("--set", "trainer.rollout_buffer.batch_policy=rolling"),
     ],
 )
 def test_refusals_use_exit_four(selection, arguments):

@@ -71,7 +71,6 @@ def _training_config(
                 policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(**geometry)),
                 ref=sections.Ref(megatron_config=sections.RefMegatronConfig(**geometry)),
                 rollout_buffer=sections.RolloutBuffer(
-                    max_staleness_steps=recipe.staleness,
                     max_in_flight=plan.train_batch_size,
                 ),
             ),
@@ -80,6 +79,7 @@ def _training_config(
             ),
         ),
         preset.patch,
+        presets.training_mode_patch(recipe.mode),
     )
     return presets.apply_settings(config, settings, preset)
 

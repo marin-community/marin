@@ -205,19 +205,19 @@ def _changed_paths(ref: str, paths: tuple[str, ...]) -> tuple[list[dict[str, str
     return [{"path": path, "status": status} for status, path in zip(fields[::2], fields[1::2], strict=True)], None
 
 
-def _grafana_links(preset: presets.Preset, receipt: AttemptRecord | None, cluster: str) -> dict[str, str]:
+def _grafana_links(receipt: AttemptRecord | None, cluster: str) -> dict[str, str]:
     if receipt is None or not receipt.native.result.iris_job_id:
         return {}
     run_id = receipt.native.config.get("run", {}).get("id")
     if not run_id or receipt.native.result.started_at is None:
         return {}
     training_type = receipt.native.config.get("runtime", {}).get("training_type")
+    if training_type not in ("sync", "async"):
+        return {}
     return presets.grafana_links(
         run_id=run_id,
         cluster=cluster,
-        training_type=(
-            "async" if training_type == "async" or (training_type is None and preset.recipe.staleness) else "sync"
-        ),
+        training_type=training_type,
         started_ms=presets.utc_millis(receipt.native.result.started_at),
         finished_ms=presets.utc_millis(receipt.native.result.finished_at) if receipt.native.result.finished_at else None,
     )
@@ -264,7 +264,7 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
         team = (
             receipt.native.config.get("iris", {}).get("wandb_entity") if receipt is not None else execution.wandb_entity
         )
-        grafana = _grafana_links(preset, receipt, execution.cluster)
+        grafana = _grafana_links(receipt, execution.cluster)
         state = (
             result.state.value
             if result

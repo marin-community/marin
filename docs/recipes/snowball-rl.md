@@ -35,15 +35,15 @@ W&B URLs and a Grafana dashboard link. Set `WANDB_API_KEY` before submission;
 |---|---|---|
 | speed-short | 8 H100, east | 512 training tasks × four answers × 4,096 tokens; engine tokens/s/GPU, then full-panel quality; about 15 minutes |
 | data-short | 8 H100, east | 256 candidate training tasks × four answers, up to 8,192 tokens; mixed-answer fraction; about 15 minutes |
-| speed-medium | 40 H100, east | ten synchronous updates with 4,096-token answers; median update time over updates 2–10 and staleness-0 k3 mismatch; about 40 minutes |
+| speed-medium | 40 H100, east | ten asynchronous updates with staleness 2 and TIS with 4,096-token answers; median update time over updates 2–10 and staleness-0 k3 mismatch; asynchronous runtime unmeasured |
 | speed-long | 40 H100, east | 20 asynchronous updates, staleness 2 and TIS; median update time over updates 3–20 and staleness-0 k3 mismatch; 45–75 minutes |
-| learning-medium | 40 H100, east | full greedy EvalLite at update 0 and after 25 synchronous RLOO-N updates; final equal-family mean and score gain per H100-hour; about two hours |
+| learning-medium | 40 H100, east | full greedy EvalLite at update 0 and after 25 asynchronous RLOO-N updates with staleness 2 and TIS; final equal-family mean and score gain per H100-hour; asynchronous runtime unmeasured |
 | data-medium | 40 H100, east | learning-medium on candidate tasks, using learning-medium controls |
 | train-long | 40 H100, east | asynchronous training, default 100 updates; checkpoints, 100-task panel every ten updates and HF export; no verdict |
 
 East is `cw-us-east-02a`. The 40-H100 layout has 32 policy GPUs and eight engine GPUs,
 128 prompts × four answers and a 24,576-token window. Natural replies allow 8,192 tokens.
-Speed-long and train-long use staleness 2 and TIS. Speed-long has no evaluation,
+All training presets use staleness 2 and TIS. Speed-long has no evaluation,
 checkpoints or export; learner and engine token rates are descriptive telemetry.
 
 ## Change one input
