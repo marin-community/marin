@@ -67,12 +67,7 @@ def training_recipe(steps: int) -> dict:
             "remote_judge": {"base_url": "https://api.together.xyz/v1", "api_key_env": JUDGE_API_KEY_ENV},
         }
     }
-    config["extra_env"].update(
-        VERIFYIT_JUDGE_MODEL="openai/gpt-oss-120b",
-        NCCL_NET="Socket",
-        NCCL_IB_DISABLE="1",
-        NCCL_SOCKET_FAMILY="AF_INET",
-    )
+    config["extra_env"].update(VERIFYIT_JUDGE_MODEL="openai/gpt-oss-120b")
     config["generator"]["trajectory_reward_shaping"] = {
         "enabled": True,
         # Enabling shaping would also apply the DAPO overlong penalty over the derived l_cache window.
