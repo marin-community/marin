@@ -204,7 +204,7 @@ def evaluation_protocol(root: str) -> tuple[EvaluationProtocol, EvaluationManife
     path = StoragePath(root)
     protocol = EvaluationProtocol.model_validate_json((path / PROTOCOL_FILENAME).read_text())
     manifest = EvaluationManifest.model_validate_json((path / MANIFEST_FILENAME).read_text())
-    if protocol.fingerprint != manifest.protocol_hash or manifest.rows != protocol.expected_population:
+    if protocol.fingerprint != manifest.protocol_hash:
         raise ValueError("Evaluation manifest does not match its protocol")
     conversion_bytes = (path / "manifest.json").read_bytes()
     if hashlib.sha256(conversion_bytes).hexdigest() != manifest.conversion_manifest_sha256:
@@ -215,7 +215,8 @@ def evaluation_protocol(root: str) -> tuple[EvaluationProtocol, EvaluationManife
         or conversion["source_revision"] != manifest.source_revision
         or conversion["recipe_revision"] != manifest.importer_revision
         or conversion["intended_use"] != "eval"
-        or conversion["input_rows"] != manifest.rows
+        or conversion["input_rows"] != protocol.expected_population
+        or conversion["input_rows"] != manifest.rows + conversion["within_source_dedup"]["within_source_duplicates"]
         or conversion["converted_rows"] != manifest.rows
         or conversion["rejections"]
     ):

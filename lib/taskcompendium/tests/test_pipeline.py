@@ -323,17 +323,17 @@ def test_pipeline_accounts_for_rejects_duplicates_and_conflicting_keys(tmp_path,
     )
 
     audit = stage_table(tmp_path).to_pylist()
-    assert manifest["dispositions"] == {"keep": 1, "reject": 4}
+    assert manifest["dispositions"] == {"keep": 3, "reject": 2}
     assert manifest["reasons"] == {
-        "exact_semantic_duplicate": 1,
-        "conflicting_references": 2,
+        "DUPLICATE_WITHIN_SOURCE": 1,
         "normalize:invalid_reference": 1,
     }
-    assert audit[1]["duplicate_of"] == audit[0]["task_id"]
+    duplicate = next(row for row in audit if row["duplicate_of"])
+    assert duplicate["duplicate_of"] == min(audit[index]["task_id"] for index in (0, 1))
     assert audit[4]["filter_reasons"][0] == "normalize:invalid_reference"
-    assert all(audit[index]["filter_reasons"] == ["conflicting_references"] for index in (2, 3))
+    assert all(audit[index]["filter_status"] == "keep" for index in (2, 3))
     accepted = [TaskSpec.model_validate_json(row["task_json"]) for row in stage_table(tmp_path, "accepted").to_pylist()]
-    assert [task.id for task in accepted] == [audit[0]["task_id"]]
+    assert {task.id for task in accepted} == {row["task_id"] for row in audit if row["filter_status"] == "keep"}
     assert accepted[0].source.revision == svamp_recipe.source.revision
     assert apple_row["Body"] in accepted[0].context.events[0].content
     assert "Equation" not in service.batches["batch-0"][0]["body"]["messages"][1]["content"]
@@ -374,10 +374,11 @@ def test_audit_deduplicates_across_acquired_shards_on_storage_uri(tmp_path, appl
         with file.open("rb") as stream:
             audit.extend(pq.read_table(stream).to_pylist())
     by_index = {int(row["source_row"].rsplit(":", 1)[1]): row for row in audit}
-    assert manifest["dispositions"] == {"keep": 1, "reject": 1002}
-    assert by_index[1000]["duplicate_of"] == by_index[0]["task_id"]
-    assert all(by_index[index]["filter_reasons"] == ["conflicting_references"] for index in (1001, 1002))
-    assert sum(len(requests) for requests in service.batches.values()) == 1
+    assert manifest["dispositions"] == {"keep": 3, "reject": 1000}
+    canonical = min(by_index[index]["task_id"] for index in range(1001))
+    assert all(row["duplicate_of"] == canonical for row in audit if row["duplicate_of"])
+    assert all(by_index[index]["filter_status"] == "keep" for index in (1001, 1002))
+    assert sum(len(requests) for requests in service.batches.values()) == 3
     assert len(audit) == len(rows)
     assert all(row["raw_json"] and row["task_json"] for row in audit)
 

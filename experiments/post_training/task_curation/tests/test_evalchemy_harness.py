@@ -14,7 +14,7 @@ from experiments.post_training.task_curation.datasets.evalchemy.mmlu import sour
 from experiments.post_training.task_curation.pipeline import source_recipe
 
 
-def test_publication_compiles_staged_fewshots_and_retains_duplicate_rows(tmp_path):
+def test_publication_compiles_staged_fewshots_and_drops_duplicate_rows(tmp_path):
     dataset = next(source.config for source in sources() if source.config.protocol.benchmark == "mmlu-abstract_algebra")
     document = {
         "question": "Which integer is even?",
@@ -45,9 +45,8 @@ def test_publication_compiles_staged_fewshots_and_retains_duplicate_rows(tmp_pat
     finally:
         client.shutdown()
     cases = list(evaluation_cases(str(output)))
-    assert manifest.rows == 2
-    assert [case.item.source_ordinal for case in cases] == [0, 1]
-    assert cases[0].task.id != cases[1].task.id
+    assert manifest.rows == 1
+    assert [case.item.source_ordinal for case in cases] == [0]
     for case in cases:
         operation = case.item.operation
         context = operation.requests[0].context

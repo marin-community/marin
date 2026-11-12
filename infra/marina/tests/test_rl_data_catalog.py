@@ -51,6 +51,7 @@ from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentity
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
 def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:
@@ -210,6 +211,7 @@ def publish_sample(
     missing_packet: bool = False,
     source_id: str = "Marin:math",
     origin: SourceOrigin = SourceOrigin.MARIN,
+    duplicates: int = 0,
 ) -> None:
     declaration = SourceDeclaration(
         id=source_id,
@@ -227,7 +229,10 @@ def publish_sample(
         daytona_count_basis="Fixture tasks contain no actor environment.",
         family="Marin:math",
         tags=[],
-        task_count=3,
+        task_count=3 - duplicates,
+        within_source_dedup=deduplication_evidence("fixture", "1", "1", 3).model_copy(
+            update={"unique_count": 3 - duplicates, "within_source_duplicates": duplicates}
+        ),
         notes="",
         dataset_id="fixture",
         dataset_revision="1",
@@ -237,7 +242,7 @@ def publish_sample(
         is_benchmark=False,
         kind="Dataset",
         status="Available",
-        pipeline=None,
+        pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": "1", "files": []},
     )
     curation = CurationSummary(
         status="completed",
@@ -342,7 +347,8 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
             daytona_count_basis="Fixture tasks contain no actor environment.",
             family="Numbers",
             tags=[],
-            task_count=None,
+            task_count=1,
+            within_source_dedup=deduplication_evidence("fixture", "1", "1"),
             notes="",
             dataset_id="fixture",
             dataset_revision="1",
@@ -352,7 +358,7 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
             is_benchmark=False,
             kind="Dataset",
             status="Available",
-            pipeline=None,
+            pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": "1", "files": []},
         )
         for identifier in ("Marin:a", "Marin:b", "Marin:inventory")
     ]
@@ -520,11 +526,13 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
     assert load_curriculum(str(path), str(coverage_path), query)["counts"]["tasks"] == 4
     assert load_curriculum(str(path), str(coverage_path), query)["changed"] is False
     catalog_root = str(tmp_path / "catalog")
-    publish_sample(catalog_root, "graded", source_id="Marin:a")
+    publish_sample(catalog_root, "graded", source_id="Marin:a", duplicates=1)
     load_catalog(CurationCatalog(catalog_root), query)
     with TestClient(create_api(cast(AppletServices, CatalogServices(engine)))) as client:
         source = client.get("/sources").json()["sources"][0]
-        assert source["task_count"] == 3
+        assert source["task_count"] == 2
+        assert source["within_source_dedup"]["raw_count"] == 3
+        assert source["within_source_dedup"]["within_source_duplicates"] == 1
         assert source["coverage"] == {
             "example_count": 300,
             "intended_use": "train",

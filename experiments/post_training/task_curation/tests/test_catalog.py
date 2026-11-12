@@ -18,6 +18,7 @@ from experiments.post_training.task_curation.datasets.skyrl import math as skyrl
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.tests.resource_receipts import resource_recipe, write_fixture_receipt
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
 def test_parquet_count_export_identifies_the_counted_input(tmp_path):
@@ -50,6 +51,9 @@ def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubr
         ),
         info=replace(
             source.info,
+            within_source_dedup=deduplication_evidence(
+                "open-athena/math500-fixture", source.dataset.revision, source.version, 3
+            ),
             daytona_machine_slots=0,
             daytona_snapshot_count=0,
             daytona_execution_failures=0,

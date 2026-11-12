@@ -200,8 +200,11 @@ def test_evaluation_input_change_during_conversion_withdraws_the_release_marker(
         run(step, max_concurrent=1)
     assert not (Path(step.path()) / MANIFEST_FILENAME).exists()
     path.write_bytes(original)
-    artifact = run(step, max_concurrent=1)[0]
-    assert artifact.path == step.path()
+    with pytest.raises(RuntimeError):
+        run(step, max_concurrent=1)
+    retry = curate(replace(source, config=replace(dataset, recipe=replace(source.config.recipe, version="2"))), options)
+    artifact = run(retry, max_concurrent=1)[0]
+    assert artifact.path != step.path()
     assert len(list(evaluation_cases(artifact.path))) == 1
 
 

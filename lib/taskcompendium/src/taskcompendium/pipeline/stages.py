@@ -71,7 +71,7 @@ from taskcompendium.pipeline.transforms import (
     normalize_row,
     public_group_key,
     review_record,
-    source_locator_order,
+    task_id_order,
 )
 from taskcompendium.pipeline.verification import verify_task
 
@@ -398,7 +398,7 @@ def prepare_source(
         normalized_rows.group_by(
             public_group_key,
             reducer=deduplicate_group,
-            sort_by=source_locator_order,
+            sort_by=task_id_order,
             num_output_shards=num_output_shards,
         )
         .map(_check_prepared_audit)
@@ -449,7 +449,7 @@ def prepare_panel(
     output = StoragePath(output_path)
     checks = {row.normalized["audit"]["task_id"]: row.checks for row in rows}
     groups: dict[str, list[dict[str, Any]]] = {}
-    for row in sorted((row.normalized for row in rows), key=source_locator_order):
+    for row in sorted((row.normalized for row in rows), key=task_id_order):
         groups.setdefault(public_group_key(row), []).append(row)
     records = []
     for key, group in groups.items():

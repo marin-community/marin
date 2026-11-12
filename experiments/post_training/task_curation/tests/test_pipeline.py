@@ -524,9 +524,9 @@ def test_reviewed_input_mutation_fails_instead_of_publishing_under_planned_ident
         ):
             with pytest.raises(Exception) as failure:
                 run(planned, max_concurrent=1)
-        assert "Input overrides changed after planning" in error_chain(failure.value)
         if changed_input != "during_conversion":
-            assert not (StoragePath(planned.path()) / "final").exists()
+            assert "Input overrides changed after planning" in error_chain(failure.value)
+        assert not (StoragePath(planned.path()) / "final").exists()
     finally:
         client.shutdown()
 

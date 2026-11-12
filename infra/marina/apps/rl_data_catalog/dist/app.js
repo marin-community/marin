@@ -11,7 +11,7 @@ function grade(row) {
   return row.assessment.status === 'complete' ? row.assessment.admitted.grade : 'unassessed';
 }
 function value(row, key) {
-  if (key === 'examples') return row.coverage?.example_count;
+  if (key === 'examples') return row.within_source_dedup.unique_count;
   if (key === 'use') return row.coverage?.intended_use || 'unprocessed';
   if (key === 'quality') return grade(row);
   if (key === 'independent') return row.independent_qc?.verdict;
@@ -59,7 +59,7 @@ function render() {
     const open = node('button', row.display_name, 'source-name');
     open.title = row.display_name; open.addEventListener('click', () => details(row));
     name.append(open, node('span', row.origin, 'source-subtitle'));
-    const examples = node('td', row.coverage ? number.format(row.coverage.example_count) : '—', 'num');
+    const examples = node('td', number.format(row.within_source_dedup.unique_count), 'num');
     if (row.coverage && row.coverage.basis === 'declared') {
       examples.title = 'Declared examples in the pinned release; no curriculum placement';
     } else {
@@ -110,12 +110,12 @@ function details(row) {
   $('detail-name').textContent = row.display_name; $('detail-notes').textContent = row.notes;
   const controls = row.curation?.verification;
   const fields = [
-    ['Catalog', row.origin], ['Status', row.status], ['Oracle validation', row.oracle_validation && (oracleValidationLabels[row.oracle_validation] ?? row.oracle_validation)], ['Converted examples', row.coverage?.example_count],
+    ['Catalog', row.origin], ['Status', row.status], ['Oracle validation', row.oracle_validation && (oracleValidationLabels[row.oracle_validation] ?? row.oracle_validation)], ['Unique examples', row.within_source_dedup.unique_count], ['Raw converted tasks', row.within_source_dedup.raw_count], ['Within-source duplicates dropped', row.within_source_dedup.within_source_duplicates],
     ['Use', useLabels[row.coverage?.intended_use]], ['Quality', labels[grade(row)]],
     ['Independent QC', row.independent_qc ? `${labels[row.independent_qc.verdict]}: ${row.independent_qc.admitted === null ? `${row.independent_qc.reviewed} reviewed` : `${row.independent_qc.admitted} of ${row.independent_qc.reviewed} reviewed`} — ${row.independent_qc.method}` : null],
     ['Daytona safe', daytonaLabels[row.daytona_safety]],
     ['Top curriculum area', row.coverage?.top_area?.name],
-    ['Input rows', row.task_count], ['Source ID', row.id], ['Dataset revision', row.dataset_revision],
+    ['Source ID', row.id], ['Dataset revision', row.dataset_revision],
     ['Pipeline', row.pipeline?.name], ['Curation', row.curation?.status],
     ['Assessment model', row.assessment.model?.model], ['Assessment note', row.assessment.reason],
     ['Admission counts', row.curation?.admission_counts], ['Control status', controls?.status], ['Control counts', controls?.counts],
@@ -125,6 +125,18 @@ function details(row) {
     field.append(node('dt', title), node('dd', typeof item === 'object' ? JSON.stringify(item) : String(item)));
     return field;
   }));
+  const manifestUri = row.within_source_dedup.drop_manifest_uri;
+  const manifestField = node('dl', undefined, 'field');
+  const manifestValue = node('dd');
+  manifestValue.append(node('code', manifestUri));
+  if (manifestUri.startsWith('s3://')) {
+    const anchor = node('a', 'Filer ↗');
+    anchor.href = `https://filer.marina.oa.dev/#${encodeURIComponent(manifestUri)}`;
+    anchor.rel = 'noopener'; anchor.target = '_blank';
+    manifestValue.append(' ', anchor);
+  }
+  manifestField.append(node('dt', 'Within-source exclusion manifest'), manifestValue);
+  $('detail-fields').append(manifestField);
   const links = [];
   if (row.coverage && row.coverage.basis !== 'declared') { const anchor = node('a', 'Curriculum coverage'); anchor.href = curriculumLink(row); links.push(anchor); }
   if (row.independent_qc) {
@@ -144,7 +156,7 @@ async function load() {
   state.sources = data.sources;
   state.daytonaSnapshotLimit = data.daytona_snapshot_limit;
   const processed = data.sources.filter(row => row.coverage && row.coverage.basis !== 'declared');
-  const examples = processed.reduce((total, row) => total + row.coverage.example_count, 0);
+  const examples = data.sources.reduce((total, row) => total + row.within_source_dedup.unique_count, 0);
   $('message').textContent = `${number.format(data.sources.length)} sources · ${number.format(examples)} examples · ${processed.length} sources processed`;
   $('snapshot-info').textContent = `Curation inventory dated ${new Date(data.created_at).toLocaleDateString()}.`;
   for (const origin of [...new Set(data.sources.map(row => row.origin))].sort()) {
