@@ -65,3 +65,28 @@ function daytonaLabel(daytona) {
   const reason = reasons[String(daytona.reason_code).toLowerCase()];
   return `Unsafe: ${reason || daytona.reason || 'execution requirement'}`;
 }
+
+function currentDataset(row) {
+  const release = row.current_release;
+  if (release) return release.repo && release.revision && release.url?.startsWith('https://') ? release : null;
+  // Prebuilt campaign imports already record their exact training input in older snapshots.
+  if (!row.id.startsWith('Campaign Release:') || !row.dataset_id?.startsWith('open-athena/') ||
+      !row.dataset_revision || row.pipeline?.source !== row.dataset_id || row.pipeline.revision !== row.dataset_revision ||
+      row.url !== `https://huggingface.co/datasets/${row.dataset_id}/tree/${row.dataset_revision}`) return null;
+  return {repo: row.dataset_id, revision: row.dataset_revision, url: row.url};
+}
+function datasetLinks(row) {
+  const current = currentDataset(row), links = node('div', undefined, 'dataset-links');
+  const sameInput = current && (row.url === current.url ||
+    (row.dataset_id === current.repo && row.dataset_revision === current.revision));
+  function append(label, url, title) {
+    const anchor = node('a', label); anchor.href = url; anchor.title = title;
+    anchor.target = '_blank'; anchor.rel = 'noopener'; links.append(anchor);
+  }
+  if (row.url?.startsWith('https://') && !sameInput) {
+    links.append(node('span', 'Upstream:'));
+    append('Original dataset ↗', row.url, `Upstream original: ${row.dataset_id || row.url}`);
+  }
+  if (current) append('Current dataset ↗', current.url, `Pinned training release: ${current.repo} @ ${current.revision}`);
+  return links.childNodes.length ? links : null;
+}

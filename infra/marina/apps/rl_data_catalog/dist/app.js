@@ -140,6 +140,8 @@ function sourceRow(row, others, canonical) {
     const name = node('td'), open = node('button', row.display_name, 'source-name');
     open.title = row.display_name; open.addEventListener('click', () => details(row));
     name.append(open, node('span', [originOf(row), row.build_path].filter(Boolean).join(' · '), 'source-subtitle'));
+    const datasets = datasetLinks(row);
+    if (datasets) name.append(datasets);
     if (canonical) {
       name.append(node('span', `${sourceOverlap(row) == null ? "Unmeasured overlap" : `${Math.round(100 * sourceOverlap(row))}% overlap · ${sourceOverlap(row) === 1 ? "duplicate" : "partial overlap"}`} with ${canonical.display_name}`, 'source-subtitle duplicate-note'));
     } else if (others.length) {
@@ -199,7 +201,8 @@ function details(row) {
   const evidence = node('a', 'All quality evidence'); evidence.href = evidenceLink(row); links.push(evidence);
   if (row.coverage?.top_area) { const anchor = node('a', 'Curriculum coverage'); anchor.href = curriculumLink(row); links.push(anchor); }
   if (row.assessment.status === 'complete') { const anchor = node('a', 'Sampled review'); anchor.href = `assessment.html?source=${encodeURIComponent(row.id)}`; links.push(anchor); }
-  if (row.url?.startsWith('https://')) { const anchor = node('a', 'Original dataset ↗'); anchor.href = row.url; anchor.rel = 'noopener'; anchor.target = '_blank'; links.push(anchor); }
+  const datasets = datasetLinks(row);
+  if (datasets) links.push(datasets);
   $('detail-links').replaceChildren(...links); $('details').showModal();
 }
 function metrics(displayed) {

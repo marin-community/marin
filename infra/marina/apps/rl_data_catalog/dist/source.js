@@ -46,6 +46,7 @@ function link(text, href) { const anchor = node('a', text); anchor.href = href; 
 
 async function render(data, sourceId) {
   const d = data.declaration, curation = data.curation, controls = curation?.verification, assessment = data.assessment;
+  const current = currentDataset(d);
   document.title = `${d.display_name} · Evidence · RL Data Atlas`;
   $('title').textContent = d.display_name;
   $('message').textContent = `${d.origin} · ${d.id} · catalog snapshot ${data.catalog.snapshot_id}`;
@@ -91,7 +92,8 @@ async function render(data, sourceId) {
   ] : [], 'Measured outputs from the registered converter, before admission gates.'));
   sections.push(card('Releases and measurements', [
     ['Origin', d.origin], ['Build path', d.build_path],
-    ['Dataset', d.url && pointer(d.url, `${d.dataset_id || d.url} ↗`)], ['Dataset revision', d.dataset_revision],
+    ['Datasets', datasetLinks(d)], ['Input revision', d.dataset_revision],
+    ['Current release pin', current && `${current.repo} @ ${current.revision}`],
     ['Pipeline', d.pipeline && `${d.pipeline.name} @ ${d.pipeline.version}`],
     ['Examples', data.coverage?.example_count != null ? number.format(data.coverage.example_count) : null], ['Use', data.coverage?.intended_use],
     ['Top curriculum area', data.coverage?.top_area && `${data.coverage.top_area.name} (${number.format(data.coverage.top_area.instances)} placed tasks)`],
