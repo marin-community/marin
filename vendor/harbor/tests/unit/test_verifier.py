@@ -1,5 +1,6 @@
 """Unit tests for the Verifier."""
 
+import json
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -18,6 +19,33 @@ from harbor.verifier.verifier import (
     Verifier,
     VerifierRuntimeError,
 )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("status", [None, "infra_error", "scored"])
+async def test_structured_infrastructure_zero_is_not_a_scored_reward(tmp_path, status):
+    task_dir = _create_task_dir(tmp_path)
+    (task_dir / "tests" / "verifier.toml").write_text('mode = "pytest"\n')
+    task = Task(task_dir)
+    paths = TrialPaths(trial_dir=tmp_path / "trial")
+    paths.mkdir()
+    paths.reward_text_path.write_text("0.0")
+    if status is not None:
+        (paths.verifier_dir / "verdict.json").write_text(
+            json.dumps({"status": status, "reward": 0.0, "detail": {}})
+        )
+    environment = MagicMock()
+    environment.capabilities.mounted = True
+    environment.upload_dir = AsyncMock()
+    environment.os = TaskOS.LINUX
+    environment.exec = AsyncMock(return_value=ExecResult(return_code=0))
+    verifier = Verifier(task, paths, environment)
+    if status == "scored":
+        result = await verifier.verify()
+        assert result.rewards == {"reward": 0.0}
+    else:
+        with pytest.raises(VerifierRuntimeError):
+            await verifier.verify()
 
 
 def _create_task_dir(root: Path) -> Path:

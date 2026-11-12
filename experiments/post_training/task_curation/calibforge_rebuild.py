@@ -450,8 +450,7 @@ LOWERED_RUNTIME = {"cpus": NORMALIZED_CPUS, "memory_mb": NORMALIZED_MEMORY_MB, "
 def lowered_task_spec(task_id: str, task_binary: bytes) -> dict:
     """The TaskCompendium spec a rollout consumes: resources plus setup commands.
 
-    Harbor's task.toml cannot express a start hook, but the rollout runner executes
-    ``EnvironmentRequirements.setup_commands`` after installing resources
+    The rollout runner executes ``EnvironmentRequirements.setup_commands`` after installing resources
     (``rolloutengine.machines``), so the fixtures travel as resources and the setup
     script runs from ``/setup_files``. The models forbid extra keys, which makes an
     unsupported field a validation error instead of a silently ignored one.

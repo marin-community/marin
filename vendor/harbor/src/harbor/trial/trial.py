@@ -46,6 +46,7 @@ from harbor.skills import ResolvedSkill, resolve_skills
 from harbor.tasks.client import TaskClient
 from harbor.trial.artifact_handler import ArtifactHandler
 from harbor.trial.attempt import trial_paths, trial_relative_path
+from harbor.environments.setup import run_environment_setup
 from harbor.trial.errors import (
     AgentDiskFullError,
     AgentSetupTimeoutError,
@@ -399,6 +400,12 @@ class Trial(ABC):
         await self.agent_environment.run_healthcheck()
         await self._upload_injected_skills()
         await self._upload_setup_files()
+        if self.task.config.environment.setup is not None:
+            await self._await_phase(
+                run_environment_setup(self.agent_environment, self.task.config.environment.setup),
+                timeout_sec=self.task.config.environment.setup.timeout_sec,
+                timeout_error=EnvironmentStartTimeoutError("Public fixture initialization timed out"),
+            )
         with self.agent_environment.with_default_user(self.task.config.agent.user):
             await self._setup_agent()
         self.result.agent_info = self.agent.to_agent_info()
@@ -1141,8 +1148,17 @@ class Trial(ABC):
         if self._effective_skills_dir:
             extra_kwargs["skills_dir"] = self._effective_skills_dir
 
+        conflicts = {
+            name
+            for name, value in self.task.config.agent.env.items()
+            if name in self.config.agent.env and self.config.agent.env[name] != value
+        }
+        if conflicts:
+            raise ValueError(f"Agent environment contradicts task.toml: {', '.join(sorted(conflicts))}")
         self.agent = AgentFactory.create_agent_from_config(
-            self.config.agent,
+            self.config.agent.model_copy(
+                update={"env": {**self.task.config.agent.env, **self.config.agent.env}}
+            ),
             guest_environment=self.guest_environment,
             host_capabilities=self.host_capabilities,
             logs_dir=self.paths.agent_dir,

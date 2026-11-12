@@ -353,6 +353,11 @@ scored bug-zero/reference-one controls for the complete population. It retains
 package bytes and executes no controls during import. Infrastructure-error zeros
 cannot admit a task. Lowered TaskCompendium envelopes use `prebuilt.import_prebuilt`.
 
+Native Harbor execution runs `environment.setup.command` with its declared
+`timeout_sec` before agent access. Task `agent.env` values apply only to the
+agent; conflicting trial-level values fail. A structured verifier's non-scored
+verdict remains an infrastructure error even when a zero reward file exists.
+
 ```python
 from finestore.rl.curation import CurationCatalog
 

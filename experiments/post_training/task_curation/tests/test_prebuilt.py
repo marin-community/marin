@@ -15,6 +15,7 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     FileReward,
+    NoGrader,
     PlainText,
     ResourceGroups,
     RewardFile,
@@ -99,6 +100,9 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
     task = task.model_copy(
         update={
             "tags": ("harbor",),
+            "answer_type": AnswerType.WORKSPACE_STATE,
+            "environment_requirements": EnvironmentRequirements(),
+            "grader": NoGrader(reason="Harbor grades the completed trial"),
             "resources": ResourceGroups(
                 verifier=tuple(
                     inline_resource(path, content)
