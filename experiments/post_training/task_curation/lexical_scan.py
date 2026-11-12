@@ -25,6 +25,7 @@ from marin.datakit.decon import (
     decon_to_parquet,
 )
 from marin.datakit.normalize import NormalizedData
+from marin.execution.artifact import read_artifact
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -110,7 +111,7 @@ def build_drop_sets(config: DropConfig, *, campaign: CampaignRuntime) -> Lexical
 
 def mark_population(config: MarkConfig, *, campaign: CampaignRuntime) -> SourceLexicalMarks:
     population = SourceTextPopulation.raw_load(config.population_path)
-    drops = LexicalDropSets.raw_load(config.drop_path).attributes
+    drops = read_artifact(config.drop_path, LexicalDropSets).attributes
     result = decon_to_parquet(
         normalized_data=NormalizedData(main_output_dir=population.main_output_dir, dup_output_dir="", counters={}),
         prebuilt_bloom_dir=config.bloom_path,
@@ -139,7 +140,7 @@ def mark_files(mark: SourceLexicalMarks) -> list[str]:
 
 def measure_marks(config: ReportConfig) -> LexicalMeasurements:
     """Attribute every marked task through the complete causal hash index, without sampling."""
-    marks = [SourceLexicalMarks.raw_load(path) for path in config.mark_paths]
+    marks = [read_artifact(path, SourceLexicalMarks) for path in config.mark_paths]
     index_paths = {str(mark.attributes.eval_hash_index_path) for mark in marks}
     if len(index_paths) != 1:
         raise ValueError(f"Marks use different eval indices: {index_paths}")
@@ -154,7 +155,7 @@ def measure_marks(config: ReportConfig) -> LexicalMeasurements:
     logger.info("Joining %d distinct causal hashes against the complete eval index", len(needed_hashes))
     # Reuse the reference report's full streaming index join, never its sampled gallery.
     hash_evals = _hash_to_evals(index_path, needed_hashes) if needed_hashes else {}
-    drops = LexicalDropSets.raw_load(config.drop_path).attributes
+    drops = read_artifact(config.drop_path, LexicalDropSets).attributes
     measurements = {}
     for mark in marks:
         population = SourceTextPopulation.raw_load(mark.population_path)
