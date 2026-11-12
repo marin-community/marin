@@ -1,24 +1,45 @@
 :root {
-  --text: #1f2328;
-  --muted: #656d76;
-  --border: #d0d7de;
-  --header: #f6f8fa;
-  --link: #0969da;
-  --official: #1a7f37;
-  --unofficial: #9a6700;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  color: var(--text);
+  color-scheme: dark;
+  --surface-0: #0d1117;
+  --surface-1: #161b22;
+  --surface-2: #1f2630;
+  --border: #2d333b;
+  --text-primary: #f0efec;
+  --text-secondary: #c3c2b7;
+  --text-muted: #8b8a80;
+  --link: #7cb4f5;
+  /* Sequential blue from the reference palette; cell depth = score on a fixed 0-100 scale. */
+  --seq: #2a78d6;
+  --seq-max: 62%;
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--text-primary);
+  background: var(--surface-0);
 }
 
 body {
   margin: 0;
-  padding: 24px;
+  padding: 40px 24px;
+}
+
+header {
+  max-width: 1200px;
+  margin-bottom: 24px;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 header p,
 .source {
-  max-width: 72ch;
-  color: var(--muted);
+  max-width: 80ch;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.55;
 }
 
 a {
@@ -26,99 +47,182 @@ a {
   text-decoration: none;
 }
 
-a:hover {
+a:hover,
+a:focus-visible {
   text-decoration: underline;
 }
 
-.table-wrap {
+.card {
   overflow-x: auto;
+  background: var(--surface-1);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 10px;
+  box-shadow: 0 1px 0 rgb(255 255 255 / 3%) inset, 0 8px 24px rgb(0 0 0 / 35%);
 }
 
 table {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 2px;
+  padding: 6px;
   font-size: 14px;
 }
 
 th,
 td {
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border);
+  padding: 9px 7px;
+  border-radius: 4px;
   text-align: right;
   white-space: nowrap;
 }
 
 thead th {
-  white-space: normal;
-  vertical-align: bottom;
-  font-size: 13px;
   position: sticky;
   top: 0;
-  background: var(--header);
+  z-index: 2;
+  padding-bottom: 10px;
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  font-size: 11.5px;
   font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: normal;
+  vertical-align: bottom;
 }
 
 th.model {
-  max-width: 180px;
-  white-space: normal;
   position: sticky;
   left: 0;
   z-index: 1;
-  background: var(--header);
+  min-width: 140px;
+  max-width: 170px;
+  background: var(--surface-1);
+  font-size: 14px;
+  font-weight: 600;
   text-align: left;
+  white-space: normal;
 }
 
-td .score {
+thead th.model {
+  z-index: 3;
+}
+
+tbody th.model a {
+  color: var(--text-primary);
+}
+
+tbody th.model a:hover {
+  color: var(--link);
+}
+
+td.scored {
+  background: color-mix(in oklab, var(--seq) calc(var(--heat) * var(--seq-max)), var(--surface-1));
+}
+
+td.scored a {
+  display: block;
+  color: var(--text-primary);
   font-variant-numeric: tabular-nums;
-}
-
-td.official {
-  background: #dafbe1;
-}
-
-td.unofficial {
-  background: #fff8c5;
+  font-weight: 500;
 }
 
 td.unofficial .score {
-  text-decoration: underline dotted var(--unofficial);
-  text-underline-offset: 3px;
+  text-decoration: underline dotted var(--text-muted);
+  text-underline-offset: 4px;
 }
 
-td.missing,
-.missing {
-  color: var(--muted);
+td.missing {
+  background: var(--surface-2);
+  color: var(--text-muted);
   text-align: center;
 }
 
 .note-mark {
-  color: var(--unofficial);
-  font-weight: 600;
+  margin-left: 1px;
+  color: var(--text-secondary);
+  font-weight: 700;
 }
 
-.swatch {
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  margin-right: 4px;
-  border: 1px solid var(--border);
-  vertical-align: -2px;
+/* Hover: outline the cell, tint its row and column header. */
+tbody tr.active th.model,
+thead th.active {
+  color: var(--text-primary);
+  background: var(--surface-2);
 }
 
-.swatch.official {
-  background: #dafbe1;
-}
-
-.swatch.unofficial {
-  background: #fff8c5;
+td:hover,
+td:focus-within {
+  outline: 2px solid var(--text-secondary);
+  outline-offset: -2px;
 }
 
 .legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
-  margin-top: 12px;
+  align-items: center;
+  gap: 12px 28px;
+  margin: 16px 0 10px;
+  color: var(--text-secondary);
   font-size: 13px;
-  color: var(--muted);
+}
+
+.scale {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.scale-bar {
+  width: 140px;
+  height: 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: linear-gradient(
+    to right,
+    var(--surface-1),
+    color-mix(in oklab, var(--seq) var(--seq-max), var(--surface-1))
+  );
+}
+
+.sample-unofficial {
+  color: var(--text-primary);
+  text-decoration: underline dotted var(--text-muted);
+  text-underline-offset: 4px;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 10;
+  max-width: 340px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: none;
+}
+
+.tooltip[hidden] {
+  display: none;
+}
+
+.tooltip .tip-title {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.tooltip .tip-score {
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.tooltip .tip-id {
+  color: var(--text-muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  word-break: break-all;
 }
