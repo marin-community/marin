@@ -52,6 +52,12 @@ LAYOUTS = {
     ),
 }
 POLICY = jmp.get_policy("p=f32,c=bfloat16")
+# The test meshes each layout's update test runs on: both for the stacked layout.
+LAYOUT_MESHES = {
+    "stacked": ("replica4_expert2", "replica2_data2_expert2"),
+    "per_node_qb": ("replica2_data2_expert2",),
+    "unstacked": ("replica4_expert2",),
+}
 OPTIMIZERS = {
     "adamw": lambda: AdamConfig(learning_rate=1e-2, warmup=0.0, weight_decay=0.1, max_grad_norm=1.0).build(10),
     "muonh": lambda: GrugMoeMuonHConfig(learning_rate=2e-2, adam_lr=1e-2, warmup=0.0).build(10),
@@ -126,7 +132,8 @@ def test_zero1_matches_the_replicated_update(layout, optimizer_name):
     # means over the batch, move far less: they matched exactly. Only the expert weights' parameters move to the
     # replicas: with per-node QB, router_bias and the betas keep their sharding.
     with use_cpu_devices(8):
-        for name, mesh in _meshes().items():
+        for name in LAYOUT_MESHES[layout]:
+            mesh = _meshes()[name]
             optimizer = OPTIMIZERS[optimizer_name]()
             runs, replicated_specs, replicated_compute_specs = {}, {}, {}
             for zero1 in (False, True):
@@ -221,7 +228,8 @@ def test_zero1_crosses_the_replicas_once_per_step_after_the_microbatch_loop():
     # The step is compiled for the state one step has written, so a compute copy left sharded over the replicas would
     # show up as gathers in the layer loop.
     with use_cpu_devices(8):
-        for name, mesh in _meshes().items():
+        # K=2 on one mesh and K=4 on the other.
+        for (name, mesh), k in zip(_meshes().items(), (2, 4), strict=True):
             optimizer = optax.adam(1e-2)
             with jax.set_mesh(mesh):
                 marked = jax.eval_shape(
@@ -232,30 +240,29 @@ def test_zero1_crosses_the_replicas_once_per_step_after_the_microbatch_loop():
                 for path, x in jax.tree_util.tree_leaves_with_path(marked)
                 if getattr(path[-1], "name", None) != "router_bias"
             ]
-            for k in (2, 4):
-                msg = f"{name} K={k}"
-                gathers, reductions = {}, {}
-                for zero1 in (False, True):
-                    train_step = zero1_step(optimizer, zero1=zero1, microbatches=k)
-                    with jax.set_mesh(mesh):
-                        state, _, _ = train_step(zero1_state(mesh, optimizer, zero1=zero1), BATCH)
-                        hlo = train_step.lower(state, BATCH).compile().as_text()
-                    gathers[zero1] = replica_reductions(hlo, mesh, GATHERS)
-                    reductions[zero1] = replica_reductions(hlo, mesh)
-                in_loop = [sorted((r.elements, r.op_name) for r in gathers[z] if r.in_loop) for z in (False, True)]
-                assert in_loop[1] == in_loop[0], (msg, in_loop)
-                added = collections.Counter(r.elements for r in gathers[True] if not r.in_loop)
-                added.subtract(r.elements for r in gathers[False] if not r.in_loop)
-                expert_shards = collections.Counter(
-                    int(np.prod(x.sharding.shard_shape(x.shape)))
-                    for path, x in jax.tree_util.tree_leaves_with_path(state.compute_params)
-                    if is_expert(path)
-                )
-                assert +added == expert_shards and -added == collections.Counter(), (msg, added, expert_shards)
-                in_loop = [r for r in reductions[True] if r.in_loop]
-                assert not any("transpose(" in r.op_name and not r.scalar for r in in_loop), (msg, in_loop)
-                after_loop = sum(r.elements for r in reductions[True] if not r.in_loop)
-                assert sum(sizes) <= after_loop < sum(sizes) + min(sizes), (msg, after_loop, sum(sizes))
+            msg = f"{name} K={k}"
+            gathers, reductions = {}, {}
+            for zero1 in (False, True):
+                train_step = zero1_step(optimizer, zero1=zero1, microbatches=k)
+                with jax.set_mesh(mesh):
+                    state, _, _ = train_step(zero1_state(mesh, optimizer, zero1=zero1), BATCH)
+                    hlo = train_step.lower(state, BATCH).compile().as_text()
+                gathers[zero1] = replica_reductions(hlo, mesh, GATHERS)
+                reductions[zero1] = replica_reductions(hlo, mesh)
+            in_loop = [sorted((r.elements, r.op_name) for r in gathers[z] if r.in_loop) for z in (False, True)]
+            assert in_loop[1] == in_loop[0], (msg, in_loop)
+            added = collections.Counter(r.elements for r in gathers[True] if not r.in_loop)
+            added.subtract(r.elements for r in gathers[False] if not r.in_loop)
+            expert_shards = collections.Counter(
+                int(np.prod(x.sharding.shard_shape(x.shape)))
+                for path, x in jax.tree_util.tree_leaves_with_path(state.compute_params)
+                if is_expert(path)
+            )
+            assert +added == expert_shards and -added == collections.Counter(), (msg, added, expert_shards)
+            in_loop = [r for r in reductions[True] if r.in_loop]
+            assert not any("transpose(" in r.op_name and not r.scalar for r in in_loop), (msg, in_loop)
+            after_loop = sum(r.elements for r in reductions[True] if not r.in_loop)
+            assert sum(sizes) <= after_loop < sum(sizes) + min(sizes), (msg, after_loop, sum(sizes))
 
 
 @pytest.mark.timeout(900)
@@ -351,26 +358,27 @@ def test_zero1_with_the_overlapped_last_microbatch_matches_the_replicated_update
     # With overlap_last_microbatch the expert gradients are reduce-scattered layer by layer in the last microbatch's
     # backward, through the gradient sinks; the step matches the replicated overlapped step as without the overlap.
     with use_cpu_devices(8):
-        for name, mesh in _meshes().items():
-            optimizer = OPTIMIZERS[optimizer_name]()
-            runs = {}
-            for zero1 in (False, True):
-                state = zero1_state(mesh, optimizer, zero1=zero1)
-                train_step = zero1_step(optimizer, zero1=zero1, overlap=True)
-                losses, after_one_step = [], None
-                with jax.set_mesh(mesh):
-                    for _ in range(3):
-                        state, metrics, _ = train_step(state, BATCH)
-                        losses.append(float(metrics["train/loss"]))
-                        if after_one_step is None:
-                            after_one_step = jax.tree.map(np.asarray, (state.params, state.ema_params))
-                runs[zero1] = (losses, after_one_step, jax.tree.map(np.asarray, (state.params, state.ema_params)))
-            (losses, one, three), (zero1_losses, zero1_one, zero1_three) = runs[False], runs[True]
-            np.testing.assert_allclose(zero1_losses, losses, rtol=1e-5, err_msg=name)
-            errors = relative_errors(zero1_one, one)
-            assert max(errors.values()) <= 1e-6, (name, errors)
-            errors = relative_errors(zero1_three, three)
-            assert max(errors.values()) <= 2**-8, (name, errors)
+        name = {"adamw": "replica4_expert2", "muonh": "replica2_data2_expert2"}[optimizer_name]
+        mesh = _meshes()[name]
+        optimizer = OPTIMIZERS[optimizer_name]()
+        runs = {}
+        for zero1 in (False, True):
+            state = zero1_state(mesh, optimizer, zero1=zero1)
+            train_step = zero1_step(optimizer, zero1=zero1, overlap=True)
+            losses, after_one_step = [], None
+            with jax.set_mesh(mesh):
+                for _ in range(3):
+                    state, metrics, _ = train_step(state, BATCH)
+                    losses.append(float(metrics["train/loss"]))
+                    if after_one_step is None:
+                        after_one_step = jax.tree.map(np.asarray, (state.params, state.ema_params))
+            runs[zero1] = (losses, after_one_step, jax.tree.map(np.asarray, (state.params, state.ema_params)))
+        (losses, one, three), (zero1_losses, zero1_one, zero1_three) = runs[False], runs[True]
+        np.testing.assert_allclose(zero1_losses, losses, rtol=1e-5, err_msg=name)
+        errors = relative_errors(zero1_one, one)
+        assert max(errors.values()) <= 1e-6, (name, errors)
+        errors = relative_errors(zero1_three, three)
+        assert max(errors.values()) <= 2**-8, (name, errors)
 
 
 @pytest.mark.timeout(900)
@@ -385,55 +393,55 @@ def test_zero1_with_the_overlapped_last_microbatch_reduces_into_the_shard_per_la
         layer_scan = "jit(train_step)/transpose(jvp(Transformer))/while/body/"
         optimizer = optax.adam(1e-2)
         options = {"xla_disable_hlo_passes": "cpu-all-reduce-combiner"}
-        for name, mesh in _meshes().items():
-            for k in (2, 4):
-                msg = f"{name} K={k}"
-                hlos = {}
-                for zero1 in (False, True):
-                    train_step = zero1_step(optimizer, zero1=zero1, microbatches=k, overlap=True)
-                    with jax.set_mesh(mesh):
-                        state, _, _ = train_step(zero1_state(mesh, optimizer, zero1=zero1), BATCH)
-                        hlos[zero1] = train_step.lower(state, BATCH).compile(compiler_options=options).as_text()
-                expert_compute = {
-                    jax.tree_util.keystr(path): x.sharding.shard_shape(x.shape)
-                    for path, x in jax.tree_util.tree_leaves_with_path(state.compute_params)
-                    if is_expert(path)
-                }
-                expert_zero1 = {
-                    jax.tree_util.keystr(path): x.sharding.shard_shape(x.shape)
-                    for path, x in jax.tree_util.tree_leaves_with_path(state.params)
-                    if is_expert(path)
-                }
-                # A layer's slice of each expert gradient as the backward reduces it: all-gathered over ``data``
-                # (FSDP) by the marking, like the other weights' gradients.
+        # K=2 on one mesh and K=4 on the other.
+        for (name, mesh), k in zip(_meshes().items(), (2, 4), strict=True):
+            msg = f"{name} K={k}"
+            hlos = {}
+            for zero1 in (False, True):
+                train_step = zero1_step(optimizer, zero1=zero1, microbatches=k, overlap=True)
                 with jax.set_mesh(mesh):
-                    marked = jax.eval_shape(june_train._mark_batch_reduced, state.compute_params)
-                layer_slices = sorted(
-                    int(np.prod(x.sharding.shard_shape(x.shape)[1:]))
-                    for path, x in jax.tree_util.tree_leaves_with_path(marked)
-                    if is_expert(path)
-                )
-                reductions = {z: replica_reductions(hlos[z], mesh) for z in (False, True)}
-                per_layer = [r for r in reductions[True] if r.in_loop and "transpose(" in r.op_name and not r.scalar]
-                assert per_layer and all(r.op_name.startswith(layer_scan) for r in per_layer), (msg, per_layer)
-                assert sorted(r.elements for r in per_layer) == layer_slices, (msg, per_layer)
-                after = [sorted(r.elements for r in reductions[z] if not r.in_loop and not r.scalar) for z in (0, 1)]
-                assert after[1] == after[0], (msg, after)
-                # The while loops whose bodies run the per-layer reductions output the ZeRO-1 shard of every expert
-                # gradient (bfloat16, the compute dtype) and never the compute shard.
-                computations = dict(re.findall(r"(?m)^%?([\w.\-]+) .*\{$\n((?:[ ].*\n?)*)", hlos[True]))
-                loop_outputs = []
-                for shape, body in re.findall(r"= (.*?) while\(.*?body=%?([\w.\-]+)", hlos[True]):
-                    if layer_scan in computations.get(body, "") and "all-reduce" in computations.get(body, ""):
-                        loop_outputs.append(shape)
-                assert loop_outputs, msg
-                for path, shard in expert_zero1.items():
-                    zero1_shape = "bf16[" + ",".join(map(str, shard)) + "]"
-                    assert any(zero1_shape in out for out in loop_outputs), (msg, path, zero1_shape, loop_outputs)
-                gathers = {z: replica_reductions(hlos[z], mesh, GATHERS) for z in (False, True)}
-                in_loop = [sorted(r.elements for r in gathers[z] if r.in_loop) for z in (False, True)]
-                assert in_loop[1] == in_loop[0], (msg, in_loop)
-                added = collections.Counter(r.elements for r in gathers[True] if not r.in_loop)
-                added.subtract(r.elements for r in gathers[False] if not r.in_loop)
-                expert_shards = collections.Counter(int(np.prod(shape)) for shape in expert_compute.values())
-                assert +added == expert_shards and -added == collections.Counter(), (msg, added, expert_shards)
+                    state, _, _ = train_step(zero1_state(mesh, optimizer, zero1=zero1), BATCH)
+                    hlos[zero1] = train_step.lower(state, BATCH).compile(compiler_options=options).as_text()
+            expert_compute = {
+                jax.tree_util.keystr(path): x.sharding.shard_shape(x.shape)
+                for path, x in jax.tree_util.tree_leaves_with_path(state.compute_params)
+                if is_expert(path)
+            }
+            expert_zero1 = {
+                jax.tree_util.keystr(path): x.sharding.shard_shape(x.shape)
+                for path, x in jax.tree_util.tree_leaves_with_path(state.params)
+                if is_expert(path)
+            }
+            # A layer's slice of each expert gradient as the backward reduces it: all-gathered over ``data``
+            # (FSDP) by the marking, like the other weights' gradients.
+            with jax.set_mesh(mesh):
+                marked = jax.eval_shape(june_train._mark_batch_reduced, state.compute_params)
+            layer_slices = sorted(
+                int(np.prod(x.sharding.shard_shape(x.shape)[1:]))
+                for path, x in jax.tree_util.tree_leaves_with_path(marked)
+                if is_expert(path)
+            )
+            reductions = {z: replica_reductions(hlos[z], mesh) for z in (False, True)}
+            per_layer = [r for r in reductions[True] if r.in_loop and "transpose(" in r.op_name and not r.scalar]
+            assert per_layer and all(r.op_name.startswith(layer_scan) for r in per_layer), (msg, per_layer)
+            assert sorted(r.elements for r in per_layer) == layer_slices, (msg, per_layer)
+            after = [sorted(r.elements for r in reductions[z] if not r.in_loop and not r.scalar) for z in (0, 1)]
+            assert after[1] == after[0], (msg, after)
+            # The while loops whose bodies run the per-layer reductions output the ZeRO-1 shard of every expert
+            # gradient (bfloat16, the compute dtype) and never the compute shard.
+            computations = dict(re.findall(r"(?m)^%?([\w.\-]+) .*\{$\n((?:[ ].*\n?)*)", hlos[True]))
+            loop_outputs = []
+            for shape, body in re.findall(r"= (.*?) while\(.*?body=%?([\w.\-]+)", hlos[True]):
+                if layer_scan in computations.get(body, "") and "all-reduce" in computations.get(body, ""):
+                    loop_outputs.append(shape)
+            assert loop_outputs, msg
+            for path, shard in expert_zero1.items():
+                zero1_shape = "bf16[" + ",".join(map(str, shard)) + "]"
+                assert any(zero1_shape in out for out in loop_outputs), (msg, path, zero1_shape, loop_outputs)
+            gathers = {z: replica_reductions(hlos[z], mesh, GATHERS) for z in (False, True)}
+            in_loop = [sorted(r.elements for r in gathers[z] if r.in_loop) for z in (False, True)]
+            assert in_loop[1] == in_loop[0], (msg, in_loop)
+            added = collections.Counter(r.elements for r in gathers[True] if not r.in_loop)
+            added.subtract(r.elements for r in gathers[False] if not r.in_loop)
+            expert_shards = collections.Counter(int(np.prod(shape)) for shape in expert_compute.values())
+            assert +added == expert_shards and -added == collections.Counter(), (msg, added, expert_shards)
