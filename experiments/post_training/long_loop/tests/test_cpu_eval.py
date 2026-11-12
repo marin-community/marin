@@ -23,7 +23,7 @@ def run_cpu_eval(*, output: str):
         RAY_ENABLE_UV_RUN_RUNTIME_ENV="0",
     )
     with (root / "cpu-eval.log").open("w") as log:
-        subprocess.run(
+        result = subprocess.run(
             [
                 "uv",
                 "run",
@@ -44,8 +44,12 @@ def run_cpu_eval(*, output: str):
             env=environment,
             stdout=log,
             stderr=subprocess.STDOUT,
-            check=True,
+            check=False,
             timeout=120,
+        )
+    if result.returncode:
+        raise RuntimeError(
+            f"CPU eval fixture exited {result.returncode}:\n{(root / 'cpu-eval.log').read_text()[-16000:]}"
         )
     assert json.loads((root / "terminal.json").read_text())["result"]["state"] == "succeeded"
 

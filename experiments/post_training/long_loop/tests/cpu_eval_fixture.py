@@ -14,7 +14,7 @@ from pathlib import Path
 import ray
 import yaml
 from cloud.iris.launch import LaunchOutcome, execute_launch
-from cloud.iris.tests.test_launch_config import _raw_config
+from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from omegaconf import OmegaConf
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
 from rolloutengine.harness.external import AgentHarness
@@ -279,7 +279,7 @@ class LocalBackend:
 def main(root):
     root.mkdir(parents=True, exist_ok=True)
     cfg = configuration(root)
-    launch = _raw_config()
+    launch = raw_launch_config()
     launch["skyrl"].setdefault("generator", {})["trajectory_retention"] = OmegaConf.to_container(
         cfg.generator.trajectory_retention
     )
