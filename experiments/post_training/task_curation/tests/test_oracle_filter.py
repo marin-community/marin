@@ -40,6 +40,7 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
         "infra",
         "source-env",
         "unmatched-env",
+        "invalid-reward",
         "calibration-only",
         "live",
     ):
@@ -132,6 +133,8 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
                 if task_id in {"source-env", "unmatched-env"}
                 else {"status": "scored", "reward": 1}
             )
+            if task_id == "invalid-reward":
+                verdict["reward"] = True
             (root / "verifier/verdict.json").write_text(json.dumps(verdict))
             if task_id != "missing-exit":
                 (root / "agent/exit-code.txt").write_text("7" if task_id == "failed-solution" else "0")
@@ -155,7 +158,8 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
     output = tmp_path / "filtered/tasks.parquet"
     receipt = filter_cohort(cohort, task_map, tmp_path / "jobs", output, no_oracle_liveness=liveness)
     assert [row["path"] for row in pq.read_table(output).to_pylist()] == ["pass", "live"]
-    assert receipt.input_rows == 8
+    assert receipt.input_rows == 9
+    assert receipt.tasks["invalid-reward"].exclusion_reason is OracleExclusionReason.INFRASTRUCTURE
     incompatible = receipt.tasks["source-env"]
     assert incompatible.exclusion_reason is OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER
     assert (
@@ -173,9 +177,11 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
     assert receipt.tasks["live"].trials == ()
     assert require_oracle_filter(live, receipt, json.loads(rows[-1]["lowered_task_spec"])["runtime"])
     assert receipt.tasks["failed-solution"].trials[0].oracle_exit_code == 7
+    assert receipt.tasks["failed-solution"].exclusion_reason is OracleExclusionReason.ORACLE_FAILED
     assert not receipt.tasks["failed-solution"].passed
     assert not receipt.tasks["infra"].passed
     assert receipt.tasks["missing-exit"].trials[0].oracle_exit_code is None
+    assert receipt.tasks["missing-exit"].exclusion_reason is OracleExclusionReason.INFRASTRUCTURE
     assert not receipt.tasks["missing-exit"].passed
 
     envelope = json.loads(rows[0]["lowered_task_spec"])
