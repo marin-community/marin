@@ -59,10 +59,10 @@ class AgentHarness:
     """A harness for an agent that owns its prompts and tool loop.
 
     Each completion call sends one prompt and returns the exact ``ModelTurn``, also from tasks that the agent
-    does not await, such as HTTP handlers. A prompt that extends the last prompt with the model's message,
-    under the same options, is a reply; any other prompt starts a new conversation. The last prompt again gets
-    the same turn. One model request can be open at a time. When the attempt ends, calls wait until the
-    cleanup, after grading; the cleanup then cancels the agent. ``check`` rejects tools that the agent does
+    does not await, such as HTTP handlers. A prompt that semantically extends the last prompt with the model's
+    message is a reply with its current options; a history rewrite starts a new conversation. An identical
+    repeated prompt gets the same turn. One model request can be open at a time. When the attempt ends, calls
+    wait until cleanup, after grading; the cleanup then cancels the agent. ``check`` rejects tools that the agent does
     not get, such as an answer tool or a tool provider. The task rollout reference gives the rules for
     cancelled calls and for the shutdown of the agent.
     """
