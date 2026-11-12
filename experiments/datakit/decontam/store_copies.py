@@ -154,6 +154,21 @@ class Matcher:
 
 
 @dataclass(frozen=True)
+class StoreSource:
+    """A store source's normalized directory and the attribute directories the store joined, under ``STORE_ROOT``."""
+
+    dir: str
+    decon: str
+    exact: str
+    fuzzy: str | None
+    """None for sources the store exempts from fuzzy dedup."""
+
+
+def store_sources() -> dict[str, StoreSource]:
+    return {name: StoreSource(**dirs) for name, dirs in json.loads(SOURCES_FILE.read_text()).items()}
+
+
+@dataclass(frozen=True)
 class SourceFile:
     source: str
     path: str
@@ -163,21 +178,22 @@ class SourceFile:
     """None for sources the store exempts from fuzzy dedup."""
 
 
-def store_files(sources: dict[str, dict], names: list[str] | None, every: int) -> list[SourceFile]:
+def store_files(sources: dict[str, StoreSource], names: list[str] | None, every: int) -> list[SourceFile]:
     """List the normalized files of the chosen sources, every ``every``-th one of each."""
     unknown = sorted(set(names or []) - sources.keys())
     if unknown:
         raise ValueError(f"unknown sources: {unknown}")
     files = []
     for name in sorted(names or sources):
-        dirs = {k: f"{STORE_ROOT}/{v}" if v else None for k, v in sources[name].items()}
-        paths = sorted(str(p) for p in StoragePath(f"{dirs['dir']}/*.parquet").glob())
+        source = sources[name]
+        root = StoragePath(STORE_ROOT)
+        paths = sorted(str(p) for p in (root / source.dir / "*.parquet").glob())
         if not paths:
-            raise ValueError(f"{name}: no Parquet files in {dirs['dir']}")
+            raise ValueError(f"{name}: no Parquet files in {root / source.dir}")
         for path in paths[::every]:
             base = path.rsplit("/", 1)[1]
-            fuzzy = f"{dirs['fuzzy']}/{base}" if dirs["fuzzy"] else None
-            files.append(SourceFile(name, path, f"{dirs['decon']}/{base}", f"{dirs['exact']}/{base}", fuzzy))
+            fuzzy = str(root / source.fuzzy / base) if source.fuzzy else None
+            files.append(SourceFile(name, path, str(root / source.decon / base), str(root / source.exact / base), fuzzy))
     return files
 
 
@@ -233,23 +249,27 @@ def file_matches(file: SourceFile, matcher: Matcher) -> list[dict]:
     ]
 
 
-def match_path(out_prefix: str, path: str) -> str:
-    return f"{out_prefix}/matches/{hashlib.sha256(path.encode()).hexdigest()[:20]}.parquet"
+def targets_path(out_prefix: str) -> StoragePath:
+    return StoragePath(out_prefix) / "targets.json"
+
+
+def match_path(out_prefix: str, path: str) -> StoragePath:
+    return StoragePath(out_prefix) / "matches" / f"{hashlib.sha256(path.encode()).hexdigest()[:20]}.parquet"
 
 
 def _search_shard(out_prefix: str):
     def run(items: Iterator[dict], shard) -> Iterator[str]:
-        with StoragePath(f"{out_prefix}/targets.json").open("r") as f:
+        with targets_path(out_prefix).open("r") as f:
             matcher = Matcher([Target(t["record_id"], t["field"], t["text"], tuple(t["anchors"])) for t in json.load(f)])
         for item in items:
             out = match_path(out_prefix, item["path"])
             # A finished file's output is written whole, so a rerun skips it.
-            if StoragePath(out).exists():
+            if out.exists():
                 continue
             rows = file_matches(SourceFile(**item), matcher)
-            with StoragePath(out).open("wb") as f:
+            with out.open("wb") as f:
                 pq.write_table(pa.Table.from_pylist(rows, schema=MATCH_SCHEMA), f)
-            yield out
+            yield str(out)
 
     return run
 
@@ -323,20 +343,19 @@ def report_markdown(
     return "\n".join(lines) + "\n"
 
 
-def load_records(args: argparse.Namespace) -> tuple[str, list[dict]]:
-    if args.hf:
-        if not (args.revision and args.split):
-            raise ValueError("--hf needs --revision and --split")
-        dataset = load_dataset(args.hf, args.config, split=args.split, revision=args.revision)
-        return f"{args.hf}@{args.revision[:10]} {args.config or ''} {args.split}".strip(), list(dataset)
-    paths = sorted(str(p) for p in StoragePath(args.parquet).glob())
+def hf_records(repo: str, revision: str, config: str | None, split: str) -> list[dict]:
+    return list(load_dataset(repo, config, split=split, revision=revision))
+
+
+def parquet_records(pattern: str) -> list[dict]:
+    paths = sorted(str(p) for p in StoragePath(pattern).glob())
     if not paths:
-        raise ValueError(f"no files match {args.parquet}")
+        raise ValueError(f"no files match {pattern}")
     rows = []
     for path in paths:
         with StoragePath(path).open("rb") as f:
             rows += pq.read_table(f).to_pylist()
-    return f"{args.parquet} ({len(paths)} files)", rows
+    return rows
 
 
 def main() -> None:
@@ -358,14 +377,21 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
 
-    title, rows = load_records(args)
+    if args.hf:
+        if not (args.revision and args.split):
+            raise ValueError("--hf needs --revision and --split")
+        rows = hf_records(args.hf, args.revision, args.config, args.split)
+        title = " ".join(x for x in (f"{args.hf}@{args.revision[:10]}", args.config, args.split) if x)
+    else:
+        rows = parquet_records(args.parquet)
+        title = args.parquet
     targets = targets_for(rows, args.id_field, args.fields, args.min_words)
     if not targets:
         raise ValueError(f"no field of any record has {args.min_words} or more words")
-    StoragePath(f"{args.out_prefix}/targets.json").write_text(
+    targets_path(args.out_prefix).write_text(
         json.dumps([{"record_id": t.record_id, "field": t.field, "text": t.text, "anchors": t.anchors} for t in targets])
     )
-    files = store_files(json.loads(SOURCES_FILE.read_text()), args.sources, args.every)
+    files = store_files(store_sources(), args.sources, args.every)
     logger.info("%s: %d records, %d targets, %d files", title, len(rows), len(targets), len(files))
 
     ctx = ZephyrContext(
@@ -376,19 +402,19 @@ def main() -> None:
     matches = []
     for f in files:
         out = match_path(args.out_prefix, f.path)
-        if not StoragePath(out).exists():
+        if not out.exists():
             raise ValueError(f"{f.path} was not searched: {out} is missing")
-        with StoragePath(out).open("rb") as fh:
+        with out.open("rb") as fh:
             matches += pq.read_table(fh).to_pylist()
     records = record_summary(targets, matches)
-    with StoragePath(f"{args.out_prefix}/records.parquet").open("wb") as fh:
+    with (StoragePath(args.out_prefix) / "records.parquet").open("wb") as fh:
         pq.write_table(pa.Table.from_pylist(records), fh)
     sources = sorted({f.source for f in files})
     scope = f"{len(files):,} files of {len(sources)} sources" + (
         f", every {args.every}th file" if args.every > 1 else ""
     )
     report = report_markdown(title, len(rows), targets, records, matches, scope)
-    StoragePath(f"{args.out_prefix}/report.md").write_text(report)
+    (StoragePath(args.out_prefix) / "report.md").write_text(report)
     print(report)
 
 
