@@ -55,7 +55,7 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import username_segment
-from skyrlrecipe import ContextBudget, RLEntrypoint, SkyRLRecipe, sections
+from skyrlrecipe import ContextBudget, SkyRLRecipe, sections
 
 from experiments.evaluation.models import SNOWBALL_SFT_EXPORT_URI, SNOWBALL_VLLM_ARGS
 from experiments.evaluation.pipeline import EvaluationResult
@@ -509,7 +509,6 @@ def model_step(version: str) -> ArtifactStep[LevanterCheckpoint]:
 
 def rl_config_yaml(preset: ScalePreset, arm: ArmSpec, policy: PolicySpec) -> str:
     config = SkyRLRecipe(
-        entrypoint=RLEntrypoint.STANDARD,
         context_budget=ContextBudget(
             request_window_tokens=preset.request_window_tokens,
             max_new_tokens_per_turn=preset.max_new_tokens,

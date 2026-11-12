@@ -440,7 +440,7 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
 def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     preset = presets.PRESETS["train-long" if case.startswith("train-candidate") else "speed-medium"]
-    roots = controls(recorded_runs, preset.name) if presets.gated(preset) else []
+    roots = controls(recorded_runs, preset.name) if preset.gated else []
     built = snowball.build_run(preset)
     source = (
         None

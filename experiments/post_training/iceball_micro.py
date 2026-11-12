@@ -63,7 +63,7 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
-from skyrlrecipe import ContextBudget, RLEntrypoint, SkyRLRecipe, sections
+from skyrlrecipe import ContextBudget, SkyRLRecipe, sections
 from zephyr.writers import write_parquet_file
 
 from experiments.evaluation.pipeline import EvaluationResult
@@ -149,7 +149,6 @@ QWEN3_CHAT_TEMPLATE = (
 )
 
 ICEBALL_RL_RECIPE = SkyRLRecipe(
-    entrypoint=RLEntrypoint.STANDARD,
     context_budget=ContextBudget(
         request_window_tokens=ICEBALL_SEQUENCE_LENGTH, max_new_tokens_per_turn=256, max_turns=1
     ),

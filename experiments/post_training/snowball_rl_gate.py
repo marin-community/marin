@@ -89,8 +89,6 @@ CONTROLS = {
     )
 }
 
-SHARED_CONTROLS = {"data-medium": "learning-medium"}
-
 
 REPORTED_PREFIXES = ("async/", "consumed/", "generate/", "loss/", "policy/", "reward/", "startup/", "timing/", "vllm/")
 
@@ -132,7 +130,7 @@ def parse_requirement(text: str) -> Requirement:
 
 def validate_requirements(preset: presets.Preset, requirements: Sequence[str], *, control: bool) -> None:
     """Validate a candidate's control pin and user requirements before GPU submission."""
-    gated = presets.gated(preset)
+    gated = preset.gated
     if requirements and (control or not gated):
         raise click.BadParameter("--require needs a gated candidate preset, without --control")
     keys = [parse_requirement(text).key for text in requirements]
@@ -148,7 +146,7 @@ def validate_requirements(preset: presets.Preset, requirements: Sequence[str], *
 def validate_candidate(preset: presets.Preset, inputs: GateInputs, *, control: bool = False) -> None:
     """Compose the submitted inputs and check every gated control against current defaults."""
     defaults, _ = _current_configs(preset, inputs)
-    if control or not presets.gated(preset):
+    if control or not preset.gated:
         return
     pins = control_pins(preset)
     current = comparison_config(defaults)
@@ -461,7 +459,7 @@ def _panel_identity(preset: presets.Preset, launch: dict, inputs: GateInputs) ->
 
 def training_invariants(preset: presets.Preset, metrics: Mapping[int, Mapping[str, float]]) -> tuple[Invariant, ...]:
     """Check planned update completion and finite training loss and gradient evidence."""
-    generating = preset.recipe.layout.role_plan.generate_only
+    generating = isinstance(preset.recipe.layout.role_plan, presets.SkyRLGenerationPlan)
     planned = {0} if generating else set(range(1, preset.updates + 1))
     completed = planned.intersection(metrics)
     training = [metrics[step] for step in sorted(completed)]
@@ -501,7 +499,7 @@ def _load_run(
     if terminal.native.result.provenance is None:
         raise InvalidComparison(f"run has no recorded source provenance: {path}")
     metrics = read_skyrl_metrics(path)
-    generating = preset.recipe.layout.role_plan.generate_only
+    generating = isinstance(preset.recipe.layout.role_plan, presets.SkyRLGenerationPlan)
     training = [
         row for step, row in sorted(metrics.items()) if (step == 0 if generating else 1 <= step <= preset.updates)
     ]
@@ -1096,7 +1094,7 @@ def _write_gate(
 
 
 def control_pins(preset: presets.Preset) -> tuple[ControlPin, ...]:
-    control_preset = SHARED_CONTROLS.get(preset.name, preset.name)
+    control_preset = preset.shared_control or preset.name
     known = CONTROLS.get(control_preset, ())
     pins = tuple(pin for pin in known if pin.revision == preset.revision)
     if not pins:
@@ -1224,7 +1222,7 @@ class SnowballCommand(click.Command):
 @click.option(
     "--preset",
     "preset_name",
-    type=click.Choice(sorted(name for name, preset in presets.PRESETS.items() if presets.gated(preset))),
+    type=click.Choice(sorted(name for name, preset in presets.PRESETS.items() if preset.gated)),
     required=True,
     help="Gated preset whose pinned controls to compare with.",
 )

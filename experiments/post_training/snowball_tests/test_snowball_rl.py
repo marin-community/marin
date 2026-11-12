@@ -41,7 +41,7 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
             monkeypatch.setenv("WANDB_ENTITY", "test-team")
         run = snowball.build_run(
             preset,
-            tasks=selection if preset.focus == presets.Focus.DATA else None,
+            tasks=selection if preset.tasks_input == "required" else None,
             control=name == "speed-long",
         )
         for index, step in enumerate(run.runs):
@@ -117,7 +117,16 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
             )
         ),
     )
-    shared = replace(promoted, focus=presets.Focus.DATA)
+    shared = replace(
+        promoted,
+        focus=presets.Focus.DATA,
+        tasks_input="required",
+        accepts_settings=False,
+        accepts_init=False,
+        accepts_control=False,
+        shared_control=promoted.name,
+        data_settings=frozenset(),
+    )
     monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, promoted.name: promoted, shared.name: shared})
     monkeypatch.setitem(
         gate.CONTROLS,
@@ -427,6 +436,16 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     learning = presets.PRESETS["learning-medium"]
     data = presets.PRESETS["data-short"]
     long = presets.PRESETS["train-long"]
+    assert snowball.build_run(replace(learning, gated=False)).gate is None
+    with pytest.raises(click.BadParameter, match="accepts no --set"):
+        snowball.build_run(
+            replace(learning, accepts_settings=False), settings=("trainer.policy.optimizer_config.lr=2e-6",)
+        )
+    with pytest.raises(click.BadParameter, match="owned"):
+        snowball.build_run(
+            replace(learning, owned_keys=learning.owned_keys | {"trainer.policy.optimizer_config.lr"}),
+            settings=("trainer.policy.optimizer_config.lr=2e-6",),
+        )
 
     def run(preset=learning, *settings, **kwargs):
         return snowball.build_run(preset, settings=settings, **kwargs).runs[0]

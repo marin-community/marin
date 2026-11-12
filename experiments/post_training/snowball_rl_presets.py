@@ -27,9 +27,9 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     MegatronGeometry,
+    SkyRLGenerationPlan,
     SkyRLRolePlan,
     SkyRLRun,
-    role_plan_config_values,
 )
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from marin.training.training import LevanterCheckpoint
@@ -39,6 +39,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
 from skyrlrecipe import RecipePatch, sections
 from skyrlrecipe.documents import MISSING, get_path, merge_mappings, set_path
+from skyrlrecipe.sampling import EvalSamplingParams
 from skyrlrecipe.settings import parse_setting as typed_setting_value
 
 from experiments.post_training.task_curation.driver import CANONICAL_ARTIFACT_ROOT
@@ -217,7 +218,7 @@ class Evaluation:
 @dataclass(frozen=True)
 class Layout:
     name: str
-    role_plan: SkyRLRolePlan
+    role_plan: SkyRLRolePlan | SkyRLGenerationPlan
     megatron: MegatronGeometry
     cluster: str
     host_memory: str
@@ -248,12 +249,24 @@ class Preset:
     recipe: Recipe
     updates: int
     measured: range
+    tasks_input: Literal["forbidden", "required", "optional"]
+    accepts_settings: bool
+    accepts_init: bool
+    accepts_replicates: bool
+    accepts_control: bool
+    gated: bool
+    resume_mode: Literal["none", "latest"]
+    best_checkpoint_export: bool
+    publishes: bool
+    shared_control: str | None
+    owned_keys: frozenset[str]
+    setting_sections: frozenset[str] | None
+    data_settings: frozenset[str]
     tasks: str = _DEFAULT_TASKS
     model: ArtifactHfModel = _DEFAULT_MODEL
     patch: RecipePatch = field(default_factory=RecipePatch)
     eval_lite: str = _DEFAULT_EVAL_LITE
     evaluations: tuple[Evaluation, ...] = ()
-    keep_weights: bool = False
     checkpoint_every: int | None = None
     guards: tuple[Metric, ...] = ()
     objectives: tuple[Metric, ...] = ()
@@ -282,29 +295,24 @@ def override_document(settings: tuple[str, ...]) -> dict:
 
 
 def configure_evaluation(
-    evaluation: Evaluation, config: dict, tasks: ArtifactStep, *, revision: str
-) -> tuple[ArtifactDataSource, ...]:
+    evaluation: Evaluation, config: RecipePatch, tasks: ArtifactStep, *, revision: str
+) -> tuple[RecipePatch, tuple[ArtifactDataSource, ...]]:
     if evaluation.sample is not None:
         tasks = sampled_tasks_step(tasks, evaluation.file, evaluation.sample, SEED, revision=revision)
-    config["trainer"].update(eval_num_prompts=None, dump_eval_results=True)
-    sampling = (
-        {
-            "temperature": 0.0,
-            "top_p": 1.0,
-            "logprobs": None,
-            "ignore_eos": False,
-            "max_generate_length": EVAL_REPLY_TOKENS,
-        }
-        if evaluation.answers == 1
-        else {
-            "temperature": 1.0,
-            "top_p": 1.0,
-            "logprobs": None,
-            "ignore_eos": config["generator"]["sampling_params"]["ignore_eos"],
-        }
+    sampling = EvalSamplingParams(
+        temperature=0.0 if evaluation.answers == 1 else 1.0,
+        top_p=1.0,
+        logprobs=None,
+        ignore_eos=False if evaluation.answers == 1 else config.generator.sampling_params.ignore_eos,
+        **({"max_generate_length": EVAL_REPLY_TOKENS} if evaluation.answers == 1 else {}),
     )
-    config["generator"].update(eval_n_samples_per_prompt=evaluation.answers, eval_sampling_params=sampling)
-    return (ArtifactDataSource(tasks, relative_path=f"{evaluation.file}.parquet"),)
+    configured = config.merge(
+        RecipePatch(
+            trainer=sections.Trainer(eval_num_prompts=None, dump_eval_results=True),
+            generator=sections.Generator(eval_n_samples_per_prompt=evaluation.answers, eval_sampling_params=sampling),
+        )
+    )
+    return configured, (ArtifactDataSource(tasks, relative_path=f"{evaluation.file}.parquet"),)
 
 
 EVALUATIONS = MappingProxyType(
@@ -345,7 +353,7 @@ P40 = Layout(
     cluster="cw-us-east-02a",
     host_memory="1800GB",
 )
-E8 = replace(P40, name="e8", role_plan=replace(_P40_PLAN, generate_only=True))
+E8 = replace(P40, name="e8", role_plan=SkyRLGenerationPlan(_P40_PLAN))
 _LEARNING = Recipe(
     layout=P40,
     request_window_tokens=24576,
@@ -366,7 +374,54 @@ _GAPS = (
     Gap.NO_IMAGE_SANDBOX,
 )
 _PANEL = EVALUATIONS["eval_lite_100"]
+_BATCH_KEYS = frozenset(
+    {
+        "trainer.train_batch_size",
+        "trainer.policy_mini_batch_size",
+        "generator.n_samples_per_prompt",
+        "trainer.micro_train_batch_size_per_gpu",
+    }
+)
+_OWNED_KEYS = frozenset(
+    {
+        "entrypoint",
+        "trainer.resume_mode",
+        "trainer.placement",
+        "generator.trajectory_retention",
+        "generator.run_engines_locally",
+        "trainer.callbacks",
+        "trainer.ckpt_interval",
+        "trainer.hf_save_interval",
+    }
+) | (frozenset(_P40_PLAN.config_values()) - _BATCH_KEYS)
+_GATED_KEYS = frozenset(
+    {
+        "trainer.max_steps",
+        "trainer.seed",
+        "trainer.logger",
+        "trainer.project_name",
+        "context_budget",
+        "generator.sampling_params.ignore_eos",
+        "generator.sampling_params.min_tokens",
+    }
+)
+_SPEED_KEYS = frozenset(
+    {"generator.sampling_params.logprobs", "trainer.training_metrics", "generator.apply_overlong_filtering"}
+)
 _LEARNING_MEDIUM = Preset(
+    tasks_input="forbidden",
+    accepts_settings=True,
+    accepts_init=True,
+    accepts_replicates=True,
+    accepts_control=True,
+    gated=True,
+    resume_mode="none",
+    best_checkpoint_export=False,
+    publishes=True,
+    shared_control=None,
+    owned_keys=_OWNED_KEYS | _GATED_KEYS,
+    setting_sections=None,
+    data_settings=frozenset({"shuffle", "sampling"}),
     revision="2026.11.11.1",
     focus=Focus.LEARNING,
     duration=Duration.MEDIUM,
@@ -374,7 +429,6 @@ _LEARNING_MEDIUM = Preset(
     updates=25,
     measured=range(21, 26),
     evaluations=(replace(EVALUATIONS["eval_lite"], at_start=True),),
-    keep_weights=True,
     guards=(Metric("eval_lite/family_mean", True),),
     objectives=(Metric("eval_lite/family_mean", True), Metric("eval_lite/family_mean/gain_per_h100_hour", True)),
     gaps=_GAPS,
@@ -386,6 +440,19 @@ PRESETS = MappingProxyType(
         for preset in (
             Preset(
                 revision="2026.11.11.1",
+                tasks_input="forbidden",
+                accepts_settings=True,
+                accepts_init=False,
+                accepts_replicates=True,
+                accepts_control=True,
+                gated=True,
+                resume_mode="none",
+                best_checkpoint_export=False,
+                publishes=False,
+                shared_control=None,
+                owned_keys=_OWNED_KEYS | _GATED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
+                setting_sections=frozenset({"generator"}),
+                data_settings=frozenset(),
                 focus=Focus.SPEED,
                 duration=Duration.SHORT,
                 objectives=(Metric("generate/tokens_per_second_per_gpu", True),),
@@ -399,6 +466,19 @@ PRESETS = MappingProxyType(
             ),
             Preset(
                 revision="2026.11.11.1",
+                tasks_input="required",
+                accepts_settings=False,
+                accepts_init=False,
+                accepts_replicates=True,
+                accepts_control=True,
+                gated=True,
+                resume_mode="none",
+                best_checkpoint_export=False,
+                publishes=False,
+                shared_control=None,
+                owned_keys=_OWNED_KEYS | _GATED_KEYS | _BATCH_KEYS,
+                setting_sections=frozenset({"generator"}),
+                data_settings=frozenset(),
                 focus=Focus.DATA,
                 duration=Duration.SHORT,
                 objectives=(Metric("screen_256x4/mixed_fraction", True),),
@@ -412,6 +492,19 @@ PRESETS = MappingProxyType(
             ),
             Preset(
                 revision="2026.11.11.1",
+                tasks_input="forbidden",
+                accepts_settings=True,
+                accepts_init=False,
+                accepts_replicates=True,
+                accepts_control=True,
+                gated=True,
+                resume_mode="none",
+                best_checkpoint_export=False,
+                publishes=False,
+                shared_control=None,
+                owned_keys=_OWNED_KEYS | _GATED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
+                setting_sections=None,
+                data_settings=frozenset(),
                 focus=Focus.SPEED,
                 duration=Duration.MEDIUM,
                 objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.MEDIAN),),
@@ -437,6 +530,19 @@ PRESETS = MappingProxyType(
             ),
             Preset(
                 revision="2026.11.11.1",
+                tasks_input="forbidden",
+                accepts_settings=True,
+                accepts_init=False,
+                accepts_replicates=True,
+                accepts_control=True,
+                gated=True,
+                resume_mode="none",
+                best_checkpoint_export=False,
+                publishes=False,
+                shared_control=None,
+                owned_keys=_OWNED_KEYS | _GATED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
+                setting_sections=None,
+                data_settings=frozenset(),
                 focus=Focus.SPEED,
                 duration=Duration.LONG,
                 objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.MEDIAN),),
@@ -451,9 +557,31 @@ PRESETS = MappingProxyType(
                 budget="45-75 min; 30-50 H100-h",
             ),
             _LEARNING_MEDIUM,
-            replace(_LEARNING_MEDIUM, focus=Focus.DATA),
+            replace(
+                _LEARNING_MEDIUM,
+                focus=Focus.DATA,
+                tasks_input="required",
+                accepts_settings=False,
+                accepts_init=False,
+                accepts_control=False,
+                shared_control=_LEARNING_MEDIUM.name,
+                data_settings=frozenset(),
+            ),
             Preset(
                 revision="2026.11.11.1",
+                tasks_input="optional",
+                accepts_settings=True,
+                accepts_init=True,
+                accepts_replicates=False,
+                accepts_control=False,
+                gated=False,
+                resume_mode="latest",
+                best_checkpoint_export=True,
+                publishes=True,
+                shared_control=None,
+                owned_keys=_OWNED_KEYS,
+                setting_sections=None,
+                data_settings=frozenset({"shuffle", "sampling"}),
                 focus=Focus.TRAIN,
                 duration=Duration.LONG,
                 recipe=_ASYNC_P40,
@@ -461,7 +589,6 @@ PRESETS = MappingProxyType(
                 measured=range(1, 101),
                 evaluations=(replace(_PANEL, every=10, at_start=True),),
                 checkpoint_every=10,
-                keep_weights=True,
                 gaps=_GAPS,
             ),
         )
@@ -473,13 +600,9 @@ def run_name(preset: Preset, provenance: Provenance, inputs_hash: str, replicate
     if control:
         return control_name(preset.name, provenance.base_commit, replicate)
     name = f"{RUN_PREFIX}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
-    if preset.focus != Focus.TRAIN:
+    if preset.accepts_replicates:
         name += f"-r{replicate}"
     return user_owned_name(name)
-
-
-def gated(preset: Preset) -> bool:
-    return preset.focus != Focus.TRAIN
 
 
 def selection_summary(selection: ArtifactStep) -> dict:
@@ -542,7 +665,6 @@ BATCH_SETTINGS = {
     "generator.n_samples_per_prompt": "n_samples_per_prompt",
     "trainer.micro_train_batch_size_per_gpu": "micro_train_batch_size_per_gpu",
 }
-_COMPARISON_KEYS = {"trainer.max_steps", "trainer.seed", "trainer.logger", "trainer.project_name"}
 
 
 def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Preset) -> RecipePatch:
@@ -558,51 +680,16 @@ def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Prese
 
     trainer = values.get("trainer", {})
     generator = values.get("generator", {})
-    role_paths = set(role_plan_config_values(preset.recipe.layout.role_plan)) - BATCH_SETTINGS.keys()
     owners = {
-        "choose the preset's role plan": has("entrypoint"),
-        "checkpoint resume mode is fixed by the preset": has("trainer.resume_mode"),
+        "use the preset's declared owned keys": any(has(path) for path in preset.owned_keys),
         "choose network transport in Layout": any(key.startswith("NCCL_") for key in values.get("extra_env", {})),
-        "choose role geometry with Layout.role_plan": has("trainer.placement") or any(has(path) for path in role_paths),
-        "set checkpoint retention in the preset": has("generator.trajectory_retention"),
-        "choose the preset's Layout": has("generator.run_engines_locally"),
         "evaluation requests are fixed by the preset": (
             has("trainer.callbacks") or any(key.startswith("eval_") for key in (*trainer, *generator))
         ),
-        "set checkpoint frequency in the preset": has("trainer.ckpt_interval") or has("trainer.hf_save_interval"),
-        "select curated data with --tasks on a data or train-long preset": (
-            has("data")
-            and (
-                preset.focus not in (Focus.LEARNING, Focus.TRAIN)
-                or bool(values["data"].keys() - {"shuffle", "sampling"})
-            )
-        ),
-        "change the preset and recalibrate its control to keep runs comparable": (
-            preset.focus != Focus.TRAIN
-            and (
-                any(has(path) for path in _COMPARISON_KEYS)
-                or has("context_budget")
-                or has("generator.sampling_params.ignore_eos")
-                or has("generator.sampling_params.min_tokens")
-            )
-        ),
-        "keep mismatch metrics and fixed-length training masks enabled in speed presets": (
-            preset.focus == Focus.SPEED
-            and any(
-                has(path)
-                for path in (
-                    "generator.sampling_params.logprobs",
-                    "trainer.training_metrics",
-                    "generator.apply_overlong_filtering",
-                )
-            )
-        ),
-        "change batch shape only in a learning or train-long preset": (
-            preset.focus not in (Focus.LEARNING, Focus.TRAIN) and any(has(path) for path in BATCH_SETTINGS)
-        ),
-        "use generator performance keys; generate-only sampling belongs to the evaluation": (
-            preset.recipe.layout.role_plan.generate_only
-            and (bool(values.keys() - {"generator"}) or has("generator.sampling_params"))
+        "select curated data with --tasks": has("data") and bool(values["data"].keys() - preset.data_settings),
+        "use the preset's permitted setting sections": (
+            preset.setting_sections is not None
+            and (bool(values.keys() - preset.setting_sections) or has("generator.sampling_params"))
         ),
     }
     fix = next((message for message, owned in owners.items() if owned), None)

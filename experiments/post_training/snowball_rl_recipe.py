@@ -5,9 +5,7 @@
 
 from __future__ import annotations
 
-import json
 import math
-from copy import deepcopy
 from dataclasses import asdict, replace
 
 import click
@@ -40,7 +38,6 @@ from skyrlrecipe.declared import (
     HFModelSaveCallback,
 )
 from skyrlrecipe.documents import MISSING, get_path
-from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training.task_curation.selection import TRAIN_FILENAME, GraderKind
@@ -54,7 +51,8 @@ def _training_config(
     settings: tuple[str, ...],
 ) -> RecipePatch:
     recipe = preset.recipe
-    plan = recipe.layout.role_plan
+    selected = recipe.layout.role_plan
+    plan = selected.geometry if isinstance(selected, presets.SkyRLGenerationPlan) else selected
     geometry = asdict(recipe.layout.megatron)
     config = recipe.config.merge(
         RecipePatch(
@@ -69,7 +67,7 @@ def _training_config(
                 max_steps=preset.updates or 1,
                 micro_forward_batch_size_per_gpu=plan.micro_train_batch_size_per_gpu,
                 eval_interval=max(1, preset.updates) if preset.evaluations else -1,
-                resume_mode="latest" if preset.focus == presets.Focus.TRAIN else "none",
+                resume_mode=preset.resume_mode,
                 policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(**geometry)),
                 ref=sections.Ref(megatron_config=sections.RefMegatronConfig(**geometry)),
                 rollout_buffer=sections.RolloutBuffer(
@@ -107,7 +105,7 @@ def _callbacks(
     expected_tasks: int,
     model: SkyRLModelSource,
 ) -> tuple[Callback, ...]:
-    if preset.recipe.layout.role_plan.generate_only:
+    if isinstance(preset.recipe.layout.role_plan, presets.SkyRLGenerationPlan):
         return (EvaluationCallback(type="evaluation", additional_evaluations=profiles),) if profiles else ()
     callbacks: list[Callback] = []
     if preset.checkpoint_every:
@@ -122,7 +120,7 @@ def _callbacks(
                 **({"additional_evaluations": profiles} if profiles else {}),
             )
         )
-    if preset.focus == presets.Focus.TRAIN:
+    if preset.best_checkpoint_export:
         callbacks.extend(
             [
                 BestCheckpointCallback(
@@ -138,7 +136,7 @@ def _callbacks(
                 ),
             ]
         )
-    if preset.keep_weights and preset.focus != presets.Focus.TRAIN:
+    if preset.publishes and not preset.best_checkpoint_export:
         callbacks.extend(
             (
                 CheckpointCallback(type="checkpoint", save_steps=preset.updates + 1, save_on_train_end=True),
@@ -182,15 +180,20 @@ def run_spec(
         field: value for key, field in presets.BATCH_SETTINGS.items() if (value := get_path(initial, key)) is not MISSING
     }
     if batch_changes:
-        plan = replace(preset.recipe.layout.role_plan, **batch_changes)
+        selected = preset.recipe.layout.role_plan
+        plan = (
+            replace(selected, geometry=replace(selected.geometry, **batch_changes))
+            if isinstance(selected, presets.SkyRLGenerationPlan)
+            else replace(selected, **batch_changes)
+        )
         preset = replace(preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, role_plan=plan)))
     default = presets.default_selection(preset)
     selection = tasks or default
     _refuse_judged(presets.selection_summary(selection), "train")
     chosen = preset.evaluations
-    generating = preset.recipe.layout.role_plan.generate_only
-    config = _training_config(preset, settings).to_skyrl()
-    preset = replace(preset, updates=config["trainer"]["max_steps"])
+    generating = isinstance(preset.recipe.layout.role_plan, presets.SkyRLGenerationPlan)
+    config = _training_config(preset, settings)
+    preset = replace(preset, updates=config.trainer.max_steps)
     model = _model_input(preset, init)
     validation_data = ()
     evaluation_data = []
@@ -199,34 +202,43 @@ def run_spec(
     for index, evaluation in enumerate(chosen):
         evaluation_tasks = evaluation.tasks(selection, default, preset.eval_lite)
         _refuse_judged(presets.selection_summary(evaluation_tasks), evaluation.file)
-        profile_config = config if index == 0 else deepcopy(config)
-        sources = presets.configure_evaluation(evaluation, profile_config, evaluation_tasks, revision=preset.revision)
+        profile_config, sources = presets.configure_evaluation(
+            evaluation, config, evaluation_tasks, revision=preset.revision
+        )
         if index == 0:
+            config = profile_config
             validation_data = sources
             answer_count = presets.evaluation_answer_count(evaluation, evaluation_tasks)
             expected_tasks = answer_count // evaluation.answers
             if generating:
-                config["trajectory_runner"]["max_concurrent_tasks"] = answer_count
+                config = config.merge(
+                    RecipePatch(trajectory_runner=sections.TrajectoryRunner(max_concurrent_tasks=answer_count))
+                )
         else:
             evaluation_data.append((evaluation.name, sources))
             profiles[evaluation.name] = EvaluationSampling(
-                sampling_params=EvalSamplingParams.model_validate_json(
-                    json.dumps(profile_config["generator"]["eval_sampling_params"])
-                ),
-                n_samples_per_prompt=profile_config["generator"]["eval_n_samples_per_prompt"],
+                sampling_params=profile_config.generator.eval_sampling_params,
+                n_samples_per_prompt=profile_config.generator.eval_n_samples_per_prompt,
                 **({"schedule": "final"} if not generating else {}),
             )
-    config["trainer"]["callbacks"] = [
-        callback.to_skyrl()
-        for callback in _callbacks(preset, chosen[0] if chosen else None, profiles, expected_tasks, model)
-    ]
+    config = config.merge(
+        RecipePatch(
+            trainer=sections.Trainer(
+                callbacks=_callbacks(preset, chosen[0] if chosen else None, profiles, expected_tasks, model),
+            )
+        )
+    )
     plan = preset.recipe.layout.role_plan
     return SkyRLSpec(
         name=name,
         version=preset.revision,
-        config_yaml=yaml.safe_dump(SkyRLRecipe.from_document(config).to_skyrl(), sort_keys=False),
+        config_yaml=yaml.safe_dump(SkyRLRecipe.from_document(config.to_skyrl()).to_skyrl(), sort_keys=False),
         model=model,
-        train_data=(() if plan.generate_only else (ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),)),
+        train_data=(
+            ()
+            if isinstance(plan, presets.SkyRLGenerationPlan)
+            else (ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),)
+        ),
         validation_data=validation_data,
         evaluation_data=tuple(evaluation_data),
         topology=SkyRLTopology(num_nodes=plan.num_nodes, gpus_per_node=8, gpu_variant="H100", role_plan=plan),
@@ -256,5 +268,5 @@ def run_step(preset: presets.Preset, spec: SkyRLSpec, *, wandb_entity: str | Non
             required_env_vars=(("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)),
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
         ),
-        export_hf=preset.keep_weights,
+        export_hf=preset.publishes,
     )

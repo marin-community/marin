@@ -295,7 +295,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request, native_json):
             ).model_dump(mode="json"),
         )
         (root / ".executor_status").write_text("SUCCESS")
-        generating = preset.recipe.layout.role_plan.generate_only
+        generating = isinstance(preset.recipe.layout.role_plan, presets.SkyRLGenerationPlan)
         stored_metrics = {}
         for step in (0,) if generating else range(1, preset.updates + 1):
             row = deepcopy(NATIVE_RECORD["metrics"])
