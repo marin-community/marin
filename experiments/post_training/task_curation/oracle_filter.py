@@ -34,6 +34,7 @@ from taskcompendium.pipeline.oracle_filter import (
     OracleTaskReceipt,
     OracleTrialReceipt,
     ResourceCalibrationReceipt,
+    SourcePytestEnvironment,
     VerifierResourceProfile,
     has_oracle_solution,
     next_trial_requirements,
@@ -131,6 +132,7 @@ def trial_receipt(path: Path) -> OracleTrialReceipt:
     exit_path = path.parent / "agent/exit-code.txt"
     usage_path = path.parent / "agent/resource-usage.json"
     verifier_usage_path = path.parent / "verifier/resource-usage.json"
+    source_environment_path = path.parent / "verifier/source-environment.json"
     logs = []
     for name in ("agent/oracle.txt", "verifier/test-stdout.txt", "verifier/test-stderr.txt"):
         log = path.parent / name
@@ -154,6 +156,11 @@ def trial_receipt(path: Path) -> OracleTrialReceipt:
             else ResourceUsage()
         ),
         failure_log="\n".join(logs),
+        source_environment=(
+            SourcePytestEnvironment.model_validate_json(source_environment_path.read_text())
+            if source_environment_path.exists()
+            else None
+        ),
     )
 
 
