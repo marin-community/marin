@@ -75,7 +75,7 @@ def build_smoke(
         cluster="cw-us-east-08a",
         cluster_config="lib/iris/config/cw-us-east-08a.yaml",
         cpu=120,
-        memory="940GB",
+        memory="900GB",
         disk="2TB",
         priority="production",
         max_retries=0,
