@@ -24,6 +24,7 @@ import math
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from functools import partial
 from typing import Any, Protocol, override
 
@@ -172,13 +173,20 @@ class ClefDecisionModel(DecisionModelClient):
             raise RuntimeError(f"Decision model answered 200 without a score read: {error}") from error
 
 
-async def clef_healthy(source: EndpointSource, http: httpx.AsyncClient, *, timeout: float = HEALTH_TIMEOUT) -> bool:
+class ClefHealth(StrEnum):
+    HEALTHY = "healthy"
+    DOWN = "down"
+    UNSUPPORTED = "unsupported"
+    """The gateway has no health route (404 or 405): an older gateway, or a relay pointed at one."""
+
+
+async def clef_health(source: EndpointSource, http: httpx.AsyncClient, *, timeout: float = HEALTH_TIMEOUT) -> ClefHealth:
     """Whether the gateway, reached through ``source``, reports a bound and freshly checked Clef backend.
 
-    Anything but 200 within ``timeout`` (a 503, an unregistered relay, a transport error, a hang) reads as down.
+    A 503, any other non-200, an unregistered relay, a transport error or no answer within ``timeout`` is down.
     """
 
-    async def probe() -> int:
+    async def status() -> int:
         endpoint = await asyncio.to_thread(source.current)
         response = await http.get(
             f"{endpoint.base_url}{HEALTH_PATH}", headers={"Authorization": f"Bearer {endpoint.token}"}, timeout=timeout
@@ -186,10 +194,13 @@ async def clef_healthy(source: EndpointSource, http: httpx.AsyncClient, *, timeo
         return response.status_code
 
     try:
-        return await asyncio.wait_for(probe(), timeout) == 200
+        code = await asyncio.wait_for(status(), timeout)
     except (httpx.TransportError, RuntimeError, TimeoutError) as error:  # RuntimeError: no relay endpoint yet
         logging.info("%s: health read failed: %s", UNAVAILABLE_MARKER, type(error).__name__)
-        return False
+        return ClefHealth.DOWN
+    if code == 200:
+        return ClefHealth.HEALTHY
+    return ClefHealth.UNSUPPORTED if code in (404, 405) else ClefHealth.DOWN
 
 
 async def read(event: DecisionModelRead, client: DecisionModelClient, *, notify: Notify) -> DecisionModelLevel:

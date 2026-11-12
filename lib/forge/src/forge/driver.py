@@ -36,7 +36,7 @@ from forge.model.review import Incomplete
 from forge.model.workpiece import WORKPIECE, Submission, Terminal, Workpiece
 from forge.policy import Policy, load_policy, parse_overlay
 from forge.report import report
-from forge.resources.decision_model import clef_healthy
+from forge.resources.decision_model import ClefHealth, clef_health
 from forge.stages.classify import replayable_grade
 from forge.wiring import endpoint_source, install, runtime
 
@@ -253,10 +253,10 @@ async def one(args: argparse.Namespace) -> int:
     return DECISION_MODEL_HELD if decision_model_held(wp) else 0
 
 
-def decision_model_health(policy: Policy) -> Callable[[], Awaitable[bool]]:
+def decision_model_health(policy: Policy) -> Callable[[], Awaitable[ClefHealth]]:
     """The gateway's Clef health read on the decision model's own route, built on first use."""
 
-    async def healthy() -> bool:
+    async def health() -> ClefHealth:
         source = endpoint_source(
             os.environ.get("GLM_BASE_URL"),
             os.environ.get("GLM_RELAY_JOB"),
@@ -265,9 +265,9 @@ def decision_model_health(policy: Policy) -> Callable[[], Awaitable[bool]]:
             policy.setting("provider.pool", str),
         )
         async with httpx.AsyncClient() as http:
-            return await clef_healthy(source, http)
+            return await clef_health(source, http)
 
-    return healthy
+    return health
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -281,33 +281,51 @@ async def run(args: argparse.Namespace) -> None:
     failures: list[str] = []
     _, policy = run_policy(args.policy)
     retry_interval = policy.setting("decision_model.retry_interval", float)
-    healthy = decision_model_health(policy)
+    health = decision_model_health(policy)
     # Decision-model proposals wait here while the decision model is down. Every retry_interval the driver reads the
     # gateway's Clef health (never a Clef read); once healthy it resumes them all after a per-driver random delay,
-    # so drivers released by one Clef restart do not refill in the same second.
+    # so drivers released by one Clef restart do not refill in the same second. A gateway without the health route
+    # falls back to resuming one deferred proposal as a probe and the rest once it is not held.
     deferred: list[str] = []
-    down = False
+    down = probe_due = False
     next_probe = 0.0
     resume_at: float | None = None
+    probe: str | None = None
+    held_at = 0.0
+    warned_unsupported = False
     skipped = completed = submitted = held = 0
 
     async def advance_gate() -> None:
-        nonlocal down, next_probe, resume_at
-        if not down:
+        nonlocal down, next_probe, resume_at, probe_due, warned_unsupported
+        if not down or probe is not None or probe_due:
             return
         if resume_at is None and time.monotonic() >= next_probe:
             next_probe = time.monotonic() + retry_interval
-            if await healthy():
-                resume_at = time.monotonic() + random.uniform(0, retry_interval)
-                logging.info(
-                    "Decision model healthy; resuming %d deferred proposals within %gs", len(deferred), retry_interval
-                )
+            match await health():
+                case ClefHealth.HEALTHY:
+                    resume_at = time.monotonic() + random.uniform(0, retry_interval)
+                    logging.info(
+                        "Decision model healthy; resuming %d deferred proposals within %gs",
+                        len(deferred),
+                        retry_interval,
+                    )
+                case ClefHealth.UNSUPPORTED:
+                    if not warned_unsupported:
+                        logging.warning("Gateway has no Clef health route; probing with one deferred workpiece")
+                        warned_unsupported = True
+                    # As before the health route: the probe starts retry_interval after the latest hold.
+                    if time.monotonic() >= held_at + retry_interval:
+                        probe_due = True
+                    else:
+                        next_probe = held_at + retry_interval
+                case ClefHealth.DOWN:
+                    pass
         if resume_at is not None and time.monotonic() >= resume_at:
             logging.info("Decision model answered again; resuming %d deferred proposals", len(deferred))
             down, resume_at = False, None
 
     def gate_wake() -> float | None:
-        if not down:
+        if not down or probe is not None or probe_due:
             return None
         return max(0.0, (resume_at if resume_at is not None else next_probe) - time.monotonic())
 
@@ -318,6 +336,9 @@ async def run(args: argparse.Namespace) -> None:
             while len(active) < args.concurrency:
                 if deferred and not down:
                     path, resume = deferred.pop(0), True
+                elif deferred and probe_due:
+                    path, resume = deferred.pop(0), True
+                    probe, probe_due = path, False
                 elif not exhausted:
                     path = next(proposals, None)
                     if path is None:
@@ -352,15 +373,24 @@ async def run(args: argparse.Namespace) -> None:
                 for task in done:
                     path, _ = active.pop(task)
                     completed += 1
+                    was_probe = path == probe
+                    if was_probe:
+                        probe = None
                     if task.result() == DECISION_MODEL_HELD:
                         held += 1
-                        # Re-read health now: a hold can come from a wait that began before Clef returned.
-                        down, resume_at, next_probe = True, None, time.monotonic()
+                        # Re-read health now, since a hold can come from a wait that began before Clef returned;
+                        # a held probe waits out retry_interval as before.
+                        held_at = time.monotonic()
+                        down, resume_at = True, None
+                        next_probe = held_at + retry_interval if was_probe else held_at
                         deferred.append(path)
                         logging.warning(
                             "DECISION_MODEL_HELD %s: %d decision_model proposals deferred", path, len(deferred)
                         )
                         continue
+                    if was_probe:
+                        logging.info("Decision model answered again; resuming %d deferred proposals", len(deferred))
+                        down = False
                     if task.result() != 0:
                         failures.append(path)
             elif wake is not None:

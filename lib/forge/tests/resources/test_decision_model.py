@@ -40,7 +40,7 @@ from forge.model.stage import Exit
 from forge.model.workpiece import Conversation, Submission, Terminal, Workpiece
 from forge.policy import load_policy
 from forge.policy.defaults import DEFAULTS_DIR
-from forge.resources.decision_model import UNAVAILABLE_MARKER, ClefDecisionModel, clef_healthy
+from forge.resources.decision_model import UNAVAILABLE_MARKER, ClefDecisionModel, ClefHealth, clef_health
 from forge.resources.grading import GradeCandidate, GradingResource, ScriptedModel, candidate_turns
 from forge.resources.inference import InferenceClient
 from forge.resources.rollouts import RolloutResource
@@ -275,7 +275,7 @@ def test_driver_reads_the_decision_model_hold_the_coordinator_recorded(proposal:
     assert not decision_model_held(wp)
 
 
-async def test_clef_health_is_a_get_of_the_gateway_health_route_and_anything_but_200_is_down() -> None:
+async def test_clef_health_is_a_get_of_the_gateway_health_route_and_only_a_missing_route_is_unsupported() -> None:
     requests: list[tuple[str, str]] = []
 
     def gateway(status: int) -> httpx.AsyncClient:
@@ -293,9 +293,11 @@ async def test_clef_health_is_a_get_of_the_gateway_health_route_and_anything_but
         raise httpx.ConnectError("relay down")
 
     source = FixedEndpoint(GlmEndpoint("http://gateway/v1", "token", Pool.HIGH))
-    assert await clef_healthy(source, gateway(200))
-    assert not await clef_healthy(source, gateway(503))
-    assert requests == [("GET", "/v1/systemone/health")] * 2  # never a Clef read
-    assert not await clef_healthy(source, httpx.AsyncClient(transport=httpx.MockTransport(unreachable)))
+    statuses = {200: ClefHealth.HEALTHY, 503: ClefHealth.DOWN, 500: ClefHealth.DOWN}
+    statuses |= {404: ClefHealth.UNSUPPORTED, 405: ClefHealth.UNSUPPORTED}
+    for status, expected in statuses.items():
+        assert await clef_health(source, gateway(status)) is expected, status
+    assert requests == [("GET", "/v1/systemone/health")] * len(statuses)  # never a Clef read
+    assert await clef_health(source, httpx.AsyncClient(transport=httpx.MockTransport(unreachable))) is ClefHealth.DOWN
     hung = httpx.AsyncClient(transport=httpx.MockTransport(hang))
-    assert not await asyncio.wait_for(clef_healthy(source, hung, timeout=0.05), 5)
+    assert await asyncio.wait_for(clef_health(source, hung, timeout=0.05), 5) is ClefHealth.DOWN

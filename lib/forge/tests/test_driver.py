@@ -21,6 +21,7 @@ from forge.driver import eligible, inputs, proposal_bucket, proposal_key
 from forge.model.proposal import TASK_PROPOSAL, Environment, TaskProposal, Verification
 from forge.policy import load_policy
 from forge.policy.defaults import DEFAULTS_DIR
+from forge.resources.decision_model import ClefHealth
 from forge.resources.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT
 
 pytest_plugins = ("lib.forge.tests.test_proposal",)
@@ -157,42 +158,37 @@ def test_relay_reresolves_by_job_and_model_without_exposing_token(monkeypatch: p
         wiring.endpoint_source(None, None, "secret-token", "glm-5.3", pool)
 
 
-async def test_driver_defers_decision_model_proposals_while_held_and_resumes_them_from_the_log(
-    proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def run_gated(
+    proposal: TaskProposal,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    exits: dict[str, list[int]],
+    health: list[ClefHealth],
+) -> tuple[list[tuple[str, bool]], list[int], list[tuple[float, float]]]:
+    """Run a driver over slots 1-4 (1 and 3 decision_model) at concurrency 1; slot keys of ``exits`` are names."""
     kinds = {1: Verification.DECISION_MODEL, 2: Verification.CODE, 3: Verification.DECISION_MODEL, 4: Verification.CODE}
-    paths = []
+    paths = {}
     for slot, verification in kinds.items():
         path = tmp_path / "cap" / f"slot-{slot}.proposal.json"
         path.parent.mkdir(exist_ok=True)
         path.write_bytes(
             TASK_PROPOSAL.dump_json(replace(proposal, header=replace(proposal.header, verification=verification)))
         )
-        paths.append(str(path))
+        paths[f"slot-{slot}"] = str(path)
     manifest = tmp_path / "proposals.txt"
-    manifest.write_text("\n".join(paths) + "\n")
+    manifest.write_text("\n".join(paths.values()) + "\n")
     overlay = tmp_path / "overlay.json"
     overlay.write_text(json.dumps({"proposals.environments": ["container"], "decision_model.retry_interval": 0.2}))
-    # Slot 1 is held; the first health read finds Clef still down, the second finds it back.
-    exits = {paths[0]: [driver.DECISION_MODEL_HELD]}
+    codes = {paths[name]: list(values) for name, values in exits.items()}
     launches: list[tuple[str, bool]] = []
-    health = [False, True]
     reads: list[int] = []
     delays: list[tuple[float, float]] = []
-
-    async def healthy() -> bool:
-        reads.append(len(launches))
-        return health.pop(0)
-
-    def uniform(low: float, high: float) -> float:
-        delays.append((low, high))
-        return 0.05
 
     class FakeProcess:
         def __init__(self, command: list[str]) -> None:
             path = command[command.index("--proposals") + 1]
             launches.append((Path(path).name.split(".")[0], "--resume-held" in command))
-            self.code = exits.get(path, [0]).pop(0) if exits.get(path) else 0
+            self.code = codes[path].pop(0) if codes.get(path) else 0
 
         def wait(self) -> int:
             return self.code
@@ -200,9 +196,17 @@ async def test_driver_defers_decision_model_proposals_while_held_and_resumes_the
         def poll(self) -> int:
             return self.code
 
+    async def read_health() -> ClefHealth:
+        reads.append(len(launches))
+        return health.pop(0)
+
+    def uniform(low: float, high: float) -> float:
+        delays.append((low, high))
+        return 0.05
+
     monkeypatch.setattr(driver, "configure_coreweave_s3", lambda: None)
     monkeypatch.setattr(driver.subprocess, "Popen", FakeProcess)
-    monkeypatch.setattr(driver, "decision_model_health", lambda policy: healthy)
+    monkeypatch.setattr(driver, "decision_model_health", lambda policy: read_health)
     monkeypatch.setattr(driver.random, "uniform", uniform)
     args = argparse.Namespace(
         proposals=str(manifest),
@@ -218,6 +222,20 @@ async def test_driver_defers_decision_model_proposals_while_held_and_resumes_the
         revise=False,
     )
     await driver.run(args)
+    return launches, reads, delays
+
+
+async def test_driver_defers_decision_model_proposals_while_held_and_resumes_them_from_the_log(
+    proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Slot 1 is held; the first health read finds Clef still down (503), the second finds it back.
+    launches, reads, delays = await run_gated(
+        proposal,
+        tmp_path,
+        monkeypatch,
+        {"slot-1": [driver.DECISION_MODEL_HELD]},
+        [ClefHealth.DOWN, ClefHealth.HEALTHY],
+    )
     assert launches == [
         ("slot-1", False),  # held: Clef unavailable
         ("slot-2", False),  # slot-3 is deferred without a launch; other kinds continue
@@ -227,3 +245,26 @@ async def test_driver_defers_decision_model_proposals_while_held_and_resumes_the
     ]
     assert reads == [1, 3]  # health is read, not probed with a workpiece: nothing launched while Clef is down
     assert delays == [(0, 0.2)]  # each driver resumes at a random point within retry_interval
+
+
+async def test_driver_without_a_gateway_health_route_probes_with_one_workpiece(
+    proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An older gateway answers 404: one deferred workpiece probes; it is held once, then answers.
+    launches, reads, delays = await run_gated(
+        proposal,
+        tmp_path,
+        monkeypatch,
+        {"slot-1": [driver.DECISION_MODEL_HELD, driver.DECISION_MODEL_HELD]},
+        [ClefHealth.UNSUPPORTED] * 10,
+    )
+    assert launches == [
+        ("slot-1", False),
+        ("slot-2", False),
+        ("slot-4", False),
+        ("slot-1", True),  # the probe, still held
+        ("slot-3", True),  # the next probe answers; only then the rest
+        ("slot-1", True),
+    ]
+    assert reads == [1, 3, 4]  # at each hold and when retry_interval passes; none while a probe runs
+    assert delays == []
