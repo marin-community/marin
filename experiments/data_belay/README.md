@@ -143,7 +143,8 @@ Runs train main's fast-track dense model. Until 2026-11-12 they trained the dens
 on the `marin_belay_v1_recipe` branch: the validation runs below and the Datakit sweep, with run ids
 `dbelay-<rung>-…`. Both models read the same base cache with the same tokenizer, so the candidate caches and the
 dilution references carry over. The fast-track model adds GatedNorm, short convolutions, and sliding-window attention
-(one KV head at d512 and d768), and trains with MuonH. Its budget is 690 steps at d512 and 2,040 at d768, against 720 and 2,161.
+(one KV head at d512 and d768), and trains with MuonH. Its budget is 690 steps at d512 and 2,040 at d768, against
+720 and 2,161.
 
 Five validation arms reran on it at d512 and d768, and the null arm at d512 (`dbelay-main-…`). Each arm is judged
 with seeds 0–2 on both models, so the 6-seed vanilla arms below count their first 3 here:
