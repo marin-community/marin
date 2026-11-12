@@ -224,7 +224,6 @@ def main() -> None:
         plan = []
         handles = []
         client = current_client()
-        built_contexts = set()
         for group, rows in sorted(groups.items()):
             for start in range(0, len(rows), args.tasks_per_shard):
                 selected = rows[start : start + args.tasks_per_shard]
@@ -274,16 +273,6 @@ def main() -> None:
                     )
                 )
                 print(json.dumps({"job_id": job.job_id, "rows": len(selected)}), flush=True)
-                if group[0] not in built_contexts:
-                    ready = output / "shards" / f"{index:04d}" / "build-ready.json"
-                    while not ready.exists():
-                        state = job.status()
-                        if state in ("failed", "stopped", "succeeded"):
-                            raise RuntimeError(
-                                f"First actual data shard could not build context {group[0]}: {job.job_id}"
-                            )
-                        time.sleep(2)
-                    built_contexts.add(group[0])
         (output / "plan.json").write_text(
             json.dumps(
                 {

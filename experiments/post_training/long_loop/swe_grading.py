@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 TRUST = Path("/opt/long-loop-trusted")
+CONTROL_BIN = Path("/opt/long-loop-control-bin")
 WORKSPACE = Path("/testbed")
 AGENT_UID = 10001
 GRADER_UID = 10002
@@ -49,6 +50,7 @@ class TaskPins:
 def command(argv: list[str], *, cwd: Path, timeout: float, uid: int | None = None) -> subprocess.CompletedProcess:
     environment = {
         **os.environ,
+        "PATH": f"{CONTROL_BIN}:/usr/bin:/bin",
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": "/dev/null",
         "GIT_NO_REPLACE_OBJECTS": "1",
@@ -165,6 +167,19 @@ def bootstrap(pins: TaskPins) -> None:
     started = time.time()
     phases = {}
     TRUST.mkdir(mode=0o700)
+    CONTROL_BIN.mkdir(mode=0o755)
+    CONTROL_BIN.chmod(0o755)
+    executables = {}
+    for name in ("git", "tar", "setpriv", "python3", "verifyit", "chown", "chmod", "chgrp"):
+        executable = shutil.which(name)
+        if executable is None:
+            raise FileNotFoundError(f"Required task control executable is missing: {name}")
+        original = Path(executable).resolve()
+        if original.stat().st_mode & 0o022:
+            raise ValueError(f"Task control executable is writable by a non-root user: {original}")
+        (CONTROL_BIN / name).symlink_to(original)
+        executables[name] = str(Path(executable).absolute())
+    write_json(TRUST / "control-executables.json", executables)
     repo = TRUST / "repository.git"
     checked(command(["git", "init", "--bare", str(repo)], cwd=TRUST, timeout=120))
     checked(git(repo, "fetch", "--depth=2", pins.repository, pins.bug, pins.reference, timeout=pins.setup_timeout))
@@ -195,17 +210,20 @@ def bootstrap(pins: TaskPins) -> None:
         constraint = TRUST / "dependency-constraints.txt"
         constraint.write_text(pins.dependency_constraints)
         os.environ["PIP_CONSTRAINT"] = str(constraint)
-    setup = command(["bash", "-euo", "pipefail", "-c", pins.dependency_setup], cwd=WORKSPACE, timeout=pins.setup_timeout)
+    # Upstream setup runs before agent access in the task's original environment.
+    setup = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", pins.dependency_setup],
+        cwd=WORKSPACE,
+        capture_output=True,
+        timeout=pins.setup_timeout,
+        check=False,
+    )
     (TRUST / "setup.stdout").write_bytes(setup.stdout)
     (TRUST / "setup.stderr").write_bytes(setup.stderr)
     checked(setup)
     phases["declared_dependency_install"] = time.time() - dependencies_started
     freeze_started = time.time()
-    python = (
-        checked(command(["python3", "-I", "-S", "-c", "import sys; print(sys.executable)"], cwd=TRUST, timeout=30))
-        .decode()
-        .strip()
-    )
+    python = executables["python3"]
     info = json.loads(
         checked(
             command(
@@ -233,6 +251,25 @@ def bootstrap(pins: TaskPins) -> None:
     )
     for source, destination in {(info[k], target[k]) for k in ("purelib", "platlib")}:
         shutil.copytree(source, destination, dirs_exist_ok=True, symlinks=False)
+    # Console scripts must use the frozen interpreter too; retaining their
+    # original shebang would re-enter agent-writable installed packages.
+    for source in Path(info["scripts"]).iterdir():
+        if not source.is_file() or not os.access(source, os.X_OK):
+            continue
+        with source.open("rb") as stream:
+            first = stream.readline(4096)
+            if not first.startswith(b"#!"):
+                continue
+            interpreter = first[2:].strip().split()[0].decode(errors="replace")
+            if (
+                not interpreter.startswith("/")
+                or Path(interpreter).parent.resolve() != Path(python).parent.resolve()
+                or Path(interpreter).resolve() != Path(python).resolve()
+            ):
+                continue
+            destination = Path(target["scripts"]) / source.name
+            destination.write_bytes(f"#!{frozen}/bin/python\n".encode() + stream.read())
+            destination.chmod(0o755)
     inventory = (
         "import importlib.metadata as m,json,sys,pathlib; ds=list(m.distributions()); "
         "modules={n for d in ds "
@@ -286,6 +323,7 @@ def bootstrap(pins: TaskPins) -> None:
 
 def grade(tests: Path, logs: Path) -> None:
     """Grade only a descended candidate diff in a clean trusted repository."""
+    os.environ["PATH"] = f"{CONTROL_BIN}:/usr/bin:/bin"
     logs.mkdir(parents=True, exist_ok=True)
     pins = TaskPins(**json.loads((TRUST / "pins.json").read_text()))
     trusted_paths = (tests / "trusted_test_paths.txt").read_text().splitlines()
@@ -297,6 +335,7 @@ def grade(tests: Path, logs: Path) -> None:
         "dependencies.json",
         "candidate-modules.json",
         "bootstrap.json",
+        "control-executables.json",
         "setup.stdout",
         "setup.stderr",
     ):
@@ -349,7 +388,7 @@ def grade(tests: Path, logs: Path) -> None:
         # verifyit itself uses its image-owned uv tool environment. Only pytest
         # runs under the task's frozen Python, with no writable agent packages.
         wrapper = TRUST / "grade-python"
-        wrapper.write_text('#!/bin/sh\nexec python3 -I -S /opt/long-loop-swe/grading.py pytest -- "$@"\n')
+        wrapper.write_text(f'#!/bin/sh\nexec {CONTROL_BIN}/python3 -I -S /opt/long-loop-swe/grading.py pytest -- "$@"\n')
         wrapper.chmod(0o750)
         private_tests = TRUST / "tests"
         shutil.copytree(tests, private_tests, dirs_exist_ok=True)
@@ -423,6 +462,7 @@ def pytest_process(arguments: list[str]) -> None:
             raise ValueError(f"Unexpected verifyit scratch path: {parent}")
         os.chown(parent, GRADER_UID, GRADER_UID)
     os.environ["HOME"] = "/home/longloop-grade"
+    os.environ["PATH"] = f"{TRUST}/python/bin:{CONTROL_BIN}:/usr/bin:/bin"
     os.environ["PYTHONNOUSERSITE"] = "1"
     os.environ["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     for name in ("PYTHONPATH", "PYTHONHOME", "PYTEST_ADDOPTS"):

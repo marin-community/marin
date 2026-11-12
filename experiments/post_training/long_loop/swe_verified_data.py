@@ -126,7 +126,8 @@ def prepare_task(
         "tests/test.sh": (
             (
                 "#!/bin/bash\nset -euo pipefail\n"
-                f"exec python3 -I -S {GUEST_RUNTIME} grade --tests /tests --logs /logs/verifier\n"
+                f"exec /opt/long-loop-control-bin/python3 -I -S {GUEST_RUNTIME} "
+                "grade --tests /tests --logs /logs/verifier\n"
             ).encode()
         ),
         "environment/Dockerfile": files["environment/Dockerfile"] + IMAGE_LAYER.encode(),

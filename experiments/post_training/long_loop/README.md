@@ -250,6 +250,8 @@ the upstream dependency setup, then freezes trusted grading dependencies before
 the agent starts. Grading first checks HEAD ancestry, reconstructs a fresh source
 worktree, restores tests and pytest configuration, and runs the task tests with
 plugin autoload disabled. Agent package installations do not enter that interpreter.
+Root control commands use immutable bindings captured before agent access;
+grading console scripts use the frozen task interpreter rather than agent packages.
 Each grade preserves HEAD, candidate patch, import origins, package inventory and
 the verifier report. Candidate failures score zero; infrastructure failures remain
 unscored.
@@ -259,8 +261,9 @@ repository and image context. Submit its coordinator on RNO2A at production prio
 with the privileged container profile, an inherited HF secret and a three-day task
 timeout. It takes the pinned input prefix and manifest SHA, output prefix, job
 prefix, tasks per shard, setup timeout, verifier timeout and enclosing Harbor timeout
-as arguments. A shard starts with a real corpus task; its successful image build
-precedes fan-out for that context. This uses no RL allocation or model requests.
+as arguments. All shards are submitted directly; each builds its original task
+image and runs the controls with private userspace networking. This uses no RL
+allocation or model requests.
 
 `seal_swe_admission` requires a complete shard plan and exactly one receipt per
 original SWE task. Only a scored unfixed-bug zero and scored reference one admit a

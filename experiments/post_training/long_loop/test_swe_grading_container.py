@@ -37,13 +37,20 @@ def test_trusted_grading_ignores_mutable_agent_packages_and_pytest_hooks(tmp_pat
     git("config", "user.email", "fixture@example.invalid")
     (repository / "solution.py").write_text("VALUE = 1\n")
     (repository / "setup.py").write_text(
-        "from setuptools import setup\nsetup(name='fixture',version='1',py_modules=['solution'])\n"
+        "from setuptools import setup\nsetup(name='fixture',version='1',py_modules=['solution','fixture_cli'],"
+        "entry_points={'console_scripts':['fixture-value=fixture_cli:main']})\n"
+    )
+    (repository / "fixture_cli.py").write_text(
+        "import json,sys\nfrom solution import VALUE\n"
+        "def main(): print(json.dumps({'value':VALUE,'prefix':sys.prefix}))\n"
     )
     (repository / "tests").mkdir()
     (repository / "tests/test_value.py").write_text(
-        "import os,sys\nfrom solution import VALUE\n"
+        "import os,sys,json,subprocess\nfrom solution import VALUE\n"
         "def test_value():\n    assert VALUE == 1\n    assert os.getuid() == 10002\n"
         "    assert sys.prefix == '/opt/long-loop-trusted/python'\n"
+        "    cli=json.loads(subprocess.check_output(['fixture-value'],text=True))\n"
+        "    assert cli == {'value':1,'prefix':'/opt/long-loop-trusted/python'}\n"
     )
     git("add", ".")
     git("commit", "-qm", "reference")
@@ -58,7 +65,8 @@ def test_trusted_grading_ignores_mutable_agent_packages_and_pytest_hooks(tmp_pat
         "RUN python -m venv /opt/verifyit-control && /opt/verifyit-control/bin/pip install /opt/verifyit-source "
         "&& ln -s /opt/verifyit-control/bin/verifyit /usr/local/bin/verifyit "
         "&& pip install setuptools pytest pytest-json-report\n"
-        "RUN useradd -m -U -u 10001 longloop-agent && useradd -m -U -u 10002 longloop-grade\n"
+        "RUN useradd -m -U -u 10001 longloop-agent && useradd -m -U -u 10002 longloop-grade "
+        "&& chgrp longloop-agent /usr/local/bin && chmod g+w,+t /usr/local/bin\n"
         "COPY grading.py /opt/long-loop-swe/grading.py\nCOPY fixture /fixture\nRUN mkdir /testbed\nWORKDIR /\n"
     )
     pilot = DockerPilot(tmp_path)
@@ -90,7 +98,7 @@ def test_trusted_grading_ignores_mutable_agent_packages_and_pytest_hooks(tmp_pat
                 "docker",
                 "exec",
                 container,
-                "python3",
+                "/opt/long-loop-control-bin/python3",
                 "-I",
                 "-S",
                 "/opt/long-loop-swe/grading.py",
@@ -109,6 +117,13 @@ def test_trusted_grading_ignores_mutable_agent_packages_and_pytest_hooks(tmp_pat
             ["docker", "exec", container, "python3", "-I", "-S", "/opt/long-loop-swe/grading.py", "bootstrap", payload]
         )
         pilot.command(["docker", "cp", str(tests), f"{container}:/tests"])
+        inject_commands = (
+            "import pathlib; "
+            "payload='#!/bin/sh\\nid -u > /root/agent-command-executed\\nexit 0\\n'; "
+            "[(p.write_text(payload),p.chmod(0o755)) "
+            "for p in [pathlib.Path('/usr/local/bin')/n for n in ('git','tar','setpriv')]]"
+        )
+        pilot.command(["docker", "exec", "-u", "10001", container, "python3", "-c", inject_commands])
         assert grade("bug")["reward"] == 0
         forge = (
             "import pathlib,sysconfig; p=pathlib.Path(sysconfig.get_path('purelib')); "
@@ -131,9 +146,13 @@ def test_trusted_grading_ignores_mutable_agent_packages_and_pytest_hooks(tmp_pat
             ["docker", "exec", "-u", "10001", container, "sh", "-c", "printf 'VALUE=1\\n' > /testbed/solution.py"]
         )
         assert grade("fixed")["reward"] == 1
-        pilot.command(["docker", "exec", "-u", "10001", container, "git", "-C", "/testbed", "checkout", "-f", reference])
+        pilot.command(
+            ["docker", "exec", "-u", "10001", container, "/usr/bin/git", "-C", "/testbed", "checkout", "-f", reference]
+        )
         bypass = grade("wrong-branch")
         assert bypass["reward"] == 0 and bypass["detail"]["reason"] == "wrong_ancestry"
+        marker = pilot.command(["docker", "exec", container, "test", "-e", "/root/agent-command-executed"], check=False)
+        assert marker.returncode == 1
         baseline = json.loads(
             pilot.command(["docker", "exec", container, "cat", "/opt/long-loop-trusted/dependencies.json"]).stdout
         )

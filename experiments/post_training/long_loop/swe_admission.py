@@ -189,6 +189,7 @@ def run_controls(prepared: PreparedTask, image: str, directory: Path, *, network
                 "dependencies.json",
                 "candidate-modules.json",
                 "bootstrap.json",
+                "control-executables.json",
                 "setup.stdout",
                 "setup.stderr",
             ):
