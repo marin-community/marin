@@ -1472,7 +1472,8 @@ Evaluation and benchmark Use values receive a lexical receipt with status
 `measured (benchmark, not remediated)`. Expected self-matches stay in the
 measurement and matched-evaluation evidence. These receipts retain every task,
 name no new release, and never certify a training release. Use comes from the
-registered converter's `intended_use` and the explicit benchmark marker.
+registered converter's `intended_use`; the benchmark marker distinguishes
+evaluation benchmarks without overriding a declared training Use.
 
 After a full scan, apply the frozen Use declarations and produce the training
 review table before publishing any remediation versions:

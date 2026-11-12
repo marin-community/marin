@@ -11,9 +11,11 @@ import pyarrow as pa
 import pytest
 from finestore.rl.curation import DeconReceiptStatus, LexicalContaminationEvidence, LexicalUse
 from finestore.schema import arrow_schema
+from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.evaluation import EvalDataset
 from experiments.post_training.task_curation.lexical_policy import main, measurement_for_use, source_lexical_use
+from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.sources import all_sources
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 
@@ -95,3 +97,15 @@ def test_report_keeps_benchmarks_out_of_the_training_review_table(tmp_path, monk
     assert result["measurements"]["train"]["receipt"] is None
     assert result["measurements"]["eval"]["receipt"]["status"] == "measured (benchmark, not remediated)"
     assert result["measurements"]["eval"]["receipt"]["dropped_tasks"] == 0
+
+
+def test_training_use_keeps_benchmark_tagged_sources_in_remediation_review():
+    source = next(
+        source
+        for source in all_sources().values()
+        if isinstance(source.config, CurationRecipe)
+        and source.config.intended_use is IntendedUse.TRAIN
+        and "benchmark" in source.info.tags
+    )
+    assert source_lexical_use(source) is LexicalUse.TRAIN
+    assert measurement_for_use(overlap_measurement(source.dataset.name), source_lexical_use(source)).receipt is None
