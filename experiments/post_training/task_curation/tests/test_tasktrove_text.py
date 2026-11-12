@@ -35,7 +35,8 @@ from taskcompendium.runtime.task_grading import grade_task
 from verifyit.candidate import grade_candidate
 from verifyit.execution.worker import call_bounded
 from verifyit.grade import Status
-from verifyit.spec import RUBRIC_CHECKLIST, RUBRIC_REFERENCE, ExactSpec, JudgeSpec, MathSpec, McqSpec
+from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.spec import RUBRIC_CHECKLIST, RUBRIC_LABELS, RUBRIC_REFERENCE, ExactSpec, JudgeSpec, MathSpec, McqSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove import calendar as calendar_sources
 from experiments.post_training.task_curation.datasets.tasktrove import (
@@ -53,6 +54,7 @@ from experiments.post_training.task_curation.tests.conversion import (
     fixture_context,
     tasktrove_row,
 )
+from experiments.post_training.task_curation.tests.review_server import JudgeReply
 
 FIXTURES = Path(__file__).parent / "fixtures"
 RECIPES = {
@@ -392,11 +394,40 @@ def test_judged_task_keeps_source_criteria_question_and_judge_files():
     assert isinstance(task.grader, VerifyitGrader)
     spec = verifyit_spec(task.grader)
     assert isinstance(spec, JudgeSpec)
-    assert (spec.rubric, spec.criteria, spec.question) == (RUBRIC_CHECKLIST, STACK_CRITERIA, STACK_QUESTION)
+    assert spec.rubric == RUBRIC_LABELS
+    assert json.loads(spec.references[0]) == stack_data()["rubric"]
+    assert spec.question == prompt_of(task)
     verifier = verifier_files(task)
     assert verifier["source/judge.toml"] == JUDGE_TOML.encode()
     assert json.loads(verifier["source/verifier_data.json"])["score_threshold"] == 0.5
     assert prompt_of(task) == f"{STACK_QUESTION}\nReturn your final, comprehensive assistant response."
+
+
+def test_tiered_source_grades_through_the_remote_boundary_without_a_grader_image(review_server):
+    task = task_of("tasktrove-unix", ROWS["tasktrove-unix"])
+    assert isinstance(task.grader, VerifyitGrader)
+    assert task.grader.environment is None
+    connection = JudgeConnection(f"http://127.0.0.1:{review_server.server_port}/v1", "fixture-key")
+    review_server.judge_replies = [JudgeReply("CORRECT"), JudgeReply("INCORRECT")]
+    results = []
+    for candidate in ("A complete answer.", "An unrelated answer.", ""):
+        attempt = GradingAttempt(
+            ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=candidate)))
+        )
+        results.append(grade_task(task, attempt, judge_connection=connection))
+
+    assert [(result.status, result.reward) for result in results] == [
+        (Outcome.GRADED, 1.0),
+        (Outcome.GRADED, 0.0),
+        (Outcome.SUBMISSION_FAILURE, 0.0),
+    ]
+    assert len(review_server.requests) == 2
+    for request in review_server.requests:
+        assert request["model"] == "MiniMaxAI/MiniMax-M3-MXFP8"
+        assert request["temperature"] == 0.7
+        assert request["chat_template_kwargs"] == {"thinking_mode": "adaptive"}
+        assert prompt_of(task) in request["messages"][-1]["content"]
+        assert all(criterion in request["messages"][-1]["content"] for criterion in STACK_CRITERIA)
 
 
 def test_judged_principles_become_criteria_without_numbering():

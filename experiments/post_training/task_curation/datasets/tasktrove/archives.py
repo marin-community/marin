@@ -83,7 +83,7 @@ class TaskTroveConverter:
             )
         existing = {resource.path for resource in (*task.resources.all, *task.resources.oracle)}
         # Oracle controls may upload these files through runtimes without timestamp support.
-        oracle = task.resources.oracle + tuple(
+        oracle = tuple(resource.model_copy(update={"mtime_ns": None}) for resource in task.resources.oracle) + tuple(
             archive_resource(row.data, path).model_copy(update={"mtime_ns": None})
             for path in row.data["files"]
             if path not in existing and not path.startswith(("tests/", "setup_files/"))
