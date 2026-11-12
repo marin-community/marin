@@ -173,6 +173,13 @@ the assigned backend's `roles` counts for each role. Daytona safety counts only
 actor snapshots and actor refusals; a reply-only task has no Daytona actor and
 is N/A. LOCAL grader quota or feature failures remain visible independently.
 Backend names are never distribution features.
+The map carries the catalog's `grading_environment` census unchanged; its
+required/declared boundary counts and mismatch reasons come from converted-row
+evidence. The loader rejects a map carrying different grading evidence.
+The offline `daytona_census` command measures registered converters' TaskSpec
+outputs before admission gates and records admission rejections separately.
+An all-rejected population retains its measured execution cost and a BAD
+curation result. A converter emitting no TaskSpecs is an ingestion failure.
 The loader checks schema, snapshot and source coverage and stages the matrix and
 source maps under the catalog load ID before its conditional atomic selection.
 Changing a survey refreshes an otherwise unchanged catalog. A failed import

@@ -173,6 +173,7 @@ TASK_FIELDS = {
     "resources": (Requirement.FILE_UPLOAD,),
     "tags": (),
     "labels": (),
+    "integrity_contract": (Requirement.USER, Requirement.PROCESS, Requirement.FILESYSTEM, Requirement.FILE_MODE),
 }
 
 SCRIPT_GRADER_FIELDS = {

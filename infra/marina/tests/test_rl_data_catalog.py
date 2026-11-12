@@ -81,6 +81,7 @@ def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:
                 resource_ranges={},
                 backends={},
                 role_backend_assignments={},
+                grading_environment=None,
             )
             for source in catalog.sources(snapshot.snapshot_id)
         ],
