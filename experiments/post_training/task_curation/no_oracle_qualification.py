@@ -49,7 +49,6 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from experiments.post_training.task_curation.calibforge_rebuild import iter_task_payloads
 from experiments.post_training.task_curation.no_oracle_liveness import (
     UNKNOWN_BASE,
     LivenessOutcome,
@@ -58,6 +57,7 @@ from experiments.post_training.task_curation.no_oracle_liveness import (
 )
 from experiments.post_training.task_curation.no_oracle_preservation import PreservationResult, check_preservation
 from experiments.post_training.task_curation.no_oracle_setup import SetupExecution, _execute_lowered, _execute_setups
+from experiments.post_training.task_curation.task_tars import iter_task_payloads
 
 
 @dataclass(frozen=True)
@@ -221,6 +221,8 @@ def main() -> None:
     parser.add_argument("--task", action="append", default=[], help="limit to these task ids")
     parser.add_argument("--liveness", type=Path, help="JSONL receipts from no_oracle_liveness")
     args = parser.parse_args()
+    if args.stub_apt and (not args.docker or args.lowered):
+        parser.error("--stub-apt requires --docker without --lowered")
 
     bases = manifest_bases(args.rebuild_out / "manifest.json")
     rebuilt = dict(iter_task_payloads(args.rebuild_out / "pending-tasks.parquet"))

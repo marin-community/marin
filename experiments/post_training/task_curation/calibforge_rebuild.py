@@ -56,6 +56,7 @@ from experiments.post_training.task_curation.calibforge_fixtures import (
     copy_commands,
     copy_target,
     fixture_generator,
+    setup_script_name,
     teardown_commands,
 )
 from experiments.post_training.task_curation.environment import dockerfile_lines
@@ -71,7 +72,7 @@ from experiments.post_training.task_curation.lowered_envelope import (
     LoweredSpec,
     MachineShape,
 )
-from experiments.post_training.task_curation.task_tars import open_task_tar
+from experiments.post_training.task_curation.task_tars import iter_task_payloads, open_task_tar
 
 REBUILT = "rebuilt_pending_oracle_and_admission"
 DEFERRED = "deferred"
@@ -99,7 +100,7 @@ SETUP_FAILURES = {
 }
 """Tasks excluded from the cohort because their own setup does not complete."""
 
-_META_COMMANDS = {"from", "cmd", "entrypoint", "label", "expose", "stopsignal", "healthcheck", "shell"}
+_META_COMMANDS = {"from", "cmd", "entrypoint", "label", "expose", "stopsignal", "healthcheck"}
 _INNOCUOUS_RUN = {"mkdir", "chmod", "touch", "ln", "rm"}
 
 
@@ -218,11 +219,10 @@ def _pack_tar(files: dict[str, bytes], modes: dict[str, int]) -> bytes:
 def compile_recipe(instructions: list[Instruction], files: dict[str, bytes], modes: dict[str, int]) -> CompiledRecipe:
     """Compile a native recipe into a base, workdir, setup script and fixture archive.
 
-    The compiled script must run the task's full native recipe: dependency
-    installs move into the setup script verbatim, file copies are staged from
-    the fixture payload, and ENV assignments persist in the setup script. A
-    step that cannot run that way without changing the task defers with the
-    reason admission records.
+    Dependency installs run verbatim, copies come from the fixture payload,
+    and ENV assignments persist in the setup script. Task execution supersedes
+    container startup directives and metadata. Unsupported build steps defer
+    with the reason admission records.
     """
     bases = [item for item in instructions if item.command == "from"]
     if len(bases) != 1:
@@ -454,11 +454,6 @@ LOWERED_RUNTIME = MachineShape(cpus=NORMALIZED_CPUS, memory_mb=NORMALIZED_MEMORY
 """The machine shape every lowered task declares."""
 
 
-def setup_script_name(command: str) -> str:
-    """The script filename a rebuilt task's setup command ends with."""
-    return command.split()[-1].rsplit("/", 1)[-1]
-
-
 def lowered_task_spec(task_id: str, task_binary: bytes) -> LoweredSpec:
     """Lower a rebuilt task into the rollout envelope preserving its workspace, setup and verifier."""
     with open_task_tar(task_binary) as archive:
@@ -536,15 +531,6 @@ class TaskEvidence:
             "setup_sha256": self.setup_sha256,
             "archive_sha256": self.archive_sha256,
         }
-
-
-def iter_task_payloads(path: Path):
-    """Each (task_id, payload) pair in a cohort parquet's ``task_binary`` column."""
-    parquet = pq.ParquetFile(path)
-    for batch in parquet.iter_batches(batch_size=64, columns=["path", "task_binary"]):
-        columns = batch.to_pydict()
-        for task_id, blob in zip(columns["path"], columns["task_binary"], strict=True):
-            yield task_id, bytes(blob)
 
 
 @dataclass(frozen=True)

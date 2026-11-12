@@ -70,6 +70,10 @@ def teardown_commands() -> tuple[str, str]:
     return (f"rm -f {SETUP_ROOT}/{FIXTURE_ARCHIVE} {SETUP_ROOT}/{SETUP_SCRIPT}", f"rmdir {SETUP_ROOT}")
 
 
+def setup_script_name(command: str) -> str:
+    return command.split()[-1].rsplit("/", 1)[-1]
+
+
 def fixture_generator(arguments: list[str], copied_files: set[str]) -> bool:
     """Whether this RUN invokes a staged fixture-generating script.
 
