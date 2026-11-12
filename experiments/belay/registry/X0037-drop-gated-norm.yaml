@@ -97,7 +97,8 @@ trials:
   batch: X0037
   date: '2026-11-12'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0037
-  wandb: []
+  wandb:
+  - belay-X0037d512-seed0
   settings:
     embed_gated_norm: 'false'
     final_gated_norm: 'false'
