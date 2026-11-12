@@ -11,6 +11,7 @@ from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
     ITEMS,
     POPULATIONS,
+    RUNS,
     Assessment,
     AssessmentAttempt,
     AssessmentItem,
@@ -28,7 +29,6 @@ from finestore.store import DataStore
 from rigging.filesystem.distributed_lock import LeaseLostError, LocalFileLease
 
 from experiments.post_training.task_curation.catalog_snapshot import publish_catalog
-from experiments.post_training.task_curation.curation_catalog import RUNS
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 

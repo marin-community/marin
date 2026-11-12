@@ -1,5 +1,11 @@
 # Task data curation
 
+To add a dataset to the RL Data Atlas, start with the Atlas
+[Getting started](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/guide.html)
+page. It shows every ingestion path, what each outcome guarantees and live
+per-outcome source counts. Its source is
+[`guide.html`](../../../infra/marina/apps/rl_data_catalog/dist/guide.html).
+
 [Dataset declarations](datasets/README.md) feed TaskSpec conversion and the RL
 Data Atlas through [all_sources()](sources.py). See the
 [reference](../../../docs/references/task-curation.md) for source fields, grading,
@@ -163,7 +169,7 @@ For a production FULL campaign, add
 Enable assessment and omit `--cache-dir`, which selects local execution and a
 local artifact root. Production reuses the remote artifact cache under
 `--artifact-root` (default `s3://marin-us-east-02a/marin`) and model requests under
-the explicit `--review-cache`. Reuse those locations, pinned inputs, recipe
+`--review-cache` (default `<artifact-root>/rl-data/review-cache`). Reuse those locations, pinned inputs, recipe
 versions, rubric and model revisions across campaigns. A new report directory or
 enabling assessment does not force recomputation of completed work. Switching
 artifact roots does not move cached work; verify artifact and model-cache reuse
@@ -301,7 +307,8 @@ checkpoint, retrieval instruction and normalization. `--worker-cpu` and
 The model loads inside workers when an embedding batch has cache misses.
 
 `--cache-dir` selects local workers and artifacts. `--review-cache` selects the
-shared inference cache, defaulting locally to `<cache-dir>/review-cache`.
+shared inference cache, defaulting to `<cache-dir>/review-cache` locally and
+`<artifact-root>/rl-data/review-cache` otherwise.
 Keep it across campaigns and worker-count changes. FineStore caches vectors by
 rendered text and embedding specification; Zephyr writes vector Parquet.
 Alignment reads that Parquet and keeps the curriculum matrix in worker memory.

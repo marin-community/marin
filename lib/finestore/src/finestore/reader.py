@@ -702,7 +702,7 @@ class _ReadOperations:
                     rows = rows.drop_columns([SystemColumns.GENERATION])
                 else:
                     rows = rows.select([name for name in columns if name in rows.column_names])
-                yield from rows.to_pylist()
+                yield from rows.to_pylist(maps_as_pydicts="strict")
 
     def point(self, table: str, **keys) -> dict | None:
         plan = self._read_plan(table, None, [(key, "==", value) for key, value in keys.items()])
@@ -719,7 +719,7 @@ class _ReadOperations:
             result = _scan_plan(plan, None, history_floor=self._history_floor)
         if result is None or result.num_rows == 0:
             return None
-        return result.slice(0, 1).to_pylist()[0]
+        return result.slice(0, 1).to_pylist(maps_as_pydicts="strict")[0]
 
     def _lookup_rows(
         self,

@@ -29,6 +29,7 @@ from experiments.post_training.task_curation.prebuilt import (
     PrebuiltCohort,
     import_harbor_prebuilt,
     import_prebuilt,
+    import_taskcompendium_prebuilt,
 )
 from experiments.post_training.task_curation.source import (
     RlDataSource,
@@ -40,6 +41,7 @@ from experiments.post_training.task_curation.source import (
 TASK_TROVE_PUBLIC = "open-athena/task-trove"
 PUBLIC_STAGED_REVISION = "5d6a5c9cbbf1541ae7325cbdba290a102ab05ca0"
 CAMPAIGN_ISSUE = "https://github.com/marin-community/marin/issues/10305"
+CAMPAIGN_SUFFIX = "taskcompendium-20261112"
 
 STAGE3_IMAGE_CAVEAT = (
     "Container image material is host-local and excluded from the screened release, so this "
@@ -71,6 +73,56 @@ def _rebuilt_cohort(config: PrebuiltCohort, info: SourceInfo) -> RlDataSource[Pr
         pipeline=import_prebuilt,
         config=config,
         info=replace(info, count=config.expected_rows, dataset=config.dataset),
+    )
+
+
+def _qa_cohort(config: PrebuiltCohort, info: SourceInfo) -> RlDataSource[PrebuiltCohort]:
+    """A conversation-only QA cohort admitted from its published canonical task specs."""
+    return RlDataSource(
+        pipeline=import_taskcompendium_prebuilt,
+        config=config,
+        info=replace(info, count=config.expected_rows, dataset=config.dataset),
+    )
+
+
+def _tasktrove_qa_release(
+    name: str,
+    title: str,
+    family: str,
+    revision: str,
+    expected_rows: int,
+    evidence: str,
+    recipe_revision: str,
+    notes: str,
+    tags: tuple[str, ...] = ("rlvr", "single-turn", "campaign-release", "converted"),
+) -> RlDataSource[PrebuiltCohort]:
+    """A privately published, QA-qualified TaskTrove cohort pending release."""
+    config = PrebuiltCohort(
+        name=f"{name}-qa",
+        version="2026.11.12.1",
+        repo=f"open-athena/tasktrove-{name}-{CAMPAIGN_SUFFIX}",
+        revision=revision,
+        expected_rows=expected_rows,
+    )
+    return _qa_cohort(
+        config,
+        SourceInfo(
+            id=f"Campaign Release:tasktrove-{name}-qa",
+            title=title,
+            origin="Task Trove",
+            family=family,
+            tags=tags,
+            oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+            oversight=OversightEvidence(
+                campaign="RL Data Atlas",
+                recipe_revision=recipe_revision,
+                verification=evidence,
+                level=OversightLevel.SAMPLE,
+                reviewed=expected_rows,
+                admitted=expected_rows,
+            ),
+            notes=notes,
+        ),
     )
 
 
@@ -1074,5 +1126,184 @@ def sources() -> list[RlDataSource]:
                     evidence_url=_pinned_blob(staged_v2, "manifest.json"),
                 ),
             )
+        ),
+        # RL Data Atlas QA campaigns: eight TaskTrove cohorts privately published after
+        # conversion-fidelity, grader-soundness and blinded-reference review. Each
+        # pinned revision's build.json records the measured rejections, dedup collapse
+        # and row counts; the evidence strings below carry the measured results.
+        # Conversation-only tasks import their canonical task specs without a runtime
+        # envelope; sample controls ran on the archive-wide seeded samples, not the
+        # full populations.
+        _tasktrove_qa_release(
+            "math_oracle",
+            "TaskTrove math oracle QA cohort (TaskCompendium)",
+            "math-answer",
+            revision="1ac3735fcbd85bb059053b37d1c5891622e4fc5a",
+            expected_rows=57424,
+            recipe_revision="datasets/tasktrove/math.py v3; TaskTrove @ 02923004846e",
+            evidence=(
+                "All 57,777 rows re-converted and compared row-by-row against the archive with zero "
+                "discrepancies; 353 unparsable-reference rows rejected at conversion. Contained grader "
+                "controls on the 24-task seeded sample: golden 23/24 (the failing task is the "
+                "unparseable-reference row, now rejected), empty 24/24, wrong 24/24. Blinded review: "
+                "19/19 solved cases agree."
+            ),
+            notes=(
+                "5,000-scale scalar sympy compare with hidden gold references. 353 rows whose typed "
+                "references the production math-verify parser rejects are excluded at admission. "
+                "Private release; conversation-only tasks import canonical task specs. The pinned "
+                "cohort revision was downloaded back and every task hash re-validated."
+            ),
+        ),
+        _tasktrove_qa_release(
+            "math_stack",
+            "TaskTrove math stack-exchange QA cohort (TaskCompendium)",
+            "math-answer",
+            revision="2cef971f0e6de40011aa5b5a423aca97be27cac7",
+            expected_rows=110604,
+            recipe_revision="datasets/tasktrove/math.py v3; TaskTrove @ 02923004846e",
+            evidence=(
+                "All 110,730 rows re-converted and compared row-by-row against the archive (the single "
+                "pre-existing reviewed defect unchanged); 125 unparsable-reference rows rejected at "
+                "conversion. Contained grader controls on the 24-task seeded sample: 72/72. Blinded "
+                "review: 20/20 solved cases agree."
+            ),
+            notes=(
+                "Typed sympy comparison with per-task oracle. 125 rows whose typed references the "
+                "production math-verify parser rejects are excluded at admission. Private release; "
+                "conversation-only tasks import canonical task specs. The pinned cohort revision was "
+                "downloaded back and every task hash re-validated."
+            ),
+        ),
+        _tasktrove_qa_release(
+            "math_openreasoning",
+            "TaskTrove math open-reasoning QA cohort (TaskCompendium)",
+            "math-answer",
+            revision="af81284226c98852a60e0946ec084867e22875e1",
+            expected_rows=42621,
+            recipe_revision="datasets/tasktrove/math.py v3; TaskTrove @ 02923004846e",
+            evidence=(
+                "All 42,636 rows re-converted and compared row-by-row against the archive with zero "
+                "discrepancies; 15 unparsable-reference rows rejected at conversion. Contained grader "
+                "controls on the 24-task seeded sample: 72/72. Blinded review: 16/16 addressed cases "
+                "agree; 2 sampled rows carry suspected conversion defects (statements unanswerable as "
+                "converted), recorded in the audit evidence."
+            ),
+            notes=(
+                "Rigorous scalar/interval/set/tuple/equation verifier with oracle. 15 rows whose typed "
+                "references the production math-verify parser rejects are excluded at admission. "
+                "Private release; conversation-only tasks import canonical task specs. The pinned "
+                "cohort revision was downloaded back and every task hash re-validated."
+            ),
+        ),
+        _tasktrove_qa_release(
+            "math_gym",
+            "TaskTrove math gym QA cohort (TaskCompendium)",
+            "math-answer",
+            revision="8b9af73ebed3b62f5a73dacf6c238cf2d82391ef",
+            expected_rows=3941,
+            recipe_revision="datasets/tasktrove/math.py v3; TaskTrove @ 02923004846e",
+            evidence=(
+                "All 4,096 rows re-converted and compared row-by-row against the archive with zero "
+                "discrepancies; 155 unparsable-reference rows rejected at conversion. Contained grader "
+                "controls on the 24-task seeded sample: 72/72. Blinded review: 7/7 solved cases agree "
+                "(35% of cases solvable within the review's budget; the rest excluded as "
+                "competition-difficulty with coverage reported)."
+            ),
+            notes=(
+                "Strict trailing boxed compare with no oracle. 155 rows whose typed references the "
+                "production math-verify parser rejects are excluded at admission. Private release; "
+                "conversation-only tasks import canonical task specs. The pinned cohort revision was "
+                "downloaded back and every task hash re-validated."
+            ),
+        ),
+        _tasktrove_qa_release(
+            "math_prism",
+            "TaskTrove math prism QA cohort (TaskCompendium)",
+            "math-answer",
+            revision="ddb6f6cc8dbb09638d496739ab204b3ba5c6c37e",
+            expected_rows=2221,
+            recipe_revision="datasets/tasktrove/math.py v3; TaskTrove @ 02923004846e",
+            evidence=(
+                "All 2,404 rows re-converted and compared row-by-row against the archive with zero "
+                "discrepancies; 2 unparsable-reference rows rejected at conversion; 181 exact duplicates "
+                "collapse under the pipeline dedup key, 2,221 retained. Contained grader controls on the "
+                "24-task seeded sample: 72/72. Blinded review: 5 agree, 1 solver error admitted after the "
+                "reference was verified correct, 1 reference answer proven impossible for the stated "
+                "graph (spanning trees of a unicyclic 20-vertex graph cannot exceed the cycle length of "
+                "20; the row records 147), 1 statement-ambiguity mismatch."
+            ),
+            notes=(
+                "Symbolic exact compare with hidden gold references. Data-quality caveat: blinded review "
+                "found a provably wrong reference answer in the sampled rows, so the source's reference "
+                "data is noisy even though its grader mechanics are sound. Private release; "
+                "conversation-only tasks import canonical task specs. The pinned cohort revision was "
+                "downloaded back and every task hash re-validated."
+            ),
+        ),
+        _tasktrove_qa_release(
+            "safety",
+            "TaskTrove safety QA cohort (TaskCompendium)",
+            "llm-judge-freeform",
+            revision="b4f15e07796b5bea1f311892583ecce129efe0fa",
+            expected_rows=44939,
+            recipe_revision="datasets/tasktrove/judged.py v3; MEDIUM tier under RUBRIC_CHECKLIST",
+            evidence=(
+                "All 89,066 rows re-converted and compared row-by-row against the archive with zero "
+                "discrepancies; 44,127 exact duplicates collapse under the pipeline dedup key, 44,939 "
+                "retained. MEDIUM-tier checklist judge e2e on the 10-task seeded sample through the "
+                "production grading boundary at temperature 0.7: 29/30 as expected (one conservative "
+                "0.5 on a wrong submission expected to score 0.0). Self-judged verdicts recorded "
+                "before any judge run."
+            ),
+            notes=(
+                "Judge-only against a per-prompt two-line safety principle. No endpoint is hard-coded "
+                "in any task spec; the MEDIUM JUDGE_TIERS definition pins model and completion settings. "
+                "Private release; conversation-only tasks import canonical task specs. The pinned cohort "
+                "revision was downloaded back and every task hash re-validated."
+            ),
+        ),
+        _tasktrove_qa_release(
+            "knowledge-openqa",
+            "TaskTrove knowledge open-QA QA cohort (TaskCompendium)",
+            "qa-short-answer",
+            revision="f8f83ffcc9779f8314f381a095de2d29525e48dc",
+            expected_rows=122314,
+            recipe_revision="datasets/tasktrove/qa.py v5; MEDIUM JUDGE_TIERS pin; TaskTrove @ 02923004846e",
+            evidence=(
+                "All 122,357 rows re-converted and compared row-by-row against the archive with zero "
+                "discrepancies; 43 exact duplicates collapse under the pipeline dedup key, 122,314 "
+                "retained. MEDIUM-tier reference judge e2e on the 10-task seeded sample through the "
+                "production grading boundary at temperature 0.7: 30/30 as expected."
+            ),
+            notes=(
+                "Exact gate then reference-based judge. No endpoint is hard-coded in any task spec; "
+                "the MEDIUM JUDGE_TIERS definition pins model and completion settings. Private release; "
+                "conversation-only tasks import canonical task specs. The pinned cohort revision was "
+                "downloaded back and every task hash re-validated."
+            ),
+        ),
+        _tasktrove_qa_release(
+            "science-openqa",
+            "TaskTrove science open-QA QA cohort (TaskCompendium)",
+            "llm-judge-freeform",
+            revision="e3b624988578da13c523fcc3e39e65f752a781ff",
+            expected_rows=150644,
+            recipe_revision="datasets/tasktrove/qa.py v5; HEAVY JUDGE_TIERS pin; TaskTrove @ 02923004846e",
+            evidence=(
+                "All 150,644 rows re-converted and compared row-by-row against the archive with zero "
+                "discrepancies; no dedup collisions. HEAVY-tier reference judge e2e on the 10-task "
+                "seeded sample through the production grading boundary against the pinned GLM relay at "
+                "temperature 0.7: 30/30 as expected, including the small-angle leniency trap flagged "
+                "before the run."
+            ),
+            notes=(
+                "Reference answer plus scientific-equivalence judge. The tier is chosen for the source "
+                "(the archive demonstrably contains operator-algebra equivalence items a MEDIUM judge "
+                "would mis-grade). No endpoint is hard-coded in any task spec; the HEAVY JUDGE_TIERS "
+                "definition pins model and completion settings. Private release; conversation-only "
+                "tasks import canonical task specs. The pinned cohort revision was downloaded back and "
+                "every task hash re-validated."
+            ),
         ),
     ]

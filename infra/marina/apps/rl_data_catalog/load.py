@@ -21,10 +21,12 @@ from taskcompendium.source_fingerprints import SourceIdentitySurvey
 MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
 DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
+LOADER_VERSION = 2
+"""Bump when loaded rows change shape; a load from an older loader is restaged even for the same snapshot."""
 TABLE_COLUMNS = {
     "sources": (
         "id TEXT, declaration JSONB, assessment_key TEXT, latest_attempt_key TEXT, "
-        "latest_attempt_status TEXT, reason TEXT, curation JSONB, diagnostics JSONB, "
+        "latest_attempt_status TEXT, reason TEXT, curation JSONB, diagnostics JSONB, updated_at TIMESTAMPTZ, "
         "source_fingerprint JSONB, duplicate_group JSONB"
     ),
     "assessments": (
@@ -94,7 +96,8 @@ def load_catalog(
     survey_id = canonical_sha256(backend_map.model_dump(mode="json"))
     current = query(
         """
-        SELECT c.load_id, l.catalog_root, l.snapshot_id, b.survey_id, i.survey_id AS identity_id FROM atlas_current c
+        SELECT c.load_id, l.catalog_root, l.snapshot_id, l.loader_version,
+            b.survey_id, i.survey_id AS identity_id FROM atlas_current c
         JOIN atlas_loads l USING (load_id)
         LEFT JOIN atlas_backend_surveys b USING (load_id)
         LEFT JOIN atlas_identity_surveys i USING (load_id) WHERE c.name = 'latest'
@@ -104,11 +107,13 @@ def load_catalog(
     if current and (
         current[0]["catalog_root"],
         current[0]["snapshot_id"],
+        current[0]["loader_version"],
         current[0]["survey_id"],
         current[0]["identity_id"],
     ) == (
         catalog.root,
         snapshot.snapshot_id,
+        LOADER_VERSION,
         survey_id,
         identity_id,
     ):
@@ -128,21 +133,26 @@ def load_catalog(
 
     execute(
         """
-        INSERT INTO atlas_loads (load_id, catalog_root, snapshot_id, created_at)
-        VALUES (:load_id, :catalog_root, :snapshot_id, :created_at)
+        INSERT INTO atlas_loads (load_id, catalog_root, snapshot_id, created_at, loader_version)
+        VALUES (:load_id, :catalog_root, :snapshot_id, :created_at, :loader_version)
     """,
         {
             "load_id": load_id,
             "catalog_root": catalog.root,
             "snapshot_id": snapshot.snapshot_id,
             "created_at": snapshot.created_at,
+            "loader_version": LOADER_VERSION,
         },
     )
     sources = list(catalog.sources(snapshot.snapshot_id))
     if len(sources) != snapshot.source_count:
         raise ValueError("Catalog inventory does not cover its declared source count")
+
+    starts = catalog.source_starts()
+
     if {source.id for source in sources} != {source.source_id for source in backend_map.sources}:
         raise ValueError("Backend map does not cover the selected catalog inventory")
+
     if {source.id for source in sources} != set(identities.fingerprints):
         raise ValueError("Source identity map does not cover the selected catalog inventory")
     source_declarations = {source.id: source.declaration for source in sources}
@@ -156,6 +166,7 @@ def load_catalog(
         "sources": [
             {
                 **row.model_dump(mode="json", exclude={"snapshot_id"}),
+                "updated_at": starts[row.id].isoformat() if row.id in starts else None,
                 "source_fingerprint": (
                     identities.fingerprints[row.id].model_dump(mode="json")
                     if identities.fingerprints[row.id] is not None

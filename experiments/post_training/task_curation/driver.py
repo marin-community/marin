@@ -72,6 +72,11 @@ from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURR
 LOCAL_MAX_WORKERS = 4
 LOCAL_MEMORY = "4g"
 LOCAL_NORMALIZED_SHARDS = 4
+IRIS_MAX_WORKERS = 64
+IRIS_COORDINATOR_MEMORY = "16g"
+IRIS_NORMALIZED_SHARDS = 32
+REVIEW_CACHE_DIRECTORY = "rl-data/review-cache"
+"""Shared model-request cache under the artifact root; request keys carry the model, revision and prompt."""
 WORKER_CONTAINER_PROFILE = "CONTAINER_PROFILE_PRIVILEGED"
 IRIS_JOB_TTL = 1800
 CORPUS_CONVERSION_VERSION = "2026.10.14.1"
@@ -365,12 +370,22 @@ def _embedding_pass(
         click.echo(json.dumps({"stage": stage, "root": result.path, "paths": result.paths}, indent=2))
 
 
+def default_review_cache(cache_dir: Path | None, artifact_root: str) -> str:
+    """The model-request cache beside the run's artifacts: the local cache directory or the artifact root."""
+    if cache_dir is not None:
+        return str(cache_dir / "review-cache")
+    return str(StoragePath(artifact_root) / REVIEW_CACHE_DIRECTORY)
+
+
 @click.command(help=__doc__)
 @click.option("--model", default=GLM_MODEL, show_default=True)
 @click.option("--model-revision", help="Required when a recipe uses model review.")
 @click.option("--base-url", help="OpenAI-compatible review endpoint; defaults to the relay job's endpoint.")
 @click.option("--relay-job", default=DEFAULT_GLM_RELAY_JOB, show_default=True, help="Iris GLM relay job to resolve.")
-@click.option("--review-cache", help="Required when a recipe uses model review.")
+@click.option(
+    "--review-cache",
+    help=f"Model-request cache; defaults to CACHE_DIR/review-cache locally or ARTIFACT_ROOT/{REVIEW_CACHE_DIRECTORY}.",
+)
 @click.option("--review-mode", type=click.Choice(["batch", "chat"]), help="Required when a recipe uses model review.")
 @click.option(
     "--review-concurrency",
@@ -387,13 +402,21 @@ def _embedding_pass(
 @click.option("--representation", type=click.Choice(["direct", "rewrite"]), default="direct", show_default=True)
 @click.option("--embedding-sample-size", type=click.IntRange(min=1), help="Seeded embedding sample per source.")
 @click.option("--catalog-root", help="Immutable directory containing curriculum.json; defaults to TASK_CURRICULUM.")
-@click.option("--max-workers", type=click.IntRange(min=1), help="Local default: 4; required for Iris execution.")
+@click.option(
+    "--max-workers",
+    type=click.IntRange(min=1),
+    help=f"Default: {LOCAL_MAX_WORKERS} locally, {IRIS_MAX_WORKERS} on Iris.",
+)
 @click.option("--worker-cpu", type=click.FloatRange(min=0, min_open=True), help="CPU cores per Zephyr worker.")
 @click.option("--worker-memory", help="RAM per Zephyr worker; defaults to 8g for embeddings.")
-@click.option("--coordinator-memory", help="Iris coordinator RAM, e.g. 16g; required for Iris execution.")
-@click.option("--normalized-shards", type=click.IntRange(min=1), help="Local default: 4; required for Iris recipes.")
+@click.option("--coordinator-memory", help=f"Iris coordinator RAM; default {IRIS_COORDINATOR_MEMORY}.")
+@click.option(
+    "--normalized-shards",
+    type=click.IntRange(min=1),
+    help=f"Default: {LOCAL_NORMALIZED_SHARDS} locally, {IRIS_NORMALIZED_SHARDS} on Iris.",
+)
 @click.option("--concurrent-sources", type=click.IntRange(min=1), default=10, show_default=True)
-@click.option("--worker-image", help="Zephyr worker image; required for Iris execution.")
+@click.option("--worker-image", help="Zephyr worker image override; defaults to the cluster's task image.")
 @click.option(
     "--container-profile",
     default=None,
@@ -564,16 +587,13 @@ def main(
         cache_dir = Path.home() / ".cache/marin"
     if cache_dir is None and (input_root is not None or local_files or auxiliary):
         raise click.UsageError("Local input options require local execution")
+    review_cache = review_cache or default_review_cache(cache_dir, artifact_root)
     if corpus is not None and embed is None:
         assert selection_recipe is not None
         _selection_pass(_corpus_sources(corpus), selection_recipe, cache_dir=cache_dir, do_run=do_run)
         return
-    if embed is not None:
-        review_cache = review_cache or (str(cache_dir / "review-cache") if cache_dir else None)
-        if review_cache is None:
-            raise click.UsageError("Embedding requires --review-cache (or --cache-dir)")
-        if representation == "rewrite" and model_revision is None:
-            raise click.UsageError("Rewrites require --model-revision")
+    if embed is not None and representation == "rewrite" and model_revision is None:
+        raise click.UsageError("Rewrites require --model-revision")
     description_model = (
         DescriptionModel(model, model_revision) if representation == "rewrite" and model_revision else None
     )
@@ -594,9 +614,7 @@ def main(
             else None
         ),
     )
-    max_workers = max_workers if max_workers is not None else (LOCAL_MAX_WORKERS if cache_dir else None)
-    if max_workers is None:
-        raise click.UsageError("Iris execution requires --max-workers")
+    max_workers = max_workers if max_workers is not None else (LOCAL_MAX_WORKERS if cache_dir else IRIS_MAX_WORKERS)
     pool = CampaignPool(
         max_workers,
         concurrent_sources,
@@ -606,7 +624,7 @@ def main(
         # must request the profile the workers will run under.
         coordinator_resources=ResourceConfig(
             cpu=1,
-            ram=coordinator_memory or LOCAL_MEMORY,
+            ram=coordinator_memory or (LOCAL_MEMORY if cache_dir else IRIS_COORDINATOR_MEMORY),
             preemptible=False,
             container_profile=worker_resources.container_profile,
         ),
@@ -618,7 +636,6 @@ def main(
     )
     embedding = None
     if embed is not None:
-        assert review_cache is not None
         embedding = partial(
             _embedding_pass,
             catalog_root=catalog_root,
@@ -703,10 +720,6 @@ def main(
         raise click.UsageError(
             "Local execution does not accept --worker-image, --container-profile or --coordinator-memory"
         )
-    if coordinator_memory is None and cache_dir is None:
-        raise click.UsageError("SAMPLE/FULL requires --coordinator-memory")
-    if worker_image is None and cache_dir is None:
-        raise click.UsageError("SAMPLE/FULL requires --worker-image")
     if report_path is None and cache_dir is None:
         raise click.UsageError("SAMPLE/FULL requires --report-path")
     review = (
@@ -716,13 +729,15 @@ def main(
     )
     recipe_settings = RecipeSettings(
         review=review,
-        review_cache=review_cache or (str(cache_dir / "review-cache") if cache_dir else None),
+        review_cache=review_cache,
         base_url=base_url,
         api_key=os.environ.get(GLM_BULK_TOKEN_ENV),
         relay_job=relay_job,
         review_concurrency=review_concurrency,
         normalized_shards=(
-            normalized_shards if normalized_shards is not None else (LOCAL_NORMALIZED_SHARDS if cache_dir else None)
+            normalized_shards
+            if normalized_shards is not None
+            else (LOCAL_NORMALIZED_SHARDS if cache_dir else IRIS_NORMALIZED_SHARDS)
         ),
         machines=CampaignMachines(
             image_factory=_image_factory(Backend(image_backend) if image_backend is not None else None, controller_url),
@@ -738,9 +753,9 @@ def main(
     options = PipelineOptions(processing_mode, runtime, inputs=inputs, recipe_settings=recipe_settings)
     assessment = None
     if assess:
-        if review is None or recipe_settings.review_cache is None:
+        if review is None:
             raise click.UsageError(
-                "Assessment requires --model-revision, --review-mode and a review cache; use --skip-assessment to skip"
+                "Assessment requires --model-revision and --review-mode; use --skip-assessment to skip"
             )
         rubric = ASSESSMENT_RUBRIC
         if assessment_rubric is not None:
@@ -785,6 +800,7 @@ def main(
             plan = campaign_plan(steps, pool)
             plan["cache_dir"] = str(cache_dir) if cache_dir else None
             plan["report_path"] = report_path
+            plan["review_cache"] = review_cache
             plan["publication_catalog"] = publication_root
             plan["quality_policy"] = {"sample_size": quality_sample_size, "seed": seed}
             plan["embedding_stage"] = embed

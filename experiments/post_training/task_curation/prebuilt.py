@@ -21,6 +21,7 @@ import tomllib
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from functools import partial
 from pathlib import Path
 
@@ -154,24 +155,119 @@ def import_harbor_cohort(config: PrebuiltCohort) -> str:
     return str(local)
 
 
+def import_taskcompendium_cohort(config: PrebuiltCohort) -> str:
+    """Validate canonical tasks without requiring a machine for conversation-only graders."""
+    local = Path(
+        hf_hub_download(
+            repo_id=config.repo, repo_type=config.repo_type, filename=TASKS_FILENAME, revision=config.revision
+        )
+    )
+    seen = set()
+    for batch in pq.ParquetFile(local).iter_batches(batch_size=32):
+        for row in batch.to_pylist():
+            serialized = row["task_spec"]
+            task = TaskSpec.model_validate_json(serialized)
+            if hashlib.sha256(serialized.encode()).hexdigest() != row["task_sha256"]:
+                raise ValueError(f"Published task differs from its recorded hash: {task.id}")
+            if task.id in seen:
+                raise ValueError(f"Duplicate published task: {task.id}")
+            seen.add(task.id)
+            reason = missing_environment(task.model_dump(mode="json"))
+            if reason is not None:
+                raise ValueError(f"{task.id}: {reason}")
+    if len(seen) != config.expected_rows:
+        raise ValueError(f"{config.repo}@{config.revision} has {len(seen)} rows, expected {config.expected_rows}")
+    return str(local)
+
+
+class PrebuiltEncoding(StrEnum):
+    LOWERED = "lowered_task_spec"
+    CANONICAL = "task_spec"
+
+
 @dataclass(frozen=True)
 class PrebuiltImport:
     output_path: str
     cohort: PrebuiltCohort
     mode: SourceProcessingMode
     task_format: TaskFormat
+    encoding: PrebuiltEncoding
 
 
 def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
     """Read the pinned lowered cohort into admitted corpus views."""
-    return prebuilt_artifact(source, options, import_cohort, task_format=TaskFormat.TASKCOMPENDIUM)
+    return prebuilt_artifact(
+        source, options, import_cohort, task_format=TaskFormat.TASKCOMPENDIUM, encoding=PrebuiltEncoding.LOWERED
+    )
 
 
 def import_harbor_prebuilt(
     source: RlDataSource[PrebuiltCohort], options: PipelineOptions
 ) -> ArtifactStep[CampaignArtifact]:
     """Admit native Harbor packages through exact bug/reference control receipts."""
-    return prebuilt_artifact(source, options, import_harbor_cohort, task_format=TaskFormat.HARBOR)
+    return prebuilt_artifact(
+        source, options, import_harbor_cohort, task_format=TaskFormat.HARBOR, encoding=PrebuiltEncoding.CANONICAL
+    )
+
+
+def import_taskcompendium_prebuilt(
+    source: RlDataSource[PrebuiltCohort], options: PipelineOptions
+) -> ArtifactStep[CampaignArtifact]:
+    """Admit a qualified canonical TaskCompendium release without lowering its tasks again."""
+    return prebuilt_artifact(
+        source,
+        options,
+        import_taskcompendium_cohort,
+        task_format=TaskFormat.TASKCOMPENDIUM,
+        encoding=PrebuiltEncoding.CANONICAL,
+    )
+
+
+QUICK_VIEW_VERSION = "2026.11.12"
+"""Format version of the converted view a QUICK pass writes; the cohort revision is in the step identity."""
+COHORT_INTENDED_USE = "train"
+"""Published campaign cohorts are RL training populations."""
+
+
+def cohort_task_json(tasks: Path) -> list[str]:
+    """Each row's TaskSpec as canonical JSON, from a lowered envelope or a native Harbor package."""
+    columns = pq.ParquetFile(tasks).schema_arrow.names
+    rows = pq.read_table(tasks).to_pylist()
+    if "lowered_task_spec" in columns:
+        return [TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"]).model_dump_json() for row in rows]
+    return [TaskSpec.model_validate_json(row["task_spec"]).model_dump_json() for row in rows]
+
+
+def _quick_view(config: PrebuiltCohort, tasks: Path, destination: str) -> CampaignArtifact:
+    """Write the validated cohort as the converted view that QUICK consumers, such as embedding, read.
+
+    QUICK admits nothing. Every published row is a converted task, so there are no rejections.
+    """
+    task_json = cohort_task_json(tasks)
+    root = StoragePath(destination)
+    normalize = root / "normalize"
+    with (normalize / "part-00000.parquet").open("wb") as handle:
+        pq.write_table(pa.table({"task_json": task_json}), handle)
+    manifest = {
+        "status": "completed",
+        "mode": SourceProcessingMode.QUICK.value,
+        "repo": config.repo,
+        "revision": config.revision,
+        "intended_use": COHORT_INTENDED_USE,
+        "input_rows": len(task_json),
+        "converted_rows": len(task_json),
+        "rejections": {},
+    }
+    (root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    return CampaignArtifact(
+        status="completed",
+        result=PipelineResult(
+            status="completed",
+            outputs={"normalize": str(normalize)},
+            evidence={"manifest": str(root / "manifest.json")},
+            stages=("download", "validate", "normalize"),
+        ),
+    )
 
 
 def prebuilt_artifact(
@@ -180,30 +276,33 @@ def prebuilt_artifact(
     load: Callable[[PrebuiltCohort], str],
     *,
     task_format: TaskFormat,
+    encoding: PrebuiltEncoding,
 ) -> ArtifactStep[CampaignArtifact]:
     """Publish validated rows and corpus views while preserving their controlled package bytes."""
     if "excluded" in source.info.tags:
         raise ValueError(f"Published cohort is excluded pending qualification: {source.name}")
-    if source.admission_blockers:
+    if options.mode is not SourceProcessingMode.QUICK and source.admission_blockers:
         raise ValueError(f"Source {source.name} cannot admit tasks: {'; '.join(source.admission_blockers)}")
     config = source.config
     assert config is not None
-    if options.mode is SourceProcessingMode.QUICK:
-        raise ValueError(f"A published cohort is imported for admission, not for a quick pass: {source.name}")
+    quick = options.mode is SourceProcessingMode.QUICK
 
     def build_config(context) -> PrebuiltImport:
-        return PrebuiltImport(context.output_path, config, options.mode, task_format)
+        return PrebuiltImport(context.output_path, config, options.mode, task_format, encoding)
 
     def run(invocation: PrebuiltImport) -> CampaignArtifact:
         local = Path(load(invocation.cohort))
+        if invocation.mode is SourceProcessingMode.QUICK:
+            return _quick_view(invocation.cohort, local, invocation.output_path)
         destination = Path(invocation.output_path)
+
         destination.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(local, destination / TASKS_FILENAME)
         tasks = []
         grading: Counter[str] = Counter()
         oracle_filter = None
         for row in pq.read_table(local).to_pylist():
-            if invocation.task_format is TaskFormat.HARBOR:
+            if invocation.encoding is PrebuiltEncoding.CANONICAL:
                 serialized = row["task_spec"]
                 task = TaskSpec.model_validate_json(serialized)
                 original_path = task.source.row
@@ -230,7 +329,7 @@ def prebuilt_artifact(
                     oracle_filter,
                     (
                         json.loads(row["lowered_task_spec"])["runtime"]
-                        if invocation.task_format is TaskFormat.TASKCOMPENDIUM
+                        if invocation.encoding is PrebuiltEncoding.LOWERED
                         else None
                     ),
                 ):
@@ -274,7 +373,7 @@ def prebuilt_artifact(
 
     return ArtifactStep(
         name=config.name,
-        version=config.version,
+        version=QUICK_VIEW_VERSION if quick else config.version,
         artifact_type=CampaignArtifact,
         run=partial(run),
         build_config=build_config,

@@ -66,19 +66,63 @@ no current grade; archived evidence remains available. Inventory-only sources
 carry a skip reason. Source details show the latest curation outcome; the
 assessment page shows the curation associated with its selected grade.
 
+## Getting started page
+
+**Getting started** (`guide.html`) explains, for a reader new to Marin, every
+path from a candidate dataset to an Atlas source: the task format gate,
+environment fidelity, curation modes, qualification, Daytona safety and
+publication. It states what each outcome guarantees and links each step to the
+normative section of the [task curation reference](task-curation.md) and to the
+enforcing code. Per-outcome counts, Daytona labels and oracle-validation counts
+are computed in the browser from the same `/sources` response as **By source**,
+so they follow each catalog load without a code release. Sources from snapshots
+published before declarations carried an oversight level count as *oversight
+not declared*. Edit the rules in the reference first, then the page text in
+`infra/marina/apps/rl_data_catalog/dist/guide.html`, and release the app.
+
 ## Browsing sources
 
-**By source** lists individual sources with their catalog, converted example
-count, training/evaluation use, current sampled quality, any independent QC the
-pinned release performed, whether the source is Daytona safe, and the curriculum domain
-with the most mapped examples. Search names, datasets or tags; filter by catalog,
-use or quality; select a column heading to sort. Filters and sorting are included in the URL. CSV export
+**By source** lists individual sources with their converted example count,
+training/evaluation use, Quality, Result, Daytona label, the curriculum subject
+with the most converted tasks, the selected catalog snapshot’s load time
+(**Last updated**, UTC) and a link to its evidence page. Catalog
+tabs show per-catalog counts. Search names, datasets or tags, filter by use,
+Quality or Result, and select a column heading to sort. The default view hides
+QUICK-quality and BAD-result sources; **Show QUICK-quality and BAD-result
+sources** turns that off. Filters and sorting are included in the URL. CSV export
 includes the filtered rows in the displayed order.
+
+
+[Quality and result](task-curation.md#quality-and-result) defines both labels.
+Examples, Use and Top curriculum area come from the declaration's measured
+[coverage](task-curation.md#coverage); a declaration from an older snapshot
+without coverage falls back to the selected curriculum release.
+
+**Daytona** shows N/A for non-agentic sources. Zero snapshots alone does not establish that no machine is used; a grader-only host image can still be Unsafe.
+An agentic source shows Safe or Unsafe with its measured unique snapshot count
+against the limit of ten, or *Unknown (not measured)* when its declaration records no
+production snapshot-identity measurement.
+
+**Likely duplicates** fold into one entry. A `/sources` row may carry
+`duplicate_group`, an object with `group_id`, `canonical_source_id` and a `members` list.
+Each member records `source_id` and its measured `overlap_with_canonical` (or null
+when unavailable). The view shows the canonical member with an expandable list of
+the others. The groups remain advisory; the complete recorded opinions are served
+by `/source-duplicates`. Rows without a group stay ungrouped. Source details and
+evidence pages show the source's backend requirements and per-role assignments.
+
+**Evidence** (`source.html`) collects one source's quality evidence on one page:
+declared oversight pointers, grader controls and admission counts, the sampled
+LLM-judge review with its frozen sample, rubric, judge model and archived traces,
+independent QC, the pinned dataset and its revision, coverage and Daytona bases,
+diagnostics and archived reviews. Result is a plain outcome badge; Evidence opens this page. Every stored assessment review is listed with its full verdict and expandable evidence packet. Complete archived review collections and links to all saved reports, traces and receipts appear on the same page. FULL describes curation scope; it does not create review records for tasks outside the stored assessment sample. Object-store URLs get a Filer link.
+
 
 **Daytona safe** requires both execution compatibility and at most ten unique
 Daytona snapshots. Check agent and grader machines independently: a package-lock
 grader requires local execution even when the agent's image works on Daytona.
 The backend map records these separate machine slots and their blockers.
+
 
 Example counts describe successfully converted tasks before curation admission.
 A dash means no processed examples from that source are in the currently
@@ -218,8 +262,8 @@ s3://marin-us-east-02a/marin/rl-data/catalog/production` to the
 [campaign command](task-curation.md#run-a-campaign) with assessment enabled.
 `--cache-dir` selects local execution and a local artifact root, so production
 publication rejects it. Production uses the shared artifact cache under
-`--artifact-root` (default `s3://marin-us-east-02a/marin`) and an explicit
-`--review-cache` for model requests. Reuse the existing cache locations, pinned
+`--artifact-root` (default `s3://marin-us-east-02a/marin`) and `--review-cache`
+(default `<artifact-root>/rl-data/review-cache`) for model requests. Reuse the existing cache locations, pinned
 inputs, recipe versions, rubric and model revisions to reuse completed work.
 Assessment can use cached results; enabling it does not force regrading.
 A new report directory does not invalidate the caches. Switching a local or GCP
@@ -253,7 +297,7 @@ and import are separate; grading a new source does not generate its heatmap cove
 Coordinate the code release and data load: the new API returns 503 until a
 catalog has been selected. The loader reads through `CurationCatalog`, sends byte-bounded
 SQL batches, checks sample and packet coverage, then selects the load with one
-conditional UPDATE. An unchanged snapshot skips loading. If the catalog or serving
+conditional UPDATE. An unchanged snapshot loaded by the same `LOADER_VERSION` skips loading; a newer loader restages it. The loader records each source's latest published campaign start as its last update. If the catalog or serving
 selection changes during an import, that import fails and can be retried. Cleanup
 after successful selection removes only older loads observed before staging; it
 preserves imports that started later. Schema changes may require downtime. FineStore's snapshot reader caches
