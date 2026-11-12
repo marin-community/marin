@@ -42,8 +42,8 @@ A human then decides what happens. Never work around a refusal.
 
 1. **Run:** `B new-idea --idea-id <N>`
    - **Expect:** the idea's text, its Track and baseline, three checks, the settable fields, and a `next:` line.
-   - **If it prints `posted escalation: Idea #<N> was already tested as X####`:** the idea has prior trials and
-     goes to a maintainer. Stop working on this idea. It runs again only when a maintainer re-queues it with the note
+   - **If it prints `posted escalation: Idea #<N> was already tested as X####`:** the idea has prior trials with a
+     recorded result (a crashed run's trial does not count) and goes to a maintainer. Stop working on this idea. It runs again only when a maintainer re-queues it with the note
      "retest on current recipe".
    - **If it refuses because of the Track** (unknown or `hero-mfu`): run the escalate command it prints, then stop
      working on this idea. A missing Track is `speedrun`, except on a rerun of an idea with a registry entry: it

@@ -926,3 +926,11 @@ def test_a_rerun_that_names_no_track_repeats_its_last_attempts_tracks() -> None:
     )
     assert previous_tracks({"track": "custom", "trials": []}) == (Track.CUSTOM,)  # a study records no trials
     assert previous_tracks({"trials": [trial("d512", "2026-09-26")]}) is None  # only legacy rungs
+
+
+def test_a_trial_with_no_recorded_result_does_not_hold_a_rerun() -> None:
+    rungs = tuple(LADDER_RUNGS)
+    crashed = {"trials": [{"id": f"t{n}", "rung": r.value} for n, r in enumerate(rungs, 17)]}
+    assert prior_trials_hold(crashed, None, rungs) is None
+    measured = {"trials": [{"id": "t017", "rung": "competitive-d512", "delta": [-0.004]}]}
+    assert prior_trials_hold(measured, None, rungs) is not None

@@ -502,9 +502,10 @@ SPECS = Path("experiments/belay/runs")
 
 def prior_trials_hold(entry: dict, note: str | None, tracks: tuple[Track, ...]) -> str | None:
     """The prior results that hold an idea back (escalated to the admin page), unless a maintainer re-queued it with
-    a note asking for a retest on the current recipe. A ladder is held only by trials on its own rungs (taking a
-    speedrun win up the ladder is not a retest). None when it may run."""
-    trials = entry.get("trials") or []
+    a note asking for a retest on the current recipe. Only trials with a recorded result hold (a run that crashed
+    tested nothing), and a ladder is held only by trials on its own rungs (taking a speedrun win up the ladder is not
+    a retest). None when it may run."""
+    trials = [t for t in entry.get("trials") or [] if t.get("loss_delta") or t.get("delta")]
     if len(tracks) > 1:
         trials = [t for t in trials if t.get("rung") in tracks]
     if not trials or RETEST in (note or "").lower():
