@@ -41,7 +41,7 @@
       "oversight_evidence": null,
       "grading_environment": null,
       "disposition": "retired_task_spec_validation",
-      "disposition_reason": "Full QUICK attempted 2,205 native packages and converted none. Mechanical outcomes: {'converter_error:invalid_task_spec': 2205}. The native actor environment cannot populate the current TaskSpec contract; no image or environment was substituted. A new immutable qualified release is required.",
+      "disposition_reason": "Full QUICK attempted 2,205 native packages and converted none. Every row fails docker_image digest-reference validation: the TaskSpec contract requires image@sha256:<64 lowercase hex digits>. No environment was replaced or rebuilt. Publish a new native release specifying retrievable immutable image references and qualify it through SAMPLE/FULL before re-ingestion.",
       "disposition_evidence": {
         "input_rows": 2205,
         "converted_rows": 0,
@@ -54,6 +54,11 @@
           "declared_counts": {},
           "status_counts": {},
           "reason_counts": {}
+        },
+        "validation_diagnostics_uri": "s3://marin-us-east-02a/marin/rl-data/atlas-disposition/2026.11.12.4/validation-diagnostics/campaign-release-smartie-calibforge-admitted.json",
+        "validation_diagnostics_sha256": "f4b91f15e9481fde3f2ba3fc90fccc34fd5c298a6b3f56615690cc06d7d52e60",
+        "invalid_fields": {
+          "docker_image": 2205
         }
       }
     },
@@ -3877,7 +3882,7 @@
       "oversight_evidence": null,
       "grading_environment": null,
       "disposition": "retired_task_spec_validation",
-      "disposition_reason": "Full QUICK attempted 2,698 native packages and converted none. Mechanical outcomes: {'converter_error:invalid_task_spec': 2698}. The native actor environment cannot populate the current TaskSpec contract; no image or environment was substituted. A new immutable qualified release is required.",
+      "disposition_reason": "Full QUICK attempted 2,698 native packages and converted none. Every row fails docker_image digest-reference validation: the TaskSpec contract requires image@sha256:<64 lowercase hex digits>. No environment was replaced or rebuilt. Publish a new native release specifying retrievable immutable image references and qualify it through SAMPLE/FULL before re-ingestion.",
       "disposition_evidence": {
         "input_rows": 2698,
         "converted_rows": 0,
@@ -3890,6 +3895,11 @@
           "declared_counts": {},
           "status_counts": {},
           "reason_counts": {}
+        },
+        "validation_diagnostics_uri": "s3://marin-us-east-02a/marin/rl-data/atlas-disposition/2026.11.12.4/validation-diagnostics/task-trove-xiaomimimo-mimo-v2-6-rl-oss-code.json",
+        "validation_diagnostics_sha256": "cf756015e848c3bbb56d6967e28e9b3b306bec5b3d4b7cc24cbe1684003b26ca",
+        "invalid_fields": {
+          "docker_image": 2698
         }
       }
     },
@@ -3926,7 +3936,7 @@
       "oversight_evidence": null,
       "grading_environment": null,
       "disposition": "retired_task_spec_validation",
-      "disposition_reason": "Full QUICK attempted 1,000 native packages and converted none. Mechanical outcomes: {'converter_error:invalid_task_spec': 1000}. The native actor environment cannot populate the current TaskSpec contract; no image or environment was substituted. A new immutable qualified release is required.",
+      "disposition_reason": "Full QUICK attempted 1,000 native packages and converted none. Every row fails docker_image digest-reference validation: the TaskSpec contract requires image@sha256:<64 lowercase hex digits>. No environment was replaced or rebuilt. Publish a new native release specifying retrievable immutable image references and qualify it through SAMPLE/FULL before re-ingestion.",
       "disposition_evidence": {
         "input_rows": 1000,
         "converted_rows": 0,
@@ -3939,6 +3949,11 @@
           "declared_counts": {},
           "status_counts": {},
           "reason_counts": {}
+        },
+        "validation_diagnostics_uri": "s3://marin-us-east-02a/marin/rl-data/atlas-disposition/2026.11.12.4/validation-diagnostics/task-trove-xiaomimimo-mimo-v2-6-rl-oss-cyber.json",
+        "validation_diagnostics_sha256": "5b2d970a325057cdd98ba85705cbfc64d55d27193ef8f448a2e3779b2ce4c18a",
+        "invalid_fields": {
+          "docker_image": 1000
         }
       }
     },
@@ -4110,7 +4125,7 @@
       "oversight_evidence": null,
       "grading_environment": null,
       "disposition": "retired_task_spec_validation",
-      "disposition_reason": "Full QUICK attempted 2,093 native packages and converted none. Mechanical outcomes: {'converter_error:invalid_task_spec': 2093}. The native actor environment cannot populate the current TaskSpec contract; no image or environment was substituted. A new immutable qualified release is required.",
+      "disposition_reason": "Full QUICK attempted 2,093 native packages and converted none. Every row fails docker_image digest-reference validation: the TaskSpec contract requires image@sha256:<64 lowercase hex digits>. No environment was replaced or rebuilt. Publish a new native release specifying retrievable immutable image references and qualify it through SAMPLE/FULL before re-ingestion.",
       "disposition_evidence": {
         "input_rows": 2093,
         "converted_rows": 0,
@@ -4123,6 +4138,11 @@
           "declared_counts": {},
           "status_counts": {},
           "reason_counts": {}
+        },
+        "validation_diagnostics_uri": "s3://marin-us-east-02a/marin/rl-data/atlas-disposition/2026.11.12.4/validation-diagnostics/task-trove-xiaomimimo-mimo-v2-6-rl-oss-webdev.json",
+        "validation_diagnostics_sha256": "2c717f52ff537527e8710eb040aa45c40331871d67a0a509c0265778000f5712",
+        "invalid_fields": {
+          "docker_image": 2093
         }
       }
     },
