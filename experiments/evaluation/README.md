@@ -239,3 +239,55 @@ platform. It checks a temporary copy and leaves the source unchanged.
 `upgrade-format` only after the smoke checks pass. These commands upgrade the
 FineStore format; `backfill-samples` rewrites normalized samples from retained
 source files. Read each command's `--help` before writing to production storage.
+
+## Repeated BFCL parity
+
+Use an explicit model file and Harbor policy for every arm. The repeat wrapper
+uses the standard launcher, submits five independent production groups by default,
+and preserves the supplied agent, decoding, parser and task-selection settings:
+
+```bash
+uv run python -m experiments.evaluation.bfcl_parity launch \
+  --model-config model.yaml --harbor-config bfcl-policy.yaml \
+  --federated-cluster cw-rno2a --records-prefix s3://your-bucket/fresh-records \
+  --run-prefix unique-cohort --runs 5 --dry-run
+```
+
+Remove `--dry-run` to submit. Each logical run has its own namespace and server.
+Use a fresh prefix; do not repeat a submission while earlier jobs are active.
+The wrapper does not select scores or launch whole-run replacements. Standard
+Harbor policy retries remain those in the supplied YAML.
+
+After all attempts finish, create a JSON manifest with `task_ids`, `reference`,
+and `arms`. Each arm lists every supplied physical attempt with `logical_run`,
+`record`, `record_sha256`, `samples`, and `samples_sha256`. The files are native
+`record.json` and sample-array JSON snapshots, not a table of headline scores.
+Give a whole-run replacement the original logical ID. If a terminal native record
+has no sample artifact, use `samples: null` and `samples_sha256: null`.
+
+```bash
+uv run python -m experiments.evaluation.bfcl_parity analyze \
+  --manifest fixed-cohort.json --output fresh-report.json
+```
+
+The reader verifies byte pins, fixed task IDs, native benchmark size, and binary
+agreement between scored grading, verifier reward and sample metrics. Scored agent
+errors retain their rewards; unscored or absent grades stay NULL. Conflicting
+coverage counters block full-run admission while retaining the raw scores. The
+reader does not infer retry eligibility or discover omitted jobs.
+
+Recorded method equality includes the whole evaluator definition, evaluator
+runtime, tokenizer, agent, sampling, parser, hardware and serving configuration.
+Only target model identity/weight-reference fields are excluded; tokenizer
+fallbacks are resolved before excluding checkpoint revisions. Checkpoints must
+also agree within each arm. This compares recorded declarations, rather than
+independently attesting effective worker policy.
+
+Primary means, sample SDs and intervals require at least five complete logical
+runs per arm. Two complete attempts for one logical run are rejected. The default
+bootstrap uses a new Python `Random(297)` stream and 10,000 independent run-cluster
+draws: arms are sorted by name, runs by native run ID, and each draw resamples whole
+run means. The same reference draws are reused for reference contrasts; run
+numbers are not paired and tasks are not resampled. Percentiles use sorted draw
+indices `int(.025*N)` and `int(.975*N)`, without interpolation. Values are fractions.
+This utility does not replace historical preregistered continuation analyses.
