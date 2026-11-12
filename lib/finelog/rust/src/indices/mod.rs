@@ -35,7 +35,7 @@ use std::time::Instant;
 use arrow::record_batch::RecordBatch;
 use serde::{Deserialize, Serialize};
 
-use crate::indices::exact::{ExactColumn, ExactIndexConfig, ExactSection};
+use crate::indices::exact::{ExactIndexConfig, ExactSection};
 use crate::indices::format::{Exactness, SectionInput, SectionKind, SegmentBinding};
 use crate::indices::group_extrema::{GroupExtremaConfig, GroupExtremaSection};
 use crate::indices::projection::{
@@ -233,6 +233,12 @@ impl SegmentIndexConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExactPostingsCoverage {
     pub columns: BTreeMap<String, Vec<String>>,
+}
+
+/// Borrowed writer form of [`ExactPostingsCoverage`]; serializes to the same JSON.
+#[derive(Serialize)]
+struct ExactPostingsCoverageView<'a> {
+    columns: BTreeMap<&'a str, Vec<&'a str>>,
 }
 
 pub fn parse_exact_postings_coverage(bytes: &[u8]) -> Option<ExactPostingsCoverage> {
@@ -656,75 +662,45 @@ pub fn read_group_extrema_section(
 }
 
 fn append_exact_sections(sections: &mut Vec<SectionInput>, sidecar: &ExactSection) {
-    let postings = ExactSection {
-        total_rows: sidecar.total_rows,
-        columns: sidecar
-            .columns
-            .iter()
-            .filter(|(_, column)| !column.rows.is_empty())
-            .map(|(name, column)| {
-                (
-                    name.clone(),
-                    ExactColumn {
-                        counts: None,
-                        rows: column.rows.clone(),
-                    },
-                )
-            })
-            .collect(),
-    };
-    if !postings.columns.is_empty() {
+    let posted_values: BTreeMap<&str, Vec<&str>> = sidecar
+        .columns
+        .iter()
+        .filter(|(_, column)| !column.rows.is_empty())
+        .map(|(name, column)| {
+            (
+                name.as_str(),
+                column.rows.keys().map(String::as_str).collect(),
+            )
+        })
+        .collect();
+    if !posted_values.is_empty() {
         sections.push(SectionInput {
             id: EXACT_POSTINGS_SECTION_ID.to_string(),
             kind: SectionKind::ExactPostings,
             method_version: EXACT_POSTINGS_METHOD_VERSION,
             exactness: Exactness::ExactRows,
-            coverage: serde_json::to_vec(&ExactPostingsCoverage {
-                columns: postings
-                    .columns
-                    .iter()
-                    .map(|(column, postings)| {
-                        (column.clone(), postings.rows.keys().cloned().collect())
-                    })
-                    .collect(),
+            coverage: serde_json::to_vec(&ExactPostingsCoverageView {
+                columns: posted_values,
             })
             .expect("exact-postings coverage serialization never fails"),
-            payload: exact::serialize(&postings),
+            payload: exact::serialize_postings(sidecar),
         });
     }
 
-    let counts = ExactSection {
-        total_rows: sidecar.total_rows,
-        columns: sidecar
-            .columns
-            .iter()
-            .filter_map(|(name, column)| {
-                column.counts.as_ref().map(|counts| {
-                    (
-                        name.clone(),
-                        ExactColumn {
-                            counts: Some(counts.clone()),
-                            rows: BTreeMap::new(),
-                        },
-                    )
-                })
-            })
-            .collect(),
-    };
-    if !counts.columns.is_empty() {
+    let counted_columns: Vec<&str> = sidecar
+        .columns
+        .iter()
+        .filter(|(_, column)| column.counts.is_some())
+        .map(|(name, _)| name.as_str())
+        .collect();
+    if !counted_columns.is_empty() {
         sections.push(SectionInput {
             id: VALUE_COUNTS_SECTION_ID.to_string(),
             kind: SectionKind::ValueCounts,
             method_version: VALUE_COUNTS_METHOD_VERSION,
             exactness: Exactness::ExactAggregate,
-            coverage: counts
-                .columns
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\0")
-                .into_bytes(),
-            payload: exact::serialize(&counts),
+            coverage: counted_columns.join("\0").into_bytes(),
+            payload: exact::serialize_counts(sidecar),
         });
     }
 }

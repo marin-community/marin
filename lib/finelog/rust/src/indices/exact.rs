@@ -227,18 +227,71 @@ pub fn named_projection_path(parquet_path: &Path, name: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
+/// The borrowed halves of one column that a section encodes. `None` encodes
+/// exactly like an absent count summary or an empty postings map, so a
+/// section can omit either half without copying the other.
+struct ColumnParts<'a> {
+    name: &'a str,
+    counts: Option<&'a BTreeMap<Option<String>, u64>>,
+    rows: Option<&'a BTreeMap<String, Vec<RowRun>>>,
+}
+
+/// Encode every column whole. Index builds write the per-section halves.
+#[cfg(test)]
 pub(crate) fn serialize(sidecar: &ExactSection) -> Vec<u8> {
+    encode(
+        sidecar.total_rows,
+        sidecar.columns.iter().map(|(name, column)| ColumnParts {
+            name,
+            counts: column.counts.as_ref(),
+            rows: Some(&column.rows),
+        }),
+    )
+}
+
+/// Encode the row postings of every column that has any, with no counts.
+pub(crate) fn serialize_postings(sidecar: &ExactSection) -> Vec<u8> {
+    encode(
+        sidecar.total_rows,
+        sidecar
+            .columns
+            .iter()
+            .filter(|(_, column)| !column.rows.is_empty())
+            .map(|(name, column)| ColumnParts {
+                name,
+                counts: None,
+                rows: Some(&column.rows),
+            }),
+    )
+}
+
+/// Encode the value counts of every column that has them, with no postings.
+pub(crate) fn serialize_counts(sidecar: &ExactSection) -> Vec<u8> {
+    encode(
+        sidecar.total_rows,
+        sidecar.columns.iter().filter_map(|(name, column)| {
+            column.counts.as_ref().map(|counts| ColumnParts {
+                name,
+                counts: Some(counts),
+                rows: None,
+            })
+        }),
+    )
+}
+
+fn encode<'a>(total_rows: u64, columns: impl Iterator<Item = ColumnParts<'a>>) -> Vec<u8> {
+    let columns: Vec<ColumnParts<'a>> = columns.collect();
     let mut out = Vec::new();
     out.extend_from_slice(MAGIC);
     out.push(VERSION);
-    out.extend_from_slice(&sidecar.total_rows.to_le_bytes());
+    out.extend_from_slice(&total_rows.to_le_bytes());
     // Version 2 reserved this byte for the removed monolithic `.eqp` writer.
     out.push(0);
-    put_u16(&mut out, sidecar.columns.len());
-    for (name, column) in &sidecar.columns {
-        put_string_u16(&mut out, name);
+    put_u16(&mut out, columns.len());
+    for column in &columns {
+        put_string_u16(&mut out, column.name);
         out.push(u8::from(column.counts.is_some()));
-        if let Some(counts) = &column.counts {
+        if let Some(counts) = column.counts {
             put_u32(&mut out, counts.len());
             for (value, count) in counts {
                 match value {
@@ -251,8 +304,12 @@ pub(crate) fn serialize(sidecar: &ExactSection) -> Vec<u8> {
                 out.extend_from_slice(&count.to_le_bytes());
             }
         }
-        put_u32(&mut out, column.rows.len());
-        for (value, runs) in &column.rows {
+        let Some(rows) = column.rows else {
+            put_u32(&mut out, 0);
+            continue;
+        };
+        put_u32(&mut out, rows.len());
+        for (value, runs) in rows {
             put_string_u32(&mut out, value);
             put_u32(&mut out, runs.len());
             let mut previous_end = 0_u64;
@@ -601,6 +658,44 @@ mod tests {
         );
         assert_eq!(service.counts.as_ref().unwrap()[&None], 1);
         assert_eq!(service.rows["worker"], vec![RowRun { start: 4, len: 2 }]);
+    }
+
+    #[test]
+    fn section_encodings_keep_the_whole_section_wire_format() {
+        let counts = BTreeMap::from([(Some("api".to_string()), 2), (None, 1)]);
+        let rows = BTreeMap::from([("api".to_string(), vec![RowRun { start: 2, len: 3 }])]);
+        let column =
+            |counts: Option<&BTreeMap<Option<String>, u64>>,
+             rows: Option<&BTreeMap<String, Vec<RowRun>>>| ExactColumn {
+                counts: counts.cloned(),
+                rows: rows.cloned().unwrap_or_default(),
+            };
+        let section = |columns: Vec<(&str, ExactColumn)>| ExactSection {
+            total_rows: 9,
+            columns: columns
+                .into_iter()
+                .map(|(name, column)| (name.to_string(), column))
+                .collect(),
+        };
+        let sidecar = section(vec![
+            ("both", column(Some(&counts), Some(&rows))),
+            ("counts_only", column(Some(&counts), None)),
+            ("rows_only", column(None, Some(&rows))),
+            ("neither", column(None, None)),
+        ]);
+        let postings = section(vec![
+            ("both", column(None, Some(&rows))),
+            ("rows_only", column(None, Some(&rows))),
+        ]);
+        let value_counts = section(vec![
+            ("both", column(Some(&counts), None)),
+            ("counts_only", column(Some(&counts), None)),
+        ]);
+
+        assert_eq!(serialize_postings(&sidecar), serialize(&postings));
+        assert_eq!(serialize_counts(&sidecar), serialize(&value_counts));
+        assert_eq!(parse(&serialize_postings(&sidecar)), Some(postings));
+        assert_eq!(parse(&serialize_counts(&sidecar)), Some(value_counts));
     }
 
     #[test]
