@@ -331,6 +331,492 @@ def sources() -> list[RlDataSource]:
             ),
         ),
         RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="curriculum-easy-v1-rebuilt",
+                version="1",
+                repo="open-athena/tasktrove-curriculum-easy-v1-taskcompendium-20261112",
+                revision="4151b071dbb38df532b38c7de1becb12ca1e0f73",
+                expected_rows=505,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:tasktrove-curriculum-easy-rebuilt-v1",
+                title="TaskTrove curriculum-easy rebuilt cohort (TaskCompendium)",
+                origin="Task Trove",
+                family="python-tests",
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=505,
+                daytona_snapshot_count=2,
+                daytona_count_basis=(
+                    "production snapshot_identity over the lowered task specs at the pinned revision: "
+                    "2 distinct agent identity, zero execution-requirement failures. Graders are "
+                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
+                    "contributing no Daytona identity"
+                ),
+                daytona_execution_failures=0,
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    verification=(
+                        "setup fidelity executed on all 505 converted specs at this revision (all "
+                        "reproduce their archive's lowered base, working directory, steps and environment "
+                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
+                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
+                    ),
+                    reviewed=505,
+                    admitted=505,
+                    level=OversightLevel.SAMPLE,
+                ),
+                notes=(
+                    "505 curriculum-easy tasks converted to run in their archived environment, lowered onto "
+                    "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_curriculum-easy @ "
+                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    "negative verdict on an empty submission. The repository is private pending release."
+                ),
+                dataset=SourceReference(
+                    "open-athena/tasktrove-curriculum-easy-v1-taskcompendium-20261112",
+                    "4151b071dbb38df532b38c7de1becb12ca1e0f73",
+                    "https://huggingface.co/datasets/open-athena/tasktrove-curriculum-easy-v1-taskcompendium-20261112"
+                    "/tree/4151b071dbb38df532b38c7de1becb12ca1e0f73",
+                ),
+            ),
+        ),
+        RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="curriculum-medium-v1-rebuilt",
+                version="1",
+                repo="open-athena/tasktrove-curriculum-medium-v1-taskcompendium-20261112",
+                revision="db17ab9b01d960d01f7a75c3d1d896504ceaf9fa",
+                expected_rows=488,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:tasktrove-curriculum-medium-rebuilt-v1",
+                title="TaskTrove curriculum-medium rebuilt cohort (TaskCompendium)",
+                origin="Task Trove",
+                family="python-tests",
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=488,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the lowered task specs at the pinned revision: "
+                    "1 distinct agent identity, zero execution-requirement failures. Graders are "
+                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
+                    "contributing no Daytona identity"
+                ),
+                daytona_execution_failures=0,
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    verification=(
+                        "setup fidelity executed on all 488 converted specs at this revision (all "
+                        "reproduce their archive's lowered base, working directory, steps and environment "
+                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
+                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
+                    ),
+                    reviewed=488,
+                    admitted=488,
+                    level=OversightLevel.SAMPLE,
+                ),
+                notes=(
+                    "488 curriculum-medium tasks converted to run in their archived environment, lowered onto "
+                    "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_curriculum-medium-v2 @ "
+                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    "negative verdict on an empty submission. The repository is private pending release."
+                ),
+                dataset=SourceReference(
+                    "open-athena/tasktrove-curriculum-medium-v1-taskcompendium-20261112",
+                    "db17ab9b01d960d01f7a75c3d1d896504ceaf9fa",
+                    "https://huggingface.co/datasets/open-athena/tasktrove-curriculum-medium-v1-taskcompendium-20261112"
+                    "/tree/db17ab9b01d960d01f7a75c3d1d896504ceaf9fa",
+                ),
+            ),
+        ),
+        RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="e2egit-large-v1-rebuilt",
+                version="1",
+                repo="open-athena/tasktrove-e2egit-large-v1-taskcompendium-20261112",
+                revision="4bdaeaaf069eb6ad7b0a716d445e9e789f37a758",
+                expected_rows=4993,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:tasktrove-e2egit-large-rebuilt-v1",
+                title="TaskTrove e2egit-large rebuilt cohort (TaskCompendium)",
+                origin="Task Trove",
+                family="python-tests",
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=4993,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the lowered task specs at the pinned revision: "
+                    "1 distinct agent identity, zero execution-requirement failures. Graders are "
+                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
+                    "contributing no Daytona identity"
+                ),
+                daytona_execution_failures=0,
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    verification=(
+                        "setup fidelity executed on all 4,993 converted specs at this revision (all "
+                        "reproduce their archive's lowered base, working directory, steps and environment "
+                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
+                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
+                    ),
+                    reviewed=4993,
+                    admitted=4993,
+                    level=OversightLevel.SAMPLE,
+                ),
+                notes=(
+                    "4,993 e2egit-large tasks converted to run in their archived environment, lowered onto "
+                    "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_e2egit-large @ "
+                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    "negative verdict on an empty submission. The repository is private pending release."
+                ),
+                dataset=SourceReference(
+                    "open-athena/tasktrove-e2egit-large-v1-taskcompendium-20261112",
+                    "4bdaeaaf069eb6ad7b0a716d445e9e789f37a758",
+                    "https://huggingface.co/datasets/open-athena/tasktrove-e2egit-large-v1-taskcompendium-20261112"
+                    "/tree/4bdaeaaf069eb6ad7b0a716d445e9e789f37a758",
+                ),
+            ),
+        ),
+        RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="multifile-v1-rebuilt",
+                version="1",
+                repo="open-athena/tasktrove-multifile-v1-taskcompendium-20261112",
+                revision="5accbb5851dc5774a05424aa7d22f995cbfd7e34",
+                expected_rows=4842,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:tasktrove-multifile-rebuilt-v1",
+                title="TaskTrove multifile rebuilt cohort (TaskCompendium)",
+                origin="Task Trove",
+                family="python-tests",
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=4842,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the lowered task specs at the pinned revision: "
+                    "1 distinct agent identity, zero execution-requirement failures. Graders are "
+                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
+                    "contributing no Daytona identity"
+                ),
+                daytona_execution_failures=0,
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    verification=(
+                        "setup fidelity executed on all 4,842 converted specs at this revision (all "
+                        "reproduce their archive's lowered base, working directory, steps and environment "
+                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
+                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
+                    ),
+                    reviewed=4842,
+                    admitted=4842,
+                    level=OversightLevel.SAMPLE,
+                ),
+                notes=(
+                    "4,842 multifile tasks converted to run in their archived environment, lowered onto "
+                    "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_multifile-v3 @ "
+                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    "negative verdict on an empty submission. The repository is private pending release."
+                ),
+                dataset=SourceReference(
+                    "open-athena/tasktrove-multifile-v1-taskcompendium-20261112",
+                    "5accbb5851dc5774a05424aa7d22f995cbfd7e34",
+                    "https://huggingface.co/datasets/open-athena/tasktrove-multifile-v1-taskcompendium-20261112"
+                    "/tree/5accbb5851dc5774a05424aa7d22f995cbfd7e34",
+                ),
+            ),
+        ),
+        RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="pymethods2test-v1-rebuilt",
+                version="1",
+                repo="open-athena/tasktrove-pymethods2test-v1-taskcompendium-20261112",
+                revision="f6a20442763e152ec662483dc0ee1476caa6d541",
+                expected_rows=500,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:tasktrove-pymethods2test-rebuilt-v1",
+                title="TaskTrove pymethods2test rebuilt cohort (TaskCompendium)",
+                origin="Task Trove",
+                family="python-tests",
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=500,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the lowered task specs at the pinned revision: "
+                    "1 distinct agent identity, zero execution-requirement failures. Graders are "
+                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
+                    "contributing no Daytona identity"
+                ),
+                daytona_execution_failures=0,
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    verification=(
+                        "setup fidelity executed on all 500 converted specs at this revision (all "
+                        "reproduce their archive's lowered base, working directory, steps and environment "
+                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
+                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
+                    ),
+                    reviewed=500,
+                    admitted=500,
+                    level=OversightLevel.SAMPLE,
+                ),
+                notes=(
+                    "500 pymethods2test tasks converted to run in their archived environment, lowered onto "
+                    "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_pymethods2test-v3 @ "
+                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    "negative verdict on an empty submission. The repository is private pending release."
+                ),
+                dataset=SourceReference(
+                    "open-athena/tasktrove-pymethods2test-v1-taskcompendium-20261112",
+                    "f6a20442763e152ec662483dc0ee1476caa6d541",
+                    "https://huggingface.co/datasets/open-athena/tasktrove-pymethods2test-v1-taskcompendium-20261112"
+                    "/tree/f6a20442763e152ec662483dc0ee1476caa6d541",
+                ),
+            ),
+        ),
+        RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="pymethods2test-large-v1-rebuilt",
+                version="1",
+                repo="open-athena/tasktrove-pymethods2test-large-v1-taskcompendium-20261112",
+                revision="a9ed5c72ade6670853fc28af8bf1b59541d3827c",
+                expected_rows=4990,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:tasktrove-pymethods2test-large-rebuilt-v1",
+                title="TaskTrove pymethods2test-large rebuilt cohort (TaskCompendium)",
+                origin="Task Trove",
+                family="python-tests",
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=4990,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the lowered task specs at the pinned revision: "
+                    "1 distinct agent identity, zero execution-requirement failures. Graders are "
+                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
+                    "contributing no Daytona identity"
+                ),
+                daytona_execution_failures=0,
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    verification=(
+                        "setup fidelity executed on all 4,990 converted specs at this revision (all "
+                        "reproduce their archive's lowered base, working directory, steps and environment "
+                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
+                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
+                    ),
+                    reviewed=4990,
+                    admitted=4990,
+                    level=OversightLevel.SAMPLE,
+                ),
+                notes=(
+                    "4,990 pymethods2test-large tasks converted to run in their archived environment, lowered onto "
+                    "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_pymethods2test-large-v2 @ "
+                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    "negative verdict on an empty submission. The repository is private pending release."
+                ),
+                dataset=SourceReference(
+                    "open-athena/tasktrove-pymethods2test-large-v1-taskcompendium-20261112",
+                    "a9ed5c72ade6670853fc28af8bf1b59541d3827c",
+                    "https://huggingface.co/datasets/open-athena/tasktrove-pymethods2test-large-v1-taskcompendium-20261112"
+                    "/tree/a9ed5c72ade6670853fc28af8bf1b59541d3827c",
+                ),
+            ),
+        ),
+        RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="stack-pytest-v1-rebuilt",
+                version="1",
+                repo="open-athena/tasktrove-stack-pytest-v1-taskcompendium-20261112",
+                revision="f6909b5b5fe8d207fb442f24d4140556431d02a3",
+                expected_rows=492,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:tasktrove-stack-pytest-rebuilt-v1",
+                title="TaskTrove stack-pytest rebuilt cohort (TaskCompendium)",
+                origin="Task Trove",
+                family="python-tests",
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=492,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the lowered task specs at the pinned revision: "
+                    "1 distinct agent identity, zero execution-requirement failures. Graders are "
+                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
+                    "contributing no Daytona identity"
+                ),
+                daytona_execution_failures=0,
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    verification=(
+                        "setup fidelity executed on all 492 converted specs at this revision (all "
+                        "reproduce their archive's lowered base, working directory, steps and environment "
+                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
+                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
+                    ),
+                    reviewed=492,
+                    admitted=492,
+                    level=OversightLevel.SAMPLE,
+                ),
+                notes=(
+                    "492 stack-pytest tasks converted to run in their archived environment, lowered onto "
+                    "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_stack-pytest-v2 @ "
+                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    "negative verdict on an empty submission. The repository is private pending release."
+                ),
+                dataset=SourceReference(
+                    "open-athena/tasktrove-stack-pytest-v1-taskcompendium-20261112",
+                    "f6909b5b5fe8d207fb442f24d4140556431d02a3",
+                    "https://huggingface.co/datasets/open-athena/tasktrove-stack-pytest-v1-taskcompendium-20261112"
+                    "/tree/f6909b5b5fe8d207fb442f24d4140556431d02a3",
+                ),
+            ),
+        ),
+        RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="unitsyn-python-v1-rebuilt",
+                version="1",
+                repo="open-athena/tasktrove-unitsyn-python-v1-taskcompendium-20261112",
+                revision="3ed40d26a51c8ca0cf26c15cc84316409534a937",
+                expected_rows=4991,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:tasktrove-unitsyn-python-rebuilt-v1",
+                title="TaskTrove unitsyn-python rebuilt cohort (TaskCompendium)",
+                origin="Task Trove",
+                family="python-tests",
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=4991,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the lowered task specs at the pinned revision: "
+                    "1 distinct agent identity, zero execution-requirement failures. Graders are "
+                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
+                    "contributing no Daytona identity"
+                ),
+                daytona_execution_failures=0,
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    verification=(
+                        "setup fidelity executed on all 4,991 converted specs at this revision (all "
+                        "reproduce their archive's lowered base, working directory, steps and environment "
+                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
+                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
+                    ),
+                    reviewed=4991,
+                    admitted=4991,
+                    level=OversightLevel.SAMPLE,
+                ),
+                notes=(
+                    "4,991 unitsyn-python tasks converted to run in their archived environment, lowered onto "
+                    "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_unitsyn-python-v4 @ "
+                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    "negative verdict on an empty submission. The repository is private pending release."
+                ),
+                dataset=SourceReference(
+                    "open-athena/tasktrove-unitsyn-python-v1-taskcompendium-20261112",
+                    "3ed40d26a51c8ca0cf26c15cc84316409534a937",
+                    "https://huggingface.co/datasets/open-athena/tasktrove-unitsyn-python-v1-taskcompendium-20261112"
+                    "/tree/3ed40d26a51c8ca0cf26c15cc84316409534a937",
+                ),
+            ),
+        ),
+        RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="unitsyn-python-large-v1-rebuilt",
+                version="1",
+                repo="open-athena/tasktrove-unitsyn-python-large-v1-taskcompendium-20261112",
+                revision="3a64ac3ed258bd184c24c24e7c7578f64142c180",
+                expected_rows=4991,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:tasktrove-unitsyn-python-large-rebuilt-v1",
+                title="TaskTrove unitsyn-python-large rebuilt cohort (TaskCompendium)",
+                origin="Task Trove",
+                family="python-tests",
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=4991,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the lowered task specs at the pinned revision: "
+                    "1 distinct agent identity, zero execution-requirement failures. Graders are "
+                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
+                    "contributing no Daytona identity"
+                ),
+                daytona_execution_failures=0,
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    verification=(
+                        "setup fidelity executed on all 4,991 converted specs at this revision (all "
+                        "reproduce their archive's lowered base, working directory, steps and environment "
+                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
+                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
+                    ),
+                    reviewed=4991,
+                    admitted=4991,
+                    level=OversightLevel.SAMPLE,
+                ),
+                notes=(
+                    "4,991 unitsyn-python-large tasks converted to run in their archived environment, lowered onto "
+                    "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_unitsyn-python-large-v2 @ "
+                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    "negative verdict on an empty submission. The repository is private pending release."
+                ),
+                dataset=SourceReference(
+                    "open-athena/tasktrove-unitsyn-python-large-v1-taskcompendium-20261112",
+                    "3a64ac3ed258bd184c24c24e7c7578f64142c180",
+                    "https://huggingface.co/datasets/open-athena/tasktrove-unitsyn-python-large-v1-taskcompendium-20261112"
+                    "/tree/3a64ac3ed258bd184c24c24e7c7578f64142c180",
+                ),
+            ),
+        ),
+        RlDataSource(
             info=SourceInfo(
                 id="Campaign Release:smartie-calibforge-shared-v2",
                 title="Snowball Smartie repaired CalibForge shared environment v2",
