@@ -122,7 +122,8 @@ async def run_one(spec: dict, base: str, factory=None) -> LivenessResult:
             network=NetworkPolicy.ALLOW,
             cpus=runtime.cpus,
             memory_mb=runtime.memory_mb,
-            storage_mb=runtime.storage_mb,
+            # The local backend provides no disk quota; declaring one is refused.
+            storage_mb=None,
         )
         grading_factory = LocalMachineFactory()
     else:
