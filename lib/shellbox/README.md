@@ -222,6 +222,17 @@ Before grading, stop agent command submission and call `LocalMachine.quiesce_com
 to reclaim work left by earlier successful commands, including tmux servers.
 Process sessions, relay helpers and peer containers remain alive.
 
+For agent commands that need a separate grading boundary, call
+`scope = await machine.open_process_scope()`, run those commands through
+`scope.run(command)`, then `await scope.terminate()` before collection or
+verification. Scope termination closes admission, kills detached descendants,
+and waits for confirmed exit; it raises if confirmation fails. Setup, sidecar,
+and verifier commands use `machine.run` outside the scope. Local machines support
+this operation when the worker has delegated cgroup v2. Docker, gVisor, Iris,
+Daytona, QEMU, and ShellSim currently reject scope creation, so callers must
+select a separate verifier machine or fail before the agent turn on those
+backends. Ordinary `Machine.run` behavior is unchanged.
+
 Docker and Daytona stop the command's process group on a timeout. A successful stop preserves the machine for later commands.
 A failed stop without confirmed completion raises an infrastructure error and closes the machine.
 Docker and Daytona also stop the process group on caller cancellation. Daytona preserves the machine only after confirming the stop and removing private command files; otherwise it closes the machine.

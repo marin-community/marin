@@ -302,6 +302,53 @@ async def test_local_quiesce_stops_prior_tmux_agent_and_preserves_http_helper_an
         assert (await task.containers["runtime"].run(Command(("true",)))).exit_code == 0
 
 
+async def test_local_scope_stops_double_forked_writer_but_preserves_setup_service(create_machine):
+    machine = await create_machine(MachineSpec(HostImage(), workdir="/app"))
+    setup = await machine.run(Command(("sh", "-c", "sleep 3600 & echo $!")))
+    assert setup.exit_code == 0
+    scope = await machine.open_process_scope()
+    writer = (
+        "import os,pathlib,time\n"
+        "if os.fork() == 0:\n"
+        " os.setsid()\n"
+        " if os.fork() == 0:\n"
+        "  pathlib.Path('/app/writer-pid').write_text(str(os.getpid()))\n"
+        "  while True:\n"
+        "   pathlib.Path('/app/verdict').write_text('agent')\n"
+        "   time.sleep(0.01)\n"
+        " os._exit(0)\n"
+        "os.wait()\n"
+    )
+    assert (await scope.run(Command(("python3", "-c", writer)))).exit_code == 0
+    ready = await machine.run(
+        Command(("sh", "-c", "until test -s /app/writer-pid && test -s /app/verdict; do sleep 0.01; done"), timeout=5)
+    )
+    assert ready.exit_code == 0
+
+    await scope.terminate()
+    await scope.terminate()
+    with pytest.raises(RuntimeError, match="closed"):
+        await scope.run(Command(("true",)))
+    assert (
+        await machine.run(Command(("sh", "-c", 'pid=$(cat /app/writer-pid); test ! -e "/proc/$pid"')))
+    ).exit_code == 0
+    assert (await machine.run(Command(("sh", "-c", f"test -e /proc/{setup.stdout.decode().strip()}")))).exit_code == 0
+    checked = await machine.run(Command(("sh", "-c", "echo verifier > /app/verdict; sleep 0.1; cat /app/verdict")))
+    assert checked.stdout == b"verifier\n"
+
+
+async def test_local_scope_termination_waits_for_an_active_command(create_machine):
+    machine = await create_machine(MachineSpec(HostImage(), workdir="/app"))
+    scope = await machine.open_process_scope()
+    active = asyncio.create_task(scope.run(Command(("sh", "-c", "echo ready > /app/scope-ready; exec sleep 3600"))))
+    ready = await machine.run(Command(("sh", "-c", "until test -s /app/scope-ready; do sleep 0.01; done"), timeout=5))
+    assert ready.exit_code == 0
+
+    await asyncio.wait_for(scope.terminate(), 5)
+    assert (await active).exit_code != 0
+    assert (await machine.run(Command(("true",)))).exit_code == 0
+
+
 async def test_local_cancelled_readiness_preserves_helper_until_owner_closes_it(create_task):
     spec = TaskSpec(
         (
