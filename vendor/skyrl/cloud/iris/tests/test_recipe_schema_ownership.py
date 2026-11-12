@@ -83,6 +83,7 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_laun
             type(value), "author-B"
         )
         set_path(seeded, ".".join(parts), sentinel)
+    set_path(seeded, "trainer.callbacks", [{"type": "progress", "log_interval": 31}])
     for path in LAUNCH_PATHS:
         set_path(seeded, path, False if path == "trainer.export_hf_artifact" else "author-B")
     for path in FILL_WHEN_UNSET | LAUNCH_INPUT_CHANGES["clamp"]:

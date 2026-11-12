@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from copy import deepcopy
 from datetime import datetime, timezone
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ import pyarrow.parquet as pq
 import pytest
 import yaml
 from omegaconf import OmegaConf, open_dict
+from skyrlrecipe import SkyRLRecipe
 from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
@@ -485,11 +487,41 @@ def test_callback_setup_rejects_final_metrics_during_periodic_evaluation(consume
     [
         ("inherit", {}, None),
         ("explicit", {"n_samples_per_prompt": 3}, None),
+        ("sampling-omitted", {}, None),
+        ("sampling-null", {"sampling_params": None}, None),
+        ("sampling-empty", {"sampling_params": {}}, None),
+        ("native-forms", {"sampling_params": {"stop": "!", "logprobs": -1, "prompt_logprobs": None}}, None),
+        ("final-schedule", {"schedule": "final"}, None),
+        (
+            "sampling-domain",
+            {"sampling_params": {
+                "allowed_token_ids": [7], "bad_words": ["bad"],
+                "custom_params": {"nested": {"enabled": True}}, "detokenize": True,
+                "ebnf": None, "extra_args": {"choice": {"json": {"type": "object"}}},
+                "flat_logprobs": False, "frequency_penalty": 0.5, "ignore_eos": False,
+                "include_stop_str_in_output": True, "json_schema": None,
+                "logit_bias": {"7": -0.1}, "logprob_token_ids": [7], "logprobs": -1,
+                "max_generate_length": 64, "max_new_tokens": None, "max_tokens": None,
+                "min_new_tokens": 0, "min_p": 0.1, "min_tokens": 1, "n": 1,
+                "no_stop_trim": False, "output_kind": 0, "output_text_buffer_length": 0,
+                "presence_penalty": 0.25, "prompt_logprobs": None, "regex": None,
+                "repetition_detection": {"max_pattern_size": 4, "min_pattern_size": 2, "min_count": 3},
+                "repetition_penalty": 1.1, "routed_experts_prompt_start": 0,
+                "sampling_seed": 17, "seed": 42, "skip_clone": False,
+                "skip_reading_prefix_cache": None, "skip_special_tokens": False,
+                "spaces_between_special_tokens": True, "stop": ["domain-stop"],
+                "stop_regex": None, "stop_token_ids": [7], "stream_interval": None,
+                "structured_outputs": {"json": {"type": "object", "properties": {"answer": {"type": "integer"}}}},
+                "temperature": 0.1, "thinking_token_budget": None,
+                "top_k": -1, "top_p": 0.8, "trace_decode_token_ids": None, "watermarking": False,
+            }},
+            None,
+        ),
         ("duplicate", {}, "duplicate evaluation profile: sampled"),
         ("field", {"answer_count": 2}, "unknown fields.*answer_count"),
         ("sampling", {"sampling_params": {"temprature": 0.1}}, "unknown sampling keys.*temprature"),
-        ("zero-answers", {"n_samples_per_prompt": 0}, "n_samples_per_prompt must be a positive integer"),
-        ("empty-files", {"data_files": []}, "data_files must be nonempty"),
+        ("zero-answers", {"n_samples_per_prompt": 0}, r"(?s)n_samples_per_prompt.*greater than 0"),
+        ("empty-files", {"data_files": []}, r"(?s)data_files"),
         ("missing-profile", {}, "evaluation data has no additional evaluation profile: sampled"),
         ("two-inputs", {"data_files": ["another.parquet"]}, "both data_files and evaluation_data"),
         ("null-profile", None, "evaluation profile sampled must be a mapping"),
@@ -499,9 +531,9 @@ def test_callback_setup_rejects_final_metrics_during_periodic_evaluation(consume
         ("list-profiles", {}, "additional_evaluations must be a mapping"),
         ("mixed-field-keys", {1: 0, "typo": 0}, "profile sampled has unknown fields"),
         ("mixed-sampling-keys", {"sampling_params": {1: 0, "typo": 0}}, "profile sampled has unknown sampling keys"),
-        ("scalar-files", {"data_files": 7}, "profile sampled: data_files must be nonempty"),
-        ("string-files", {"data_files": "panel.parquet"}, "profile sampled: data_files must be nonempty"),
-        ("nonstring-files", {"data_files": [7]}, "profile sampled: data_files must be nonempty"),
+        ("scalar-files", {"data_files": 7}, r"(?s)profile sampled:.*data_files"),
+        ("string-files", {"data_files": "panel.parquet"}, r"(?s)profile sampled:.*data_files"),
+        ("nonstring-files", {"data_files": [7]}, r"(?s)profile sampled:.*data_files"),
         ("null-callback", {}, r"trainer.callbacks\[0\] must be a mapping"),
     ],
 )
@@ -509,15 +541,23 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: 
     path = tmp_path / "evaluation.yaml"
     document = raw_launch_config()
     document["run"]["export_hf"] = False
+    document["iris"]["max_retries"] = 0
     document["skyrl"]["entrypoint"] = "generate"
     generator = document["skyrl"].setdefault("generator", {})
-    generator["eval_sampling_params"] = {"temperature": 0.5, "stop": ["base-stop"], "top_p": 0.73}
+    generator["eval_sampling_params"] = {
+        "temperature": 0.5, "stop": ["base-stop"], "top_p": 0.73,
+        "skip_special_tokens": False,
+    }
     generator["eval_n_samples_per_prompt"] = 2
     profile = {
         "sampling_params": {"temperature": 0.0, "stop": None, "seed": 42, "frequency_penalty": 0.5, "stop_token_ids": [7]},
         "n_samples_per_prompt": None,
     }
     profile = {**profile, **patch} if isinstance(patch, dict) else patch
+    if case == "sampling-omitted":
+        profile.pop("sampling_params")
+    if case == "final-schedule":
+        document["skyrl"]["entrypoint"] = "standard"
     document["skyrl"]["trainer"]["callbacks"] = [
         {"type": "evaluation", "additional_evaluations": {"sampled": profile}}
     ]
@@ -552,13 +592,18 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: 
         with pytest.raises(ValueError, match=error):
             load_launch_config(path)
         return
+    expected_sampling = generator["eval_sampling_params"] | (profile.get("sampling_params") or {})
+    authored = deepcopy(document["skyrl"])
+    authored["trainer"].pop("seed", None)
+    authored["trainer"]["logger"] = ["records"]
+    document["skyrl"] = SkyRLRecipe.from_document(authored).to_skyrl()
+    path.write_text(yaml.safe_dump(document))
     loaded = load_launch_config(path)
     recorded = loaded.skyrl.trainer.callbacks[0].additional_evaluations.sampled
     assert recorded.n_samples_per_prompt == (3 if case == "explicit" else 2)
     request = OmegaConf.to_container(recorded.sampling_params, resolve=True)
-    assert {key: request[key] for key in ("top_p", "temperature", "stop", "seed")} == {
-        "top_p": 0.73, "temperature": 0.0, "stop": None, "seed": 42,
-    }
+    assert {key: request[key] for key in expected_sampling} == expected_sampling
+    assert recorded.schedule == ("final" if case == "final-schedule" else "every_evaluation")
     prepared = launch._prepare_config(loaded)
     OmegaConf.update(prepared, "skyrl.generator.eval_sampling_params.seed", 91, force_add=True)
     OmegaConf.update(prepared, "skyrl.generator.eval_sampling_params.presence_penalty", 0.25, force_add=True)
@@ -593,10 +638,17 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: 
     assert observed["primary"] == ["throughput-only"]
     assert observed["profile"] == ["panel-only"]
     assert observed["count"] == (3 if case == "explicit" else 2)
-    assert observed["request"] | {
-        "temperature": 0.0, "stop": None, "seed": 42,
-        "presence_penalty": 0.25, "frequency_penalty": 0.5, "stop_token_ids": [7],
-    } == observed["request"]
+    assert {key: observed["request"][key] for key in expected_sampling} == expected_sampling
+    from skyrl_train.inference_engines.sampling import get_sampling_params_for_backend
+
+    assert observed["request"]["presence_penalty"] == 0.25
+    native_request = get_sampling_params_for_backend("vllm", OmegaConf.create(observed["request"]))
+    assert native_request["skip_special_tokens"] is False
+    assert native_request["stop"] == (["!"] if case == "native-forms" else expected_sampling["stop"])
+    if case == "sampling-domain":
+        assert native_request["structured_outputs"] == expected_sampling["structured_outputs"]
+        assert native_request["extra_args"] == expected_sampling["extra_args"]
+        assert native_request["logprobs"] == -1
     record = json.loads((tmp_path / "resolved.json").read_text())
     assert record["config"]["inputs"]["evaluation_data"]["sampled"][0]["identity"] == "panel"
     stored = record["config"]["skyrl"]["trainer"]["callbacks"][0]["additional_evaluations"]["sampled"]
