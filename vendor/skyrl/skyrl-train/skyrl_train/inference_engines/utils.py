@@ -146,27 +146,21 @@ def aggregate_completion_usage_info(
     are still compatible with newer vllm versions can be checked in our GPU tests, where we explicitly
     check the dictionary with `CompletionResponse.model_validate()`.
     """
-    if backend == "vllm":
-        # required fields
-        usage_info = {
-            "prompt_tokens": sum(result["usage"]["prompt_tokens"] for result in results),
-            "total_tokens": sum(result["usage"]["total_tokens"] for result in results),
-        }
-        # optional fields
-        if results[0]["usage"].get("completion_tokens") is not None:
-            usage_info["completion_tokens"] = sum(result["usage"]["completion_tokens"] for result in results)
-        if results[0]["usage"].get("prompt_tokens_details") is not None:
-            if results[0]["usage"]["prompt_tokens_details"].get("cached_tokens") is not None:
-                usage_info["prompt_tokens_details"] = {
-                    "cached_tokens": sum(
-                        result["usage"]["prompt_tokens_details"]["cached_tokens"] for result in results
-                    )
-                }
-        return usage_info
-    elif backend == "sglang":
-        raise NotImplementedError("SGLang is not supported yet")
-    else:
+    if backend != "vllm":
         raise ValueError(f"Unsupported backend: {backend}")
+    usage_info = {
+        "prompt_tokens": sum(result["usage"]["prompt_tokens"] for result in results),
+        "total_tokens": sum(result["usage"]["total_tokens"] for result in results),
+    }
+    # optional fields
+    if results[0]["usage"].get("completion_tokens") is not None:
+        usage_info["completion_tokens"] = sum(result["usage"]["completion_tokens"] for result in results)
+    if results[0]["usage"].get("prompt_tokens_details") is not None:
+        if results[0]["usage"]["prompt_tokens_details"].get("cached_tokens") is not None:
+            usage_info["prompt_tokens_details"] = {
+                "cached_tokens": sum(result["usage"]["prompt_tokens_details"]["cached_tokens"] for result in results)
+            }
+    return usage_info
 
 
 _RENDEZVOUS_PORT_START = 20_000

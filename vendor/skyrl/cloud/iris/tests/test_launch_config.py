@@ -13,13 +13,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import yaml
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
+from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from finestore.rl.run_records import read_attempt, read_attempt_metrics
-from cloud.iris.tests.launch_test_support import raw_config
 from cloud.iris import launch, skyrl_entrypoint, task_runtime, training_driver
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
 from cloud.iris.rl_config_translation import (
@@ -36,6 +36,8 @@ from marinskyrl.runtime_options import reference_model_required
 from marinskyrl.inference_placement import validate_expert_block_transport
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.utils.tracking import Tracking
+from skyrl_train.config.rollout_validation import EntrypointOperation, validate_rollout_launch
+from skyrl_train.inference_engines import placement as inference_placement
 
 
 def test_training_channels_require_compatible_weight_transport() -> None:
@@ -53,8 +55,108 @@ def test_training_channels_require_compatible_weight_transport() -> None:
     validate_expert_block_transport(config)
 
 
+def test_colocated_expert_block_accepts_only_the_four_gpu_verified_layout() -> None:
+    config = get_default_config()
+    config.trainer.strategy = "megatron"
+    config.trainer.placement.colocate_all = True
+    config.trainer.placement.policy_num_nodes = 1
+    config.trainer.placement.policy_num_gpus_per_node = 4
+    config.trainer.policy.megatron_config.tensor_model_parallel_size = 1
+    config.trainer.policy.megatron_config.pipeline_model_parallel_size = 1
+    config.trainer.policy.megatron_config.expert_tensor_parallel_size = 1
+    config.trainer.policy.megatron_config.expert_model_parallel_size = 4
+    config.generator.weight_sync_transport = "expert_block"
+    config.generator.weight_sync_backend = "nccl"
+    config.generator.backend = "vllm"
+    config.generator.run_engines_locally = True
+    config.generator.num_inference_engines = 1
+    config.generator.inference_engine_tensor_parallel_size = 1
+    config.generator.inference_engine_pipeline_parallel_size = 1
+    config.generator.inference_engine_data_parallel_size = 4
+    config.generator.inference_engine_expert_parallel_size = 4
+    config.generator.expert_block_sync.verify = True
+    with open_dict(config.generator.engine_init_kwargs):
+        config.generator.engine_init_kwargs.kernel_config = {"moe_backend": "triton"}
+
+    validate_expert_block_transport(config)
+
+    config.generator.inference_engine_data_parallel_size = 2
+    with pytest.raises(ValueError, match="colocation requires"):
+        validate_expert_block_transport(config)
+
+
+def test_colocated_expert_block_rejects_generation_before_ray_starts() -> None:
+    config = get_default_config()
+    config.trainer.placement.colocate_all = True
+    config.generator.weight_sync_transport = "expert_block"
+
+    with pytest.raises(ValueError, match="requires a training entrypoint"):
+        validate_rollout_launch(config, EntrypointOperation.GENERATE)
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    ["skyrl_train.entrypoints.main_generate", "skyrl_train.entrypoints.taskcompendium"],
+)
+def test_colocated_expert_block_rejects_unverified_launch_entrypoint(tmp_path: Path, entrypoint: str) -> None:
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw_launch_config()))
+    config = load_launch_config(path)
+    config.skyrl.generator.weight_sync_transport = "expert_block"
+    config.runtime.entrypoint = entrypoint
+
+    with pytest.raises(ValueError, match="requires the standard training entrypoint"):
+        validate_launch_config(config)
+
+
+def test_shared_bundle_reports_reject_duplicate_or_misrouted_receivers(monkeypatch) -> None:
+    shared_group = object()
+    bundle_nodes = {0: "node-a", 1: "node-b", 2: "node-a", 3: "node-b"}
+    monkeypatch.setattr(
+        inference_placement,
+        "placement_group_table",
+        lambda group: {"bundles_to_node_id": bundle_nodes},
+    )
+    nodes = inference_placement.colocated_inference_bundle_nodes(
+        shared_group, [[2], [0], [3], [1]], num_inference_engines=1, data_parallel_size=4, pipeline_parallel_size=1
+    )
+    assert nodes == [["node-a", "node-a", "node-b", "node-b"]]
+    reports = [
+        [
+            {
+                "host": "host-a" if rank < 2 else "host-b",
+                "gpu_uuid": f"gpu-{rank}",
+                "dp_rank": rank,
+                "dp_world_size": 4,
+                "ep_rank": rank,
+                "ep_world_size": 4,
+                "torch_rank": rank,
+                "torch_world_size": 4,
+            }
+        ]
+        for rank in range(4)
+    ]
+    kwargs = dict(
+        bundle_nodes=nodes,
+        node_hosts={"node-a": "host-a", "node-b": "host-b"},
+        relative_rank_offsets=[0] * 4,
+        data_parallel_size=4,
+        expert_parallel_size=4,
+    )
+    placements = inference_placement.verified_inference_replica_placements(reports, **kwargs)
+    assert [row.worker.gpu_uuid for row in placements] == [f"gpu-{rank}" for rank in range(4)]
+
+    reports[3][0]["gpu_uuid"] = "gpu-0"
+    with pytest.raises(ValueError, match="distinct"):
+        inference_placement.verified_inference_replica_placements(reports, **kwargs)
+    reports[3][0]["gpu_uuid"] = "gpu-3"
+    reports[3][0]["ep_rank"] = 2
+    with pytest.raises(ValueError, match="EP rank"):
+        inference_placement.verified_inference_replica_placements(reports, **kwargs)
+
+
 def test_launch_preserves_harbor_dataset_relative_paths(tmp_path):
-    raw = raw_config()
+    raw = raw_launch_config()
     task = {
         "git_url": "https://example.org/tasks.git",
         "git_commit_id": "b" * 40,
@@ -79,7 +181,7 @@ def test_launch_preserves_harbor_dataset_relative_paths(tmp_path):
 
 
 def test_default_hf_export_requests_only_the_terminal_checkpoint(tmp_path):
-    raw = raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["trainer"].update(export_hf_artifact=True, ckpt_interval=1)
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
@@ -99,7 +201,7 @@ def test_default_hf_export_requests_only_the_terminal_checkpoint(tmp_path):
 async def test_custom_session_settings_reach_private_grading_through_the_launch_config(
     tmp_path: Path, text: str, reward: float
 ) -> None:
-    raw = raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["environment"] = {"task_sessions": {"custom_math": {"reward_method": "final_line"}}}
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
@@ -134,7 +236,7 @@ def test_launch_config_composes_and_loads_as_structured_hydra(
     tmp_path: Path, loss: str, reduction: str, storage_prefix: str, probe_enabled: bool
 ) -> None:
     path = tmp_path / "resolved-launch.yaml"
-    raw = raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["trainer"]["algorithm"].update(policy_loss_type=loss, loss_reduction=reduction)
     trainer = raw["skyrl"]["trainer"]
     trainer["resume_mode"] = "from_path"
@@ -171,7 +273,7 @@ def test_launch_config_composes_and_loads_as_structured_hydra(
 
 def test_auxiliary_ftpo_launch_retains_task_objective_and_topk(tmp_path: Path) -> None:
     # Smartie's mixed objective previously failed the launcher's distillation-only top-K gate.
-    raw = raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["trainer"]["use_sample_packing"] = False
     raw["skyrl"]["trainer"]["algorithm"].update(policy_loss_type="regular", ftpo={"auxiliary_weight": 0.1})
     raw["skyrl"]["generator"]["sampling_params"] = {"temperature": 1.0, "logprobs": 32}
@@ -188,7 +290,7 @@ def test_auxiliary_ftpo_launch_retains_task_objective_and_topk(tmp_path: Path) -
 @pytest.mark.parametrize("switch", ["use_abs_kl", "use_kl_estimator_k3"])
 def test_composed_launch_rejects_kl_switches(tmp_path: Path, switch: str) -> None:
     path = tmp_path / "launch.yaml"
-    path.write_text(yaml.safe_dump(raw_config()))
+    path.write_text(yaml.safe_dump(raw_launch_config()))
     config = load_launch_config(path)
     OmegaConf.update(config.skyrl.trainer.algorithm, switch, True, force_add=True)
     OmegaConf.save(config, path)
@@ -209,7 +311,7 @@ def test_composed_launch_rejects_kl_switches(tmp_path: Path, switch: str) -> Non
 def test_composed_launch_records_whether_training_runs_ahead_of_its_updates(
     tmp_path: Path, entrypoint: str, max_staleness_steps: int, expected: str | None
 ) -> None:
-    raw = raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["entrypoint"] = entrypoint
     raw["skyrl"]["trainer"]["placement"]["colocate_all"] = False
     raw["skyrl"]["trainer"]["rollout_buffer"] = {"max_staleness_steps": max_staleness_steps}
@@ -222,7 +324,7 @@ def test_composed_launch_records_whether_training_runs_ahead_of_its_updates(
 
 
 def test_object_store_uris_in_skyrl_config_reach_the_task_unchanged(tmp_path: Path) -> None:
-    raw = raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["trainer"]["rollout_buffer"] = {"object_store_root": "s3://runs/smoke/rollouts"}
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw, sort_keys=False))
@@ -235,7 +337,7 @@ def test_object_store_uris_in_skyrl_config_reach_the_task_unchanged(tmp_path: Pa
 def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = raw_config()
+    config = raw_launch_config()
     config["skyrl"] = yaml.safe_load(
         (Path(__file__).resolve().parents[1] / "configs/qwen_megatron_smoke.yaml").read_text()
     )
@@ -278,7 +380,7 @@ def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_
 @pytest.mark.parametrize("entrypoint", ["standard", "generate"])
 def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path, monkeypatch, entrypoint) -> None:
     destination = tmp_path / "launch.yaml"
-    document = raw_config()
+    document = raw_launch_config()
     document["run"]["coordinator_iris_job_id"] = "/tests/coordinator"
     document["iris"]["max_retries"] = 0
     document["skyrl"]["trainer"]["logger"] = ["records"]
@@ -344,7 +446,10 @@ def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) ->
     raw = yaml.safe_load((Path(__file__).resolve().parents[1] / "configs/qwen_megatron_smoke.yaml").read_text())
     groups = {"eval/train/avg_score": ["eval/cat_count_n1/avg_score", "eval/cat_count_n2/avg_score"]}
     profiles = {"sampled": {"sampling_params": {"stop": ["./END"]}}}
-    raw["trainer"]["callbacks"] = [{"type": "evaluation", "metric_groups": groups, "additional_evaluations": profiles}]
+    raw["trainer"]["callbacks"] = [
+        {"type": "evaluation", "metric_groups": groups, "additional_evaluations": profiles},
+        {"type": "best_checkpoint", "selection_metric": "eval/identity_behavior_holdout/pass_at_1"},
+    ]
     path = tmp_path / "evaluation.yaml"
     path.write_text(yaml.safe_dump(raw))
 
@@ -354,6 +459,7 @@ def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) ->
 
     assert config.trainer.callbacks[0].metric_groups == groups
     assert config.trainer.callbacks[0].additional_evaluations == profiles
+    assert config.trainer.callbacks[1].selection_metric == "eval/identity_behavior_holdout/pass_at_1"
 
 
 @pytest.mark.parametrize("consumer", ["metric_groups", "stop_when"])
@@ -401,7 +507,7 @@ def test_callback_setup_rejects_final_metrics_during_periodic_evaluation(consume
 )
 def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: Path, monkeypatch, case, patch, error) -> None:
     path = tmp_path / "evaluation.yaml"
-    document = raw_config()
+    document = raw_launch_config()
     document["run"]["export_hf"] = False
     document["skyrl"]["entrypoint"] = "generate"
     generator = document["skyrl"].setdefault("generator", {})
@@ -499,7 +605,7 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: 
 
 
 def test_source_recipe_rejects_resolved_harbor_key_before_discarding_agent_settings(tmp_path: Path) -> None:
-    raw = raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["terminal_bench_config"] = {"installed_agent": {"agent": {"name": "pi"}}}
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
@@ -509,7 +615,7 @@ def test_source_recipe_rejects_resolved_harbor_key_before_discarding_agent_setti
 
 
 def test_installed_agent_artifacts_follow_launch_attempt_and_survive_reload(tmp_path: Path) -> None:
-    raw = raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["config_groups"] = {"terminal_bench_config": "terminal_bench"}
     raw["skyrl"]["terminal_bench"] = {"installed_agent": {"agent": {"name": "pi"}}}
     path = tmp_path / "launch.yaml"
@@ -522,7 +628,7 @@ def test_installed_agent_artifacts_follow_launch_attempt_and_survive_reload(tmp_
 
 
 def test_null_nonfinite_limit_in_launch_fails_on_first_invalid_step(tmp_path: Path) -> None:
-    raw = raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["trainer"]["policy"] = {"max_consecutive_nonfinite_steps": None}
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw, sort_keys=False))
@@ -536,7 +642,7 @@ def test_null_nonfinite_limit_in_launch_fails_on_first_invalid_step(tmp_path: Pa
 @pytest.mark.parametrize(("key", "value"), [("use_tis", True), ("tis_imp_ratio_cap", 2.0)])
 def test_composed_launch_rejects_tis_selectors(tmp_path: Path, key: str, value) -> None:
     path = tmp_path / "launch.yaml"
-    path.write_text(yaml.safe_dump(raw_config()))
+    path.write_text(yaml.safe_dump(raw_launch_config()))
     config = load_launch_config(path)
     OmegaConf.update(config.skyrl.trainer.algorithm, key, value, force_add=True)
     OmegaConf.save(config, path)
@@ -608,7 +714,7 @@ def test_composed_launch_rejects_tis_selectors(tmp_path: Path, key: str, value) 
     ],
 )
 def test_launch_validates_correction_and_selection_contract(tmp_path: Path, overrides: dict, error: str | None):
-    raw = OmegaConf.create(raw_config())
+    raw = OmegaConf.create(raw_launch_config())
     for key, value in overrides.items():
         OmegaConf.update(raw.skyrl.trainer, key, value, force_add=True)
     path = tmp_path / "launch.yaml"
@@ -625,7 +731,7 @@ def test_launch_validates_correction_and_selection_contract(tmp_path: Path, over
     ("recipe", "nodes"), [("snowball_mopd_ultra_async_smoke", 8), ("snowball_mopd_ultra_async_32k_smoke", 9)]
 )
 def test_inherited_recipe_round_trips_as_a_self_contained_launch(tmp_path: Path, recipe: str, nodes: int):
-    raw = raw_config()
+    raw = raw_launch_config()
     raw["skyrl"] = {"defaults": [recipe, "_self_"], "trainer": {"max_steps": 2}}
     raw["iris"]["allocation"]["num_nodes"] = nodes
     path = tmp_path / "launch.yaml"

@@ -24,7 +24,7 @@ for the recipe and resume commands.
 experiments/post_training/task_curation/recipes/eval-lite.json`
 builds the EvalLite: 1,500 evaluation-only benchmark tasks that RL
 runs grade without containers or judges, and a 100-task fast subset. The
-[panel reference](../../../docs/references/task-curation.md#eval-lite)
+[panel reference](../../../docs/references/task-curation.md#evallite)
 lists its parts and how to change them.
 
 ## Local conversion loop
