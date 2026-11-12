@@ -15,7 +15,6 @@ from verifyit.modes.grade_exact import grade_collection_f1, grade_normalized_ali
 from .amc import last_boxed_answer
 
 INVALID_ANSWER = "[invalid]"
-GSM8K_STOPS = tuple("Question:" if stop == "\nQuestion:" else stop for stop in END_OF_TURN)
 COMPLETION_REQUEST_STOPS = ("\nYou are an AI assistant", "\nQuestion:", "\nQ:", "\n[Question]")
 GSM8K_REQUEST_STOPS = ("\nYou are an AI assistant", "Question:", "\nQ:", "\n[Question]")
 _NUMBER = r"-?\$?\d[\d,]*(?:\.\d+)?"
@@ -192,7 +191,8 @@ def validate_harness_generation(profile: str, references: tuple[tuple[str, ...],
 
 
 def _gsm8k_flexible_answer(response: str) -> str:
-    response = final_text(truncate_response(response, GSM8K_STOPS))
+    # A leading Question: can restate the prompt; a later line starts a new turn.
+    response = final_text(truncate_response(response.lstrip()))
     boxed = last_boxed_answer(response.replace(r"\fbox", r"\boxed"))
     if boxed:
         return boxed.strip()

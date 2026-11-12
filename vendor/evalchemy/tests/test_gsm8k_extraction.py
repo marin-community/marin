@@ -33,6 +33,12 @@ def _flexible_extract(response: str) -> tuple[Instance, str]:
         ("\\boxed{1,200}", "1,200"),
         ("\\boxed{18}. The calculation used 9 and 2.", "18"),
         ("The answer is 12.\nQuestion: unrelated question with 8088 rows", "12"),
+        (
+            "Question: Janet has 16 eggs and uses 7.\n16 - 7 = 9; 9 * 2 = 18.\nThe answer is 18."
+            "\nQuestion: unrelated question with 8088 rows",
+            "18",
+        ),
+        ("\nQuestion: Janet has 16 eggs and uses 7.\nThe answer is 18.", "18"),
         ("The answer is 12.\nQ: unrelated question with 8088 rows", "12"),
         ("The answer is 12.\n[Question] unrelated question with 8088 rows", "12"),
         ("$$", "[invalid]"),

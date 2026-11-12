@@ -22,7 +22,7 @@ trailing newline.
 
 import re
 
-from eval.generation_stops import GSM8K_STOP_SEQUENCES, truncate_at_stop
+from eval.generation_stops import END_OF_TURN_SEQUENCES, truncate_at_stop
 
 FALLBACK = "[invalid]"
 _FINAL_ANSWER_MARKER = "#### "
@@ -46,7 +46,7 @@ def extract_flexible(solution: str) -> str:
     The reference pattern has two alternated groups, so ``findall`` yields
     tuples and the filter keeps the first non-empty group of the last match.
     """
-    matches = _FLEXIBLE_EXTRACT.findall(truncate_at_stop(solution, GSM8K_STOP_SEQUENCES))
+    matches = _FLEXIBLE_EXTRACT.findall(truncate_at_stop(solution.lstrip(), END_OF_TURN_SEQUENCES))
     if not matches:
         return FALLBACK
     groups = [group for group in matches[-1] if group]

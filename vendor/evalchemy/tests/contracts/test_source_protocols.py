@@ -151,3 +151,17 @@ def test_gsm_perturbation_pairs_matching_trials_and_keeps_pass_at_k(reverse_clea
     assert reduced["gsm8k-perturbed:typos_harmed"] == reduced["gsm8k-perturbed:typos_helped"] == 1
     assert reduced["pass@1"] == 0.5
     assert reduced["pass@2"] == 1.0
+
+
+def test_gsm_perturbation_scores_answer_after_leading_question_restatement():
+    source = GSM8KPerturbedBenchmark()
+    item = next(source.iter_specs(SourceOptions("GSM8KPerturbed", source.SOURCE, limit=1)))
+    response = (
+        f"\nQuestion: Janet has 16 eggs.\nThe answer is {item.target}.\n"
+        "Question: unrelated question with 8088 rows"
+    )
+
+    grade = gsm8k_flexible(item, [response])
+
+    assert grade.metrics == {"accuracy": 1.0, "no_answer": 0.0}
+    assert grade.filtered_resps == [f"{item.target}."]
