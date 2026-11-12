@@ -681,7 +681,7 @@ def _execute_lowered(
 
 
 def main() -> None:
-    """Run the offline preservation phase and write the qualification report."""
+    """Report payload preservation, optional Docker setup checks and supplied liveness evidence."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cohort", type=Path, required=True, help="native cohort parquet (path, task_binary)")
     parser.add_argument("--rebuild-out", type=Path, required=True, help="rebuild output directory")
