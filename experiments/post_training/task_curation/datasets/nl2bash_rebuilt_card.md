@@ -49,11 +49,11 @@ identity, with no build or execution-requirement failures.
 
 ## Qualification
 
-Setup fidelity and verifier liveness ran against these converted specs before publication:
+Setup fidelity and verifier liveness ran against these converted specs at this revision:
 
 - **Setup fidelity:** 1,498 of 1,498 specs reproduce their archive's lowered environment exactly —
-  same pinned base, working directory and setup-command sequence — and every spec carries its
-  verifier resources.
+  same pinned base, working directory, setup-command sequence and environment variables — and every
+  spec carries its verifier resources.
 - **Verifier liveness:** 20 tasks sampled across the cohort's single environment. Every sampled
   grader grades an empty submission through the production grading path and returns a **negative
   verdict (reward 0.0)**, with no infrastructure errors or timeouts.

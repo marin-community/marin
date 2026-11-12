@@ -162,7 +162,7 @@ def sources() -> list[RlDataSource]:
                 name="nl2bash-v1-rebuilt",
                 version="1",
                 repo="open-athena/nl2bash-v1-rebuilt-taskcompendium-20261111",
-                revision="6c3a45faee37588a877d86c808828fd8377673f8",
+                revision="1be6be13a89ab3ef30c7390ca2f29d7b9eeb40dd",
                 expected_rows=1498,
             ),
             info=SourceInfo(
@@ -184,12 +184,12 @@ def sources() -> list[RlDataSource]:
                 oracle_validation=OracleValidation.VERIFIER_EXECUTED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/nl2bash.py @ 3687e77944",
+                    recipe_revision="datasets/tasktrove/nl2bash.py @ e6be97168d",
                     verification=(
-                        "setup fidelity executed on all 1,498 converted specs (all reproduce their archive's "
-                        "lowered base, working directory and steps) and verifier liveness on 20 sampled tasks "
-                        "drawn across the cohort's single environment (20 negative verdicts, reward 0.0, no "
-                        "infrastructure errors)"
+                        "setup fidelity executed on all 1,498 converted specs at this revision (all reproduce "
+                        "their archive's lowered base, working directory, steps and environment variables) and "
+                        "verifier liveness on 20 sampled tasks drawn across the cohort's single environment "
+                        "(20 negative verdicts, reward 0.0, no infrastructure errors)"
                     ),
                     reviewed=1498,
                     admitted=1498,
@@ -203,13 +203,130 @@ def sources() -> list[RlDataSource]:
                     "DCAgent2__nl2bash-tasks-cleaned-oracle-v2 @ 02923004846e4e73862c20962f823a6d05100e7a: "
                     "zero refusals, zero substitutions. Qualified without oracles: setup fidelity matches on "
                     "all 1,498 rows and 20 of 20 sampled verifiers return a negative verdict on an empty "
-                    "submission. The repository is private pending release."
+                    "submission at this revision. The repository is private pending release."
                 ),
                 dataset=SourceReference(
                     "open-athena/nl2bash-v1-rebuilt-taskcompendium-20261111",
-                    "6c3a45faee37588a877d86c808828fd8377673f8",
+                    "1be6be13a89ab3ef30c7390ca2f29d7b9eeb40dd",
                     "https://huggingface.co/datasets/open-athena/nl2bash-v1-rebuilt-taskcompendium-20261111"
-                    "/tree/6c3a45faee37588a877d86c808828fd8377673f8",
+                    "/tree/1be6be13a89ab3ef30c7390ca2f29d7b9eeb40dd",
+                ),
+            ),
+        ),
+        RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="codeforces-v1-rebuilt",
+                version="1",
+                repo="open-athena/tasktrove-codeforces-v1-taskcompendium-20261112",
+                revision="05167566303b67a1adea08743d26c39101c5c30a",
+                expected_rows=9745,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:tasktrove-codeforces-rebuilt-v1",
+                title="TaskTrove codeforces rebuilt cohort (TaskCompendium)",
+                origin="Task Trove",
+                family="competitive-programming",
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=9745,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the lowered task specs at the pinned revision: "
+                    "one distinct agent identity (each task's archived recipe lowered onto the pinned "
+                    "base), zero execution-requirement failures. Graders are lock-placed and grade in "
+                    "the worker's local runtime, contributing no Daytona identity"
+                ),
+                daytona_execution_failures=0,
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/code.py @ e6be97168d",
+                    verification=(
+                        "setup fidelity executed on all 9,745 converted specs at this revision (all "
+                        "reproduce their archive's lowered base, working directory, steps and environment "
+                        "variables) and verifier liveness on 20 sampled tasks drawn across the cohort's "
+                        "single environment (20 negative verdicts, reward 0.0, no infrastructure errors)"
+                    ),
+                    reviewed=9745,
+                    admitted=9745,
+                    level=OversightLevel.SAMPLE,
+                ),
+                notes=(
+                    "9,745 codeforces tasks converted to run in the environment their archives specify: "
+                    "the ubuntu:24.04 recipe each task ships is lowered onto the digest-pinned base and "
+                    "its RUN steps replay as setup commands, one distinct environment across the cohort, "
+                    "measured at the pinned upstream revision laion__codeforces-v3 @ "
+                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. 240 rows are "
+                    "refused as null graders and 15 for gold leaked into the instruction; refused rows "
+                    "are the conversion's own reviewed outcome classes. Qualified without oracles: setup "
+                    "fidelity matches on every converted row and 20 of 20 sampled verifiers return a "
+                    "negative verdict on an empty submission. The repository is private pending release."
+                ),
+                dataset=SourceReference(
+                    "open-athena/tasktrove-codeforces-v1-taskcompendium-20261112",
+                    "05167566303b67a1adea08743d26c39101c5c30a",
+                    "https://huggingface.co/datasets/open-athena/tasktrove-codeforces-v1-taskcompendium-20261112"
+                    "/tree/05167566303b67a1adea08743d26c39101c5c30a",
+                ),
+            ),
+        ),
+        RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="competitive-coding-v1-rebuilt",
+                version="1",
+                repo="open-athena/tasktrove-competitive-coding-v1-taskcompendium-20261112",
+                revision="5a7b7a75eb32901947157e39516a15d894db332b",
+                expected_rows=13973,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:tasktrove-competitive-coding-rebuilt-v1",
+                title="TaskTrove competitive-coding rebuilt cohort (TaskCompendium)",
+                origin="Task Trove",
+                family="competitive-programming",
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=13973,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the lowered task specs at the pinned revision: "
+                    "one distinct agent identity (each task's archived recipe lowered onto the pinned "
+                    "base), zero execution-requirement failures. Graders are lock-placed and grade in "
+                    "the worker's local runtime, contributing no Daytona identity"
+                ),
+                daytona_execution_failures=0,
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/code.py @ e6be97168d",
+                    verification=(
+                        "setup fidelity executed on all 13,973 converted specs at this revision (all "
+                        "reproduce their archive's lowered base, working directory, steps and environment "
+                        "variables) and verifier liveness on 20 sampled tasks drawn across the cohort's "
+                        "single environment (20 negative verdicts, reward 0.0, no infrastructure errors)"
+                    ),
+                    reviewed=13973,
+                    admitted=13973,
+                    level=OversightLevel.SAMPLE,
+                ),
+                notes=(
+                    "13,973 competitive-coding tasks converted to run in the environment their archives "
+                    "specify: the ubuntu:24.04 recipe each task ships is lowered onto the digest-pinned "
+                    "base and its RUN steps replay as setup commands, one distinct environment across the "
+                    "cohort, measured at the pinned upstream revision "
+                    "laion__nemotron-gym-competitive-coding-v2 @ 02923004846e4e73862c20962f823a6d05100e7a "
+                    "with zero substitutions. 1,739 rows are refused for gold leaked into the instruction "
+                    "and one as a reviewed defect; refused rows are the conversion's own reviewed outcome "
+                    "classes. Qualified without oracles: setup fidelity matches on every converted row "
+                    "and 20 of 20 sampled verifiers return a negative verdict on an empty submission. "
+                    "The repository is private pending release."
+                ),
+                dataset=SourceReference(
+                    "open-athena/tasktrove-competitive-coding-v1-taskcompendium-20261112",
+                    "5a7b7a75eb32901947157e39516a15d894db332b",
+                    "https://huggingface.co/datasets/open-athena/tasktrove-competitive-coding-v1-taskcompendium-20261112"
+                    "/tree/5a7b7a75eb32901947157e39516a15d894db332b",
                 ),
             ),
         ),
