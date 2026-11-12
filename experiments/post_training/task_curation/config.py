@@ -34,6 +34,7 @@ class RecipeSettings:
     quality_sample_size: int = SOURCE_QUALITY_SAMPLE_SIZE
     verification_sample_size: int = 20
     oracle_filter_receipt: str | None = None
+    decontamination_receipt: str | None = None
     curation_attempt: int = 0
     execution: AuditExecution = field(default_factory=AuditExecution)
 

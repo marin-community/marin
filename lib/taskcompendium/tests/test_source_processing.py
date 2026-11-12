@@ -52,6 +52,7 @@ from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
 from taskcompendium.pipeline.stages import AuditExecution, prepare_source
 from taskcompendium.runtime.resources import inline_resource
 
+from .decontamination_fixtures import decontamination_evidence
 from .oracle_filter_fixtures import oracle_receipt
 from .pipeline_stages import (
     GRADER_ENVIRONMENT,
@@ -182,6 +183,7 @@ def pipeline_config(
         normalized_shards=normalized_shards,
         machines=machines,
         judge_connection=judge_connection,
+        lexical_contamination=decontamination_evidence(SOURCE_FILES.dataset, SOURCE_FILES.revision, 1),
     )
 
 
@@ -1046,3 +1048,43 @@ def test_reviewed_oracle_source_requires_population_filter_and_rejects_failed_or
     result = run_pipeline(recipe, source, tmp_path / "filtered", replace(config, oracle_filter=receipt))
     assert [row["task_id"] for row in parquet_rows(result.final_path)] == [tasks[1].id]
     assert read_json(result.manifest_path)["admission_counts"] == {"rejected": 1, "admitted": 1}
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+@pytest.mark.parametrize("state", ["missing", "measurement_only", "wrong_pin", "clean", "remediated"])
+def test_decontamination_receipt_precedes_conversion_and_quality_review(tmp_path, mode, state):
+    source = tmp_path / "source"
+    write_jsonl(source, apple_rows(1))
+    conversions = tmp_path / "conversions"
+    conversions.mkdir()
+    recipe = fixture_recipe(RecordingConverter(str(conversions)), controls=REFERENCE_CONTROLS)
+    service = BatchService()
+    reviewer = BatchReviewer(service, "fixture", "revision")
+    evidence = decontamination_evidence(recipe.source.dataset, recipe.source.revision, 1)
+    document = evidence.model_dump(mode="json")
+    if state == "measurement_only":
+        document["receipt"] = None
+    elif state == "wrong_pin":
+        document["receipt"]["dataset_revision"] = "different-output-pin"
+    elif state == "remediated":
+        document.update(measured_tasks=2, contaminated_tasks=1, contaminated_fraction=0.5)
+        document["receipt"].update(
+            status="remediated",
+            dropped_tasks=1,
+            drop_manifest_uri="s3://test/dropped-task.jsonl",
+            original_private_dataset_id="open-athena/unfiltered",
+            original_private_dataset_revision="original-pin",
+        )
+    evidence = None if state == "missing" else type(evidence).model_validate(document)
+    config = replace(pipeline_config(mode, reviewer), lexical_contamination=evidence)
+    if state in {"missing", "measurement_only", "wrong_pin"}:
+        with pytest.raises(ValueError, match=r"[Dd]econtamination"):
+            run_pipeline(recipe, source, tmp_path / "output", config)
+        assert list(conversions.iterdir()) == []
+        assert service.files == {}
+        assert not (tmp_path / "output" / "final").exists()
+        return
+    result = run_pipeline(recipe, source, tmp_path / "output", config)
+    assert len(parquet_rows(result.final_path)) == 1
+    assert service.files
+    assert read_json(result.manifest_path)["lexical_contamination"] == document

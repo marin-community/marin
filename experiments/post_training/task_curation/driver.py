@@ -88,9 +88,16 @@ EMBEDDING_STAGES = (
 )
 
 
-def _selected_sources(sources: tuple[str, ...]) -> dict[str, RlDataSource]:
+def _selected_sources(sources: tuple[str, ...], mode: SourceProcessingMode) -> dict[str, RlDataSource]:
     """Select named sources, or training sources when no names are supplied."""
     catalog = runnable_sources()
+    if sources or mode is SourceProcessingMode.QUICK:
+        registered = {
+            source.name: source
+            for source in all_sources().values()
+            if source.pipeline is not None and not {"deprecated", "excluded"}.intersection(source.info.tags)
+        }
+        catalog = {**registered, **catalog}
     unknown = set(sources) - catalog.keys()
     if unknown:
         raise click.UsageError(f"Unknown source: {', '.join(sorted(unknown))}")
@@ -421,6 +428,7 @@ def _embedding_pass(
 )
 @click.option("--verification-sample-size", type=click.IntRange(min=1), default=20)
 @click.option("--oracle-filter-receipt", type=str)
+@click.option("--decontamination-receipt", type=str)
 @click.option(
     "--curation-attempt",
     type=click.IntRange(min=0),
@@ -510,6 +518,7 @@ def main(
     quality_sample_size: int,
     verification_sample_size: int,
     oracle_filter_receipt: str | None,
+    decontamination_receipt: str | None,
     curation_attempt: int,
     assess: bool | None,
     assessment_sample_size: int,
@@ -545,7 +554,7 @@ def main(
     selection_recipe = (
         SelectionRecipe.model_validate_json(StoragePath(selection).read_text()) if selection is not None else None
     )
-    selected = _selected_sources(sources)
+    selected = _selected_sources(sources, processing_mode)
     if processing_mode != SourceProcessingMode.QUICK and any(
         source.declaration.type == "eval" for source in selected.values()
     ):
@@ -732,6 +741,7 @@ def main(
         quality_sample_size=quality_sample_size,
         verification_sample_size=verification_sample_size,
         oracle_filter_receipt=oracle_filter_receipt,
+        decontamination_receipt=decontamination_receipt,
         curation_attempt=curation_attempt,
         execution=AuditExecution(max_workers=max_workers, worker_resources=worker_resources),
     )

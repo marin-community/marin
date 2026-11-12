@@ -74,6 +74,29 @@ release and vectors stay in object storage.
 
 ## Storage and publication
 
+### Decontamination before QA
+
+QUICK produces unreviewed TaskSpecs for measurement. Before SAMPLE/FULL review,
+each source must carry `lexical_contamination`, including a verified private
+`open-athena` TaskCompendium release receipt at the exact input repository and
+revision. `--decontamination-receipt PATH` loads the complete measurement and
+receipt JSON; declarations expose the same evidence in the catalog.
+
+A measurement with no receipt cannot admit tasks, including a measurement with
+zero contaminated tasks. A clean receipt retains the complete measured
+population. A remediated receipt drops every flagged task, records the drop
+manifest and original private snapshot pin, and identifies a new output pin.
+Retained plus dropped tasks must equal the measured population. The output pin
+must match the source used for QA and admission. Preserve the raw measurement
+input pin separately from the archived private snapshot and final release.
+
+The recipe runner rejects missing or mismatched receipts before conversion,
+reviewer requests or grader controls. Prebuilt imports also check the receipt
+population against the published cohort and preserve the receipt in their
+manifest. Receipt changes enter artifact identity. Existing grandfathered
+MarinSkyRL blend selection remains unchanged; their measurements and remediation
+candidates are recorded without changing the blend wiring.
+
 The curation driver defaults to `s3://marin-us-east-02a/marin` on CoreWeave.
 `--artifact-root URL` selects another root explicitly and overrides the ambient
 `MARIN_PREFIX`. Local `--cache-dir PATH` takes precedence for local execution.

@@ -377,6 +377,16 @@ class LexicalContaminationEvidence(CatalogRecord):
         return None
 
 
+def require_decontamination(
+    evidence: LexicalContaminationEvidence | None, dataset_id: str | None, dataset_revision: str | None
+) -> None:
+    """Require a clean or remediated private release before source QA or admission."""
+    if evidence is None:
+        raise ValueError("Decontamination measurement and private-release admission receipt are missing")
+    if blocker := evidence.admission_blocker(dataset_id, dataset_revision):
+        raise ValueError(f"Decontamination admission blocked: {blocker}")
+
+
 class SourceDeclaration(CatalogRecord):
     id: str
     name: str

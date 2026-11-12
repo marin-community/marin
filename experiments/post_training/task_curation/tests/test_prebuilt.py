@@ -28,6 +28,7 @@ from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.driver import _write_corpus
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 from lib.taskcompendium.tests.oracle_filter_fixtures import oracle_receipt
 
 from .prebuilt_fixtures import prebuilt_task
@@ -43,7 +44,9 @@ def _write(tmp_path, rows: list[dict]):
 
 
 def _cohort(rows: int):
-    return prebuilt.PrebuiltCohort(name="c", version="2026.11.12.1", repo="org/repo", revision="rev", expected_rows=rows)
+    return prebuilt.PrebuiltCohort(
+        name="c", version="2026.11.12.1", repo="open-athena/repo", revision="rev", expected_rows=rows
+    )
 
 
 def test_a_published_cohort_is_downloaded_and_validated(tmp_path, monkeypatch):
@@ -77,7 +80,12 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
     source = RlDataSource(
         config=_cohort(2),
         pipeline=prebuilt.import_prebuilt,
-        info=SourceInfo(id="fixture", title="fixture", origin="fixture"),
+        info=SourceInfo(
+            id="fixture",
+            title="fixture",
+            origin="fixture",
+            lexical_contamination=decontamination_evidence("open-athena/repo", "rev", 2),
+        ),
     )
     artifact = run(prebuilt.import_prebuilt(source, PipelineOptions(mode, CampaignRuntime())))[0]
     destination = Path(artifact.path)
@@ -140,7 +148,13 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
         source = RlDataSource(
             config=_cohort(1),
             pipeline=prebuilt.import_harbor_prebuilt,
-            info=SourceInfo(id="native", title="native", origin="fixture", task_format=TaskFormat.HARBOR),
+            info=SourceInfo(
+                id="native",
+                title="native",
+                origin="fixture",
+                lexical_contamination=decontamination_evidence("open-athena/repo", "rev", 1),
+                task_format=TaskFormat.HARBOR,
+            ),
         )
         artifact = run(prebuilt.import_harbor_prebuilt(source, PipelineOptions(mode, CampaignRuntime())))[0]
         destination = Path(artifact.path)
@@ -173,12 +187,13 @@ def test_direct_prebuilt_admission_requires_oversight_but_allows_unsafe_tasks(tm
     path = _write(tmp_path, [prebuilt_task("a")])
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
     config = prebuilt.PrebuiltCohort(
-        name="unsafe-cohort", version="2026.11.12.1", repo="org/repo", revision="rev", expected_rows=1
+        name="unsafe-cohort", version="2026.11.12.1", repo="open-athena/repo", revision="rev", expected_rows=1
     )
     source = RlDataSource(
         config=config,
         pipeline=prebuilt.import_prebuilt,
         info=SourceInfo(
+            lexical_contamination=decontamination_evidence("open-athena/repo", "rev", 1),
             id="fixture:unsafe",
             title="Unsafe",
             origin="fixture",
@@ -253,7 +268,13 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
     source = RlDataSource(
         config=_cohort(1),
         pipeline=prebuilt.import_prebuilt,
-        info=SourceInfo(id="fixture:oracle", title="oracle", origin="fixture", task_format=TaskFormat.TASKCOMPENDIUM),
+        info=SourceInfo(
+            id="fixture:oracle",
+            title="oracle",
+            origin="fixture",
+            lexical_contamination=decontamination_evidence("open-athena/repo", "rev", 1),
+            task_format=TaskFormat.TASKCOMPENDIUM,
+        ),
     )
     step = prebuilt.import_prebuilt(source, PipelineOptions(mode, CampaignRuntime()))
     destination = tmp_path / "admitted"

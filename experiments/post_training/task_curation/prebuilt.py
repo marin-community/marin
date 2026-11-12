@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.curation import LexicalContaminationEvidence, require_decontamination
 from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
 from rigging.filesystem.storage_path import StoragePath
@@ -36,6 +37,7 @@ from taskcompendium.grading_environment import (
     count_grading_environment,
     grading_environment_census,
 )
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
 from taskcompendium.pipeline.conversion import normalization_columns
@@ -160,6 +162,7 @@ class PrebuiltImport:
     cohort: PrebuiltCohort
     mode: SourceProcessingMode
     task_format: TaskFormat
+    lexical_contamination: LexicalContaminationEvidence
 
 
 def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
@@ -190,11 +193,17 @@ def prebuilt_artifact(
     assert config is not None
     if options.mode is SourceProcessingMode.QUICK:
         raise ValueError(f"A published cohort is imported for admission, not for a quick pass: {source.name}")
+    evidence = source.info.lexical_contamination
+    assert evidence is not None
+    assert evidence.receipt is not None
+    if evidence.receipt.retained_tasks != config.expected_rows:
+        raise ValueError(f"Decontamination receipt does not cover the published cohort: {source.name}")
 
     def build_config(context) -> PrebuiltImport:
-        return PrebuiltImport(context.output_path, config, options.mode, task_format)
+        return PrebuiltImport(context.output_path, config, options.mode, task_format, evidence)
 
     def run(invocation: PrebuiltImport) -> CampaignArtifact:
+        require_decontamination(invocation.lexical_contamination, invocation.cohort.repo, invocation.cohort.revision)
         local = Path(load(invocation.cohort))
         destination = Path(invocation.output_path)
         destination.mkdir(parents=True, exist_ok=True)
@@ -259,6 +268,7 @@ def prebuilt_artifact(
             "revision": config.revision,
             "row_count": config.expected_rows,
             "oracle_filter": oracle_filter.model_dump(mode="json") if oracle_filter else None,
+            "lexical_contamination": invocation.lexical_contamination.model_dump(mode="json"),
             "tasks_sha256": file_sha256(StoragePath(str(destination / TASKS_FILENAME))),
         }
         (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -273,7 +283,7 @@ def prebuilt_artifact(
         )
 
     return ArtifactStep(
-        name=config.name,
+        name=f"{config.name}-{canonical_sha256(evidence.model_dump(mode='json'))[:16]}",
         version=config.version,
         artifact_type=CampaignArtifact,
         run=partial(run),
