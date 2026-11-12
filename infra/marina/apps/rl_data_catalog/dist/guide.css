@@ -66,6 +66,14 @@ body.guide { background: var(--bg); }
 .flow .edge path { fill: none; stroke: var(--edge); stroke-width: 1.6; }
 .flow .edge.exit path { stroke-dasharray: 5 4; }
 .flow .arrowhead { fill: var(--edge); }
+.flow .elabel { fill: var(--muted); font-size: 11.5px; }
+
+.flow-legend { display: flex; flex-wrap: wrap; gap: 6px 20px; margin: 10px 2px 0; font-size: 12.5px; color: var(--muted); align-items: center; }
+.flow-legend span { display: inline-flex; align-items: center; }
+.flow-legend .edge-sample { display: inline-block; width: 28px; border-top: 2px solid var(--edge); margin-right: 8px; }
+.flow-legend .edge-sample.dashed { border-top-style: dashed; }
+
+.pill.unavailable { opacity: 0.5; }
 .flow .pill rect { stroke-width: 1.3; }
 .flow .pill .pc { font-size: 11.5px; }
 .flow .pill .pt { font-size: 14.5px; font-weight: 650; }
@@ -108,6 +116,8 @@ body.guide { background: var(--bg); }
 .guide .num { text-align: right; }
 .guide button.count { border: 1px solid var(--line); background: var(--surface); color: var(--green); border-radius: 6px; padding: 4px 10px; font-variant-numeric: tabular-nums; font-size: 13px; }
 .guide button.count:hover { border-color: var(--green); }
+.guide button.count:disabled { color: var(--muted); cursor: not-allowed; }
+.guide button.count:disabled:hover { border-color: var(--line); }
 .guide .muted { color: var(--muted); }
 .guide .text-button { color: var(--green); }
 
