@@ -26,6 +26,7 @@ class SourceTextPopulation(Artifact):
     specs_output_dir: str
     converter_rejections: dict[str, int]
     admission_rejections: dict[str, int]
+    within_source_dedup: dict | None = None
 
 
 class LexicalDropSets(Artifact):

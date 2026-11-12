@@ -69,7 +69,7 @@ assessment page shows the curation associated with its selected grade.
 
 ## Browsing sources
 
-**By source** lists individual sources with their catalog, converted example
+**By source** lists individual sources with their catalog, unique example
 count, training/evaluation use, current sampled quality, any independent QC the
 pinned release performed, whether the source is Daytona safe, and the curriculum domain
 with the most mapped examples. Search names, datasets or tags; filter by catalog,
@@ -82,7 +82,9 @@ grandfathered blends show a dash. Package-lock graders run on LOCAL with separat
 compatibility evidence. A source without a measured actor verdict cannot enter
 new ingestion. The backend map records each role's demands and blockers.
 
-Example counts describe successfully converted tasks before training selection.
+Example counts describe unique converted task contracts after mandatory within-source
+deduplication, before training selection. Source details include the raw converted count,
+duplicates dropped, and the exclusion manifest.
 Every entry has a registered conversion pipeline; there is no inventory-only
 path that substitutes a declared count for conversion.
 **Not assessed** means there is no current sampled assessment; **Unknown** is a
@@ -110,7 +112,9 @@ Before selecting a new catalog load:
 3. Check task-derived SHARED/SEPARATE grading evidence and actor-only Daytona
    measurements. Every UNSAFE reason needs details and affected actor-task counts;
    retain independent grader compatibility evidence. Grandfathered blends keep
-   their explicit dash exemption.
+   their explicit dash exemption. Task curation owns the fixed list of Daytona-exempt blends and
+   records the exemption reason in `SourceDeclaration.daytona_exemption`; the packaged Atlas
+   renderer reads that reason without owning source-specific policy.
 4. Recompute Result from reviewed issue counts using the inclusive 10% and 50%
    boundaries. Retain issues and repair recommendations separately from exclusions.
 5. Check Evalchemy benchmarks retain evaluation/heldout use. Run conversion in
@@ -130,7 +134,9 @@ Before selecting a new catalog load:
 2. Survey the production backends at Marin latest for their current capabilities
    with the [survey procedure](#backend-survey), and publish the matrix beside the deployment record.
    Execute this survey at each deployment; do not reuse an older deployment's matrix.
-3. Verify measured Examples counts and version-bound lexical evidence for the retained sources.
+3. Verify every source has a complete, exact-pin `within_source_dedup` receipt and
+   Examples equals its `unique_count`, including QUICK sources. Check raw and duplicate
+   counts against the drop manifest, then verify version-bound lexical evidence.
    New or changed admissions require a private TaskCompendium clean/remediated
    receipt after [lexical decontamination](task-curation.md#lexical-decontamination-before-publication);
    preserve grandfathered selection until explicitly approved.
@@ -455,3 +461,21 @@ Declared limits must match the production Harbor trial exactly; calibration-only
 solutions cannot serve as admission evidence. Publish the calibrated TaskSpecs
 and receipt together in a new private, pinned TaskCompendium release. A uniform
 source shape requires every task to have passed at that shape.
+
+## Within-source deduplication before deployment
+
+Every source declaration must contain a complete `within_source_dedup` receipt for the configured
+dataset pin and converter version, including QUICK sources. The receipt records raw converted
+TaskSpecs, unique contracts, duplicates dropped, and the duplicate-to-kept manifest. Atlas Examples
+uses the unique count; source details retain the raw count, duplicate count and exclusion manifest URI,
+with a Filer link beside S3 URIs.
+
+Ingest in this order: conversion → exact within-source deduplication → lexical decontamination →
+resource calibration and full-population oracle filtering → SAMPLE/FULL QA. Keep the lowest task
+ID for each exact full contract. Different graders or private references remain distinct tasks.
+Record duplicate exclusions as `DUPLICATE_WITHIN_SOURCE`, separately from QC.
+
+Before a TRAIN remediation release, union duplicate and lexical exclusions and qualify the retained
+population. Eval/benchmark sources strictly drop duplicates while recording lexical matches without
+lexical exclusions. Publish one new private `open-athena` TaskCompendium version per source only after the
+release has been authorized. Preserve the previous artifacts and receipts.

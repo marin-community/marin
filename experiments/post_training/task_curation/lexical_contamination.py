@@ -26,6 +26,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskSpec, format_conversation
+from taskcompendium.pipeline.deduplication import DROP_SCHEMA, unique_documents
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.sources import conversion_context, source_shards, staged_raw_file_rows
 from zephyr.context import ZephyrContext
@@ -68,6 +69,9 @@ class TextPopulationFiles(NamedTuple):
     task_specs_sha256: str
     main_output_dir: str
     specs_output_dir: str
+    raw_task_count: int
+    within_source_duplicates: int
+    drop_manifest_uri: str
 
 
 def source_documents(config: SourceTextConfig, rejected: Counter, admission: Counter) -> Iterable[tuple[dict, dict]]:
@@ -111,11 +115,10 @@ def source_documents(config: SourceTextConfig, rejected: Counter, admission: Cou
 
 
 def write_text_population(documents: Iterable[tuple[dict, dict]], output_path: str) -> TextPopulationFiles:
-    """Retain every task, writing bounded text/spec partitions without deduplication."""
+    """Deduplicate exact task contracts before writing the lexical input population."""
     text_output = prefix_join(output_path, "outputs/main")
     spec_output = prefix_join(output_path, "specs")
     text_digest, spec_digest = hashlib.sha256(), hashlib.sha256()
-    seen = set()
     texts, specs = [], []
     size = partition = count = 0
 
@@ -134,35 +137,55 @@ def write_text_population(documents: Iterable[tuple[dict, dict]], output_path: s
         size = 0
         partition += 1
 
-    for document, runtime in documents:
-        task = TaskSpec.model_validate(document)
-        if task.id in seen:
-            raise ValueError(f"Duplicate TaskSpec ID prevents exact per-task exclusions: {task.id}")
-        seen.add(task.id)
-        # Preserve case and paragraph boundaries: the shared eval bloom uses this policy.
-        # Fingerprints use this same renderer, then normalize its text for similarity ranking.
-        text = format_conversation(task.context.events)
-        serialized = task.model_dump_json()
-        text_digest.update(json.dumps([task.id, text], ensure_ascii=False).encode())
-        spec_digest.update(serialized.encode())
-        texts.append({"id": task.id, "text": text, "partition_id": partition})
-        specs.append({"id": task.id, "task_spec": serialized, "runtime": json.dumps(runtime)})
-        count += 1
-        size += len(text.encode()) + len(serialized.encode())
-        if size >= PARTITION_BYTES or len(texts) >= PARTITION_ROWS:
-            flush()
+    drop_manifest = prefix_join(output_path, "within-source-dedup/drops.parquet")
+    duplicate_count = 0
+    pending_drops = []
+    with StoragePath(drop_manifest).open("wb", auto_mkdir=True) as stream:
+        with pq.ParquetWriter(stream, DROP_SCHEMA, compression="zstd") as writer:
+
+            def record_drop(row: dict[str, str]) -> None:
+                nonlocal duplicate_count
+                duplicate_count += 1
+                pending_drops.append(row)
+                if len(pending_drops) >= PARTITION_ROWS:
+                    writer.write_table(pa.Table.from_pylist(pending_drops, schema=DROP_SCHEMA))
+                    pending_drops.clear()
+
+            for document, runtime in unique_documents(documents, record_drop):
+                task = TaskSpec.model_validate(document)
+                # Preserve case and paragraph boundaries: the shared eval bloom uses this policy.
+                # Fingerprints use this same renderer, then normalize its text for similarity ranking.
+                text = format_conversation(task.context.events)
+                serialized = task.model_dump_json()
+                text_digest.update(json.dumps([task.id, text], ensure_ascii=False).encode())
+                spec_digest.update(serialized.encode())
+                texts.append({"id": task.id, "text": text, "partition_id": partition})
+                specs.append({"id": task.id, "task_spec": serialized, "runtime": json.dumps(runtime)})
+                count += 1
+                size += len(text.encode()) + len(serialized.encode())
+                if size >= PARTITION_BYTES or len(texts) >= PARTITION_ROWS:
+                    flush()
+            if pending_drops:
+                writer.write_table(pa.Table.from_pylist(pending_drops, schema=DROP_SCHEMA))
     if texts:
         flush()
-    return TextPopulationFiles(count, text_digest.hexdigest(), spec_digest.hexdigest(), text_output, spec_output)
+    return TextPopulationFiles(
+        count,
+        text_digest.hexdigest(),
+        spec_digest.hexdigest(),
+        text_output,
+        spec_output,
+        count + duplicate_count,
+        duplicate_count,
+        drop_manifest,
+    )
 
 
 def normalize_source(config: SourceTextConfig) -> SourceTextPopulation:
     source = all_sources()[canonical_source_id(config.source_id)]
     rejected, admission = Counter(), Counter()
-    count, text_sha, spec_sha, texts, specs = write_text_population(
-        source_documents(config, rejected, admission), config.output_path
-    )
-    if count == 0:
+    files = write_text_population(source_documents(config, rejected, admission), config.output_path)
+    if files.task_count == 0:
         raise ValueError(f"Registered converter emitted no TaskSpecs: {source.info.id}; {dict(rejected)}")
     dataset = source.dataset
     assert dataset is not None and dataset.revision is not None
@@ -174,11 +197,17 @@ def normalize_source(config: SourceTextConfig) -> SourceTextPopulation:
         source_version=source.version,
         converter_revision=config.converter_revision,
         text_renderer_version=RENDERER_VERSION,
-        task_count=count,
-        text_sha256=text_sha,
-        task_specs_sha256=spec_sha,
-        main_output_dir=texts,
-        specs_output_dir=specs,
+        task_count=files.task_count,
+        text_sha256=files.text_sha256,
+        task_specs_sha256=files.task_specs_sha256,
+        main_output_dir=files.main_output_dir,
+        specs_output_dir=files.specs_output_dir,
+        within_source_dedup={
+            "raw_count": files.raw_task_count,
+            "unique_count": files.task_count,
+            "within_source_duplicates": files.within_source_duplicates,
+            "drop_manifest_uri": files.drop_manifest_uri,
+        },
         converter_rejections=dict(rejected),
         admission_rejections=dict(admission),
     )

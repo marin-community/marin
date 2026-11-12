@@ -26,16 +26,20 @@ from finestore.rl.curation import (
     SourceDeclaration,
     SourceOrigin,
     SourceQualityResult,
+    WithinSourceDedupEvidence,
     source_identifier,
     source_title,
 )
 from finestore.rl.source_identity import canonical_source_id
-from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from marin.execution.lazy import ArtifactStep
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.decontamination import require_private_release
+from experiments.post_training.task_curation.source_policy import (
+    GRANDFATHERED_DAYTONA_EXEMPTION,
+    GRANDFATHERED_MARINSKYRL_SOURCES,
+)
 
 
 class PinnedReference(Protocol):
@@ -160,6 +164,7 @@ class SourceInfo:
     integrity_contracts: IntegrityContractSummary | None = None
     actor_census_input: ActorCensusInput | None = None
     converted_examples: ConvertedExamples | None = None
+    within_source_dedup: WithinSourceDedupEvidence | None = None
     lexical_contamination: LexicalContaminationEvidence | None = None
     daytona_machine_slots: int | None = None
     daytona_roles: dict[str, dict[str, RoleExecutionEvidence]] | None = None
@@ -292,6 +297,9 @@ class RlDataSource[ConfigT: CatalogConfig]:
             raise ValueError(f"Source {info.id} has no registered conversion pipeline")
         dataset = self.dataset
         invocation = self.pipeline_reference
+        dedup = info.within_source_dedup
+        if dedup is None:
+            raise ValueError(f"Source {info.id} requires a complete within-source deduplication census")
         tags = info.tags
         if info.id in GRANDFATHERED_MARINSKYRL_SOURCES:
             safety = None
@@ -332,7 +340,8 @@ class RlDataSource[ConfigT: CatalogConfig]:
             quality_result=info.quality_result,
             family=info.family,
             tags=list(tags),
-            task_count=info.count,
+            task_count=dedup.unique_count,
+            within_source_dedup=dedup,
             notes=" ".join(
                 (info.notes, *(f"Admission blocked: {reason}." for reason in self.admission_blockers))
             ).strip(),
@@ -365,6 +374,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             pipeline=invocation,
             independent_qc=info.independent_qc,
             daytona_safety=safety,
+            daytona_exemption=GRANDFATHERED_DAYTONA_EXEMPTION if info.id in GRANDFATHERED_MARINSKYRL_SOURCES else None,
             daytona_snapshot_count=info.daytona_snapshot_count,
             daytona_count_basis=info.daytona_count_basis,
             oracle_validation=info.oracle_validation,

@@ -3,12 +3,10 @@
 
 """Bind frozen lexical measurements to the currently configured TaskSpec population."""
 
-import json
 from dataclasses import replace
-from pathlib import Path
 
 from finestore.rl.curation import ActorCensusInput, DeconReceiptStatus, LexicalContaminationEvidence, LexicalUse
-from finestore.rl.source_identity import SourceId, canonical_source_id
+from finestore.rl.source_identity import SourceId
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from experiments.post_training.task_curation.source import RlDataSource
@@ -81,15 +79,3 @@ def bind_lexical_measurement(
         if observed == expected:
             measurement = receipt.measurement
     return replace(source, info=replace(source.info, lexical_contamination=measurement))
-
-
-def read_lexical_measurements(directory: Path) -> dict[str, LexicalMeasurementReceipt]:
-    receipts = {}
-    for path in sorted(directory.glob("part-*.json")):
-        for source_id, record in json.loads(path.read_text()).items():
-            source_id = canonical_source_id(source_id)
-            receipt = LexicalMeasurementReceipt.model_validate(record)
-            if source_id != receipt.source_id or source_id in receipts:
-                raise ValueError(f"Duplicate or mismatched lexical source identity: {source_id}")
-            receipts[source_id] = receipt
-    return receipts

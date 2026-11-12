@@ -24,6 +24,10 @@ corpus publisher; the experiment owns acquisition and artifact graphs.
 
 ## Pipeline overview
 
+The mandatory ingest order is conversion → exact within-source deduplication → lexical
+decontamination → resource calibration and full-population oracle filtering → SAMPLE/FULL QA.
+QUICK also deduplicates its complete converted population.
+
 The driver runs each dataset's conversion graph, then binds the embedding graph
 to the completed source artifacts. QUICK converts without review; SAMPLE reviews
 a bounded panel; FULL expands accepted sources and verifies kept tasks.
@@ -35,8 +39,11 @@ populations remain distinct throughout the export.
 ```mermaid
 flowchart TD
     sources["Pinned dataset declarations"] --> conversion["Dataset-owned conversion graph"]
-    conversion --> quick["QUICK: converted TaskSpecs"]
-    conversion --> reviewed["SAMPLE/FULL: review, verify, admit"]
+    conversion --> dedup["Within-source exact deduplication"]
+    dedup --> quick["QUICK: unique converted TaskSpecs"]
+    dedup --> decon["Lexical decontamination or benchmark measurement"]
+    decon --> calibration["Resource calibration and full-population oracle filtering"]
+    calibration --> reviewed["SAMPLE/FULL: review, verify, admit"]
     reviewed --> catalog["FineStore campaign catalog: results and evidence"]
     quick --> text["Public task inputs → direct instruction text"]
     reviewed --> text
@@ -152,6 +159,41 @@ same artifact root:
 MARIN_PREFIX=s3://marin-us-east-02a/marin \
   uv run python -m experiments.post_training.task_curation.images --all
 ```
+
+## Mandatory within-source duplicate removal
+
+Every source, including QUICK and prebuilt cohorts, drops exact duplicate contracts after
+conversion. `taskcompendium.identity.task_identity` hashes the canonical TaskSpec with only
+`id`, `source`, `tags` and `labels` excluded. Public conversation, tools, environment and execution
+requirements, grader contract, private reference and tests all participate. Equal prompts with
+different graders remain distinct. Near-duplicates remain advisory.
+
+The lowest task ID is retained, using lexicographic string order. The drop manifest records each
+`task_id` → `kept_id` with ledger reason `DUPLICATE_WITHIN_SOURCE`. This is a mechanical exclusion;
+it does not contribute a QC defect. The raw locator ledger lists every selected input; retained
+conversions, duplicate mappings and conversion rejections account for its outcomes. SAMPLE draws
+its QA panel from the unique converted population; FULL reads the cached unique conversions.
+
+Catalog declarations require `within_source_dedup` evidence bound to the input dataset pin and
+converter version. Atlas Examples is `unique_count`; `raw_count` counts successfully converted
+TaskSpecs before deduplication, and `within_source_duplicates` counts the dropped copies.
+Conversion rejections remain a separate ledger. The source fingerprint uses the same exact
+within-source contract identity to count duplicates in the successful pre-deduplication conversions.
+
+For TRAIN remediation, union duplicate and lexical exclusion manifests by task ID, preserving both
+reasons for an overlap. For eval/benchmark sources, drop duplicates and record lexical flags without
+lexical exclusions. Both policies prepare one new
+private `open-athena` TaskCompendium release per source. Bind calibration, full-population oracle
+filtering, and SAMPLE/FULL QA to the retained population. Measurement and manifest preparation
+alone never publish a Hugging Face release. Existing source artifacts remain immutable.
+
+Evaluation protocols pin the upstream input and its raw task count. Evaluation manifests and
+sidecars contain the unique contracts actually evaluated, in their original source order; the
+conversion ledger reconciles raw rows with unique tasks and dropped copies. An interrupted or
+unsuccessful publication attempt requires a new output artifact version.
+
+Selection-time deduplication retains the rules in [Final task selection](#final-task-selection); changing its grader and
+reference semantics requires a separate decision.
 
 ## Final task selection
 
@@ -390,7 +432,7 @@ lexical exclusions. Use that complete source set for DF filtering.
 
 Before admitting a new or changed source:
 
-1. Normalize the complete converted population with `lexical_contamination`.
+1. Normalize and exactly deduplicate the complete converted population with `lexical_contamination`.
    It uses TaskCompendium's `format_conversation` for the public instruction and
    conversation context, preserving case and blank-line paragraphs. It excludes
    private grader, test and oracle resources from the scanned text, and retains
@@ -1053,13 +1095,13 @@ prints a plan unless `--run` is supplied. QUICK runs locally without review or
 controller settings. See the campaign quickstart below for input overrides.
 The recipe implementation shares conversion and the normalized schema across
 its modes. QUICK retains TaskSpecs
-and typed rejections, skipping admission, fingerprints, review, deduplication
-and grading. It records declared images or locks without building environments.
+and typed rejections after exact within-source duplicate removal, skipping admission,
+advisory cross-source fingerprints, review and grading. It records declared images or locks without building environments.
 
 Recipe SAMPLE and FULL bind `SourcePipelineConfig` and a resolved grader
 environment. Other callables choose their own configuration. The recipe's FULL
-mode reviews a bounded panel, then
-reuses those conversions for expansion. Sample QC is informational and never rejects a source or task. The procedure
+mode converts and deduplicates the complete population before reviewing a bounded panel,
+then reuses retained conversions for full QA. Sample QC is informational and never rejects a source or task. The procedure
 below describes those reviewed stages. See the
 [campaign quickstart](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md)
 for local overrides, Harbor export and pinned content comparison commands.
@@ -1333,6 +1375,11 @@ Incomplete curation produces retained artifacts and downstream assessment, then
 the campaign reports failure. `--curation-attempt N` selects a new curation key
 when controls need a retry; successful exact review requests and pinned downloads
 remain cached. Rerun the same campaign to reuse completed dependencies.
+When `run_source_pipeline` runs SAMPLE or FULL again at an existing output root, it writes a
+new `attempts/<uuid>/` directory. The returned manifest and view paths identify
+that attempt; previous telemetry, partial shards and completed phase evidence
+remain in place. The configured request cache is shared across attempts and reuses only requests
+with the same serialized body and model revision.
 `--assessment-model-revision` changes the grading model revision separately from
 the curation review revision.
 

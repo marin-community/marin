@@ -153,9 +153,23 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
     liveness = tmp_path / "liveness.jsonl"
     liveness.write_text(proof.model_dump_json() + "\n")
     output = tmp_path / "filtered/tasks.parquet"
-    receipt = filter_cohort(cohort, task_map, tmp_path / "jobs", output, no_oracle_liveness=liveness)
+    conversion_manifest = tmp_path / "conversion.json"
+    conversion_manifest.write_text(
+        json.dumps(
+            {
+                "input_rows": 10,
+                "converted_rows": 8,
+                "within_source_dedup": {"raw_count": 10, "unique_count": 8, "within_source_duplicates": 2},
+                "oracle_recipe_identity": "fixture-recipe",
+            }
+        )
+    )
+    receipt = filter_cohort(
+        cohort, task_map, tmp_path / "jobs", output, conversion_manifest=conversion_manifest, no_oracle_liveness=liveness
+    )
     assert [row["path"] for row in pq.read_table(output).to_pylist()] == ["pass", "live"]
     assert receipt.input_rows == 8
+    assert receipt.conversion_rejections == 0
     incompatible = receipt.tasks["source-env"]
     assert incompatible.exclusion_reason is OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER
     assert (

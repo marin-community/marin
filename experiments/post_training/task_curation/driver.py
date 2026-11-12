@@ -75,7 +75,7 @@ LOCAL_MEMORY = "4g"
 LOCAL_NORMALIZED_SHARDS = 4
 WORKER_CONTAINER_PROFILE = "CONTAINER_PROFILE_PRIVILEGED"
 IRIS_JOB_TTL = 1800
-CORPUS_CONVERSION_VERSION = "2026.10.14.1"
+CORPUS_CONVERSION_VERSION = "2026.11.12.1"
 CANONICAL_ARTIFACT_ROOT = "s3://marin-us-east-02a/marin"
 TASK_SELECTION_KEY = "task_selection"
 EMBEDDING_STAGES = (
@@ -228,9 +228,12 @@ def _write_corpus(roots: dict[str, str], inventory: list[SourceDeclaration], rep
             "intended_use": manifest["intended_use"],
         }
         if population == "converted":
-            if manifest["input_rows"] != manifest["converted_rows"] + sum(manifest["rejections"].values()):
+            duplicates = manifest["within_source_dedup"]["within_source_duplicates"]
+            if manifest["input_rows"] != manifest["converted_rows"] + duplicates + sum(manifest["rejections"].values()):
                 raise ValueError(f"Conversion does not account for all input rows: {identifier}")
-            row.update({key: manifest[key] for key in ("input_rows", "converted_rows", "rejections")})
+            row.update(
+                {key: manifest[key] for key in ("input_rows", "converted_rows", "rejections", "within_source_dedup")}
+            )
         sources.append(row)
     result = {
         "version": CORPUS_CONVERSION_VERSION,
@@ -840,7 +843,12 @@ def main(
         else:
             _publish_campaign(report_path, selected, publication_root)
         if selection_step is not None or embedding is not None:
-            roots = {source.info.id: step.path() for source, step in zip(selected.values(), curation_steps, strict=True)}
+            roots = {
+                source.info.id: str(
+                    StoragePath(step.artifact_type.raw_load(step.path()).result.evidence["manifest"]).parent
+                )
+                for source, step in zip(selected.values(), curation_steps, strict=True)
+            }
             _write_corpus(roots, inventory, report_path, "admitted")
         if selection_step is not None:
             result = run(selection_step, max_concurrent=1)[0]

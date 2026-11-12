@@ -8,6 +8,7 @@ from pathlib import Path
 
 from taskcompendium.models import ExecutionRequirements, TaskSpec
 from taskcompendium.pipeline.conversion import convert_source_row
+from taskcompendium.pipeline.deduplication import unique_task_indices
 from taskcompendium.pipeline.models import Converter, ImportRejection, NormalizedTask
 from taskcompendium.pipeline.oracle_filter import oracle_recipe_identity
 from taskcompendium.pipeline.sources import conversion_context, source_shards, staged_raw_file_rows
@@ -48,8 +49,9 @@ def fixture_receipt(recipe: CurationRecipe, root: Path, inputs=None, overrides=N
             result = convert_source_row(row, conversion).result
             if not isinstance(result, ImportRejection):
                 tasks.append(result.task)
-    return oracle_receipt(tasks, oracle_recipe_identity(declared)).model_copy(
-        update={"input_rows": input_rows, "conversion_rejections": input_rows - len(tasks)}
+    kept, dropped = unique_task_indices(tasks)
+    return oracle_receipt([tasks[index] for index in kept], oracle_recipe_identity(declared)).model_copy(
+        update={"input_rows": input_rows - len(dropped), "conversion_rejections": input_rows - len(tasks)}
     )
 
 

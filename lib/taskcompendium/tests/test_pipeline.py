@@ -319,17 +319,17 @@ def test_pipeline_accounts_for_rejects_duplicates_and_conflicting_keys(tmp_path,
     )
 
     audit = stage_table(tmp_path).to_pylist()
-    assert manifest["dispositions"] == {"keep": 1, "reject": 4}
+    assert manifest["dispositions"] == {"keep": 3, "reject": 2}
     assert manifest["reasons"] == {
-        "exact_semantic_duplicate": 1,
-        "conflicting_references": 2,
+        "DUPLICATE_WITHIN_SOURCE": 1,
         "normalize:invalid_reference": 1,
     }
-    assert audit[1]["duplicate_of"] == audit[0]["task_id"]
+    duplicate = next(row for row in audit if row["duplicate_of"])
+    assert duplicate["duplicate_of"] == min(audit[index]["task_id"] for index in (0, 1))
     assert audit[4]["filter_reasons"][0] == "normalize:invalid_reference"
-    assert all(audit[index]["filter_reasons"] == ["conflicting_references"] for index in (2, 3))
+    assert all(audit[index]["filter_status"] == "keep" for index in (2, 3))
     accepted = [TaskSpec.model_validate_json(row["task_json"]) for row in stage_table(tmp_path, "accepted").to_pylist()]
-    assert [task.id for task in accepted] == [audit[0]["task_id"]]
+    assert {task.id for task in accepted} == {row["task_id"] for row in audit if row["filter_status"] == "keep"}
     assert accepted[0].source.revision == svamp_recipe.source.revision
     assert apple_row["Body"] in accepted[0].context.events[0].content
     assert "Equation" not in service.batches["batch-0"][0]["body"]["messages"][1]["content"]
@@ -353,27 +353,28 @@ def test_audit_deduplicates_across_acquired_shards_on_storage_uri(tmp_path, appl
     rows = [apple_row] * 1001 + [{**conflicting, "Answer": "1"}, {**conflicting, "Answer": "2"}]
     snapshot = tmp_path / "sample.jsonl"
     snapshot.write_text("".join(json.dumps(row) + "\n" for row in rows))
-    root = f"memory://curation-{tmp_path.name}"
-    (StoragePath(root) / "staged" / "source.jsonl").write_bytes(snapshot.read_bytes())
+    root = StoragePath(f"memory://curation-{tmp_path.name}")
+    (root / "staged" / "source.jsonl").write_bytes(snapshot.read_bytes())
     service = BatchService()
     reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment")
     review_source(
-        f"{root}/staged",
-        f"{root}/audited",
+        str(root / "staged"),
+        str(root / "audited"),
         svamp_recipe,
         AuditExecution(max_workers=2, review_batch_size=1, reviewer=reviewer),
         len(rows),
     )
-    manifest = filter_source(f"{root}/audited", f"{root}/filtered", max_workers=1)
+    manifest = filter_source(str(root / "audited"), str(root / "filtered"), max_workers=1)
     audit = []
-    for file in (StoragePath(root) / "filtered/audit/*.parquet").glob():
+    for file in (root / "filtered/audit/*.parquet").glob():
         with file.open("rb") as stream:
             audit.extend(pq.read_table(stream).to_pylist())
     by_index = {int(row["source_row"].rsplit(":", 1)[1]): row for row in audit}
-    assert manifest["dispositions"] == {"keep": 1, "reject": 1002}
-    assert by_index[1000]["duplicate_of"] == by_index[0]["task_id"]
-    assert all(by_index[index]["filter_reasons"] == ["conflicting_references"] for index in (1001, 1002))
-    assert sum(len(requests) for requests in service.batches.values()) == 1
+    assert manifest["dispositions"] == {"keep": 3, "reject": 1000}
+    canonical = min(by_index[index]["task_id"] for index in range(1001))
+    assert all(row["duplicate_of"] == canonical for row in audit if row["duplicate_of"])
+    assert all(by_index[index]["filter_status"] == "keep" for index in (1001, 1002))
+    assert sum(len(requests) for requests in service.batches.values()) == 3
     assert len(audit) == len(rows)
     assert all(row["raw_json"] and row["task_json"] for row in audit)
 
@@ -508,20 +509,6 @@ def test_review_accepts_glm_completed_tool_call_with_stop_finish_reason():
     assert records[0].status == ReviewStatus.REVIEWED
     assert records[0].verdict is not None
     assert records[0].verdict.task_id == "task-0"
-
-
-def test_conflicting_review_is_informational_even_at_high_confidence(apple_row):
-    task = svamp_task("task-0", apple_row)
-    row = response(task.id, confidence="high")
-    function = row["response"]["body"]["choices"][0]["message"]["tool_calls"][0]["function"]
-    verdict = json.loads(function["arguments"])
-    verdict.update(quality="bad", reference_status="conflict", defects=["wrong_reference"])
-    function["arguments"] = json.dumps(verdict)
-    review = review_records(json.dumps(row), [task.id])[0]
-    assert review.verdict.quality == "bad"
-    decision = task_decision(task.id, verify_task(task))
-    assert decision.disposition == Disposition.KEEP
-    assert decision.reasons == []
 
 
 @pytest.mark.parametrize(
