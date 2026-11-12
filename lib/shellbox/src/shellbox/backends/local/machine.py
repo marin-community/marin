@@ -407,6 +407,7 @@ class LocalProcessScope:
         self.group = group
         self._closed = False
         self._active: set[asyncio.Task[Result]] = set()
+        self._commands: dict[MachineCgroup, asyncio.Task[asyncio.subprocess.Process]] = {}
         self._closing: asyncio.Task[None] | None = None
 
     async def run(self, command: Command) -> Result:
@@ -428,12 +429,16 @@ class LocalProcessScope:
         await await_cleanup(self._closing)
 
     async def _terminate(self) -> None:
-        try:
-            await self.group.close()
-            if self._active:
-                await asyncio.gather(*tuple(self._active), return_exceptions=True)
-        finally:
-            self.machine._command_cgroups.discard(self.group)
+        async def stop(group: MachineCgroup, acquisition: asyncio.Task[asyncio.subprocess.Process]) -> None:
+            self._commands.pop(group, None)
+            process = await finish_owned(acquisition)
+            await self.machine._stop_command(process, group)
+
+        await asyncio.gather(*(stop(group, acquisition) for group, acquisition in tuple(self._commands.items())))
+        if self._active:
+            await asyncio.gather(*tuple(self._active), return_exceptions=True)
+        await self.group.close()
+        self.machine._scopes.discard(self)
 
 
 class LocalMachine:
@@ -463,6 +468,7 @@ class LocalMachine:
         self._command_cgroups: set[MachineCgroup] = set()
         self._background_cgroups: set[MachineCgroup] = set()
         self._run_commands: dict[MachineCgroup, asyncio.Task[asyncio.subprocess.Process]] = {}
+        self._scopes: set[LocalProcessScope] = set()
         self._keeper_cgroup: MachineCgroup | None = None
         self._bwrap = bwrap
         self._environment = environment
@@ -690,8 +696,9 @@ class LocalMachine:
         if self._cgroup is None:
             raise UnsupportedMachineSpec("Process scopes require delegated cgroups")
         group = self._cgroup.create_child()
-        self._command_cgroups.add(group)
-        return LocalProcessScope(self, group)
+        scope = LocalProcessScope(self, group)
+        self._scopes.add(scope)
+        return scope
 
     async def open_process(self, command: Command) -> SubprocessSession:
         """Start a foreground process in the same pinned namespaces as run."""
@@ -857,6 +864,8 @@ class LocalMachine:
     async def _execute(
         self, command: Command, environment: dict[str, str], *, scope: LocalProcessScope | None = None
     ) -> Result:
+        if scope is not None and scope._closed:
+            raise RuntimeError("Process scope is closed")
         config = self._command_config(command, environment)
         # Anonymous output files let a successful foreground command finish even
         # when its background services keep stdout open. RLIMIT_FSIZE bounds writers.
@@ -876,7 +885,7 @@ class LocalMachine:
             stdin_file.write(command.stdin)
             stdin_file.seek(0)
             assert self._root_fd is not None
-            group = scope.group if scope is not None else self._new_command_cgroup()
+            group = scope.group.create_child() if scope is not None else self._new_command_cgroup()
             config["cgroup"] = None if group is None else str(group.path / "cgroup.procs")
             configuration.write(json.dumps(config).encode())
             configuration.seek(0)
@@ -896,8 +905,11 @@ class LocalMachine:
                     start_new_session=True,
                 )
             )
-            if group is not None and scope is None:
-                self._run_commands[group] = acquisition
+            if group is not None:
+                if scope is None:
+                    self._run_commands[group] = acquisition
+                else:
+                    scope._commands[group] = acquisition
             process = None
             try:
                 async with asyncio.timeout(command.timeout):
@@ -916,10 +928,9 @@ class LocalMachine:
                         process = await finish_owned(acquisition)
                         self._commands.add(process)
                     status_writer.close()
-                    if scope is not None:
-                        scope._closed = True
-                        await group.close()
-                    elif group is not None:
+                    if group is not None:
+                        if scope is not None:
+                            scope._commands.pop(group, None)
                         await self._stop_command(process, group)
                     elif not self._closed:
                         await self.close()
@@ -937,6 +948,10 @@ class LocalMachine:
             finally:
                 if process is not None:
                     self._commands.discard(process)
+                if scope is not None and group is not None and group in scope._commands and not self._closed:
+                    if not group.populated:
+                        await group.close()
+                        scope._commands.pop(group, None)
                 if scope is None and group is not None and not self._closed and group in self._command_cgroups:
                     if group.populated:
                         self._background_cgroups.add(group)
@@ -1004,6 +1019,7 @@ class LocalMachine:
         await asyncio.shield(self._closing)
 
     async def _destroy(self) -> None:
+        await asyncio.gather(*(scope.terminate() for scope in tuple(self._scopes)))
         if self._cgroup is not None:
             self._cgroup.kill()
         # Kill the verified, pinned guest init before its host launcher. An

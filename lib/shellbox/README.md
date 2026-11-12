@@ -227,7 +227,9 @@ For agent commands that need a separate grading boundary, use
 `scope = await machine.open_process_scope()`, run those commands through
 `scope.run(command)`, then `await scope.terminate()` before collection or
 verification. Scope termination closes admission, kills detached descendants,
-and waits for confirmed exit; it raises if confirmation fails. Setup, sidecar,
+and waits for confirmed exit; it raises if confirmation fails. A scoped command
+timeout or cancellation stops that command and its descendants; the scope and
+background work from earlier commands remain available. Setup, sidecar,
 and verifier commands use `machine.run` outside the scope. Local machines support
 this operation when the worker has delegated cgroup v2. Docker, gVisor, Iris,
 Daytona, QEMU, and ShellSim currently reject scope creation, so callers must
