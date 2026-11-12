@@ -1006,6 +1006,9 @@ commands do. A `negative_verdict` requires exit code zero, a reward below one,
 and a positive structured executed-test count (`detail.total`). Numeric reward
 files without execution evidence report `unverified_execution`. Crashes and
 missing exit diagnostics report `verifier_error`, even when a reward is zero.
+Liveness qualification enforces the published runtime's startup and cleanup
+deadlines. Failed or expired machine cleanup reports `infra_error` and cannot
+qualify a task.
 
 The offline report records payload preservation and setup execution rates. Its
 verifier results are populated only from an explicit `--liveness` JSONL file. `skipped` is the default

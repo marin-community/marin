@@ -71,7 +71,7 @@ from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.external import AgentHarness
 from rolloutengine.harness.shell import WORKSPACE_INSTRUCTION, ShellHarness, ToolCallResult, ToolContext
 from rolloutengine.harness.step import StepHarness
-from rolloutengine.machines import task_machine
+from rolloutengine.machines import grading_machine_factory, task_machine
 from rolloutengine.models import (
     LENGTH_STOP_REASON,
     AttemptEnded,
@@ -3553,6 +3553,27 @@ async def test_a_task_machine_raises_its_close_failure_after_a_clean_body():
     with pytest.raises(RuntimeError, match="machine_close"):
         async with task_machine(task, Factory(), machine_runtime(), cleanup_timeout=1):
             pass
+
+
+async def test_grading_factory_enforces_runtime_cleanup_deadline_after_grader_close():
+    closing = asyncio.Event()
+
+    class HangingClose:
+        async def close(self):
+            closing.set()
+            await asyncio.Future()
+
+    class Factory(DockerMachineFactory):
+        async def create(self, spec):
+            return HangingClose()
+
+    with pytest.raises(RuntimeError):
+        async with grading_machine_factory(
+            Factory(), machine_runtime(cleanup_timeout=1e-300), cleanup_timeout=5
+        ) as factory:
+            machine = await factory.create(MachineSpec(DockerImage("fixture")))
+            await machine.close()
+    assert closing.is_set()
 
 
 async def test_a_task_machine_closes_its_machine_when_setup_fails():
