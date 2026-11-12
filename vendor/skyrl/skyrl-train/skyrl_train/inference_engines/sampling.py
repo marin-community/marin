@@ -8,61 +8,6 @@ from typing import Any, Dict
 
 from omegaconf import DictConfig, ListConfig
 
-# Public SamplingParams fields in the pinned marin.39e62869693c serving API,
-# together with native request extensions and the native length alias.
-SAMPLING_PARAMETER_KEYS = frozenset(
-    {
-        'allowed_token_ids',
-        'bad_words',
-        'custom_params',
-        'detokenize',
-        'ebnf',
-        'extra_args',
-        'flat_logprobs',
-        'frequency_penalty',
-        'ignore_eos',
-        'include_stop_str_in_output',
-        'json_schema',
-        'logit_bias',
-        'logprob_token_ids',
-        'logprobs',
-        'max_generate_length',
-        'max_new_tokens',
-        'max_tokens',
-        'min_new_tokens',
-        'min_p',
-        'min_tokens',
-        'n',
-        'no_stop_trim',
-        'output_kind',
-        'output_text_buffer_length',
-        'presence_penalty',
-        'prompt_logprobs',
-        'regex',
-        'repetition_detection',
-        'repetition_penalty',
-        'routed_experts_prompt_start',
-        'sampling_seed',
-        'seed',
-        'skip_clone',
-        'skip_reading_prefix_cache',
-        'skip_special_tokens',
-        'spaces_between_special_tokens',
-        'stop',
-        'stop_regex',
-        'stop_token_ids',
-        'stream_interval',
-        'structured_outputs',
-        'temperature',
-        'thinking_token_budget',
-        'top_k',
-        'top_p',
-        'trace_decode_token_ids',
-        'watermarking',
-    }
-)
-
-
 def get_vllm_sampling_params(sampling_params: DictConfig) -> Dict[str, Any]:
     stop_val = sampling_params.get("stop", None)
     vllm_sampling_params = {

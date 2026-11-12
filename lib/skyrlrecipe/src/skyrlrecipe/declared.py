@@ -75,9 +75,14 @@ class SequenceRule(Section):
     high: int | float | None = unset_field()
 
 
+EvaluationSchedule = Literal["every_evaluation", "final"]
+
+
 class EvaluationSampling(Section):
-    sampling_params: EvalSamplingParams | None = unset_field()
-    n_samples_per_prompt: PositiveInt | None = unset_field()
+    sampling_params: EvalSamplingParams | None = None
+    n_samples_per_prompt: PositiveInt | None = None
+    data_files: Annotated[tuple[Annotated[str, Field(min_length=1)], ...], Field(min_length=1)] | None = None
+    schedule: EvaluationSchedule = "every_evaluation"
 
 
 class EvaluationMinimum(Section):
@@ -180,7 +185,7 @@ class InferenceStatsCallback(Section):
     poll_interval_seconds: int | float = unset_field()
 
 
-LoggingBackend = Literal["wandb", "mlflow", "swanlab", "tensorboard", "console"]
+LoggingBackend = Literal["wandb", "mlflow", "swanlab", "tensorboard", "console", "records"]
 
 CorrectionRule = Annotated[TokenRule | SequenceRule, Field(discriminator="kind")]
 
