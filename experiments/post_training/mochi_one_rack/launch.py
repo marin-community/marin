@@ -81,7 +81,7 @@ def build_smoke(
         max_retries=0,
         target_cluster="cw-us-east-08a",
         parent_cluster_config="lib/iris/config/marin.yaml",
-        coordinator_timeout_hours=8,
+        coordinator_timeout_hours=72,
         job_timeout_seconds=18000,
         wandb_entity="marin-community",
         required_env_vars=("DAYTONA_RL_API_KEY", "DAYTONA_EVAL_API_KEY", "MARIN_PREFIX"),
