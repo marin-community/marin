@@ -5,6 +5,7 @@ from typing import Any
 
 from eval.completion_response import CompletionText
 from eval.contracts.eval_spec import EvalSpec, Grade
+from eval.runtime.checkpoints import input_digest
 
 
 def pdbthink(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
@@ -30,6 +31,7 @@ def pdbthink(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
     score = 0.0 if tool_call else float(outcome["score"]["score"])
     row = {
         **spec.doc["report_metadata"],
+        "prompt_sha256": input_digest(spec.requests[0].prompt),
         "completion_index": spec.trial or 0,
         "score": score,
         "correct": bool(outcome["score"].get("correct")) and not tool_call,

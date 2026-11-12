@@ -41,6 +41,28 @@ def test_family_macro_excludes_controls_and_survives_resume(pdbthink_bundle):
     assert resumed_endpoint.requests == []
 
 
+def test_context_control_report_counts_identical_prompts_across_instances(pdbthink_bundle):
+    first = record("first-control", representation="context_only")
+    second = record("second-control", representation="context_only")
+    first["report_metadata"]["semantic_instance_id"] = "first"
+    second["report_metadata"]["semantic_instance_id"] = "second"
+    second["messages"] = first["messages"]
+    source, options = source_and_options(pdbthink_bundle([record("first"), record("second"), first, second]))
+
+    metrics, _ = evaluate_source(source, options, FixedEndpoint("FINAL: 2"))
+
+    assert metrics["macro_score"] == 1.0
+    assert metrics["pdbthink_report"]["context_only_baseline"]["P01"] == {
+        "n_instances": 2,
+        "n_distinct_prompts": 1,
+        "effective_sample_size": 1,
+        "identical_prompts": True,
+        "context_only_score": 1.0,
+        "with_coordinates_score": 1.0,
+        "gain_over_context_only": 0.0,
+    }
+
+
 @pytest.mark.parametrize("schema,gold,text,termination,message_extra,expected", [
     ("residue_set", {"value": ["A:A1", "A:G2"]}, "FINAL: A:A1", "stop", {}, 2 / 3),
     ("residue_pair", {"value": "A:A1--B:G2", "alternatives": ["A:A1--B:S3"]},

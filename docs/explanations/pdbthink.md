@@ -22,6 +22,15 @@ questions and 253 renders: 158 minimal-PDB, 47 normalized-coordinate, and 48
 context-only prompts. All questions have upstream curation status `proposed`.
 This is a candidate benchmark, not an accepted final release.
 
+An independent audit of this revision confirmed 113 question/answer pairs,
+found one defective clash question, and left seven questions underdefined
+(six fold classifications and one mechanism question). The clash gold mistakes
+a covalent glycosylation bond for a nonbonded contact. The frozen scores retain
+all 121 questions; correcting the defect requires a new benchmark revision.
+The complete question ledger and supporting calculations are archived at
+`gs://marin-us-west1/evaluation/pdbthink/full-quality-audit-20261112`
+([Filer](https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-west1%2Fevaluation%2Fpdbthink%2Ffull-quality-audit-20261112)).
+
 Minimal-PDB renders use the Protein Data Bank text format. Normalized-coordinate
 renders express the coordinates in tables; context-only controls omit them.
 The 158 minimal-PDB renders include 31 rotated controls, which change the
@@ -34,8 +43,9 @@ See the [upstream revision notes](https://github.com/Open-Athena/pdbthink/blob/c
 Changed questions require fresh model responses; scores from older prompt
 versions are not directly comparable. Mechanism multiple-choice answers remain
 curated interpretations that coordinate calculations do not independently
-establish. The clash family contains four of five requested
-questions because structures with unknown protein bond topology are rejected.
+establish. The upstream generator produced four of its five requested clash questions
+after rejecting structures with unknown protein bond topology. Those four still
+include the glycosylation defect identified above.
 
 Marin records the source, config, definitions, structure and bundle hashes in its
 [manifest](https://github.com/marin-community/marin/blob/main/vendor/evalchemy/eval/chat_benchmarks/PDBThink/manifest.json).
@@ -136,3 +146,8 @@ there is no pass@k selection. The upstream report supplies protein-cluster
 bootstrap intervals, family scores, control comparisons, consistency, failure
 counts and mechanistic diagnostics under `pdbthink_report`. The frozen manifest
 and actual token budgets are saved under `pdbthink` in the task results.
+
+Context-control reports count distinct system/user message sequences by prompt
+hash. Some questions share an identical context-only prompt: the 48 control
+renders contain 34 distinct prompts. The report's `effective_sample_size` field
+counts those distinct prompts, rather than independent stochastic completions.
