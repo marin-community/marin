@@ -69,6 +69,8 @@ class DaytonaCensus:
     roles: dict
     converter_sha256: str
     admission_rejections: dict[str, int]
+    actor_sources: dict[str, int]
+    unsafe_reasons: dict[str, str]
 
 
 class EnvelopeCensus(NamedTuple):
@@ -79,6 +81,7 @@ class EnvelopeCensus(NamedTuple):
     execution_failures: Counter[str]
     mapping_failures: Counter[str]
     roles: dict
+    actor_sources: Counter[str]
 
 
 @cache
@@ -148,7 +151,7 @@ def measure_source(source_id: str, artifact_root: str) -> DaytonaCensus:
     rejections = Counter()
     admission_rejections = Counter()
     result = measure_envelopes(converted_source(source, artifact_root, rejections, admission_rejections))
-    converted, machine_slots, sizes, failed_tasks, failures, mapping, roles = result
+    converted, machine_slots, sizes, failed_tasks, failures, mapping, roles, actor_sources = result
     if isinstance(config, PrebuiltCohort) and converted != config.expected_rows:
         raise ValueError(f"Published cohort has {converted} TaskSpecs, expected {config.expected_rows}")
     rows = converted + sum(rejections.values())
@@ -186,6 +189,8 @@ def measure_source(source_id: str, artifact_root: str) -> DaytonaCensus:
         roles,
         converter_sha256(),
         dict(admission_rejections),
+        dict(actor_sources),
+        daytona_unsafe_reasons(result),
     )
 
 
@@ -196,6 +201,7 @@ def measure_envelopes(documents: Iterable[tuple[dict, dict]]) -> EnvelopeCensus:
     identities = {}
     local_checks = {}
     roles = {role: {} for role in ("agent", "grader")}
+    actor_sources = Counter()
     for task, shapes in documents:
         converted += 1
         if converted % 10000 == 0:
@@ -238,6 +244,12 @@ def measure_envelopes(documents: Iterable[tuple[dict, dict]]) -> EnvelopeCensus:
                 grader_measurement = identities[grader_key]
                 outcome["failures"].update(reason for _, reason in grader_measurement.execution_failures)
         actor_runtime = {**runtime, "verifier_machine": None}
+        if runtime["task_machine"] is not None:
+            actor_sources.update(
+                name
+                for name in ("docker_image", "docker_build", "packages_lock", "package_spec")
+                if task["environment_requirements"].get(name) is not None
+            )
         envelope = {"task": task, "runtime": actor_runtime}
         key = canonical_sha256([task["environment_requirements"], actor_runtime])
         if key not in identities:
@@ -253,7 +265,28 @@ def measure_envelopes(documents: Iterable[tuple[dict, dict]]) -> EnvelopeCensus:
     for backends in roles.values():
         for outcome in backends.values():
             outcome["failures"] = dict(outcome["failures"])
-    return EnvelopeCensus(converted, machine_slots, sizes, failed_tasks, failures, mapping, roles)
+    return EnvelopeCensus(converted, machine_slots, sizes, failed_tasks, failures, mapping, roles, actor_sources)
+
+
+def daytona_unsafe_reasons(census: EnvelopeCensus) -> dict[str, str]:
+    """Classify actor refusals and the snapshot budget, preserving their actual details."""
+    reasons = {}
+    if len(census.snapshot_sizes) > DAYTONA_SAFE_SNAPSHOT_LIMIT:
+        reasons["too_many_snapshots"] = (
+            f"{len(census.snapshot_sizes)} actor snapshot identities exceed "
+            f"the {DAYTONA_SAFE_SNAPSHOT_LIMIT}-snapshot budget"
+        )
+    other = []
+    for detail in (*census.execution_failures, *census.mapping_failures):
+        if census.actor_sources["docker_build"] and "Unresolved Docker build context" in detail:
+            reasons["unbuilt_image"] = detail
+        elif census.actor_sources["packages_lock"] and "requires a registry image or Docker build context" in detail:
+            reasons["host_image_required"] = detail
+        else:
+            other.append(detail)
+    if other:
+        reasons["execution_requirement"] = "; ".join(sorted(set(other)))
+    return reasons
 
 
 def converted_source(source, artifact_root: str, rejections: Counter, admission_rejections: Counter):
@@ -366,6 +399,8 @@ def main() -> None:
                     f"{type(error).__name__}: {error}",
                     {},
                     converter_sha256(),
+                    {},
+                    {},
                     {},
                 )
             target = args.output / (canonical_sha256(source_id)[:20] + ".json")

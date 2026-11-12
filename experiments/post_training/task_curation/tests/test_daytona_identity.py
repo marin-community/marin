@@ -228,3 +228,46 @@ def test_execution_cost_census_keeps_task_specs_rejected_by_the_grading_boundary
     assert census.execution_failure_tasks == 0
     assert admission == {"source_defect:grading_environment_mismatch": 1}
     assert not rejected
+
+
+@pytest.mark.usefixtures("taskcompendium_environment")
+def test_actor_unsafe_reasons_distinguish_snapshot_budget_build_and_host_image():
+    from experiments.post_training.task_curation.daytona_census import (  # noqa: PLC0415
+        daytona_unsafe_reasons,
+        measure_envelopes,
+    )
+
+    def actor(requirements):
+        return {"id": "actor", "environment_requirements": requirements, "grader": {"environment": None}}
+
+    budget = measure_envelopes(
+        (actor({"command_semantics": "linux_process", "docker_image": f"image-{index}@sha256:" + "a" * 64}), {})
+        for index in range(11)
+    )
+    assert set(daytona_unsafe_reasons(budget)) == {"too_many_snapshots"}
+    build = measure_envelopes(
+        [
+            (
+                actor(
+                    {
+                        "command_semantics": "linux_process",
+                        "docker_build": {
+                            "files": [
+                                {
+                                    "path": "Dockerfile",
+                                    "source": {
+                                        "kind": "inline_file",
+                                        "content_base64": base64.b64encode(b"FROM ubuntu:24.04\nRUN true\n").decode(),
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                ),
+                {},
+            )
+        ]
+    )
+    assert "Unresolved Docker build context" in daytona_unsafe_reasons(build)["unbuilt_image"]
+    locked = measure_envelopes([(actor({"command_semantics": "linux_process", "packages_lock": "actor.lock"}), {})])
+    assert "requires a registry image or Docker build context" in daytona_unsafe_reasons(locked)["host_image_required"]
