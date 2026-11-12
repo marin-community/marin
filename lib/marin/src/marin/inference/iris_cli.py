@@ -224,7 +224,11 @@ def _checkout_free_setup_script(marin_version: str, extras: tuple[str, ...]) -> 
 
 
 def _prepared_direct_service(
-    service: IrisServiceConfig, placement: ResourceConfig, workspace_dir: Path | None, client: IrisClient
+    service: IrisServiceConfig,
+    placement: ResourceConfig,
+    workspace_dir: Path | None,
+    client: IrisClient,
+    secrets: dict[str, str],
 ) -> IrisServiceConfig:
     regions = placement.regions
     if not placement.target_cluster and (
@@ -237,7 +241,11 @@ def _prepared_direct_service(
         )
         return service
     setup_scripts = None if workspace_dir is not None else [_checkout_free_setup_script(_marin_core_version(), ())]
-    environment = create_environment(workspace=str(workspace_dir or Path.cwd()), setup_scripts=setup_scripts)
+    environment = create_environment(
+        workspace=str(workspace_dir or Path.cwd()),
+        setup_scripts=setup_scripts,
+        secrets={name: value for name, value in secrets.items() if name == "HF_TOKEN"},
+    )
     click.echo("Preparing Hugging Face weights on CPU before reserving accelerators...")
     try:
         model, engine = prepare_hf_models(
@@ -687,7 +695,7 @@ def main(
         click.echo(f"Using controller {controller_url}")
         with IrisClient.remote(controller_url, workspace=workspace_dir, credentials=endpoint_info.credentials) as client:
             if not brokered:
-                service = _prepared_direct_service(service, submission_resources, workspace_dir, client)
+                service = _prepared_direct_service(service, submission_resources, workspace_dir, client, secrets)
             job = client.submit(
                 entrypoint=Entrypoint.from_callable(run_iris_service, service),
                 name=job_name,
