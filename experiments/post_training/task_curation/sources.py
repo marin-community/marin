@@ -109,12 +109,8 @@ def require_accepted_task_format(source: RlDataSource) -> None:
 
 
 def runnable_sources() -> dict[str, RlDataSource]:
-    """Sources with dataset-owned execution, keyed by invocation name."""
-    sources = [
-        source
-        for source in all_sources().values()
-        if source.pipeline is not None and source.declaration.status == "Available"
-    ]
+    """Available sources with dataset-owned execution, keyed by invocation name."""
+    sources = [source for source in all_sources().values() if source.declaration.status == "Available"]
     for source in sources:
         require_accepted_task_format(source)
     names = [source.name for source in sources]

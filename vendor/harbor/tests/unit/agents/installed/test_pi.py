@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -23,6 +24,7 @@ from harbor.agents.installed.pi import Pi
 from harbor.llms.base import ContextLengthExceededError
 from harbor.literal.proxy import CORRELATION_ID_HEADER
 from harbor.models.agent.context import AgentContext
+from harbor.models.trial.paths import EnvironmentPaths
 from harbor.models.trajectories.trajectory import Trajectory
 from harbor.utils.artifact_writer import get_artifact_writer
 
@@ -44,6 +46,7 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script, *, admin_uploads=False):
     root_uploads = temp_dir / "root-uploads.jsonl"
     monkeypatch.setattr(Pi, "_ENDPOINT_ENV_PATH", str(endpoint_path))
     monkeypatch.setattr(Pi, "_CONTEXT_BUDGET_EXTENSION_PATH", str(extension_path))
+    monkeypatch.setattr(Pi, "_RUNTIME_DIR", endpoint_path.parent)
 
     fake_bin = temp_dir / "fake-bin"
     artifact_dir = temp_dir / "pi-artifacts"
@@ -88,6 +91,12 @@ sys.exit(status)
         path.write_text(contents)
         path.chmod(0o755)
     class LocalShellEnvironment:
+        async def ensure_dirs(self, dirs, *, chmod=True):
+            for directory in dirs:
+                directory.mkdir(parents=True, exist_ok=True)
+                if chmod:
+                    directory.chmod(0o777)
+
         async def upload_file(self, source_path, target_path):
             shutil.copyfile(source_path, target_path)
             if admin_uploads:
@@ -112,6 +121,7 @@ sys.exit(status)
         artifact_dir=artifact_dir,
         endpoint_path=endpoint_path,
         extension_path=extension_path,
+        uploads_path=root_uploads,
     )
 
 
@@ -139,6 +149,27 @@ async def test_hosted_nonroot_run_cleans_admin_uploaded_files_without_failing(te
     assert not shell.endpoint_path.exists()
     assert not shell.extension_path.exists()
     assert not (temp_dir / ".pi/agent/models.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_failed_agent_exec_keeps_endpoint_credentials_outside_persisted_logs(temp_dir, monkeypatch):
+    shell = _local_pi_shell(temp_dir, monkeypatch, "#!/bin/sh\nexit 0\n", admin_uploads=True)
+    agent = Pi(
+        logs_dir=temp_dir,
+        model_name="hosted_vllm/served-model",
+        api_base="https://model.example.test/proxy/t/private-fixture-key/v1",
+        api_key="EMPTY",
+        thinking_format="chat-template",
+    )
+    monkeypatch.setattr(agent, "exec_as_agent", AsyncMock(side_effect=RuntimeError("Agent exec never started")))
+    with pytest.raises(RuntimeError, match="never started"):
+        await agent.run("Complete the task", shell.environment, AgentContext())
+    assert "private-fixture-key" in shell.endpoint_path.read_text()
+    uploaded = [Path(json.loads(line)) for line in shell.uploads_path.read_text().splitlines()]
+    assert shell.endpoint_path in uploaded
+    persisted = temp_dir / str(EnvironmentPaths.agent_dir).lstrip("/")
+    assert all(not path.is_relative_to(persisted) for path in uploaded)
+    assert all(not path.is_relative_to(shell.artifact_dir) for path in uploaded)
 
 
 @pytest.mark.asyncio

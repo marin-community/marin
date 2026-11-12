@@ -15,7 +15,6 @@ Daytona-safe. No Daytona API calls are made.
 import base64
 import gzip
 import io
-import math
 import tarfile
 import tempfile
 import tomllib
@@ -27,17 +26,18 @@ from pathlib import Path
 from daytona import Resources
 from harbor.environments.daytona import machine_spec
 from harbor_config.models.task.config import EnvironmentConfig
-from shellbox.backends.daytona.machine import DaytonaMachineFactory, UnsupportedMachineSpec, snapshot_identity
+from shellbox.backends.daytona.machine import (
+    DaytonaMachineFactory,
+    UnsupportedMachineSpec,
+    snapshot_identity,
+    snapshot_resources,
+)
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
-    LINUX_PROCESS_CAPABILITIES,
-    CommandSemantics,
     HostImage,
     MachineSpec,
     NetworkPolicy,
-    check_execution_requirements,
 )
-from taskcompendium.models import EnvironmentRequirements, require_resolved_environment
 
 ENVIRONMENT_PREFIX = "environment/"
 DOCKERFILE = "Dockerfile"
@@ -61,16 +61,6 @@ class SnapshotIdentityCount:
     # Tasks whose declared execution requirements the Daytona backend refuses, so a
     # snapshot count alone must not call them safe.
     execution_failures: list[tuple[str, str]] = field(default_factory=list)
-
-
-def _machine_resources(cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int = 0) -> Resources:
-    """The ``Resources`` construction mirroring ``DaytonaMachineFactory._prepare``."""
-    return Resources(
-        cpu=cpus,
-        memory=math.ceil(memory_mb / 1024) if memory_mb is not None else None,
-        disk=math.ceil(storage_mb / 1024) if storage_mb is not None else None,
-        gpu=gpus or None,
-    )
 
 
 def _write_context(root: Path, name: str, content: bytes, mode: int = 0o644) -> None:
@@ -125,49 +115,12 @@ def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentit
                     memory_mb=config.memory_mb,
                     storage_mb=config.storage_mb,
                 )
-                name = snapshot_identity(
-                    spec.source, _machine_resources(spec.cpus, spec.memory_mb, spec.storage_mb, spec.gpus)
-                )
+                name = snapshot_identity(spec.source, snapshot_resources(spec))
             except UnsupportedMachineSpec as error:
                 failures.append((task_id, str(error)))
                 continue
             sizes[name] += 1
     return SnapshotIdentityCount(distinct=len(sizes), sizes=dict(sizes), failures=failures)
-
-
-@dataclass(frozen=True)
-class _DeclaredRequirements:
-    """The slice of a lowered spec's environment that execution checks read."""
-
-    capabilities: tuple[str, ...]
-    command_semantics: str | None
-    docker_image: str | None
-
-
-def daytona_execution_failure(requirements: Mapping) -> str | None:
-    """Why the Daytona backend would refuse this task's declared requirements, if it would.
-
-    A converted task that only names an image and ordinary capabilities passes; one that
-    declares an unsupported capability (a container runtime, for instance) or needs the
-    account to build its archived Dockerfile does not, whatever its snapshot count is.
-    """
-    declared = _DeclaredRequirements(
-        capabilities=tuple(requirements.get("capabilities") or ()),
-        command_semantics=requirements.get("command_semantics"),
-        docker_image=requirements.get("docker_image"),
-    )
-    spec = MachineSpec(source=RegistryImage(declared.docker_image), env={}, network=NetworkPolicy.ALLOW)
-    try:
-        check_execution_requirements(
-            declared,
-            spec,
-            semantics=CommandSemantics.LINUX_PROCESS,
-            capabilities=LINUX_PROCESS_CAPABILITIES,
-            image_reference=declared.docker_image,
-        )
-    except UnsupportedMachineSpec as error:
-        return str(error)
-    return None
 
 
 def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> SnapshotIdentityCount:
@@ -178,6 +131,10 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
     fabricated snapshot. Unbuilt contexts retain their identity but are refused
     by the runtime's unresolved-environment check.
     """
+    # Native Harbor counting also runs in Harbor's standalone environment, which
+    # does not install TaskCompendium. Only lowered TaskCompendium inputs need it.
+    from taskcompendium.models import EnvironmentRequirements, require_resolved_environment  # noqa: PLC0415
+
     sizes: Counter[str] = Counter()
     failures: list[tuple[str, str]] = []
     execution_failures: list[tuple[str, str]] = []
@@ -236,7 +193,7 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
                 try:
                     name = snapshot_identity(
                         source,
-                        _machine_resources(machine.cpus, machine.memory_mb, machine.storage_mb, machine.gpus),
+                        snapshot_resources(machine),
                     )
                 except UnsupportedMachineSpec as error:
                     mapping_errors.append(f"{role}: {error}")

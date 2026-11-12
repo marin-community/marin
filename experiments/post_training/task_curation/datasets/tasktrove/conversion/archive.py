@@ -46,6 +46,9 @@ TESTS_MOUNT = "/tests"
 """Where Harbor mounts a task's ``tests/`` directory, and only at grading time."""
 UV_IMAGE = "ghcr.io/astral-sh/uv:0.13.5"
 TEST_SH_REWARD = FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),))
+VERIFYIT_VERDICT_REWARD = FileReward(
+    files=(RewardFile(path="/logs/verifier/verdict.json", format=RewardFileFormat.VERDICT_JSON),)
+)
 """The numeric reward file a Harbor ``tests/test.sh`` writes."""
 
 

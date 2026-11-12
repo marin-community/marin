@@ -23,7 +23,6 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.conversion import AgenticConverter
 from taskcompendium.pipeline.conversion import convert_row as convert_mechanical_row
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, RawRow
@@ -232,7 +231,7 @@ def test_a_conversion_lowers_the_archive_environment():
     assert requirements.setup_commands == ()
 
 
-@pytest.mark.parametrize("entrypoint", ["archive", "mechanical", "agentic_reply"])
+@pytest.mark.parametrize("entrypoint", ["archive", "mechanical"])
 def test_archive_converter_rejects_an_agentic_task_without_a_declared_environment(entrypoint):
     source = Source(dataset="fixture", revision="1", row="missing", importer_revision="1")
     row = RawRow("missing", source, {"path": "missing", "files": {}})
@@ -241,7 +240,7 @@ def test_archive_converter_rejects_an_agentic_task_without_a_declared_environmen
         source=source,
         context=ConversationInput(events=(TextMessage(role="user", content="Edit the workspace."),)),
         environment_requirements=EnvironmentRequirements(),
-        answer_type=AnswerType.TEXT if entrypoint == "agentic_reply" else AnswerType.WORKSPACE_STATE,
+        answer_type=AnswerType.WORKSPACE_STATE,
         answer_format=PlainText(),
         grader=NoGrader(reason="fixture"),
     )
@@ -253,9 +252,7 @@ def test_archive_converter_rejects_an_agentic_task_without_a_declared_environmen
     result = (
         TaskTroveConverter("fixture", convert)(row, context)
         if entrypoint == "archive"
-        else convert_mechanical_row(
-            row, AgenticConverter(convert) if entrypoint == "agentic_reply" else convert, context
-        )
+        else convert_mechanical_row(row, convert, context)
     )
     assert isinstance(result, ImportRejection)
     assert result.reason == "missing_environment"

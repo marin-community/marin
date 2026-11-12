@@ -86,11 +86,6 @@ def test_pipeline_less_pointers_are_inventory_never_admitted():
             assert source.declaration.daytona_safety is DaytonaSafety.UNASSESSED
 
 
-def test_every_runnable_source_reads_available():
-    for source in runnable_sources().values():
-        assert source.declaration.status == "Available"
-
-
 @pytest.mark.parametrize("missing", ["count", "basis", "oversight", "verification"])
 def test_unqualified_agentic_pipeline_stays_visible_but_cannot_be_selected(monkeypatch, missing):
     info = replace(
@@ -116,3 +111,11 @@ def test_unqualified_agentic_pipeline_stays_visible_but_cannot_be_selected(monke
     monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: {info.id: source})
     assert source.name not in runnable_sources()
     assert source.declaration.status == "Inventory"
+
+
+def test_existing_internal_blend_selection_does_not_require_new_audit_evidence(monkeypatch):
+    source_id = next(iter(GRANDFATHERED_MARINSKYRL_SOURCES))
+    source = replace(_agentic(TaskFormat.MARINSKYRL, source_id), pipeline=lambda _source, _options: None)
+    monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: {source_id: source})
+    assert runnable_sources()[source.name] is source
+    assert source.declaration.status == "Available"

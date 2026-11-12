@@ -396,11 +396,10 @@ class EnvironmentRequirements(BaseModel):
         return self
 
 
-def missing_environment(spec: Mapping, *, agentic: bool = False) -> str | None:
+def missing_environment(spec: Mapping) -> str | None:
     """Explain a missing task environment before conversion or cohort admission.
 
-    Conversation-only tasks need no machine. Source admission can require an
-    environment even when a conversion removed the task's machine operations.
+    Conversation-only tasks need no machine.
     """
     requirements = spec.get("environment_requirements") or {}
     if any(
@@ -408,8 +407,7 @@ def missing_environment(spec: Mapping, *, agentic: bool = False) -> str | None:
     ):
         return None
     needs_machine = (
-        agentic
-        or spec.get("answer_type") in {"file", "state", "workspace_state"}
+        spec.get("answer_type") in {"file", "state", "workspace_state"}
         or bool(requirements.get("capabilities"))
         or requirements.get("command_semantics") is not None
         or bool(requirements.get("tool_providers"))
