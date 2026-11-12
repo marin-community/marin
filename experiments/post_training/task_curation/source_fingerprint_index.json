@@ -1,0 +1,87 @@
+{
+  "Campaign Release:smartie-calibforge-rebuilt-v1": {
+    "declaration_sha256": "08c57eb4a1f547237d5b04c8d7eb0a49c9f7048d7d2774678af8d6353796cd72",
+    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+  },
+  "Campaign Release:tasktrove-code-contests-built-image": {
+    "declaration_sha256": "b0a84cd682a4621bf1d7d40de7eec2f2fd100bd3dc2dd93bd58818775326d69c",
+    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+  },
+  "Campaign Release:tasktrove-codeforces-rebuilt-v1": {
+    "declaration_sha256": "871e1f8cf3bf4db06bb9ad98f025351e166e9a74752b9df445598282fccffb20",
+    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+  },
+  "Campaign Release:tasktrove-competitive-coding-rebuilt-v1": {
+    "declaration_sha256": "6e900f3c6b4c2d20cef46d2530bd90c0bc87535a2f86605073546d92b776080d",
+    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+  },
+  "Campaign Release:tasktrove-curriculum-easy-rebuilt-v1": {
+    "declaration_sha256": "fe3a87b1f07bdc00b63a3e5e89b68ae47bcdd5ccd87e93c4be3307e7cd083d9b",
+    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+  },
+  "Campaign Release:tasktrove-curriculum-medium-rebuilt-v1": {
+    "declaration_sha256": "1d8645524eca7d121f594c255ef9999a2322f85f0e3836dc9821323287ac7717",
+    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+  },
+  "Campaign Release:tasktrove-e2egit-large-rebuilt-v1": {
+    "declaration_sha256": "7e5f57e627515614fbb4722d21b0ca33301f6dd2bff0e1aa8a327d795b950c9e",
+    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+  },
+  "Campaign Release:tasktrove-e2egit-v2-rebuilt": {
+    "declaration_sha256": "0c5772706e3dbde52accfeecddccac863d6b40a2c966615611faaed183a8f7b9",
+    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+  },
+  "Campaign Release:tasktrove-multifile-rebuilt-v1": {
+    "declaration_sha256": "2fd8ca8b9b2a2db3264c581fa1e3456648db1dd2a42980b2bbc40f0b58f6906d",
+    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+  },
+  "Campaign Release:tasktrove-nl2bash-rebuilt-v1": {
+    "declaration_sha256": "e1aa178bdcaba4444117b3450484770d10f624affdf917aacba2136740b41457",
+    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+  },
+  "Campaign Release:tasktrove-pymethods2test-large-rebuilt-v1": {
+    "declaration_sha256": "1b851e1ced383b9d8223f1df74b439529751cea4179d66ad8e50e1240fecc1cc",
+    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+  },
+  "Campaign Release:tasktrove-pymethods2test-rebuilt-v1": {
+    "declaration_sha256": "c26f090304995724e6a43b4c100ef7862e078ed8581f1f836f2fe5d8ca40a67a",
+    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+  },
+  "Campaign Release:tasktrove-stack-pytest-rebuilt-v1": {
+    "declaration_sha256": "6a35d3ae964733eafa0dd836d9fb9f1e1de573485721541c06ac321ee9a20c83",
+    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+  },
+  "Campaign Release:tasktrove-taco-built-image": {
+    "declaration_sha256": "160193fc33b1c3d712ebdb8d6e79447758a46a2329743318eab77f9191bd03e2",
+    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+  },
+  "Campaign Release:tasktrove-unitsyn-python-large-rebuilt-v1": {
+    "declaration_sha256": "cabe4b75891cfb14b2dc647cd6b5cb08a21cc96cb4b7a8f47adeee4e64a44d35",
+    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+  },
+  "Campaign Release:tasktrove-unitsyn-python-rebuilt-v1": {
+    "declaration_sha256": "5f2ca23ef599a55e188a7fdaab28a0433965f237f4ff408b5ed4c46279c74b02",
+    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+  },
+  "Task Trove:laion__codeforces-v3": {
+    "declaration_sha256": "0a955c43a9ac3e138b513ca59ef5faa3a4e5fa7da754ddfbef12df1707881c41",
+    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+  }
+}

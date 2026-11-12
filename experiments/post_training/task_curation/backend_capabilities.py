@@ -60,6 +60,7 @@ def source_map(
     role_counts = {backend: defaultdict(Counter) for backend in checkers}
     blockers = defaultdict(Counter)
     errors = defaultdict(Counter)
+    assignments = defaultdict(Counter)
     count = 0
     for document in documents:
         count += 1
@@ -71,6 +72,9 @@ def source_map(
         }
         demands = task_demands({"task": task, "runtime": runtime})
         for role, needs in demands.items():
+            declared = task.get("environment_requirements") if role == "agent" else task["grader"]["environment"]
+            assigned = "local" if role == "grader" and declared.get("packages_lock") else "daytona"
+            assignments[role][assigned] += 1
             demand_counts[role].update(needs)
             shape = runtime.get("task_machine" if role == "agent" else "verifier_machine")
             if shape:
@@ -110,6 +114,7 @@ def source_map(
         inputs=inputs,
         demands=dict(demand_counts),
         resource_ranges=dict(ranges),
+        role_backend_assignments=dict(assignments),
         backends={
             backend: BackendFit(
                 support=combined_support(task_counts[backend]),
@@ -149,9 +154,9 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
             raise ValueError(f"Unknown or duplicate input source: {source_id}")
         paths = [Path(path) for path in entry["paths"]]
         digests = {}
-        for path in paths:
+        for index, path in enumerate(paths):
             with path.open("rb") as stream:
-                digests[str(path)] = hashlib.file_digest(stream, "sha256").hexdigest()
+                digests[f"{index}:{path.name}"] = hashlib.file_digest(stream, "sha256").hexdigest()
         measured = source_map(
             source_id, converted_specs(paths, entry["column"]), matrix, checkers, digests, runtime_defaults
         )
@@ -189,6 +194,7 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
                 demands={},
                 resource_ranges={},
                 backends={},
+                role_backend_assignments={},
             )
             for source_id in source_ids
         ],

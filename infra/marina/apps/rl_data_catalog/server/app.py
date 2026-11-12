@@ -144,6 +144,24 @@ def create_api(services: AppletServices) -> FastAPI:
                         "curation": row["curation"],
                         "coverage": coverage.get(row["id"]),
                         "backend_capabilities": row["backend_capabilities"],
+                        "source_fingerprint": (
+                            {
+                                key: value
+                                for key, value in row["source_fingerprint"].items()
+                                if key
+                                in {
+                                    "version",
+                                    "seed",
+                                    "task_count",
+                                    "within_source_duplicates",
+                                    "sample_sha256",
+                                    "lineage",
+                                }
+                            }
+                            if row["source_fingerprint"] is not None
+                            else None
+                        ),
+                        "duplicate_group": row["duplicate_group"],
                         "assessment": {
                             "status": "complete" if row["assessment_key"] else row["latest_attempt_status"],
                             "pipeline_key": row["assessment_key"],
@@ -187,6 +205,50 @@ def create_api(services: AppletServices) -> FastAPI:
                 .all()
             )
             return {"survey_id": row["survey_id"], **row["survey"], "matrix": cells}
+
+    @api.get("/source-fingerprint")
+    def source_fingerprint(source_id: str) -> dict[str, Any]:
+        with engine.connect() as connection:
+            source = source_record(connection, source_id)
+            return {"source_id": source_id, "fingerprint": source["source_fingerprint"]}
+
+    @api.get("/source-duplicates")
+    def source_duplicates() -> dict[str, Any]:
+        with engine.connect() as connection:
+            metadata = loaded_catalog(connection)
+            parameters = {"load_id": metadata["load_id"]}
+            survey = (
+                connection.execute(
+                    text("SELECT survey_id, metadata FROM atlas_identity_surveys WHERE load_id = :load_id"), parameters
+                )
+                .mappings()
+                .first()
+            )
+            if survey is None:
+                raise HTTPException(503, "Selected catalog has no source identity survey")
+            reviews = (
+                connection.execute(
+                    text(
+                        "SELECT review FROM atlas_duplicate_reviews WHERE load_id = :load_id "
+                        "ORDER BY left_source, right_source"
+                    ),
+                    parameters,
+                )
+                .scalars()
+                .all()
+            )
+            groups = (
+                connection.execute(
+                    text(
+                        "SELECT DISTINCT duplicate_group FROM atlas_sources WHERE load_id = :load_id "
+                        "AND duplicate_group IS NOT NULL"
+                    ),
+                    parameters,
+                )
+                .scalars()
+                .all()
+            )
+            return {"survey_id": survey["survey_id"], **survey["metadata"], "reviews": reviews, "groups": groups}
 
     @api.get("/assessment")
     def assessment(source_id: str) -> dict[str, Any]:

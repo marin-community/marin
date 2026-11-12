@@ -43,6 +43,7 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from taskcompendium.backend_requirements import BackendSourceMap, BackendSurvey, backend_schema_sha256
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
+from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
 
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
@@ -79,6 +80,7 @@ def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:
                 demands={},
                 resource_ranges={},
                 backends={},
+                role_backend_assignments={},
             )
             for source in catalog.sources(snapshot.snapshot_id)
         ],
@@ -86,7 +88,20 @@ def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:
 
 
 def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]:
-    return load_surveyed_catalog(catalog, query, catalog_backend_map(catalog))
+    return load_surveyed_catalog(catalog, query, catalog_backend_map(catalog), catalog_identity_map(catalog))
+
+
+def catalog_identity_map(catalog: CurationCatalog) -> SourceIdentitySurvey:
+    snapshot = catalog.current()
+    return SourceIdentitySurvey(
+        catalog_root=catalog.root,
+        snapshot_id=snapshot.snapshot_id,
+        generated_at="2026-11-12T00:00:00+00:00",
+        fingerprints={source.id: None for source in catalog.sources(snapshot.snapshot_id)},
+        reviews=[],
+        groups=[],
+        judge=None,
+    )
 
 
 def test_backend_survey_refresh_and_failed_staging_preserve_selected_map(catalog_database, catalog_query, tmp_path):
@@ -94,7 +109,8 @@ def test_backend_survey_refresh_and_failed_staging_preserve_selected_map(catalog
     publish_sample(root, "graded", source_id="a")
     catalog = CurationCatalog(root)
     first = catalog_backend_map(catalog)
-    loaded = load_surveyed_catalog(catalog, catalog_query, first)
+    identities = catalog_identity_map(catalog)
+    loaded = load_surveyed_catalog(catalog, catalog_query, first, identities)
     second = first.model_copy(update={"generated_at": "2026-11-12T01:00:00+00:00"})
 
     def failing_query(sql, parameters):
@@ -103,15 +119,46 @@ def test_backend_survey_refresh_and_failed_staging_preserve_selected_map(catalog
         return catalog_query(sql, parameters)
 
     with pytest.raises(RuntimeError, match="transport interrupted"):
-        load_surveyed_catalog(catalog, failing_query, second)
+        load_surveyed_catalog(catalog, failing_query, second, identities)
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         assert client.get("/backends").json()["generated_at"] == first.generated_at
         assert client.get("/sources").json()["sources"][0]["backend_capabilities"]["basis"] == "unassessed"
-    refreshed = load_surveyed_catalog(catalog, catalog_query, second)
+    refreshed = load_surveyed_catalog(catalog, catalog_query, second, identities)
     assert refreshed["load_id"] != loaded["load_id"]
-    assert not load_surveyed_catalog(catalog, catalog_query, second)["changed"]
+    assert not load_surveyed_catalog(catalog, catalog_query, second, identities)["changed"]
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         assert client.get("/backends").json()["generated_at"] == second.generated_at
+
+
+def test_source_fingerprint_is_stored_separately_and_failed_refresh_keeps_previous(
+    catalog_database, catalog_query, tmp_path
+):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "graded", source_id="a")
+    catalog = CurationCatalog(root)
+    fixture = Path(__file__).resolve().parents[3] / (
+        "experiments/post_training/task_curation/tests/fixtures/source-overlap-fingerprints.json"
+    )
+    fingerprint = SourceFingerprint.model_validate(next(iter(json.loads(fixture.read_text()).values())))
+    identities = catalog_identity_map(catalog).model_copy(update={"fingerprints": {"a": fingerprint}})
+    backends = catalog_backend_map(catalog)
+    load_surveyed_catalog(catalog, catalog_query, backends, identities)
+    newer = identities.model_copy(update={"generated_at": "2026-11-12T02:00:00+00:00"})
+
+    def failing_query(sql, parameters):
+        if "INSERT INTO atlas_backend_cells" in sql:
+            raise RuntimeError("Import interrupted after source fingerprints")
+        return catalog_query(sql, parameters)
+
+    with pytest.raises(RuntimeError, match="Import interrupted"):
+        load_surveyed_catalog(catalog, failing_query, backends, newer)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        summary = client.get("/sources").json()["sources"][0]["source_fingerprint"]
+        assert summary["sample_sha256"] == fingerprint.sample_sha256 and "sample" not in summary
+        assert client.get("/source-fingerprint", params={"source_id": "a"}).json()["fingerprint"]["sample"] == [
+            sample.model_dump(mode="json") for sample in fingerprint.sample
+        ]
+        assert client.get("/source-duplicates").json()["generated_at"] == identities.generated_at
 
 
 @pytest.fixture
@@ -545,6 +592,8 @@ def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(
         "backend_sources": 1,
         "backend_surveys": 1,
         "backend_cells": 301,
+        "identity_surveys": 1,
+        "duplicate_reviews": 0,
     }
     assert load_catalog(CurationCatalog(root), query)["changed"] is False
     with engine.begin() as connection:

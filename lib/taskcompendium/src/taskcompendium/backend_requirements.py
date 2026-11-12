@@ -84,6 +84,8 @@ class BackendSourceMap(BaseModel):
     demands: dict[str, dict[Requirement, int]]
     resource_ranges: dict[str, dict[str, tuple[int, int]]]
     backends: dict[str, BackendFit]
+    role_backend_assignments: dict[str, dict[str, int]]
+    """Daytona deployment: agent on Daytona, package-lock grader on LOCAL."""
 
 
 class BackendSurvey(BaseModel):
