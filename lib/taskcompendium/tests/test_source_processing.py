@@ -388,7 +388,7 @@ def test_preparation_bounds_lossless_review_files_with_skewed_duplicate_rows(tmp
     [
         (SourceProcessingMode.SAMPLE, "good", 100),
         (SourceProcessingMode.FULL, "good", 125),
-        (SourceProcessingMode.FULL, "bad", 100),
+        (SourceProcessingMode.FULL, "bad", 125),
         (SourceProcessingMode.FULL, "some_issues", 125),
     ],
 )
@@ -508,23 +508,16 @@ def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mo
     assert {row["task_id"] for row in raw} == {row["task_id"] for row in review}
     assert all("task_json" not in row and "raw_json" not in row for row in review)
     assert not report["raw_population_census"]
-    assert report["quality"]["status"] == {"bad": "reject", "good": "trust", "some_issues": "trust"}[quality]
+    assert report["quality"]["status"] == "trust"
     reviewed = sum(len(requests) for requests in service.files.values())
     assert reviewed == 100
-    if quality == "bad":
-        assert all(row["filter_status"] == "reject" for row in review)
-        assert not parquet_rows(result.final_path)
-    elif quality == "good":
-        verified = parquet_rows(result.verify_path)
-        assert {row["admission"] for row in verified} == {"admitted"}
-        assert len(parquet_rows(result.final_path)) == len(verified) == expected_conversions
-    else:
-        # Uncertain panel judgments are not source defects: the reviewed rows are
-        # rejected individually and the unreviewed rows inherit the source decision.
-        assert Counter((row["quality_basis"], row["filter_status"]) for row in review) == {
-            ("direct_review", "reject"): 100,
-            ("inferred_from_source", "keep"): 25,
-        }
+    verified = parquet_rows(result.verify_path)
+    assert {row["admission"] for row in verified} == {"admitted"}
+    assert len(parquet_rows(result.final_path)) == len(verified) == expected_conversions
+    assert Counter(row["filter_status"] for row in review) == Counter(
+        {"keep": expected_conversions, "defer": 125 - expected_conversions}
+    )
+    assert report["quality"]["result"]["verdict"] == {"bad": "bad", "good": "good", "some_issues": "unknown"}[quality]
 
 
 @pytest.mark.parametrize("population_count", [10, 125])
@@ -536,11 +529,11 @@ def test_unsupported_raw_panel_never_becomes_a_small_population_census(tmp_path,
     reviewer = BatchReviewer(BatchService(), "fixture", "revision")
     result = run_pipeline(recipe, source, tmp_path / "output", pipeline_config(SourceProcessingMode.FULL, reviewer))
     report = read_json(result.manifest_path)
-    assert report["quality"]["status"] == "incomplete"
+    assert report["quality"]["status"] == ("census" if population_count <= 100 else "trust")
     assert report["raw_population_census"] == (population_count <= 100)
-    assert not report["full_expansion"]
-    assert result.status == "incomplete"
-    assert len(list(conversions.iterdir())) == min(100, population_count)
+    assert report["full_expansion"]
+    assert result.status == "completed"
+    assert len(list(conversions.iterdir())) == population_count
     review = parquet_rows(result.review_path)
     assert len(review) == population_count
     assert {row["filter_status"] for row in review} == {"defer"}
@@ -636,7 +629,7 @@ def test_source_retry_reuses_successful_reviews_after_unavailable_evidence(tmp_p
         ]
         config = replace(config, oracle_filter=oracle_receipt(tasks, oracle_recipe_identity(recipe)))
     first = run_pipeline(recipe, source, tmp_path / "output", config)
-    assert first.status == "incomplete"
+    assert first.status == ("completed" if failure == "quality_panel" else "incomplete")
     assert Path(first.manifest_path).exists()
     submitted = sum(len(rows) for rows in service.files.values())
     first_files = set(service.files)
@@ -690,7 +683,7 @@ class PartiallyUnavailableReview(BatchService):
         (SourceProcessingMode.SAMPLE, 125, 0, "trust", 100, "validated"),
     ],
 )
-def test_resolved_source_gate_finishes_with_unavailable_task_deferred(
+def test_qc_unavailability_does_not_reject_tasks_but_controls_still_can(
     tmp_path, mode, population, bad_count, quality, processed, verification
 ):
     source = tmp_path / "source"
@@ -712,19 +705,19 @@ def test_resolved_source_gate_finishes_with_unavailable_task_deferred(
     review = parquet_rows(result.review_path)
     deferred = [row for row in review if row["review_status"] == "unavailable"]
     assert len(deferred) == 1
-    assert deferred[0]["filter_status"] == "defer"
+    assert deferred[0]["filter_status"] == ("reject" if verification == "validated" else "keep")
     final = parquet_rows(result.final_path)
-    assert len(final) == (0 if verification == "validated" else processed - bad_count - 1)
-    assert deferred[0]["task_id"] not in {row["task_id"] for row in final}
+    assert len(final) == (0 if verification == "validated" else processed)
+    assert (deferred[0]["task_id"] in {row["task_id"] for row in final}) == (verification != "validated")
     assert list((tmp_path / "output/work/quality/evidence").glob("*.parquet"))
 
 
 @pytest.mark.parametrize(
     "unavailable,bad_count,quality,status,admitted",
-    [(3, 20, "trust", "completed", 102), (10, 45, "incomplete", "incomplete", 0)],
+    [(3, 20, "trust", "completed", 125), (10, 45, "trust", "completed", 125)],
     ids=["decision_reached", "decision_open"],
 )
-def test_unavailable_reviews_leave_a_source_incomplete_only_when_the_gate_cannot_decide(
+def test_unavailable_reviews_remain_in_the_ledger_while_full_conversion_completes(
     tmp_path, unavailable, bad_count, quality, status, admitted
 ):
     source = tmp_path / "source"
@@ -743,7 +736,7 @@ def test_unavailable_reviews_leave_a_source_incomplete_only_when_the_gate_cannot
     review = parquet_rows(result.review_path)
     deferred = [row for row in review if row["review_status"] == "unavailable"]
     assert len(deferred) == unavailable
-    assert {row["filter_status"] for row in deferred} == {"defer"}
+    assert {row["filter_status"] for row in deferred} == {"keep"}
     assert len(parquet_rows(result.final_path)) == admitted
 
 
@@ -762,7 +755,7 @@ class MixedPanelConverter:
 
 
 @pytest.mark.parametrize(
-    "defect_limit,expected_quality,expected_status", [(2, "trust", "sampled"), (101, "reject", "gated")]
+    "defect_limit,expected_quality,expected_status", [(2, "trust", "sampled"), (101, "trust", "sampled")]
 )
 def test_raw_panel_with_source_defects_keeps_fixed_draw_and_decisive_quality(
     tmp_path, defect_limit, expected_quality, expected_status
@@ -777,12 +770,15 @@ def test_raw_panel_with_source_defects_keeps_fixed_draw_and_decisive_quality(
     report = read_json(result.manifest_path)
     assert report["raw_sample_count"] == report["quality"]["population"]["input_count"] == 100
     assert report["quality"]["status"] == expected_quality
+    exclusions = report["quality"]["population"]["exclusions"]
     if defect_limit == 2:
-        assert report["quality"]["assessments"]["defect"] in (1, 2)
-        assert report["quality"]["defect_fraction"] in (0.01, 0.02)
+        assert exclusions["normalization:source_defect"] in (1, 2)
+        assert report["quality"]["result"]["issue_count"] == 0
+        assert report["quality"]["result"]["verdict"] == "good"
     else:
-        assert report["quality"]["assessments"]["defect"] == 100
-        assert report["quality"]["defect_fraction"] == 1.0
+        assert exclusions["normalization:source_defect"] == 100
+        assert report["quality"]["result"]["reviewed"] == 0
+        assert report["quality"]["result"]["verdict"] == "unknown"
         assert service.files == {}
     assert result.status == expected_status
     assert len(list(conversions.iterdir())) == 100
@@ -1137,3 +1133,26 @@ def test_decontamination_receipt_precedes_conversion_and_quality_review(tmp_path
     assert len(parquet_rows(result.final_path)) == 1
     assert service.files
     assert read_json(result.manifest_path)["lexical_contamination"] == document
+
+
+def test_transport_outage_cannot_qualify_tasks_with_passing_controls(tmp_path):
+    source = tmp_path / "source"
+    write_jsonl(source, apple_rows(2))
+    recipe = fixture_recipe(convert_svamp, controls=REFERENCE_CONTROLS)
+    available = BatchReviewer(BatchService(), "fixture", "available", max_attempts=1)
+    qualified = run_pipeline(
+        recipe, source, tmp_path / "available", pipeline_config(SourceProcessingMode.FULL, available)
+    )
+    assert qualified.status == "completed"
+    assert len(parquet_rows(qualified.final_path)) == 2
+    unavailable = BatchReviewer(BatchService(interrupted=True), "fixture", "unavailable", max_attempts=1)
+    pending = run_pipeline(
+        recipe, source, tmp_path / "unavailable", pipeline_config(SourceProcessingMode.FULL, unavailable)
+    )
+    assert pending.status == "incomplete"
+    assert parquet_rows(pending.final_path) == []
+    report = read_json(pending.manifest_path)
+    assert report["quality"]["result"]["verdict"] == "unknown"
+    assert report["quality"]["result"]["issue_count"] == 0
+    assert report["quality"]["result"]["unavailable_count"] == 2
+    assert {row["admission"] for row in parquet_rows(pending.verify_path)} == {"deferred"}

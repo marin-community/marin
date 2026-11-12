@@ -3,12 +3,15 @@
 
 """The task catalog: training and evaluation dataset declarations, keyed by name."""
 
+from dataclasses import replace
+
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
     structure_closure,
     thoughtcrime,
 )
 from experiments.post_training.task_curation.datasets.arc import arc
+from experiments.post_training.task_curation.datasets.daytona_measurements import DAYTONA_MEASUREMENTS
 from experiments.post_training.task_curation.datasets.evalchemy import code as eval_code
 from experiments.post_training.task_curation.datasets.evalchemy import financebench as eval_financebench
 from experiments.post_training.task_curation.datasets.evalchemy import harness as eval_harness
@@ -79,6 +82,24 @@ def all_sources() -> dict[str, RlDataSource]:
         *thoughtcrime.sources(),
         *campaign_releases.sources(),
     ]
+    measured_sources = []
+    for source in sources:
+        measurement = DAYTONA_MEASUREMENTS.get(source.info.id)
+        if measurement is not None:
+            dataset = source.dataset
+            if dataset is None or (dataset.name, dataset.revision) != (
+                measurement.dataset_id,
+                measurement.dataset_revision,
+            ):
+                raise ValueError(f"Daytona census does not match source input pin: {source.info.id}")
+            fields = measurement.model_dump(
+                exclude={"dataset_id", "dataset_revision", "daytona_unsafe_reasons", "daytona_roles"}
+            )
+            fields["daytona_unsafe_reasons"] = tuple(measurement.daytona_unsafe_reasons)
+            fields["daytona_roles"] = measurement.daytona_roles
+            source = replace(source, info=replace(source.info, **fields))
+        measured_sources.append(source)
+    sources = measured_sources
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")
@@ -108,7 +129,11 @@ def require_accepted_task_format(source: RlDataSource) -> None:
 
 def runnable_sources() -> dict[str, RlDataSource]:
     """Available sources with dataset-owned execution, keyed by invocation name."""
-    sources = [source for source in all_sources().values() if source.declaration.status == "Available"]
+    sources = [
+        source
+        for source in all_sources().values()
+        if not source.admission_blockers and source.declaration.status == "Available"
+    ]
     for source in sources:
         require_accepted_task_format(source)
     names = [source.name for source in sources]

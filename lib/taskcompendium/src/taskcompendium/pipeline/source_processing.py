@@ -119,7 +119,7 @@ from taskcompendium.pipeline.stages import (
 )
 from taskcompendium.pipeline.transforms import admit_converted_row
 
-SOURCE_PIPELINE_REVISION = "15"
+SOURCE_PIPELINE_REVISION = "17"
 PANEL_ROWS_PER_SHARD = 16
 ROWS_PER_SHARD = 1000
 MAX_PREPARATION_SHARDS = 64
@@ -786,7 +786,6 @@ def _population_shard_count(population_count: int, maximum: int) -> int:
 def _export_sidecars(
     run: _SourceRun,
     panel: _Panel,
-    decision: SourceQualityReport,
     checked: StoragePath,
     verification: SourceVerificationStatus,
     *,
@@ -814,7 +813,7 @@ def _export_sidecars(
             _unprocessed_review,
             recipe=run.recipe,
             processed=frozenset(_source_identity(row, run.recipe)["task_id"] for row in panel.sample.rows),
-            disposition="reject" if decision.status == SourceQualityStatus.REJECT else "defer",
+            disposition="defer",
         )
         inputs.extend(
             _UnprocessedLocators(path, str(output), ShardInfo(index, len(locators)), unprocessed)
@@ -851,8 +850,6 @@ def _source_status(
     # Per-task validation defers unavailable rows without blocking the whole source.
     if quality == SourceQualityStatus.INCOMPLETE or verification == SourceVerificationStatus.INCONCLUSIVE:
         return SourceStatus.INCOMPLETE
-    if quality == SourceQualityStatus.REJECT:
-        return SourceStatus.GATED
     if processed_all:
         return SourceStatus.COMPLETED
     return SourceStatus.SAMPLED if mode == SourceProcessingMode.SAMPLE else SourceStatus.GATED
@@ -989,9 +986,7 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
     verification, checked = _verify(run)
     verification_status = SourceVerificationStatus(verification["verification"]["status"])
     _write_download_manifest(run, panel.sample.population_count)
-    admissions, grading_environment = _export_sidecars(
-        run, panel, decision, checked, verification_status, expanded=expanded
-    )
+    admissions, grading_environment = _export_sidecars(run, panel, checked, verification_status, expanded=expanded)
     verification["verification"]["source_path"] = str(run.output / "normalize")
     verification["verification"]["review_path"] = str(run.output / "review")
     status = _source_status(

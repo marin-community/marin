@@ -120,12 +120,9 @@ SELECT p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count,
     ) AS verdict_counts,
     COUNT(i.task_id) AS item_count,
     COUNT(i.task_id) FILTER (WHERE i.status = 'reviewed' AND i.has_task AND i.verdict = 'good') AS good_count,
-    COUNT(i.task_id) FILTER (WHERE i.status = 'reviewed' AND i.has_task AND i.verdict = 'bad') AS bad_count,
     COUNT(i.task_id) FILTER (
         WHERE i.status = 'reviewed' AND i.has_task AND i.verdict <> 'unknown'
-    ) AS conclusive_count,
-    a.curation->>'status' AS curation_status,
-    (a.curation->>'processed_rows')::bigint AS processed_rows
+    ) AS conclusive_count
 FROM atlas_populations p JOIN atlas_assessments a USING (load_id, pipeline_key)
 LEFT JOIN atlas_items i
     ON i.load_id = p.load_id AND i.pipeline_key = p.pipeline_key AND i.cohort = p.cohort
@@ -134,24 +131,24 @@ GROUP BY p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count, a.cu
 SELECT load_id, pipeline_key, cohort, population, sample_count, reviewed,
     missing_evidence, packets_with_omissions, verdict_counts,
     CASE
-        WHEN cohort = 'admitted' AND population = 0 AND processed_rows > 0
-            AND curation_status IN ('completed', 'gated') THEN 'bad'
-        WHEN sample_count = 0 OR item_count <> sample_count THEN 'unknown'
-        WHEN 5 * good_count >= 4 * sample_count THEN 'good'
-        WHEN 5 * bad_count > sample_count THEN 'bad'
-        WHEN 5 * conclusive_count < 4 * sample_count THEN 'unknown'
+        WHEN sample_count = 0 OR item_count <> sample_count OR conclusive_count = 0 THEN 'unknown'
+        WHEN 2 * (conclusive_count - good_count) >= conclusive_count THEN 'bad'
+        WHEN 10 * (conclusive_count - good_count) <= conclusive_count THEN 'good'
         ELSE 'some_issues'
     END AS grade,
-    good_count::double precision / NULLIF(sample_count, 0) AS good_fraction,
+    good_count::double precision / NULLIF(conclusive_count, 0) AS good_fraction,
     CASE
-        WHEN cohort = 'admitted' AND population = 0 AND processed_rows > 0
-            AND curation_status IN ('completed', 'gated') THEN 'Curation retained zero tasks'
         WHEN sample_count = 0 THEN 'No sample available'
         WHEN item_count <> sample_count THEN 'Sample coverage is incomplete'
-        WHEN 5 * good_count >= 4 * sample_count THEN 'At least 80% of sampled tasks are Good'
-        WHEN 5 * bad_count > sample_count THEN 'More than 20% of sampled tasks are Bad'
-        WHEN 5 * conclusive_count < 4 * sample_count THEN 'Fewer than 80% of sampled tasks have conclusive evidence'
-        ELSE 'Sample has concerns below the Bad threshold'
-    END AS grade_reason
+        WHEN conclusive_count = 0 THEN 'No conclusive reviewed tasks'
+        WHEN 2 * (conclusive_count - good_count) >= conclusive_count THEN 'At least 50% of reviewed tasks have issues'
+        WHEN 10 * (conclusive_count - good_count) <= conclusive_count THEN 'At least 90% of reviewed tasks are clean'
+        ELSE 'More than 10% and fewer than 50% of reviewed tasks have issues'
+    END AS grade_reason,
+    conclusive_count AS result_reviewed,
+    conclusive_count - good_count AS issue_count,
+    (conclusive_count - good_count)::double precision / NULLIF(conclusive_count, 0) AS issue_rate,
+    reviewed - conclusive_count AS uncertain_count,
+    sample_count - reviewed AS unavailable_count
 FROM counts;
 """

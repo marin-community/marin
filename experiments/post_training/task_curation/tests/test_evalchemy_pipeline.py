@@ -40,7 +40,7 @@ from experiments.post_training.task_curation.driver import _conversion_steps
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 
 def decode_prefix(data: dict, _context: ConversionContext, *, prefix: str) -> dict:
@@ -69,7 +69,14 @@ def grouped_item(task):
 def fixture_source() -> RlDataSource[EvalDataset]:
     return RlDataSource(
         info=SourceInfo(
-            id="eval-identity", title="Identity fixture", origin="test", family="test", tags=("eval",), count=1
+            id="Marin:eval-identity",
+            upstream_dataset="eval-identity",
+            upstream_name="eval-identity",
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+            family="test",
+            tags=("eval",),
+            count=1,
         ),
         config=EvalDataset(
             CurationRecipe(

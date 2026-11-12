@@ -294,7 +294,6 @@ class QualityBasis(StrEnum):
     UNREVIEWED = "unreviewed"
     DIRECT_REVIEW = "direct_review"
     INFERRED_FROM_SOURCE = "inferred_from_source"
-    SOURCE_REJECTED = "source_rejected"
     SOURCE_INCOMPLETE = "source_incomplete"
 
 

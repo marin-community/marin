@@ -8,6 +8,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from finestore.rl.curation import OversightEvidence, OversightLevel
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
@@ -16,10 +17,14 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, SourceReference
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 
-NUMBERS_DATASET = SourceReference("open-athena/numbers-fixture", "a" * 40, "https://example.org/numbers")
+NUMBERS_DATASET = SourceReference(
+    "open-athena/numbers-fixture",
+    "a" * 40,
+    "https://huggingface.co/datasets/open-athena/numbers-fixture/tree/" + "a" * 40,
+)
 
 
 @dataclass(frozen=True)
@@ -105,9 +110,18 @@ def numbers_pipeline(source: RlDataSource[NumbersConfig], options: PipelineOptio
 def number_source(path: Path, name: str = "numbers") -> RlDataSource[NumbersConfig]:
     return RlDataSource(
         info=SourceInfo(
-            id=f"fixture:{name}",
-            title=name,
-            origin="fixture",
+            id=f"Marin:{name}",
+            upstream_dataset=name,
+            upstream_name=name,
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+            oversight=OversightEvidence(
+                level=OversightLevel.FULL, verification="Fixture arithmetic ingestion is executed and checked locally."
+            ),
+            daytona_snapshot_count=0,
+            daytona_machine_slots=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture ingestion performs arithmetic locally and creates no actor.",
             lexical_contamination=decontamination_evidence(NUMBERS_DATASET.name, NUMBERS_DATASET.revision, 1),
         ),
         config=NumbersConfig(name, path),

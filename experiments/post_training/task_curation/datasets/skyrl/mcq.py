@@ -13,7 +13,7 @@ from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 from verifyit.modes.extract import extract_boxed
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 GPQA_CHOICES = ("Correct Answer", "Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3")
 OPTION_LABEL = re.compile(r"(?m)^([A-Z]):")
@@ -86,8 +86,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:gpqa",
-                title="Idavidrein/gpqa · gpqa_diamond",
-                origin="MarinSkyRL",
+                upstream_dataset="gpqa",
+                upstream_name="gpqa",
+                subset=None,
+                build_path="MarinSkyRL",
+                origin=SourceOrigin.GPQA,
                 family="qa-multiple-choice",
                 tags=("rlvr", "single-turn", "benchmark", "license:cc-by-4.0", "gym/mcq"),
             ),
@@ -109,8 +112,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:openscience",
-                title="nvidia/OpenScience",
-                origin="MarinSkyRL",
+                upstream_dataset="openscience",
+                upstream_name="openscience",
+                subset=None,
+                build_path="MarinSkyRL",
+                origin=SourceOrigin.NEMOTRON,
                 family="qa-multiple-choice",
                 tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/mcq"),
             ),

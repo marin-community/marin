@@ -35,7 +35,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.repository_pytes
 )
 from experiments.post_training.task_curation.datasets.tasktrove.swe_rebench import convert_swe_rebench_task
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 REPOSITORY_CRITERIA = """
 The public repository and checkout identify necessary context; unavailable local checkout is a runtime
@@ -130,8 +130,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             version="4",
             info=SourceInfo(
                 id="Task Trove:DCAgent__swe_rebench_v2_patched_oracle-v2",
-                title="DCAgent/swe_rebench_v2_patched_oracle-v2",
-                origin="Task Trove",
+                upstream_dataset="DCAgent__swe_rebench_v2_patched_oracle-v2",
+                upstream_name="DCAgent__swe_rebench_v2_patched_oracle-v2",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="swe-repo",
                 tags=(
                     "agentic",
@@ -177,8 +180,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             version="4",
             info=SourceInfo(
                 id="Task Trove:laion__swesmith-oracle-filtered-v2",
-                title="laion/swesmith-oracle-filtered-v2",
-                origin="Task Trove",
+                upstream_dataset="laion__swesmith-oracle-filtered-v2",
+                upstream_name="laion__swesmith-oracle-filtered-v2",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="swe-repo",
                 tags=("agentic", "multi-turn", "language:python", "deprecated"),
                 count=12927,
