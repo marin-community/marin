@@ -84,11 +84,9 @@ _WORD = re.compile(r"\S+")
 
 
 def normalized(text: str) -> str:
-    """Lowercase and collapse whitespace runs to one space.
-
-    A regex substitution, not ``" ".join(text.split())``: repository documents reach
-    hundreds of MB, and a list of every word costs several times the text's size.
-    """
+    """Lowercase and collapse whitespace runs to one space."""
+    # Not " ".join(text.split()): documents reach hundreds of MB, and a list of every word
+    # costs several times the text's size.
     return _WHITESPACE.sub(" ", text.lower()).strip()
 
 
@@ -251,11 +249,11 @@ def store_files(sources: dict[str, StoreSource], names: list[str] | None, every:
     for name in sorted(names or sources):
         source = sources[name]
         root = StoragePath(STORE_ROOT)
-        paths = sorted(str(p) for p in (root / source.dir / "*.parquet").glob())
+        paths = sorted((root / source.dir / "*.parquet").glob(), key=str)
         if not paths:
             raise ValueError(f"{name}: no Parquet files in {root / source.dir}")
-        for path in paths[::every]:
-            base = path.rsplit("/", 1)[1]
+        for file_path in paths[::every]:
+            path, base = str(file_path), file_path.name
             fuzzy = str(root / source.fuzzy / base) if source.fuzzy else None
             files.append(SourceFile(name, path, str(root / source.decon / base), str(root / source.exact / base), fuzzy))
     return files
@@ -325,7 +323,7 @@ def match_path(out_prefix: str, path: str) -> StoragePath:
 
 
 def _search_shard(out_prefix: str):
-    def run(items: Iterator[dict], shard) -> Iterator[str]:
+    def run(items: Iterator[dict], _) -> Iterator[str]:
         with targets_path(out_prefix).open("r") as f:
             matcher = Matcher([Target(**t) for t in json.load(f)])
         for item in items:
