@@ -97,14 +97,27 @@ def test_a_task_declaring_more_than_the_normalized_shape_defers():
         "environment/Dockerfile": b"FROM ubuntu:24.04\nWORKDIR /app\n",
         "task.toml": b'[task]\nid = "fixture"\n\n[environment]\nworkdir = "/app"\nmemory = "8G"\n',
     }
+    with pytest.raises(DeferredRebuild, match="larger_machine_shape"):
+        rebuild_task(native_task_bytes(members))
+
+
+def native_task_bytes(members: dict[str, bytes]) -> bytes:
+    """Pack tar members without gzip, as ``native_task``'s builder does."""
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
         for name, content in members.items():
             info = tarfile.TarInfo(name)
             info.size = len(content)
             archive.addfile(info, io.BytesIO(content))
-    with pytest.raises(DeferredRebuild, match="larger_machine_shape"):
-        rebuild_task(gzip.compress(buffer.getvalue(), mtime=0))
+    return gzip.compress(buffer.getvalue(), mtime=0)
+
+
+def test_every_run_segment_lowers_into_its_own_setup_command():
+    """A RUN with chained commands lowers each segment; none is dropped."""
+    rebuilt = rebuild_task(native_task("FROM ubuntu:24.04\nWORKDIR /app\nRUN pip install pytest && chmod 755 /app\n"))
+    commands = unpack(rebuilt.task_binary)["setup_files/calibforge-initialize.sh"].decode().splitlines()
+    assert "(cd /app && pip install pytest)" in commands
+    assert "(cd /app && chmod 755 /app)" in commands
 
 
 def test_a_lowered_spec_stages_fixtures_through_setup_commands():

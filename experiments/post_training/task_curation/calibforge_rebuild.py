@@ -253,7 +253,7 @@ def _recipe_body(instructions: list[Instruction], files: dict[str, bytes]) -> tu
         elif item.command == "workdir":
             workdir = _enter_workdir(item, workdir, steps)
         elif item.command == "run":
-            steps.commands.append(_run_command(item, workdir, steps.copied_files))
+            steps.commands.extend(_run_commands(item, workdir, steps.copied_files))
         elif item.command == "copy":
             _stage_copy(item, workdir, files, steps)
         else:
@@ -278,8 +278,8 @@ def _enter_workdir(item: Instruction, workdir: str, steps: _RecipeSteps) -> str:
     return workdir
 
 
-def _run_command(item: Instruction, workdir: str, copied_files: set[str]) -> str:
-    """The setup command one RUN becomes, or a deferral when it cannot be expressed."""
+def _run_commands(item: Instruction, workdir: str, copied_files: set[str]) -> list[str]:
+    """The setup commands one RUN's segments become, or a deferral when one cannot be expressed."""
     if item.flags:
         raise DeferredRebuild("requires_run_flags_support")
     if item.json_form:
@@ -293,6 +293,7 @@ def _run_command(item: Instruction, workdir: str, copied_files: set[str]) -> str
                 raise DeferredRebuild("requires_pipeline_support")
             else:
                 segments[-1].append(token)
+    lowered: list[str] = []
     for raw_segment in segments:
         if not raw_segment:
             raise DeferredRebuild("requires_empty_run")
@@ -316,9 +317,10 @@ def _run_command(item: Instruction, workdir: str, copied_files: set[str]) -> str
                 prefix = "DEBIAN_FRONTEND=noninteractive " + prefix
             # Emit the segment verbatim: globs and variables keep their shell
             # semantics at sandbox start (the recipe is the task's own content).
-            return f"(cd {shlex.quote(workdir)} && {prefix}{' '.join(raw_segment)})"
+            lowered.append(f"(cd {shlex.quote(workdir)} && {prefix}{' '.join(raw_segment)})")
+            continue
         raise DeferredRebuild("requires_unsupported_run:" + arguments[0])
-    raise DeferredRebuild("requires_empty_run")
+    return lowered
 
 
 def _stage_copy(item: Instruction, workdir: str, files: dict[str, bytes], steps: _RecipeSteps) -> None:

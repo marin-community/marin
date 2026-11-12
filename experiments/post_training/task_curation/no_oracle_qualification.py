@@ -65,7 +65,7 @@ from experiments.post_training.task_curation.environment_fidelity import (
     ENVIRONMENT_DOCKERFILE,
     ENVIRONMENT_PREFIX,
 )
-from experiments.post_training.task_curation.no_oracle_liveness import load_specs, manifest_bases
+from experiments.post_training.task_curation.no_oracle_liveness import DETAIL_LIMIT, load_specs, manifest_bases
 
 COPY_SOURCE = re.compile(r"^\s*COPY\s+(?:--\S+\s+)*(?P<sources>.+)$", re.IGNORECASE | re.MULTILINE)
 ADD_SOURCE = re.compile(r"^\s*ADD\s", re.IGNORECASE | re.MULTILINE)
@@ -460,22 +460,22 @@ def _execute_container_setup(
     resolvers = tuple(part for server in dns for part in ("--dns", server))
     created = _docker("create", *resolvers, image, "sh", "-c", command)
     if created.returncode:
-        return SetupExecution(task_id=task_id, outcome="docker_error", detail=created.stderr[-500:])
+        return SetupExecution(task_id=task_id, outcome="docker_error", detail=created.stderr[-DETAIL_LIMIT:])
     container = created.stdout.strip()
     try:
         for source, destination in copies:
             copied = _docker("cp", str(source), f"{container}:{destination}")
             if copied.returncode:
-                return SetupExecution(task_id=task_id, outcome="docker_error", detail=copied.stderr[-500:])
+                return SetupExecution(task_id=task_id, outcome="docker_error", detail=copied.stderr[-DETAIL_LIMIT:])
         started = _docker("start", "-a", container, timeout=timeout)
     except subprocess.TimeoutExpired:
         return SetupExecution(task_id=task_id, outcome="timeout", detail=f"{timeout}s")
     finally:
         removed = _docker("rm", "-f", container)
         if removed.returncode:
-            raise RuntimeError(f"cannot remove Docker setup container {container}: {removed.stderr[-500:]}")
+            raise RuntimeError(f"cannot remove Docker setup container {container}: {removed.stderr[-DETAIL_LIMIT:]}")
     if started.returncode:
-        return SetupExecution(task_id=task_id, outcome="script_error", detail=started.stderr[-500:])
+        return SetupExecution(task_id=task_id, outcome="script_error", detail=started.stderr[-DETAIL_LIMIT:])
     return SetupExecution(task_id=task_id, outcome="executed", workspace_stdout=started.stdout)
 
 
@@ -551,7 +551,7 @@ class WorkspaceComparison:
     """Expected paths present with different bytes."""
     extra: tuple[str, ...]
     remoded: tuple[str, ...]
-    """Present paths whose mode differs from the native recipe's own chmod."""
+    """Paths present with a mode other than the native archive member's, as "digest:path:from->to"."""
 
 
 def _compare_workspace(expectations: tuple[FileExpectation, ...], stdout: str) -> WorkspaceComparison:

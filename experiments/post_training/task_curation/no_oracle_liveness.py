@@ -45,6 +45,9 @@ VERIFIER_COMMAND = "bash /tests/test.sh"
 VERIFIER_TIMEOUT = 900.0
 REWARD_PATH = "/logs/verifier/reward.txt"
 
+DETAIL_LIMIT = 500
+"""Characters of a provider error kept for a report; the rest is truncation noise."""
+
 
 @dataclass(frozen=True)
 class LivenessResult:
@@ -113,7 +116,13 @@ async def run_one(spec: dict, base: str, cgroup_parent: Path | None = None) -> L
             return LivenessResult(task.id, base, "timeout", None, None, placement.snapshot, str(error))
         except Exception as error:
             return LivenessResult(
-                task.id, base, "infra_error", None, None, placement.snapshot, f"{type(error).__name__}: {error}"[:500]
+                task.id,
+                base,
+                "infra_error",
+                None,
+                None,
+                placement.snapshot,
+                f"{type(error).__name__}: {error}"[:DETAIL_LIMIT],
             )
         return classify_result(task.id, base, placement.snapshot, result)
 

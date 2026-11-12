@@ -4,8 +4,9 @@
 """TaskTrove competitive-programming sources: stdin/stdout programs graded by verifyit ``stdio``.
 
 Code Contests and TACO retain their source image recipes for the actor and its independent grader.
-The remaining sources use the campaign executable image and compiler grader packages. Controls run
-an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an empty submission.
+The remaining sources run in the environment their archives specify, lowered onto a pinned base.
+Controls run an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an
+empty submission.
 """
 
 import json

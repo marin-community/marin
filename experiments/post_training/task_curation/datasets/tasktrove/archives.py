@@ -55,12 +55,12 @@ class TaskTroveConverter:
         reply_only = (
             task.answer_type in CONVERSATION_ANSWERS and task.environment_requirements == EnvironmentRequirements()
         )
-        reused = (
+        substituted = (
             None if reply_only else environment_unused(task.model_dump(mode="json"), archive_file(row.data, DOCKERFILE))
         )
-        if reused is not None:
+        if substituted is not None:
             return ImportRejection(
-                kind=ImportFailureKind.CONVERTER_ERROR, reason="environment_substituted", detail=reused
+                kind=ImportFailureKind.CONVERTER_ERROR, reason="environment_substituted", detail=substituted
             )
         existing = {resource.path for resource in (*task.resources.all, *task.resources.oracle)}
         # Oracle controls may upload these files through runtimes without timestamp support.

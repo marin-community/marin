@@ -197,15 +197,15 @@ def declared_machine(
                 base64.b64decode(resource.source.content_base64, validate=True),
                 int(resource.mode or "644", 8),
             )
-        source: RegistryImage | DockerfileSource | HostImage | object = DockerfileSource(context, context / DOCKERFILE)
+        source = DockerfileSource(context, context / DOCKERFILE)
     elif requirements.docker_image is not None:
         source = RegistryImage(requirements.docker_image)
     elif requirements.packages_lock is not None:
         source = HostImage()
-    elif requirements.package_spec is not None:
-        source = requirements.package_spec
     else:
-        raise ValueError("declared requirements name no environment")
+        if requirements.package_spec is None:
+            raise ValueError("declared requirements name no environment")
+        source = requirements.package_spec
     return MachineSpec(
         source=source,
         workdir=requirements.working_directory or "",
