@@ -45,7 +45,7 @@ DATA_BELAY_RUNGS = ("d512", "d768", "d1024")
 # The cluster and Iris band of the runs. prepare's tokenize job runs there too, beside the caches it writes.
 CLUSTER = "cw-us-east-02a"
 BAND = "batch"
-# The launcher's run-wide artifact version: the one the validation caches were built at.
+# The launcher's --version, which only the run step takes: the validation caches pin their own.
 LAUNCH_VERSION = "2026.09.25"
 # Runs write their outputs here, under the cluster's MARIN_PREFIX, with a 30-day TTL.
 RUNS_ROOT = "tmp/ttl=30d/data_belay/runs"

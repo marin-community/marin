@@ -81,7 +81,7 @@ CONFIDENCE = 0.95
 # (control seeds 6-8) came out math -0.56% [-1.09%, -0.03%] at d512.
 MIN_GAIN = 0.01
 # Relative increase past which a group counts as harmed: 1%, or 2.5 seed SDs where the seeds vary more, so that
-# 3 seeds per arm can call a group neutral. The SDs are from the first four d512 control seeds
+# 3 seeds per arm can call a group neutral. The SDs are from the vanilla Track's first four d512 control seeds
 # (dbelay-d512-control-s0..s3): Paloma 0.45%, Uncheatable 0.54%, knowledge 0.83%, commonsense 0.40%, math 1.06%,
 # code 1.22%.
 HARM_LIMITS = {

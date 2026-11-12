@@ -326,7 +326,7 @@ def build_h100_ladder_run(
         )
 
     # Baseline: the recorded dense/MoE baseline for this size (DENSE_TPP/MOE_TPP at the rung's baseline
-    # batch). baseline_active is a FIXED reference (not the candidate's), so an architecture change moves
+    # batch). _BASELINE_ACTIVE_PARAMS is a FIXED reference (not the candidate's), so an architecture change moves
     # the candidate's FLOPs/token but never the budget it is compared against.
     steps_of_baseline = baseline_steps(size, dense)
     baseline_tokens = rung.baseline_batch * steps_of_baseline * SEQ_LEN

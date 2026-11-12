@@ -45,7 +45,7 @@ uv run data-belay report --rung d512 --candidate <filtered label> --against <unf
 
 `train` launches `experiments.grug.fast_track.launch --dense` on `cw-us-east-02a` at Iris priority `batch`, and it
 refuses a run id that W&B already has. Runs write under `tmp/ttl=30d/data_belay/runs/` in the cluster's
-`MARIN_PREFIX`. `score` refuses a run without its final eval, and must run before the 30-day TTL deletes the
+`MARIN_PREFIX`. `score` refuses a run that has not finished training, and must run before the 30-day TTL deletes the
 checkpoints. It writes one JSON per run under `data_belay/choice/` in
 the training cluster's `MARIN_PREFIX` (`s3://marin-us-east-02a/marin/data_belay/choice/`), outside the TTL root, and
 `report` reads it from there.
@@ -143,10 +143,10 @@ Runs train main's fast-track dense model. Until 2026-11-12 they trained the dens
 on the `marin_belay_v1_recipe` branch: the validation runs below and the Datakit sweep, with run ids
 `dbelay-<rung>-…`. Both models read the same base cache with the same tokenizer, so the candidate caches and the
 dilution references carry over. The fast-track model adds GatedNorm, short convolutions, and sliding-window attention
-with one KV head, and trains with MuonH. Its budget is 690 steps at d512 and 2,040 at d768, against 720 and 2,161.
+(one KV head at d512 and d768), and trains with MuonH. Its budget is 690 steps at d512 and 2,040 at d768, against 720 and 2,161.
 
-Five validation arms and the null arm reran on it at d512 and d768 (`dbelay-main-…`), each with the same 3 seeds as
-the vanilla runs it is compared with:
+Five validation arms reran on it at d512 and d768, and the null arm at d512 (`dbelay-main-…`). Each arm is judged
+with seeds 0–2 on both models, so the 6-seed vanilla arms below count their first 3 here:
 
 | Arm | d512, vanilla | d512, fast-track | d768, vanilla | d768, fast-track |
 |---|---|---|---|---|
@@ -155,7 +155,7 @@ the vanilla runs it is compared with:
 | FineWeb, 20% | no gain | trade-off | helps | helps |
 | Cosmopedia web samples, 20% | no gain | no gain | no gain | no gain |
 | FineWeb, 50% | hurts | hurts | hurts | hurts |
-| Null: control seeds 6–8 | no gain | no gain | | |
+| Null: control seeds 6–8 | no gain | no gain | no gain | not run |
 
 The gains agree: across the 30 pairs of arm and group at each rung, the two models' `Δ`s against the control
 correlate at 0.99, and where their signs differ both are within 1%. The one rung that turns from no to yes, FineWeb

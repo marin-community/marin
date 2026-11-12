@@ -21,10 +21,11 @@ import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
-from levanter.checkpoint import discover_checkpoint_candidates, load_checkpoint
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
+from marin.execution.step_status import STATUS_SUCCESS, StatusFile
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -43,7 +44,6 @@ from experiments.grug.fast_track.launch import (
     V16384_TOKENIZER,
     V16384_VOCAB,
     _h100_ladder_model,
-    baseline_steps,
     h100_ladder_rung,
 )
 from experiments.grug.fast_track.model import GrugModelConfig, Transformer
@@ -201,12 +201,11 @@ def score_rows(model: Transformer, rows: Sequence[tuple[list[int], list[float]]]
     return out
 
 
-def final_checkpoint_path(run_output: str, step: int) -> str:
-    """The complete checkpoint of a run's last step, ``step``: training saves it after its final eval."""
-    for candidate in discover_checkpoint_candidates(prefix_join(run_output, "checkpoints")):
-        if candidate.step == step:
-            return candidate.path
-    raise ValueError(f"{run_output} has no complete checkpoint of its last step, {step}, yet")
+def final_checkpoint_path(run_output: str) -> str:
+    """The latest checkpoint of a finished run, which training saves after its final eval."""
+    if StatusFile(run_output, worker_id="data-belay-score").status != STATUS_SUCCESS:
+        raise ValueError(f"{run_output} has not finished training")
+    return latest_checkpoint_path(prefix_join(run_output, "checkpoints"))
 
 
 def load_model(step_dir: str, config: GrugModelConfig, mesh: jax.sharding.Mesh) -> Transformer:
@@ -225,8 +224,7 @@ def main(rung: str, runs_root: str, choice_root: str, run_ids: tuple[str, ...]) 
     """Score each finished run's final checkpoint on every task, into ``results.choice_path(choice_root, run_id)``."""
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
-    steps = baseline_steps(rung, dense=True)
-    checkpoints = {run_id: final_checkpoint_path(prefix_join(runs_root, run_id), steps) for run_id in run_ids}
+    checkpoints = {run_id: final_checkpoint_path(prefix_join(runs_root, run_id)) for run_id in run_ids}
     tokenizer = load_tokenizer(V16384_TOKENIZER)
     questions = {task.name: task_questions(task) for task in TASKS}
     rows = {name: choice_rows(tokenizer, qs) for name, qs in questions.items()}
