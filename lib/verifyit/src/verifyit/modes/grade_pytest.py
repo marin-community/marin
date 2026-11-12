@@ -71,8 +71,11 @@ def record(error, nodeid=None):
     failure = {"kind": kind, "filename": filename, "nodeid": nodeid}
     if isinstance(error, ImportError):
         failure["missing_module"] = error.name or ""
-    if isinstance(error, AttributeError) and isinstance(error.obj, type(sys)):
-        failure["module"] = object.__getattribute__(error.obj, "__dict__").get("__file__", "")
+    if isinstance(error, AttributeError):
+        # Guest exceptions may omit owner metadata; retain their traceback provenance.
+        module = getattr(error, "obj", None)
+        if isinstance(module, type(sys)):
+            failure["module"] = object.__getattribute__(module, "__dict__").get("__file__", "")
     with open(sys.argv[1], "a") as output:
         output.write(repr(failure) + "\\n")
 
