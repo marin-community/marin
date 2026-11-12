@@ -31,8 +31,6 @@ from experiments.post_training.task_curation.catalog_snapshot import (
     refresh_catalog,
     retire_catalog_sources,
 )
-from experiments.post_training.task_curation.curation_catalog import RUNS
-
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 

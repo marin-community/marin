@@ -29,21 +29,25 @@ def test_quality_is_the_stronger_of_oversight_and_executed_controls(declaration,
     assert quality(declaration, curation) is expected
 
 
-def test_a_recorded_defect_is_bad_whatever_the_other_evidence():
-    assert result({"status": "Excluded"}, _curation("passed"), "good", Quality.SAMPLE) is Result.BAD
-    assert result({"status": "Available"}, _curation("rejected"), None, Quality.QUICK) is Result.BAD
-    assert result({"status": "Available"}, _curation("passed"), "bad", Quality.SAMPLE) is Result.BAD
+@pytest.mark.parametrize(
+    ("counts", "expected"),
+    [
+        ({"good": 20, "some_issues": 0, "bad": 0, "unknown": 0}, Result.GOOD),
+        ({"good": 18, "some_issues": 1, "bad": 1, "unknown": 0}, Result.GOOD),
+        ({"good": 17, "some_issues": 3, "bad": 0, "unknown": 0}, Result.SOME_ISSUES),
+        ({"good": 11, "some_issues": 4, "bad": 5, "unknown": 0}, Result.SOME_ISSUES),
+        ({"good": 10, "some_issues": 6, "bad": 4, "unknown": 0}, Result.BAD),
+        ({"good": 0, "some_issues": 0, "bad": 20, "unknown": 0}, Result.BAD),
+        ({"good": 17, "some_issues": 1, "bad": 0, "unknown": 2}, Result.SOME_ISSUES),
+    ],
+)
+def test_result_uses_reviewed_sample_clean_and_issue_thresholds(counts, expected):
+    assert result({"reviewed": 20, "verdict_counts": counts}) is expected
 
 
-def test_sampled_grade_then_executed_qa_then_upstream_qc_decide_the_result():
-    available = {"status": "Available"}
-    assert result(available, _curation("passed"), "some_issues", Quality.SAMPLE) is Result.SOME_ISSUES
-    assert result(available, _curation("passed"), "unknown", Quality.SAMPLE) is Result.SOME_ISSUES
-    assert result({**available, "oversight": "sample"}, None, None, Quality.SAMPLE) is Result.GOOD
-    assert result({**available, "independent_qc": {"verdict": "some_issues"}}, None, None, Quality.QUICK) is (
-        Result.SOME_ISSUES
-    )
-    assert result(available, None, "unknown", Quality.QUICK) is None
+def test_result_without_review_stays_unassessed():
+    assert result(None) is None
+    assert result({"reviewed": 0, "verdict_counts": {}}) is None
 
 
 def test_daytona_is_not_applicable_without_a_sandbox_and_measured_otherwise():

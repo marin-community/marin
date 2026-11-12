@@ -31,8 +31,6 @@ ORDER = {Quality.QUICK: 0, Quality.SAMPLE: 1, Quality.FULL: 2}
 OVERSIGHT_QUALITY = {"sample": Quality.SAMPLE, "full": Quality.FULL}
 # Per-task validation covered every eligible task; a passed sample let the rest skip validation.
 CONTROL_QUALITY = {"validated": Quality.FULL, "passed": Quality.SAMPLE}
-FAILED_CONTROLS = {"rejected"}
-GRADE_RESULT = {"good": Result.GOOD, "some_issues": Result.SOME_ISSUES, "bad": Result.BAD}
 
 
 def controls_status(curation: dict[str, Any] | None) -> str | None:
@@ -51,23 +49,17 @@ def quality(declaration: dict[str, Any], curation: dict[str, Any] | None) -> Qua
     return max(levels, key=ORDER.__getitem__)
 
 
-def result(
-    declaration: dict[str, Any], curation: dict[str, Any] | None, grade: str | None, level: Quality
-) -> Result | None:
-    """BAD on any recorded defect; otherwise the sampled grade; otherwise passed QA or upstream QC.
-
-    ``grade`` is the sampled assessment grade of the admitted cohort. An ``unknown``
-    grade, a review that could not confirm the sample, counts as SOME_ISSUES once
-    executed QA exists. ``None`` means no QA evidence exists.
-    """
-    independent = (declaration.get("independent_qc") or {}).get("verdict")
-    if declaration.get("status") == "Excluded" or controls_status(curation) in FAILED_CONTROLS or grade == "bad":
+def result(review: dict[str, Any] | None) -> Result | None:
+    """Label the reviewed sample; QC and admission status do not reject a source."""
+    if not review or not review["reviewed"]:
+        return None
+    counts = review["verdict_counts"]
+    reviewed = review["reviewed"]
+    if 10 * counts["good"] >= 9 * reviewed:
+        return Result.GOOD
+    if 2 * (counts["some_issues"] + counts["bad"]) >= reviewed:
         return Result.BAD
-    if grade in GRADE_RESULT:
-        return GRADE_RESULT[grade]
-    if level is not Quality.QUICK:
-        return Result.SOME_ISSUES if grade == "unknown" else Result.GOOD
-    return GRADE_RESULT.get(independent)
+    return Result.SOME_ISSUES
 
 
 def daytona(declaration: dict[str, Any], limit: int) -> dict[str, Any]:

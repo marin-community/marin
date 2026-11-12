@@ -40,7 +40,6 @@ from experiments.post_training.task_curation.datasets.tasktrove import puzzles a
 from experiments.post_training.task_curation.datasets.tasktrove import python_tests as tasktrove_python_tests
 from experiments.post_training.task_curation.datasets.tasktrove import qa as tasktrove_qa
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
-from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
 from experiments.post_training.task_curation.source import GRANDFATHERED_MARINSKYRL_SOURCES, RlDataSource, TaskFormat
 from experiments.post_training.task_curation.source_coverage import load_coverage, require_coverage
 
@@ -67,7 +66,6 @@ def declared_sources() -> dict[str, RlDataSource]:
         *tasktrove_code.sources(),
         *tasktrove_python_tests.sources(),
         *tasktrove_nl2bash.sources(),
-        *tasktrove_structured_outputs.sources(),
         *tasktrove_repositories.sources(),
         *tasktrove_math.sources(),
         *tasktrove_judged.sources(),

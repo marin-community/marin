@@ -154,7 +154,7 @@ def create_api(services: AppletServices) -> FastAPI:
             inventory = []
             for row in rows:
                 declaration = row["declaration"]
-                grade = ((row["cohorts"] or {}).get("admitted") or {}).get("grade") if row["assessment_key"] else None
+                review = (row["cohorts"] or {}).get("admitted") if row["assessment_key"] else None
                 level = quality(declaration, row["curation"])
                 inventory.append(
                     {
@@ -163,7 +163,7 @@ def create_api(services: AppletServices) -> FastAPI:
                         "curation": row["curation"],
                         "coverage": declared_coverage(declaration) or coverage.get(row["id"]),
                         "quality": level,
-                        "result": result(declaration, row["curation"], grade, level),
+                        "result": result(review),
                         "daytona": daytona(declaration, DAYTONA_SAFE_SNAPSHOT_LIMIT),
                         "updated_at": metadata["loaded_at"],
                         "backend_capabilities": row["backend_capabilities"],
@@ -391,7 +391,7 @@ def create_api(services: AppletServices) -> FastAPI:
             ).scalar_one_or_none()
             load = loaded_catalog(connection)
         declaration = source["declaration"]
-        grade = (summaries.get("admitted") or {}).get("grade")
+        review = summaries.get("admitted")
         level = quality(declaration, source["curation"])
         return {
             "declaration": declaration,
@@ -409,7 +409,7 @@ def create_api(services: AppletServices) -> FastAPI:
             "cohorts": summaries,
             "archived_reviews": reviews,
             "quality": level,
-            "result": result(declaration, source["curation"], grade, level),
+            "result": result(review),
             "daytona": daytona(declaration, DAYTONA_SAFE_SNAPSHOT_LIMIT),
             "updated_at": load["loaded_at"],
             "catalog": {"root": load["catalog_root"], "snapshot_id": load["snapshot_id"]},

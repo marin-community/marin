@@ -418,7 +418,7 @@ SOURCES = (
 def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
-            pipeline=None if source.name in TIERED_JUDGE_SOURCES - QA_PINNED_SOURCES else process_rows,
+            pipeline=process_rows,
             info=replace(
                 source.info,
                 task_format=TaskFormat.TASKCOMPENDIUM,
@@ -456,4 +456,5 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             ),
         )
         for source in SOURCES
+        if source.name not in TIERED_JUDGE_SOURCES - QA_PINNED_SOURCES
     ]

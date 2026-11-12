@@ -15,7 +15,7 @@
         "deprecated"
       ],
       "task_count": 2205,
-      "notes": "2,205 quality-admitted CalibForge tasks. Deprecated: every task names its own prebuilt registry image in task.toml, so running the cohort provisions one Daytona snapshot per task \u2014 2,205 distinct images across 2,205 tasks on the pinned release payloads, far beyond the ten-snapshot budget. Oracle solution execution was also skipped, so successful execution is not certified, and the pinned release manifest records the cohort as not published. A snapshot-safe rebuild from these candidates is planned. See the campaign report: https://github.com/marin-community/marin/issues/10305 Admission blocked: accepted agentic task format is missing. Admission blocked: execution requirement measurement is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "notes": "2,205 quality-admitted CalibForge tasks. Deprecated: every task names its own prebuilt registry image in task.toml, so running the cohort provisions one Daytona snapshot per task — 2,205 distinct images across 2,205 tasks on the pinned release payloads, far beyond the ten-snapshot budget. Oracle solution execution was also skipped, so successful execution is not certified, and the pinned release manifest records the cohort as not published. A snapshot-safe rebuild from these candidates is planned. See the campaign report: https://github.com/marin-community/marin/issues/10305 Admission blocked: accepted agentic task format is missing. Admission blocked: execution requirement measurement is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
       "dataset_id": "open-athena/task-trove",
       "dataset_revision": "6a6429ccba098e11ea9f6297a70cb43a34670c0f",
       "url": "https://huggingface.co/datasets/open-athena/task-trove/tree/6a6429ccba098e11ea9f6297a70cb43a34670c0f/releases/smartie-continuation-20261016/calibforge",
@@ -2288,6 +2288,462 @@
       "grading_environment": null,
       "disposition": "pending_quick_conversion",
       "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+    },
+    {
+      "id": "Task Trove:laion__glaive-code-assistant-sandboxes-verified-v2",
+      "name": "tasktrove-glaive_code",
+      "display_name": "laion/glaive-code-assistant-sandboxes-verified-v2",
+      "origin": "Task Trove",
+      "family": "llm-judge-freeform",
+      "tags": [
+        "agentic",
+        "multi-turn"
+      ],
+      "task_count": 10000,
+      "notes": "Judge-only over code that is never run, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Admission blocked: production snapshot identity measurement is missing. Admission blocked: execution requirement measurement is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "type": "Agentic",
+      "turns": "Multi-turn",
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "status": "Inventory",
+      "pipeline": null,
+      "independent_qc": null,
+      "daytona_safety": "not_applicable",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": null,
+      "daytona_count_basis": "PRE-18a common-admission census; Complete converted census; actor on Daytona, package-lock grader on LOCAL; production Harbor machine_spec -> shellbox snapshot_identity; converter checkout 58824e448d5faf16b074600e5374f0902941b66c; recipe version 2; allocations from native task.toml or published runtime, absent values null; no Daytona API calls; evidence s3://marin-us-east-02a/marin/rl-data/atlas/daytona-census/20261112/daytona-measurements-fb3bdf712b938d57.json",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "machine_slots": 10000,
+            "failures": {
+              "The local backend does not provide disk quotas or GPU allocations": 10000
+            }
+          }
+        }
+      },
+      "oracle_validation": null,
+      "oversight": "none",
+      "oversight_evidence": null,
+      "grading_environment": null,
+      "coverage": {
+        "intended_use": "train",
+        "example_count": 10000,
+        "top_area": {
+          "subject_id": "D02",
+          "name": "Computer & Information Sciences",
+          "instances": 950
+        },
+        "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 10000 tasks, every task embedded; leading subject by placed-task count",
+        "unavailable_reason": null
+      },
+      "disposition": "pending_quick_conversion",
+      "disposition_reason": "Retired until a registered converter and pinned judge contract support QUICK conversion."
+    },
+    {
+      "id": "Task Trove:laion__nemotron-gym-structured-outputs-v4",
+      "name": "tasktrove-structured_outputs",
+      "display_name": "laion/nemotron-gym-structured-outputs-v4",
+      "origin": "Task Trove",
+      "family": "instruction-following",
+      "tags": [
+        "agentic",
+        "multi-turn"
+      ],
+      "task_count": 53870,
+      "notes": "All formats require both a format check and a source-grounding judge. Inventory: the grounding judge model is unspecified. Pin the judge contract and complete grounding-verifier QA before admission. Admission blocked: production snapshot identity measurement is missing. Admission blocked: execution requirement measurement is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "type": "Agentic",
+      "turns": "Multi-turn",
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "status": "Inventory",
+      "pipeline": null,
+      "independent_qc": null,
+      "daytona_safety": "not_applicable",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": null,
+      "daytona_count_basis": "PRE-18a common-admission census; Complete converted census; actor on Daytona, package-lock grader on LOCAL; production Harbor machine_spec -> shellbox snapshot_identity; converter checkout 518dd8c50508c1ec02e52d64261a36fdca6c5ac3; recipe version 2; allocations from native task.toml or published runtime, absent values null; no Daytona API calls; evidence s3://marin-us-east-02a/marin/rl-data/atlas/daytona-census/20261112/daytona-measurements-fb3bdf712b938d57.json",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "machine_slots": 50606,
+            "failures": {
+              "The local backend does not provide disk quotas or GPU allocations": 50606
+            }
+          }
+        }
+      },
+      "oracle_validation": null,
+      "oversight": "none",
+      "oversight_evidence": null,
+      "grading_environment": null,
+      "coverage": {
+        "intended_use": "train",
+        "example_count": 50606,
+        "top_area": {
+          "subject_id": "D17",
+          "name": "Medicine & Clinical Care",
+          "instances": 6470
+        },
+        "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 50606 tasks, every task embedded; leading subject by placed-task count",
+        "unavailable_reason": null
+      },
+      "disposition": "pending_quick_conversion",
+      "disposition_reason": "Retired until a registered converter and pinned judge contract support QUICK conversion."
+    },
+    {
+      "id": "Task Trove:laion__stackexchange-codereview-sandboxes-verified-v2",
+      "name": "tasktrove-codereview",
+      "display_name": "laion/stackexchange-codereview-sandboxes-verified-v2",
+      "origin": "Task Trove",
+      "family": "llm-judge-freeform",
+      "tags": [
+        "agentic",
+        "multi-turn"
+      ],
+      "task_count": 10000,
+      "notes": "Judge-only code review with a four-criterion rubric and no reference; the rubric ships under tests/, which the agent never sees. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Admission blocked: production snapshot identity measurement is missing. Admission blocked: execution requirement measurement is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "type": "Agentic",
+      "turns": "Multi-turn",
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "status": "Inventory",
+      "pipeline": null,
+      "independent_qc": null,
+      "daytona_safety": "not_applicable",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": null,
+      "daytona_count_basis": "PRE-18a common-admission census; Complete converted census; actor on Daytona, package-lock grader on LOCAL; production Harbor machine_spec -> shellbox snapshot_identity; converter checkout 58824e448d5faf16b074600e5374f0902941b66c; recipe version 2; allocations from native task.toml or published runtime, absent values null; no Daytona API calls; evidence s3://marin-us-east-02a/marin/rl-data/atlas/daytona-census/20261112/daytona-measurements-fb3bdf712b938d57.json",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "machine_slots": 10000,
+            "failures": {
+              "The local backend does not provide disk quotas or GPU allocations": 10000
+            }
+          }
+        }
+      },
+      "oracle_validation": null,
+      "oversight": "none",
+      "oversight_evidence": null,
+      "grading_environment": null,
+      "coverage": {
+        "intended_use": "train",
+        "example_count": 10000,
+        "top_area": {
+          "subject_id": "D02",
+          "name": "Computer & Information Sciences",
+          "instances": 2517
+        },
+        "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 10000 tasks, every task embedded; leading subject by placed-task count",
+        "unavailable_reason": null
+      },
+      "disposition": "pending_quick_conversion",
+      "disposition_reason": "Retired until a registered converter and pinned judge contract support QUICK conversion."
+    },
+    {
+      "id": "Task Trove:laion__stackexchange-overflow-sandboxes-verified-v2",
+      "name": "tasktrove-stack_overflow",
+      "display_name": "laion/stackexchange-overflow-sandboxes-verified-v2",
+      "origin": "Task Trove",
+      "family": "llm-judge-freeform",
+      "tags": [
+        "agentic",
+        "multi-turn"
+      ],
+      "task_count": 10000,
+      "notes": "Judge-only Stack Overflow answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Admission blocked: production snapshot identity measurement is missing. Admission blocked: execution requirement measurement is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "type": "Agentic",
+      "turns": "Multi-turn",
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "status": "Inventory",
+      "pipeline": null,
+      "independent_qc": null,
+      "daytona_safety": "not_applicable",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": null,
+      "daytona_count_basis": "PRE-18a common-admission census; Complete converted census; actor on Daytona, package-lock grader on LOCAL; production Harbor machine_spec -> shellbox snapshot_identity; converter checkout 58824e448d5faf16b074600e5374f0902941b66c; recipe version 2; allocations from native task.toml or published runtime, absent values null; no Daytona API calls; evidence s3://marin-us-east-02a/marin/rl-data/atlas/daytona-census/20261112/daytona-measurements-fb3bdf712b938d57.json",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "machine_slots": 10000,
+            "failures": {
+              "The local backend does not provide disk quotas or GPU allocations": 10000
+            }
+          }
+        }
+      },
+      "oracle_validation": null,
+      "oversight": "none",
+      "oversight_evidence": null,
+      "grading_environment": null,
+      "coverage": {
+        "intended_use": "train",
+        "example_count": 10000,
+        "top_area": {
+          "subject_id": "D02",
+          "name": "Computer & Information Sciences",
+          "instances": 1520
+        },
+        "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 10000 tasks, every task embedded; leading subject by placed-task count",
+        "unavailable_reason": null
+      },
+      "disposition": "pending_quick_conversion",
+      "disposition_reason": "Retired until a registered converter and pinned judge contract support QUICK conversion."
+    },
+    {
+      "id": "Task Trove:laion__stackexchange-superuser-sandboxes-verified-v2",
+      "name": "tasktrove-superuser",
+      "display_name": "laion/stackexchange-superuser-sandboxes-verified-v2",
+      "origin": "Task Trove",
+      "family": "llm-judge-freeform",
+      "tags": [
+        "agentic",
+        "multi-turn"
+      ],
+      "task_count": 10000,
+      "notes": "Judge-only Super User answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Admission blocked: production snapshot identity measurement is missing. Admission blocked: execution requirement measurement is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "type": "Agentic",
+      "turns": "Multi-turn",
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "status": "Inventory",
+      "pipeline": null,
+      "independent_qc": null,
+      "daytona_safety": "not_applicable",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": null,
+      "daytona_count_basis": "PRE-18a common-admission census; Complete converted census; actor on Daytona, package-lock grader on LOCAL; production Harbor machine_spec -> shellbox snapshot_identity; converter checkout 58824e448d5faf16b074600e5374f0902941b66c; recipe version 2; allocations from native task.toml or published runtime, absent values null; no Daytona API calls; evidence s3://marin-us-east-02a/marin/rl-data/atlas/daytona-census/20261112/daytona-measurements-fb3bdf712b938d57.json",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "machine_slots": 10000,
+            "failures": {
+              "The local backend does not provide disk quotas or GPU allocations": 10000
+            }
+          }
+        }
+      },
+      "oracle_validation": null,
+      "oversight": "none",
+      "oversight_evidence": null,
+      "grading_environment": null,
+      "coverage": {
+        "intended_use": "train",
+        "example_count": 10000,
+        "top_area": {
+          "subject_id": "D02",
+          "name": "Computer & Information Sciences",
+          "instances": 3581
+        },
+        "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 10000 tasks, every task embedded; leading subject by placed-task count",
+        "unavailable_reason": null
+      },
+      "disposition": "pending_quick_conversion",
+      "disposition_reason": "Retired until a registered converter and pinned judge contract support QUICK conversion."
+    },
+    {
+      "id": "Task Trove:laion__stackexchange-tezos-sandboxes-verified-v2",
+      "name": "tasktrove-tezos",
+      "display_name": "laion/stackexchange-tezos-sandboxes-verified-v2",
+      "origin": "Task Trove",
+      "family": "llm-judge-freeform",
+      "tags": [
+        "agentic",
+        "multi-turn"
+      ],
+      "task_count": 10000,
+      "notes": "Judge-only Tezos answers, four-criterion rubric, no reference; the _copyN duplicates fall to the dedup step. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Admission blocked: production snapshot identity measurement is missing. Admission blocked: execution requirement measurement is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "type": "Agentic",
+      "turns": "Multi-turn",
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "status": "Inventory",
+      "pipeline": null,
+      "independent_qc": null,
+      "daytona_safety": "not_applicable",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": null,
+      "daytona_count_basis": "PRE-18a common-admission census; Complete converted census; actor on Daytona, package-lock grader on LOCAL; production Harbor machine_spec -> shellbox snapshot_identity; converter checkout 58824e448d5faf16b074600e5374f0902941b66c; recipe version 2; allocations from native task.toml or published runtime, absent values null; no Daytona API calls; evidence s3://marin-us-east-02a/marin/rl-data/atlas/daytona-census/20261112/daytona-measurements-fb3bdf712b938d57.json",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "machine_slots": 10000,
+            "failures": {
+              "The local backend does not provide disk quotas or GPU allocations": 10000
+            }
+          }
+        }
+      },
+      "oracle_validation": null,
+      "oversight": "none",
+      "oversight_evidence": null,
+      "grading_environment": null,
+      "coverage": {
+        "intended_use": "train",
+        "example_count": 10000,
+        "top_area": {
+          "subject_id": "D02",
+          "name": "Computer & Information Sciences",
+          "instances": 2168
+        },
+        "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 10000 tasks, every task embedded; leading subject by placed-task count",
+        "unavailable_reason": null
+      },
+      "disposition": "pending_quick_conversion",
+      "disposition_reason": "Retired until a registered converter and pinned judge contract support QUICK conversion."
+    },
+    {
+      "id": "Task Trove:laion__stackexchange-unix-sandboxes-verified-v2",
+      "name": "tasktrove-unix",
+      "display_name": "laion/stackexchange-unix-sandboxes-verified-v2",
+      "origin": "Task Trove",
+      "family": "llm-judge-freeform",
+      "tags": [
+        "agentic",
+        "multi-turn"
+      ],
+      "task_count": 10000,
+      "notes": "Judge-only Unix & Linux answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Admission blocked: production snapshot identity measurement is missing. Admission blocked: execution requirement measurement is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "type": "Agentic",
+      "turns": "Multi-turn",
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "status": "Inventory",
+      "pipeline": null,
+      "independent_qc": null,
+      "daytona_safety": "not_applicable",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": null,
+      "daytona_count_basis": "PRE-18a common-admission census; Complete converted census; actor on Daytona, package-lock grader on LOCAL; production Harbor machine_spec -> shellbox snapshot_identity; converter checkout 58824e448d5faf16b074600e5374f0902941b66c; recipe version 2; allocations from native task.toml or published runtime, absent values null; no Daytona API calls; evidence s3://marin-us-east-02a/marin/rl-data/atlas/daytona-census/20261112/daytona-measurements-fb3bdf712b938d57.json",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "machine_slots": 10000,
+            "failures": {
+              "The local backend does not provide disk quotas or GPU allocations": 10000
+            }
+          }
+        }
+      },
+      "oracle_validation": null,
+      "oversight": "none",
+      "oversight_evidence": null,
+      "grading_environment": null,
+      "coverage": {
+        "intended_use": "train",
+        "example_count": 10000,
+        "top_area": {
+          "subject_id": "D02",
+          "name": "Computer & Information Sciences",
+          "instances": 5132
+        },
+        "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 10000 tasks, every task embedded; leading subject by placed-task count",
+        "unavailable_reason": null
+      },
+      "disposition": "pending_quick_conversion",
+      "disposition_reason": "Retired until a registered converter and pinned judge contract support QUICK conversion."
+    },
+    {
+      "id": "Task Trove:laion__wizardlm-orca-v4",
+      "name": "tasktrove-wizard_orca",
+      "display_name": "laion/wizardlm-orca-v4",
+      "origin": "Task Trove",
+      "family": "llm-judge-freeform",
+      "tags": [
+        "agentic",
+        "multi-turn"
+      ],
+      "task_count": 10000,
+      "notes": "Judge-only over Orca-style instructions, three-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Admission blocked: production snapshot identity measurement is missing. Admission blocked: execution requirement measurement is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "type": "Agentic",
+      "turns": "Multi-turn",
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "status": "Inventory",
+      "pipeline": null,
+      "independent_qc": null,
+      "daytona_safety": "not_applicable",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": null,
+      "daytona_count_basis": "PRE-18a common-admission census; Complete converted census; actor on Daytona, package-lock grader on LOCAL; production Harbor machine_spec -> shellbox snapshot_identity; converter checkout 58824e448d5faf16b074600e5374f0902941b66c; recipe version 2; allocations from native task.toml or published runtime, absent values null; no Daytona API calls; evidence s3://marin-us-east-02a/marin/rl-data/atlas/daytona-census/20261112/daytona-measurements-fb3bdf712b938d57.json",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "machine_slots": 9999,
+            "failures": {
+              "The local backend does not provide disk quotas or GPU allocations": 9999
+            }
+          }
+        }
+      },
+      "oracle_validation": null,
+      "oversight": "none",
+      "oversight_evidence": null,
+      "grading_environment": null,
+      "coverage": {
+        "intended_use": "train",
+        "example_count": 9999,
+        "top_area": {
+          "subject_id": "D02",
+          "name": "Computer & Information Sciences",
+          "instances": 452
+        },
+        "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 9999 tasks, every task embedded; leading subject by placed-task count",
+        "unavailable_reason": null
+      },
+      "disposition": "pending_quick_conversion",
+      "disposition_reason": "Retired until a registered converter and pinned judge contract support QUICK conversion."
     }
   ]
 }

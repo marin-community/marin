@@ -83,7 +83,7 @@ async function render(data, sourceId) {
   sections.push(card('Independent QC', d.independent_qc ? [
     ['Verdict', d.independent_qc.verdict], ['Method', d.independent_qc.method], ['Reviewed', d.independent_qc.reviewed],
     ['Admitted', d.independent_qc.admitted], ['Evidence', d.independent_qc.evidence_url && pointer(d.independent_qc.evidence_url, 'Release manifest ↗')],
-  ] : [], 'Quality control the upstream release recorded itself. It counts as QUICK.'));
+  ] : [], 'Quality control the upstream release recorded itself. It counts as QUICK. QC never rejects a source or overrides the reviewed-sample Result.'));
   sections.push(card('Releases and measurements', [
     ['Dataset', d.url && pointer(d.url, `${d.dataset_id || d.url} ↗`)], ['Dataset revision', d.dataset_revision],
     ['Pipeline', d.pipeline && `${d.pipeline.name} @ ${d.pipeline.version}`],
@@ -118,7 +118,7 @@ async function render(data, sourceId) {
       record.append(node('summary', 'Complete assessment report'), node('pre', JSON.stringify(report.report, null, 2)));
       section.replaceChildren(node('h2', 'All stored assessment reviews'),
         node('p', `${number.format(report.report.evidence.samples.length)} stored records. Open each review for its full verdict and packet. FULL describes curation scope; reviews cover the stored assessment sample.`, 'card-intro'),
-        taskReviews(sourceId, report.report.evidence.samples), record);
+        repairRecommendations(report.report), taskReviews(sourceId, report.report.evidence.samples), record);
     } catch (error) { section.append(node('p', error.message, 'error')); }
   }
   for (const summary of data.archived_reviews) {
@@ -127,7 +127,7 @@ async function render(data, sourceId) {
     try {
       const review = await json(`api/archive/reviews/${encodeURIComponent(summary.id)}`);
       const records = node('details', undefined, 'archived-collection');
-      records.append(node('summary', 'Complete review collection'), node('pre', JSON.stringify(review.collection, null, 2)));
+      records.append(node('summary', 'Complete review collection'), repairRecommendations(review.collection), node('pre', JSON.stringify(review.collection, null, 2)));
       section.replaceChildren(node('h2', `Archived review collection ${review.id}`), records);
       const artifacts = list(review.artifacts.map(artifact => link(artifact.path,
         `api/archive/reviews/${encodeURIComponent(review.id)}/artifacts/${artifact.path.split('/').map(encodeURIComponent).join('/')}`)));
