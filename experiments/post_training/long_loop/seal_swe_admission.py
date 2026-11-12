@@ -130,31 +130,26 @@ def seal(
                 )
                 continue
             pins = receipt["pins"]
-            unlocked = prepare_task(
+            prepared = prepare_task(
                 original,
                 setup_timeout=pins["setup_timeout"],
                 verifier_timeout=pins["verifier_timeout"],
                 harbor_verifier_timeout=harbor_timeout,
                 dependency_constraints="",
             )
-            if hashlib.sha256(unlocked.task.model_dump_json().encode()).hexdigest() != receipt["task_sha256"]:
+            serialized = prepared.task.model_dump_json()
+            output_sha256 = hashlib.sha256(serialized.encode()).hexdigest()
+            if output_sha256 != receipt["task_sha256"]:
                 raise ValueError("The release derivation differs from the task whose controls ran")
-            lock = "".join(f"{name}=={version}\n" for name, version in evidence["dependencies"]["packages"])
-            prepared = prepare_task(
-                original,
-                setup_timeout=pins["setup_timeout"],
-                verifier_timeout=pins["verifier_timeout"],
-                harbor_verifier_timeout=harbor_timeout,
-                dependency_constraints=lock,
-            )
-            accepted[original.id] = {**row, "task_spec": prepared.task.model_dump_json()}
+            versions = "".join(f"{name}=={version}\n" for name, version in evidence["dependencies"]["packages"])
+            accepted[original.id] = {**row, "task_spec": serialized}
             identities.append(
                 {
                     "task_id": original.id,
                     "input_sha256": hashlib.sha256(row["task_spec"].encode()).hexdigest(),
                     "admitted_task_sha256": receipt["task_sha256"],
-                    "output_sha256": hashlib.sha256(accepted[original.id]["task_spec"].encode()).hexdigest(),
-                    "dependency_lock_sha256": hashlib.sha256(lock.encode()).hexdigest(),
+                    "output_sha256": output_sha256,
+                    "observed_distribution_versions_sha256": hashlib.sha256(versions.encode()).hexdigest(),
                     "receipt_sha256": evidence["receipt_sha256"],
                     "evidence": evidence["uri"],
                     "original_instruction_sha256": prepared.original_instruction_sha256,
@@ -213,8 +208,9 @@ def seal(
         "files": files,
         "exclusion_reasons": dict(Counter(row["reason"] for row in excluded)),
         "dependency_policy": (
-            "Exact pre-agent admitted distribution versions constrain setup; runtime refuses any environment drift; "
-            "agent-installed packages never seed grading"
+            "Publish the exact tested task package without adding setup constraints after admission; "
+            "retain observed pre-agent distribution inventories; each trial freezes its grading interpreter "
+            "before agent access. Fresh setup may resolve different versions; agent packages never seed grading."
         ),
     }
     (output / "manifest.json").write_text(json.dumps(result, indent=2) + "\n")

@@ -273,7 +273,10 @@ uncommitted task outputs remain preserved but cannot certify admission.
 `seal_swe_admission` requires this complete index and exactly one receipt per
 original SWE task. Only a scored unfixed-bug zero and scored reference one admit a
 task. Failed, degenerate and unexecuted controls cannot qualify it. Sealing records
-before/after identities, dependency locks and exclusions, preserves the nonagentic
+before/after identities, observed dependency inventories and exclusions, preserves the nonagentic
 validation rows, and explicitly records any seeded replacement of rejected SWE
 validation rows. Its output is a new immutable dataset version; existing releases
 and stopped-run evidence remain unchanged.
+The published task package is exactly the one whose controls ran. Sealing adds
+no untested dependency constraints; the observed package versions remain available
+for reproduction, while each new trial freezes its own grading environment.
