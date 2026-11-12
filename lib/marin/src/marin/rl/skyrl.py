@@ -43,6 +43,8 @@ _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
 SKYRL_PROJECT = Path("vendor/skyrl")
+# The SkyRL runtime is packaged separately, so its matching limit is checked there too.
+_COLOCATED_EXPERT_BLOCK_GPU_COUNT = 4
 
 
 def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
@@ -609,7 +611,36 @@ def _validate_skyrl_recipe(
         _declared_config_value(config, "generator.weight_sync_transport") == "expert_block"
         and topology.role_plan.colocate_all
     ):
-        raise ValueError("SkyRL expert_block requires non-colocated inference workers")
+        plan = topology.role_plan
+        supported = (
+            _declared_config_value(config, "entrypoint") in ("standard", _MISSING_CONFIG_VALUE)
+            and plan.policy_num_nodes == 1
+            and plan.policy_num_gpus_per_node == _COLOCATED_EXPERT_BLOCK_GPU_COUNT
+            and plan.num_inference_engines == 1
+            and plan.inference_engine_tensor_parallel_size == 1
+            and plan.inference_engine_pipeline_parallel_size == 1
+            and plan.inference_engine_data_parallel_size == plan.policy_num_gpus_per_node
+            and plan.inference_engine_expert_parallel_size == plan.policy_num_gpus_per_node
+            and _declared_config_value(config, "trainer.policy.megatron_config.tensor_model_parallel_size") == 1
+            and _declared_config_value(config, "trainer.policy.megatron_config.pipeline_model_parallel_size") == 1
+            and _declared_config_value(config, "trainer.policy.megatron_config.expert_tensor_parallel_size") in (1, None)
+            and _declared_config_value(config, "trainer.policy.megatron_config.expert_model_parallel_size")
+            == plan.policy_num_gpus_per_node
+            and _declared_config_value(config, "trainer.policy.megatron_config.nccl_max_channels")
+            in (None, 1, _MISSING_CONFIG_VALUE)
+            and _declared_config_value(config, "generator.backend") == "vllm"
+            and _declared_config_value(config, "generator.run_engines_locally") is True
+            and _declared_config_value(config, "generator.weight_sync_backend") == "nccl"
+            and _declared_config_value(config, "generator.expert_block_sync.verify") is True
+            and _declared_config_value(config, "generator.engine_init_kwargs.kernel_config.moe_backend") == "triton"
+            and _declared_config_value(config, "trainer.policy.model.lora.rank") in (0, _MISSING_CONFIG_VALUE)
+            and _declared_config_value(config, "generator.enforce_eager") in (False, _MISSING_CONFIG_VALUE)
+        )
+        if not supported:
+            raise ValueError(
+                "SkyRL colocated expert_block requires entrypoint=standard, one four-GPU node, policy TP=PP=ETP=1 EP=4, "
+                "one local vLLM TP=PP=1 DP=EP=4 TRITON engine, NCCL, verification, and no LoRA or eager mode"
+            )
     forward_batch = _declared_config_value(config, "trainer.micro_forward_batch_size_per_gpu")
     if forward_batch is not _MISSING_CONFIG_VALUE and forward_batch != topology.role_plan.micro_train_batch_size_per_gpu:
         raise ValueError("Megatron requires equal micro_forward_batch_size_per_gpu and micro_train_batch_size_per_gpu")

@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from omegaconf import DictConfig, OmegaConf
-from transformers import PreTrainedTokenizerBase
 
 from skyrl_train.config.weight_sync_pause import resolve_weight_sync_pause_policy
 
@@ -30,7 +29,6 @@ class InferenceEngineRoleConfig:
 
 def inference_engine_kwargs_from_config(
     cfg: DictConfig,
-    tokenizer: PreTrainedTokenizerBase,
     role: InferenceEngineRoleConfig,
     *,
     engine_init_kwargs: dict[str, Any],
@@ -55,7 +53,6 @@ def inference_engine_kwargs_from_config(
         "inference_engine_enable_sleep": role.inference_engine_enable_sleep,
         "max_num_batched_tokens": cfg.generator.max_num_batched_tokens,
         "max_num_seqs": cfg.generator.max_num_seqs,
-        "tokenizer": tokenizer,
         "backend": role.backend,
         "vllm_attention_backend": cfg.generator.get("vllm_attention_backend", None),
         "engine_init_kwargs": engine_init_kwargs,
