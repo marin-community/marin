@@ -26,17 +26,19 @@ def test_report_reads_choice_loss_in_the_format_the_scorer_writes():
 
 
 @pytest.mark.parametrize(
-    ("candidate", "expected"),
+    ("candidate", "share", "expected"),
     [
-        ("fineweb-edu-sample-10bt-p20-006b29", DILUTION_REFERENCES[20]),
-        # The first pilot caches' labels carry the share without a cache hash.
-        ("finemath-p20", DILUTION_REFERENCES[20]),
+        ("fineweb-edu-sample-10bt-p20-006b29", 0.2, DILUTION_REFERENCES[0.2]),
         # A reference is judged against the others.
-        (DILUTION_REFERENCES[20][0], DILUTION_REFERENCES[20][1:]),
-        # No references at 50%, and none for the control.
-        ("fineweb-sample-10bt-p50-d497e2", ()),
-        ("control", ()),
+        (DILUTION_REFERENCES[0.2][0], 0.2, DILUTION_REFERENCES[0.2][1:]),
+        # The share is the one the runs trained at, not the label's: 19.6% is not 20%.
+        ("fineweb-sample-10bt-p20-abcdef", 0.196, ()),
+        # No references at 50%, and none for the control, which gives up no share.
+        ("fineweb-sample-10bt-p50-d497e2", 0.5, ()),
+        ("control", 0.0, ()),
     ],
 )
-def test_a_candidate_is_judged_against_the_dilution_references_at_its_share(candidate, expected):
-    assert dilution_references(candidate) == expected
+def test_a_candidate_is_judged_against_the_dilution_references_at_the_share_its_runs_trained_at(
+    candidate, share, expected
+):
+    assert dilution_references(candidate, share) == expected

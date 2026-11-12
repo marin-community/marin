@@ -4,6 +4,7 @@
 """Data Belay command line: `uv run data-belay <command>`."""
 
 import logging
+import math
 import os
 import shlex
 import statistics
@@ -20,14 +21,23 @@ from rigging.filesystem.storage_path import prefix_join
 from experiments.data_belay.datakit import MIN_TOP_RUNG, datakit_intake
 from experiments.data_belay.intake import MAX_EPOCHS, DatasetRequest, IntakeReport, LicenseVerdict, run_intake
 from experiments.data_belay.judge import HARM_LIMITS, RungResult, judge, ladder_step
-from experiments.data_belay.prepare import CACHE_PATH, CachePlan, PreparedCache, build_cache, hf_files, plan_cache
+from experiments.data_belay.prepare import (
+    CACHE_PATH,
+    CachePlan,
+    CacheReading,
+    PreparedCache,
+    build_cache,
+    hf_files,
+    plan_cache,
+)
 from experiments.data_belay.results import (
     CHOICE_DIR,
     CONTROL_SEEDS,
     arm_metrics,
+    arm_mix,
+    arm_share,
     control_run_id,
     dilution_arm,
-    label_share,
     run_exists,
     run_scored,
     treatment_run_id,
@@ -94,6 +104,13 @@ def _submit_cpu_job(job_name: str, cpu: int, memory: str) -> None:
     os.execvp(cmd[0], cmd)
 
 
+def _whole_percent(ctx: click.Context, param: click.Parameter, share: float) -> float:
+    """A run's label names its share in whole percent, so a share must be one for the label to be exact."""
+    if not math.isclose(share * 100, round(share * 100)):
+        raise click.BadParameter(f"{share:g} is not a whole percent; run labels name the share in whole percent")
+    return share
+
+
 def _dataset_options(command):
     for option in reversed(
         [
@@ -101,7 +118,14 @@ def _dataset_options(command):
             click.option("--config", "config_name", default=None, help="Dataset config (subset)."),
             click.option("--split", default="train", show_default=True),
             click.option("--text-field", default="text", show_default=True),
-            click.option("--share", type=float, default=0.2, show_default=True, help="Share of the rung's tokens."),
+            click.option(
+                "--share",
+                type=float,
+                default=0.2,
+                show_default=True,
+                callback=_whole_percent,
+                help="Share of the rung's tokens, a whole percent.",
+            ),
             click.option(
                 "--license",
                 "license_id",
@@ -217,7 +241,14 @@ def _build(report: IntakeReport, plan: CachePlan, *, allow_test_in_train: bool) 
 @click.option(
     "--source", "sources", multiple=True, required=True, help="A Datakit registry source; repeat it for a family."
 )
-@click.option("--share", type=float, default=0.2, show_default=True, help="Share of each rung's tokens.")
+@click.option(
+    "--share",
+    type=float,
+    default=0.2,
+    show_default=True,
+    callback=_whole_percent,
+    help="Share of each rung's tokens, a whole percent.",
+)
 @click.option("--submit", is_flag=True, help=f"Run as an Iris CPU job on {CLUSTER}.")
 def prepare_datakit(label: str, sources: tuple[str, ...], share: float, submit: bool) -> None:
     """Tokenize a seeded file sample of Datakit sources' normalized output, sized for the largest rung they supply."""
@@ -309,14 +340,17 @@ def score(rung: str, submit: bool, run_ids: tuple[str, ...]) -> None:
     help="Compare with this candidate's runs (same seeds) instead of the control: e.g. filtered against unfiltered.",
 )
 def report(rung: str, candidate: str, seeds: str, against: str | None) -> None:
-    """Verdict and per-group change of a candidate against the shared control or another candidate, and the ladder's
-    next step after the verdicts at this rung and the rungs below it."""
+    """Verdict and per-group change of a candidate against the shared control or another candidate, how much of each
+    arm's data it read, and the ladder's next step after the verdicts at this rung and the rungs below it."""
     seed_list = [int(s) for s in seeds.split(",")]
     baseline_name = against or "control"
+    configure_coreweave_s3()
     choice_root = _choice_root()
     result, against_dilution = _rung_result(choice_root, rung, candidate, seed_list, against)
     harm_name = "dilution" if against_dilution else baseline_name
     click.echo(f"{candidate} against {baseline_name} at {rung}: {result.verdict}")
+    for name in (candidate,) if against is None else (candidate, against):
+        click.echo(_data_line(rung, name, seed_list))
     if against is None and not against_dilution:
         click.echo("no dilution references at this share and rung: harm is against the control")
     click.echo(
@@ -337,8 +371,44 @@ def report(rung: str, candidate: str, seeds: str, against: str | None) -> None:
             return
         results.append(_rung_result(choice_root, lower, candidate, seed_list, against)[0])
     results.append(result)
-    rungs = ", ".join(f"{r} {x.verdict}" for r, x in zip(DATA_BELAY_RUNGS, results, strict=False))
+    rungs = ", ".join(
+        f"{r} {x.verdict}{_epochs_note(r, candidate, seed_list)}"
+        for r, x in zip(DATA_BELAY_RUNGS, results, strict=False)
+    )
     click.echo(f"ladder: {rungs} -> {ladder_step(results, len(DATA_BELAY_RUNGS))}")
+
+
+def _arm_reading(rung: str, candidate: str, seeds: list[int]) -> tuple[float, PreparedCache, CacheReading] | None:
+    """The share, cache and reading of the candidate's runs at ``rung``; None for runs on the base mix alone."""
+    mix = arm_mix([treatment_run_id(rung, candidate, s) for s in seeds])
+    if mix is None:
+        return None
+    cache = PreparedCache.read(mix.cache_root)
+    return mix.share, cache, cache.reading(mix.share, rung_tokens(rung))
+
+
+def _data_line(rung: str, candidate: str, seeds: list[int]) -> str:
+    arm = _arm_reading(rung, candidate, seeds)
+    if arm is None:
+        return f"data: {candidate} trains on the base mix alone"
+    share, cache, reading = arm
+    return (
+        f"data: {candidate} trained at a share of {share * 100:g}%: read {_billions(reading.tokens)} tokens, "
+        f"{reading.epochs:.2f} epochs of its {_billions(cache.tokens)}-token cache, {reading.dataset_seen:.1%} of the "
+        f"dataset's about {_billions(cache.dataset_tokens)} tokens"
+    )
+
+
+def _epochs_note(rung: str, candidate: str, seeds: list[int]) -> str:
+    arm = _arm_reading(rung, candidate, seeds)
+    if arm is None:
+        return ""
+    _, _, reading = arm
+    return f" ({reading.epochs:.2f} epochs)"
+
+
+def _billions(tokens: int) -> str:
+    return f"{tokens / 1e9:#.3g}B"
 
 
 def _rung_result(
@@ -346,10 +416,14 @@ def _rung_result(
 ) -> tuple[RungResult, bool]:
     """The candidate's result at ``rung``, and whether its harm is against the dilution references."""
     baseline_ids, treatment_ids = _arm_run_ids(rung, candidate, seeds, against)
+    share = arm_share(treatment_ids)
     # Against another candidate, both arms give up the same share of the base mix, so the harm is against it too.
-    if against is not None and label_share(against) != label_share(candidate):
-        raise click.ClickException(f"{candidate} and {against} have different shares; compare candidates at one share")
-    dilution = dilution_arm(choice_root, rung, candidate) if against is None else None
+    if against is not None and (against_share := arm_share(baseline_ids)) != share:
+        raise click.ClickException(
+            f"{candidate} trained at a share of {share:g} and {against} at {against_share:g}; "
+            "compare candidates at one share"
+        )
+    dilution = dilution_arm(choice_root, rung, candidate, share) if against is None else None
     baseline, treatment = arm_metrics(choice_root, rung, baseline_ids), arm_metrics(choice_root, rung, treatment_ids)
     return judge(baseline, treatment, HARM_LIMITS, dilution), dilution is not None
 

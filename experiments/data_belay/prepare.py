@@ -126,6 +126,18 @@ class CacheManifest:
 
 
 @dataclasses.dataclass(frozen=True)
+class CacheReading:
+    """How much of a candidate's data one run read."""
+
+    tokens: int
+    """Tokens that the run read from the cache."""
+    epochs: float
+    """Times the run read through the cache."""
+    dataset_seen: float
+    """Share of the dataset's tokens that the run read at least once."""
+
+
+@dataclasses.dataclass(frozen=True)
 class PreparedCache:
     """A cache that ``prepare`` built, as ``train`` reads it from the cache's manifest."""
 
@@ -137,6 +149,8 @@ class PreparedCache:
     """The share that the cache was sized for and its epochs were checked at."""
     tokens: int
     """Tokens in the built cache."""
+    dataset_tokens: int
+    """Tokens in the dataset that the cache samples: intake's estimate, or the cache's tokens when it holds more."""
 
     @property
     def train_cache(self) -> str:
@@ -161,11 +175,23 @@ class PreparedCache:
             raise ValueError(f"no {MANIFEST_NAME} in {root}: pass the cache path that prepare printed")
         written = json.loads(manifest.read_text())
         intake = written["intake"]
-        return cls(root, intake["repo"], intake["config"], float(intake["share"]), int(written["stats"]["total_tokens"]))
+        return cls(
+            root,
+            intake["repo"],
+            intake["config"],
+            float(intake["share"]),
+            int(written["stats"]["total_tokens"]),
+            max(int(intake["estimated_tokens"]), int(written["stats"]["total_tokens"])),
+        )
+
+    def reading(self, share: float, rung_tokens: int) -> CacheReading:
+        """What a run of ``rung_tokens`` training tokens reads at ``share``; a run sees at most the whole cache."""
+        tokens = round(share * rung_tokens)
+        return CacheReading(tokens, tokens / self.tokens, min(tokens, self.tokens) / self.dataset_tokens)
 
     def check_rung(self, rung: str, rung_tokens: int) -> None:
         """Raise when a rung of ``rung_tokens`` training tokens reads this cache more than ``MAX_EPOCHS`` times."""
-        epochs = self.share * rung_tokens / self.tokens
+        epochs = self.reading(self.share, rung_tokens).epochs
         if epochs > MAX_EPOCHS:
             raise ValueError(
                 f"{rung} reads {self.candidate} {epochs:.2f} times, past {MAX_EPOCHS:g}: above its top rung"

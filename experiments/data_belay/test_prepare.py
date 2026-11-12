@@ -55,3 +55,14 @@ def test_train_refuses_a_rung_that_repeats_the_cache_past_the_epoch_cap(tmp_path
     cache.check_rung("d768", 52_000)
     with pytest.raises(ValueError, match="past 4"):
         cache.check_rung("d1024", 60_000)
+
+
+def test_a_rung_reads_the_cache_and_sees_at_most_the_cache_of_the_dataset(tmp_path):
+    root = tmp_path / "small"
+    write_manifest(root, share=0.2)
+    cache = PreparedCache.read(str(root))
+    # 2,600 cache tokens of a dataset of about 3,000.
+    below = cache.reading(0.2, 6_500)
+    assert (below.tokens, below.epochs, below.dataset_seen) == (1300, pytest.approx(0.5), pytest.approx(1300 / 3000))
+    past = cache.reading(0.2, 26_000)
+    assert (past.tokens, past.epochs, past.dataset_seen) == (5200, pytest.approx(2.0), pytest.approx(2600 / 3000))

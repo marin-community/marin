@@ -6,9 +6,8 @@
 import dataclasses
 import functools
 import json
-import re
 import statistics
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import wandb
@@ -26,9 +25,9 @@ CONTROL_SEEDS = {"d512": (0, 1, 2, 3, 4, 5), "d768": (0, 1, 2), "d1024": (0, 1, 
 # Candidates whose text no eval measures, in scripts the English evals do not share: Japanese web text (ClimbLab) and
 # Chinese, Thai and Arabic PDFs (FinePDFs), from the Datakit. Their cost against the control is what giving a
 # candidate that share of the base mix costs on its own, and the judge measures harm against them. Keyed by the share
-# in percent, as the candidate's label carries it (prepare.PreparedCache.candidate).
+# that their runs trained at, which a candidate's runs must match.
 DILUTION_REFERENCES = {
-    20: (
+    0.2: (
         "dk-climblab-ja-p20-cb41c3",
         "dk-finepdfs-cmn_hani-p20-860b9c",
         "dk-finepdfs-tha_thai-p20-cd56ab",
@@ -36,12 +35,19 @@ DILUTION_REFERENCES = {
     )
 }
 REFERENCE_SEEDS = (0, 1, 2)
-# The share in a candidate's label: <name>-p<percent>-<cache hash>, or <name>-p<percent> for the first pilot caches.
-LABEL_SHARE = re.compile(r"-p(\d+)(?:-[0-9a-f]{6})?$")
 # Choice loss and accuracy of each run's final checkpoint, one JSON per run id, in this directory under the training
 # cluster's MARIN_PREFIX. Outside the runs' 30-day TTL root, so the verdicts can be recomputed after the checkpoints
 # are gone.
 CHOICE_DIR = "data_belay/choice"
+
+
+@dataclasses.dataclass(frozen=True)
+class TrainedMix:
+    """The second cache that a run trained on, and its share of the training tokens, as the run logged them."""
+
+    share: float
+    cache_root: str
+    """The cache path that ``prepare`` printed, which holds the cache's manifest."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -78,6 +84,34 @@ def run_exists(run_id: str) -> bool:
     return len(wandb.Api().runs(WANDB_PROJECT, filters={"name": run_id})) > 0
 
 
+@functools.cache
+def _wandb_run(run_id: str):
+    return wandb.Api().run(f"{WANDB_PROJECT}/{run_id}")
+
+
+def trained_mix(config: Mapping[str, Any]) -> TrainedMix | None:
+    """The mix in a run's W&B config, or None for a run on the base mix alone."""
+    data = config["data"]
+    share = data["train_weights"].get("mix")
+    if share is None:
+        return None
+    return TrainedMix(float(share), data["components"]["mix"]["cache_dir"].removesuffix("/train"))
+
+
+def arm_mix(run_ids: Sequence[str]) -> TrainedMix | None:
+    """The mix that every run of one arm trained on; raises when the runs trained on different ones."""
+    mixes = {trained_mix(_wandb_run(run_id).config) for run_id in run_ids}
+    if len(mixes) != 1:
+        raise ValueError(f"the runs {', '.join(run_ids)} trained on different mixes: {mixes}")
+    return mixes.pop()
+
+
+def arm_share(run_ids: Sequence[str]) -> float:
+    """The share of the base mix that one arm's runs gave up: 0 for runs on the base mix alone."""
+    mix = arm_mix(run_ids)
+    return 0.0 if mix is None else mix.share
+
+
 def run_scored(choice_root: str, run_id: str) -> bool:
     configure_coreweave_s3()
     return StoragePath(choice_path(choice_root, run_id)).exists()
@@ -99,7 +133,7 @@ def metrics_from(summary: Mapping[str, Any], scores: Mapping[str, TaskScore]) ->
 @functools.cache
 def run_metrics(choice_root: str, run_id: str) -> dict[str, float]:
     """Every metric in GROUP_METRICS of a finished run; raises if the run did not finish or has no choice loss yet."""
-    run = wandb.Api().run(f"{WANDB_PROJECT}/{run_id}")
+    run = _wandb_run(run_id)
     if run.state != "finished":
         raise ValueError(f"run {run_id} is {run.state}, not finished")
     path = choice_path(choice_root, run_id)
@@ -116,25 +150,19 @@ def arm_metrics(choice_root: str, rung: str, run_ids: list[str]) -> dict[str, li
     return {group: [values[group] for values in per_run] for group in GROUP_METRICS}
 
 
-def label_share(candidate: str) -> int | None:
-    """The share in percent that a candidate's label carries, or None for a label without one."""
-    match = LABEL_SHARE.search(candidate)
-    return int(match.group(1)) if match else None
+def dilution_references(candidate: str, share: float) -> tuple[str, ...]:
+    """The dilution references that ``candidate``, whose runs trained at ``share``, is judged against."""
+    return tuple(ref for ref in DILUTION_REFERENCES.get(share, ()) if ref != candidate)
 
 
-def dilution_references(candidate: str) -> tuple[str, ...]:
-    """The dilution references that ``candidate`` is judged against: those at its share, leaving out itself."""
-    return tuple(ref for ref in DILUTION_REFERENCES.get(label_share(candidate), ()) if ref != candidate)
-
-
-def dilution_arm(choice_root: str, rung: str, candidate: str) -> dict[str, list[float]] | None:
-    """Each dilution reference's mean group value at ``rung``, for a candidate at the references' share.
+def dilution_arm(choice_root: str, rung: str, candidate: str, share: float) -> dict[str, list[float]] | None:
+    """Each dilution reference's mean group value at ``rung``, for a candidate whose runs trained at ``share``.
 
     One value per reference, not per seed: the references differ from each other by more than their seeds do, so
-    pooling their seeds would narrow the interval. None when the candidate's share has no references. Raises when a
-    reference is not scored at the rung, so that one ladder never mixes two harm baselines.
+    pooling their seeds would narrow the interval. None when the share has no references. Raises when a reference is
+    not scored at the rung, so that one ladder never mixes two harm baselines, or did not train at the share.
     """
-    refs = dilution_references(candidate)
+    refs = dilution_references(candidate, share)
     if not refs:
         return None
     unscored = [
@@ -142,5 +170,8 @@ def dilution_arm(choice_root: str, rung: str, candidate: str) -> dict[str, list[
     ]
     if unscored:
         raise ValueError(f"{candidate} at {rung}: dilution references not scored yet: {', '.join(unscored)}")
+    for ref in refs:
+        if (ref_share := arm_share([treatment_run_id(rung, ref, s) for s in REFERENCE_SEEDS])) != share:
+            raise ValueError(f"dilution reference {ref} trained at a share of {ref_share:g} at {rung}, not {share:g}")
     arms = [arm_metrics(choice_root, rung, [treatment_run_id(rung, ref, s) for s in REFERENCE_SEEDS]) for ref in refs]
     return {group: [statistics.fmean(arm[group]) for arm in arms] for group in GROUP_METRICS}

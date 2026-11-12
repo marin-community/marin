@@ -38,7 +38,7 @@ uv run data-belay train --rung d512 --seed 0 \
 uv run data-belay score --rung d512 --submit dbelay-main-d512-<label>-s0 dbelay-main-d512-<label>-s1 \
     dbelay-main-d512-<label>-s2
 
-# 5. Verdict against the shared control, or against another candidate at the same seeds.
+# 5. Verdict against the shared control, or against another candidate at the same seeds and share.
 uv run data-belay report --rung d512 --candidate <label> --seeds 0,1,2
 uv run data-belay report --rung d512 --candidate <filtered label> --against <unfiltered label> --seeds 0,1,2
 ```
@@ -49,6 +49,13 @@ refuses a run id that W&B already has. Runs write under `tmp/ttl=30d/data_belay/
 checkpoints. It writes one JSON per run under `data_belay/choice/` in
 the training cluster's `MARIN_PREFIX` (`s3://marin-us-east-02a/marin/data_belay/choice/`), outside the TTL root, and
 `report` reads it from there.
+
+Under the verdict, `report` prints how much of each arm's data its runs read: the tokens, the epochs of its cache, and
+the fraction of the dataset seen. It takes the share and the cache from the runs' W&B config and the dataset's size
+from the cache's manifest. The ladder line gives the epochs at each rung, since a gain that falls off as the epochs
+pass 1 reads differently from one that falls off below 1. The share is the runs' too: a candidate is judged against
+the dilution references whose runs trained at its share, and `--against` refuses two arms at different shares.
+`--share` takes a whole percent, so that the run label (`p20`) names it exactly.
 
 `check` allows the licenses on the Blue Oak Council's [list of permissive licenses](https://blueoakcouncil.org/list)
 (every rating, version 16) and OpenMDW. It rejects NC and ND licenses, and refuses any other license for a person to
@@ -91,13 +98,13 @@ varied about 4 times as much between control seeds.
 ## Verdict
 
 For each group, `Δ` is the treatment's mean over a baseline's, minus 1, with a Welch t interval. The gain is `Δ`
-against the control. The harm is `Δ` against the dilution references at the candidate's share
-(`results.DILUTION_REFERENCES`): four Datakit sources at 20% whose text no eval measures, in scripts the English evals
-do not share (ClimbLab Japanese, and FinePDFs Chinese, Thai and Arabic). Giving up 20% of the base mix costs every
-group 1.1% to 3.0% on its own, past the harm limits of Paloma, Uncheatable and commonsense, so the harm is what a
-candidate costs beyond that. The reference arm holds one value per reference, the mean of its seeds, because the
-references differ from each other by more than their seeds do. At a share without references, the harm is against
-the control.
+against the control. The harm is `Δ` against the dilution references at the share that the candidate's runs trained
+at (`results.DILUTION_REFERENCES`): four Datakit sources at 20% whose text no eval measures, in scripts the English
+evals do not share (ClimbLab Japanese, and FinePDFs Chinese, Thai and Arabic). Giving up 20% of the base mix costs
+every group 1.1% to 3.0% on its own, past the harm limits of Paloma, Uncheatable and commonsense, so the harm is
+what a candidate costs beyond that. The reference arm holds one value per reference, the mean of its seeds, because
+the references differ from each other by more than their seeds do. At a share without references, the harm is
+against the control.
 
 A group is `better` (gain interval below 0, and a gain of at least 1%), `worse` (harm interval above its harm limit),
 `neutral` (harm interval below the limit) or `unresolved`. The harm limit is 1%, or 2.5 seed SDs of the d512 control
@@ -300,6 +307,9 @@ knowledge now does, calls FineWeb-Edu 20% `better` only at d1024, and Edu agains
 ## Limits
 
 - No contamination scan yet: a gain on one eval set alone needs a check for leakage.
+- A verdict says whether a candidate helps at one share, not how much compute it saves. For a source under serious
+  consideration, run a second share (as FineMath's dose response did) and read the compute saved at equal loss off the
+  control's loss curve, by hand for now.
 - Commonsense keeps answer BPB, which misses a gain in telling the gold answer from the distractors. `score` also
   writes accuracy on seven more multiple-choice tasks as a check; at d768 the control is above chance on SciQ,
   ARC-Easy and PIQA.
