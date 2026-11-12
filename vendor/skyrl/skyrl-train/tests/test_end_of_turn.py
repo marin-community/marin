@@ -70,22 +70,23 @@ def test_the_special_token_a_turn_stopped_at_is_removed_from_the_reply(terminato
 
 
 @pytest.mark.parametrize(
-    "response_ids,expected",
+    "response_ids,finish_reason,expected",
     [
-        ([PLAN, END_OF_TURN], "plan<|eot_id|>"),
-        ([THINK_START, PLAN, THINK_END, CALL, END_OF_TURN], "call<|eot_id|>"),
+        ([PLAN, END_OF_TURN], "stop", "plan<|eot_id|>"),
+        ([THINK_START, PLAN, THINK_END, CALL, END_OF_TURN], "stop", "call<|eot_id|>"),
+        ([THINK_START, PLAN, THINK_END, CALL, END_OF_TURN], "length", "call<|eot_id|>"),
     ],
-    ids=["plain", "reasoning"],
+    ids=["plain", "reasoning", "reasoning-length-stop"],
 )
-def test_explicit_special_token_retention_keeps_the_turn_terminator(response_ids, expected):
-    output = _generate(response_ids, "stop", sampling_params={"skip_special_tokens": False})
+def test_explicit_special_token_retention_keeps_the_turn_terminator(response_ids, finish_reason, expected):
+    output = _generate(response_ids, finish_reason, sampling_params={"skip_special_tokens": False})
 
     assert output["responses"] == [expected]
     assert output["assistant_messages"][0]["content"] == expected
 
 
 def test_a_length_stop_keeps_its_last_token():
-    output = _generate([PLAN, END_OF_TURN], "length")
+    output = _generate([PLAN, END_OF_TURN], "length", sampling_params={"skip_special_tokens": False})
 
     assert output["assistant_messages"][0]["content"] == "plan<|eot_id|>"
 

@@ -438,9 +438,12 @@ class DirectModelClient:
             tokenizer = self._client.tokenizer
             stop_reason = choice["finish_reason"]
             semantic_ids = response_ids[:-1] if _ends_turn(tokenizer, response_ids, stop_reason) else response_ids
-            terminator_text = ""
+            terminator_text = (
+                tokenizer.decode(response_ids[-1:], skip_special_tokens=False)
+                if response_ids and response_ids[-1] in _turn_end_tokens(tokenizer)
+                else ""
+            )
             if len(semantic_ids) != len(response_ids):
-                terminator_text = tokenizer.decode(response_ids[-1:], skip_special_tokens=False)
                 text = text.removesuffix(terminator_text)
                 if message.get("content") is not None:
                     message = {**message, "content": text}
@@ -451,9 +454,9 @@ class DirectModelClient:
                     message = {**message, "content": text}
             # Extract the answer before restoring a requested turn terminator.
             if terminator_text and not body.get("skip_special_tokens", True):
-                text += terminator_text
+                text = text.removesuffix(terminator_text) + terminator_text
                 if message.get("content") is not None:
-                    message = {**message, "content": message["content"] + terminator_text}
+                    message = {**message, "content": message["content"].removesuffix(terminator_text) + terminator_text}
             logprob_items = (choice.get("logprobs") or {}).get("content")
             response_logprobs = (
                 [float(item["logprob"]) for item in logprob_items] if logprob_items is not None else None
