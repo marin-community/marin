@@ -200,7 +200,8 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
         for role, declared, shape in slots:
             if declared is None or shape is None:
                 continue
-            shape = execution_resource_shape(task, shape)
+            if role == "agent":
+                shape = execution_resource_shape(task, shape)
             requirements = EnvironmentRequirements.model_validate(declared)
             with tempfile.TemporaryDirectory() as tmp:
                 context = Path(tmp)

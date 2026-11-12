@@ -216,7 +216,8 @@ def task_demands(document: Mapping) -> dict[str, set[Requirement]]:
             demands.add(Requirement.FILE_MTIME)
         if not demands:
             continue
-        shape = execution_resource_shape(task, shape)
+        if role == "agent":
+            shape = execution_resource_shape(task, shape)
         if task.get("execution_requirements") is not None:
             demands.add(Requirement.COMMAND_TIMEOUT)
         if shape is not None:

@@ -8,7 +8,7 @@ import json
 import logging
 from collections.abc import Iterable
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 
@@ -18,7 +18,9 @@ from fray.local_backend import LocalClient
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from taskcompendium.grading_environment import GradingEnvironmentMode, assess_grading_environment
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.models import TaskSpec
 
 from experiments.post_training.task_curation.daytona_census import (
     daytona_unsafe_counts,
@@ -43,48 +45,81 @@ def population_documents(population: SourceTextPopulation) -> Iterable[tuple[dic
                     yield json.loads(row["task_spec"]), json.loads(row["runtime"])
 
 
+@dataclass
+class ContractCensus:
+    groups: dict[str, dict] = field(default_factory=dict)
+    example: dict | None = None
+    required_shared: int = 0
+    shared_missing: int = 0
+    task_count: int = 0
+
+    def observe(self, task: dict) -> None:
+        self.task_count += 1
+        contract = task.get("integrity_contract")
+        shared = (
+            assess_grading_environment(TaskSpec.model_validate({**task, "integrity_contract": None})).required
+            is GradingEnvironmentMode.SHARED
+        )
+        self.required_shared += shared
+        self.shared_missing += shared and contract is None
+        descriptor = {key: (contract or {}).get(key) for key in ("id", "version", "dependency_state", "harness_policy")}
+        descriptor["native_family"] = ((contract or {}).get("native") or {}).get("family")
+        if contract is not None:
+            descriptor["harness_policy"] = {
+                name: contract[name]
+                for name in (
+                    "harness",
+                    "harness_sha256",
+                    "protected_root",
+                    "agent_uid",
+                    "grader_uid",
+                    "protected_test_patterns",
+                    "pinned_plugins",
+                    "plugin_discovery",
+                )
+                if name in contract
+            }
+        descriptor["present"] = contract is not None
+        key = canonical_sha256(descriptor)
+        group = self.groups.setdefault(key, {**descriptor, "count": 0})
+        group["count"] += 1
+        if self.example is None and contract is not None and len(json.dumps(contract).encode()) <= 16384:
+            self.example = {"task_id": task["id"], "contract": contract}
+
+    def rows(self) -> list[dict]:
+        return sorted(self.groups.values(), key=lambda group: (-group["count"], canonical_sha256(group)))
+
+
+def write_contract_summary(census: ContractCensus, population: SourceTextPopulation, output_path: str) -> dict:
+    rows = census.rows()
+    uri = prefix_join(output_path, "integrity-contracts.json")
+    with StoragePath(uri).open("w", auto_mkdir=True) as stream:
+        json.dump({"groups": rows, "example": census.example, "input_artifact": population.path}, stream)
+    return {
+        "schema_version": 2,
+        "groups": rows[:64],
+        "distinct_groups": len(rows),
+        "absent_contract_tasks": sum(group["count"] for group in rows if not group["present"]),
+        "required_shared_tasks": census.required_shared,
+        "shared_missing_contract_tasks": census.shared_missing,
+        "example": census.example,
+        "evidence_url": uri,
+        "dataset_id": population.dataset_id,
+        "dataset_revision": population.dataset_revision,
+        "task_specs_sha256": population.task_specs_sha256,
+    }
+
+
 def measure_population(config: CensusConfig) -> ActorCensus:
     population = SourceTextPopulation.raw_load(config.population_path)
-    contracts: dict[str, dict] = {}
-    example = None
+    contracts = ContractCensus()
 
     def documents():
-        nonlocal example
         for task, runtime in population_documents(population):
-            contract = task.get("integrity_contract")
-            descriptor = {
-                key: (contract or {}).get(key)
-                for key in ("id", "version", "dependency_state", "native_family", "harness_policy")
-            }
-            if contract is not None:
-                descriptor["harness_policy"] = {
-                    name: contract[name]
-                    for name in (
-                        "harness",
-                        "harness_sha256",
-                        "protected_root",
-                        "agent_uid",
-                        "grader_uid",
-                        "protected_test_patterns",
-                        "pinned_plugins",
-                        "plugin_discovery",
-                    )
-                    if name in contract
-                }
-            descriptor["present"] = contract is not None
-            key = canonical_sha256(descriptor)
-            group = contracts.setdefault(key, {**descriptor, "count": 0})
-            group["count"] += 1
-            if example is None and contract is not None and len(json.dumps(contract).encode()) <= 16384:
-                example = {"task_id": task["id"], "contract": contract}
+            contracts.observe(task)
             yield task, runtime
 
     result = measure_envelopes(documents())
-    contract_rows = sorted(contracts.values(), key=lambda group: (-group["count"], canonical_sha256(group)))
-    contract_uri = prefix_join(config.output_path, "integrity-contracts.json")
-    with StoragePath(contract_uri).open("w", auto_mkdir=True) as stream:
-        json.dump({"groups": contract_rows, "example": example, "input_artifact": population.path}, stream)
-
     if result.converted != population.task_count:
         raise ValueError(f"{population.source_id}: {result.converted} measured for {population.task_count} TaskSpecs")
     details = daytona_unsafe_reasons(result)
@@ -119,16 +154,7 @@ def measure_population(config: CensusConfig) -> ActorCensus:
         snapshot_sizes=dict(result.snapshot_sizes),
         execution_failures=dict(result.execution_failures),
         mapping_failures=dict(result.mapping_failures),
-        integrity_contracts={
-            "groups": contract_rows[:64],
-            "distinct_groups": len(contract_rows),
-            "missing_tasks": sum(group["count"] for group in contract_rows if not group["present"]),
-            "example": example,
-            "evidence_url": contract_uri,
-            "dataset_id": population.dataset_id,
-            "dataset_revision": population.dataset_revision,
-            "task_specs_sha256": population.task_specs_sha256,
-        },
+        integrity_contracts=write_contract_summary(contracts, population, config.output_path),
     )
 
 

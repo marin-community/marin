@@ -232,7 +232,7 @@ def measure_envelopes(documents: Iterable[tuple[dict, dict]]) -> EnvelopeCensus:
                 **PROFILE,
                 "backend": "daytona",
                 "network": network,
-                **execution_resource_shape(task, shapes.get(slot)),
+                **(execution_resource_shape(task, shapes.get(slot)) if role == "agent" else (shapes.get(slot) or {})),
             }
             if role == "grader" and declared and declared.get("packages_lock"):
                 shape["backend"] = "local"

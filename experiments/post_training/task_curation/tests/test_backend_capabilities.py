@@ -34,6 +34,7 @@ from taskcompendium.backend_requirements import RuntimeProfile
 from taskcompendium.models import EnvironmentRequirements, ExecutionRequirements, ScriptGrader, TaskResource, TaskSpec
 
 from experiments.post_training.task_curation.backend_capabilities import source_map
+from experiments.post_training.task_curation.daytona_identity import count_lowered_spec_identities
 
 ROOT = Path(__file__).resolve().parents[4]
 RUNTIME = RuntimeProfile(
@@ -161,3 +162,32 @@ def test_declared_capacity_reaches_backend_checks_and_conflicting_runtime_fails(
         source_map(
             "budgeted", [{"task": document, "runtime": {"task_machine": {"cpus": 3}}}], matrix, checkers, {}, defaults
         )
+
+
+def test_actor_capacity_preserves_independent_separate_grader_profile():
+    environment = {"command_semantics": "linux_process", "docker_image": "example/image@sha256:" + "0" * 64}
+    task = {
+        "id": "independent",
+        "environment_requirements": environment,
+        "grader": {"environment": environment},
+        "execution_requirements": {
+            "cpus": 2,
+            "memory_mb": 4096,
+            "storage_mb": 10240,
+            "agent_timeout_sec": 900,
+            "verifier_timeout_sec": 600,
+        },
+    }
+    runtime = {
+        "task_machine": {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240},
+        "verifier_machine": {"cpus": 4, "memory_mb": 8192, "storage_mb": 20480},
+    }
+    document = {"task": task, "runtime": runtime}
+    counts = count_lowered_spec_identities([("independent", document)])
+    assert counts.distinct == 2 and not counts.execution_failures
+    checkers = {"docker": DockerMachineFactory().check_environment}
+    mapped = source_map(
+        "independent", [document], capability_matrix(checkers), checkers, {}, {"agent": RUNTIME, "grader": RUNTIME}
+    )
+    assert mapped.resource_ranges["agent"]["memory_mb"] == (4096, 4096)
+    assert mapped.resource_ranges["grader"]["memory_mb"] == (8192, 8192)

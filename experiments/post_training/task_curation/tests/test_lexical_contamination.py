@@ -35,7 +35,7 @@ from experiments.post_training.task_curation.lexical_artifacts import (
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
 from experiments.post_training.task_curation.lexical_scan import ReportConfig, measure_marks
 from experiments.post_training.task_curation.local import artifact_prefix
-from experiments.post_training.task_curation.published_census import CensusConfig, measure_population
+from experiments.post_training.task_curation.published_census import CensusConfig, ContractCensus, measure_population
 
 
 def lexical_task(identifier: str, public: str, private: str) -> dict:
@@ -195,4 +195,34 @@ def test_census_reads_every_partition_and_measures_empty_actor_environments(tmp_
     assert result.daytona_safety == "not_applicable"
     assert result.daytona_machine_slots == result.daytona_snapshot_count == result.daytona_execution_failures == 0
     assert result.empty_declared_environment_tasks == {"agent": 1001, "grader": 1001}
-    assert result.integrity_contracts["missing_tasks"] == 1001
+    assert result.integrity_contracts["absent_contract_tasks"] == 1001
+    assert result.integrity_contracts["shared_missing_contract_tasks"] == 0
+
+
+def test_contract_census_separates_native_families_and_required_shared_missing():
+    from taskcompendium.models import ScriptGrader  # noqa: PLC0415
+
+    environment = EnvironmentRequirements(
+        command_semantics="linux_process",
+        docker_image="example/image@sha256:" + "0" * 64,
+        capabilities=("git_repository",),
+    )
+    shared = lexical_task("shared", "Edit the repository", "private")
+    shared["environment_requirements"] = environment.model_dump(mode="json")
+    shared["grader"] = ScriptGrader(argv=("true",), environment=environment).model_dump(mode="json")
+    counts = ContractCensus()
+    for family in ("pytest", "shell"):
+        # Native publisher metadata is opaque to the grading-boundary assessment.
+        contract = {
+            "id": "native-shared",
+            "version": 1,
+            "dependency_state": "agent_mutable",
+            "native": {"family": family},
+        }
+        counts.observe({**shared, "integrity_contract": contract})
+    counts.observe(shared)
+    counts.observe(lexical_task("separate", "Reply only", "private"))
+    groups = counts.rows()
+    assert {r["native_family"] for r in groups if r["present"]} == {"pytest", "shell"}
+    assert sum(r["count"] for r in groups if not r["present"]) == 2
+    assert counts.required_shared == 3 and counts.shared_missing == 1
