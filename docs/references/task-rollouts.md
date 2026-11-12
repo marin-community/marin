@@ -163,8 +163,8 @@ the task. Backends can use `TraceMode.MESSAGES` when only text and usage are ava
 
 ### Model session
 
-A harness calls the model through its `ModelSession`, which records the exact tokens and applies the turn
-and token limits:
+Each attempt's recorder implements `ModelSession`, which records the exact tokens and applies the turn
+and token limits. A harness calls the model through that session:
 
 - `start(prompt)` starts a new conversation with a `Prompt`: public messages, model options, and optionally
   exact prompt `token_ids`. It returns the model's turn. A later `start` starts another conversation, for
@@ -179,11 +179,13 @@ and token limits:
 `start` and `reply` also accept `context_recovery=ContextRecovery.NEVER`. A model adapter can raise
 `ContextRejected(original_error, message)` when a context request is refused before generation. The session
 applies the original error unless the harness selects `ALWAYS`, or `AFTER_TURN` after a model turn has
-completed anywhere in this attempt. Recovery raises `ContextWindowExceeded` without recording the refused
-request. The session owns this attempt state; no caller tracks another sampled-turn flag. Each attempt
+completed anywhere in this attempt. Recovery raises `ContextWindowExceeded` to the harness so it can shorten
+the request or compact its history and try again. The refused request is not recorded. The session owns
+this attempt state; no caller tracks another sampled-turn flag. Each attempt
 starts with fresh state, and a rejection does not spend a model turn or reset cumulative limits or deadlines.
 
-The generic agent harness selects `ALWAYS`. Full Harbor trials select `AFTER_TURN`, so an initial generation
+The generic agent harness, used by SkyRL's native agent integration, selects `ALWAYS`.
+Full Harbor trials select `AFTER_TURN`, so an initial generation
 budget rejection still ends with `length` and an initial serving failure keeps its original error. Later
 rejections leave the sampled evidence available while Harbor finishes verification. Existing reward and
 error treatments still apply to the trial result. Explicit `ContextWindowExceeded` and unwrapped
