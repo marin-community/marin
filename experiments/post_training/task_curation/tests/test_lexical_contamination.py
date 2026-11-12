@@ -36,6 +36,7 @@ from experiments.post_training.task_curation.lexical_contamination import write_
 from experiments.post_training.task_curation.lexical_scan import ReportConfig, measure_marks
 from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.published_census import CensusConfig, ContractCensus, measure_population
+from experiments.post_training.task_curation.published_integrity import measure_integrity
 
 
 def lexical_task(identifier: str, public: str, private: str) -> dict:
@@ -123,6 +124,10 @@ def test_full_task_text_marks_public_eval_copy_and_excludes_private_reference(tm
                 result=text_population.result_payload(),
             )
         )
+        refreshed = measure_integrity(CensusConfig(text_population.path, str(tmp_path / "integrity-refresh")))
+        assert refreshed.task_count == 2
+        assert refreshed.summary["required_shared_tasks"] == 0
+        assert refreshed.summary["absent_contract_tasks"] == 2
         marks = SourceLexicalMarks(
             path=str(tmp_path / "marks"), source_id="fixture", population_path=text_population.path, attributes=result
         )

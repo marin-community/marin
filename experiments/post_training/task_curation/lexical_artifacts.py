@@ -7,9 +7,11 @@ from typing import Literal
 
 from marin.datakit.decon import AllSourceDropSets, DeconAttributes
 from marin.execution.artifact import Artifact
+from pydantic import Field
 
 
 class SourceTextPopulation(Artifact):
+    path: str = Field(min_length=1)
     source_id: str
     dataset_id: str
     dataset_revision: str
@@ -66,3 +68,12 @@ class ActorCensus(Artifact):
     execution_failures: dict[str, int]
     mapping_failures: dict[str, int]
     integrity_contracts: dict
+
+
+class IntegrityCensus(Artifact):
+    source_id: str
+    input_artifact: str
+    converter_version: str
+    converter_revision: str
+    task_count: int
+    summary: dict
