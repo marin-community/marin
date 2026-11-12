@@ -72,6 +72,8 @@ struct Fixture {
     target_addr: SocketAddr,
     target_url: String,
     target_requests: Arc<RequestStats>,
+    /// The cluster the source forwards as, and the hub trusts.
+    cluster: String,
 }
 
 fn test_forwarder(
@@ -80,9 +82,20 @@ fn test_forwarder(
     target_addr: SocketAddr,
     private_pem: &str,
 ) -> Forwarder<TestTransport> {
+    cluster_forwarder(source, target_url, target_addr, private_pem, SOURCE_CLUSTER)
+}
+
+/// As [`test_forwarder`], forwarding as `cluster`.
+fn cluster_forwarder(
+    source: Arc<Store>,
+    target_url: String,
+    target_addr: SocketAddr,
+    private_pem: &str,
+    cluster: &str,
+) -> Forwarder<TestTransport> {
     let config = ForwardingConfig {
         target: target_url,
-        cluster: SOURCE_CLUSTER.to_string(),
+        cluster: cluster.to_string(),
     };
     let minter = TokenMinter::new(private_pem, config.cluster.clone()).unwrap();
     Forwarder::with_client(source, config, minter, stats_client(target_addr))
@@ -93,10 +106,16 @@ impl Fixture {
     /// it. Each namespace's watermark is unset: a forwarder started now seeds at the tip.
     /// Call [`Self::forward_from_start`] to drain what is already written.
     async fn new(tag: &str) -> Self {
+        Self::forwarding_as(tag, SOURCE_CLUSTER).await
+    }
+
+    /// As [`Self::new`], with the source forwarding as `cluster`.
+    async fn forwarding_as(tag: &str, cluster: &str) -> Self {
         let target = disk_store(&format!("{tag}_target"));
-        let (target_addr, target_requests) =
-            serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
-        Self::with_hub(tag, Some(target), target_addr, target_requests).await
+        let (target_addr, target_requests) = serve(Arc::clone(&target), hub_policy(cluster)).await;
+        let mut fx = Self::with_hub(tag, Some(target), target_addr, target_requests).await;
+        fx.cluster = cluster.to_string();
+        fx
     }
 
     /// As [`Self::new`], but the hub refuses every request with `invalid_argument` and
@@ -131,6 +150,7 @@ impl Fixture {
             target_addr,
             target_url: format!("http://{target_addr}"),
             target_requests,
+            cluster: SOURCE_CLUSTER.to_string(),
         }
     }
 
@@ -144,11 +164,12 @@ impl Fixture {
 
     /// A forwarder from this source to this hub, signing with `private_pem`.
     fn forwarder(&self, private_pem: &str) -> Forwarder<TestTransport> {
-        test_forwarder(
+        cluster_forwarder(
             Arc::clone(&self.source),
             self.target_url.clone(),
             self.target_addr,
             private_pem,
+            &self.cluster,
         )
     }
 
@@ -1183,6 +1204,29 @@ async fn seeding_at_the_tip_ships_new_rows_and_never_backfills() {
     wait_for_hub_log_rows(&fx, &[("/user/job/t", "after")]).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rows_that_already_carry_an_origin_cluster_are_never_re_forwarded() {
+    // A row that arrived by forwarding already names an origin. Relaying it onward would
+    // loop, so only rows this store's own writers produced are eligible.
+    let fx = Fixture::new("loop").await;
+
+    push_named(
+        &fx.source_client,
+        "/user/job/t",
+        "relayed",
+        "some-other-cluster",
+    )
+    .await;
+    push(&fx.source_client, "/user/job/t", &["local"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+    fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
+
+    assert_eq!(
+        fx.hub_log_rows().await,
+        vec![("/user/job/t".to_string(), "local".to_string())]
+    );
+}
+
 /// Write one log row under `key` that its writer has already labeled with `cluster`.
 async fn push_named(
     client: &LogServiceClient<TestTransport>,
@@ -1203,15 +1247,14 @@ async fn push_named(
         .unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn named_rows_are_forwarded_under_the_senders_cluster() {
-    // The forwarder sends every row, including rows a local writer already labeled, and
-    // stamps each with its own cluster on the way out. A row named with the sender's own
-    // cluster keeps that name; a row labeled for another cluster arrives attributed to
-    // the server that sent it.
-    let fx = Fixture::new("named").await;
+/// Forward `own` (named for the forwarder's cluster), `unnamed` and `other` (named for
+/// another cluster) from a source forwarding as `cluster`, and check that the first two
+/// reach the hub under `cluster` and the third stays behind.
+async fn assert_own_and_unnamed_rows_are_forwarded(tag: &str, cluster: &str) {
+    let fx = Fixture::forwarding_as(tag, cluster).await;
 
-    push_named(&fx.source_client, "/user/job/t", "own", SOURCE_CLUSTER).await;
+    push_named(&fx.source_client, "/user/job/t", "own", cluster).await;
+    push(&fx.source_client, "/user/job/t", &["unnamed"]).await;
     push_named(
         &fx.source_client,
         "/user/job/t",
@@ -1219,7 +1262,6 @@ async fn named_rows_are_forwarded_under_the_senders_cluster() {
         "some-other-cluster",
     )
     .await;
-    push(&fx.source_client, "/user/job/t", &["unnamed"]).await;
     fx.forward_from_start(LOG_NAMESPACE_NAME).await;
     fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
 
@@ -1227,15 +1269,24 @@ async fn named_rows_are_forwarded_under_the_senders_cluster() {
         fx.hub_log_rows().await,
         vec![
             ("/user/job/t".to_string(), "own".to_string()),
-            ("/user/job/t".to_string(), "other".to_string()),
             ("/user/job/t".to_string(), "unnamed".to_string()),
         ]
     );
-    assert_eq!(hub_log_count_for_cluster(&fx, SOURCE_CLUSTER).await, 3);
-    assert_eq!(
-        hub_log_count_for_cluster(&fx, "some-other-cluster").await,
-        0
-    );
+    assert_eq!(hub_log_count_for_cluster(&fx, cluster).await, 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_row_named_for_its_own_cluster_is_forwarded_like_an_unnamed_one() {
+    // A server may stamp its own rows with its cluster name. Those rows were produced
+    // here, so they are forwarded and keep the name; the unnamed row is stamped with it.
+    assert_own_and_unnamed_rows_are_forwarded("own", SOURCE_CLUSTER).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cluster_name_with_a_quote_is_matched_as_a_literal() {
+    // The forwarder's own name goes into the scan's SQL. A quote in it must be
+    // escaped, or the scan fails and nothing is forwarded.
+    assert_own_and_unnamed_rows_are_forwarded("quoted", "o'brien").await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -163,7 +163,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let mode = resolve_serve_mode(&args)?;
-    let auth = resolve_auth_policy(&args)?;
 
     configure_query_runtime(args.query_metadata_cache_mb.map(NonZeroUsize::get))
         .map_err(|e| format!("failed to configure query runtime: {e}"))?;
@@ -222,6 +221,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // below. The server serves — and /health is green — while archived rows are
     // still being reconciled into the catalog. A shadow store starts none of it.
     store.bootstrap_maintenance();
+    // Auth is ALWAYS enforced (default-deny). No policy → the private
+    // allow-localhost default (loopback only); a shared global finelog sets a
+    // cidr+jwt stack. A malformed policy fails startup rather than mis-admitting.
+    // The /debug/* admin routes are gated by this same policy (see `build_app`).
+    let auth = if args.auth_policy.trim().is_empty() {
+        AuthPolicy::allow_localhost()
+    } else {
+        AuthPolicy::parse(&args.auth_policy)
+            .map_err(|e| format!("invalid FINELOG_AUTH_POLICY: {e}"))?
+    };
     tracing::info!(policy = %auth.describe(), "finelog-server: auth policy active");
     let config = ServerConfig::with_debug_admin(args.debug_admin).with_auth(auth);
     let config = match &forwarder {
@@ -320,31 +329,6 @@ fn resolve_serve_mode(args: &Args) -> Result<ServeMode, String> {
         return Err("shadow mode refuses --forwarding: a rehearsal must not write to a hub".into());
     }
     Ok(ServeMode::Shadow)
-}
-
-/// Resolve the auth policy, refusing a forwarding server that receives relayed rows.
-///
-/// Auth is ALWAYS enforced (default-deny). No policy → the private allow-localhost
-/// default (loopback only); a shared global finelog sets a cidr+jwt stack. A
-/// malformed policy fails startup rather than mis-admitting. The /debug/* admin
-/// routes are gated by this same policy (see `build_app`).
-///
-/// The forwarder sends every row it holds, so a server whose `jwt` layer admits
-/// other clusters' forwarders would send their rows on again. Only a hub has that
-/// layer, and a hub must not forward.
-fn resolve_auth_policy(args: &Args) -> Result<AuthPolicy, String> {
-    let auth = if args.auth_policy.trim().is_empty() {
-        AuthPolicy::allow_localhost()
-    } else {
-        AuthPolicy::parse(&args.auth_policy)
-            .map_err(|e| format!("invalid FINELOG_AUTH_POLICY: {e}"))?
-    };
-    if auth.admits_forwarders() && !args.forwarding.trim().is_empty() {
-        return Err(
-            "a server that receives relayed rows (jwt layer) must not set --forwarding".into(),
-        );
-    }
-    Ok(auth)
 }
 
 /// Decide the deploy offline: read the registered schemas, run each
@@ -491,40 +475,6 @@ mod tests {
         assert!(resolve_serve_mode(&parsed)
             .unwrap_err()
             .contains("--forwarding"));
-    }
-
-    /// A jwt layer that trusts one forwarding sender, as on the hub.
-    fn hub_auth_policy() -> String {
-        serde_json::json!([{
-            "type": "jwt",
-            "keys": [{"cluster": "cw-test", "public_keys": [TEST_PUBLIC_KEY]}]
-        }])
-        .to_string()
-    }
-
-    const TEST_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAqwwvfFvyRQ+8Dhh0li8h2HtCT4yP40s0pzBwwSAkK5s=\n-----END PUBLIC KEY-----\n";
-
-    #[test]
-    fn a_server_that_receives_relayed_rows_refuses_to_forward() {
-        let policy = hub_auth_policy();
-        let parsed = args(&[
-            "--auth-policy",
-            &policy,
-            "--forwarding",
-            r#"{"target":"https://hub","cluster":"marin"}"#,
-        ]);
-
-        assert!(resolve_auth_policy(&parsed)
-            .unwrap_err()
-            .contains("--forwarding"));
-    }
-
-    #[test]
-    fn a_hub_that_does_not_forward_starts() {
-        let policy = hub_auth_policy();
-        let parsed = args(&["--auth-policy", &policy]);
-
-        assert!(resolve_auth_policy(&parsed).unwrap().admits_forwarders());
     }
 
     #[test]
