@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 STORE_ROOT = "s3://marin-us-east-02a/marin"
 SOURCES_FILE = Path(__file__).with_name("hero_store_sources.json")
 DEFAULT_MIN_WORDS = 8
-READ_BATCH_ROWS = 1024
+READ_BATCH_ROWS = 64
 SAMPLE_DOCS = 3
 TOP_SOURCES = 10
 
@@ -373,7 +373,7 @@ def main() -> None:
     parser.add_argument("--sources", nargs="+", help="search only these store sources")
     parser.add_argument("--every", type=int, default=1, help="search every N-th file of each source")
     parser.add_argument("--max-workers", type=int, default=100)
-    parser.add_argument("--worker-ram", default="16g")
+    parser.add_argument("--worker-ram", default="32g")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
 
