@@ -24,11 +24,11 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256, task_identity
 from taskcompendium.models import TaskSpec
+from taskcompendium.pipeline.deduplication import DUPLICATE_WITHIN_SOURCE
 
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 
 logger = logging.getLogger(__name__)
-DUPLICATE_WITHIN_SOURCE = "DUPLICATE_WITHIN_SOURCE"
 LEXICAL_CONTAMINATION = "LEXICAL_CONTAMINATION"
 DROP_SCHEMA = pa.schema([("task_id", pa.string()), ("kept_id", pa.string()), ("reasons", pa.list_(pa.string()))])
 
@@ -79,8 +79,8 @@ def census_source(
     """Count exact contracts on disk and retain every dropped ID with its canonical ID."""
     key = canonical_sha256(original_source_id(population.source_id))[:20]
     output = StoragePath(output_root) / key
-    if (output / "measurement.json").exists():
-        raise FileExistsError(f"Census already exists: {output}")
+    if output.exists():
+        raise FileExistsError(f"Existing census output requires a new artifact version: {output}")
     with TemporaryDirectory(prefix="within-source-") as scratch:
         with closing(sqlite3.connect(str(Path(scratch) / "contracts.sqlite"))) as database:
             database.execute("PRAGMA journal_mode = OFF")

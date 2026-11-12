@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, TypedDict
 
 import pyarrow as pa
 from rigging.filesystem.storage_path import StoragePath
@@ -40,6 +40,14 @@ RETAINED_SCHEMA = pa.schema(
     ]
 )
 DROP_SCHEMA = pa.schema([("task_id", pa.string()), ("kept_id", pa.string()), ("reason", pa.string())])
+
+
+class DeduplicationEvidence(TypedDict):
+    revision: str
+    raw_count: int
+    unique_count: int
+    within_source_duplicates: int
+    drop_manifest_uri: str
 
 
 def unique_task_indices(tasks: Sequence[TaskSpec]) -> tuple[list[int], list[dict[str, str]]]:
@@ -74,7 +82,7 @@ class DeduplicatedPopulation:
             sorted(str(path) for path in (StoragePath(self.path) / "retained/*.parquet").glob())
         ).flat_map(read_converted)
 
-    def evidence(self) -> dict[str, Any]:
+    def evidence(self) -> DeduplicationEvidence:
         return {
             "revision": DEDUPLICATION_REVISION,
             "raw_count": self.raw_count,

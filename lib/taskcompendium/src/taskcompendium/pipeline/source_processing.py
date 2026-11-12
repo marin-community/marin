@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded raw sampling, source review, and gated conversion on an entered worker pool."""
+"""Source conversion, mandatory deduplication, and bounded quality review on an entered worker pool."""
 
 import hashlib
 import json
@@ -47,7 +47,11 @@ from taskcompendium.pipeline.conversion import (
     row_source,
     row_task_id,
 )
-from taskcompendium.pipeline.deduplication import DeduplicatedPopulation, deduplicate_population
+from taskcompendium.pipeline.deduplication import (
+    DeduplicatedPopulation,
+    DeduplicationEvidence,
+    deduplicate_population,
+)
 from taskcompendium.pipeline.execution_telemetry import (
     TELEMETRY_FILENAME,
     PhaseTelemetry,
@@ -166,7 +170,7 @@ class ConversionResult:
     rejections: dict[str, int]
     elapsed_seconds: float
     grading_environment: dict[str, Any]
-    within_source_dedup: dict[str, Any]
+    within_source_dedup: DeduplicationEvidence
 
 
 @dataclass(frozen=True)
@@ -862,16 +866,8 @@ def _write_manifest(
     _write_json(output / "manifest.json", manifest)
 
 
-def _finish_scratch(run: _SourceRun, status: SourceStatus) -> None:
-    """Dispose of a finished run's redundant task payloads and point phase manifests at the normalize view."""
-    # Keep request/response evidence and decision manifests. Only the completed
-    # procedure's redundant task payloads are disposable; failures retain them.
-    if status != SourceStatus.INCOMPLETE:
-        for phase in SCRATCH_PHASES:
-            for view in ("audit", "accepted", "review-inputs"):
-                path = run.scratch(phase) / view
-                if path.exists():
-                    path.rmtree()
+def _finish_scratch(run: _SourceRun) -> None:
+    """Point phase manifests at the normalize view while preserving their task payloads."""
     for phase in SCRATCH_PHASES:
         path = run.scratch(phase) / "manifest.json"
         if path.exists():
@@ -944,7 +940,7 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
         unavailable_reviews=unavailable_reviews,
         status=status,
     )
-    _finish_scratch(run, status)
+    _finish_scratch(run)
     return SourcePipelineResult(
         *(str(run.output / name) for name in OUTPUT_VIEWS),
         manifest_path=str(run.output / "manifest.json"),

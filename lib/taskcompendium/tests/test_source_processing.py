@@ -545,8 +545,8 @@ def test_complete_conversion_precedes_bounded_quality_and_preserves_ledgers(
     assert len(list(Path(result.normalize_path).glob("*.parquet"))) == 1
     assert all("raw_json" not in row for row in raw)
     assert read_json(Path(result.download_path) / "manifest.json")["source_input"] == str(source)
-    assert not [path for path in (tmp_path / "output/work").rglob("*.parquet") if path.parent.name != "evidence"]
-    assert not list((tmp_path / "output/work").rglob("batch-*.jsonl.gz"))
+    assert list((tmp_path / "output/work/filtered/audit").glob("*.parquet"))
+    assert list((tmp_path / "output/work/sample/review-inputs").glob("batch-*.jsonl.gz"))
     assert {row["task_id"] for row in raw} == {row["task_id"] for row in review}
     assert all("task_json" not in row and "raw_json" not in row for row in review)
     assert not report["raw_population_census"]
@@ -629,7 +629,7 @@ def test_source_read_in_parts_publishes_the_views_of_a_whole_read(tmp_path, mode
     assert read_json(parted.manifest_path)["raw_population_count"] == 125
 
 
-def test_completed_source_rerun_reuses_inference_cache_without_scratch(tmp_path):
+def test_completed_source_preserves_phase_payloads_and_reuses_inference_cache(tmp_path):
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(2)[1:])
     recipe = fixture_recipe(convert_svamp)
@@ -638,7 +638,7 @@ def test_completed_source_rerun_reuses_inference_cache_without_scratch(tmp_path)
     config = pipeline_config(SourceProcessingMode.SAMPLE, reviewer)
     first = run_pipeline(recipe, source, tmp_path / "output", config)
     first_review = parquet_rows(first.review_path)
-    assert not [path for path in (tmp_path / "output/work").rglob("*.parquet") if path.parent.name != "evidence"]
+    assert list((tmp_path / "output/work/filtered/audit").glob("*.parquet"))
     resumed = BatchService(interrupted=True)
     second_reviewer = replace(reviewer, client=resumed)
     config = replace(config, execution=replace(config.execution, reviewer=second_reviewer))
@@ -681,7 +681,7 @@ def test_source_retry_reuses_successful_reviews_after_unavailable_evidence(tmp_p
     failed_ids = [row["custom_id"] for row in service.batches["batch-0"]] if failure == "quality_panel" else []
     assert sorted(retried_ids) == sorted(failed_ids)
     assert submitted == (100 if failure == "quality_panel" else population)
-    assert not [path for path in (tmp_path / "output/work").rglob("*.parquet") if path.parent.name != "evidence"]
+    assert list((tmp_path / "output/work/filtered/audit").glob("*.parquet"))
     review = parquet_rows(second.review_path)
     assert len(review) == len({row["task_id"] for row in review}) == population
     assert all(row["review_status"] not in {"invalid", "unavailable"} for row in review)

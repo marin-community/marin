@@ -5,6 +5,7 @@
 
 import json
 from contextlib import ExitStack
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -107,6 +108,14 @@ def test_frozen_census_unions_duplicate_and_lexical_drops_across_partitions(tmp_
     if lexical_use is not LexicalUse.TRAIN:
         expected = [{"task_id": "z", "kept_id": "a", "reasons": ["DUPLICATE_WITHIN_SOURCE"]}]
     assert pq.read_table(result["combined_drop_manifest_uri"]).to_pylist() == expected
+
+    partial = tmp_path / "partial" / Path(result["evidence_url"]).parent.name
+    partial.mkdir(parents=True)
+    existing = partial / "duplicates.parquet"
+    existing.write_bytes(b"interrupted census artifact")
+    with pytest.raises(FileExistsError, match="new artifact version"):
+        census_source(population, {}, str(tmp_path / "partial"), lexical_use=lexical_use)
+    assert existing.read_bytes() == b"interrupted census artifact"
 
 
 def test_full_task_text_marks_public_eval_copy_and_excludes_private_reference(tmp_path):
