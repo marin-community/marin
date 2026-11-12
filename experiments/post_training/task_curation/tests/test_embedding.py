@@ -28,7 +28,7 @@ from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.embedding import DescriptionEndpoint, curation_embedding_pipeline
 from experiments.post_training.task_curation.local import artifact_prefix
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
 
@@ -204,7 +204,15 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
                     sample_size=None,
                     seed=0,
                     inventory=[
-                        RlDataSource(info=SourceInfo(id="source", title="Fixture", origin="fixture")).declaration
+                        RlDataSource(
+                            info=SourceInfo(
+                                id="Marin:source",
+                                upstream_dataset="source",
+                                upstream_name="source",
+                                build_path="test",
+                                origin=SourceOrigin.MARIN,
+                            )
+                        ).declaration
                     ],
                 )
             )
@@ -342,11 +350,34 @@ def test_publication_adds_declared_inventory_sources_without_placement(tmp_path,
             sample_size=None,
             seed=0,
             inventory=[
-                RlDataSource(info=SourceInfo(id="source", title="Fixture", origin="fixture")).declaration,
                 RlDataSource(
-                    info=SourceInfo(id="Pointer:release", title="Pointer", origin="fixture", count=7)
+                    info=SourceInfo(
+                        id="Marin:source",
+                        upstream_dataset="source",
+                        upstream_name="source",
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                    )
                 ).declaration,
-                RlDataSource(info=SourceInfo(id="Pointer:no-count", title="NoCount", origin="fixture")).declaration,
+                RlDataSource(
+                    info=SourceInfo(
+                        id="Pointer:release",
+                        upstream_dataset=("Pointer:release").partition(":")[2],
+                        upstream_name=("Pointer:release").partition(":")[2],
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                        count=7,
+                    )
+                ).declaration,
+                RlDataSource(
+                    info=SourceInfo(
+                        id="Pointer:no-count",
+                        upstream_dataset=("Pointer:no-count").partition(":")[2],
+                        upstream_name=("Pointer:no-count").partition(":")[2],
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                    )
+                ).declaration,
             ],
         )
         built = run(stages.publication, max_concurrent=1)[0]

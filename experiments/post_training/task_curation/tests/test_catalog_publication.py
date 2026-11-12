@@ -24,6 +24,7 @@ from finestore.rl.curation import (
     CurationSummary,
     DaytonaMeasurement,
     DaytonaSafety,
+    DaytonaUnsafeReason,
     OracleValidation,
     SnapshotSource,
     register_catalog,
@@ -38,7 +39,7 @@ from experiments.post_training.task_curation.catalog_snapshot import (
     retire_catalog_sources,
 )
 from experiments.post_training.task_curation.curation_catalog import RUNS
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, SourceReference
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 
@@ -202,18 +203,26 @@ def test_publication_round_trips_daytona_safety_to_the_inventory(tmp_path):
         config=replace(runnable.config, name="agent"),
         info=replace(
             runnable.info,
-            id="fixture:agent",
+            id="Marin:agent",
+            upstream_dataset="agent",
+            upstream_name="agent",
+            title=None,
             tags=("agentic",),
             daytona_snapshot_count=25,
+            daytona_machine_slots=25,
+            daytona_unsafe_reasons=(DaytonaUnsafeReason.TOO_MANY_SNAPSHOTS,),
+            daytona_unsafe_details={"too_many_snapshots": "25 measured identities"},
+            daytona_unsafe_counts={"too_many_snapshots": 25},
+            daytona_execution_failures=0,
             daytona_count_basis="shellbox-identity over pinned payloads",
         ),
     )
     record_attempt(root, runnable, "first", "2026-10-16T10:00:00Z", "key-a")
     publish_catalog(root, "first", [runnable, agent])
     rows = selected_sources(root)
-    assert rows[runnable.info.id].declaration.daytona_safety is DaytonaSafety.SAFE
-    assert rows["fixture:agent"].declaration.daytona_safety is DaytonaSafety.UNSAFE
-    assert rows["fixture:agent"].declaration.daytona_snapshot_threshold == DAYTONA_SAFE_SNAPSHOT_LIMIT
+    assert rows[runnable.info.id].declaration.daytona_safety is DaytonaSafety.NOT_APPLICABLE
+    assert rows["Marin:agent"].declaration.daytona_safety is DaytonaSafety.UNSAFE
+    assert rows["Marin:agent"].declaration.daytona_snapshot_threshold == DAYTONA_SAFE_SNAPSHOT_LIMIT
 
 
 def test_an_unselected_runnable_source_picks_up_the_current_safety_verdict(tmp_path):
@@ -223,7 +232,15 @@ def test_an_unselected_runnable_source_picks_up_the_current_safety_verdict(tmp_p
     agent = replace(
         first,
         config=replace(first.config, name="agent"),
-        info=replace(first.info, id="fixture:agent", tags=("agentic",), dataset=pinned),
+        info=replace(
+            first.info,
+            id="Marin:agent",
+            upstream_dataset="agent",
+            upstream_name="agent",
+            title=None,
+            tags=("agentic",),
+            dataset=pinned,
+        ),
     )
     record_attempt(root, first, "first", "2026-10-16T10:00:00Z", "key-a", source_count=2)
     record_attempt(root, agent, "first", "2026-10-16T10:00:00Z", "key-b")
@@ -235,15 +252,17 @@ def test_an_unselected_runnable_source_picks_up_the_current_safety_verdict(tmp_p
         info=replace(
             agent.info,
             daytona_snapshot_count=5,
+            daytona_machine_slots=5,
+            daytona_execution_failures=0,
             daytona_count_basis="shellbox-identity over pinned payloads",
             oracle_validation=OracleValidation.VERIFIER_EXECUTED,
         ),
     )
     publish_catalog(root, "second", [reassessed, repaired])
     rows = selected_sources(root)
-    assert rows["fixture:agent"].declaration.daytona_safety is DaytonaSafety.SAFE
-    assert rows["fixture:agent"].declaration.oracle_validation is OracleValidation.VERIFIER_EXECUTED
-    assert rows["fixture:agent"].assessment_key == "key-b"
+    assert rows["Marin:agent"].declaration.daytona_safety is DaytonaSafety.SAFE
+    assert rows["Marin:agent"].declaration.oracle_validation is OracleValidation.VERIFIER_EXECUTED
+    assert rows["Marin:agent"].assessment_key == "key-b"
     assert rows[reassessed.info.id].assessment_key == "key-a"
 
 
@@ -287,6 +306,8 @@ def test_metadata_refresh_retires_sources_without_removing_archived_assessments(
     assert current[kept.info.id].assessment_key == "kept-key"
     assert current[kept.info.id].declaration.notes == "Updated measured evidence"
     assert refreshed.source_count == 1
+    assert current[kept.info.id].declaration.quality_result.reviewed == 1
+    assert current[kept.info.id].declaration.quality_result.verdict == "good"
     catalog = CurationCatalog(root)
     assert {row.id for row in catalog.sources(original.snapshot_id)} == {kept.info.id, retired.info.id}
     assert catalog.packet("retired-key", "retired-key") == {"task": {"id": "retired-key"}}
@@ -305,7 +326,15 @@ def test_metadata_refresh_cannot_reuse_a_grade_for_a_changed_pipeline(tmp_path):
 
 def test_publication_rejects_a_source_without_a_registered_converter(tmp_path):
     root = str(tmp_path / "production")
-    pointer = RlDataSource(info=SourceInfo(id="new:pointer", title="Pointer", origin="fixture"))
+    pointer = RlDataSource(
+        info=SourceInfo(
+            id="Marin:pointer",
+            upstream_dataset=("Marin:pointer").partition(":")[2],
+            upstream_name=("Marin:pointer").partition(":")[2],
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+        )
+    )
     with pytest.raises(ValueError, match="no registered conversion pipeline"):
         publish_catalog(root, "invalid-source", [pointer])
     assert not (tmp_path / "production").exists()
@@ -338,7 +367,7 @@ def test_retirement_materializes_legacy_missing_defaults_without_changing_archiv
             transaction.table(CURRENT).add({"name": "latest", "snapshot_id": "legacy"})
     retire_catalog_sources(root, "retired", frozenset({retired.info.id}))
     (current,) = CurationCatalog(root).sources("retired")
-    assert current.declaration.daytona_safety is DaytonaSafety.UNASSESSED
+    assert current.declaration.daytona_safety is None
     assert current.declaration.oversight.value == "none"
     assert current.declaration.daytona_snapshot_count is None
     original = CurationCatalog(root).view.point(INVENTORY, snapshot_id="legacy", id=kept.info.id)
@@ -359,6 +388,7 @@ def test_measured_refresh_preserves_assessments_and_roundtrips_arrow_maps(tmp_pa
         daytona_execution_failures=3,
         daytona_count_basis="Complete production identity census",
         daytona_unsafe_reasons=["too_many_snapshots", "unbuilt_image"],
+        daytona_unsafe_counts={"too_many_snapshots": 20, "unbuilt_image": 3},
         daytona_unsafe_details={"too_many_snapshots": "14 distinct identities", "unbuilt_image": "3 unbuilt actors"},
         daytona_roles={"agent": {"daytona": {"machine_slots": 20, "failures": {"unbuilt_image": 3}}}},
     )

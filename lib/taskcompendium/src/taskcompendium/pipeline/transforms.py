@@ -17,7 +17,6 @@ from taskcompendium.pipeline.models import (
     REJECTING_CHECK_STATUSES,
     RESOURCES_OVER_BUDGET,
     CheckResult,
-    Confidence,
     Decision,
     Disposition,
     FilterPolicy,
@@ -194,7 +193,6 @@ def filter_row(row: dict[str, Any], policy: FilterPolicy) -> dict[str, Any]:
     if row["quality_basis"] in (
         QualityBasis.UNREVIEWED,
         QualityBasis.INFERRED_FROM_SOURCE,
-        QualityBasis.SOURCE_REJECTED,
         QualityBasis.SOURCE_INCOMPLETE,
     ):
         # These are source-level decisions, not missing per-task model responses.
@@ -202,13 +200,8 @@ def filter_row(row: dict[str, Any], policy: FilterPolicy) -> dict[str, Any]:
         failed = [f"check:{check['check']}" for check in row["checks"] if check["status"] in REJECTING_CHECK_STATUSES]
         if failed:
             return {**row, "filter_status": "reject", "filter_reasons": failed}
-        if row["quality_basis"] == QualityBasis.INFERRED_FROM_SOURCE and policy.minimum_confidence == Confidence.HIGH:
-            return {**row, "filter_status": "defer", "filter_reasons": ["source_quality:requires_direct_review"]}
         return row
-    review = review_record(row)
-    decision = task_decision(
-        row["task_id"], [CheckResult.model_validate(check) for check in row["checks"]], review, policy
-    )
+    decision = task_decision(row["task_id"], [CheckResult.model_validate(check) for check in row["checks"]])
     return {
         **row,
         "filter_status": decision.disposition.value,

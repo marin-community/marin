@@ -38,7 +38,7 @@ from experiments.post_training.task_curation.pipeline import (
     environment_requirements,
     process_rows,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 from experiments.post_training.task_curation.tests.image_builds import (
     DATA_PATH,
     REPOSITORY,
@@ -62,7 +62,13 @@ def catalog(monkeypatch, tmp_path):
             **{
                 name: RlDataSource(
                     pipeline=process_rows,
-                    info=SourceInfo(id=f"fixture:{name}", title=name, origin="fixture"),
+                    info=SourceInfo(
+                        id=f"Marin:{name}",
+                        upstream_dataset=name,
+                        upstream_name=name,
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                    ),
                     config=pipeline,
                 )
                 for name, pipeline in pipelines.items()

@@ -295,6 +295,29 @@ and does not make a source selectable for training. The deprecated tag and its
 reason remain available for registered historical sources. Removed pipeline-less
 entries are tracked in retired-inventory-only.json; their artifacts stay archived.
 
+`SourceInfo.origin` is a `SourceOrigin` naming the upstream provider. Internal
+campaigns and pipelines belong in `build_path`. `Task Trove` and `TaskTrove` share
+`SourceOrigin.TASKTROVE`; Nemotron blend providers remain Nemotron even when
+MarinSkyRL builds them.
+
+| Field | Ingestion contract |
+|---|---|
+| `upstream_dataset`, `subset`, `variant` | Stable upstream population keys; subset and variant are optional. |
+| `id` | Generated as `<origin>:<upstream_dataset>[/<subset>][@<variant>]`; mismatches fail validation. Published IDs are immutable. |
+| `upstream_name`, `title` | Title is generated as `<upstream_name> · <subset> · <variant>`, omitting absent parts. Do not add prose or format labels. |
+| `build_path` | Internal campaign or pipeline, independently of upstream origin. |
+| `url` | Upstream provenance URL, including for repaired releases. |
+| `current_release` | Required exact `{repo, revision, url}` consumed for training. QUICK uses its pinned input; QA/repair uses its private open-athena release; decontamination uses the receipt's remediated pin. |
+| `quality_result` | Computed `reviewed`, `issue_count`, `issue_rate`, `verdict`, `issues`, and `repair_recommendation`. `sample_count`, `uncertain_count` and `unavailable_count` retain coverage. Mechanical exclusions remain in their own ledger. |
+
+A frozen pending-retirement map records the published IDs whose existing provider
+prefixes differ from their generated identities. It permits only those exact
+existing ID-to-identity pairs while ID changes await approval. New declarations
+must match their generated IDs. After approval, retire each old ID in a new
+snapshot, register its replacement and re-point the retained assessment evidence;
+keep historical snapshots and artifacts. Do not edit the frozen map to admit a
+new mismatched declaration.
+
 Every runnable agentic source declares its ingested `task_format`. New agentic
 sources must ingest TaskCompendium or Harbor task directories; selection rejects
 an agentic source that declares no format, and rejects MarinSkyRL's internal
@@ -313,7 +336,12 @@ actor requirements is SAFE; otherwise it is UNSAFE. Package-lock graders run on
 LOCAL and record separate per-role compatibility evidence. A LOCAL grader failure
 does not change the actor's Daytona label. Unsafe sources can still be ingested.
 The measured count, refused-task count, actor machine count and provenance remain
-visible beside the label.
+visible beside the label. UNSAFE includes one or more typed reasons:
+`TOO_MANY_SNAPSHOTS`, `UNBUILT_IMAGE`, `HOST_IMAGE_REQUIRED`, or
+`EXECUTION_REQUIREMENT`. `daytona_unsafe_details` explains each census cause;
+`daytona_unsafe_counts` counts affected actor task slots per reason. Counts can
+overlap when an actor has several refusal causes. The snapshot total remains
+separate from affected-task counts. Grader refusals never supply actor reasons.
 
 **Publishing a conversion.** A curation step that converts data publishes the converted
 artifact to the `open-athena` Hugging Face org as a **private** repository: campaign
@@ -864,7 +892,7 @@ and grading. It records declared images or locks without building environments.
 Recipe SAMPLE and FULL bind `SourcePipelineConfig` and a resolved grader
 environment. Other callables choose their own configuration. The recipe's FULL
 mode reviews a bounded panel, then
-reuses those conversions when its quality gate allows expansion. The procedure
+reuses those conversions for expansion. Sample QC is informational and never rejects a source or task. The procedure
 below describes those reviewed stages. See the
 [campaign quickstart](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md)
 for local overrides, Harbor export and pinned content comparison commands.
@@ -882,12 +910,15 @@ Oracle filtering is never sampled, even when the other checks use SAMPLE.
    (`task-curation/download/<hash>`).
 2. Draw at most 100 raw rows with a seeded sample, convert them and run cheap
    checks.
-3. With a rubric, send the panel in bounded batches to the GLM reviewer. More
-   than 50% known defects, over the whole panel, rejects the source; otherwise
-   it is accepted. Uncertain judgments, unsupported conversions and duplicate
-   rows are not defects. Rows outside the panel are never reviewed individually.
-   Without a rubric, rows are kept as `unreviewed`.
-4. In full mode, convert and audit every row of an accepted source.
+3. With a rubric, send the panel in bounded batches to the GLM reviewer. Compute
+   Result from conclusive reviewed tasks: GOOD at no more than 10% issues,
+   BAD at 50% or more, SOME_ISSUES between them. Exactly 10% is GOOD; exactly
+   50% is BAD. Record counts, rate, issue evidence and a repair recommendation.
+   Unavailable and uncertain observations remain explicit; mechanical exclusions
+   never enter this denominator. QC does not reject tasks or block expansion.
+   Rows outside the panel are never reviewed individually. Without a rubric,
+   record an unreviewed Result.
+4. In full mode, convert and audit every row.
 5. Filter rows into kept, rejected and deferred.
 6. With controls, verify a seeded sample of at most 20 kept rows
    (`--verification-sample-size`): each task's one control runs once in a fresh
@@ -1055,10 +1086,10 @@ Grading machines never have network access. Add `--run` to execute, with `GLM_BU
 the review endpoint is resolved from the Iris GLM relay job (`--relay-job`) unless
 `--base-url` overrides it. `--mode sample` is a test run that
 converts and gates only each source's panel. `--mode full` runs each source on
-its own: it makes its own panel quality decision, converts every row of an
-accepted source, draws its control sample from all kept rows, and validates every
-kept task when the control sample does not permit skipping validation. A quality
-rejection ends the source `gated`; control failures reject individual tasks. Repeat
+its own: it records its panel quality Result, converts every row, draws its
+control sample from all kept rows, and validates every kept task when the control
+sample does not permit skipping validation. QC is informational; mechanical
+and control failures retain their separate task exclusions. Repeat
 `--source NAME` to run a subset.
 
 FULL runs append a post-curation assessment; SAMPLE can opt in with `--assess`.

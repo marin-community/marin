@@ -11,7 +11,7 @@ Its loader and selected release are independent of the sampled grading catalog.
 
 The 95% control pass threshold permits curation to skip validation of unsampled
 tasks. Below that threshold, curation validates each task and retains individual
-passes. The 80% Good threshold below grades a sample of the retained output.
+passes. The Result thresholds below grade a reviewed sample of the retained output.
 Curation supplies the tasks and evidence; the grade does not change admission.
 
 ```mermaid
@@ -41,18 +41,19 @@ after curation. Excluded rows are sampled separately to inspect filtering decisi
 Admitted opinions, excluded diagnostics and executed grader controls remain
 separate. Grading does not change admission. Input populations may overlap.
 
-SQL computes each cohort's verdict counts and label over the entire selected sample:
+Result is computed from conclusive reviewed tasks in each cohort. A task has
+issues when its judgment is Some issues or Bad:
 
-- Good: at least 80% have usable task evidence and a Good judgment.
-- Bad: more than 20% have usable task evidence and a Bad judgment.
-- Unknown: neither threshold is met and fewer than 80% have conclusive judgments.
-- Some issues: the remaining samples.
+- Good: at least 90% clean (no more than 10% with issues).
+- Bad: at least 50% with issues.
+- Some issues: more than 10% and fewer than 50% with issues.
+- Unknown: no conclusive reviewed tasks or incomplete sample coverage.
 
-A completed or gated pipeline that processes inputs and retains zero tasks is Bad.
-An incomplete pipeline without retained tasks remains Unknown. Missing packets
-and unavailable judgments count against coverage; they are never dropped from
-the denominator. Atlas displays the Good fraction and the reason for the label.
-These opinions describe the inspected sample, not an estimate of the whole source.
+Exactly 10% issues is Good; exactly 50% is Bad. Store the reviewed and issue
+counts, issue rate, issue evidence and repair recommendation. Unavailable and
+uncertain judgments remain explicit coverage diagnostics. Mechanical exclusions
+and zero retained tasks do not invent quality observations. QC never rejects
+sources or tasks. These opinions describe the inspected sample.
 
 Large packets retain the task and answer contract, with bounded previews of long
 text, collections and stage audits. Previews record original sizes and selected
@@ -96,6 +97,25 @@ within the domain. On small screens, the table keeps name, count and quality
 visible; source details contain the remaining fields.
 
 ## Updating Atlas
+
+Before selecting a new catalog load:
+
+1. Validate every source's typed upstream origin, build path and generated title.
+   Preserve published IDs until approved retirement and evidence re-pointing.
+2. Verify `current_release.repo`, `revision` and `url` identify the exact consumed
+   pin. QA/repair releases must be private open-athena TaskCompendium datasets;
+   decontamination remediation must select the new version. Keep `url` as upstream
+   provenance.
+3. Check task-derived SHARED/SEPARATE grading evidence and actor-only Daytona
+   measurements. Every UNSAFE reason needs details and affected actor-task counts;
+   retain independent grader compatibility evidence. Grandfathered blends keep
+   their explicit dash exemption.
+4. Recompute Result from reviewed issue counts using the inclusive 10% and 50%
+   boundaries. Retain issues and repair recommendations separately from exclusions.
+5. Check Evalchemy benchmarks retain evaluation/heldout use. Run conversion in
+   QUICK, SAMPLE or FULL; changed behavior requires SAMPLE/FULL QA and new pins.
+6. Retain lexical decontamination receipts and original artifacts. Stage and
+   validate the complete load before selecting it.
 
 Source code lives in `infra/marina/apps/rl_data_catalog/`. Its migration
 creates the SQL tables; it does not read object storage or run curation.

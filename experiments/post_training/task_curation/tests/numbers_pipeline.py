@@ -16,7 +16,7 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, SourceReference
 
 NUMBERS_DATASET = SourceReference("local-numbers", "pinned", "https://example.org/numbers")
 
@@ -104,9 +104,11 @@ def numbers_pipeline(source: RlDataSource[NumbersConfig], options: PipelineOptio
 def number_source(path: Path, name: str = "numbers") -> RlDataSource[NumbersConfig]:
     return RlDataSource(
         info=SourceInfo(
-            id=f"fixture:{name}",
-            title=name,
-            origin="fixture",
+            id=f"Marin:{name}",
+            upstream_dataset=name,
+            upstream_name=name,
+            build_path="test",
+            origin=SourceOrigin.MARIN,
         ),
         config=NumbersConfig(name, path),
         pipeline=numbers_pipeline,

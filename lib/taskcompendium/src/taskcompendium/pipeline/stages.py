@@ -31,7 +31,6 @@ from zephyr.writers import DEFAULT_TARGET_BUFFER_BYTES, write_jsonl_file
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA, audit_columns
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
-from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.models import (
     REJECTING_CHECK_STATUSES,
     CheckResult,
@@ -614,24 +613,16 @@ def _complete_audit_batch(
                 audit.model_copy(
                     update={
                         "review": sampled[audit.task_id],
+                        "decision": (
+                            audit.decision
+                            or Decision(
+                                task_id=audit.task_id, disposition=Disposition.KEEP, reasons=["sample_qc:informational"]
+                            )
+                        ),
                         "source_quality_report": quality_path,
                     }
                 )
             )
-            if report is not None and report.status == SourceQualityStatus.REJECT:
-                row.update(
-                    quality_basis=QualityBasis.SOURCE_REJECTED.value,
-                    filter_status="reject",
-                    filter_reasons=["source_quality:reject"],
-                )
-            elif report is not None and report.status == SourceQualityStatus.INCOMPLETE:
-                decision = task_decision(audit.task_id, audit.checks, review_record(row), FilterPolicy())
-                if decision.disposition != Disposition.REJECT:
-                    row.update(
-                        quality_basis=QualityBasis.SOURCE_INCOMPLETE.value,
-                        filter_status="defer",
-                        filter_reasons=["source_quality:incomplete"],
-                    )
             yield row
             continue
         if quality_exclusion(audit) is not None:
@@ -647,7 +638,6 @@ def _complete_audit_batch(
         disposition, basis = {
             SourceQualityStatus.UNREVIEWED: (Disposition.KEEP, QualityBasis.UNREVIEWED),
             SourceQualityStatus.TRUST: (Disposition.KEEP, QualityBasis.INFERRED_FROM_SOURCE),
-            SourceQualityStatus.REJECT: (Disposition.REJECT, QualityBasis.SOURCE_REJECTED),
             SourceQualityStatus.INCOMPLETE: (Disposition.DEFER, QualityBasis.SOURCE_INCOMPLETE),
         }[report.status]
         yield audit_columns(

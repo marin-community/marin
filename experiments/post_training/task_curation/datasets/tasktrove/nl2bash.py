@@ -23,7 +23,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.execu
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import OUTPUT_PATH, convert_nl2bash
 from experiments.post_training.task_curation.environment_fidelity import archive_environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 CONFIG = "DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
 
@@ -58,8 +58,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 id="Task Trove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
-                title="DCAgent2/nl2bash-tasks-cleaned-oracle-v2",
-                origin="Task Trove",
+                upstream_dataset="DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+                upstream_name="DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="shell-cmd",
                 tags=("agentic", "multi-turn", "language:bash"),
                 count=1498,

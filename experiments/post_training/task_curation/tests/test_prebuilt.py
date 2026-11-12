@@ -10,7 +10,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import DaytonaSafety, OversightEvidence, OversightLevel
+from finestore.rl.curation import DaytonaSafety, DaytonaUnsafeReason, OversightEvidence, OversightLevel
 from marin.execution.lazy import StepContext, run
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
@@ -27,7 +27,7 @@ from experiments.post_training.task_curation import prebuilt
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.driver import _write_corpus
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 from lib.taskcompendium.tests.oracle_filter_fixtures import oracle_receipt
 
 from .prebuilt_fixtures import prebuilt_task
@@ -43,7 +43,13 @@ def _write(tmp_path, rows: list[dict]):
 
 
 def _cohort(rows: int):
-    return prebuilt.PrebuiltCohort(name="c", version="2026.11.12.1", repo="org/repo", revision="rev", expected_rows=rows)
+    return prebuilt.PrebuiltCohort(
+        name="c",
+        version="2026.11.12.1",
+        repo="org/repo",
+        revision="1111111111111111111111111111111111111111",
+        expected_rows=rows,
+    )
 
 
 def test_a_published_cohort_is_downloaded_and_validated(tmp_path, monkeypatch):
@@ -77,7 +83,13 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
     source = RlDataSource(
         config=_cohort(2),
         pipeline=prebuilt.import_prebuilt,
-        info=SourceInfo(id="fixture", title="fixture", origin="fixture"),
+        info=SourceInfo(
+            id="Marin:fixture",
+            upstream_dataset="fixture",
+            upstream_name="fixture",
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+        ),
     )
     artifact = run(prebuilt.import_prebuilt(source, PipelineOptions(mode, CampaignRuntime())))[0]
     destination = Path(artifact.path)
@@ -140,7 +152,14 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
         source = RlDataSource(
             config=_cohort(1),
             pipeline=prebuilt.import_harbor_prebuilt,
-            info=SourceInfo(id="native", title="native", origin="fixture", task_format=TaskFormat.HARBOR),
+            info=SourceInfo(
+                id="Marin:native",
+                upstream_dataset="native",
+                upstream_name="native",
+                build_path="test",
+                origin=SourceOrigin.MARIN,
+                task_format=TaskFormat.HARBOR,
+            ),
         )
         artifact = run(prebuilt.import_harbor_prebuilt(source, PipelineOptions(mode, CampaignRuntime())))[0]
         destination = Path(artifact.path)
@@ -173,18 +192,28 @@ def test_direct_prebuilt_admission_requires_oversight_but_allows_unsafe_tasks(tm
     path = _write(tmp_path, [prebuilt_task("a")])
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
     config = prebuilt.PrebuiltCohort(
-        name="unsafe-cohort", version="2026.11.12.1", repo="org/repo", revision="rev", expected_rows=1
+        name="unsafe-cohort",
+        version="2026.11.12.1",
+        repo="org/repo",
+        revision="1111111111111111111111111111111111111111",
+        expected_rows=1,
     )
     source = RlDataSource(
         config=config,
         pipeline=prebuilt.import_prebuilt,
         info=SourceInfo(
-            id="fixture:unsafe",
-            title="Unsafe",
-            origin="fixture",
+            id="Marin:unsafe",
+            upstream_dataset=("Marin:unsafe").partition(":")[2],
+            upstream_name=("Marin:unsafe").partition(":")[2],
+            build_path="test",
+            origin=SourceOrigin.MARIN,
             tags=("agentic",),
             task_format=TaskFormat.TASKCOMPENDIUM,
             daytona_snapshot_count=11,
+            daytona_machine_slots=11,
+            daytona_unsafe_reasons=(DaytonaUnsafeReason.TOO_MANY_SNAPSHOTS,),
+            daytona_unsafe_details={"too_many_snapshots": "11 identities"},
+            daytona_unsafe_counts={"too_many_snapshots": 11},
             daytona_count_basis="fixture production identity census",
             daytona_execution_failures=0,
             oversight=(
@@ -253,7 +282,14 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
     source = RlDataSource(
         config=_cohort(1),
         pipeline=prebuilt.import_prebuilt,
-        info=SourceInfo(id="fixture:oracle", title="oracle", origin="fixture", task_format=TaskFormat.TASKCOMPENDIUM),
+        info=SourceInfo(
+            id="Marin:oracle",
+            upstream_dataset=("Marin:oracle").partition(":")[2],
+            upstream_name=("Marin:oracle").partition(":")[2],
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+            task_format=TaskFormat.TASKCOMPENDIUM,
+        ),
     )
     step = prebuilt.import_prebuilt(source, PipelineOptions(mode, CampaignRuntime()))
     destination = tmp_path / "admitted"

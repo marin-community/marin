@@ -4,22 +4,33 @@
 """Agentic sources are admitted only in an accepted task format."""
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
-from finestore.rl.curation import DaytonaSafety, OversightEvidence, OversightLevel
+from finestore.rl.curation import OversightEvidence, OversightLevel
 
 from experiments.post_training.task_curation.source import (
     GRANDFATHERED_MARINSKYRL_SOURCES,
     RlDataSource,
     SourceInfo,
+    SourceOrigin,
     TaskFormat,
 )
 from experiments.post_training.task_curation.sources import all_sources, require_accepted_task_format, runnable_sources
+from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 
-def _agentic(task_format: TaskFormat | None, source_id: str = "fixture:agentic") -> RlDataSource:
+def _agentic(task_format: TaskFormat | None, source_id: str = "Marin:agentic") -> RlDataSource:
     return RlDataSource(
-        info=SourceInfo(id=source_id, title=source_id, origin="fixture", tags=("agentic",), task_format=task_format)
+        info=SourceInfo(
+            id=source_id,
+            upstream_dataset=(source_id).partition(":")[2],
+            upstream_name=(source_id).partition(":")[2],
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+            tags=("agentic",),
+            task_format=task_format,
+        )
     )
 
 
@@ -43,7 +54,7 @@ def test_the_grandfather_list_holds_only_runnable_agentic_marinskyrl_sources():
     sources = all_sources()
     for source_id in GRANDFATHERED_MARINSKYRL_SOURCES:
         source = sources[source_id]
-        assert source.info.origin == "MarinSkyRL"
+        assert source.info.origin is SourceOrigin.NEMOTRON
         assert "agentic" in source.info.tags
         assert source.pipeline is not None
         assert source.info.task_format is TaskFormat.MARINSKYRL
@@ -52,7 +63,7 @@ def test_the_grandfather_list_holds_only_runnable_agentic_marinskyrl_sources():
 def test_a_new_internal_format_agentic_source_is_rejected():
     """A MarinSkyRL-format source outside the frozen list cannot be selected."""
     with pytest.raises(ValueError, match="not grandfathered"):
-        require_accepted_task_format(_agentic(TaskFormat.MARINSKYRL, "MarinSkyRL:a-new-blend"))
+        require_accepted_task_format(_agentic(TaskFormat.MARINSKYRL, "Marin:a-new-blend"))
 
 
 def test_an_agentic_source_without_a_declared_format_is_rejected():
@@ -63,27 +74,22 @@ def test_an_agentic_source_without_a_declared_format_is_rejected():
 @pytest.mark.parametrize("task_format", [TaskFormat.TASKCOMPENDIUM, TaskFormat.HARBOR])
 def test_task_directory_formats_pass_and_non_agentic_sources_need_none(task_format):
     require_accepted_task_format(_agentic(task_format))
-    require_accepted_task_format(RlDataSource(info=SourceInfo(id="fixture:math", title="math", origin="fixture")))
+    require_accepted_task_format(
+        RlDataSource(
+            info=SourceInfo(
+                id="Marin:math",
+                upstream_dataset=("Marin:math").partition(":")[2],
+                upstream_name=("Marin:math").partition(":")[2],
+                build_path="test",
+                origin=SourceOrigin.MARIN,
+            )
+        )
+    )
 
 
-def test_pipeline_less_pointers_are_inventory_never_admitted():
-    """A pointer stays visible in the Atlas, labelled Inventory and unselectable."""
-    sources = all_sources()
-    runnable = set(runnable_sources())
-    pointers = [source for source in sources.values() if source.pipeline is None]
-    assert pointers
-
-    for source in pointers:
-        status = source.declaration.status
-        if "deprecated" in source.info.tags:
-            assert status == "Deprecated"
-        elif "excluded" in source.info.tags:
-            assert status == "Excluded"
-        else:
-            assert status == "Inventory"
-        assert source.name not in runnable
-        if "agentic" in source.info.tags and source.info.daytona_snapshot_count is None:
-            assert source.declaration.daytona_safety is DaytonaSafety.UNASSESSED
+def test_pipeline_less_pointers_are_rejected():
+    with pytest.raises(ValueError, match="no registered conversion pipeline"):
+        _ = _agentic(TaskFormat.TASKCOMPENDIUM).declaration
 
 
 @pytest.mark.parametrize("missing", ["count", "basis", "oversight", "verification"])
@@ -107,15 +113,15 @@ def test_unqualified_agentic_pipeline_stays_visible_but_cannot_be_selected(monke
         info = replace(
             info, oversight=OversightEvidence(level=OversightLevel.SAMPLE, campaign="fixture", verification="")
         )
-    source = RlDataSource(info=info, pipeline=lambda _source, _options: None)
+    source = replace(number_source(Path("unused")), info=info)
     monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: {info.id: source})
     assert source.name not in runnable_sources()
-    assert source.declaration.status == "Inventory"
+    assert source.declaration.status == "Not selectable"
 
 
 def test_existing_internal_blend_selection_does_not_require_new_audit_evidence(monkeypatch):
     source_id = next(iter(GRANDFATHERED_MARINSKYRL_SOURCES))
-    source = replace(_agentic(TaskFormat.MARINSKYRL, source_id), pipeline=lambda _source, _options: None)
+    source = all_sources()[source_id]
     monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: {source_id: source})
     assert runnable_sources()[source.name] is source
     assert source.declaration.status == "Available"

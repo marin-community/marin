@@ -51,23 +51,18 @@ pass `PhaseTelemetry` to the writer to retain counters and the execution ID.
    reference/wrong-answer checks for in-process numeric, MCQ, exact and action
    graders. The driver deduplicates the checked panel and saves its review
    batches.
-3. **Review.** With a rubric, the GLM reviewer judges the sample. These reviews
-   are the only model reviews of the source: more than 50% known defects reject
-   it, and otherwise it is accepted. The fraction uses the whole panel as the
-   denominator; uncertain judgments, unsupported conversions and duplicate rows
-   are not defects. Unavailable reviews leave the source `incomplete` only when
-   they could still push the defects above 50%; a rerun resumes the same sample.
-   Without a rubric, `skip_source_review` keeps every converted row with
-   `quality_basis="unreviewed"` and rejects the source only when converter
-   defects and failed checks exceed the rejection threshold.
-4. **Full expansion.** In full mode an accepted source converts and audits every
-   row. Unsampled rows of an accepted source use
-   `quality_basis="inferred_from_source"`.
-5. **Filter.** Rows are kept, rejected or deferred from quality evidence.
-   Deferred rows (unavailable or malformed review) are excluded from `final/`
-   and counted separately from defects; the manifest records them as
-   `unavailable_reviews`. They make the source `incomplete` only when resolving
-   them could change the quality decision.
+3. **Review.** With a rubric, the reviewer judges the fixed sample. Result is
+   computed from conclusive reviewed tasks: at most 10% issues is Good, at
+   least 50% is Bad, and the interval between is Some issues. The report retains
+   the issue count, denominator, rate, issue evidence and repair recommendation.
+   Unknown and unavailable judgments remain coverage diagnostics. Without a
+   rubric, `skip_source_review` records an unreviewed Result.
+4. **Full expansion.** Full mode converts and audits every row. Unsampled rows
+   use `quality_basis="inferred_from_source"`. QC never rejects tasks or blocks
+   expansion.
+5. **Filter.** Mechanical conversion, deduplication and structural checks keep,
+   reject or defer rows independently of QC opinions. The original reviews stay
+   in the audit records.
 6. **Verify.** With controls, [source_verification.py](source_verification.py)
    samples kept rows and grades one control submission per task through the
    same grading path rollouts use ([controls.py](controls.py)):
@@ -103,7 +98,7 @@ pass `PhaseTelemetry` to the writer to retain counters and the execution ID.
    | Admission | Meaning |
    | --- | --- |
    | `admitted` | Kept, and the grader runs in process, is a verifyit judge, passed its controls, or is covered by a passing control sample. |
-   | `rejected` | Rejected by conversion, checks, review or verification. |
+   | `rejected` | Rejected by conversion, mechanical checks or verification. |
    | `deferred` | Held back for unavailable review or inconclusive verification. |
    | `no_grader` | The converter found no runnable grader (`NoGrader`). |
    | `unverified` | A sandbox grader, other than a judge, without controls or a passing control sample. |
@@ -201,7 +196,7 @@ A source runs these phases in order:
 | `raw_sample` | One execution scans the staged files, writes the locators and draws the panel. A parted source in sample mode draws the panel by index on the driver, and the execution produces only the panel's rows. |
 | `panel_normalize` | One execution decodes, converts and checks the panel rows. |
 | `sample_prepare` | The driver deduplicates the panel and saves its review batches. |
-| `quality_review` | With a rubric, the driver reads the review cache once and one execution reviews the sample; without one, the driver decides from conversion and check failures. |
+| `quality_review` | With a rubric, the driver reads the review cache once and one execution reviews the sample; without one, the driver records an unreviewed Result. |
 | `full_prepare` | Full mode only: one execution converts, deduplicates and checks every row. |
 | `audit_review` | One execution reuses the panel's reviews and applies the source decision to every other prepared row, without model requests. |
 | `filter` | One execution writes the filtered audit and its kept rows. |
