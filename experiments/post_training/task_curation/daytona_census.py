@@ -11,7 +11,7 @@ import logging
 import subprocess
 import tomllib
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, replace
 from functools import cache
@@ -71,6 +71,7 @@ class DaytonaCensus:
     admission_rejections: dict[str, int]
     actor_sources: dict[str, int]
     unsafe_reasons: dict[str, str]
+    unsafe_counts: dict[str, int]
 
 
 class EnvelopeCensus(NamedTuple):
@@ -82,6 +83,7 @@ class EnvelopeCensus(NamedTuple):
     mapping_failures: Counter[str]
     roles: dict
     actor_sources: Counter[str]
+    unsafe_task_counts: Counter[str]
 
 
 @cache
@@ -151,7 +153,7 @@ def measure_source(source_id: str, artifact_root: str) -> DaytonaCensus:
     rejections = Counter()
     admission_rejections = Counter()
     result = measure_envelopes(converted_source(source, artifact_root, rejections, admission_rejections))
-    converted, machine_slots, sizes, failed_tasks, failures, mapping, roles, actor_sources = result
+    converted, machine_slots, sizes, failed_tasks, failures, mapping, roles, actor_sources, _unsafe_task_counts = result
     if isinstance(config, PrebuiltCohort) and converted != config.expected_rows:
         raise ValueError(f"Published cohort has {converted} TaskSpecs, expected {config.expected_rows}")
     rows = converted + sum(rejections.values())
@@ -191,6 +193,7 @@ def measure_source(source_id: str, artifact_root: str) -> DaytonaCensus:
         dict(admission_rejections),
         dict(actor_sources),
         daytona_unsafe_reasons(result),
+        daytona_unsafe_counts(result),
     )
 
 
@@ -202,6 +205,7 @@ def measure_envelopes(documents: Iterable[tuple[dict, dict]]) -> EnvelopeCensus:
     local_checks = {}
     roles = {role: {} for role in ("agent", "grader")}
     actor_sources = Counter()
+    unsafe_task_counts = Counter()
     for task, shapes in documents:
         converted += 1
         if converted % 10000 == 0:
@@ -255,6 +259,12 @@ def measure_envelopes(documents: Iterable[tuple[dict, dict]]) -> EnvelopeCensus:
         if key not in identities:
             identities[key] = count_lowered_spec_identities([(task["id"], envelope)])
         measurement = identities[key]
+        unsafe_task_counts.update(
+            {
+                actor_failure_reason(detail, task["environment_requirements"])
+                for _, detail in (*measurement.execution_failures, *measurement.failures)
+            }
+        )
         machine_slots += runtime["task_machine"] is not None
         sizes.update(measurement.sizes)
         failed_tasks += bool(measurement.execution_failures)
@@ -265,28 +275,38 @@ def measure_envelopes(documents: Iterable[tuple[dict, dict]]) -> EnvelopeCensus:
     for backends in roles.values():
         for outcome in backends.values():
             outcome["failures"] = dict(outcome["failures"])
-    return EnvelopeCensus(converted, machine_slots, sizes, failed_tasks, failures, mapping, roles, actor_sources)
+    return EnvelopeCensus(
+        converted, machine_slots, sizes, failed_tasks, failures, mapping, roles, actor_sources, unsafe_task_counts
+    )
+
+
+def actor_failure_reason(detail: str, sources: Mapping[str, object]) -> str:
+    if sources.get("docker_build") and "Unresolved Docker build context" in detail:
+        return "unbuilt_image"
+    if sources.get("packages_lock") and "requires a registry image or Docker build context" in detail:
+        return "host_image_required"
+    return "execution_requirement"
 
 
 def daytona_unsafe_reasons(census: EnvelopeCensus) -> dict[str, str]:
     """Classify actor refusals and the snapshot budget, preserving their actual details."""
-    reasons = {}
+    details: dict[str, set[str]] = {}
     if len(census.snapshot_sizes) > DAYTONA_SAFE_SNAPSHOT_LIMIT:
-        reasons["too_many_snapshots"] = (
+        details["too_many_snapshots"] = {
             f"{len(census.snapshot_sizes)} actor snapshot identities exceed "
             f"the {DAYTONA_SAFE_SNAPSHOT_LIMIT}-snapshot budget"
-        )
-    other = []
+        }
     for detail in (*census.execution_failures, *census.mapping_failures):
-        if census.actor_sources["docker_build"] and "Unresolved Docker build context" in detail:
-            reasons["unbuilt_image"] = detail
-        elif census.actor_sources["packages_lock"] and "requires a registry image or Docker build context" in detail:
-            reasons["host_image_required"] = detail
-        else:
-            other.append(detail)
-    if other:
-        reasons["execution_requirement"] = "; ".join(sorted(set(other)))
-    return reasons
+        details.setdefault(actor_failure_reason(detail, census.actor_sources), set()).add(detail)
+    return {reason: "; ".join(sorted(values)) for reason, values in details.items()}
+
+
+def daytona_unsafe_counts(census: EnvelopeCensus) -> dict[str, int]:
+    """Count affected actor task slots once per reason, including the cohort budget."""
+    counts = dict(census.unsafe_task_counts)
+    if len(census.snapshot_sizes) > DAYTONA_SAFE_SNAPSHOT_LIMIT:
+        counts["too_many_snapshots"] = census.machine_slots
+    return counts
 
 
 def converted_source(source, artifact_root: str, rejections: Counter, admission_rejections: Counter):
@@ -399,6 +419,7 @@ def main() -> None:
                     f"{type(error).__name__}: {error}",
                     {},
                     converter_sha256(),
+                    {},
                     {},
                     {},
                     {},
