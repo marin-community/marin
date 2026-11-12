@@ -138,3 +138,20 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
     else:
         with pytest.raises(ValueError, match=r"differs from its control|controls do not admit"):
             prebuilt.import_harbor_cohort(_cohort(1))
+
+
+def test_quick_pass_writes_the_validated_cohort_as_converted_tasks(tmp_path, monkeypatch):
+    path = _write(tmp_path, [_task("a"), _task("b")])
+    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
+    output = tmp_path / "out"
+    artifact = prebuilt._quick_view(_cohort(2), path, output)
+
+    manifest = json.loads((output / "manifest.json").read_text())
+    tasks = [
+        TaskSpec.model_validate_json(item)
+        for item in pq.read_table(output / "normalize").column("task_json").to_pylist()
+    ]
+    assert artifact.status == "completed"
+    assert [task.id for task in tasks] == ["a", "b"]
+    assert manifest["input_rows"] == manifest["converted_rows"] == 2
+    assert manifest["rejections"] == {} and manifest["intended_use"] == "train"
