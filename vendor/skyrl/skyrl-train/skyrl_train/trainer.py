@@ -1646,7 +1646,9 @@ class RayPPOTrainer:
             async with asyncio.TaskGroup() as tasks:
                 native = tasks.create_task(self.eval(evaluation_pool=pool))
                 additional = [
-                    tasks.create_task(callback.collect_evaluation(state, trainer=self, pool=pool))
+                    tasks.create_task(
+                        self.callback_handler.collect_evaluation(callback, state, trainer=self, pool=pool)
+                    )
                     for callback in self.callback_handler.callbacks
                 ]
             eval_metrics = native.result()

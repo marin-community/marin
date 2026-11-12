@@ -127,8 +127,8 @@ identity raises `MissingEnvironmentArtifact` with the build command. The
 environment's identity and built image digest enter every such source's
 artifact identity.
 
-New builds use the public `rollout-images` package, shared with
-[evaluation rollout images](../../../evaluation/images/tau3/README.md).
+New builds use the public `rollout-images` package, shared with evaluation
+rollout images.
 Existing digest references remain valid in their original packages. Iris workers
 pull anonymously, so any replacement repository must be public. Built images are
 separate from the Zephyr worker image, which carries the grading code that starts

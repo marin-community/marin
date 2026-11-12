@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
-from typing import Any
 
 import pytest
 import yaml
@@ -13,6 +12,7 @@ from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
+from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris import training_driver
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
 from cloud.iris.rl_config_translation import (
@@ -92,7 +92,7 @@ def test_colocated_expert_block_rejects_generation_before_ray_starts() -> None:
 )
 def test_colocated_expert_block_rejects_unverified_launch_entrypoint(tmp_path: Path, entrypoint: str) -> None:
     path = tmp_path / "launch.yaml"
-    path.write_text(yaml.safe_dump(_raw_config()))
+    path.write_text(yaml.safe_dump(raw_launch_config()))
     config = load_launch_config(path)
     config.skyrl.generator.weight_sync_transport = "expert_block"
     config.runtime.entrypoint = entrypoint
@@ -147,94 +147,8 @@ def test_shared_bundle_reports_reject_duplicate_or_misrouted_receivers(monkeypat
         inference_placement.verified_inference_replica_placements(reports, **kwargs)
 
 
-def _raw_config() -> dict[str, Any]:
-    return {
-        "schema_version": 1,
-        "run": {
-            "id": "smoke",
-            "attempt_id": "attempt-1",
-            "seed": 42,
-            "mode": "train",
-            "submission": "wait",
-            "export_hf": True,
-        },
-        "runtime": {
-            "profile": "megatron",
-            "entrypoint": "skyrl_train.entrypoints.main_base",
-        },
-        "iris": {
-            "cluster": "cw-us-east-08a",
-            "cluster_config": "configs/cw-us-east-08a.yaml",
-            "job_name": "smoke",
-            "wandb_entity": None,
-            "allocation": {
-                "num_nodes": 1,
-                "gpus_per_node": 8,
-                "gpu_variant": "H100",
-                "cpu": 48,
-                "memory": "700GB",
-                "disk": "4TB",
-            },
-        },
-        "ray": {
-            "spill_backend": "local",
-            "spill_dir": "/tmp/skyrl-ray-spill",
-            "rendezvous_dir": "s3://runs/smoke/rendezvous",
-            "log_dir": "s3://runs/smoke/ray-logs",
-        },
-        "artifacts": {
-            "checkpoint_root": "s3://runs/smoke/checkpoints",
-            "export_root": "s3://runs/smoke/exports",
-            "attempts_root": "s3://runs/smoke/attempts",
-            "resolved_config_uri": "s3://runs/smoke/resolved.yaml",
-            "terminal_manifest_uri": "s3://runs/smoke/terminal.json",
-        },
-        "inputs": {
-            "model": {
-                "uri": "s3://models/qwen",
-                "identity": "sha256:model",
-                "local_path": "/tmp/models/qwen",
-                "tokenizer_uri": "s3://models/qwen-tokenizer",
-                "tokenizer_revision": "a" * 40,
-            },
-            "data_kind": "tasks",
-            "train_data": [],
-            "validation_data": [],
-        },
-        "skyrl": {
-            "entrypoint": "standard",
-            "context_budget": {
-                "request_window_tokens": 1024,
-                "max_new_tokens_per_turn": 256,
-                "max_turns": 1,
-            },
-            "model_num_attention_heads": 8,
-            "trainer": {
-                "seed": 42,
-                "strategy": "megatron",
-                "algorithm": {"use_kl_loss": False},
-                "placement": {
-                    "colocate_all": True,
-                    "policy_num_nodes": 1,
-                    "policy_num_gpus_per_node": 8,
-                },
-                "train_batch_size": 8,
-                "policy_mini_batch_size": 8,
-                "micro_train_batch_size_per_gpu": 1,
-            },
-            "generator": {
-                "backend": "vllm",
-                "run_engines_locally": True,
-                "num_inference_engines": 8,
-                "inference_engine_tensor_parallel_size": 1,
-                "n_samples_per_prompt": 1,
-            },
-        },
-    }
-
-
 def test_launch_preserves_harbor_dataset_relative_paths(tmp_path):
-    raw = _raw_config()
+    raw = raw_launch_config()
     task = {
         "git_url": "https://example.org/tasks.git",
         "git_commit_id": "b" * 40,
@@ -259,7 +173,7 @@ def test_launch_preserves_harbor_dataset_relative_paths(tmp_path):
 
 
 def test_default_hf_export_requests_only_the_terminal_checkpoint(tmp_path):
-    raw = _raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["trainer"].update(export_hf_artifact=True, ckpt_interval=1)
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
@@ -279,7 +193,7 @@ def test_default_hf_export_requests_only_the_terminal_checkpoint(tmp_path):
 async def test_custom_session_settings_reach_private_grading_through_the_launch_config(
     tmp_path: Path, text: str, reward: float
 ) -> None:
-    raw = _raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["environment"] = {"task_sessions": {"custom_math": {"reward_method": "final_line"}}}
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
@@ -314,7 +228,7 @@ def test_launch_config_composes_and_loads_as_structured_hydra(
     tmp_path: Path, loss: str, reduction: str, storage_prefix: str, probe_enabled: bool
 ) -> None:
     path = tmp_path / "resolved-launch.yaml"
-    raw = _raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["trainer"]["algorithm"].update(policy_loss_type=loss, loss_reduction=reduction)
     trainer = raw["skyrl"]["trainer"]
     trainer["resume_mode"] = "from_path"
@@ -353,7 +267,7 @@ def test_launch_config_composes_and_loads_as_structured_hydra(
 
 def test_auxiliary_ftpo_launch_retains_task_objective_and_topk(tmp_path: Path) -> None:
     # Smartie's mixed objective previously failed the launcher's distillation-only top-K gate.
-    raw = _raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["trainer"]["use_sample_packing"] = False
     raw["skyrl"]["trainer"]["algorithm"].update(policy_loss_type="regular", ftpo={"auxiliary_weight": 0.1})
     raw["skyrl"]["generator"]["sampling_params"] = {"temperature": 1.0, "logprobs": 32}
@@ -370,7 +284,7 @@ def test_auxiliary_ftpo_launch_retains_task_objective_and_topk(tmp_path: Path) -
 @pytest.mark.parametrize("switch", ["use_abs_kl", "use_kl_estimator_k3"])
 def test_composed_launch_rejects_kl_switches(tmp_path: Path, switch: str) -> None:
     path = tmp_path / "launch.yaml"
-    path.write_text(yaml.safe_dump(_raw_config()))
+    path.write_text(yaml.safe_dump(raw_launch_config()))
     config = load_launch_config(path)
     OmegaConf.update(config.skyrl.trainer.algorithm, switch, True, force_add=True)
     OmegaConf.save(config, path)
@@ -391,7 +305,7 @@ def test_composed_launch_rejects_kl_switches(tmp_path: Path, switch: str) -> Non
 def test_composed_launch_records_whether_training_runs_ahead_of_its_updates(
     tmp_path: Path, entrypoint: str, max_staleness_steps: int, expected: str | None
 ) -> None:
-    raw = _raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["entrypoint"] = entrypoint
     raw["skyrl"]["trainer"]["placement"]["colocate_all"] = False
     raw["skyrl"]["trainer"]["rollout_buffer"] = {"max_staleness_steps": max_staleness_steps}
@@ -404,7 +318,7 @@ def test_composed_launch_records_whether_training_runs_ahead_of_its_updates(
 
 
 def test_object_store_uris_in_skyrl_config_reach_the_task_unchanged(tmp_path: Path) -> None:
-    raw = _raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["trainer"]["rollout_buffer"] = {"object_store_root": "s3://runs/smoke/rollouts"}
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw, sort_keys=False))
@@ -417,7 +331,7 @@ def test_object_store_uris_in_skyrl_config_reach_the_task_unchanged(tmp_path: Pa
 def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = _raw_config()
+    config = raw_launch_config()
     config["skyrl"] = yaml.safe_load(
         (Path(__file__).resolve().parents[1] / "configs/qwen_megatron_smoke.yaml").read_text()
     )
@@ -459,7 +373,7 @@ def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_
 
 def test_task_materializes_the_forwarded_launch_document(tmp_path: Path) -> None:
     destination = tmp_path / "launch.yaml"
-    contents = yaml.safe_dump(_raw_config()).encode()
+    contents = yaml.safe_dump(raw_launch_config()).encode()
 
     path = materialize_launch_config(
         str(destination),
@@ -474,7 +388,10 @@ def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) ->
     raw = yaml.safe_load((Path(__file__).resolve().parents[1] / "configs/qwen_megatron_smoke.yaml").read_text())
     groups = {"eval/train/avg_score": ["eval/cat_count_n1/avg_score", "eval/cat_count_n2/avg_score"]}
     profiles = {"sampled": {"sampling_params": {"stop": ["./END"]}}}
-    raw["trainer"]["callbacks"] = [{"type": "evaluation", "metric_groups": groups, "additional_evaluations": profiles}]
+    raw["trainer"]["callbacks"] = [
+        {"type": "evaluation", "metric_groups": groups, "additional_evaluations": profiles},
+        {"type": "best_checkpoint", "selection_metric": "eval/identity_behavior_holdout/pass_at_1"},
+    ]
     path = tmp_path / "evaluation.yaml"
     path.write_text(yaml.safe_dump(raw))
 
@@ -484,10 +401,11 @@ def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) ->
 
     assert config.trainer.callbacks[0].metric_groups == groups
     assert config.trainer.callbacks[0].additional_evaluations == profiles
+    assert config.trainer.callbacks[1].selection_metric == "eval/identity_behavior_holdout/pass_at_1"
 
 
 def test_source_recipe_rejects_resolved_harbor_key_before_discarding_agent_settings(tmp_path: Path) -> None:
-    raw = _raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["terminal_bench_config"] = {"installed_agent": {"agent": {"name": "pi"}}}
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
@@ -497,7 +415,7 @@ def test_source_recipe_rejects_resolved_harbor_key_before_discarding_agent_setti
 
 
 def test_installed_agent_artifacts_follow_launch_attempt_and_survive_reload(tmp_path: Path) -> None:
-    raw = _raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["config_groups"] = {"terminal_bench_config": "terminal_bench"}
     raw["skyrl"]["terminal_bench"] = {"installed_agent": {"agent": {"name": "pi"}}}
     path = tmp_path / "launch.yaml"
@@ -510,7 +428,7 @@ def test_installed_agent_artifacts_follow_launch_attempt_and_survive_reload(tmp_
 
 
 def test_null_nonfinite_limit_in_launch_fails_on_first_invalid_step(tmp_path: Path) -> None:
-    raw = _raw_config()
+    raw = raw_launch_config()
     raw["skyrl"]["trainer"]["policy"] = {"max_consecutive_nonfinite_steps": None}
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw, sort_keys=False))
@@ -524,7 +442,7 @@ def test_null_nonfinite_limit_in_launch_fails_on_first_invalid_step(tmp_path: Pa
 @pytest.mark.parametrize(("key", "value"), [("use_tis", True), ("tis_imp_ratio_cap", 2.0)])
 def test_composed_launch_rejects_tis_selectors(tmp_path: Path, key: str, value) -> None:
     path = tmp_path / "launch.yaml"
-    path.write_text(yaml.safe_dump(_raw_config()))
+    path.write_text(yaml.safe_dump(raw_launch_config()))
     config = load_launch_config(path)
     OmegaConf.update(config.skyrl.trainer.algorithm, key, value, force_add=True)
     OmegaConf.save(config, path)
@@ -596,7 +514,7 @@ def test_composed_launch_rejects_tis_selectors(tmp_path: Path, key: str, value) 
     ],
 )
 def test_launch_validates_correction_and_selection_contract(tmp_path: Path, overrides: dict, error: str | None):
-    raw = OmegaConf.create(_raw_config())
+    raw = OmegaConf.create(raw_launch_config())
     for key, value in overrides.items():
         OmegaConf.update(raw.skyrl.trainer, key, value, force_add=True)
     path = tmp_path / "launch.yaml"
@@ -613,7 +531,7 @@ def test_launch_validates_correction_and_selection_contract(tmp_path: Path, over
     ("recipe", "nodes"), [("snowball_mopd_ultra_async_smoke", 8), ("snowball_mopd_ultra_async_32k_smoke", 9)]
 )
 def test_inherited_recipe_round_trips_as_a_self_contained_launch(tmp_path: Path, recipe: str, nodes: int):
-    raw = _raw_config()
+    raw = raw_launch_config()
     raw["skyrl"] = {"defaults": [recipe, "_self_"], "trainer": {"max_steps": 2}}
     raw["iris"]["allocation"]["num_nodes"] = nodes
     path = tmp_path / "launch.yaml"

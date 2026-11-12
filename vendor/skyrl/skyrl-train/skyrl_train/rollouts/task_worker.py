@@ -424,6 +424,19 @@ class TaskRolloutWorker:
             if harbor is None or self.installed_agents is None:
                 raise ValueError("Full Harbor trials require Harbor and installed-agent settings")
             harnesses[HARBOR_TRIAL_SESSION] = self.installed_agents.original_harness(lowered, session_id, harbor, phase)
+            # Harbor owns the phase deadlines and must still run its verifier
+            # after an agent timeout. The outer attempt deadline covers the full trial.
+            lowered = lowered.model_copy(
+                update={
+                    "limits": lowered.limits.model_copy(
+                        update={
+                            "model_turn_timeout": None,
+                            "tool_turn_timeout": None,
+                            "total_turn_timeout": None,
+                        }
+                    )
+                }
+            )
         elif harbor is not None and self.installed_agents is not None:
             if not is_shell_harness(lowered.harness):
                 raise ValueError("SkyRL agents require a Shellbox task grader")
@@ -478,10 +491,12 @@ class TaskRolloutWorker:
             task = lowered.task
             harbor = harbor_settings[index]
             session_id = session_ids[index]
+            has_sampled_turn = False
 
             async def model(request):
+                nonlocal has_sampled_turn
                 try:
-                    return await _model_turn(
+                    turn = await _model_turn(
                         self.model_client,
                         request,
                         sampling_params=sampling,
@@ -491,12 +506,19 @@ class TaskRolloutWorker:
                         session_id=session_id,
                     )
                 except (GenerationLimitReached, ContextLengthExceededError) as error:
-                    if lowered.harness != SKYRL_AGENT_HARNESS:
+                    # Harbor still verifies after a rejected prompt. Preserve the last
+                    # sampled turn instead of replacing it with the unsent conversation.
+                    recoverable = lowered.harness == SKYRL_AGENT_HARNESS or (
+                        lowered.harness == HARBOR_TRIAL_SESSION and has_sampled_turn
+                    )
+                    if not recoverable:
                         raise
                     raise ContextWindowExceeded(
                         f"This request exceeds the maximum context length of {max_context_length} tokens. "
                         "Compact the conversation and retry."
                     ) from error
+                has_sampled_turn = True
+                return turn
 
             engine = engines[index]
             harbor_slots = nullcontext() if harbor is None else self.harbor_task_slots
@@ -530,6 +552,7 @@ class TaskRolloutWorker:
                 with rollout_wait("retry_backoff"):
                     await self.retry_wait(delay)
                 retries += 1
+                has_sampled_turn = False
 
         with rollout_phase("collect"):
             async with asyncio.TaskGroup() as group:

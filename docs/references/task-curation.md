@@ -290,7 +290,30 @@ ArtifactSteps.
 
 An `RlDataSource` has `info`, a typed `config` and an optional `pipeline`.
 `SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
-search tags, notes and an optional input-row count. A `SourceReference` groups a
+search tags, notes and an optional input-row count. The `deprecated` tag marks a
+source `Deprecated` in the catalog (overriding `excluded`), and its notes carry
+the deprecation reason. `independent_qc` records
+quality control a pinned release performed outside curation, so inventory-only
+pointers surface that evidence in the Atlas. `daytona_safety` records whether
+running the source fits the Daytona snapshot budget (`DAYTONA_SAFE_SNAPSHOT_LIMIT`,
+ten unique snapshots); every non-agentic source is safe automatically, and an
+agentic source stays `unassessed` until its snapshot requirement is assessed.
+That assessment must be measured, not inferred: `daytona_snapshot_count` holds
+the number of distinct snapshot names the production path would create for the
+pinned task payloads, `daytona_count_basis` names the rule and payload source,
+and an agentic verdict without both collapses back to `unassessed`.
+
+Measurement runs that production path rather than reimplementing it
+(`experiments/post_training/task_curation/daytona_identity.py`): each pinned
+task's environment is materialized to a build context, the `MachineSpec` is
+built through Harbor's own task-config mapping
+(`harbor.environments.daytona.machine_spec`), and the name comes from
+`shellbox.backends.daytona.machine.snapshot_identity` — the same function the
+Daytona factory uses to name and create snapshots. A task the production
+validation rejects (for example a Dockerfile with `ADD`, which Daytona cannot
+build) counts as a failure and is reported, not treated as safe. No Daytona API
+calls are made. A
+`SourceReference` groups a
 name, revision and URL for an inventory dataset. Runnable sources expose their
 pinned input through `config.dataset`. Current grades come from the executed
 assessment records in `finestore.rl.curation.CurationCatalog`.
