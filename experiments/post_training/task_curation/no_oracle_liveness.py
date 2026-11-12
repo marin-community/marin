@@ -31,7 +31,7 @@ import json
 import math
 import random
 from collections import defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -95,9 +95,19 @@ def sample_by_base(specs: dict[str, dict], bases: dict[str, str], per_base: int,
     return chosen
 
 
-async def run_one(spec: dict, base: str, factory=None) -> LivenessResult:
+async def run_one(spec: dict, base: str, factory=None, lock_url: str | None = None) -> LivenessResult:
     """Grade an empty submission with the task's own grader, on a fresh grading machine."""
     task = TaskSpec.model_validate(spec["task"])
+    if lock_url is not None and getattr(task.grader, "environment", None) is not None:
+        # Grade against the lock this run built, so the cohort is qualified on the artifact
+        # the pipeline produces rather than on a path recorded somewhere else.
+        task = task.model_copy(
+            update={
+                "grader": task.grader.model_copy(
+                    update={"environment": replace(task.grader.environment, packages_lock=lock_url)}
+                )
+            }
+        )
     runtime = MachineRuntimeSpec.model_validate(
         {
             **(spec["runtime"].get("verifier_machine") or {}),
@@ -172,10 +182,12 @@ async def run_one(spec: dict, base: str, factory=None) -> LivenessResult:
     return LivenessResult(task.id, base, outcome, 0, result.reward, snapshot)
 
 
-async def run(specs: dict[str, dict], bases: dict[str, str], task_ids: list[str], output: Path) -> None:
+async def run(
+    specs: dict[str, dict], bases: dict[str, str], task_ids: list[str], output: Path, lock_url: str | None = None
+) -> None:
     with output.open("a") as handle:
         for index, task_id in enumerate(task_ids, start=1):
-            result = await run_one(specs[task_id], bases.get(task_id, "<unknown>"))
+            result = await run_one(specs[task_id], bases.get(task_id, "<unknown>"), lock_url=lock_url)
             handle.write(json.dumps(asdict(result)) + "\n")
             handle.flush()
             print(f"[{index}/{len(task_ids)}] {task_id}: {result.outcome}", flush=True)
@@ -189,6 +201,7 @@ def main() -> None:
     parser.add_argument("--sample-per-base", type=int, default=20)
     parser.add_argument("--limit", type=int, default=0, help="cap the sample for a pilot run")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--lock-url", help="grade packaged graders against this built lock")
     args = parser.parse_args()
     specs = load_specs(args.lowered)
     if args.manifest is not None:
@@ -203,7 +216,7 @@ def main() -> None:
     if args.limit:
         task_ids = task_ids[: args.limit]
     print(f"sampled {len(task_ids)} of {len(specs)} tasks", flush=True)
-    asyncio.run(run(specs, bases, task_ids, args.output))
+    asyncio.run(run(specs, bases, task_ids, args.output, args.lock_url))
 
 
 if __name__ == "__main__":
