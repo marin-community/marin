@@ -22,26 +22,43 @@ generators, tracking, reference models, critics, optimizers, or schedulers. ``--
 belongs to this export job and is independent of the source training gang's process-group
 timeout.
 
-The export lands in ``export_path`` on durable storage. When the request carries the
-training run's Hub destination, the export-only job publishes the completed artifact.
+The export lands in ``export_path`` on durable storage. Once the GPU job has exited,
+a CPU job publishes that verified artifact to the training run's Hub destination.
 """
 
 import argparse
 import hashlib
+import json
 import os
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
+from urllib.parse import urlsplit
+
+from connectrpc.errors import ConnectError
+from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
+from iris.cluster.config import load_config
+from iris.cluster.constraints import region_constraint
+from iris.cluster.runtime.env import SCRATCH_CACHE_PATH
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.state import JobState
+from iris.rpc import job_pb2
+from rigging.config_discovery import find_project_root, resolve_cluster_config
+from rigging.filesystem.cluster_config import get_bucket_location
+from rigging.timing import Duration
 
 from cloud.iris.artifacts import terminal_checkpoint_step
 from cloud.iris.launch_config import RunMode, SubmissionMode, load_launch_config
-from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT
-from cloud.iris.runtime_environment import RuntimeMode, runtime_profile_for_strategy
+from cloud.iris.paths import PROJECT_ROOT
+from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, IRIS_TASK_IMAGE
+from cloud.iris.runtime_environment import RuntimeMode, RuntimeProfile, runtime_profile_for_strategy, task_setup_script
+from cloud.iris.submission import submission_client
 from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX, policy_export_path, selected_export_step
 from marinskyrl.resource_locator import ModelLocatorError
 from marinskyrl.resource_locator import join_resource_path
+from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, ModelManifest
 from omegaconf import DictConfig, OmegaConf
 from skyrl_train.hf_export_schema import (
     DEFAULT_HF_EXPORT_TIMEOUT,
@@ -51,6 +68,8 @@ from skyrl_train.hf_export_schema import (
     HFExportStatus,
     HFUploadMode,
 )
+from skyrl_train.hf_publisher import publish_verified_hf_export
+from skyrl_train.io import io
 
 
 def _read_hf_export_request(checkpoint_path: str) -> HFExportRequest | None:
@@ -186,10 +205,6 @@ def checkpoint_export_launch_config(
         "step": request.step,
         "checkpoint_path": request.checkpoint_path,
         "export_root": request.export_path,
-        "hf_hub_repo_id": request.hf_hub_repo_id,
-        "hf_hub_private": request.hf_hub_private,
-        "hf_hub_revision": request.hf_hub_revision,
-        "hf_upload_mode": request.hf_upload_mode.value,
     }
     return config
 
@@ -386,22 +401,79 @@ def _run_export(spec: ExportJobSpec, command: list[str]) -> None:
         _verify_hf_model_export(export_path)
 
 
+def _run_hub_upload(spec: ExportJobSpec) -> None:
+    """Publish only after conversion has released its Iris GPU allocation."""
+    export_path = policy_export_path(spec.request.export_path, spec.request.step)
+    with io.open_file(join_resource_path(export_path, MODEL_MANIFEST_FILENAME), "r") as source:
+        manifest = ModelManifest.from_mapping(json.load(source), export_path)
+    # The publisher stages a local copy; reserve space for it and the CPU environment.
+    disk_bytes = max(64 * 1024**3, 2 * sum(entry.size for entry in manifest.files) + 8 * 1024**3)
+    cluster_path = (
+        Path(spec.cluster_config)
+        if spec.cluster_config
+        else resolve_cluster_config(spec.target_cluster or spec.cluster, dirs=IRIS_CLUSTER_CONFIG_DIRS)
+    )
+    cluster = load_config(str(cluster_path))
+    scheme = urlsplit(export_path).scheme
+    if scheme == "gs":
+        region = get_bucket_location(export_path)
+    elif scheme == "s3" and cluster.platform.coreweave is not None:
+        region = cluster.platform.coreweave.region
+    else:
+        raise ValueError("CPU Hub publication requires a GCS export or an S3 export on its CoreWeave cluster")
+    constraints = [region_constraint([region])]
+    workspace = find_project_root(PROJECT_ROOT)
+    if workspace is None:
+        raise RuntimeError("Hub publication requires a Marin checkout")
+    with submission_client(
+        str(cluster_path), spec.target_cluster, spec.parent_cluster_config, workspace
+    ) as (client, cluster_pin):
+        if cluster_pin is not None:
+            constraints.append(cluster_pin)
+        job = client.submit(
+            name=f"{spec.job_name or 'hf-export'}-hub-step-{spec.request.step}",
+            entrypoint=Entrypoint.from_callable(publish_verified_hf_export, spec.request, SCRATCH_CACHE_PATH),
+            task_image=IRIS_TASK_IMAGE,
+            resources=ResourceSpec(cpu=4, memory="8GB", disk=disk_bytes),
+            environment=EnvironmentSpec(setup_scripts=[task_setup_script(RuntimeProfile.HUB_PUBLISH)]),
+            constraints=constraints,
+            max_retries_failure=1,
+            max_task_failures=1,
+            priority_band=job_pb2.PriorityBand.Value(f"PRIORITY_BAND_{spec.priority.upper()}"),
+            timeout=Duration.from_seconds(spec.timeout),
+        )
+        print(f"[export-hf] CPU Hub upload: {job.job_id}", flush=True)
+        try:
+            status = job.wait(timeout=spec.timeout, raise_on_failure=False)
+        except BaseException:
+            job.cancel()
+            raise
+        if status.state is not JobState.SUCCEEDED:
+            raise subprocess.CalledProcessError(1, ["publish-hf", str(spec.request.hf_hub_repo_id)])
+
+
 def submit_requested_export(spec: ExportJobSpec, command: list[str]) -> None:
     """Submit one export job, verify synchronous output, and persist request state."""
     export_path = policy_export_path(spec.request.export_path, spec.request.step)
-    if spec.request.hf_hub_repo_id is None and _has_completed_hf_model_export(export_path):
+    completed = _has_completed_hf_model_export(export_path)
+    if spec.request.hf_hub_repo_id is None and completed:
         _write_hf_export_request(spec.request.with_status(HFExportStatus.COMPLETE, last_exit_code=0))
         print(f"[export-hf] reused verified global_step_{spec.request.step} export")
         return
     request = spec.request.with_status(HFExportStatus.IN_PROGRESS, timeout=spec.timeout, increment_attempts=True)
     _write_hf_export_request(request)
     try:
-        _run_export(spec, command)
+        if not completed:
+            _run_export(spec, command)
         if not _has_completed_hf_model_export(export_path):
             raise RuntimeError(f"Export job returned without a completed HF model at {export_path}")
+        if request.hf_hub_repo_id is not None:
+            _run_hub_upload(spec)
     except BaseException as error:
         exit_code = error.returncode if isinstance(error, subprocess.CalledProcessError) else 1
         _write_hf_export_request(request.with_status(HFExportStatus.PENDING, last_exit_code=exit_code))
+        if isinstance(error, ConnectError):
+            raise subprocess.CalledProcessError(exit_code, ["publish-hf", str(request.hf_hub_repo_id)]) from error
         raise
     _write_hf_export_request(request.with_status(HFExportStatus.COMPLETE, last_exit_code=0))
 
@@ -453,6 +525,8 @@ def main() -> None:
     else:
         request = None
         spec = manual_spec(args, parser)
+    if spec.no_wait and spec.request.hf_hub_repo_id is not None:
+        parser.error("--no-wait cannot publish to the Hub: CPU publication must wait for GPU conversion to finish")
 
     if request is not None and request.status is HFExportStatus.COMPLETE:
         print(f"[export-hf] global_step_{request.step} is already complete")
@@ -466,6 +540,8 @@ def main() -> None:
         return
     if request is None:
         _run_export(spec, cmd)
+        if spec.request.hf_hub_repo_id is not None:
+            _run_hub_upload(spec)
     else:
         submit_requested_export(spec, cmd)
 

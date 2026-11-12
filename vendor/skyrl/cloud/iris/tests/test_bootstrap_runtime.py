@@ -173,6 +173,26 @@ def test_export_bootstrap_does_not_require_rollout_or_telemetry_packages(tmp_pat
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize("publisher_installed", [False, True])
+def test_hub_publish_bootstrap_checks_cpu_publisher_without_cuda(tmp_path: Path, publisher_installed: bool) -> None:
+    environment, process_environment = _fake_frozen_runtime(tmp_path)
+    site_packages = next((environment / "lib").glob("python*/site-packages"))
+    shutil.rmtree(site_packages / "nvidia")
+    (site_packages / "flash_attn.py").unlink()
+    (site_packages / "flash_attn_2_cuda.py").unlink()
+    if publisher_installed:
+        _write_module(site_packages, "skyrl_train/hf_publisher.py", "def publish_verified_hf_export(*args): pass\n")
+
+    result = _run_bootstrap(environment, process_environment, "hub-publish")
+
+    if publisher_installed:
+        assert result.returncode == 0, result.stderr
+        assert not (environment / "lib/libcudart.so").exists()
+    else:
+        assert result.returncode != 0
+        assert "skyrl_train.hf_publisher" in result.stderr
+
+
 def test_bootstrap_uses_system_python_when_managed_pin_is_unresolvable(tmp_path: Path) -> None:
     environment, process_environment = _fake_frozen_runtime(tmp_path, managed_python_pin_is_unresolvable=True)
 

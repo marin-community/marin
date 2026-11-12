@@ -37,10 +37,6 @@ checkpoint_export:
   step: null
   checkpoint_path: null
   export_root: null
-  hf_hub_repo_id: null
-  hf_hub_private: false
-  hf_hub_revision: main
-  hf_upload_mode: latest
 
 trainer:
   # Best selection queues only the final export, after the last evaluation.

@@ -22,6 +22,7 @@ class RuntimeProfile(StrEnum):
 
     MEGATRON = "megatron"
     MEGATRON_EXPORT = "megatron-export"
+    HUB_PUBLISH = "hub-publish"
 
 
 class RuntimeMode(StrEnum):

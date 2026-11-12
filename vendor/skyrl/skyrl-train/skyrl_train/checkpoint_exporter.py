@@ -14,13 +14,7 @@ from transformers import PreTrainedTokenizerBase
 
 from marinskyrl.checkpoint_paths import POLICY_CHECKPOINT_SUBDIRECTORY, policy_export_path
 from skyrl_train import hf_model_io
-from skyrl_train.hf_export_schema import (
-    DEFAULT_HF_HUB_REVISION,
-    DEFAULT_HF_UPLOAD_MODE,
-    HFUploadMode,
-    TRAINER_STATE_FILENAME,
-)
-from skyrl_train.hf_publisher import HuggingFacePublisher
+from skyrl_train.hf_export_schema import TRAINER_STATE_FILENAME
 from skyrl_train.tokenizer import tokenizer_from_config
 from skyrl_train.utils import get_ray_pg_ready_with_timeout
 from skyrl_train.io import io
@@ -68,10 +62,6 @@ class PolicyExportWorkers(Protocol):
     def close(self) -> None: ...
 
 
-class ExportPublisher(Protocol):
-    def publish(self, export_path: str, step: int) -> None: ...
-
-
 class RayPolicyExportWorkers:
     """Adapt a policy Ray actor group to the model-only export protocol."""
 
@@ -116,12 +106,10 @@ class CheckpointExporter:
         plan: CheckpointExportPlan,
         workers: PolicyExportWorkers,
         tokenizer: PreTrainedTokenizerBase,
-        publisher: ExportPublisher | None = None,
     ):
         self._plan = plan
         self._workers = workers
         self._tokenizer = tokenizer
-        self._publisher = publisher
 
     def _validate_checkpoint(self) -> None:
         trainer_state_path = os.path.join(self._plan.checkpoint_path, TRAINER_STATE_FILENAME)
@@ -144,8 +132,6 @@ class CheckpointExporter:
             self._workers.load_model_checkpoint(self._plan.policy_checkpoint_path)
             self._workers.save_hf_model(self._plan.policy_export_path, self._tokenizer)
             hf_model_io.verify_hf_model_export(self._plan.policy_export_path)
-            if self._publisher is not None:
-                self._publisher.publish(self._plan.policy_export_path, self._plan.step)
             return CheckpointExportResult(step=self._plan.step, export_path=self._plan.policy_export_path)
         finally:
             self._workers.close()
@@ -206,23 +192,10 @@ def policy_export_workers(cfg: DictConfig) -> RayPolicyExportWorkers:
     return RayPolicyExportWorkers(actor_group, placement=policy_placement)
 
 
-def hub_publisher(cfg: DictConfig) -> HuggingFacePublisher | None:
-    repo_id = cfg.checkpoint_export.get("hf_hub_repo_id")
-    if not repo_id:
-        return None
-    return HuggingFacePublisher(
-        repo_id=str(repo_id),
-        private=bool(cfg.checkpoint_export.get("hf_hub_private", False)),
-        revision=str(cfg.checkpoint_export.get("hf_hub_revision", DEFAULT_HF_HUB_REVISION)),
-        upload_mode=HFUploadMode(cfg.checkpoint_export.get("hf_upload_mode", DEFAULT_HF_UPLOAD_MODE)),
-    )
-
-
 def checkpoint_exporter(cfg: DictConfig) -> CheckpointExporter:
     """Construct the standalone exporter from a resolved Hydra configuration."""
     return CheckpointExporter(
         checkpoint_export_plan(cfg),
         policy_export_workers(cfg),
         tokenizer_from_config(cfg),
-        hub_publisher(cfg),
     )

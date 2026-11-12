@@ -118,6 +118,35 @@ This shape keeps validation mechanical. Adding a launch setting means adding one
 reading it where the behavior lives; it does not require adding matching CLI flags, argv builders, and
 forwarding tests at every process boundary.
 
+## Publish a checkpoint export
+
+The checkpoint-export GPU job stops after writing and verifying the object-store
+export. When its request includes `hf_hub_repo_id`, the launcher waits for that
+job to exit, then submits a CPU Iris job to upload through the existing Hub
+publisher. The CPU job uses the export cluster's CoreWeave region, or the GCS
+bucket's region, and reserves staging disk from the export manifest's file sizes.
+Publication stages its temporary model copy under Iris's disk-backed `/cache`
+mount, including on Docker workers whose `/tmp` is a memory-backed filesystem.
+Hub credentials and object-store credentials use Iris's inherited secret files.
+`hf_hub_private`, `hf_hub_revision`, and both `hf_upload_mode` values are preserved.
+
+A failed upload leaves `hf_export_request.json` pending. Rerun the same request:
+a verified object-store export skips GPU conversion and submits only CPU
+publication. A missing or corrupt export still requires conversion. For example,
+with the original checkpoint directory, resolved training configuration, and
+export placement in these variables:
+
+```bash
+uv run --directory vendor/skyrl --frozen --extra cpu --no-group dev \
+  python -m cloud.iris.export_hf_checkpoint \
+  --request "$CHECKPOINT_PATH" --launch-config "$LAUNCH_CONFIG" \
+  --cluster "$CLUSTER" --gpu-variant "$GPU_VARIANT"
+```
+
+Requests become complete only after all requested publication succeeds. Manual
+`--no-wait` exports remain available without a Hub destination; Hub publication
+requires waiting so the CPU job starts after the GPU allocation is released.
+
 ## SkyRL role plan
 
 `SkyRLRolePlan` is the source of truth for policy, rollout, and batch geometry. Every parallelism
