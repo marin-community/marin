@@ -443,6 +443,8 @@ def refresh_daytona_measurements(
                     declaration["dataset_revision"],
                 ):
                     raise ValueError(f"Converted examples belong to a different dataset pin: {source_id}")
+                if declaration["pipeline"]["version"] != examples.converter_version:
+                    raise ValueError(f"Converted examples belong to a different converter version: {source_id}")
                 declaration["converted_examples"] = examples.model_dump(mode="json")
             rows.append({**record, "declaration": declaration})
         return rows
