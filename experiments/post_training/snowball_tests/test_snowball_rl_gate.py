@@ -431,15 +431,26 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
         ("changed-source", 0),
         ("stale-control", 4),
         ("stale-control-no-wait", 4),
+        ("candidate-compose", 4),
+        ("candidate-compose-no-wait", 4),
+        ("train-candidate-compose", 4),
+        ("train-candidate-compose-no-wait", 4),
     ],
 )
 def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
-    roots = controls(recorded_runs, "speed-medium")
-    preset = presets.PRESETS["speed-medium"]
+    preset = presets.PRESETS["train-long" if case.startswith("train-candidate") else "speed-medium"]
+    roots = controls(recorded_runs, preset.name) if presets.gated(preset) else []
     built = snowball.build_run(preset)
-    source = recorded_runs(
-        preset.name, built.runs[0].name, speed=150 if case == "fail" else 101, fingerprint=built.runs[0].fingerprint()
+    source = (
+        None
+        if "candidate-compose" in case
+        else recorded_runs(
+            preset.name,
+            built.runs[0].name,
+            speed=150 if case == "fail" else 101,
+            fingerprint=built.runs[0].fingerprint(),
+        )
     )
     if case == "invalid":
         receipt = json.loads((source / "terminal.json").read_text())
@@ -472,6 +483,8 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     client.submit.return_value.job_id = job
     if case.startswith("stale-control"):
         client.submit.side_effect = AssertionError("stale controls reached the coordinator RPC")
+    if "candidate-compose" in case:
+        client.submit.side_effect = AssertionError("a candidate that cannot compose reached the coordinator RPC")
     client.job.side_effect = lambda name: jobs[name]
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
@@ -484,11 +497,12 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
             snowball.main,
             [
                 "--preset",
-                "speed-medium",
+                preset.name,
                 "--version",
                 preset.revision,
                 "--run",
-                *(() if case == "stale-control-no-wait" else ("--wait",)),
+                *(("--set", "trainer.algorithm.policy_loss_type=gspo") if "candidate-compose" in case else ()),
+                *(() if case.endswith("no-wait") else ("--wait",)),
             ],
         )
     finally:
@@ -496,6 +510,8 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     assert result.exit_code == expected, (result.output, result.exception)
     if case.startswith("stale-control"):
         assert "skyrl.trainer.policy.optimizer_config.lr" in result.output
+    if "candidate-compose" in case:
+        assert "current preset recipe cannot be composed" in result.output
     if case == "child":
         report = gate.completed_gate(built.gate)
         assert Path(report.path(), gate.GATE_REPORT_FILENAME).exists()

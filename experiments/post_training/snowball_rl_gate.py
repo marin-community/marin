@@ -145,10 +145,12 @@ def validate_requirements(preset: presets.Preset, requirements: Sequence[str], *
         raise click.BadParameter(f"requirement metrics that the gate does not compute for control r0: {missing}")
 
 
-def validate_candidate(preset: presets.Preset) -> None:
-    """Refuse stale pinned control configurations before submitting a candidate."""
+def validate_candidate(preset: presets.Preset, inputs: GateInputs, *, control: bool = False) -> None:
+    """Compose the submitted inputs and check every gated control against current defaults."""
+    defaults, _ = _current_configs(preset, inputs)
+    if control or not presets.gated(preset):
+        return
     pins = control_pins(preset)
-    defaults, _ = _current_configs(preset, GateInputs(preset_name=preset.name))
     current = comparison_config(defaults)
     for pin in pins:
         for index in range(pin.runs):

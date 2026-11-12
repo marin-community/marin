@@ -420,7 +420,7 @@ def _run_command(function: Callable) -> click.Command:
             raise click.BadParameter("--wait requires --run")
         try:
             return function(*args, **kwargs)
-        except scoring.InvalidComparison as error:
+        except (scoring.InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
             click.echo(
                 json.dumps(
                     {
@@ -437,12 +437,6 @@ def _run_command(function: Callable) -> click.Command:
         preset = presets.PRESETS[options["preset_name"]]
         try:
             if get_job_info() is None:
-                if _from_handles(handles).gate is not None:
-                    try:
-                        snowball_rl_gate.validate_candidate(preset)
-                    except (scoring.InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
-                        click.echo(json.dumps({"preset": preset.name, "verdict": "invalid", "reason": str(error)}))
-                        raise click.exceptions.Exit(snowball_rl_gate.REFUSAL_EXIT_CODE) from error
                 job = submit_or_run("experiments.post_training.snowball_rl", handles, max_concurrent, os.environ)
             else:
                 planned = _from_handles(handles)
@@ -552,6 +546,12 @@ def main(
         requirements=requirements,
     )
     do_run = click.get_current_context().params.get("do_run", False)
+    if do_run and get_job_info() is None:
+        snowball_rl_gate.validate_candidate(
+            preset,
+            snowball_rl_gate.gate_inputs(preset.name, settings, tasks_name, init_name, requirements),
+            control=control,
+        )
     snapshot = _status(run, preset, stored_only=do_run)
     click.echo(yaml.safe_dump(snapshot, sort_keys=False, width=1000))
     if not do_run and "verdict" in snapshot:
