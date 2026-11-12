@@ -65,6 +65,124 @@ def sources() -> list[RlDataSource]:
     staged_v2 = _public_release("smartie-swesmith-staged-v2", PUBLIC_STAGED_REVISION)
     return [
         RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="code-contests-built-image",
+                version="2026.11.12",
+                repo="open-athena/tasktrove-code-contests-taskcompendium-20261112",
+                revision="5b43c6f4c2322a5808e4dbdfaf4f0052037d3607",
+                expected_rows=8222,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:tasktrove-code-contests-built-image",
+                title="TaskTrove CodeContests built-image cohort (TaskCompendium)",
+                origin="Task Trove",
+                family="competitive-programming",
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=8222,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production daytona_identity, Harbor machine_spec and Shellbox snapshot_identity over "
+                    "all 8222 specs: one identity across actor and grader, at 2 CPU / 4096 MB / 10240 MB. "
+                    "Zero identity failures and execution-requirement refusals; within the ten-identity budget"
+                ),
+                daytona_execution_failures=0,
+                daytona_run_evidence=(
+                    "https://huggingface.co/datasets/open-athena/tasktrove-code-contests-taskcompendium-20261112"
+                    "/blob/5b43c6f4c2322a5808e4dbdfaf4f0052037d3607/liveness.jsonl"
+                ),
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/code.py version 3; frozen VerifyIT @ d8cdda47f4",
+                    verification=(
+                        "all 8222 rows match their native archive's built context, including file bytes "
+                        "and modes; all rendered stdio configurations equal their original typed graders. "
+                        "The declared script invokes the image-installed VerifyIT CLI, preserving the "
+                        "candidate interpreter. The seed-0 Daytona RL sample graded 20 empty submissions: "
+                        "20 negative verdicts, reward 0.0, no infrastructure errors or timeouts. "
+                        "Evidence accompanies tasks.parquet at the pinned private revision"
+                    ),
+                    reviewed=8222,
+                    admitted=8222,
+                    level=OversightLevel.SAMPLE,
+                ),
+                notes=(
+                    "8222 tasks retain the exact built output of their archived environment for both "
+                    "actor and grader. Registry manifests were read back and pulled image IDs matched "
+                    "the local builds. The private release includes setup fidelity, stdio parity, "
+                    "sampled liveness, retained exclusions and frozen build contexts. "
+                    "No oracle solution or model-quality assessment ran"
+                ),
+                dataset=SourceReference(
+                    "open-athena/tasktrove-code-contests-taskcompendium-20261112",
+                    "5b43c6f4c2322a5808e4dbdfaf4f0052037d3607",
+                    "https://huggingface.co/datasets/open-athena/tasktrove-code-contests-taskcompendium-20261112"
+                    "/tree/5b43c6f4c2322a5808e4dbdfaf4f0052037d3607",
+                ),
+            ),
+        ),
+        RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="taco-built-image",
+                version="2026.11.12",
+                repo="open-athena/tasktrove-taco-taskcompendium-20261112",
+                revision="c96a95bc94e4824fae425811f246501f64abfadd",
+                expected_rows=5116,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:tasktrove-taco-built-image",
+                title="TaskTrove TACO built-image cohort (TaskCompendium)",
+                origin="Task Trove",
+                family="competitive-programming",
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=5116,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production daytona_identity, Harbor machine_spec and Shellbox snapshot_identity over "
+                    "all 5116 specs: one identity across actor and grader, at 2 CPU / 4096 MB / 10240 MB. "
+                    "Zero identity failures and execution-requirement refusals; within the ten-identity budget"
+                ),
+                daytona_execution_failures=0,
+                daytona_run_evidence=(
+                    "https://huggingface.co/datasets/open-athena/tasktrove-taco-taskcompendium-20261112"
+                    "/blob/c96a95bc94e4824fae425811f246501f64abfadd/liveness.jsonl"
+                ),
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/code.py version 3; frozen VerifyIT @ d8cdda47f4",
+                    verification=(
+                        "all 5116 rows match their native archive's built context, including file bytes "
+                        "and modes; all rendered stdio configurations equal their original typed graders. "
+                        "The declared script invokes the image-installed VerifyIT CLI, preserving the "
+                        "candidate interpreter. The seed-0 Daytona RL sample graded 20 empty submissions: "
+                        "20 negative verdicts, reward 0.0, no infrastructure errors or timeouts. "
+                        "Evidence accompanies tasks.parquet at the pinned private revision"
+                    ),
+                    reviewed=5116,
+                    admitted=5116,
+                    level=OversightLevel.SAMPLE,
+                ),
+                notes=(
+                    "5116 tasks retain the exact built output of their archived environment for both "
+                    "actor and grader. Registry manifests were read back and pulled image IDs matched "
+                    "the local builds. The private release includes setup fidelity, stdio parity, "
+                    "sampled liveness, retained exclusions and frozen build contexts. "
+                    "No oracle solution or model-quality assessment ran"
+                ),
+                dataset=SourceReference(
+                    "open-athena/tasktrove-taco-taskcompendium-20261112",
+                    "c96a95bc94e4824fae425811f246501f64abfadd",
+                    "https://huggingface.co/datasets/open-athena/tasktrove-taco-taskcompendium-20261112"
+                    "/tree/c96a95bc94e4824fae425811f246501f64abfadd",
+                ),
+            ),
+        ),
+        RlDataSource(
             info=SourceInfo(
                 id="Campaign Release:smartie-calibforge-admitted",
                 title="Snowball Smartie CalibForge admitted cohort",
