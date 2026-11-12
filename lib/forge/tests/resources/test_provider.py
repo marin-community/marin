@@ -94,7 +94,9 @@ async def test_failure_after_streaming_restarts_the_window() -> None:
 
 
 async def test_unregistered_relay_endpoint_is_waited_not_a_bug() -> None:
-    backend = Backend((wiring.EndpointUnregistered("GLM relay /r has no registered endpoint for m"), provider_completion()))
+    backend = Backend(
+        (wiring.EndpointUnregistered("GLM relay /r has no registered endpoint for m"), provider_completion())
+    )
     time = Time()
     waiting = WaitingBackend(backend, 3600, 1, 60, 2, role="author", clock=time.clock, sleep=time.sleep)
     result = await waiting.complete((), LLMPolicy())

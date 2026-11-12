@@ -163,9 +163,11 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
 
 - **Models**: `author.model` (DeepSeek V4.1 Flash), `solver.model` and `adversary.model` (GLM-5.3),
   each with `<role>.context_tokens`. There is no output cap; the prompt limit is the model's window.
-- **Review band**: `band.low`/`band.high` on the solver pass rate; `solver.k` trials. A task
-  that is *too easy* gets one hardening round and is then accepted with `accepted_with: too_easy`,
-  reverting to the earlier submission if the hardening broke something.
+- **Review band**: `band.low`/`band.high` on the solver pass rate; `solver.k` trials. Placement
+  tags a task, never filters it: a *too easy* task gets one hardening round, a *too hard* one easing
+  rounds within `budget.max_modify_rounds`, and a task still out of band is accepted with
+  `accepted_with: too_easy` or `too_hard`. A revision that regresses (a defect, a placement on the
+  other side, or an author that stops) reverts to the last clean submission and accepts that.
 - **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`, `budget.max_triage_repairs`.
 - **Adversary**: `adversary.roster` (names of adversary harnesses; empty by default),
   `adversary.image`. A finding is a demonstrated claim with a candidate and an expected grade;

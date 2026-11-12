@@ -17,7 +17,7 @@ from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import EnvironmentRequirements, TaskResource, TaskSpec
 from taskcompendium.runtime.resources import inline_resource
 
-from forge.arms import decided, validated
+from forge.arms import decided, stopped, validated
 from forge.config import ForgeConfig, WorkspaceHydration
 from forge.effects.context import Context
 from forge.effects.events import Note, Resolved
@@ -51,7 +51,7 @@ from forge.model.review import (
     TrialResult,
     ValidationResult,
 )
-from forge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
+from forge.model.workpiece import WORKPIECE, Conversation, Fallback, Submission, Terminal, Workpiece
 from forge.policy import GRADER_BASE_IMAGE, Policy, load_policy, sampling
 from forge.policy.defaults import DEFAULTS_DIR
 from forge.resources.bundle import Resources
@@ -457,7 +457,7 @@ async def test_control_and_claim_preemption_restarts_validation(workpiece: Workp
 async def test_custom_review_owns_hardening_policy(workpiece: Workpiece) -> None:
     assert workpiece.submission is not None
     evidence = ValidationResult(workpiece.submission.digest, (), (), ())
-    current = workpiece.with_(too_easy_baseline=workpiece.submission, evidence=(evidence,))
+    current = workpiece.with_(fallback=Fallback(workpiece.submission, BandOutcome.TOO_EASY), evidence=(evidence,))
     expected = Modify(("Custom reviewer requires another change",))
 
     def custom_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Modify:
@@ -560,7 +560,8 @@ def test_hardening_accepts_or_restores_baseline(
     original = workpiece.submission
     assert original is not None
     pending = decide(workpiece.with_(round=1, decisions=(Modify(("repair",)),), evidence=(evidence(3),)))
-    assert pending.round == 2 and pending.too_easy_baseline == original and pending.terminal is None
+    assert pending.round == 2 and pending.fallback == Fallback(original, BandOutcome.TOO_EASY)
+    assert pending.terminal is None
     first = pending.decisions[-1]
     assert (
         isinstance(first, Modify)
@@ -580,9 +581,59 @@ def test_hardening_accepts_or_restores_baseline(
     assert final.accepted_with is (None if solved == 2 else BandOutcome.TOO_EASY)
 
 
+# Mark 2026-11-11: out-of-band tasks are tagged, never filtered; too-hard used to end in abandonment.
+@pytest.mark.parametrize(
+    "revision,accepted_with,revert",
+    [
+        ("in_band", None, False),
+        ("too_hard", BandOutcome.TOO_HARD, False),
+        ("defect", BandOutcome.TOO_HARD, True),
+        ("too_easy", BandOutcome.TOO_HARD, True),
+        ("stopped", BandOutcome.TOO_HARD, True),
+    ],
+)
+def test_easing_rounds_end_in_tagged_acceptance(
+    workpiece: Workpiece, revision: str, accepted_with: BandOutcome | None, revert: bool
+) -> None:
+    original = workpiece.submission
+    assert original is not None
+    pending = decide(workpiece.with_(evidence=(evidence(0),)))
+    first = pending.decisions[-1]
+    assert (
+        isinstance(first, Modify) and first.placement is BandOutcome.TOO_HARD and "more tractable" in first.findings[0]
+    )
+    assert pending.fallback == Fallback(original, BandOutcome.TOO_HARD) and pending.terminal is None
+    updated = replace(original, task=original.task.model_copy(update={"labels": {"revision": "easier"}}))
+    pending = pending.with_(submission=updated)
+    if revision == "stopped":
+        final = stopped(pending, Stopped(StopReason.FINISHED, Conversation((), ()), "gave up"))
+    else:
+        solved, met = {"in_band": (1, True), "too_hard": (0, True), "defect": (1, False), "too_easy": (3, True)}[
+            revision
+        ]
+        final = decide(pending.with_(evidence=(evidence(solved, controls_met=met),)))
+    if revision == "too_hard":
+        # The second easing round spends the shared budget; still too hard afterwards, the latest is accepted.
+        assert isinstance(final.decisions[-1], Modify) and final.fallback == Fallback(updated, BandOutcome.TOO_HARD)
+        latest = replace(updated, notes="third")
+        final = decide(final.with_(submission=latest, evidence=(evidence(0),)))
+        updated = latest
+        exhausted = final.decisions[-1]
+        assert isinstance(exhausted, Accept) and "Shared modification budget exhausted" in exhausted.reasons
+    final = WORKPIECE.validate_json(WORKPIECE.dump_json(final))
+    assert final.terminal is Terminal.ACCEPTED and final.accepted_with is accepted_with
+    assert final.submission == (original if revert else updated)
+    decision = final.decisions[-1]
+    assert isinstance(decision, Accept) and decision.revert is revert
+
+
 @pytest.mark.parametrize("exhausted", [False, True])
 def test_review_budget_precedence(workpiece: Workpiece, exhausted: bool) -> None:
-    current = workpiece.with_(round=2 if exhausted else 0, evidence=(evidence(3),))
+    current = workpiece.with_(
+        round=2 if exhausted else 0,
+        decisions=(Modify(("repair",)), Modify(("repair",))) if exhausted else (),
+        evidence=(evidence(3),),
+    )
     if not exhausted:
         current = current.with_(
             evidence=(replace(evidence(3, controls_met=False), solver=(TrialResult(0, None, Cause.AGENT_TIMEOUT),)),)
@@ -590,7 +641,7 @@ def test_review_budget_precedence(workpiece: Workpiece, exhausted: bool) -> None
     final = decide(current)
     if exhausted:
         assert final.terminal is Terminal.ACCEPTED and final.round == 2 and final.submission == workpiece.submission
-        assert final.too_easy_baseline is None and final.accepted_with is BandOutcome.TOO_EASY
+        assert final.fallback is None and final.accepted_with is BandOutcome.TOO_EASY
         assert (
             isinstance(final.decisions[-1], Accept)
             and "Shared modification budget exhausted" in final.decisions[-1].reasons
@@ -650,7 +701,7 @@ def test_grader_failure_classification_and_repair(workpiece: Workpiece, failure:
 def test_generation_limit_is_failed_solver_evidence(workpiece: Workpiece, grade: GradeResult | None) -> None:
     result = replace(evidence(), solver=(TrialResult(0, grade, Cause.GENERATION_LIMIT), evidence().solver[0]))
     setup = build_config(load_policy(DEFAULTS_DIR), "S", {})
-    band = BandRules(0.5, 0.5, frozenset({BandOutcome.IN_BAND}))
+    band = BandRules(0.5, 0.5)
     assert isinstance(default_review(workpiece.with_(evidence=(result,)), band, setup.budget), Accept)
     assert result.solver[0].cause is Cause.GENERATION_LIMIT and result.solver[0].grade is grade
     unavailable = replace(result, controls=(ControlResult(0, None, False, Cause.NO_GRADE),))

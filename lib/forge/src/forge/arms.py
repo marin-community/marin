@@ -12,9 +12,10 @@ from forge.harness.tools.validate import ValidateRequest
 from forge.model.llm import Message, Role, ToolCall
 from forge.model.review import Abandon, Accept, BandOutcome, Budget, Incomplete, Modify, Reject, Retry
 from forge.model.stage import Stage
-from forge.model.workpiece import Conversation, Terminal, Workpiece
+from forge.model.workpiece import Conversation, Fallback, Terminal, Workpiece
 from forge.policy import Policy
 from forge.stages.exits import Decided, Validated
+from forge.stages.rules import modify_rounds, tagged
 from forge.stages.summary import validation_path, validation_summary
 
 
@@ -47,18 +48,14 @@ def after_validation(wp: Workpiece) -> Stage:
 
 def decided(wp: Workpiece, result: Decided, *, budget: Budget, policy: Policy) -> Workpiece:
     decision = result.decision
-    if isinstance(decision, Modify) and wp.round >= budget.max_modify_rounds:
-        decision = Abandon((f"budget.max_modify_rounds exhausted after {wp.round} modify rounds", *decision.findings))
+    if isinstance(decision, Modify) and modify_rounds(wp) >= budget.max_modify_rounds:
+        decision = Abandon(
+            (f"budget.max_modify_rounds exhausted after {modify_rounds(wp)} modify rounds", *decision.findings)
+        )
     wp = wp.with_(decisions=(*wp.decisions, decision))
     match decision:
         case Accept():
-            if decision.revert and wp.too_easy_baseline is None:
-                raise ValueError("Cannot revert hardening without the too-easy baseline")
-            return wp.with_(
-                terminal=Terminal.ACCEPTED,
-                submission=wp.too_easy_baseline if decision.revert else wp.submission,
-                accepted_with=BandOutcome.TOO_EASY if decision.band is BandOutcome.TOO_EASY else None,
-            )
+            return accepted(wp, decision)
         case Reject():
             return wp.with_(terminal=Terminal.REJECTED)
         case Abandon():
@@ -69,17 +66,29 @@ def decided(wp: Workpiece, result: Decided, *, budget: Budget, policy: Policy) -
                 raise ValueError("Cannot revise without an author session")
             system = tuple(message for message in previous.messages if message.role == "system")
             prompt = policy.prompt("author.revision").render(kind="review", detail="\n".join(findings))
+            fallback = wp.fallback
+            if decision.placement is not None:
+                assert wp.submission is not None
+                fallback = Fallback(wp.submission, decision.placement)
             return wp.with_(
                 round=wp.round + 1,
                 session=Conversation((*system, Message(Role.USER, prompt)), previous.tool_schemas),
-                too_easy_baseline=(
-                    wp.submission if decision.placement is BandOutcome.TOO_EASY else wp.too_easy_baseline
-                ),
+                fallback=fallback,
             )
         case Retry():
             return wp
         case Incomplete():
             return wp.with_(terminal=Terminal.HELD)
+
+
+def accepted(wp: Workpiece, decision: Accept) -> Workpiece:
+    if decision.revert and wp.fallback is None:
+        raise ValueError("Cannot revert without a fallback submission")
+    return wp.with_(
+        terminal=Terminal.ACCEPTED,
+        submission=wp.fallback.submission if decision.revert and wp.fallback is not None else wp.submission,
+        accepted_with=None if decision.band is BandOutcome.IN_BAND else decision.band,
+    )
 
 
 def after_review(wp: Workpiece) -> Stage | None:
@@ -89,8 +98,13 @@ def after_review(wp: Workpiece) -> Stage | None:
 
 
 def stopped(wp: Workpiece, result: Stopped) -> Workpiece:
-    decision = Abandon((f"author stopped: {result.summary}",))
-    return wp.with_(session=result.session, terminal=Terminal.ABANDONED, decisions=(*wp.decisions, decision))
+    """A revision that stops without submitting reverts to the fallback; without one the workpiece is abandoned."""
+    wp = wp.with_(session=result.session)
+    reason = f"author stopped: {result.summary}"
+    if wp.fallback is not None:
+        decision = Accept(wp.fallback.band, (*tagged(wp.fallback.band), reason), revert=True)
+        return accepted(wp.with_(decisions=(*wp.decisions, decision)), decision)
+    return wp.with_(terminal=Terminal.ABANDONED, decisions=(*wp.decisions, Abandon((reason,))))
 
 
 def transitions(arm: str, budget: Budget, policy: Policy) -> Transitions:

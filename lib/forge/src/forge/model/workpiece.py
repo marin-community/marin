@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import TypedDict, Unpack
 
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from taskcompendium.models import TaskSpec
 
 from forge.model.content_hash import digest
@@ -38,6 +38,14 @@ class Conversation:
     tool_schemas: tuple[ToolSchema, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class Fallback:
+    """The last submission that validated clean, and its band placement; a regressing revision reverts to it."""
+
+    submission: Submission
+    band: BandOutcome
+
+
 class Terminal(StrEnum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
@@ -54,12 +62,15 @@ class WorkpieceChanges(TypedDict, total=False):
     evidence: tuple[ValidationResult, ...]
     decisions: tuple[Decision, ...]
     terminal: Terminal | None
-    too_easy_baseline: Submission | None
+    fallback: Fallback | None
     accepted_with: BandOutcome | None
 
 
 @dataclass(frozen=True, slots=True)
 class Workpiece:
+    # Unknown fields fail loudly: a workpiece from an older format must never be silently reinterpreted.
+    __pydantic_config__ = ConfigDict(extra="forbid")
+
     id: str
     proposal: TaskProposal
     round: int = 0
@@ -68,7 +79,7 @@ class Workpiece:
     evidence: tuple[ValidationResult, ...] = ()
     decisions: tuple[Decision, ...] = ()
     terminal: Terminal | None = None
-    too_easy_baseline: Submission | None = None
+    fallback: Fallback | None = None
     accepted_with: BandOutcome | None = None
 
     def with_(self, **changes: Unpack[WorkpieceChanges]) -> "Workpiece":

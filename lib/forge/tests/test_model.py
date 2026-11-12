@@ -107,3 +107,10 @@ def test_abandon_requires_a_reason(workpiece: Workpiece, reasons: tuple[str, ...
     saved.update(terminal="abandoned", decisions=[{"kind": "abandon", "reasons": reasons}])
     with pytest.raises(ValueError, match=r"decisions.0.abandon"):
         WORKPIECE.validate_python(saved)
+
+
+def test_old_format_workpiece_fails_loudly(workpiece: Workpiece) -> None:
+    saved = WORKPIECE.dump_python(workpiece, mode="json")
+    saved["too_easy_baseline"] = None
+    with pytest.raises(ValueError, match="too_easy_baseline"):
+        WORKPIECE.validate_python(saved)

@@ -1,7 +1,6 @@
 {
   "band.low": 0.25,
   "band.high": 0.75,
-  "band.accept_too_easy": true,
   "solver.k": 3,
   "adversary.roster": [],
   "adversary.image": "${GRADER_BASE_IMAGE}",

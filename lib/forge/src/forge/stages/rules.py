@@ -37,7 +37,21 @@ def passed(grade: GradeResult) -> bool:
     return reward >= score_max or math.isclose(reward, score_max, rel_tol=1e-9, abs_tol=1e-9)
 
 
+def modify_rounds(workpiece: Workpiece) -> int:
+    return sum(isinstance(decision, Modify) for decision in workpiece.decisions)
+
+
+def tagged(band: BandOutcome) -> tuple[str, ...]:
+    return () if band is BandOutcome.IN_BAND else (f"accepted_with: {band}",)
+
+
 def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
+    """Mark's policy: band placement tags a task and never abandons it.
+
+    A too-easy task gets one hardening round and a too-hard task easing rounds within the shared modification budget;
+    a task still out of band afterwards is accepted with its placement. A revision that regresses (a defect, or a
+    placement other than the fallback's) reverts to the last clean submission and accepts it with that placement.
+    """
     result = workpiece.evidence[-1]
     decision = assess(result, band)
     if isinstance(decision, Incomplete):
@@ -48,16 +62,18 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
         cause = next((cause for cause in retryable if CAUSE_DECISIONS.get(cause) is Retry), None)
         if cause is not None and retries < budget.max_validation_retries:
             return Retry(cause, retries + 1)
-    # Mark's policy: one hardening attempt, then tagged acceptance; restore baseline on regression.
-    if isinstance(decision, Modify) and BandOutcome.TOO_EASY in band.accepted:
-        if workpiece.too_easy_baseline is not None:
-            revert = decision.placement is not BandOutcome.TOO_EASY
-            reasons = ("accepted_with: too_easy",)
-            if revert:
-                reasons += ("Hardening regressed; reverted to the previously validated submission", *decision.findings)
-            return Accept(BandOutcome.TOO_EASY, reasons, revert=revert)
-        if decision.placement is BandOutcome.TOO_EASY and workpiece.round >= budget.max_modify_rounds:
-            return Accept(BandOutcome.TOO_EASY, ("accepted_with: too_easy", "Shared modification budget exhausted"))
+    if not isinstance(decision, Modify):
+        return decision
+    placement, fallback = decision.placement, workpiece.fallback
+    if fallback is not None and placement is not fallback.band:
+        reasons = ("Revision regressed; reverted to the previously validated submission", *decision.findings)
+        return Accept(fallback.band, (*tagged(fallback.band), *reasons), revert=True)
+    if placement is None:
+        return decision
+    if placement is BandOutcome.TOO_EASY and fallback is not None:
+        return Accept(placement, (*tagged(placement), "One hardening round used"))
+    if modify_rounds(workpiece) >= budget.max_modify_rounds:
+        return Accept(placement, (*tagged(placement), "Shared modification budget exhausted"))
     return decision
 
 
@@ -113,11 +129,11 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
         if trial.grade is not None and trial.cause is not Cause.GENERATION_LIMIT
     )
     place = band.place(solved / len(result.solver))
-    if place is BandOutcome.IN_BAND and place in band.accepted:
+    if place is BandOutcome.IN_BAND:
         return Accept(place)
-    finding = f"{solved} of {len(result.solver)} trials solved: {place}"
-    if place is BandOutcome.TOO_EASY:
-        finding += (
-            ". Make the task harder while preserving correct controls and grading. This is the one hardening attempt."
-        )
+    finding = f"{solved} of {len(result.solver)} trials solved: {place}. " + (
+        "Make the task harder while preserving correct controls and grading. This is the one hardening attempt."
+        if place is BandOutcome.TOO_EASY
+        else "Make the task more tractable while preserving its objective, correct controls and grading."
+    )
     return Modify((finding,), placement=place)

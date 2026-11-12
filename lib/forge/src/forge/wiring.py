@@ -53,7 +53,7 @@ from forge.lowering import (
 )
 from forge.model.content_hash import digest
 from forge.model.proposal import Verification
-from forge.model.review import BandOutcome, BandRules, Budget
+from forge.model.review import BandRules, Budget
 from forge.model.workpiece import Submission, Workpiece
 from forge.policy import Policy, load_policy, resolution_lines
 from forge.policy import sampling as policy_sampling
@@ -317,15 +317,7 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
     budget = Budget(
         policy.setting("budget.max_modify_rounds", int), policy.setting("budget.max_validation_retries", int)
     )
-    band = BandRules(
-        policy.setting("band.low", float),
-        policy.setting("band.high", float),
-        (
-            frozenset({BandOutcome.IN_BAND, BandOutcome.TOO_EASY})
-            if policy.setting("band.accept_too_easy", bool)
-            else frozenset({BandOutcome.IN_BAND})
-        ),
-    )
+    band = BandRules(policy.setting("band.low", float), policy.setting("band.high", float))
     return ForgeConfig(
         policy,
         author,
