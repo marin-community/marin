@@ -343,7 +343,9 @@ class VerifierConfig(BaseModel):
     import_path: str | None = Field(default=None, exclude_if=lambda v: v is None)
     kwargs: dict[str, Any] = Field(default_factory=dict, exclude_if=lambda v: not v)
     disable: bool = False
-    retain_agent_services_for_tasks: list[RetainedAgentServiceTask] = Field(default_factory=list)
+    retain_agent_services_for_tasks: list[RetainedAgentServiceTask] = Field(
+        default_factory=list, exclude_if=lambda tasks: not tasks
+    )
 
     def identity_fingerprint(self) -> dict[str, Any]:
         """Compare the recorded judge model and grading settings independently of placement."""

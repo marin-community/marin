@@ -16,6 +16,9 @@ SUPERVISOR_SOURCE = Path(process_supervisor.__file__).read_text()
 CLEANUP_TIMEOUT = process_supervisor.CLEANUP_TIMEOUT + process_supervisor.CANCEL_CONFIRMATION_GRACE + 5
 TIMEOUT_MARKER = process_supervisor.TIMEOUT_MARKER
 FAILURE_MARKER = process_supervisor.FAILURE_MARKER
+FAILED_FILE = process_supervisor.FAILED_FILE
+DONE_FILE = process_supervisor.DONE_FILE
+PID_FILE = process_supervisor.PID_FILE
 PROCESS_SCOPE_START_ATTEMPTS = 1000
 PROCESS_SCOPE_POLL_INTERVAL = 0.01
 

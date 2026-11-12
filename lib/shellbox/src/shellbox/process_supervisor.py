@@ -21,6 +21,12 @@ CANCEL_CONFIRMATION_GRACE = 2
 POLL_INTERVAL = 0.01
 TIMEOUT_MARKER = "SHELLBOX_COMMAND_TIMEOUT"
 FAILURE_MARKER = "SHELLBOX_CLEANUP_FAILED"
+LOCK_FILE = "lock"
+CANCEL_FILE = "cancel"
+FAILED_FILE = "failed"
+DONE_FILE = "done"
+STARTED_FILE = "started"
+PID_FILE = "pid"
 
 
 def reap_children() -> None:
@@ -56,21 +62,21 @@ def reap_children() -> None:
 
 def cancel(control: Path) -> None:
     control.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with (control / "lock").open("w") as lock:
+    with (control / LOCK_FILE).open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        (control / "cancel").touch()
-        if (control / "failed").exists():
+        (control / CANCEL_FILE).touch()
+        if (control / FAILED_FILE).exists():
             raise RuntimeError("Command teardown failed")
-        if (control / "done").exists():
+        if (control / DONE_FILE).exists():
             return
-        if not (control / "pid").exists():
-            if (control / "started").exists():
+        if not (control / PID_FILE).exists():
+            if (control / STARTED_FILE).exists():
                 raise RuntimeError("Command supervisor identity is missing")
             return  # A queued launch observes cancel before creating children.
-        os.kill(int((control / "pid").read_text()), signal.SIGTERM)
+        os.kill(int((control / PID_FILE).read_text()), signal.SIGTERM)
     deadline = time.monotonic() + CLEANUP_TIMEOUT + CANCEL_CONFIRMATION_GRACE
-    while not (control / "done").exists():
-        if (control / "failed").exists() or time.monotonic() >= deadline:
+    while not (control / DONE_FILE).exists():
+        if (control / FAILED_FILE).exists() or time.monotonic() >= deadline:
             raise RuntimeError("Command teardown could not be confirmed")
         time.sleep(POLL_INTERVAL)
 
@@ -88,14 +94,14 @@ def run(control: Path, budget: str, argv: list[str]) -> int:
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
-    with (control / "lock").open("w") as lock:
+    with (control / LOCK_FILE).open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if (control / "cancel").exists():
+        if (control / CANCEL_FILE).exists():
             return 143
-        if (control / "pid").exists() or (control / "done").exists():
+        if (control / PID_FILE).exists() or (control / DONE_FILE).exists():
             raise RuntimeError("Command scope has already been started")
-        (control / "started").touch()
-        (control / "pid").write_text(str(os.getpid()))
+        (control / STARTED_FILE).touch()
+        (control / PID_FILE).write_text(str(os.getpid()))
     code = 143
     timed_out = False
     try:
@@ -118,10 +124,10 @@ def run(control: Path, budget: str, argv: list[str]) -> int:
                 time.sleep(POLL_INTERVAL)
     finally:
         reap_children()
-    with (control / "lock").open("w") as lock:
+    with (control / LOCK_FILE).open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        (control / "pid").unlink()
-        (control / "done").write_text("timeout" if timed_out else "complete")
+        (control / PID_FILE).unlink()
+        (control / DONE_FILE).write_text("timeout" if timed_out else "complete")
     return code
 
 
@@ -144,7 +150,7 @@ def main() -> int:
         return run(control, args[0], args[1:])
     except Exception as error:
         control.mkdir(mode=0o700, parents=True, exist_ok=True)
-        (control / "failed").touch()
+        (control / FAILED_FILE).touch()
         print(FAILURE_MARKER, file=sys.stderr, flush=True)
         print(str(error), file=sys.stderr, flush=True)
         return 125

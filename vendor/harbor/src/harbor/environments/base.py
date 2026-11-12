@@ -37,6 +37,9 @@ from harbor.utils.scripts import quote_shell_arg
 from pydantic import BaseModel
 from shellbox.process import (
     CLEANUP_TIMEOUT,
+    DONE_FILE,
+    FAILED_FILE,
+    PID_FILE,
     PROCESS_SCOPE_POLL_INTERVAL,
     PROCESS_SCOPE_START_ATTEMPTS,
     ProcessScope,
@@ -162,9 +165,9 @@ class BaseEnvironment(ABC):
         self.track_process_scope(scope, transport)
         result = await self.exec(
             f"for attempt in $(seq 1 {PROCESS_SCOPE_START_ATTEMPTS}); do "
-            f"[ ! -f {directory}/failed ] || exit 1; "
-            f"[ ! -f {directory}/done ] || exit 1; "
-            f"[ ! -f {directory}/pid ] || exit 0; sleep {PROCESS_SCOPE_POLL_INTERVAL}; done; exit 1",
+            f"[ ! -f {directory}/{FAILED_FILE} ] || exit 1; "
+            f"[ ! -f {directory}/{DONE_FILE} ] || exit 1; "
+            f"[ ! -f {directory}/{PID_FILE} ] || exit 0; sleep {PROCESS_SCOPE_POLL_INTERVAL}; done; exit 1",
             env=env,
             user=user,
         )
