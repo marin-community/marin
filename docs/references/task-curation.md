@@ -289,13 +289,12 @@ ArtifactSteps.
 
 ## Declarations
 
-An `RlDataSource` has `info`, a typed `config` and an optional `pipeline`.
-`SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
-search tags, notes and an optional input-row count. The `deprecated` tag marks a
-source `Deprecated` in the catalog (overriding `excluded`), and its notes carry
-the deprecation reason. A source without a `pipeline` is `Inventory`: it stays
-visible in the Atlas with its evidence, but it is never admitted to selection and
-its measured Daytona and oracle evidence remains visible even without a pipeline.
+An `RlDataSource` binds source information, a typed configuration and a registered
+conversion pipeline. A declaration without that pipeline is rejected. Every Atlas
+entry enters through QUICK, SAMPLE or FULL; QUICK means converted without review,
+and does not make a source selectable for training. The deprecated tag and its
+reason remain available for registered historical sources. Removed pipeline-less
+entries are tracked in retired-inventory-only.json; their artifacts stay archived.
 
 Every runnable agentic source declares its ingested `task_format`. New agentic
 sources must ingest TaskCompendium or Harbor task directories; selection rejects
@@ -303,20 +302,19 @@ an agentic source that declares no format, and rejects MarinSkyRL's internal
 blend format unless the source appears in `GRANDFATHERED_MARINSKYRL_SOURCES`, the
 frozen list of Nemotron Ultra components admitted before the requirement. A new
 internal-format source therefore fails at selection instead of shipping.
-`independent_qc` records
-quality control a pinned release performed outside curation, so inventory-only
-pointers surface that evidence in the Atlas. The Daytona verdict is derived, never
-declared: `finestore.rl.curation.daytona_verdict` marks a non-agentic source safe,
-an agentic source with no measured count `unassessed`, and a measured source
-unsafe when its unique environment count exceeds `DAYTONA_SAFE_SNAPSHOT_LIMIT`
-(ten) or when the Daytona backend refuses any task's declared execution
-requirements. The inputs are measurements: `daytona_snapshot_count` holds the
-number of distinct environments the source's own task specs require through the
-production path, `daytona_count_basis` names the rule and payload source, and
-`daytona_execution_failures` counts refused tasks. An unsafe label does not
-remove a source from the catalog; it records that a run would exceed the org's
-limits. [Making a dataset Daytona-safe](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#making-a-dataset-daytona-safe)
-covers the faithful ways to bring one inside the budget.
+`independent_qc` records quality checks performed outside curation. Quality Result
+is computed from recorded SAMPLE/FULL issue counts and remains separate from
+mechanical exclusions and spec fidelity. Daytona is a required measured enum:
+SAFE or UNSAFE for an actor, N/A when there is no actor. Grandfathered blend
+entries show a dash. Missing measurements never imply safety.
+
+Production uses a split deployment: the Daytona label counts only actor snapshot
+identities and actor execution refusals. Ten or fewer identities with no refused
+actor requirements is SAFE; otherwise it is UNSAFE. Package-lock graders run on
+LOCAL and record separate per-role compatibility evidence. A LOCAL grader failure
+does not change the actor's Daytona label. Unsafe sources can still be ingested.
+The measured count, refused-task count, actor machine count and provenance remain
+visible beside the label.
 
 **Publishing a conversion.** A curation step that converts data publishes the converted
 artifact to the `open-athena` Hugging Face org as a **private** repository: campaign
@@ -1250,7 +1248,7 @@ mode.
 
 Every source also declares an `OversightLevel` — `none`, `sample` or `full` — with an
 `OversightEvidence` that points at the campaign, the recipe revision and the
-verification summary behind it. `none` means inventory only: the source is listed but
+verification summary behind it. `none` means converted without review: the source is listed but
 not admitted. The level is the weakest review the admission rests on, so a cohort whose
 setup fidelity ran on every task but whose verifier liveness ran on a sample is
 `sample`, not `full`. `independent_qc` stays separate evidence about the upstream

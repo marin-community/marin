@@ -20,15 +20,19 @@ from finestore.rl.curation import (
     CurationCatalog,
     CurationSummary,
     DaytonaSafety,
-    IndependentQC,
     OracleValidation,
-    Verdict,
     register_catalog,
 )
 from finestore.store import DataStore
 from rigging.filesystem.distributed_lock import LeaseLostError, LocalFileLease
 
-from experiments.post_training.task_curation.catalog_snapshot import publish_catalog
+from experiments.post_training.task_curation.catalog_snapshot import (
+    publish_catalog,
+    refresh_catalog,
+    retire_catalog_sources,
+)
+from experiments.post_training.task_curation.curation_catalog import RUNS
+
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
@@ -185,30 +189,19 @@ def test_a_superseded_source_does_not_block_the_other_sources_in_its_campaign(tm
     assert rows[second.info.id].assessment_key == "second"
 
 
-def test_republication_refreshes_an_inventory_only_declaration(tmp_path):
-    root = str(tmp_path / "production")
-    runnable = number_source(tmp_path / "input")
-    pointer = RlDataSource(info=SourceInfo(id="release:pointer", title="pointer", origin="fixture"))
-    record_attempt(root, runnable, "first", "2026-10-16T10:00:00Z", "key-a")
-    publish_catalog(root, "first", [runnable, pointer])
-    qc = IndependentQC(verdict=Verdict.GOOD, method="release oracle", reviewed=3, admitted=2, evidence_url="pinned")
-    edited = RlDataSource(info=replace(pointer.info, independent_qc=qc))
-    record_attempt(root, runnable, "second", "2026-10-16T11:00:00Z", "key-a")
-    publish_catalog(root, "second", [runnable, edited])
-    assert selected_sources(root)[pointer.info.id].declaration.independent_qc == qc
-
-
 def test_publication_round_trips_daytona_safety_to_the_inventory(tmp_path):
     root = str(tmp_path / "production")
     runnable = number_source(tmp_path / "input")
-    agent = RlDataSource(
+    agent = replace(
+        runnable,
+        config=replace(runnable.config, name="agent"),
         info=replace(
             runnable.info,
             id="fixture:agent",
             tags=("agentic",),
             daytona_snapshot_count=25,
             daytona_count_basis="shellbox-identity over pinned payloads",
-        )
+        ),
     )
     record_attempt(root, runnable, "first", "2026-10-16T10:00:00Z", "key-a")
     publish_catalog(root, "first", [runnable, agent])
@@ -222,19 +215,24 @@ def test_an_unselected_runnable_source_picks_up_the_current_safety_verdict(tmp_p
     root = str(tmp_path / "production")
     first = number_source(tmp_path / "first")
     pinned = SourceReference("agent-data", "pin-1", "https://example.org/agent")
-    agent = RlDataSource(info=replace(first.info, id="fixture:agent", tags=("agentic",), dataset=pinned))
+    agent = replace(
+        first,
+        config=replace(first.config, name="agent"),
+        info=replace(first.info, id="fixture:agent", tags=("agentic",), dataset=pinned),
+    )
     record_attempt(root, first, "first", "2026-10-16T10:00:00Z", "key-a", source_count=2)
     record_attempt(root, agent, "first", "2026-10-16T10:00:00Z", "key-b")
     publish_catalog(root, "first", [first, agent])
     reassessed = replace(first, config=replace(first.config, name="numbers-second"))
     record_attempt(root, reassessed, "second", "2026-10-16T11:00:00Z", "key-a")
-    repaired = RlDataSource(
+    repaired = replace(
+        agent,
         info=replace(
             agent.info,
             daytona_snapshot_count=5,
             daytona_count_basis="shellbox-identity over pinned payloads",
             oracle_validation=OracleValidation.VERIFIER_EXECUTED,
-        )
+        ),
     )
     publish_catalog(root, "second", [reassessed, repaired])
     rows = selected_sources(root)
@@ -266,3 +264,43 @@ def test_a_lost_publication_lease_cannot_replace_the_selected_snapshot(tmp_path,
     assert CurationCatalog(root).current() == first
     publish_catalog(root, "next", [source])
     assert selected_sources(root)[source.info.id].assessment_key == "key-b"
+
+
+def test_metadata_refresh_retires_sources_without_removing_archived_assessments(tmp_path):
+    root = str(tmp_path / "production")
+    kept = number_source(tmp_path / "input", "kept")
+    retired = number_source(tmp_path / "input", "retired")
+    record_attempt(root, kept, "first", "2026-10-16T10:00:00Z", "kept-key", source_count=2)
+    record_attempt(root, retired, "first", "2026-10-16T10:00:00Z", "retired-key")
+    original = publish_catalog(root, "first", [kept, retired])
+    edited = replace(kept, info=replace(kept.info, notes="Updated measured evidence"))
+    retired_snapshot = retire_catalog_sources(root, "retired-snapshot", frozenset({retired.info.id}))
+    assert retired_snapshot.source_count == 1
+    refreshed = refresh_catalog(root, "metadata-refresh", [edited], retired_source_ids=frozenset())
+    current = selected_sources(root)
+    assert set(current) == {kept.info.id}
+    assert current[kept.info.id].assessment_key == "kept-key"
+    assert current[kept.info.id].declaration.notes == "Updated measured evidence"
+    assert refreshed.source_count == 1
+    catalog = CurationCatalog(root)
+    assert {row.id for row in catalog.sources(original.snapshot_id)} == {kept.info.id, retired.info.id}
+    assert catalog.packet("retired-key", "retired-key") == {"task": {"id": "retired-key"}}
+
+
+def test_metadata_refresh_cannot_reuse_a_grade_for_a_changed_pipeline(tmp_path):
+    root = str(tmp_path / "production")
+    source = number_source(tmp_path / "input")
+    record_attempt(root, source, "first", "2026-10-16T10:00:00Z", "key")
+    original = publish_catalog(root, "first", [source])
+    changed = replace(source, config=replace(source.config, name="changed-pipeline"))
+    with pytest.raises(ValueError, match="Source pin changed"):
+        refresh_catalog(root, "invalid-refresh", [changed], retired_source_ids=frozenset())
+    assert CurationCatalog(root).current() == original
+
+
+def test_publication_rejects_a_source_without_a_registered_converter(tmp_path):
+    root = str(tmp_path / "production")
+    pointer = RlDataSource(info=SourceInfo(id="new:pointer", title="Pointer", origin="fixture"))
+    with pytest.raises(ValueError, match="no registered conversion pipeline"):
+        publish_catalog(root, "invalid-source", [pointer])
+    assert not (tmp_path / "production").exists()

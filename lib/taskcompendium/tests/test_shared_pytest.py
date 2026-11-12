@@ -57,6 +57,15 @@ def shared_runtime():
         )
         (site / "test-dependencies.pth").write_text(sysconfig.get_path("purelib") + "\n")
         (site / "dependency.py").write_text("VALUE = 0\n")
+        (site / "baseline_plugin.py").write_text("# Source-required pytest plugin\n")
+        metadata = site / "baseline_plugin-1.dist-info"
+        metadata.mkdir()
+        (metadata / "METADATA").write_text("Name: baseline-plugin\nVersion: 1\n")
+        (metadata / "entry_points.txt").write_text("[pytest11]\nbaseline = baseline_plugin\n")
+        (metadata / "RECORD").write_text(
+            "baseline_plugin.py,,\nbaseline_plugin-1.dist-info/METADATA,,\n"
+            "baseline_plugin-1.dist-info/entry_points.txt,,\nbaseline_plugin-1.dist-info/RECORD,,\n"
+        )
         contract = SharedIntegrityContract(
             dependency_state=SharedDependencyState.AGENT_MUTABLE,
             workspace=str(workspace),
@@ -96,7 +105,9 @@ def shared_runtime():
         yield SharedRuntime(contract, site, verifyit)
 
 
-@pytest.mark.parametrize("attack", ["conftest", "addopts", "autoload", "pytest", "background", "stdout"])
+@pytest.mark.parametrize(
+    "attack", ["conftest", "addopts", "autoload", "pinned-plugin", "pytest", "background", "stdout"]
+)
 def test_shared_grading_cannot_fake_a_pass(shared_runtime, monkeypatch, attack):
     runtime = shared_runtime
     workspace = Path(runtime.contract.workspace)
@@ -118,6 +129,11 @@ def test_shared_grading_cannot_fake_a_pass(shared_runtime, monkeypatch, attack):
         metadata.mkdir()
         (metadata / "METADATA").write_text("Name: fake-plugin\nVersion: 1\n")
         (metadata / "entry_points.txt").write_text("[pytest11]\nfake = fake_plugin\n")
+    elif attack == "pinned-plugin":
+        (runtime.site / "baseline_plugin.py").write_text(
+            "import pytest\ndef pytest_collection_modifyitems(items):\n"
+            " for item in items: item.add_marker(pytest.mark.skip)\n"
+        )
     elif attack == "pytest":
         package = runtime.site / "pytest"
         package.mkdir()

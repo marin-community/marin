@@ -18,6 +18,7 @@ import pytest
 from click.testing import CliRunner
 from taskcompendium.convert.answers import answer_task
 from taskcompendium.grader import verifyit_package
+from taskcompendium.grading_environment import SharedDependencyState, SharedGradingPolicy
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
@@ -652,56 +653,6 @@ def repository_task(normalized_row) -> TaskSpec:
     )
 
 
-def test_harbor_repository_uses_shared_actor_state(repository_task, tmp_path):
-    workspace = tmp_path / "testbed"
-    workspace.mkdir()
-    product = workspace / "product.py"
-    product.write_text("candidate repair")
-    dependencies = tmp_path / "installed-dependencies"
-    dependencies.write_text("actor-installed package")
-    probe = f"#!/bin/bash\ncat product.py; cat {shlex.quote(str(dependencies))}\n".encode()
-    task = repository_task.model_copy(
-        update={
-            "grader": repository_task.grader.model_copy(update={"cwd": str(workspace)}),
-            "resources": repository_task.resources.model_copy(
-                update={
-                    "verifier": tuple(
-                        inline_resource(resource.path, probe) if resource.path == "test.sh" else resource
-                        for resource in repository_task.resources.verifier
-                    )
-                }
-            ),
-        }
-    )
-    row = {
-        "task_json": task.model_dump_json(),
-        "original_path": "swesmith-fixture",
-        "source_row": "swesmith/tasks.parquet:0",
-    }
-    files = archive_files(
-        harbor_record(row, verifyit_package_root=VERIFYIT_PACKAGE, grader_image=None, family="swe").task_binary
-    )
-    config = tomllib.loads(files["task.toml"].decode())
-    assert config["verifier"]["environment_mode"] == "shared"
-    assert "environment" not in config["verifier"]
-    assert not config["artifacts"]
-    assert "tests/Dockerfile" not in files and "tests/verifier.toml" not in files
-    assert not any(path.startswith("tests/public/") for path in files)
-    context = cast(DockerBuildContext, task.environment_requirements.docker_build)
-    for resource in context.files:
-        content = files["environment/" + resource.path]
-        if resource.path == "Dockerfile":
-            assert content.startswith(resource_bytes(resource))
-        else:
-            assert content == resource_bytes(resource)
-    # Execute the complete emitted wrapper in the existing actor tree.
-    script = files["tests/test.sh"].decode()
-    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == "candidate repairactor-installed package"
-    assert product.read_text() == "candidate repair"
-
-
 @pytest.mark.parametrize("line", ["RUN pip install rewardkit", "COPY tests/missing.py /tests/missing.py"])
 def test_harbor_repository_retains_old_environment_exclusions(repository_task, line):
     context = cast(DockerBuildContext, repository_task.environment_requirements.docker_build)
@@ -723,7 +674,13 @@ def test_harbor_repository_retains_old_environment_exclusions(repository_task, l
         "source_row": "swesmith/tasks.parquet:0",
     }
     with pytest.raises(UnsupportedHarborTask):
-        harbor_record(row, verifyit_package_root=VERIFYIT_PACKAGE, grader_image=None, family="swe")
+        harbor_record(
+            row,
+            verifyit_package_root=VERIFYIT_PACKAGE,
+            grader_image=None,
+            family="swe",
+            shared_policy=SharedGradingPolicy(dependency_state=SharedDependencyState.AGENT_MUTABLE),
+        )
 
 
 def test_openqa_keeps_conversion_but_filters_disclosed_reference():
