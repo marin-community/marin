@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("harbor", reason="Requires the isolated vendor/harbor runtime")
+pytest.importorskip("harbor.db.client", reason="Requires the isolated vendor/harbor runtime", exc_type=ImportError)
 
 from experiments.post_training.task_curation import harbor_hub
 
