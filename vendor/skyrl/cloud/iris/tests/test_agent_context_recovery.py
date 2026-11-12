@@ -132,8 +132,8 @@ async def test_native_step_harness_keeps_length_stopped_rollout():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "reject_call,trial_error",
-    [(2, None), (1, None), (2, "ContextLengthExceededError")],
-    ids=["sampled-turn", "first-request", "agent-error-policy"],
+    [(2, None), (1, None), (2, "ContextLengthExceededError"), (2, "VerifierRuntimeError")],
+    ids=["sampled-turn", "first-request", "graded-model-limit", "masked-verifier-error"],
 )
 async def test_original_harbor_trial_keeps_sampled_tokens_and_grade_after_context_rejection(reject_call, trial_error):
     """A reduced output budget starts a new prompt; rejecting it must retain the prior turn."""
@@ -224,7 +224,13 @@ async def test_original_harbor_trial_keeps_sampled_tokens_and_grade_after_contex
     assert result.grade.status == Outcome.GRADED
     assert result.grade.reward == 0.75
     assert batch["response_ids"] == [[3]]
-    assert batch["loss_masks"] == [[1]]
     assert batch["rollout_logprobs"][0] == pytest.approx([-0.1])
     assert batch["verification_results"][0].status == VerificationStatus.VERIFIED
-    assert np.sum(batch["rewards"]) == (0.75 if trial_error is None else 0.0)
+    if trial_error == "VerifierRuntimeError":
+        assert result.failure is not None
+        assert batch["loss_masks"] == [[0]]
+        assert np.sum(batch["rewards"]) == 0.0
+    else:
+        assert result.failure is None
+        assert batch["loss_masks"] == [[1]]
+        assert np.sum(batch["rewards"]) == 0.75
