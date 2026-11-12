@@ -91,6 +91,7 @@ def test_lock_grader_storage_has_no_backend_and_quota_removal_preserves_mixed_de
     assert all(fit.roles["grader"] == {Support.UNSUPPORTED: 1} for fit in before.backends.values())
     assert before.demands["grader"][Requirement.HOST_IMAGE] == 1
     assert before.resource_ranges["grader"]["storage_mb"] == (1024, 1024)
+    assert before.role_backend_assignments == {"agent": {"daytona": 1}, "grader": {"local": 1}}
     document["runtime"]["verifier_machine"]["storage_mb"] = None
     after = source_map("cohort-v2", [document], matrix, checkers, {}, defaults)
     assert after.backends["local"].roles["grader"] == {Support.PARTIAL: 1}

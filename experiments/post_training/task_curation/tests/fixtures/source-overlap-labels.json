@@ -1,0 +1,17 @@
+[
+  {
+    "left": "Campaign Release:tasktrove-codeforces-rebuilt-v1",
+    "right": "Task Trove:laion__codeforces-v3",
+    "expected": "duplicate"
+  },
+  {
+    "left": "Campaign Release:tasktrove-codeforces-rebuilt-v1",
+    "right": "Campaign Release:tasktrove-nl2bash-rebuilt-v1",
+    "expected": "distinct"
+  },
+  {
+    "left": "Campaign Release:tasktrove-nl2bash-rebuilt-v1",
+    "right": "Task Trove:laion__codeforces-v3",
+    "expected": "distinct"
+  }
+]

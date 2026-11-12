@@ -165,3 +165,24 @@ def test_grader_environment_is_counted_independently_and_lock_refusals_are_retai
     locked = count_lowered_spec_identities([("locked", spec)])
     assert locked.distinct == 1
     assert [task_id for task_id, _ in locked.execution_failures] == ["locked"]
+
+
+@pytest.mark.usefixtures("taskcompendium_environment")
+def test_daytona_role_census_routes_lock_grader_locally_and_retains_its_quota_failure():
+    # The standalone Harbor test environment intentionally omits Marin's curation runtime.
+    from experiments.post_training.task_curation.daytona_census import measure_envelopes  # noqa: PLC0415
+
+    task = {
+        "id": "actor-with-lock-grader",
+        "environment_requirements": {"docker_image": "actor@sha256:" + "a" * 64, "command_semantics": "linux_process"},
+        "grader": {"environment": {"packages_lock": "private.lock", "command_semantics": "linux_process"}},
+    }
+    measured = measure_envelopes([(task, {"verifier_machine": {"storage_mb": 1024}})])
+    assert measured.machine_slots == 1 and len(measured.snapshot_sizes) == 1
+    assert measured.execution_failure_tasks == 0
+    assert measured.roles["grader"]["local"]["machine_slots"] == 1
+    assert sum(measured.roles["grader"]["local"]["failures"].values()) == 1
+    task["environment_requirements"] = {}
+    no_actor = measure_envelopes([(task, {})])
+    assert no_actor.machine_slots == 0 and not no_actor.snapshot_sizes
+    assert not no_actor.roles["grader"]["local"]["failures"]
