@@ -129,7 +129,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             convert=convert_swe_rebench_task,
             version="4",
             info=SourceInfo(
-                id="Task Trove:DCAgent__swe_rebench_v2_patched_oracle-v2",
+                id="TaskTrove:DCAgent__swe_rebench_v2_patched_oracle-v2",
                 upstream_dataset="DCAgent__swe_rebench_v2_patched_oracle-v2",
                 upstream_name="DCAgent__swe_rebench_v2_patched_oracle-v2",
                 subset=None,
@@ -179,7 +179,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             convert=convert_swesmith_task,
             version="4",
             info=SourceInfo(
-                id="Task Trove:laion__swesmith-oracle-filtered-v2",
+                id="TaskTrove:laion__swesmith-oracle-filtered-v2",
                 upstream_dataset="laion__swesmith-oracle-filtered-v2",
                 upstream_name="laion__swesmith-oracle-filtered-v2",
                 subset=None,

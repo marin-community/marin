@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from finestore.rl.curation import DeconReceiptStatus, LexicalContaminationEvidence, LexicalReceipt, LexicalUse
+from finestore.rl.source_identity import SourceId, canonical_source_map
 from pydantic import BaseModel, ConfigDict
 from taskcompendium.pipeline.models import IntendedUse
 
@@ -20,7 +21,7 @@ from experiments.post_training.task_curation.source import RlDataSource
 class LexicalInputUse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    source_id: str
+    source_id: SourceId
     dataset_id: str
     dataset_revision: str
     converter_revision: str
@@ -68,6 +69,8 @@ def main() -> None:
     inputs = [LexicalInputUse.model_validate(row) for row in json.loads(args.source_uses.read_text())]
     uses = {row.source_id: row for row in inputs}
     raw = json.loads(args.measurements.read_text())
+    raw["measurements"] = canonical_source_map(raw["measurements"])
+    raw["drop_manifests"] = canonical_source_map(raw["drop_manifests"])
     if len(uses) != len(inputs) or set(uses) != set(raw["measurements"]):
         raise ValueError("Use declarations must cover the frozen measured source set exactly once")
     measurements = {}

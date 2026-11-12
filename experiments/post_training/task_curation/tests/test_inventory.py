@@ -13,7 +13,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from marin.execution.lazy import ArtifactStep, run
+from finestore.rl.source_identity import canonical_source_id
+from marin.execution.lazy import ArtifactStep, StepContext, run
 from taskcompendium.models import (
     AnswerType,
     Boxed,
@@ -39,6 +40,7 @@ from experiments.post_training.task_curation.inventory import (
     SelectionRecipe,
     task_selection_step,
     validation_task,
+    write_training,
 )
 from experiments.post_training.task_curation.tests.resource_receipts import resource_recipe, write_fixture_receipt
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
@@ -333,3 +335,31 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
     )
     assert resumed.exit_code == 0, resumed.output
     assert tasks == read_tasks(cache / "rl-data/task-selection/fixture/2026.10.23.2" / TRAIN_FILENAME)
+
+
+def test_source_alias_migration_preserves_selected_parquet_bytes_and_duplicate_owner(tmp_path):
+    old_ids = ("Campaign Release:tasktrove-codeforces-rebuilt-v1", "MarinSkyRL:svamp")
+    new_ids = tuple(map(canonical_source_id, old_ids))
+    assert sorted(new_ids) == list(reversed(new_ids))
+    shared = source_task("shared-first")
+    roots = [
+        admitted_source(tmp_path / "first", [shared, source_task("unique-first")]),
+        admitted_source(
+            tmp_path / "second", [shared.model_copy(update={"id": "shared-second"}), source_task("unique-second")]
+        ),
+    ]
+    settings = recipe(tmp_path).model_copy(
+        update={"sources": dict.fromkeys(old_ids, "calendar"), "family_limits": {"calendar": 3}}
+    )
+    outputs = []
+    fingerprints = []
+    for index, identifiers in enumerate((old_ids, new_ids)):
+        step = task_selection_step(dict(zip(identifiers, roots, strict=True)), settings)
+        config = step.build_config(StepContext.for_run(str(tmp_path / "output"), str(tmp_path), deps=step.deps))
+        output = tmp_path / f"selected-{index}.parquet"
+        write_training(config, (), output)
+        outputs.append(output)
+        fingerprints.append(step.fingerprint())
+    assert {task.id for task in read_tasks(outputs[0])} == {"shared-first", "unique-first", "unique-second"}
+    assert outputs[0].read_bytes() == outputs[1].read_bytes()
+    assert fingerprints[0] == fingerprints[1]

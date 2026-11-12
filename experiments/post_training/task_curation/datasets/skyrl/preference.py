@@ -45,7 +45,7 @@ KTO_COMPONENTS = {
     "kto_component_capybara": (
         "argilla/distilabel-capybara-dpo-7k-binarized",
         SourceInfo(
-            id="MarinSkyRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized",
+            id="TRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized",
             upstream_dataset="kto_mix",
             upstream_name="kto_mix",
             subset="argilla/distilabel-capybara-dpo-7k-binarized",
@@ -62,7 +62,7 @@ KTO_COMPONENTS = {
     "kto_component_intel_orca": (
         "argilla/distilabel-intel-orca-dpo-pairs",
         SourceInfo(
-            id="MarinSkyRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs",
+            id="TRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs",
             upstream_dataset="kto_mix",
             upstream_name="kto_mix",
             subset="argilla/distilabel-intel-orca-dpo-pairs",
@@ -79,7 +79,7 @@ KTO_COMPONENTS = {
     "kto_component_ultrafeedback": (
         "argilla/ultrafeedback-binarized-preferences-cleaned",
         SourceInfo(
-            id="MarinSkyRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned",
+            id="TRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned",
             upstream_dataset="kto_mix",
             upstream_name="kto_mix",
             subset="argilla/ultrafeedback-binarized-preferences-cleaned",
@@ -158,7 +158,7 @@ HH_SUBSETS = (
         "harmless-base",
         HH_HARMLESS_BASE_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:hh_rlhf/harmless-base",
+            id="Anthropic:hh_rlhf/harmless-base",
             upstream_dataset="hh_rlhf",
             upstream_name="hh_rlhf",
             subset="harmless-base",
@@ -177,7 +177,7 @@ HH_SUBSETS = (
         "helpful-base",
         HH_HELPFUL_BASE_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:hh_rlhf/helpful-base",
+            id="Anthropic:hh_rlhf/helpful-base",
             upstream_dataset="hh_rlhf",
             upstream_name="hh_rlhf",
             subset="helpful-base",
@@ -196,7 +196,7 @@ HH_SUBSETS = (
         "helpful-online",
         HH_HELPFUL_ONLINE_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:hh_rlhf/helpful-online",
+            id="Anthropic:hh_rlhf/helpful-online",
             upstream_dataset="hh_rlhf",
             upstream_name="hh_rlhf",
             subset="helpful-online",
@@ -215,7 +215,7 @@ HH_SUBSETS = (
         "helpful-rejection-sampled",
         HH_HELPFUL_REJECTION_SAMPLED_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:hh_rlhf/helpful-rejection-sampled",
+            id="Anthropic:hh_rlhf/helpful-rejection-sampled",
             upstream_dataset="hh_rlhf",
             upstream_name="hh_rlhf",
             subset="helpful-rejection-sampled",

@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
+from finestore.rl.source_identity import canonical_source_id, original_source_id
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
@@ -28,7 +29,7 @@ def coverage_query(
     source_id: str = "",
     release: str = "",
 ) -> CoverageQuery:
-    return CoverageQuery(intended_use, source_id, release)
+    return CoverageQuery(intended_use, canonical_source_id(source_id), release)
 
 
 def loaded_release(connection: Connection, release_id: str) -> dict[str, Any]:
@@ -75,7 +76,7 @@ def source_coverage(connection: Connection) -> dict[str, dict[str, Any]]:
         )
     ).mappings()
     return {
-        row["source_id"]: {
+        canonical_source_id(row["source_id"]): {
             "example_count": row["example_count"],
             "intended_use": row["intended_use"],
             "basis": row["basis"],
@@ -93,7 +94,7 @@ SOURCES_SQL = """
 WITH selected_sources AS (
     SELECT s.*
     FROM curriculum_sources s WHERE s.load_id=:load_id
-        AND (:source_id='' OR s.source_id=:source_id)
+        AND (:source_id='' OR s.source_id IN (:source_id, :original_source_id))
         AND (:intended_use='all' OR s.alignment IS NULL OR s.alignment->>'intended_use'=:intended_use)
  )
 """
@@ -144,6 +145,7 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             metadata = loaded_release(connection, filters.release)
             params = {
                 **asdict(filters),
+                "original_source_id": original_source_id(filters.source_id),
                 "load_id": metadata["load_id"],
                 "subject_id": subject_id,
             }
@@ -209,6 +211,18 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                     params,
                 ).mappings()
             ]
+        sources = [
+            {
+                **row,
+                "source_id": canonical_source_id(row["source_id"]),
+                "alignment": (
+                    {**row["alignment"], "source_id": canonical_source_id(row["alignment"]["source_id"])}
+                    if row["alignment"] is not None
+                    else None
+                ),
+            }
+            for row in sources
+        ]
         manifest = metadata["manifest"]
         return {
             "release_id": metadata["release_id"],
@@ -250,6 +264,7 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             metadata = loaded_release(connection, filters.release)
             params = {
                 **asdict(filters),
+                "original_source_id": original_source_id(filters.source_id),
                 "load_id": metadata["load_id"],
                 "subject_id": subject_id,
                 "node_id": node_id,
@@ -292,7 +307,11 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             next_cursor = base64.urlsafe_b64encode(
                 json.dumps([last["sample_rank"], last["source_id"], last["task_id"]]).encode()
             ).decode()
-        return {"release_id": metadata["release_id"], "tasks": rows[:limit], "next_cursor": next_cursor}
+        return {
+            "release_id": metadata["release_id"],
+            "tasks": [{**row, "source_id": canonical_source_id(row["source_id"])} for row in rows[:limit]],
+            "next_cursor": next_cursor,
+        }
 
     @api.get("/curriculum/task")
     def task(source_id: str, task_id: str, release: str = "") -> dict[str, Any]:
@@ -301,11 +320,20 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             detail = connection.execute(
                 text(
                     """
-                SELECT detail FROM curriculum_tasks WHERE load_id=:load_id AND source_id=:source_id AND task_id=:task_id
+                SELECT detail FROM curriculum_tasks WHERE load_id=:load_id
+                    AND source_id IN (:source_id, :original_source_id) AND task_id=:task_id
             """
                 ),
-                {"load_id": metadata["load_id"], "source_id": source_id, "task_id": task_id},
+                {
+                    "load_id": metadata["load_id"],
+                    "source_id": canonical_source_id(source_id),
+                    "original_source_id": original_source_id(source_id),
+                    "task_id": task_id,
+                },
             ).scalar_one_or_none()
         if detail is None:
             raise HTTPException(404, "Task is outside the loaded alignment population")
-        return {"release_id": metadata["release_id"], "task": detail}
+        return {
+            "release_id": metadata["release_id"],
+            "task": {**detail, "source_id": canonical_source_id(detail["source_id"])},
+        }

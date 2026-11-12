@@ -44,7 +44,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             info=SourceInfo(
-                id="SnowballV01:structure-closure" + ("/validation" if intended_use == IntendedUse.EVAL else ""),
+                id="OpenAthena:structure-closure" + ("/validation" if intended_use == IntendedUse.EVAL else ""),
                 upstream_dataset="structure-closure",
                 upstream_name="structure-closure",
                 subset="validation" if intended_use == IntendedUse.EVAL else None,

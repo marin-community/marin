@@ -115,7 +115,7 @@ def candidate_sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=None,
             info=SourceInfo(
-                id="Task Trove:laion__nemotron-gym-structured-outputs-v4",
+                id="TaskTrove:laion__nemotron-gym-structured-outputs-v4",
                 upstream_dataset="laion__nemotron-gym-structured-outputs-v4",
                 upstream_name="laion__nemotron-gym-structured-outputs-v4",
                 subset=None,

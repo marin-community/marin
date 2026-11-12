@@ -295,7 +295,7 @@ SOURCES = (
         AIME24_RUBRIC,
         controls=None,
         info=SourceInfo(
-            id="MarinSkyRL:aime24",
+            id="HuggingFaceH4:aime24",
             upstream_dataset="aime24",
             upstream_name="aime24",
             subset=None,
@@ -317,7 +317,7 @@ SOURCES = (
         IntendedUse.EVAL,
         AIME_1983_2024_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:aime_1983_2024",
+            id="di-zhang-fdu:aime_1983_2024",
             upstream_dataset="aime_1983_2024",
             upstream_name="aime_1983_2024",
             subset=None,
@@ -340,7 +340,7 @@ SOURCES = (
         IntendedUse.TRAIN,
         ASDIV_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:asdiv",
+            id="ASDiv:asdiv",
             upstream_dataset="asdiv",
             upstream_name="asdiv",
             subset=None,
@@ -362,7 +362,7 @@ SOURCES = (
         IntendedUse.TRAIN,
         DAPO_MATH_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:dapo_math",
+            id="BytedTsinghua-SIA:dapo_math",
             upstream_dataset="dapo_math",
             upstream_name="dapo_math",
             subset=None,
@@ -384,7 +384,7 @@ SOURCES = (
         IntendedUse.TRAIN,
         DEEPSCALER_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:deepscaler",
+            id="agentica-org:deepscaler",
             upstream_dataset="deepscaler",
             upstream_name="deepscaler",
             subset=None,
@@ -406,7 +406,7 @@ SOURCES = (
         IntendedUse.TRAIN,
         GSM8K_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:gsm8k",
+            id="OpenAI:gsm8k",
             upstream_dataset="gsm8k",
             upstream_name="gsm8k",
             subset=None,
@@ -428,7 +428,7 @@ SOURCES = (
         IntendedUse.TRAIN,
         HARDMATH_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:hardmath",
+            id="pafitis:hardmath",
             upstream_dataset="hardmath",
             upstream_name="hardmath",
             subset=None,
@@ -450,7 +450,7 @@ SOURCES = (
         IntendedUse.TRAIN,
         HENDRYCKS_MATH_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:hendrycks_math",
+            id="EleutherAI:hendrycks_math",
             upstream_dataset="hendrycks_math",
             upstream_name="hendrycks_math",
             subset=None,
@@ -469,7 +469,7 @@ SOURCES = (
         IntendedUse.EVAL,
         MATH500_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:math500",
+            id="HuggingFaceH4:math500",
             upstream_dataset="math500",
             upstream_name="math500",
             subset=None,
@@ -491,7 +491,7 @@ SOURCES = (
         IntendedUse.TRAIN,
         NUMINA_MATH_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:numina_math",
+            id="AI-MO:numina_math",
             upstream_dataset="numina_math",
             upstream_name="numina_math",
             subset=None,
@@ -513,7 +513,7 @@ SOURCES = (
         IntendedUse.TRAIN,
         RLVR_MATH_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:rlvr_math",
+            id="AllenAI:rlvr_math",
             upstream_dataset="rlvr_math",
             upstream_name="rlvr_math",
             subset=None,
@@ -533,7 +533,7 @@ SOURCES = (
         SVAMP_RUBRIC,
         controls=None,
         info=SourceInfo(
-            id="MarinSkyRL:svamp",
+            id="ChilleD:svamp",
             upstream_dataset="svamp",
             upstream_name="svamp",
             subset=None,

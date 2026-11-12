@@ -12,6 +12,7 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
+from finestore.rl.source_identity import canonical_source_id, canonical_source_map
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.source_fingerprints import DuplicateJudgeRun, DuplicateLabel, SourceFingerprint, SourceIdentitySurvey
 
@@ -38,9 +39,9 @@ logger = logging.getLogger(__name__)
 
 
 def fingerprint_manifest(manifest: dict) -> SourceIdentitySurvey:
-    fingerprints: dict[str, SourceFingerprint | None] = dict.fromkeys(manifest["source_ids"])
+    fingerprints: dict[str, SourceFingerprint | None] = canonical_source_map(dict.fromkeys(manifest["source_ids"]))
     for entry in manifest["inputs"]:
-        source_id = entry["source_id"]
+        source_id = canonical_source_id(entry["source_id"])
         if source_id not in fingerprints or fingerprints[source_id] is not None:
             raise ValueError(f"Unknown or duplicate fingerprint input: {source_id}")
         paths = [Path(path) for path in entry["paths"]]

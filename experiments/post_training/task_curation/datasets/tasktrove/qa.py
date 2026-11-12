@@ -253,7 +253,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "knowledge-openqa",
             "laion__nemotron-gym-knowledge-openqa-v4",
             SourceInfo(
-                id="Task Trove:laion__nemotron-gym-knowledge-openqa-v4",
+                id="TaskTrove:laion__nemotron-gym-knowledge-openqa-v4",
                 upstream_dataset="laion__nemotron-gym-knowledge-openqa-v4",
                 upstream_name="laion__nemotron-gym-knowledge-openqa-v4",
                 subset=None,
@@ -291,7 +291,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "science-openqa",
             "laion__nemotron-gym-science-so-openq-v3",
             SourceInfo(
-                id="Task Trove:laion__nemotron-gym-science-so-openq-v3",
+                id="TaskTrove:laion__nemotron-gym-science-so-openq-v3",
                 upstream_dataset="laion__nemotron-gym-science-so-openq-v3",
                 upstream_name="laion__nemotron-gym-science-so-openq-v3",
                 subset=None,
@@ -345,7 +345,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id=f"Task Trove:{MCQA_CONFIG}",
+                id=f"TaskTrove:{MCQA_CONFIG}",
                 upstream_dataset=MCQA_CONFIG,
                 upstream_name=MCQA_CONFIG,
                 subset=None,

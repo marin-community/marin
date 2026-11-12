@@ -20,6 +20,7 @@ from typing import NamedTuple
 
 import pyarrow.parquet as pq
 from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT
+from finestore.rl.source_identity import canonical_source_id, original_source_id
 from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from huggingface_hub import snapshot_download
 from rolloutengine.machines import _machine_spec
@@ -154,6 +155,7 @@ def native_shapes(task_toml: bytes) -> dict:
 
 
 def measure_source(source_id: str, artifact_root: str) -> DaytonaCensus:
+    source_id = canonical_source_id(source_id)
     source = cached_sources()[source_id]
     config = source.config
     if not isinstance(config, CurationRecipe | PrebuiltCohort):
@@ -424,7 +426,10 @@ def main() -> None:
     parser.add_argument("--artifact-root", required=True)
     parser.add_argument("--workers", type=int, required=True)
     args = parser.parse_args()
-    selected = sorted(set(json.loads(args.ids.read_text())) - GRANDFATHERED_MARINSKYRL_SOURCES)
+    selected = sorted(
+        {canonical_source_id(value) for value in json.loads(args.ids.read_text())} - GRANDFATHERED_MARINSKYRL_SOURCES,
+        key=original_source_id,
+    )
     args.output.mkdir(parents=True, exist_ok=True)
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
         pending = {pool.submit(measure_source, source_id, args.artifact_root): source_id for source_id in selected}
@@ -457,7 +462,7 @@ def main() -> None:
                     {},
                     {},
                 )
-            target = args.output / (canonical_sha256(source_id)[:20] + ".json")
+            target = args.output / (canonical_sha256(original_source_id(source_id))[:20] + ".json")
             target.write_text(json.dumps(asdict(result), indent=2) + "\n")
             logger.info("Census %s: %s %s (%d tasks)", source_id, result.status, result.verdict, result.converted)
 

@@ -12,6 +12,7 @@ from functools import partial
 
 import numpy as np
 from finestore.rl.curation import SourceDeclaration
+from finestore.rl.source_identity import canonical_source_id, canonical_source_map, original_source_id
 from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
@@ -112,6 +113,7 @@ def _prepare(
     seed: int,
     output_root: str,
 ) -> SemanticArtifact:
+    curated_roots = canonical_source_map(curated_roots)
     sources = []
     for source_id, root in curated_roots.items():
         manifest = json.loads((StoragePath(root) / "manifest.json").read_text())
@@ -295,9 +297,11 @@ def _publish(
     sample_size: int | None,
     output_root: str,
 ) -> SemanticArtifact:
+    curated_roots = canonical_source_map(curated_roots)
+    inventory = [row.model_copy(update={"id": canonical_source_id(row.id)}) for row in inventory]
     alignment = AlignmentManifest.model_validate_json((StoragePath(alignment_root) / "alignment.json").read_text())
     paths = SemanticArtifact.raw_load(alignment_root).paths
-    counts = {row.source_id: row for row in count_alignment_sources(runtime.context, paths=paths)}
+    counts = {canonical_source_id(row.source_id): row for row in count_alignment_sources(runtime.context, paths=paths)}
     if set(counts) - curated_roots.keys():
         raise ValueError("Alignment contains sources outside the selected corpus")
     if curated_roots.keys() - {row.id for row in inventory}:
@@ -340,7 +344,7 @@ def _publish(
     sources.extend(
         AlignmentSource(
             source_id=row.id,
-            source_key=canonical_sha256(row.model_dump(mode="json")),
+            source_key=canonical_sha256({**row.model_dump(mode="json"), "id": original_source_id(row.id)}),
             population=population,
             intended_use=None,
             task_count=row.task_count,
@@ -448,6 +452,9 @@ def curation_embedding_pipeline(
     inventory: list[SourceDeclaration],
 ) -> CurationEmbeddingStages:
     """Bind independent task and curriculum embeddings before the assignment pass."""
+    # Preserve artifact addresses; resolve public IDs at execution boundaries.
+    curated = {original_source_id(key): value for key, value in canonical_source_map(curated).items()}
+    inventory = [row.model_copy(update={"id": original_source_id(row.id)}) for row in inventory]
     inputs = _named(
         apply(
             "rl-semantics/inputs",

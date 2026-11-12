@@ -12,6 +12,7 @@ from typing import Any
 
 import pyarrow as pa
 from finestore.reader import ReadView
+from finestore.rl.source_identity import SourceId
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -81,7 +82,7 @@ class TaskDescription(BaseModel):
 class TaskSemanticInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    source_id: str
+    source_id: SourceId
     source_key: str
     task_id: str
     task_hash: str

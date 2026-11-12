@@ -494,7 +494,7 @@ RECIPE_VERSIONS = {
 BLENDS: dict[str, dict[str, SourceInfo]] = {
     "mopd": {
         "hs3_en": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/hs3_en",
+            id="Nemotron:nemotron_ultra_mopd/hs3_en",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="hs3_en",
@@ -505,7 +505,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=1281,
         ),
         "hs3_multi": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/hs3_multi",
+            id="Nemotron:nemotron_ultra_mopd/hs3_multi",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="hs3_multi",
@@ -516,7 +516,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=962,
         ),
         "hs3_multiturn": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/hs3_multiturn",
+            id="Nemotron:nemotron_ultra_mopd/hs3_multiturn",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="hs3_multiturn",
@@ -527,7 +527,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=1243,
         ),
         "makeshn_ultra_v3_ipi_train": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
+            id="Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="makeshn_ultra_v3_ipi_train",
@@ -538,7 +538,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2000,
         ),
         "safety_en": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/safety_en",
+            id="Nemotron:nemotron_ultra_mopd/safety_en",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="safety_en",
@@ -550,8 +550,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
         ),
         f"{NEXT_ACTION_COMPONENT}/{SweSplit.SWE_GYM}": SourceInfo(
             id=(
-                "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_com"
-                "parison_agent/SWE-Gym/SWE-Gym"
+                "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym"
             ),
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
@@ -564,8 +563,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
         ),
         f"{NEXT_ACTION_COMPONENT}/{SweSplit.SWE_REBENCH}": SourceInfo(
             id=(
-                "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_com"
-                "parison_agent/nebius/SWE-rebench-V2"
+                "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2"
             ),
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
@@ -577,7 +575,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=5307,
         ),
         "swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
+            id="Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="swe_pivot_len40k/SWE-Gym/SWE-Gym",
@@ -588,7 +586,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=860,
         ),
         "swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
+            id="Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="swe_pivot_len40k/nebius/SWE-rebench-V2",
@@ -599,7 +597,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=3903,
         ),
         "ultra_sft_step3200_abstention": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_abstention",
+            id="Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_abstention",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_sft_step3200_abstention",
@@ -610,7 +608,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=4025,
         ),
         "ultra_sft_step3200_calendar_v2": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_calendar_v2",
+            id="Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_calendar_v2",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_sft_step3200_calendar_v2",
@@ -621,7 +619,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=910,
         ),
         "ultra_sft_step3200_comp_coding": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_comp_coding",
+            id="Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_comp_coding",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_sft_step3200_comp_coding",
@@ -632,7 +630,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=7929,
         ),
         "ultra_sft_step3200_instruction_following": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following",
+            id="Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_sft_step3200_instruction_following",
@@ -643,7 +641,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=10409,
         ),
         "ultra_sft_step3200_jailbreak": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak",
+            id="Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_sft_step3200_jailbreak",
@@ -654,7 +652,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2861,
         ),
         "ultra_sft_step3200_lean": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+            id="Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_sft_step3200_lean",
@@ -665,7 +663,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=902,
         ),
         "ultra_sft_step3200_math_cot": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_cot",
+            id="Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_cot",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_sft_step3200_math_cot",
@@ -676,7 +674,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=4776,
         ),
         "ultra_sft_step3200_math_tir": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_tir",
+            id="Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_sft_step3200_math_tir",
@@ -687,7 +685,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=5917,
         ),
         "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k",
+            id="Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_sft_step3200_multichallenge_len40k",
@@ -698,7 +696,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=4028,
         ),
         "ultra_sft_step3200_nvarc_inductive": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_inductive",
+            id="Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_inductive",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_sft_step3200_nvarc_inductive",
@@ -709,7 +707,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2097,
         ),
         "ultra_sft_step3200_nvarc_transductive": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive",
+            id="Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_sft_step3200_nvarc_transductive",
@@ -720,7 +718,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2069,
         ),
         "ultra_sft_step3200_rdkit": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+            id="Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_sft_step3200_rdkit",
@@ -731,7 +729,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=1403,
         ),
         "ultra_sft_step3200_reasoning_gym": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_reasoning_gym",
+            id="Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_reasoning_gym",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_sft_step3200_reasoning_gym",
@@ -742,7 +740,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=1385,
         ),
         "ultra_sft_step3200_stem_mcqa": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa",
+            id="Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_sft_step3200_stem_mcqa",
@@ -753,7 +751,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2097,
         ),
         "ultra_sft_step3200_stem_mcqa_cot_rima_new": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa_cot_rima_new",
+            id="Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa_cot_rima_new",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_sft_step3200_stem_mcqa_cot_rima_new",
@@ -764,7 +762,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2077,
         ),
         "ultra_sft_step3200_structured_outputs_v2": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_structured_outputs_v2",
+            id="Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_structured_outputs_v2",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_sft_step3200_structured_outputs_v2",
@@ -775,7 +773,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=682,
         ),
         "ultra_sft_step3200_toolcall_schema": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema",
+            id="Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_sft_step3200_toolcall_schema",
@@ -786,7 +784,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2666,
         ),
         "ultra_v3_agentic_rl_step73_citation_format_v2": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_citation_format_v2",
+            id="Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_citation_format_v2",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_v3_agentic_rl_step73_citation_format_v2",
@@ -797,7 +795,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=250,
         ),
         "ultra_v3_agentic_rl_step73_freeform_text_v2": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_freeform_text_v2",
+            id="Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_freeform_text_v2",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_v3_agentic_rl_step73_freeform_text_v2",
@@ -808,7 +806,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=250,
         ),
         "ultra_v3_agentic_rl_step73_structured_outputs_v2": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_structured_outputs_v2",
+            id="Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_structured_outputs_v2",
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_v3_agentic_rl_step73_structured_outputs_v2",
@@ -819,7 +817,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=10000,
         ),
         "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": SourceInfo(
-            id=("MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-" "Gym/SWE-Gym"),
+            id=("Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym"),
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
@@ -830,9 +828,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=246,
         ),
         "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": SourceInfo(
-            id=(
-                "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/" "SWE-rebench-V2"
-            ),
+            id=("Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2"),
             upstream_dataset="nemotron_ultra_mopd",
             upstream_name="nemotron_ultra_mopd",
             subset="ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
@@ -845,7 +841,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
     },
     "rlvr1": {
         "language_mixing_hs3_ultra_genrm_fmt": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt",
+            id="Nemotron:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="language_mixing_hs3_ultra_genrm_fmt",
@@ -856,7 +852,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=4795,
         ),
         "ultra_sft_step3200_abstention": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_abstention",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_abstention",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_abstention",
@@ -867,7 +863,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=4025,
         ),
         "ultra_sft_step3200_calendar_v2": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_calendar_v2",
@@ -878,7 +874,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=910,
         ),
         "ultra_sft_step3200_comp_coding": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_comp_coding",
@@ -889,7 +885,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=7929,
         ),
         "ultra_sft_step3200_instruction_following": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_instruction_following",
@@ -900,7 +896,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=11828,
         ),
         "ultra_sft_step3200_jailbreak": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_jailbreak",
@@ -911,7 +907,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2861,
         ),
         "ultra_sft_step3200_lean": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_lean",
@@ -922,7 +918,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=902,
         ),
         "ultra_sft_step3200_math_cot": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_math_cot",
@@ -933,7 +929,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=4776,
         ),
         "ultra_sft_step3200_math_tir": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_math_tir",
@@ -944,7 +940,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=5917,
         ),
         "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_multichallenge_len40k",
@@ -955,7 +951,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=4028,
         ),
         "ultra_sft_step3200_nvarc_inductive": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_inductive",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_inductive",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_nvarc_inductive",
@@ -966,7 +962,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2097,
         ),
         "ultra_sft_step3200_nvarc_transductive": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_transductive",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_transductive",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_nvarc_transductive",
@@ -977,7 +973,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2069,
         ),
         "ultra_sft_step3200_reasoning_gym": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_reasoning_gym",
@@ -988,7 +984,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2089,
         ),
         "ultra_sft_step3200_stem_mcqa": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_stem_mcqa",
@@ -999,7 +995,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2097,
         ),
         "ultra_sft_step3200_stem_mcqa_cot_rima_new": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa_cot_rima_new",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa_cot_rima_new",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_stem_mcqa_cot_rima_new",
@@ -1010,7 +1006,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2077,
         ),
         "ultra_sft_step3200_structured_outputs_v2": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_structured_outputs_v2",
@@ -1021,7 +1017,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2080,
         ),
         "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
@@ -1032,7 +1028,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2838,
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
-            id=("MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-" "rebench-V2"),
+            id=("Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2"),
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
@@ -1043,7 +1039,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=11060,
         ),
         "ultra_sft_step3200_tau_pivot": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_tau_pivot",
@@ -1054,7 +1050,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=20035,
         ),
         "ultra_sft_step3200_toolcall_schema": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema",
+            id="Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema",
             upstream_dataset="nemotron_ultra_rlvr1",
             upstream_name="nemotron_ultra_rlvr1",
             subset="ultra_sft_step3200_toolcall_schema",
@@ -1067,7 +1063,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
     },
     "rlvr2": {
         "language_mixing_hs3_ultra_genrm_fmt": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/language_mixing_hs3_ultra_genrm_fmt",
+            id="Nemotron:nemotron_ultra_rlvr2/language_mixing_hs3_ultra_genrm_fmt",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="language_mixing_hs3_ultra_genrm_fmt",
@@ -1078,7 +1074,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=4757,
         ),
         "ultra_sft_step3200_abstention": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_abstention",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_abstention",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_abstention",
@@ -1089,7 +1085,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=4025,
         ),
         "ultra_sft_step3200_calendar_v2": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_calendar_v2",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_calendar_v2",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_calendar_v2",
@@ -1100,7 +1096,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=910,
         ),
         "ultra_sft_step3200_comp_coding": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_comp_coding",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_comp_coding",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_comp_coding",
@@ -1111,7 +1107,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=7929,
         ),
         "ultra_sft_step3200_instruction_following": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_instruction_following",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_instruction_following",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_instruction_following",
@@ -1122,7 +1118,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=10409,
         ),
         "ultra_sft_step3200_jailbreak": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_jailbreak",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_jailbreak",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_jailbreak",
@@ -1133,7 +1129,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2861,
         ),
         "ultra_sft_step3200_lean": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_lean",
@@ -1144,7 +1140,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=902,
         ),
         "ultra_sft_step3200_math_cot": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_math_cot",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_cot",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_math_cot",
@@ -1155,7 +1151,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=4776,
         ),
         "ultra_sft_step3200_math_tir": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_math_tir",
@@ -1166,7 +1162,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=5917,
         ),
         "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_multichallenge_len40k",
@@ -1177,7 +1173,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=4028,
         ),
         "ultra_sft_step3200_nvarc_inductive": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_inductive",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_inductive",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_nvarc_inductive",
@@ -1188,7 +1184,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2097,
         ),
         "ultra_sft_step3200_nvarc_transductive": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_transductive",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_transductive",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_nvarc_transductive",
@@ -1199,7 +1195,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2069,
         ),
         "ultra_sft_step3200_reasoning_gym": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_reasoning_gym",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_reasoning_gym",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_reasoning_gym",
@@ -1210,7 +1206,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=1385,
         ),
         "ultra_sft_step3200_stem_mcqa": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_stem_mcqa",
@@ -1221,7 +1217,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2097,
         ),
         "ultra_sft_step3200_stem_mcqa_cot_rima_new": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa_cot_rima_new",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa_cot_rima_new",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_stem_mcqa_cot_rima_new",
@@ -1232,7 +1228,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2077,
         ),
         "ultra_sft_step3200_structured_outputs_v2": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v2",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v2",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_structured_outputs_v2",
@@ -1243,7 +1239,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=682,
         ),
         "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
@@ -1254,7 +1250,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2838,
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
-            id=("MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-" "rebench-V2"),
+            id=("Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2"),
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
@@ -1265,7 +1261,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=11060,
         ),
         "ultra_sft_step3200_tau_pivot": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_tau_pivot",
@@ -1276,7 +1272,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=20035,
         ),
         "ultra_sft_step3200_toolcall_schema": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_toolcall_schema",
@@ -1287,7 +1283,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2666,
         ),
         "ultra_sft_step3200_ds2_freeform": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_ds2_freeform",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_ds2_freeform",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_ds2_freeform",
@@ -1298,7 +1294,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=1392,
         ),
         "ultra_sft_step3200_ds3_citation": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_ds3_citation",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_ds3_citation",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_ds3_citation",
@@ -1309,7 +1305,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=1403,
         ),
         "ultra_sft_step3200_rdkit": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_rdkit",
@@ -1320,7 +1316,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=1403,
         ),
         "ultra_sft_step3200_structured_outputs_v3": SourceInfo(
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v3",
+            id="Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v3",
             upstream_dataset="nemotron_ultra_rlvr2",
             upstream_name="nemotron_ultra_rlvr2",
             subset="ultra_sft_step3200_structured_outputs_v3",

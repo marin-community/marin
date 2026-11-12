@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from finestore.rl.curation import ActorCensusInput, DaytonaMeasurement, IntegrityContractSummary
+from finestore.rl.source_identity import SourceId, canonical_source_id
 from pydantic import BaseModel, ConfigDict, model_validator
 from taskcompendium.identity import canonical_sha256
 
@@ -19,7 +20,7 @@ from experiments.post_training.task_curation.source import RlDataSource
 class ActorCensusReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    source_id: str
+    source_id: SourceId
     input: ActorCensusInput
     measurement: DaytonaMeasurement
     integrity_contracts: IntegrityContractSummary | None
@@ -115,8 +116,10 @@ def receipt_from_census(census: Mapping, summary: IntegrityContractSummary | Non
 
 def integrity_summary_for_actor(actor: Mapping, integrity: Mapping) -> IntegrityContractSummary:
     """Join refreshed contract evidence only when it measured the actor census's exact input."""
-    fields = ("source_id", "input_artifact", "converter_version", "converter_revision", "task_count")
-    if any(actor[name] != integrity[name] for name in fields):
+    fields = ("input_artifact", "converter_version", "converter_revision", "task_count")
+    if canonical_source_id(actor["source_id"]) != canonical_source_id(integrity["source_id"]) or any(
+        actor[name] != integrity[name] for name in fields
+    ):
         raise ValueError(f"Integrity census input differs from actor census: {actor['source_id']}")
     raw = integrity["summary"]
     if raw["schema_version"] != 2:
@@ -161,6 +164,7 @@ def read_census_receipts(directory: Path) -> dict[str, ActorCensusReceipt]:
     receipts = {}
     for path in sorted(directory.glob("part-*.json")):
         for source_id, record in json.loads(path.read_text()).items():
+            source_id = canonical_source_id(source_id)
             receipt = ActorCensusReceipt.model_validate(record)
             if source_id != receipt.source_id or source_id in receipts:
                 raise ValueError(f"Duplicate or mismatched census source identity: {source_id}")
@@ -177,14 +181,14 @@ def main() -> None:
     integrities = {}
     for path in args.integrity_censuses:
         for record in json.loads(path.read_text()):
-            source_id = record["source_id"]
+            source_id = canonical_source_id(record["source_id"])
             if source_id in integrities:
                 raise ValueError(f"Duplicate integrity census: {source_id}")
             integrities[source_id] = record
     receipts = {}
     for path in args.censuses:
         for record in json.loads(path.read_text()):
-            integrity = integrities.get(record["source_id"])
+            integrity = integrities.get(canonical_source_id(record["source_id"]))
             summary = None if integrity is None else integrity_summary_for_actor(record, integrity)
             receipt = receipt_from_census(record, summary)
             if receipt.source_id in receipts:

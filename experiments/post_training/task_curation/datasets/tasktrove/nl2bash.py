@@ -57,7 +57,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="Task Trove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+                id="TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
                 upstream_dataset="DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
                 upstream_name="DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
                 subset=None,

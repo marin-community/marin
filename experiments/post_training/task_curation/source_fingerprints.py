@@ -12,6 +12,7 @@ from heapq import nsmallest
 
 import dupekit
 import pyarrow as pa
+from finestore.rl.source_identity import canonical_source_id, canonical_source_map, original_source_id
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec, VerifyitGrader, format_conversation
 from taskcompendium.pipeline.fingerprints import deduplication_key
@@ -167,17 +168,22 @@ def candidate_pairs(
     fingerprints: dict[str, SourceFingerprint], changed_sources: set[str], top_k: int
 ) -> list[PairSimilarity]:
     """Shortlist at most top-k pairs per changed source, with deterministic ties."""
+    fingerprints = canonical_source_map(fingerprints)
+    changed_sources = {canonical_source_id(key) for key in changed_sources}
     if not changed_sources.issubset(fingerprints):
         raise ValueError("Changed sources need complete fingerprints before duplicate review")
     selected = {}
-    for source_id in sorted(changed_sources):
+    for source_id in sorted(changed_sources, key=original_source_id):
         candidates = []
-        for other_id in sorted(fingerprints.keys() - {source_id}):
-            left, right = sorted((source_id, other_id))
+        for other_id in sorted(fingerprints.keys() - {source_id}, key=original_source_id):
+            left, right = sorted((source_id, other_id), key=original_source_id)
             candidates.append(pair_similarity(left, fingerprints[left], right, fingerprints[right]))
-        for pair in sorted(candidates, key=lambda pair: (-pair.rank_score, pair.left, pair.right))[:top_k]:
+        for pair in sorted(
+            candidates,
+            key=lambda pair: (-pair.rank_score, original_source_id(pair.left), original_source_id(pair.right)),
+        )[:top_k]:
             selected[pair.left, pair.right] = pair
-    return [selected[key] for key in sorted(selected)]
+    return [selected[key] for key in sorted(selected, key=lambda pair: tuple(map(original_source_id, pair)))]
 
 
 def duplicate_groups(reviews: list[DuplicateReview]) -> list[DuplicateGroup]:
@@ -194,7 +200,7 @@ def duplicate_groups(reviews: list[DuplicateReview]) -> list[DuplicateGroup]:
     pending = set(neighbors)
     groups = []
     while pending:
-        frontier, members = [min(pending)], set()
+        frontier, members = [min(pending, key=original_source_id)], set()
         while frontier:
             member = frontier.pop()
             if member in members:
@@ -202,8 +208,8 @@ def duplicate_groups(reviews: list[DuplicateReview]) -> list[DuplicateGroup]:
             members.add(member)
             frontier.extend(neighbors[member] - members)
         pending -= members
-        canonical = min(members)
-        group_id = hashlib.sha256("\n".join(sorted(members)).encode()).hexdigest()[:20]
+        canonical = min(members, key=original_source_id)
+        group_id = hashlib.sha256("\n".join(sorted(map(original_source_id, members))).encode()).hexdigest()[:20]
         groups.append(
             DuplicateGroup(
                 group_id=group_id,
@@ -213,7 +219,7 @@ def duplicate_groups(reviews: list[DuplicateReview]) -> list[DuplicateGroup]:
                         source_id=member,
                         overlap_with_canonical=1.0 if member == canonical else edges.get(frozenset((canonical, member))),
                     )
-                    for member in sorted(members)
+                    for member in sorted(members, key=original_source_id)
                 ],
             )
         )

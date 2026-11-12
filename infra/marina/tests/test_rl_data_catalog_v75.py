@@ -17,7 +17,7 @@ def test_v75_api_marks_zero_actor_and_grandfathered_sources_without_false_unsafe
         "daytona_count_basis": "Complete TaskSpec census",
     }
     grandfathered = {
-        "id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+        "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
         "tags": ["agentic"],
         "daytona_safety": "unassessed",
         "daytona_snapshot_count": None,

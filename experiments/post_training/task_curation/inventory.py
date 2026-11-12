@@ -14,9 +14,10 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.source_identity import canonical_source_map, original_source_id
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
-from pydantic import BaseModel, ConfigDict, PositiveInt
+from pydantic import BaseModel, ConfigDict, PositiveInt, field_validator
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.models import SCHEMA_VERSION, Source, TaskSpec
@@ -66,6 +67,11 @@ class SelectionRecipe(BaseModel):
     heldout: HeldoutSource
     validation_per_family: PositiveInt
     seed: int
+
+    @field_validator("sources", "source_limits", mode="before")
+    @classmethod
+    def _source_keys(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return None if value is None else canonical_source_map(value)
 
 
 @dataclass(frozen=True)
@@ -277,6 +283,13 @@ def prepare(config: SelectionConfig) -> None:
 
 def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecipe) -> ArtifactStep[Artifact]:
     """Bind a terminal selection to admitted source artifacts and a pinned heldout input."""
+    curated = canonical_source_map(curated)
+    recipe = recipe.model_copy(
+        update={
+            "sources": canonical_source_map(recipe.sources),
+            "source_limits": None if recipe.source_limits is None else canonical_source_map(recipe.source_limits),
+        }
+    )
     missing = recipe.sources.keys() - curated.keys()
     if missing:
         raise ValueError(f"Selection requires curation sources: {', '.join(sorted(missing))}")
@@ -293,15 +306,26 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
     heldout = ArtifactStep.adopt(
         f"rl-data/selection-inputs/{recipe.name}-heldout", recipe.heldout.version, recipe.heldout.uri
     )
-    inputs = {source_id: curated[source_id] for source_id in sorted(recipe.sources)}
+    inputs = {source_id: curated[source_id] for source_id in sorted(recipe.sources, key=original_source_id)}
+    # Persist original keys in the config identity so cached selections and duplicate ownership survive renaming.
+    stored_recipe = recipe.model_copy(
+        update={
+            "sources": {original_source_id(key): value for key, value in recipe.sources.items()},
+            "source_limits": (
+                None
+                if recipe.source_limits is None
+                else {original_source_id(key): value for key, value in recipe.source_limits.items()}
+            ),
+        }
+    )
 
     def build_config(ctx: StepContext) -> SelectionConfig:
         return SelectionConfig(
             tuple(
-                SelectionInput(source_id, recipe.sources[source_id], ctx.artifact_path(step))
+                SelectionInput(original_source_id(source_id), recipe.sources[source_id], ctx.artifact_path(step))
                 for source_id, step in inputs.items()
             ),
-            recipe,
+            stored_recipe,
             ctx.artifact_path(heldout),
             ctx.output_path,
         )

@@ -13,6 +13,7 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+from finestore.rl.source_identity import canonical_source_id, canonical_source_map, original_source_id
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -46,12 +47,14 @@ def source_declarations(checkout: Path) -> dict:
 
 
 def changed_source_declarations(before: dict, after: dict) -> set[str]:
+    before = canonical_source_map({key: {**row, "id": canonical_source_id(row["id"])} for key, row in before.items()})
+    after = canonical_source_map({key: {**row, "id": canonical_source_id(row["id"])} for key, row in after.items()})
     return {source_id for source_id in after if before.get(source_id) != after[source_id]}
 
 
 def prepare_review(base_ref: str, index: Path, output: Path, changed_output: Path) -> set[str]:
     root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
-    current = source_declarations(root)
+    current = canonical_source_map(source_declarations(root))
     with tempfile.TemporaryDirectory(prefix="atlas-source-baseline-") as temporary:
         baseline = Path(temporary) / "checkout"
         subprocess.run(["git", "worktree", "add", "--detach", str(baseline), base_ref], check=True)
@@ -60,9 +63,9 @@ def prepare_review(base_ref: str, index: Path, output: Path, changed_output: Pat
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(baseline)], check=True)
     changed = changed_source_declarations(previous, current)
-    references = {
-        key: FingerprintReference.model_validate(value) for key, value in json.loads(index.read_text()).items()
-    }
+    references = canonical_source_map(
+        {key: FingerprintReference.model_validate(value) for key, value in json.loads(index.read_text()).items()}
+    )
     missing = changed - references.keys()
     if missing:
         raise ValueError(f"Fingerprint every changed source before admission: {sorted(missing)}")
@@ -71,7 +74,7 @@ def prepare_review(base_ref: str, index: Path, output: Path, changed_output: Pat
     for source_id, reference in references.items():
         if source_id not in current:
             continue
-        if reference.declaration_sha256 != canonical_sha256(current[source_id]):
+        if reference.declaration_sha256 != canonical_sha256({**current[source_id], "id": original_source_id(source_id)}):
             raise ValueError(f"Fingerprint declaration is stale: {source_id}")
         if reference.uri not in artifacts:
             payload = StoragePath(reference.uri).read_bytes()

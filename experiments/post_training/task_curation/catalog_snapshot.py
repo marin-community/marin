@@ -41,6 +41,7 @@ from finestore.rl.curation import (
     register_catalog,
     validate_items,
 )
+from finestore.rl.source_identity import canonical_source_id, canonical_source_map
 from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from finestore.store import DataStore
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
@@ -200,7 +201,7 @@ def published_source_starts(catalog: CurationCatalog) -> dict[str, datetime]:
         if started_at is None:
             raise ValueError(f"Published campaign {row['run_id']} has no start time")
         started = datetime.fromisoformat(started_at)
-        source_id = row["source_id"]
+        source_id = canonical_source_id(row["source_id"])
         if source_id not in latest or started > latest[source_id]:
             latest[source_id] = started
     return latest
@@ -362,6 +363,14 @@ def _refresh_snapshot(
                     where=[("snapshot_id", "==", pointer["snapshot_id"])],
                 )
             )
+            prior = [
+                {
+                    **row,
+                    "id": canonical_source_id(row["id"]),
+                    "declaration": {**row["declaration"], "id": canonical_source_id(row["declaration"]["id"])},
+                }
+                for row in prior
+            ]
             rows = [
                 SnapshotSource.model_validate({**row, "snapshot_id": snapshot_id}).model_dump(mode="json")
                 for row in transform(prior)
@@ -384,6 +393,8 @@ def _refresh_snapshot(
 def retire_catalog_sources(root: str, snapshot_id: str, retired_source_ids: frozenset[str]) -> CatalogSnapshot:
     """Retire selected entries without rewriting declarations, assessments or artifacts."""
 
+    retired_source_ids = frozenset(map(canonical_source_id, retired_source_ids))
+
     def retired(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         unknown = retired_source_ids - {row["id"] for row in records}
         if unknown:
@@ -401,6 +412,7 @@ def refresh_catalog(
     This publishes a catalog snapshot, not a curation campaign. It cannot add an
     unconverted source or reuse an assessment under a changed source pin.
     """
+    retired_source_ids = frozenset(map(canonical_source_id, retired_source_ids))
     declarations = {source.info.id: source.declaration for source in sources}
     catalog = CurationCatalog(root)
     if retired_source_ids & declarations.keys():
@@ -448,6 +460,10 @@ def refresh_daytona_measurements(
     converted_examples: Mapping[str, ConvertedExamples] | None = None,
 ) -> CatalogSnapshot:
     """Apply measured actor fields to exact input pins, preserving other metadata and assessments."""
+
+    measurements = canonical_source_map(measurements)
+    converted_examples = canonical_source_map(converted_examples or {})
+    retired_source_ids = frozenset(map(canonical_source_id, retired_source_ids))
 
     def measured(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         prior_ids = {row["id"] for row in records}

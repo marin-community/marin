@@ -37,7 +37,7 @@ from experiments.post_training.task_curriculum.models import CurriculumCatalog
 @pytest.fixture(autouse=True)
 def numeric_actor_census(monkeypatch):
     sources = driver.all_sources()
-    source = sources["MarinSkyRL:aime24"]
+    source = sources["HuggingFaceH4:aime24"]
     sources[source.info.id] = replace(
         source,
         info=replace(
@@ -488,7 +488,7 @@ def test_corpus_resume_refreshes_registered_source_metadata(tmp_path, monkeypatc
     assert resumed.exit_code == 0, resumed.output
     releases = [json.loads(path.read_text()) for path in (cache / "rl-semantics").glob("publication-*/*/release.json")]
     sources = {row["source_id"]: row for row in max(releases, key=lambda r: len(r["sources"]))["sources"]}
-    assert sources["MarinSkyRL:aime24"]["basis"] == "matched"
+    assert sources["HuggingFaceH4:aime24"]["basis"] == "matched"
     declared = [row for row in sources.values() if row["basis"] == "declared"]
     assert declared and all(row["task_count"] > 0 and row["intended_use"] is None for row in declared)
     retired = json.loads((Path(__file__).parents[1] / "retired-inventory-only.json").read_text())

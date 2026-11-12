@@ -12,6 +12,7 @@ from typing import Any
 
 import click
 import pyarrow.parquet as pq
+from finestore.rl.source_identity import canonical_source_id
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -85,6 +86,7 @@ def release_tasks(paths: list[str]) -> Iterator[dict]:
         with StoragePath(path).open("rb") as stream:
             for batch in pq.ParquetFile(stream).iter_batches(batch_size=256):
                 for row in batch.to_pylist():
+                    row["source_id"] = canonical_source_id(row["source_id"])
                     yield {
                         **{
                             key: row[key]

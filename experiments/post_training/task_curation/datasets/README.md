@@ -106,7 +106,7 @@ job with a three-day timeout:
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   experiments.post_training.task_curation.native_quick \
-  --source 'Task Trove:DCAgent__exp_rpt_nemotron-cpp' \
+  --source 'TaskTrove:DCAgent__exp_rpt_nemotron-cpp' \
   --root /tmp/native-quick-UNIQUE_VERSION \
   --evidence-root s3://marin-us-east-02a/marin/rl-data/atlas-disposition/UNIQUE_VERSION/results
 ```

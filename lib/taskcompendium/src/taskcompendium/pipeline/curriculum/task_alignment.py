@@ -11,6 +11,7 @@ from functools import partial
 
 import numpy as np
 import pyarrow as pa
+from finestore.rl.source_identity import SourceId
 from finestore.schema import arrow_schema
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath
@@ -34,7 +35,7 @@ PREVIEW_CHARACTERS = 8192
 
 
 class TaskAlignment(BaseModel):
-    source_id: str
+    source_id: SourceId
     source_key: str
     task_id: str
     task_hash: str

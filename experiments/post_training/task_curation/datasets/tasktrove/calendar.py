@@ -166,7 +166,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "laion__nemotron-gym-agent-calendar-v2",
             CALENDAR_RUBRIC,
             SourceInfo(
-                id="Task Trove:laion__nemotron-gym-agent-calendar-v2",
+                id="TaskTrove:laion__nemotron-gym-agent-calendar-v2",
                 upstream_dataset="laion__nemotron-gym-agent-calendar-v2",
                 upstream_name="laion__nemotron-gym-agent-calendar-v2",
                 subset=None,
@@ -183,7 +183,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "laion__nemotron-gym-instruction-following-calendar-v3",
             IF_CALENDAR_RUBRIC,
             SourceInfo(
-                id="Task Trove:laion__nemotron-gym-instruction-following-calendar-v3",
+                id="TaskTrove:laion__nemotron-gym-instruction-following-calendar-v3",
                 upstream_dataset="laion__nemotron-gym-instruction-following-calendar-v3",
                 upstream_name="laion__nemotron-gym-instruction-following-calendar-v3",
                 subset=None,

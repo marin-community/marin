@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.source_identity import canonical_source_id, original_source_id
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from huggingface_hub import HfApi, hf_hub_download
@@ -47,7 +48,7 @@ CANONICAL_FILES = {
 
 
 def source_slug(source_id: str) -> str:
-    return re.sub(r"[^a-z0-9-]+", "-", source_id.lower()).strip("-")
+    return re.sub(r"[^a-z0-9-]+", "-", original_source_id(source_id).lower()).strip("-")
 
 
 def publish_quick(entry: dict, output: Path, repo: str) -> dict:
@@ -166,11 +167,20 @@ def run_entry(entry: dict, root: Path, hub_input: str | None) -> dict:
             ZephyrContext(client=client, max_workers=2, chunk_storage_prefix=str(root / "chunks" / slug)) as context,
         ):
             run_source_pipeline(
-                recipe, context, staged, str(output), mode=SourceProcessingMode.QUICK, canonical_source=entry["id"]
+                recipe,
+                context,
+                staged,
+                str(output),
+                mode=SourceProcessingMode.QUICK,
+                canonical_source=original_source_id(entry["id"]),
             )
     finally:
         client.shutdown()
-    repo_slug = slug[:REPO_SLUG_LIMIT].rstrip("-") + "-" + hashlib.sha256(entry["id"].encode()).hexdigest()[:8]
+    repo_slug = (
+        slug[:REPO_SLUG_LIMIT].rstrip("-")
+        + "-"
+        + hashlib.sha256(original_source_id(entry["id"]).encode()).hexdigest()[:8]
+    )
     return publish_quick(entry, output, f"open-athena/{repo_slug}-taskcompendium-20261112")
 
 
@@ -184,7 +194,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     entries = {entry["id"]: entry for entry in json.loads(RETIRED.read_text())["entries"]}
     args.root.mkdir(parents=True, exist_ok=True)
-    for source_id in args.source:
+    for requested in args.source:
+        source_id = canonical_source_id(requested)
         entry = entries[source_id]
         result = run_entry(entry, args.root, args.hub_input)
         slug = source_slug(source_id)

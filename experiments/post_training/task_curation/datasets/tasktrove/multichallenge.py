@@ -90,7 +90,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="Task Trove:laion__nemotron-gym-multichallenge-advanced-v4",
+                id="TaskTrove:laion__nemotron-gym-multichallenge-advanced-v4",
                 upstream_dataset="laion__nemotron-gym-multichallenge-advanced-v4",
                 upstream_name="laion__nemotron-gym-multichallenge-advanced-v4",
                 subset=None,

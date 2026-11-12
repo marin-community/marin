@@ -42,7 +42,7 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python \
 Repeat `--source` for every source in the selection recipe, using its invocation
 name from
 [`runnable_sources()`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py).
-For example, recipe ID `MarinSkyRL:eurus2_code` is invoked as
+For example, recipe ID `PRIME-RL:eurus2_code` is invoked as
 `--source eurus2_code`. The CLI names differ from the stable IDs in the recipe.
 Set `REVIEW_MODEL_REVISION` to the pinned reviewer, `WORKER_IMAGE` to a
 digest-pinned worker image, and `CURATION_CACHE` and `CAMPAIGN` to retained,

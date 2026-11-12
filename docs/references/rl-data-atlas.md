@@ -101,7 +101,8 @@ visible; source details contain the remaining fields.
 Before selecting a new catalog load:
 
 1. Validate every source's typed upstream origin, build path and generated title.
-   Preserve published IDs until approved retirement and evidence re-pointing.
+   Resolve historical IDs through the permanent source alias table. Preserve
+   assessment keys, packet URIs and artifact identities when loading canonical IDs.
 2. Verify `current_release.repo`, `revision` and `url` identify the exact consumed
    pin. QA/repair releases must be private open-athena TaskCompendium datasets;
    decontamination remediation must configure the new version as the pipeline input. Its URL must match the repository and revision. Keep `url` as upstream

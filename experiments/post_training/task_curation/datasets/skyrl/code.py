@@ -297,7 +297,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="MarinSkyRL:apps",
+                id="CodeParrot:apps",
                 upstream_dataset="apps",
                 upstream_name="apps",
                 subset=None,
@@ -322,7 +322,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="MarinSkyRL:eurus2_code",
+                id="PRIME-RL:eurus2_code",
                 upstream_dataset="eurus2_code",
                 upstream_name="eurus2_code",
                 subset=None,
@@ -351,7 +351,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="MarinSkyRL:verifiable_code",
+                id="Open-R1:verifiable_code",
                 upstream_dataset="verifiable_code",
                 upstream_name="verifiable_code",
                 subset=None,
@@ -379,7 +379,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="MarinSkyRL:gretel_text_to_sql",
+                id="Gretel:gretel_text_to_sql",
                 upstream_dataset="gretel_text_to_sql",
                 upstream_name="gretel_text_to_sql",
                 subset=None,

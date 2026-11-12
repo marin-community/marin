@@ -243,7 +243,7 @@ SOURCES = (
         convert_tasktrove_math,
         GYM_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__nemotron-gym-math-v5",
+            id="TaskTrove:laion__nemotron-gym-math-v5",
             upstream_dataset="laion__nemotron-gym-math-v5",
             upstream_name="laion__nemotron-gym-math-v5",
             subset=None,
@@ -282,7 +282,7 @@ SOURCES = (
         convert_openreasoning,
         OPENREASONING_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__nemotron-gym-math-openmathreasoning-v2",
+            id="TaskTrove:laion__nemotron-gym-math-openmathreasoning-v2",
             upstream_dataset="laion__nemotron-gym-math-openmathreasoning-v2",
             upstream_name="laion__nemotron-gym-math-openmathreasoning-v2",
             subset=None,
@@ -324,7 +324,7 @@ SOURCES = (
         convert_tasktrove_math,
         ORACLE_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:SankalpKJ__nemotron-math-oracle-filtered-v2",
+            id="TaskTrove:SankalpKJ__nemotron-math-oracle-filtered-v2",
             upstream_dataset="SankalpKJ__nemotron-math-oracle-filtered-v2",
             upstream_name="SankalpKJ__nemotron-math-oracle-filtered-v2",
             subset=None,
@@ -364,7 +364,7 @@ SOURCES = (
         convert_tasktrove_math,
         PRISM_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__nemo-prism-math-v3",
+            id="TaskTrove:laion__nemo-prism-math-v3",
             upstream_dataset="laion__nemo-prism-math-v3",
             upstream_name="laion__nemo-prism-math-v3",
             subset=None,
@@ -410,7 +410,7 @@ SOURCES = (
         convert_tasktrove_math,
         STACK_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__nemotron-gym-math-stack-overflow-v3",
+            id="TaskTrove:laion__nemotron-gym-math-stack-overflow-v3",
             upstream_dataset="laion__nemotron-gym-math-stack-overflow-v3",
             upstream_name="laion__nemotron-gym-math-stack-overflow-v3",
             subset=None,

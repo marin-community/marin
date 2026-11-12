@@ -8,6 +8,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from functools import partial
 
+from finestore.rl.source_identity import original_source_id
 from finestore.schema import arrow_schema
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
@@ -91,7 +92,7 @@ def _sample_tasks(key: tuple[str, str], rows: Iterator[dict], *, source_size: in
     _, selected = seeded_sample(
         rows,
         size=source_size if key[0] == "source" else area_size,
-        key=lambda row: seeded_order(row["task"]["source_id"] + "\0" + row["task"]["task_id"], 0),
+        key=lambda row: seeded_order(original_source_id(row["task"]["source_id"]) + "\0" + row["task"]["task_id"], 0),
     )
     yield from selected
 

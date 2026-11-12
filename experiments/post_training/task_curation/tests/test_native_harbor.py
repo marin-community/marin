@@ -145,9 +145,9 @@ def test_native_package_round_trip_keeps_state_boundary_private_files_and_modes(
 @pytest.mark.parametrize(
     "source_id",
     [
-        "Harbor Hub:skill2env",
-        "Task Trove:DCAgent__exp_rle_adversarial-v6",
-        "Campaign Release:smartie-swesmith-admitted",
+        "Harbor Hub:skill2env/skill2env",
+        "TaskTrove:DCAgent__exp_rle_adversarial-v6",
+        "TaskTrove:smartie-swesmith-admitted",
     ],
 )
 def test_native_registration_requires_actor_receipt_for_its_private_pin(source_id, tmp_path, monkeypatch):

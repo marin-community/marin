@@ -13,6 +13,7 @@ from functools import partial
 from pathlib import Path
 
 import pyarrow.parquet as pq
+from finestore.rl.source_identity import original_source_id
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import ArtifactStep, StepContext, run
@@ -165,7 +166,7 @@ def census_config(population: ArtifactStep, ctx: StepContext) -> CensusConfig:
 def census_steps(populations: list[SourceTextPopulation], version: str) -> list[ArtifactStep]:
     steps = []
     for population in populations:
-        key = canonical_sha256(population.source_id)[:20]
+        key = canonical_sha256(original_source_id(population.source_id))[:20]
         source = ArtifactStep.adopt(
             f"rl-data/atlas/actor-census/input/{key}", version, population.path, kind=SourceTextPopulation
         )

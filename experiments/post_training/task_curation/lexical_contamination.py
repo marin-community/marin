@@ -17,6 +17,7 @@ from typing import NamedTuple
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.source_identity import canonical_source_id, original_source_id
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -70,7 +71,7 @@ class TextPopulationFiles(NamedTuple):
 
 
 def source_documents(config: SourceTextConfig, rejected: Counter, admission: Counter) -> Iterable[tuple[dict, dict]]:
-    source = all_sources()[config.source_id]
+    source = all_sources()[canonical_source_id(config.source_id)]
     definition = source.config
     if isinstance(definition, PrebuiltCohort):
         with (StoragePath(config.source_input) / definition.files[0]).open("rb") as stream:
@@ -156,7 +157,7 @@ def write_text_population(documents: Iterable[tuple[dict, dict]], output_path: s
 
 
 def normalize_source(config: SourceTextConfig) -> SourceTextPopulation:
-    source = all_sources()[config.source_id]
+    source = all_sources()[canonical_source_id(config.source_id)]
     rejected, admission = Counter(), Counter()
     count, text_sha, spec_sha, texts, specs = write_text_population(
         source_documents(config, rejected, admission), config.output_path
@@ -187,7 +188,7 @@ def text_config(
     source_id: str, primary: ArtifactStep, inputs: dict[str, ArtifactStep], converter_revision: str, ctx: StepContext
 ) -> SourceTextConfig:
     return SourceTextConfig(
-        source_id,
+        original_source_id(source_id),
         ctx.artifact_path(primary),
         {name: ctx.artifact_path(step) for name, step in inputs.items()},
         ctx.output_path,
@@ -202,6 +203,7 @@ def text_steps(
     sources = all_sources()
     steps = []
     for source_id in source_ids:
+        source_id = canonical_source_id(source_id)
         source = sources[source_id]
         config = source.config.recipe if isinstance(source.config, EvalDataset) else source.config
         if isinstance(config, PrebuiltCohort):
@@ -214,7 +216,7 @@ def text_steps(
             inputs = {name: download_step(reference, runtime) for name, reference in config.inputs.items()}
         else:
             raise ValueError(f"No registered converter for {source_id}")
-        key = canonical_sha256(source_id)[:20]
+        key = canonical_sha256(original_source_id(source_id))[:20]
         steps.append(
             ArtifactStep(
                 name=f"rl-data/atlas/lexical/text/{key}",
@@ -241,7 +243,7 @@ def main() -> None:
     args = parser.parse_args()
     configure_coreweave_s3()
     with artifact_prefix(args.artifact_root):
-        source_ids = json.loads(args.source_ids.read_text())
+        source_ids = [canonical_source_id(value) for value in json.loads(args.source_ids.read_text())]
         runtime = CampaignRuntime()
         steps = text_steps(source_ids, runtime, args.converter_revision, args.artifact_version)
         plan = [

@@ -29,7 +29,7 @@ from finestore.rl.curation import (
     source_identifier,
     source_title,
 )
-from finestore.rl.source_identity import PENDING_SOURCE_ID_RETIREMENTS
+from finestore.rl.source_identity import canonical_source_id
 from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from marin.execution.lazy import ArtifactStep
 
@@ -170,14 +170,10 @@ class SourceInfo:
     def __post_init__(self) -> None:
         if not isinstance(self.origin, SourceOrigin):
             raise ValueError("origin must be an upstream SourceOrigin")
-        if not self.id:
-            object.__setattr__(
-                self, "id", source_identifier(self.origin, self.upstream_dataset, self.subset, self.variant)
-            )
-        if PENDING_SOURCE_ID_RETIREMENTS.get(self.id, self.id) != source_identifier(
-            self.origin, self.upstream_dataset, self.subset, self.variant
-        ):
+        expected_id = source_identifier(self.origin, self.upstream_dataset, self.subset, self.variant)
+        if self.id and canonical_source_id(self.id) != expected_id:
             raise ValueError("Source ID differs from generated identity")
+        object.__setattr__(self, "id", expected_id)
         title = source_title(self.upstream_name, self.subset, self.variant)
         if self.title is not None and self.title != title:
             raise ValueError("Source title differs from generated title")

@@ -10,6 +10,7 @@ from contextlib import ExitStack
 from functools import partial
 from pathlib import Path
 
+from finestore.rl.source_identity import original_source_id
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import ArtifactStep, run
@@ -48,7 +49,7 @@ def measure_integrity(config: CensusConfig) -> IntegrityCensus:
 def integrity_steps(populations: list[SourceTextPopulation], version: str) -> list[ArtifactStep]:
     steps = []
     for population in populations:
-        key = canonical_sha256(population.source_id)[:20]
+        key = canonical_sha256(original_source_id(population.source_id))[:20]
         source = ArtifactStep.adopt(
             f"rl-data/atlas/integrity-census/input/{key}", version, population.path, kind=SourceTextPopulation
         )

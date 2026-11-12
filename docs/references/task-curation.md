@@ -173,8 +173,8 @@ this small recipe selects 100 calendar tasks from two admitted sources:
   "name": "calendar-trial",
   "version": "2026.10.23.1",
   "sources": {
-    "Task Trove:laion__nemotron-gym-agent-calendar-v2": "calendar",
-    "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": "calendar"
+    "TaskTrove:laion__nemotron-gym-agent-calendar-v2": "calendar",
+    "TaskTrove:laion__nemotron-gym-instruction-following-calendar-v3": "calendar"
   },
   "family_limits": {"calendar": 100},
   "heldout": {
@@ -326,7 +326,7 @@ MarinSkyRL builds them.
 | Field | Ingestion contract |
 |---|---|
 | `upstream_dataset`, `subset`, `variant` | Stable upstream population keys; subset and variant are optional. |
-| `id` | Generated as `<origin>:<upstream_dataset>[/<subset>][@<variant>]`; mismatches fail validation. Published IDs are immutable. |
+| `id` | Generated as `<origin>:<upstream_dataset>[/<subset>][@<variant>]`; mismatches fail validation. Approved historical IDs resolve through the permanent alias table. |
 | `upstream_name`, `title` | Title is generated as `<upstream_name> · <subset> · <variant>`, omitting absent parts. Do not add prose or format labels. |
 | `build_path` | Internal campaign or pipeline, independently of upstream origin. |
 | `url` | Upstream provenance URL, including for repaired releases. |
@@ -339,13 +339,17 @@ unmeasured cohorts in the pending ingestion ledger. Publish a new metadata
 snapshot only after the producer's exact-pin census supplies these proofs;
 existing production SQL remains selected until that evidence-backed load is ready.
 
-A frozen pending-retirement map records the published IDs whose existing provider
-prefixes differ from their generated identities. It permits only those exact
-existing ID-to-identity pairs while ID changes await approval. New declarations
-must match their generated IDs. After approval, retire each old ID in a new
-snapshot, register its replacement and re-point the retained assessment evidence;
-keep historical snapshots and artifacts. Do not edit the frozen map to admit a
-new mismatched declaration.
+The permanent `SOURCE_ID_ALIASES` table in `finestore.rl.source_identity`
+resolves the 232 approved historical IDs to generated identities. All readers
+resolve both spellings to the canonical ID, including retained assessments,
+actor receipts, duplicate surveys and Atlas URLs. Historical snapshots, packet
+URIs, pipeline keys and TaskSpec bytes remain unchanged. Artifact construction
+and deterministic selection use `original_source_id` for existing cache keys,
+source ordering and source-derived seeds. A naming migration therefore preserves
+conversion, assessment, census and decontamination artifacts and selected task
+bytes; it does not authorize a production publication or a new conversion.
+New declarations must match their generated identities. Do not add aliases to
+bypass that contract without an explicitly approved identity migration.
 
 Every runnable agentic source declares its ingested `task_format`. New agentic
 sources must ingest TaskCompendium or Harbor task directories; selection rejects

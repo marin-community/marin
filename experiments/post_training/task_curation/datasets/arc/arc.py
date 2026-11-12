@@ -252,7 +252,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=replace(
                 SourceInfo(
-                    id="Task Trove:laion__nemotron-gym-arc-agi-python-inductive-v2",
+                    id="TaskTrove:laion__nemotron-gym-arc-agi-python-inductive-v2",
                     upstream_dataset="laion__nemotron-gym-arc-agi-python-inductive-v2",
                     upstream_name="laion__nemotron-gym-arc-agi-python-inductive-v2",
                     subset=None,
@@ -280,7 +280,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=replace(
                 SourceInfo(
-                    id="Task Trove:laion__nemotron-gym-arc-agi-transductive-v3",
+                    id="TaskTrove:laion__nemotron-gym-arc-agi-transductive-v3",
                     upstream_dataset="laion__nemotron-gym-arc-agi-transductive-v3",
                     upstream_name="laion__nemotron-gym-arc-agi-transductive-v3",
                     subset=None,
