@@ -48,6 +48,15 @@ def selected_tasks(root: Path) -> dict[str, dict]:
     return selected
 
 
+def _probe_text(lines: list[str], question: str) -> str:
+    return (
+        "This is a controlled context-length probe. Read the final question.\n"
+        + "".join(lines)
+        + "\nFinal question: "
+        + question
+    )
+
+
 def length_probe(task: dict, tokenizer, token_limit: int = PROBE_TEXT_TOKEN_LIMIT) -> tuple[dict, int]:
     """Keep the real arithmetic verifier; add visible, fully attended ledger text."""
     task = json.loads(json.dumps(task))
@@ -55,22 +64,19 @@ def length_probe(task: dict, tokenizer, token_limit: int = PROBE_TEXT_TOKEN_LIMI
     line_count = 4000
     while True:
         lines = [f"Ledger entry {index}: recorded value {index % 97}.\n" for index in range(line_count)]
-        full_text = "This is a controlled context-length probe. Read the final question.\n" + "".join(lines)
-        full_text += "\nFinal question: " + question
+        full_text = _probe_text(lines, question)
         if len(tokenizer.encode(full_text, add_special_tokens=False)) >= token_limit:
             break
         line_count *= 2
     start, stop = 0, len(lines)
     while start < stop:
         count = (start + stop + 1) // 2
-        text = "This is a controlled context-length probe. Read the final question.\n" + "".join(lines[:count])
-        text += "\nFinal question: " + question
+        text = _probe_text(lines[:count], question)
         if len(tokenizer.encode(text, add_special_tokens=False)) <= token_limit:
             start = count
         else:
             stop = count - 1
-    text = "This is a controlled context-length probe. Read the final question.\n" + "".join(lines[:start])
-    text += "\nFinal question: " + question
+    text = _probe_text(lines[:start], question)
     tokens = len(tokenizer.encode(text, add_special_tokens=False))
     assert token_limit - 100 <= tokens <= token_limit
     task["context"]["events"][-1]["content"] = text
