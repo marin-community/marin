@@ -149,6 +149,8 @@ TYPES = MappingProxyType(
         "generator.eval_sampling_params.logprobs": "NonNegativeInt | None",
         "generator.sampling_params.stop": "tuple[str, ...] | None",
         "generator.eval_sampling_params.stop": "tuple[str, ...] | None",
+        "generator.sampling_params.stop_token_ids": "tuple[int, ...] | None",
+        "generator.eval_sampling_params.stop_token_ids": "tuple[int, ...] | None",
         "data.sampling.kind": _literal(SamplingKind) + " | None",
         "data.sampling.weighting": _literal(WeightingKind),
         "data.sampling.domain_weights": "NumberMap",

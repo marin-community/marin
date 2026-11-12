@@ -19,6 +19,6 @@ class EvalSamplingParams(Section):
     top_k: int = field(-1)
     logprobs: NonNegativeInt | None = field(None)
     stop: tuple[str, ...] | None = field(None)
-    stop_token_ids: None = field(None)
+    stop_token_ids: tuple[int, ...] | None = field(None)
     skip_special_tokens: bool = field(True)
     min_tokens: NonNegativeInt = unset_field()
