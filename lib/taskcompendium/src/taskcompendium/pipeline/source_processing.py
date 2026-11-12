@@ -26,7 +26,11 @@ from zephyr.dataset import Dataset, ShardInfo, format_shard_path
 from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file
 
-from taskcompendium.grading_environment import count_grading_environment, grading_environment_census
+from taskcompendium.grading_environment import (
+    count_grading_environment,
+    grading_environment_census,
+    shared_integrity_issue,
+)
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import Grader, NoGrader, TaskSpec, VerifyitGrader, grades_in_process
 from taskcompendium.pipeline.audit_schema import (
@@ -56,7 +60,9 @@ from taskcompendium.pipeline.models import (
     Disposition,
     FilterPolicy,
     GraderReadiness,
+    ImportFailureKind,
     ImportRejection,
+    NormalizedTask,
     SourceRecipe,
     SourceStatus,
 )
@@ -222,6 +228,15 @@ def _raw_dataset(
 
 
 def _admit_conversion(converted: ConvertedRow, *, recipe: SourceRecipe) -> dict[str, Any]:
+    if isinstance(converted.result, NormalizedTask) and (issue := shared_integrity_issue(converted.result.task)):
+        converted = replace(
+            converted,
+            result=ImportRejection(
+                kind=ImportFailureKind.SOURCE_DEFECT,
+                reason=issue,
+                detail="SHARED admission requires a versioned typed integrity contract",
+            ),
+        )
     result = admit_converted_row(converted, recipe)
     result["audit"]["raw"]["raw_input_sha256"] = raw_input_sha256(converted.original_data)
     result["audit"]["raw"]["source_locator"] = converted.raw.source.row
@@ -361,7 +376,13 @@ def _admit(
 ) -> dict[str, Any]:
     if row["task_json"] is not None:
         task = TaskSpec.model_validate_json(row["task_json"])
-        if not require_oracle_filter(task, oracle_filter):
+        if issue := shared_integrity_issue(task):
+            row = {
+                **row,
+                "filter_status": Disposition.REJECT.value,
+                "filter_reasons": [*(row["filter_reasons"] or []), issue],
+            }
+        elif not require_oracle_filter(task, oracle_filter):
             assert oracle_filter is not None
             entry = oracle_filter.tasks[task.id]
             row = {

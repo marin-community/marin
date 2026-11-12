@@ -21,6 +21,8 @@ from taskcompendium.models import (
     VerifyitGrader,
 )
 
+SHARED_INTEGRITY_MISSING = "shared_integrity_contract_missing"
+
 
 class GradingEnvironmentMode(StrEnum):
     SHARED = "shared"
@@ -135,6 +137,14 @@ def count_grading_environment(counts: Counter[str], assessment: dict | None) -> 
     counts["assessed_tasks"] += 1
     for field in ("required", "declared", "status", "reason"):
         counts[f"{field}:{assessment[field] or 'unavailable'}"] += 1
+
+
+def shared_integrity_issue(task: TaskSpec) -> str | None:
+    """Return the admission failure when SHARED state has no typed integrity contract."""
+    assessment = assess_grading_environment(task)
+    if assessment.required is GradingEnvironmentMode.SHARED and task.integrity_contract is None:
+        return SHARED_INTEGRITY_MISSING
+    return None
 
 
 def grading_environment_census(counts: Counter[str]) -> dict:

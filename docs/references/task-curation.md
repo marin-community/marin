@@ -548,8 +548,41 @@ The maintained Python SWE lowering is `harbor_payload` or `harbor_record` with
 It moves the exact initial repository/dependency setup into Harbor's pre-agent
 setup and uses common actor images. Publish the resulting native package, copy
 its metadata integrity contract into the TaskSpec, then run full-population
-Harbor ORACLE filtering and SAMPLE/FULL QA. Legacy non-Python script runners
-remain unsupported until their language-specific contracts are qualified.
+Harbor ORACLE filtering and SAMPLE/FULL QA.
+
+Non-Python SWE-rebench packages use `harbor_payload` or `harbor_record` with a `shared-native` contract
+and an explicit `native.family`: Go, Rust, JVM (Gradle/Maven), Julia, Swift,
+C/C++, Dart, PHP, Elixir, .NET, Lua or OCaml. The declaration preserves the exact
+source `install_config.test_cmd` and self-contained test-ID parser. Before agent
+access, bootstrap applies the trusted source test patch, captures tests and build
+configuration, and snapshots installed toolchains and runner packages. Each grading launch restores
+those snapshots and the declared test/configuration paths, including source wrapper scripts.
+Added paths matching the contract's test and configuration patterns are removed. The command runs as the grader
+UID with a cleared environment. The root controller captures its output through
+an inherited file descriptor, kills grader-UID descendants, invokes the pinned
+parser in isolated Python, and writes the structured verdict. Dependency edits
+to installed libraries outside the pinned runner packages remain live and produce `dependencies-diff.json`;
+dependency declarations in restored build files remain pinned. Startup changes produce
+`startup-hooks-diff.json`. Candidate programs can still influence test-output parsing,
+and mutable dependencies can execute startup hooks; the contract records these gaps for subsequent tamper audits.
+
+The manual Linux-root suite exercises real runners, failed tampering attempts
+and a passing external-dependency mutation. Run it inside a disposable Linux
+container with the declared toolchains installed, since the suite overwrites
+and restores their executable files:
+
+```bash
+uv run pytest lib/taskcompendium/tests/test_shared_native.py -m manual -n 0
+```
+
+Use `-k go` to start with Go, `-k gradle` for Gradle or `-k julia` for Julia. These
+controller regressions do not replace source oracle filtering or SAMPLE/FULL QA.
+
+Recipe and prebuilt admission also require the typed integrity contract whenever
+the task requires SHARED grading. A matching container boundary or passing control
+receipt does not supply that contract. QUICK retains unprotected conversions for
+measurement; SAMPLE/FULL record `shared_integrity_contract_missing` and refuse
+admission. Changed admission revisions write new artifacts and retain prior versions.
 
 An `Environment` declares grader build inputs. The converter records agent and
 grader requirements on each TaskSpec; execution selects suitable Shellbox machines.

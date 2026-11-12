@@ -44,6 +44,7 @@ def shared_runtime():
         (workspace / "candidate.py").write_text("VALUE = 0\n")
         (workspace / "extra_guard.py").write_text("reference\n")
         (workspace / "editable.py").write_text("original\n")
+        (workspace / "conftest.py").write_text("pytest_plugins: tuple[str, ...]\n")
         (workspace / "test_case.py").write_text(
             "import candidate, dependency\ndef test_value(): assert candidate.VALUE + dependency.VALUE == 1\n"
         )

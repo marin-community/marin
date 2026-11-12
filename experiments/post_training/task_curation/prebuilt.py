@@ -37,6 +37,7 @@ from taskcompendium.grading_environment import (
     assess_grading_environment,
     count_grading_environment,
     grading_environment_census,
+    shared_integrity_issue,
 )
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import NoGrader, TaskSpec
@@ -53,6 +54,7 @@ from experiments.post_training.task_curation.decontamination import require_priv
 from experiments.post_training.task_curation.environment_fidelity import missing_environment
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference, TaskFormat
 
+PREBUILT_ADMISSION_VERSION = "2026.11.12.2"
 TASKS_FILENAME = "tasks.parquet"
 CONTROLS_FILENAME = "controls.jsonl"
 ORACLE_FILTER_FILENAME = "oracle-filter.json"
@@ -351,6 +353,8 @@ def prebuilt_artifact(
             count_grading_environment(grading, assessment.model_dump(mode="json"))
             if assessment.status is GradingEnvironmentStatus.MISMATCH:
                 raise ValueError(f"grading_environment_mismatch: {task.id}: {assessment.model_dump_json()}")
+            if issue := shared_integrity_issue(task):
+                raise ValueError(f"{issue}: {task.id}")
             if task.execution_requirements is None:
                 raise ValueError(f"SAMPLE/FULL admission requires explicit execution requirements: {task.id}")
             if oracle_filter is None:
@@ -422,7 +426,7 @@ def prebuilt_artifact(
         name = f"{name}-{canonical_sha256(evidence.model_dump(mode='json'))[:16]}"
     return ArtifactStep(
         name=name,
-        version=QUICK_VIEW_VERSION if quick else config.version,
+        version=QUICK_VIEW_VERSION if quick else PREBUILT_ADMISSION_VERSION,
         artifact_type=CampaignArtifact,
         run=partial(run),
         build_config=build_config,

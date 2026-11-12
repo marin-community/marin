@@ -108,6 +108,8 @@ def declared_plugins(reference: Path) -> list[str]:
                 continue
             if not any(isinstance(target, ast.Name) and target.id == "pytest_plugins" for target in targets):
                 continue
+            if statement.value is None:
+                continue
             values = ast.literal_eval(statement.value)
             if isinstance(values, str):
                 values = (values,)
@@ -124,7 +126,7 @@ def remove_path(path: Path) -> None:
         shutil.rmtree(path)
 
 
-def restore_file(workspace: Path, relative: str, reference: Path) -> None:
+def restore_path(workspace: Path, relative: str, reference: Path) -> None:
     target = workspace / relative
     for parent in reversed(target.parents):
         if parent == workspace or not parent.is_relative_to(workspace):
@@ -133,7 +135,10 @@ def restore_file(workspace: Path, relative: str, reference: Path) -> None:
             remove_path(parent)
         parent.mkdir(exist_ok=True)
     remove_path(target)
-    shutil.copy2(reference, target)
+    if reference.is_dir():
+        shutil.copytree(reference, target, symlinks=True)
+    else:
+        shutil.copy2(reference, target)
 
 
 def stop_agent_processes(uid: int) -> None:
@@ -280,7 +285,7 @@ print(json.dumps({'distributions':sorted(seen),'files':files,'plugins':plugins})
     write_json(root / "site-packages-baseline.json", inventory(info["sites"]))
     spec.update({"setup": "", "python": str(root / "pytest-python")})
     write_json(root / "spec.json", spec)
-    (root / "verifier.toml").write_text(payload["verifier_spec"])
+    (tests / "verifier.toml").write_text(payload["verifier_spec"])
     wrapper = root / "pytest-python"
     wrapper.write_text(
         f"#!/bin/sh\nexec {sys.executable} -I -S {contract['harness']} pytest "
@@ -316,7 +321,7 @@ def prepare_grading(contract: dict) -> None:
         if path.relative_to(workspace).as_posix() not in paths:
             remove_path(path)
     for name in paths:
-        restore_file(workspace, name, Path(contract["reference_directory"]) / name)
+        restore_path(workspace, name, Path(contract["reference_directory"]) / name)
     checked(["chgrp", "-R", str(contract["grader_uid"]), str(workspace)], cwd=root, timeout=120)
     checked(["chmod", "-R", "g+rwX", str(workspace)], cwd=root, timeout=120)
 
@@ -394,7 +399,7 @@ def grade(contract_path: Path, verifyit: str) -> None:
     root = Path(contract["protected_root"])
     # The Verifyit controller is protected and runs as root; only its pytest child drops UID.
     result = subprocess.run(
-        [verifyit, str(root / "verifier.toml"), "--logs-dir", contract["report_directory"]],
+        [verifyit, str(root / "tests/verifier.toml"), "--logs-dir", contract["report_directory"]],
         cwd=Path("/"),
         env=clean_environment(),
         capture_output=True,

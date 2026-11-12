@@ -581,12 +581,11 @@ def harbor_payload(
         has_solution=bool(solution),
     )
     if repository_state:
-        if not isinstance(spec, PytestSpec):
-            raise UnsupportedHarborTask(
-                "Shared SWE script runners need a qualified language-specific integrity contract"
-            )
         assert shared_policy is not None
-        harden_shared_swe(files, spec=spec, dependency_state=shared_policy.dependency_state)
+        try:
+            harden_shared_swe(files, spec=spec, dependency_state=shared_policy.dependency_state)
+        except KeyError as error:
+            raise UnsupportedHarborTask(f"Shared SWE requires a supported source runner: {error}") from error
     return HarborPayload(record_metadata, files, modes, solution, solution_modes)
 
 

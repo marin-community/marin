@@ -24,7 +24,15 @@ from zephyr.readers import load_jsonl
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import NoGrader, ResourceGroups, Source, TaskSpec
+from taskcompendium.models import (
+    AnswerType,
+    CommandSemantics,
+    EnvironmentRequirements,
+    NoGrader,
+    ResourceGroups,
+    Source,
+    TaskSpec,
+)
 from taskcompendium.pipeline.controls import GradingMachines, answer_reply, reference_reply
 from taskcompendium.pipeline.conversion import convert_source_row
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFormat
@@ -163,6 +171,47 @@ def write_jsonl(source: Path, rows: list[dict]) -> None:
 
 def parquet_rows(path):
     return [row for file in sorted(Path(path).glob("*.parquet")) for row in pq.read_table(file).to_pylist()]
+
+
+def unprotected_shared_task(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
+    task = convert_svamp(row, context)
+    assert isinstance(task, TaskSpec)
+    return task.model_copy(
+        update={
+            "answer_type": AnswerType.WORKSPACE_STATE,
+            "environment_requirements": EnvironmentRequirements(
+                docker_image="python@sha256:" + "a" * 64, command_semantics=CommandSemantics.LINUX_PROCESS
+            ),
+            "grader": NoGrader(reason="Native SHARED trial"),
+            "resources": ResourceGroups(
+                verifier=(inline_resource("task.toml", b'[verifier]\nenvironment_mode = "shared"\n'),)
+            ),
+        }
+    )
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+def test_shared_admission_requires_integrity_but_quick_keeps_measurement(tmp_path, mode):
+    source = tmp_path / "source"
+    write_jsonl(source, apple_rows(1))
+    recipe = fixture_recipe(unprotected_shared_task, rubric=None, controls=None)
+    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    with ZephyrContext(max_workers=1, chunk_storage_prefix=str(tmp_path / "quick-chunks")) as context:
+        quick = run_source_pipeline(
+            recipe,
+            context,
+            str(source),
+            str(tmp_path / "quick"),
+            mode=SourceProcessingMode.QUICK,
+            canonical_source=recipe.name,
+        )
+    quick_rows = parquet_rows(Path(quick.manifest_path).parent / "normalize")
+    assert len(quick_rows) == 1 and quick_rows[0]["task_json"] is not None
+    assert quick_rows[0]["grading_environment"]["status"] == "matched"
+    reviewed = run_pipeline(recipe, source, tmp_path / "reviewed", pipeline_config(mode, reviewer))
+    assert parquet_rows(reviewed.final_path) == []
+    rows = parquet_rows(reviewed.normalize_path)
+    assert rows[0]["normalization_reason"] == "shared_integrity_contract_missing"
 
 
 def pipeline_config(
