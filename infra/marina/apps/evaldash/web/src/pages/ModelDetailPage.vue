@@ -3,8 +3,8 @@ import { computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { formatCoverage, formatInterval, formatScore, formatTimestamp, objectStoreUrl } from '@/utils/formatting'
-import { ALL_COHORTS, UNVERSIONED_COHORT, fleetBest, isPartialCoverage } from '@/utils/panel'
+import { formatInterval, formatScore, formatTimestamp, objectStoreUrl } from '@/utils/formatting'
+import { ALL_COHORTS, UNVERSIONED_COHORT, cellCoverageLabel, fleetBest, isPartialCoverage } from '@/utils/panel'
 import { isSmokeEval } from '@/constants'
 import { INTERVAL_KIND, type Meta, type MissingCell, type ModelDetail, type ModelRun, type Panel, type PanelCell } from '@/types/api'
 import EvalRail from '@/components/charts/EvalRail.vue'
@@ -118,7 +118,7 @@ const cohortLabel = computed(() => (scope.value === ALL ? 'all runs' : (scope.va
 const location = computed(() => data.value?.location ?? null)
 
 function coverageNote(cell: PanelCell): string {
-  return isPartialCoverage(cell) ? formatCoverage(cell.coverage) : ''
+  return isPartialCoverage(cell) ? cellCoverageLabel(cell) : ''
 }
 </script>
 

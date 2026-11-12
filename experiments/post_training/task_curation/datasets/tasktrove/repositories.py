@@ -8,7 +8,6 @@ private copies of the repository with restored trusted tests.
 """
 
 import json
-from dataclasses import replace
 
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.pipeline.inputs import ConversionContext
@@ -109,7 +108,7 @@ def repository_source(
 ) -> RlDataSource[CurationRecipe]:
     return RlDataSource(
         pipeline=process_rows,
-        info=replace(info, task_format=TaskFormat.TASKCOMPENDIUM),
+        info=info,
         config=CurationRecipe(
             name=f"tasktrove-{name}",
             source=tasktrove_source(config),
@@ -129,44 +128,42 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             SWE_REBENCH_RUBRIC,
             convert=convert_swe_rebench_task,
             version="3",
-            info=replace(
-                SourceInfo(
-                    id="Task Trove:DCAgent__swe_rebench_v2_patched_oracle-v2",
-                    title="DCAgent/swe_rebench_v2_patched_oracle-v2",
-                    origin="Task Trove",
-                    family="swe-repo",
-                    tags=(
-                        "agentic",
-                        "multi-turn",
-                        "language:python",
-                        "language:go",
-                        "language:rust",
-                        "language:java",
-                        "language:julia",
-                        "language:kotlin",
-                        "language:swift",
-                        "language:dart",
-                        "language:c",
-                        "language:scala",
-                        "language:php",
-                        "language:csharp",
-                        "language:elixir",
-                        "language:lua",
-                        "language:cpp",
-                        "language:ocaml",
-                    ),
-                    count=18319,
-                    notes=(
-                        "Patched trusted repository tests with deferred Docker builds. Python uses pytest; "
-                        "retained non-Python sources keep their parser with exit-code credit disabled."
-                    ),
-                    daytona_snapshot_count=17706,
-                    daytona_count_basis=(
-                        "pinned release per-task build-context inventory from the conversion ledger, "
-                        "resources defaulted; production-named recount runs with the conversion program"
-                    ),
-                    task_format=TaskFormat.TASKCOMPENDIUM,
-                )
+            info=SourceInfo(
+                id="Task Trove:DCAgent__swe_rebench_v2_patched_oracle-v2",
+                title="DCAgent/swe_rebench_v2_patched_oracle-v2",
+                origin="Task Trove",
+                family="swe-repo",
+                tags=(
+                    "agentic",
+                    "multi-turn",
+                    "language:python",
+                    "language:go",
+                    "language:rust",
+                    "language:java",
+                    "language:julia",
+                    "language:kotlin",
+                    "language:swift",
+                    "language:dart",
+                    "language:c",
+                    "language:scala",
+                    "language:php",
+                    "language:csharp",
+                    "language:elixir",
+                    "language:lua",
+                    "language:cpp",
+                    "language:ocaml",
+                ),
+                count=18319,
+                notes=(
+                    "Patched trusted repository tests with deferred Docker builds. Python uses pytest; "
+                    "retained non-Python sources keep their parser with exit-code credit disabled."
+                ),
+                daytona_snapshot_count=17706,
+                daytona_count_basis=(
+                    "pinned release per-task build-context inventory from the conversion ledger, "
+                    "resources defaulted; production-named recount runs with the conversion program"
+                ),
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
         ),
         repository_source(
@@ -175,28 +172,26 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             SWESMITH_RUBRIC,
             convert=convert_swesmith_task,
             version="4",
-            info=replace(
-                SourceInfo(
-                    id="Task Trove:laion__swesmith-oracle-filtered-v2",
-                    title="laion/swesmith-oracle-filtered-v2",
-                    origin="Task Trove",
-                    family="swe-repo",
-                    tags=("agentic", "multi-turn", "language:python", "deprecated"),
-                    count=12927,
-                    notes=(
-                        "Deprecated: this upstream SWE-smith conversion predates the hardened "
-                        "bug-zero/reference-one admission and retains unresolved Docker contexts. "
-                        "The long-loop repair campaign found scratch, generated-metadata and verifier "
-                        "infrastructure defects in the derived Smartie cohort. Use its pinned repaired "
-                        "release with exact per-task control receipts."
-                    ),
-                    daytona_snapshot_count=12932,
-                    daytona_count_basis=(
-                        "pinned release per-task build-context inventory from the conversion ledger, "
-                        "resources defaulted; production-named recount runs with the conversion program"
-                    ),
-                    task_format=TaskFormat.TASKCOMPENDIUM,
-                )
+            info=SourceInfo(
+                id="Task Trove:laion__swesmith-oracle-filtered-v2",
+                title="laion/swesmith-oracle-filtered-v2",
+                origin="Task Trove",
+                family="swe-repo",
+                tags=("agentic", "multi-turn", "language:python", "deprecated"),
+                count=12927,
+                notes=(
+                    "Deprecated: this upstream SWE-smith conversion predates the hardened "
+                    "bug-zero/reference-one admission and retains unresolved Docker contexts. "
+                    "The long-loop repair campaign found scratch, generated-metadata and verifier "
+                    "infrastructure defects in the derived Smartie cohort. Use its pinned repaired "
+                    "release with exact per-task control receipts."
+                ),
+                daytona_snapshot_count=12932,
+                daytona_count_basis=(
+                    "pinned release per-task build-context inventory from the conversion ledger, "
+                    "resources defaulted; production-named recount runs with the conversion program"
+                ),
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
         ),
     ]

@@ -121,6 +121,7 @@ auth:
     - contractor@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
     - morrisy@stanford.edu
+    - wg0420@princeton.edu
 
 kubernetes_provider:
   namespace: iris

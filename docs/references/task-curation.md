@@ -294,7 +294,7 @@ search tags, notes and an optional input-row count. The `deprecated` tag marks a
 source `Deprecated` in the catalog (overriding `excluded`), and its notes carry
 the deprecation reason. A source without a `pipeline` is `Inventory`: it stays
 visible in the Atlas with its evidence, but it is never admitted to selection and
-carries `unassessed` snapshot and oracle status rather than a verdict.
+its measured Daytona and oracle evidence remains visible even without a pipeline.
 
 Every runnable agentic source declares its ingested `task_format`. New agentic
 sources must ingest TaskCompendium or Harbor task directories; selection rejects
@@ -746,32 +746,19 @@ explicit resolver (`--docker-dns 1.1.1.1`); package installation is real, becaus
 the rebuilt setup no longer installs task dependencies and the base image owns
 provisioning.
 
-**Verifier liveness (sandbox).** The task's own verifier runs in the task's
-graded environment against the untouched workspace. The verifier "actually ran"
-only when it executed and returned a well-formed negative verdict: exit code 0
-with a trailing numeric reward below 1. A crash, a nonzero exit, a timeout, an
-empty or unparsable report, or a positive reward on an unsolved workspace is an
-infrastructure error or a defect, never a pass. A solved submission is not
-needed; the rebuild changed the environment, not the grading contract.
+**Empty-submission grading (sandbox).** `no_oracle_liveness` samples tasks by
+base and calls `grade_empty_in_sandbox` on a fresh grading machine. The task
+machine's setup commands do not run in this path; the grader's declared setup
+commands do. A `negative_verdict` requires exit code zero, a reward below one,
+and a positive structured executed-test count (`detail.total`). Numeric reward
+files without execution evidence report `unverified_execution`. Crashes and
+missing exit diagnostics report `verifier_error`, even when a reward is zero.
 
-**Pass criteria.** A source reaches `verifier_executed` only when every phase ran
-and every sampled task passed (`minimum_rate` 1.0). Sampling is stratified
-per base reference, twenty tasks per base by default, and the report lists the
-pass rate per base and overall. A single infrastructure error blocks the status
-until it is explained, because the check's purpose is to prove the environment
-runs, not to estimate a rate.
-
-**Recording.** The qualification writes a JSON report with
-`preservation_rate`, `verifier_rate`, `by_base` and `verifier_failures`. Its
-verdict sets `oracle_validation` on the declaration:
-
-- `executed` — shipped oracle solutions ran and scored their expected reward;
-- `verifier_executed` — no oracle exists; both checks above passed;
-- `skipped` — neither ran, so execution is not certified.
-
-`skipped` is the default for a source without oracles, and absence of oracles is
-not evidence that execution works. The Atlas shows the value beside the catalog,
-and catalog publication carries it forward with the rest of the declaration.
+The offline report records payload preservation and setup execution rates. Its
+verifier results are populated only from an explicit `--liveness` JSONL file. `skipped` is the default
+`oracle_validation` for a source without oracles; a reward-only sample cannot
+establish `verifier_executed`. The Atlas shows the declared value beside the
+catalog, and catalog publication carries it forward.
 
 **Commands.** Run the offline phase over a rebuild output:
 
@@ -782,19 +769,23 @@ uv run python -m experiments.post_training.task_curation.no_oracle_qualification
     --output /path/to/qc-report.json
 ```
 
-The report's `summary` prints the rates and `oracle_validation`. Run the sandbox
-phase through Harbor's trial path (`harbor run --config`, see
-[harbor-integration](../harbor-integration.md)) over a packaged sample of the
-rebuilt tasks, with the task's own verifier as the final step:
-`no_oracle_qualification.classify_verifier_run` turns each trial's verifier exit
-code and trailing reward into the outcome the report records. The phase needs a
-Daytona credential, creates one sandbox per sampled task, and has no cleanup
-code path in this repository: hand the created snapshot names to an operator, as
-`.agents/ops/daytona.md` describes.
-The report's `summary` prints the rates and `oracle_validation`. The sandbox
-phase needs a Daytona credential, creates one sandbox per sampled task, and has
-no cleanup code path in this repository: hand the created snapshot names to an
-operator, as `.agents/ops/daytona.md` describes.
+The report's `summary` prints the offline rates. Run the empty-submission
+sample over lowered tasks with:
+
+```bash
+uv run python -m experiments.post_training.task_curation.no_oracle_liveness \
+    --lowered /path/to/lowered-tasks.parquet \
+    --manifest /path/to/manifest.json \
+    --output /path/to/liveness.jsonl \
+    --sample-per-base 20
+```
+
+Pass the resulting JSONL to the offline command with `--liveness /path/to/liveness.jsonl`
+to combine the receipts. That command rejects duplicate and unknown task IDs.
+
+This phase needs a Daytona credential for image-graded tasks. It records each
+sample's outcome and snapshot name in the JSONL file. Hand snapshot names to an
+operator for cleanup as `.agents/ops/daytona.md` describes.
 
 ## Conversion modes
 
@@ -1046,27 +1037,48 @@ release and does not raise the level.
 Runnable agentic sources require an accepted task format, a production snapshot-identity
 measurement and its basis, an execution-requirement failure count, and SAMPLE or FULL
 oversight with verification evidence. Sources missing these records remain visible as
-Inventory and cannot enter reviewed admission. QUICK conversion can still collect evidence.
+Inventory. The grandfathered MarinSkyRL sources retain their existing admission policy.
+Conversion and sampled review can collect evidence before a source becomes runnable.
 Deprecated sources retain their history and name their qualified replacement.
 
 Conversion rejects machine tasks without a declared image, build context, package lock
-or package spec, including workspace tasks with an empty capability list. Prebuilt agentic
-cohorts require an environment on every row. A source declaration cannot supply a missing
-task environment.
+or package spec, including workspace tasks with an empty capability list. Conversation-only
+rewrites need no agent machine; their published spec must describe the complete runtime
+and their admission requires the same SAMPLE or FULL quality evidence.
 
 The production identity census measures agent and grader machines independently, using
 their declared environments and resource shapes. Failed execution requirements make a
 cohort Daytona-unsafe even when its snapshot count fits the budget. Unsafe cohorts with
 valid task environments and admission evidence remain ingested with that label.
 
-### Graders that declare a package lock cannot run on a sandbox backend
+### Package-lock graders use the worker's local runtime
 
-An environment that declares `packages_lock` resolves to a local runtime
-(`taskcompendium/runtime/environment.py`), and `rolloutengine.machines` maps it to the
-host image. The Daytona factory accepts only a registry image or a build context, so a
-task whose grader declares a lock cannot grade there — its snapshot count is irrelevant.
+A grader that declares `packages_lock` runs in the worker's local bubblewrap
+runtime. It adds no Daytona snapshot identity. The Daytona counter records that
+grader as unsupported on Daytona, independently of the task machine's image.
+A mixed deployment may run the agent on Daytona and the grader locally, but
+that does not qualify both machine slots for Daytona. CalibForge declares an
+image for its grader.
 
-Two honest options for such a cohort: resolve the lock into a digest-pinned grader image
-during the pipeline build (one identity per distinct grader environment) and declare that
-image, or record the cohort as inadmissible on Daytona. CalibForge is unaffected because
-its grader names an image; the TaskTrove families are all lock-graded.
+### Archived CodeContests and TACO image pins
+
+`datasets/tasktrove/built_images.py` maps each archived context to its built GHCR
+image. The key covers the source files, permission bits and verifier-install
+recipe. The image freezes its bundled VerifyIT revision; changing the checkout's
+VerifyIT does not change the installed grader in that pin. Unrecognized contexts
+retain explicit build declarations. Both sources declare a script grader that
+invokes the image-installed `verifyit` tool with the preserved stdio configuration.
+System Python remains the candidate program interpreter. The script grader reads
+`verdict.json`, preserving invalid-task and infrastructure-error outcomes even
+when the CLI also writes numeric reward zero. The archive admission guard
+reconstructs the context before accepting a known image pin.
+
+The original pinned CodeContests and TACO releases read numeric rewards only.
+They remain excluded until a new immutable release carries the structured
+protocol and robust SAMPLE/FULL qualification.
+
+The images live in the non-public `marin-community/task-curation-tasktrove` GHCR
+package. Daytona needs an organization registry credential for `ghcr.io` before
+it can import them. Keep that credential in Daytona's registry settings, outside
+the TaskSpecs and qualification evidence. Image identity measurement alone does
+not establish pull access or grading liveness.

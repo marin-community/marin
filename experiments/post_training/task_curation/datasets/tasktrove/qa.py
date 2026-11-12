@@ -283,20 +283,18 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         ),
         RlDataSource(
             pipeline=process_rows,
-            info=replace(
-                SourceInfo(
-                    id=f"Task Trove:{MCQA_CONFIG}",
-                    title="laion/nemotron-gym-knowledge-mcqa-v2",
-                    origin="Task Trove",
-                    family="qa-short-answer",
-                    tags=("agentic", "multi-turn"),
-                    count=616888,
-                    notes=(
-                        "Held-out MCQA with regex extraction. Drop the trailing-letter fallback at conversion "
-                        "and subsample hard: 617k rows is a third of the corpus."
-                    ),
-                    task_format=TaskFormat.TASKCOMPENDIUM,
-                )
+            info=SourceInfo(
+                id=f"Task Trove:{MCQA_CONFIG}",
+                title="laion/nemotron-gym-knowledge-mcqa-v2",
+                origin="Task Trove",
+                family="qa-short-answer",
+                tags=("agentic", "multi-turn"),
+                count=616888,
+                notes=(
+                    "Held-out MCQA with regex extraction. Drop the trailing-letter fallback at conversion "
+                    "and subsample hard: 617k rows is a third of the corpus."
+                ),
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
                 name="tasktrove-knowledge_mcqa",

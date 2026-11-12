@@ -153,11 +153,6 @@ class OversightEvidence(CatalogRecord):
     admitted: int | None = None
 
 
-def mode_admits_training(mode: "CurationMode") -> bool:
-    """Whether a curation pass may admit tasks and be selected for training."""
-    return mode is not CurationMode.QUICK
-
-
 class OracleValidation(StrEnum):
     """How an admitted source's grader was qualified."""
 
