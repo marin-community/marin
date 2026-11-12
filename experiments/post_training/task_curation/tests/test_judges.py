@@ -87,7 +87,7 @@ def test_hosted_endpoint_requires_exact_model_before_grading(review_server, bare
     review_server.bare_model_list = bare_model_list
     review_server.model_ids = ["MiniMaxAI/MiniMax-M3.1-Flash"]
     endpoint: JudgeEndpoint = HostedJudgeEndpoint(
-        JudgeTier.MEDIUM, f"http://127.0.0.1:{review_server.server_port}/v1", "fixture-key"
+        JUDGE_TIERS[JudgeTier.MEDIUM].spec.model, f"http://127.0.0.1:{review_server.server_port}/v1", "fixture-key"
     )
     with pytest.raises(ValueError, match="does not advertise"):
         with endpoint.connect():

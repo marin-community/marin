@@ -82,7 +82,7 @@ def response(task_id: str, confidence: str = "high", quality: str = "good") -> d
     }
 
 
-SOURCE_FILES = SourceFiles("fixture/tasks", "1", ("source.jsonl",), SourceFormat.JSONL)
+SOURCE_FILES = SourceFiles("open-athena/fixture-tasks", "a" * 40, ("source.jsonl",), SourceFormat.JSONL)
 SVAMP_RUBRIC = ReviewRubric(
     id="arithmetic-word-problems",
     version="1",

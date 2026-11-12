@@ -16,6 +16,7 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.curation import LexicalContaminationEvidence, require_decontamination
 from rigging.filesystem.storage_path import StoragePath
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import Mode
@@ -159,6 +160,7 @@ class SourcePipelineConfig:
     machines: GradingMachines | None
     judge_connection: JudgeConnection | None = None
     oracle_filter: OracleFilterReceipt | None = None
+    lexical_contamination: LexicalContaminationEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -892,6 +894,9 @@ def _write_manifest(
         "source": recipe.name,
         "intended_use": recipe.intended_use.value,
         "oracle_filter": config.oracle_filter.model_dump(mode="json") if config.oracle_filter else None,
+        "lexical_contamination": (
+            config.lexical_contamination.model_dump(mode="json") if config.lexical_contamination else None
+        ),
         "raw_population_count": panel.sample.population_count,
         "raw_sample_count": len(panel.sample.rows),
         "raw_population_census": panel.census,
@@ -1040,6 +1045,7 @@ def run_source_pipeline(
         )
     if config is None or config.mode != mode:
         raise ValueError("Reviewed modes require a matching source pipeline configuration")
+    require_decontamination(config.lexical_contamination, recipe.source.dataset, recipe.source.revision)
     if recipe.rubric is not None and config.review is None:
         raise ValueError("A recipe with a rubric requires review configuration")
     telemetry = SourceTelemetry(canonical_source, output_path)

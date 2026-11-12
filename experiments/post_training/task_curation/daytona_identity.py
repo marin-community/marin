@@ -177,7 +177,7 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
                 machine = MachineSpec(
                     source=source,
                     workdir=requirements.working_directory or "",
-                    network=NetworkPolicy.ALLOW,
+                    network=NetworkPolicy(shape.get("network", "allow")),
                     cpus=shape.get("cpus"),
                     memory_mb=shape.get("memory_mb"),
                     storage_mb=shape.get("storage_mb"),

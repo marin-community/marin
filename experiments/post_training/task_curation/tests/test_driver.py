@@ -47,10 +47,12 @@ from experiments.post_training.task_curation.tests.image_builds import (
     install_fake_build_tools,
 )
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
+from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 
 
 def math500() -> CurationRecipe:
-    return cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
+    recipe = cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
+    return replace(recipe, source=replace(recipe.source, repo="open-athena/math500-fixture"))
 
 
 @pytest.fixture
@@ -62,7 +64,14 @@ def catalog(monkeypatch, tmp_path):
             **{
                 name: RlDataSource(
                     pipeline=process_rows,
-                    info=SourceInfo(id=f"fixture:{name}", title=name, origin="fixture"),
+                    info=SourceInfo(
+                        id=f"fixture:{name}",
+                        title=name,
+                        origin="fixture",
+                        lexical_contamination=decontamination_evidence(
+                            pipeline.dataset.name, pipeline.dataset.revision, 1
+                        ),
+                    ),
                     config=pipeline,
                 )
                 for name, pipeline in pipelines.items()
@@ -235,6 +244,12 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
     input_file = tmp_path / "numbers.txt"
     input_file.write_text("1\n2\n3\n")
     source = number_source(input_file)
+    source = replace(
+        source,
+        info=replace(
+            source.info, lexical_contamination=decontamination_evidence(source.dataset.name, source.dataset.revision, 1)
+        ),
+    )
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     options = [
         "--mode",
@@ -298,7 +313,7 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
         declared,
         config=replace(
             math500(),
-            source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
+            source=HfSource("open-athena/fixture-questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
             rubric=rubric,
             controls=None,
             grader=None,
@@ -311,11 +326,16 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
     monkeypatch.setattr(
         processor, "plan_download", lambda request: original(replace(request, source_url_override=str(remote)))
     )
+    evidence = decontamination_evidence(source.dataset.name, source.dataset.revision, 1)
+    decontamination_path = tmp_path / "decontamination.json"
+    decontamination_path.write_text(evidence.model_dump_json())
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     report = tmp_path / "report.json"
     options = [
         "--mode",
         mode,
+        "--decontamination-receipt",
+        str(decontamination_path),
         "--skip-assessment",
         "--max-workers",
         "1",
@@ -346,6 +366,8 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
             return
         assert executed.exit_code == 0, executed.output
         result = json.loads(report.read_text())["sources"][0]["result"]
+        manifest = json.loads(StoragePath(result["evidence"]["manifest"]).read_text())
+        assert manifest["lexical_contamination"] == evidence.model_dump(mode="json")
         rows = [
             row
             for shard in (StoragePath(result["outputs"]["final"]) / "*.parquet").glob()
@@ -377,8 +399,14 @@ def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, 
         declared,
         config=replace(
             math500(),
-            source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
+            source=HfSource("open-athena/fixture-questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
             controls=None,
+        ),
+    )
+    source = replace(
+        source,
+        info=replace(
+            source.info, lexical_contamination=decontamination_evidence(source.dataset.name, source.dataset.revision, 1)
         ),
     )
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
@@ -430,6 +458,12 @@ def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, 
 def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, review_server):
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
     source = replace(declared, config=replace(math500(), rubric=None, controls=None))
+    source = replace(
+        source,
+        info=replace(
+            source.info, lexical_contamination=decontamination_evidence(source.dataset.name, source.dataset.revision, 1)
+        ),
+    )
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
     staged = tmp_path / "input"
@@ -486,6 +520,12 @@ def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, r
 def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_path, monkeypatch, review_server):
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
     source = replace(declared, config=replace(math500(), controls=None))
+    source = replace(
+        source,
+        info=replace(
+            source.info, lexical_contamination=decontamination_evidence(source.dataset.name, source.dataset.revision, 1)
+        ),
+    )
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
     review_server.review_available = False
@@ -540,3 +580,16 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
     recovered = json.loads((cache / "campaigns/campaign.json").read_text())
     assert recovered["sources"][0]["status"] == "completed"
     assert recovered["sources"][0]["path"] != outcome["path"]
+
+
+def test_mutable_decontamination_receipt_cannot_plan_a_reviewed_campaign(tmp_path, catalog):
+    dataset = math500().dataset
+    receipt = decontamination_evidence(dataset.name, dataset.revision, 1).model_dump(mode="json")
+    receipt["receipt"]["dataset_revision"] = "main"
+    path = tmp_path / "mutable-receipt.json"
+    path.write_text(json.dumps(receipt))
+    result = CliRunner().invoke(main, [*arguments(tmp_path), "--decontamination-receipt", str(path)])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, ValueError)
+    assert "dataset_revision" in str(result.exception)
+    assert not (tmp_path / "report.json").exists()

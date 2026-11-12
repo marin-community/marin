@@ -1,0 +1,22 @@
+name: qwen3.8-27b-source-duplicates
+location: Qwen/Qwen3.8-27B
+revision: 37561816e66b5b9153b1b64c10968c18c1e6f4a0
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 1
+  cpu: 8
+  memory: 96g
+  disk: 150g
+serve:
+  tensor_parallel_size: 1
+  max_model_len: 32768
+  max_num_batched_tokens: 4096
+  max_num_seqs: 4
+  gpu_memory_utilization: 0.9
+  limit_mm_per_prompt: '{"image":0,"video":0}'
+  reasoning_parser: qwen3
+  object_store_load_mode: stage_local
+  vllm_extra_args:
+    - --language-model-only
+    - --enable-prefix-caching

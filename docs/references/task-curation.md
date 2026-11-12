@@ -74,6 +74,29 @@ release and vectors stay in object storage.
 
 ## Storage and publication
 
+### Decontamination before QA
+
+QUICK produces unreviewed TaskSpecs for measurement. Before SAMPLE/FULL review,
+each source must carry `lexical_contamination`, including a verified private
+`open-athena` TaskCompendium release receipt at the exact input repository and
+revision. `--decontamination-receipt PATH` loads the complete measurement and
+receipt JSON; declarations expose the same evidence in the catalog.
+
+A measurement with no receipt cannot admit tasks, including a measurement with
+zero contaminated tasks. A clean receipt retains the complete measured
+population. A remediated receipt drops every flagged task, records the drop
+manifest and original private snapshot pin, and identifies a new output pin.
+Retained plus dropped tasks must equal the measured population. The output pin
+must match the source used for QA and admission. Preserve the raw measurement
+input pin separately from the archived private snapshot and final release.
+
+The recipe runner rejects missing or mismatched receipts before conversion,
+reviewer requests or grader controls. Prebuilt imports also check the receipt
+population against the published cohort and preserve the receipt in their
+manifest. Receipt changes enter artifact identity. Existing grandfathered
+MarinSkyRL blend selection remains unchanged; their measurements and remediation
+candidates are recorded without changing the blend wiring.
+
 The curation driver defaults to `s3://marin-us-east-02a/marin` on CoreWeave.
 `--artifact-root URL` selects another root explicitly and overrides the ambient
 `MARIN_PREFIX`. Local `--cache-dir PATH` takes precedence for local execution.
@@ -350,6 +373,14 @@ matches every string's SHA-256 to `controls.jsonl` at the same revision and requ
 scored bug-zero/reference-one controls for the complete population. It retains
 package bytes and executes no controls during import. Infrastructure-error zeros
 cannot admit a task. Lowered TaskCompendium envelopes use `prebuilt.import_prebuilt`.
+
+Canonical TaskCompendium cohorts use `prebuilt.import_taskcompendium_prebuilt`.
+Their Parquet rows contain `task_spec` and `task_sha256`; import validates every
+hash, task identity and required environment, rejects duplicate IDs and population
+count changes, and writes the original task strings into the corpus views.
+Conversation-only tasks need no runtime envelope or machine. The pinned source
+declaration must record its qualification and SAMPLE/FULL oversight; importing a
+published cohort does not supply missing reviews or execute its controls.
 
 Native Harbor execution runs `environment.setup.command` with its declared
 `timeout_sec` before agent access. Task `agent.env` values apply only to the
