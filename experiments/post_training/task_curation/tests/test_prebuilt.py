@@ -496,9 +496,9 @@ def test_atlas_private_release_policy_blocks_prebuilt_download(tmp_path, monkeyp
         )
     document = decontamination_evidence(config.repo, config.revision, 1).model_dump(mode="json")
     if policy == "public":
-        document["receipt"]["private"] = False
+        document["receipt"]["release"]["private"] = False
     elif policy == "raw_format":
-        document["receipt"]["format"] = "raw"
+        document["receipt"]["release"]["format"] = "raw"
     evidence = type(decontamination_evidence(config.repo, config.revision, 1)).model_validate(document)
     source = RlDataSource(
         config=config,

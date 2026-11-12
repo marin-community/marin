@@ -114,12 +114,10 @@ def test_current_release_follows_the_configured_remediated_pin(tmp_path):
     source = number_source(tmp_path / "input")
     document = decontamination_evidence(source.dataset.name, source.dataset.revision, 2).model_dump(mode="json")
     document.update(contaminated_tasks=1, contaminated_fraction=0.5)
-    document["receipt"].update(
-        status="remediated",
+    document["receipt"].update(status="remediated", retained_tasks=1, dropped_tasks=1)
+    document["receipt"]["release"].update(
         dataset_id="open-athena/remediated",
         dataset_revision="b" * 40,
-        retained_tasks=1,
-        dropped_tasks=1,
         drop_manifest_uri="s3://test/drop.json",
         original_private_dataset_id=source.dataset.name,
         original_private_dataset_revision=source.dataset.revision,
