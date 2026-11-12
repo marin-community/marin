@@ -144,7 +144,7 @@ def test_quick_pass_writes_the_validated_cohort_as_converted_tasks(tmp_path, mon
     path = _write(tmp_path, [_task("a"), _task("b")])
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
     output = tmp_path / "out"
-    artifact = prebuilt._quick_view(_cohort(2), path, output)
+    artifact = prebuilt._quick_view(_cohort(2), path, str(output))
 
     manifest = json.loads((output / "manifest.json").read_text())
     tasks = [

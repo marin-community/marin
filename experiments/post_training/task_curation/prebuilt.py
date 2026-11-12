@@ -27,6 +27,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.runtime.resources import resource_bytes
@@ -175,15 +176,16 @@ def cohort_task_json(tasks: Path) -> list[str]:
     return [TaskSpec.model_validate_json(row["task_spec"]).model_dump_json() for row in rows]
 
 
-def _quick_view(config: PrebuiltCohort, tasks: Path, destination: Path) -> CampaignArtifact:
+def _quick_view(config: PrebuiltCohort, tasks: Path, destination: str) -> CampaignArtifact:
     """Write the validated cohort as the converted view that QUICK consumers, such as embedding, read.
 
     QUICK admits nothing. Every published row is a converted task, so there are no rejections.
     """
     task_json = cohort_task_json(tasks)
-    normalize = destination / "normalize"
-    normalize.mkdir(parents=True, exist_ok=True)
-    pq.write_table(pa.table({"task_json": task_json}), normalize / "part-00000.parquet")
+    root = StoragePath(destination)
+    normalize = root / "normalize"
+    with (normalize / "part-00000.parquet").open("wb") as handle:
+        pq.write_table(pa.table({"task_json": task_json}), handle)
     manifest = {
         "status": "completed",
         "mode": SourceProcessingMode.QUICK.value,
@@ -194,13 +196,13 @@ def _quick_view(config: PrebuiltCohort, tasks: Path, destination: Path) -> Campa
         "converted_rows": len(task_json),
         "rejections": {},
     }
-    (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return CampaignArtifact(
         status="completed",
         result=PipelineResult(
             status="completed",
             outputs={"normalize": str(normalize)},
-            evidence={"manifest": str(destination / "manifest.json")},
+            evidence={"manifest": str(root / "manifest.json")},
             stages=("download", "validate", "normalize"),
         ),
     )
@@ -219,10 +221,10 @@ def prebuilt_artifact(
 
     def run(output_path: str) -> CampaignArtifact:
         local = Path(load(config))
+        if quick:
+            return _quick_view(config, local, output_path)
         destination = Path(output_path)
         destination.mkdir(parents=True, exist_ok=True)
-        if quick:
-            return _quick_view(config, local, destination)
         shutil.copyfile(local, destination / TASKS_FILENAME)
         manifest = {
             "status": "completed",
