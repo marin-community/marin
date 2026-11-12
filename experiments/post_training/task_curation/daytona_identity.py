@@ -193,8 +193,8 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
 
     Each spec contributes a verifier identity — its registry image or its
     materialized ``environment/`` context with the verifier machine shape —
-    and a task-machine identity on the registry image or shellbox's default
-    agent image with the task machine shape.
+    and a task-machine identity on its declared registry image or archived
+    Dockerfile context with the task machine shape.
     """
     sizes: Counter[str] = Counter()
     failures: list[tuple[str, str]] = []
