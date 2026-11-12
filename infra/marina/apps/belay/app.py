@@ -776,6 +776,7 @@ def claim_events(conn: Connection, session_id: str, secret: str | None = None) -
     conn.execute(text("SELECT pg_advisory_xact_lock(4917)"))
     _expire_sessions(conn)
     mine = _rows(conn, "SELECT state FROM sessions WHERE id = :id", id=session_id)
+    issued = None
     if mine:
         require_session(conn, session_id, secret)
     else:
@@ -783,9 +784,7 @@ def claim_events(conn: Connection, session_id: str, secret: str | None = None) -
             return {"launch": False, "reason": "dispatch is off"}
         if _session_active(conn):
             return {"launch": False, "reason": "a session is active"}
-    issued = None
-    new = [] if mine else _rows(conn, "SELECT * FROM events WHERE session_id IS NULL ORDER BY id")
-    if not mine:
+        new = _rows(conn, "SELECT * FROM events WHERE session_id IS NULL ORDER BY id")
         if not new:
             return {"launch": False, "reason": "no queued events"}
         issued = secrets.token_urlsafe(32)
@@ -793,7 +792,6 @@ def claim_events(conn: Connection, session_id: str, secret: str | None = None) -
             text("INSERT INTO sessions (id, state, secret_sha256) VALUES (:id, :state, :digest)"),
             {"id": session_id, "state": SessionState.RUNNING, "digest": _sha256(issued)},
         )
-    if new:
         conn.execute(
             text("UPDATE events SET session_id = :s WHERE id = ANY(:ids)"),
             {"s": session_id, "ids": [e["id"] for e in new]},
@@ -806,7 +804,7 @@ def claim_events(conn: Connection, session_id: str, secret: str | None = None) -
 
 
 def expect_run(conn: Connection, expectation: RunExpectation) -> None:
-    """Record when a launched run should finish (a session's wait and the overdue check read it)."""
+    """Record when a launched run should finish (the overdue check reads it)."""
     conn.execute(
         text(
             "INSERT INTO run_expectations (name, expected_at) VALUES (:n, :at) "

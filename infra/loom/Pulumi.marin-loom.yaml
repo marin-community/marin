@@ -545,7 +545,7 @@ config:
       promptFile: watches/goals.md
       slackChannels: []
     # Marin Belay's trigger: a cheap check every 10 minutes; a session runs only when the Belay app has queued
-    # events, then drains the queue before it exits. Sessions claim work only while dispatch is on in the app.
+    # events, works through them and exits. Sessions claim work only while dispatch is on in the app.
     belay:
       enabled: true
       every: 10m
