@@ -5,8 +5,8 @@
 
 [vllm]
 repository = "https://github.com/marin-community/vllm.git"
-commit = "3004cd8f163299116b96d1b324cfff418c387388"
-upstream_base = "ced6857afa0ea7b2e3f0846a62e1394e90f15607"
+commit = "fb02daf1d7139d2adaeb0588448649591657d1e3"
+upstream_base = "9d88ceb02694c6e3df182ec3c87201284f50e2c6"
 
 [tpu-inference]
 repository = "https://github.com/marin-community/tpu-inference.git"

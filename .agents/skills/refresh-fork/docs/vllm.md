@@ -71,8 +71,8 @@ gh workflow run marin-gpu-release.yaml \
   -f promote=false
 ```
 
-This runs the Qwen3-0.6B TP4 serve-and-probe on one production-priority
-`v6e-4` in `us-east5`. Monitor the exact workflow and Iris job. The workflow
+This runs the Qwen3-0.6B TP8 serve-and-probe on one production-priority
+`v6e-8` in `us-east5`. Monitor the exact workflow and Iris job. The workflow
 owns cleanup for its job.
 
 7. Set `config/external/vllm/tpu.toml` to the tested source SHAs and upstream
