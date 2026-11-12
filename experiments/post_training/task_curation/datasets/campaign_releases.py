@@ -21,7 +21,11 @@ from finestore.rl.curation import (
     Verdict,
 )
 
-from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_prebuilt
+from experiments.post_training.task_curation.prebuilt import (
+    PrebuiltCohort,
+    import_harbor_prebuilt,
+    import_prebuilt,
+)
 from experiments.post_training.task_curation.source import (
     RlDataSource,
     SourceInfo,
@@ -63,6 +67,15 @@ def sources() -> list[RlDataSource]:
     swesmith = _public_release("smartie-continuation-20261016/swesmith", "0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c")
     staged_v1 = _public_release("smartie-swesmith-staged-v1", PUBLIC_STAGED_REVISION)
     staged_v2 = _public_release("smartie-swesmith-staged-v2", PUBLIC_STAGED_REVISION)
+    swesmith_repaired = PrebuiltCohort(
+        name="swesmith-verifier-repaired-v5",
+        version="2026.11.12.1",
+        repo="open-athena/swesmith-verifier-repaired-v5-20261112",
+        revision="26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd",
+        expected_rows=7016,
+        repo_type="dataset",
+    )
+    swesmith_evidence = f"https://huggingface.co/datasets/{swesmith_repaired.repo}/blob/{swesmith_repaired.revision}/"
     return [
         RlDataSource(
             info=SourceInfo(
@@ -908,6 +921,62 @@ def sources() -> list[RlDataSource]:
                     evidence_url=_pinned_blob(shared_v2, "manifest.json"),
                 ),
             )
+        ),
+        RlDataSource(
+            pipeline=import_harbor_prebuilt,
+            config=swesmith_repaired,
+            info=SourceInfo(
+                id="Campaign Release:swesmith-verifier-repaired-v5",
+                title="SWE-smith verifier repaired v5",
+                origin="Snowball Smartie RL",
+                family="swe-repo",
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "verified"),
+                task_format=TaskFormat.HARBOR,
+                count=swesmith_repaired.expected_rows,
+                dataset=swesmith_repaired.dataset,
+                daytona_snapshot_count=5,
+                daytona_execution_failures=0,
+                daytona_count_basis=(
+                    "production Harbor machine_spec and Shellbox snapshot_identity over every native "
+                    "Harbor package at the pinned revision, retaining each task.toml environment shape; "
+                    "zero mapping failures. Evidence: " + swesmith_evidence + "daytona-identity.json"
+                ),
+                oracle_validation=OracleValidation.EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="SWE-smith verifier repair v5",
+                    recipe_revision="43a40938875b4fbc4286a0784f6a7454110a0453",
+                    verification=(
+                        "Every admitted task has scored bug=0 and pinned-reference=1 controls, matched "
+                        "to its exact TaskSpec SHA256; infrastructure errors cannot admit a task. "
+                        "All 5,628 admitted v4 package strings remain byte-identical. Evidence: "
+                        + swesmith_evidence
+                        + "controls.jsonl"
+                    ),
+                    reviewed=swesmith_repaired.expected_rows,
+                    admitted=swesmith_repaired.expected_rows,
+                    level=OversightLevel.FULL,
+                ),
+                independent_qc=IndependentQC(
+                    verdict=Verdict.GOOD,
+                    method=(
+                        "admission requires exact-package bug-zero/reference-one controls; "
+                        "residual exclusions retained"
+                    ),
+                    reviewed=8045,
+                    admitted=swesmith_repaired.expected_rows,
+                    evidence_url=swesmith_evidence + "manifest.json",
+                ),
+                notes=(
+                    "7,016 controlled SWE-smith tasks: 5,628 admitted v4 packages preserved byte-for-byte "
+                    "and 1,388 newly admitted repairs. 1,029 of 8,045 candidates remain excluded with "
+                    "per-task reasons and receipts. Native Harbor packages retain their declared "
+                    "environment, bootstrap and hidden verifier; import validates the complete cohort "
+                    "without rewriting packages or rerunning controls. Oversight is full and oracle "
+                    "validation is executed. Preserved upstream recipes include floating image tags "
+                    "and dependency resolution; control receipts identify the tested builds. "
+                    "The repair-campaign repository is private. Controls do not measure model-solving accuracy."
+                ),
+            ),
         ),
         RlDataSource(
             info=SourceInfo(
