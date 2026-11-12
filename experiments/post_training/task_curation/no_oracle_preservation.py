@@ -5,9 +5,10 @@
 
 The native recipe's COPY steps define the workspace contract: which files the
 rebuilt setup payload must stage, where, and with which bytes and modes. The
-scanners read the recipe as written rather than through ``parse_instructions``:
-the preservation check must describe the literal archive even when the rebuild
-would defer on it, so a malformed recipe still yields a report instead of a crash.
+scanners share logical-line joining and COPY placement with setup compilation.
+They inspect literal COPY sources even when unsupported flags or RUN commands
+prevent rebuilding: preservation can report archive contents without certifying
+that the recipe can execute. WORKDIR paths accumulate from the container root.
 """
 
 import hashlib
@@ -16,11 +17,12 @@ import re
 import shlex
 import tarfile
 from dataclasses import dataclass, replace
+from pathlib import PurePosixPath
 
-from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT
+from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT, copy_target
+from experiments.post_training.task_curation.environment import dockerfile_lines
 from experiments.post_training.task_curation.environment_fidelity import (
     COPY_GLOB_CHARACTERS,
-    DEFAULT_WORKDIR,
     ENVIRONMENT_DOCKERFILE,
     ENVIRONMENT_PREFIX,
 )
@@ -64,15 +66,19 @@ def _native_dockerfile(native_payload: bytes) -> str | None:
 
 
 def native_workdir(dockerfile: str) -> str:
-    """The workdir a native recipe declares, or the default when it sets none."""
-    match = re.search(r"^\s*WORKDIR\s+(\S+)", dockerfile, re.IGNORECASE | re.MULTILINE)
-    return match.group(1) if match else DEFAULT_WORKDIR
+    """The final workdir, resolving relative WORKDIR steps from the container root."""
+    workdir = "/"
+    for line in dockerfile_lines(dockerfile):
+        words = line.split(None, 1)
+        if words[0].upper() == "WORKDIR" and len(words) == 2:
+            workdir = str(PurePosixPath(workdir) / words[1])
+    return workdir
 
 
 def _copy_steps(dockerfile: str) -> list[tuple[list[str], str]]:
     """Each COPY's flag-free sources and destination, in recipe order."""
     steps: list[tuple[list[str], str]] = []
-    for match in COPY_SOURCE.finditer(dockerfile):
+    for match in COPY_SOURCE.finditer("\n".join(dockerfile_lines(dockerfile))):
         tokens = [token for token in match.group("sources").split() if not token.startswith("--")]
         if len(tokens) < 2:
             continue
@@ -128,7 +134,7 @@ def removed_workspace_paths(dockerfile: str, workdir: str) -> tuple[str, ...]:
     leaves no such file behind, so a faithful rebuild must not be required to keep it.
     """
     removed: list[str] = []
-    for line in dockerfile.splitlines():
+    for line in dockerfile_lines(dockerfile):
         stripped = line.strip()
         if not stripped.upper().startswith("RUN "):
             continue
@@ -161,9 +167,7 @@ def copy_mappings(dockerfile: str, workdir: str) -> list[CopyMapping]:
     for sources, destination in _copy_steps(dockerfile):
         if any(character in destination for character in COPY_GLOB_CHARACTERS):
             continue
-        is_directory = len(sources) > 1 or destination.endswith("/")
-        absolute = destination if destination.startswith("/") else f"{workdir.rstrip('/')}/{destination}"
-        absolute = absolute.rstrip("/") or "/"
+        absolute, is_directory = copy_target(workdir, destination, len(sources))
         for source in sources:
             if any(character in source for character in COPY_GLOB_CHARACTERS):
                 continue

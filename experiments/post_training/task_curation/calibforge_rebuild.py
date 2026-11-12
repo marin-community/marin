@@ -200,12 +200,9 @@ class CompiledRecipe:
 
 
 def _pack_tar(files: dict[str, bytes], modes: dict[str, int]) -> bytes:
-    """Pack files deterministically: sorted members, fixed modes, gzip with mtime=0.
+    """Pack sorted files with native integer modes and zero gzip modification time.
 
-    Unlike ``tasktrove.harbor_export.archive_bytes`` this takes integer modes
-    straight from the native tar and uses the default gzip level: the rebuild's
-    payload digests must stay stable against previously built cohorts, not match
-    the verifier-export archives.
+    The default gzip compression level preserves payload digests across rebuilds.
     """
     payload = io.BytesIO()
     with tarfile.open(fileobj=payload, mode="w") as archive:

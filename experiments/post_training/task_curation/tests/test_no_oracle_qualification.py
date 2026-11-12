@@ -101,6 +101,16 @@ def test_copied_destinations_resolve_against_the_native_workdir():
     assert copied_destinations(recipe, "/app") == ("/data", "/app/relative")
 
 
+@pytest.mark.parametrize(
+    ("workdirs", "destination"),
+    [("", "/result.csv"), ("WORKDIR /app\nWORKDIR data\n", "/app/data/result.csv")],
+)
+def test_workspace_expectations_resolve_the_final_native_workdir(workdirs, destination):
+    recipe = f"FROM ubuntu:24.04\n{workdirs}COPY files/a.csv \\\n    ./result.csv\n"
+    expected = workspace_expectations(_native(recipe=recipe))
+    assert tuple(item.path for item in expected) == (destination,)
+
+
 def test_setup_execution_requires_every_expected_file():
     """An executed script that misses a copied file is not a pass."""
     assert SetupExecution("task", "executed", written=2).passed

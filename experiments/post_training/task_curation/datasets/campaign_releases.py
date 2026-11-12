@@ -13,7 +13,7 @@ image locators, absent image bytes and omitted verifier material cannot be used
 to execute tasks from the screened public release alone.
 """
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from finestore.rl.curation import (
     IndependentQC,
@@ -91,39 +91,38 @@ SINGLE_ENVIRONMENT_SPREAD = "drawn across the cohort's single environment"
 MULTI_ENVIRONMENT_SPREAD = "across the cohort's environments"
 
 
+@dataclass(frozen=True)
+class _LockGraderEvidence:
+    agent_identities: int
+    sampled: int
+    spread: str
+    campaign: str
+    recipe_revision: str
+    level: OversightLevel
+    verification: str | None = None
+
+
 def _rebuilt_cohort(
     config: PrebuiltCohort,
     info: SourceInfo,
     *,
-    agent_identities: int | None = None,
-    sampled: int | None = None,
-    spread: str | None = None,
-    oversight_campaign: str | None = None,
-    oversight_recipe_revision: str | None = None,
-    oversight_level: OversightLevel | None = None,
-    verification: str | None = None,
+    lock_grader: _LockGraderEvidence | None = None,
 ) -> RlDataSource[PrebuiltCohort]:
-    """Derive the inventory identity and row counts from the pinned import configuration.
-
-    When a cohort's evidence follows the lock-grader shape, pass its oversight
-    pointers and the measured agent identities and sample size; the task counts
-    then come from the import configuration the artifact is read back through.
-    ``verification`` overrides the standard prose for a cohort whose evidence
-    reads differently. Cohorts with other evidence declare their fields directly.
-    """
+    """Derive inventory identity and counts, optionally adding measured lock-grader evidence."""
     rows = config.expected_rows
-    if agent_identities is not None:
+    if lock_grader is not None:
         oversight = OversightEvidence(
-            campaign=oversight_campaign,
-            recipe_revision=oversight_recipe_revision,
-            verification=verification or _rebuilt_verification(rows, sampled, environments=spread),
-            level=oversight_level,
+            campaign=lock_grader.campaign,
+            recipe_revision=lock_grader.recipe_revision,
+            verification=lock_grader.verification
+            or _rebuilt_verification(rows, lock_grader.sampled, environments=lock_grader.spread),
+            level=lock_grader.level,
             reviewed=rows,
             admitted=rows,
         )
         info = replace(
             info,
-            daytona_count_basis=_lock_grader_count_basis(agent_identities, rows),
+            daytona_count_basis=_lock_grader_count_basis(lock_grader.agent_identities, rows),
             daytona_execution_failures=rows,
             oversight=oversight,
         )
@@ -252,12 +251,14 @@ def sources() -> list[RlDataSource]:
                     "pending release."
                 ),
             ),
-            agent_identities=1,
-            sampled=SAMPLED_PER_BASE,
-            spread=SINGLE_ENVIRONMENT_SPREAD,
-            oversight_campaign="RL Data Atlas",
-            oversight_recipe_revision="datasets/tasktrove/nl2bash.py @ e6be97168d",
-            oversight_level=OversightLevel.NONE,
+            lock_grader=_LockGraderEvidence(
+                agent_identities=1,
+                sampled=SAMPLED_PER_BASE,
+                spread=SINGLE_ENVIRONMENT_SPREAD,
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/nl2bash.py @ e6be97168d",
+                level=OversightLevel.NONE,
+            ),
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -289,12 +290,14 @@ def sources() -> list[RlDataSource]:
                     "pending release."
                 ),
             ),
-            agent_identities=1,
-            sampled=SAMPLED_PER_BASE,
-            spread=SINGLE_ENVIRONMENT_SPREAD,
-            oversight_campaign="RL Data Atlas",
-            oversight_recipe_revision="datasets/tasktrove/code.py @ e6be97168d",
-            oversight_level=OversightLevel.NONE,
+            lock_grader=_LockGraderEvidence(
+                agent_identities=1,
+                sampled=SAMPLED_PER_BASE,
+                spread=SINGLE_ENVIRONMENT_SPREAD,
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/code.py @ e6be97168d",
+                level=OversightLevel.NONE,
+            ),
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -327,12 +330,14 @@ def sources() -> list[RlDataSource]:
                     "The repository is private pending release."
                 ),
             ),
-            agent_identities=1,
-            sampled=SAMPLED_PER_BASE,
-            spread=SINGLE_ENVIRONMENT_SPREAD,
-            oversight_campaign="RL Data Atlas",
-            oversight_recipe_revision="datasets/tasktrove/code.py @ e6be97168d",
-            oversight_level=OversightLevel.NONE,
+            lock_grader=_LockGraderEvidence(
+                agent_identities=1,
+                sampled=SAMPLED_PER_BASE,
+                spread=SINGLE_ENVIRONMENT_SPREAD,
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/code.py @ e6be97168d",
+                level=OversightLevel.NONE,
+            ),
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -361,12 +366,14 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
-            agent_identities=2,
-            sampled=SAMPLED_PER_BASE,
-            spread=MULTI_ENVIRONMENT_SPREAD,
-            oversight_campaign="RL Data Atlas",
-            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-            oversight_level=OversightLevel.NONE,
+            lock_grader=_LockGraderEvidence(
+                agent_identities=2,
+                sampled=SAMPLED_PER_BASE,
+                spread=MULTI_ENVIRONMENT_SPREAD,
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                level=OversightLevel.NONE,
+            ),
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -395,12 +402,14 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
-            agent_identities=1,
-            sampled=SAMPLED_PER_BASE,
-            spread=MULTI_ENVIRONMENT_SPREAD,
-            oversight_campaign="RL Data Atlas",
-            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-            oversight_level=OversightLevel.NONE,
+            lock_grader=_LockGraderEvidence(
+                agent_identities=1,
+                sampled=SAMPLED_PER_BASE,
+                spread=MULTI_ENVIRONMENT_SPREAD,
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                level=OversightLevel.NONE,
+            ),
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -428,19 +437,21 @@ def sources() -> list[RlDataSource]:
                     "Daytona execution remains untested"
                 ),
             ),
-            agent_identities=1,
-            sampled=SAMPLED_PER_BASE,
-            spread=MULTI_ENVIRONMENT_SPREAD,
-            oversight_campaign="RL Data Atlas",
-            oversight_recipe_revision="datasets/tasktrove/python_tests.py version 8; verifyit @ f0155c1143",
-            oversight_level=OversightLevel.NONE,
-            verification="Unverified historical reward-only sample; does not certify test execution. "
-            "setup fidelity compared on all 477 converted specs against their native archives; "
-            "the sole shared setup recipe executed successfully with real package installation. "
-            "Production grading with COMPILER_GRADER_PACKAGES, build identity "
-            "42bb937b102dd758b4d1210769750d7e259a036169ef1458d11821809118888b, "
-            "returned 20 negative verdicts (reward 0.0, no infrastructure errors) on the seed-0 sample. "
-            "Evidence is published beside tasks.parquet at the pinned revision",
+            lock_grader=_LockGraderEvidence(
+                agent_identities=1,
+                sampled=SAMPLED_PER_BASE,
+                spread=MULTI_ENVIRONMENT_SPREAD,
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/python_tests.py version 8; verifyit @ f0155c1143",
+                level=OversightLevel.NONE,
+                verification="Unverified historical reward-only sample; does not certify test execution. "
+                "setup fidelity compared on all 477 converted specs against their native archives; "
+                "the sole shared setup recipe executed successfully with real package installation. "
+                "Production grading with COMPILER_GRADER_PACKAGES, build identity "
+                "42bb937b102dd758b4d1210769750d7e259a036169ef1458d11821809118888b, "
+                "returned 20 negative verdicts (reward 0.0, no infrastructure errors) on the seed-0 sample. "
+                "Evidence is published beside tasks.parquet at the pinned revision",
+            ),
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -468,12 +479,14 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
-            agent_identities=1,
-            sampled=SAMPLED_PER_BASE,
-            spread=MULTI_ENVIRONMENT_SPREAD,
-            oversight_campaign="RL Data Atlas",
-            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-            oversight_level=OversightLevel.NONE,
+            lock_grader=_LockGraderEvidence(
+                agent_identities=1,
+                sampled=SAMPLED_PER_BASE,
+                spread=MULTI_ENVIRONMENT_SPREAD,
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                level=OversightLevel.NONE,
+            ),
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -501,12 +514,14 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
-            agent_identities=1,
-            sampled=SAMPLED_PER_BASE,
-            spread=MULTI_ENVIRONMENT_SPREAD,
-            oversight_campaign="RL Data Atlas",
-            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-            oversight_level=OversightLevel.NONE,
+            lock_grader=_LockGraderEvidence(
+                agent_identities=1,
+                sampled=SAMPLED_PER_BASE,
+                spread=MULTI_ENVIRONMENT_SPREAD,
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                level=OversightLevel.NONE,
+            ),
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -535,12 +550,14 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
-            agent_identities=1,
-            sampled=SAMPLED_PER_BASE,
-            spread=MULTI_ENVIRONMENT_SPREAD,
-            oversight_campaign="RL Data Atlas",
-            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-            oversight_level=OversightLevel.NONE,
+            lock_grader=_LockGraderEvidence(
+                agent_identities=1,
+                sampled=SAMPLED_PER_BASE,
+                spread=MULTI_ENVIRONMENT_SPREAD,
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                level=OversightLevel.NONE,
+            ),
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -569,12 +586,14 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
-            agent_identities=1,
-            sampled=SAMPLED_PER_BASE,
-            spread=MULTI_ENVIRONMENT_SPREAD,
-            oversight_campaign="RL Data Atlas",
-            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-            oversight_level=OversightLevel.NONE,
+            lock_grader=_LockGraderEvidence(
+                agent_identities=1,
+                sampled=SAMPLED_PER_BASE,
+                spread=MULTI_ENVIRONMENT_SPREAD,
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                level=OversightLevel.NONE,
+            ),
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -603,12 +622,14 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
-            agent_identities=1,
-            sampled=SAMPLED_PER_BASE,
-            spread=MULTI_ENVIRONMENT_SPREAD,
-            oversight_campaign="RL Data Atlas",
-            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-            oversight_level=OversightLevel.NONE,
+            lock_grader=_LockGraderEvidence(
+                agent_identities=1,
+                sampled=SAMPLED_PER_BASE,
+                spread=MULTI_ENVIRONMENT_SPREAD,
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                level=OversightLevel.NONE,
+            ),
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -637,12 +658,14 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
-            agent_identities=1,
-            sampled=SAMPLED_PER_BASE,
-            spread=MULTI_ENVIRONMENT_SPREAD,
-            oversight_campaign="RL Data Atlas",
-            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-            oversight_level=OversightLevel.NONE,
+            lock_grader=_LockGraderEvidence(
+                agent_identities=1,
+                sampled=SAMPLED_PER_BASE,
+                spread=MULTI_ENVIRONMENT_SPREAD,
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                level=OversightLevel.NONE,
+            ),
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -671,12 +694,14 @@ def sources() -> list[RlDataSource]:
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
-            agent_identities=1,
-            sampled=SAMPLED_PER_BASE,
-            spread=MULTI_ENVIRONMENT_SPREAD,
-            oversight_campaign="RL Data Atlas",
-            oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-            oversight_level=OversightLevel.NONE,
+            lock_grader=_LockGraderEvidence(
+                agent_identities=1,
+                sampled=SAMPLED_PER_BASE,
+                spread=MULTI_ENVIRONMENT_SPREAD,
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                level=OversightLevel.NONE,
+            ),
         ),
         RlDataSource(
             info=SourceInfo(
