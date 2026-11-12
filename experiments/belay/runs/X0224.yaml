@@ -1,0 +1,14 @@
+experiment: X0224
+kind: study
+track: custom
+question: In the current recipe at d512, do stable rank, row-norm ratio or norm gains of any layer's matrices trend toward pathology over training?
+runs:
+  dynamics:
+    track: competitive-d512
+    seed: 0
+    variant: current recipe d512, checkpoint every 1,000 steps plus final
+    flags: ["--checkpoint-keep", "1000"]
+    hours: 3.5
+analysis:
+  - script: experiments/belay/studies/X0224.py
+    input: dynamics
