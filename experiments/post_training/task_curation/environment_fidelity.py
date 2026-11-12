@@ -22,6 +22,8 @@ import shlex
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements
+
 FROM = re.compile(r"^\s*FROM\s+(\S+)", re.IGNORECASE | re.MULTILINE)
 STEP = re.compile(r"^\s*(RUN|COPY|ADD|ENV|ARG|USER|WORKDIR|VOLUME|ENTRYPOINT|CMD)\b", re.IGNORECASE | re.MULTILINE)
 ENVIRONMENT_DOCKERFILE = "environment/Dockerfile"
@@ -221,3 +223,22 @@ def lower_environment(dockerfile: str, bases: Mapping[str, str]) -> LoweredEnvir
             continue
         raise UnlowerableRecipe(f"unknown step: {directive}")
     return LoweredEnvironment(base_ref=base_ref, working_directory=workdir, setup_commands=tuple(commands))
+
+
+def archive_environment(files: Mapping[str, bytes | str], bases: Mapping[str, str] | None = None):
+    """A TaskTrove archive's own environment, lowered onto a pinned base.
+
+    The archive defines how the task's machine is built; using anything else would run the
+    task somewhere it never specified. A recipe the lowering cannot express raises, so the
+    row is refused rather than quietly given a different environment.
+    """
+    dockerfile = dockerfile_of(files)
+    if dockerfile is None:
+        raise ValueError("archive defines no environment/Dockerfile")
+    lowered = lower_environment(dockerfile, bases or PINNED_BASES)
+    return EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_image=lowered.base_ref,
+        working_directory=lowered.working_directory,
+        setup_commands=lowered.setup_commands,
+    )

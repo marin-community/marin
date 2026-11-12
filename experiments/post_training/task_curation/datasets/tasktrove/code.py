@@ -48,17 +48,12 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.stdio
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.taco import convert_taco
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
 from experiments.post_training.task_curation.environment import Environment
+from experiments.post_training.task_curation.environment_fidelity import archive_environment
 from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
-    environment_requirements,
     process_rows,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
-
-AGENT_IMAGE = Environment(
-    image="ghcr.io/marin-community/iris-task@sha256:d6af0d198b29650fea0eaccb27d01cb9bbfb0aec9e1d5959a74c2ae055b6f305"
-)
-"""The executable image the agent writes and runs its program in."""
 
 EXECUTABLE_CONTROLS = Controls(golden=solve_script)
 
@@ -121,7 +116,7 @@ def stdio_task(row: RawRow, context: ConversionContext, convert: ConvertFn) -> N
     return tasktrove_archive_task(
         row,
         convert=convert,
-        environment=environment_requirements(AGENT_IMAGE),
+        environment=archive_environment(row.data["files"]),
         grader_environment=required_grader_environment(context),
         output_paths=SOLUTION_PATHS,
     )
@@ -184,7 +179,7 @@ def convert_competitive_coding_task(row: RawRow, context: ConversionContext) -> 
     return tasktrove_archive_task(
         row,
         convert=convert_competitive_coding,
-        environment=environment_requirements(AGENT_IMAGE),
+        environment=archive_environment(row.data["files"]),
         grader_environment=required_grader_environment(context),
         output_paths=SOLUTION_PATHS,
     )
