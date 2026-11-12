@@ -553,6 +553,19 @@ trials:
   commit: 591fcf5821
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+- id: t032
+  variant: lm_head tanh soft-cap 10
+  rung: competitive-d1280
+  protocol: equal_steps
+  batch: X0073
+  date: '2026-11-12'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0073
+  wandb: []
+  settings:
+    logit_soft_cap: '10'
+  commit: fc80e05aed
+  priority: batch
+  note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
 events:
 - type: adopted
   batch: '35'
