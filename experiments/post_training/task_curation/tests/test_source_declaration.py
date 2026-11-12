@@ -64,6 +64,7 @@ def test_status_prefers_deprecated_then_excluded_then_inventory():
 
 
 def test_quick_curation_cannot_admit_tasks():
+    """A QUICK summary admits nothing regardless of counts; a FULL summary carries them."""
     summary = {
         "status": "complete",
         "source_revision": None,
@@ -74,11 +75,11 @@ def test_quick_curation_cannot_admit_tasks():
         "unprocessed_rows": None,
         "verification": None,
     }
-    # The rule is the admissions, not the mode: QUICK with no admissions and
-    # FULL with admissions are both valid summaries.
     with pytest.raises(ValueError, match="cannot carry admitted tasks"):
         CurationSummary(mode=CurationMode.QUICK, admission_counts=AdmissionCounts(admitted=1), **summary)
-    quick = CurationSummary(mode=CurationMode.QUICK, admission_counts=AdmissionCounts(), **summary)
-    assert quick.mode is CurationMode.QUICK
-    full = CurationSummary(mode=CurationMode.FULL, admission_counts=AdmissionCounts(admitted=1), **summary)
-    assert full.admission_counts.admitted == 1
+    # The same admitted counts are valid on a FULL pass: the mode is the constraint.
+    admitted = CurationSummary(mode=CurationMode.FULL, admission_counts=AdmissionCounts(admitted=1), **summary)
+    assert admitted.admission_counts.admitted == 1
+    # Rejections alone do not trigger the guard; only admissions do.
+    rejected = CurationSummary(mode=CurationMode.QUICK, admission_counts=AdmissionCounts(rejected=3), **summary)
+    assert rejected.admission_counts.rejected == 3

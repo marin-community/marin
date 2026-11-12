@@ -23,6 +23,7 @@ from experiments.post_training.task_curation.daytona_identity import (
     count_registry_identities,
     count_task_identities,
 )
+from experiments.post_training.task_curation.tests.task_tar_fixtures import pack_tar
 
 
 def lowered(document: dict) -> LoweredSpec:
@@ -50,13 +51,7 @@ def _native_tar(dockerfile: str, files: dict[str, bytes]) -> bytes:
         "environment/Dockerfile": dockerfile.encode(),
         **{f"environment/{name}": content for name, content in files.items()},
     }
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w") as archive:
-        for name, content in members.items():
-            info = tarfile.TarInfo(name)
-            info.size = len(content)
-            archive.addfile(info, io.BytesIO(content))
-    return gzip.compress(buffer.getvalue(), mtime=0)
+    return pack_tar(members)
 
 
 def test_identical_native_tars_share_one_snapshot_and_add_tars_fail():

@@ -66,6 +66,9 @@ from experiments.post_training.task_curation.environment_fidelity import (
 from experiments.post_training.task_curation.task_tars import open_task_tar
 
 REBUILT = "rebuilt_pending_oracle_and_admission"
+DEFERRED = "deferred"
+EXCLUDED_DECONTAMINATION = "excluded_decontamination"
+EXCLUDED_SETUP_FAILURE = "excluded_setup_failure"
 
 
 @dataclass(frozen=True)
@@ -573,16 +576,16 @@ def _rebuild_cohort(cohort: Path, excluded: set[str]) -> _RebuildOutcome:
         for path, blob in zip(batch.to_pydict()["path"], batch.to_pydict()["task_binary"], strict=True):
             raw = bytes(blob)
             if path in excluded:
-                evidence.append({"task_id": path, "status": "excluded_decontamination"})
+                evidence.append({"task_id": path, "status": EXCLUDED_DECONTAMINATION})
                 continue
             if path in SETUP_FAILURES:
-                evidence.append({"task_id": path, "status": "excluded_setup_failure", "reason": SETUP_FAILURES[path]})
+                evidence.append({"task_id": path, "status": EXCLUDED_SETUP_FAILURE, "reason": SETUP_FAILURES[path]})
                 continue
             record: dict = {"task_id": path, "source_archive_sha256": hashlib.sha256(raw).hexdigest()}
             try:
                 rebuilt = rebuild_task(raw)
             except DeferredRebuild as error:
-                record.update(status="deferred", reason=str(error))
+                record.update(status=DEFERRED, reason=str(error))
                 evidence.append(record)
                 continue
             base_refs.append(rebuilt.base_ref)
@@ -610,9 +613,9 @@ def _evidence_manifest(
         "cohort_sha256": hashlib.sha256(cohort.read_bytes()).hexdigest(),
         "excluded_sha256": hashlib.sha256(excluded.read_bytes()).hexdigest(),
         "cohort_count": len(evidence),
-        "excluded_count": sum(1 for row in evidence if row["status"] == "excluded_decontamination"),
+        "excluded_count": sum(1 for row in evidence if row["status"] == EXCLUDED_DECONTAMINATION),
         "rebuilt_count": len(records),
-        "deferred_count": sum(1 for row in evidence if row["status"] == "deferred"),
+        "deferred_count": sum(1 for row in evidence if row["status"] == DEFERRED),
         # The Atlas counter measures the snapshot identities from these refs; the
         # rebuild itself stays free of the Harbor measurement environment.
         "snapshot_identity_count": None,

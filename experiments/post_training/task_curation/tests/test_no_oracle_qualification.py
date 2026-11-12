@@ -3,9 +3,6 @@
 
 """The no-oracle qualification checks what they claim to check."""
 
-import gzip
-import io
-import tarfile
 
 import pytest
 
@@ -25,18 +22,7 @@ from experiments.post_training.task_curation.no_oracle_qualification import (
     summarize,
 )
 from experiments.post_training.task_curation.no_oracle_setup import SetupExecution
-
-
-def _tar(members: dict[str, tuple[bytes, int]], gz: bool = True) -> bytes:
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w") as archive:
-        for name, (content, mode) in members.items():
-            info = tarfile.TarInfo(name)
-            info.size = len(content)
-            info.mode = mode
-            archive.addfile(info, io.BytesIO(content))
-    raw = buffer.getvalue()
-    return gzip.compress(raw, mtime=0) if gz else raw
+from experiments.post_training.task_curation.tests.task_tar_fixtures import pack_tar as _tar
 
 
 def _native(files: dict[str, bytes] | None = None, recipe: str | None = None) -> bytes:

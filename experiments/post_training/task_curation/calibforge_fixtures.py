@@ -45,10 +45,11 @@ class DeferredEnvironment(ValueError):
 
 
 def fixture_generator(arguments: list[str], copied_files: set[str]) -> bool:
-    """Whether this RUN invokes a staged fixture-generating script (``python3 /app/*.py``).
+    """Whether this RUN invokes a staged fixture-generating script.
 
-    Both setup compilers treat such a run as the script's first execution and
-    let it create whatever it writes.
+    A fixture-generating run is ``python3 /app/<script>.py`` where ``<script>``
+    is a file the COPY staging already copied; the script's own writes are its
+    output, so the run may execute it.
     """
     return (
         len(arguments) == 2

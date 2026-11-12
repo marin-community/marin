@@ -197,10 +197,10 @@ def declared_machine(
     """The shellbox MachineSpec a task's declared requirements and machine shape resolve to.
 
     A Docker build context is materialized into ``context``; a registry image, package
-    spec or host requirement maps onto the matching source. Sandbox graders resolve
-    their declared requirements through this same path when they execute, so
-    measurement and execution agree on the machine; lock-based graders run locally
-    instead and never name a sandbox.
+    spec or host requirement maps onto the matching source. This mirrors
+    ``rolloutengine.machines._machine_spec`` — the resolution a rollout runs — but
+    adds the Docker-build branch, which the rollout never sees because the runtime
+    builds a pinned image before execution.
     """
     if requirements.docker_build is not None:
         for resource in requirements.docker_build.files:
