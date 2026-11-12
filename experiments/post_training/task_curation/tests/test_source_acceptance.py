@@ -4,9 +4,10 @@
 """Agentic sources are admitted only in an accepted task format."""
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
-from finestore.rl.curation import DaytonaSafety, OversightEvidence, OversightLevel
+from finestore.rl.curation import OversightEvidence, OversightLevel
 
 from experiments.post_training.task_curation.source import (
     GRANDFATHERED_MARINSKYRL_SOURCES,
@@ -15,11 +16,13 @@ from experiments.post_training.task_curation.source import (
     TaskFormat,
 )
 from experiments.post_training.task_curation.sources import all_sources, require_accepted_task_format, runnable_sources
+from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 
 def _agentic(task_format: TaskFormat | None, source_id: str = "fixture:agentic") -> RlDataSource:
-    return RlDataSource(
-        info=SourceInfo(id=source_id, title=source_id, origin="fixture", tags=("agentic",), task_format=task_format)
+    return replace(
+        number_source(Path("unused"), "fixture"),
+        info=SourceInfo(id=source_id, title=source_id, origin="fixture", tags=("agentic",), task_format=task_format),
     )
 
 
@@ -63,27 +66,17 @@ def test_an_agentic_source_without_a_declared_format_is_rejected():
 @pytest.mark.parametrize("task_format", [TaskFormat.TASKCOMPENDIUM, TaskFormat.HARBOR])
 def test_task_directory_formats_pass_and_non_agentic_sources_need_none(task_format):
     require_accepted_task_format(_agentic(task_format))
-    require_accepted_task_format(RlDataSource(info=SourceInfo(id="fixture:math", title="math", origin="fixture")))
+    require_accepted_task_format(
+        replace(
+            number_source(Path("unused"), "fixture"), info=SourceInfo(id="fixture:math", title="math", origin="fixture")
+        )
+    )
 
 
-def test_pipeline_less_pointers_are_inventory_never_admitted():
-    """A pointer stays visible in the Atlas, labelled Inventory and unselectable."""
-    sources = all_sources()
-    runnable = set(runnable_sources())
-    pointers = [source for source in sources.values() if source.pipeline is None]
-    assert pointers
-
-    for source in pointers:
-        status = source.declaration.status
-        if "deprecated" in source.info.tags:
-            assert status == "Deprecated"
-        elif "excluded" in source.info.tags:
-            assert status == "Excluded"
-        else:
-            assert status == "Inventory"
-        assert source.name not in runnable
-        if "agentic" in source.info.tags and source.info.daytona_snapshot_count is None:
-            assert source.declaration.daytona_safety is DaytonaSafety.UNASSESSED
+def test_catalog_entries_have_registered_conversion_pipelines():
+    for source in all_sources().values():
+        assert source.declaration.pipeline is not None
+        assert source.declaration.status != "Inventory"
 
 
 @pytest.mark.parametrize("missing", ["count", "basis", "oversight", "verification"])
@@ -107,10 +100,10 @@ def test_unqualified_agentic_pipeline_stays_visible_but_cannot_be_selected(monke
         info = replace(
             info, oversight=OversightEvidence(level=OversightLevel.SAMPLE, campaign="fixture", verification="")
         )
-    source = RlDataSource(info=info, pipeline=lambda _source, _options: None)
+    source = replace(number_source(Path("unused"), "fixture"), info=info, pipeline=lambda _source, _options: None)
     monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: {info.id: source})
     assert source.name not in runnable_sources()
-    assert source.declaration.status == "Inventory"
+    assert source.declaration.status == "Not selectable"
 
 
 def test_existing_internal_blend_selection_does_not_require_new_audit_evidence(monkeypatch):

@@ -4,6 +4,7 @@
 """Daytona safety and catalog status."""
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from finestore.rl.curation import (
@@ -14,49 +15,72 @@ from finestore.rl.curation import (
     DaytonaSafety,
 )
 
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import SourceInfo
+from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 MEASURED = {"daytona_snapshot_count": 5, "daytona_count_basis": "shellbox-identity over pinned payloads"}
 
 
 def test_non_agentic_sources_are_daytona_safe_without_an_authored_value():
-    source = RlDataSource(info=SourceInfo(id="trove:math", title="Math", origin="fixture", tags=("rlvr", "single-turn")))
+    source = replace(
+        number_source(Path("unused"), "fixture"),
+        info=SourceInfo(id="trove:math", title="Math", origin="fixture", tags=("rlvr", "single-turn")),
+    )
     assert source.declaration.daytona_safety is DaytonaSafety.SAFE
 
 
 def test_an_agentic_verdict_comes_from_the_measured_count():
     """The verdict is derived from the count, so no field on the source can set it."""
     agent = SourceInfo(id="trove:agent", title="Agent", origin="fixture", tags=("agentic",))
-    inferred = RlDataSource(info=replace(agent, **MEASURED))
+    inferred = replace(number_source(Path("unused"), "fixture"), info=replace(agent, **MEASURED))
     assert inferred.declaration.daytona_safety is DaytonaSafety.SAFE
     assert inferred.declaration.daytona_snapshot_count == 5
     assert inferred.declaration.daytona_snapshot_threshold == DAYTONA_SAFE_SNAPSHOT_LIMIT
 
-    over = RlDataSource(info=replace(agent, **{**MEASURED, "daytona_snapshot_count": DAYTONA_SAFE_SNAPSHOT_LIMIT + 1}))
+    over = replace(
+        number_source(Path("unused"), "fixture"),
+        info=replace(agent, **{**MEASURED, "daytona_snapshot_count": DAYTONA_SAFE_SNAPSHOT_LIMIT + 1}),
+    )
     assert over.declaration.daytona_safety is DaytonaSafety.UNSAFE
 
-    refused = RlDataSource(info=replace(agent, **MEASURED, daytona_execution_failures=1))
+    refused = replace(
+        number_source(Path("unused"), "fixture"), info=replace(agent, **MEASURED, daytona_execution_failures=1)
+    )
     assert refused.declaration.daytona_safety is DaytonaSafety.UNSAFE
 
 
 def test_an_unmeasured_agentic_source_is_unassessed_whatever_it_declares():
     agent = SourceInfo(id="trove:agent", title="Agent", origin="fixture", tags=("agentic",))
-    assert RlDataSource(info=agent).declaration.daytona_safety is DaytonaSafety.UNASSESSED
     assert (
-        RlDataSource(info=replace(agent, daytona_count_basis="x")).declaration.daytona_safety is DaytonaSafety.UNASSESSED
+        replace(number_source(Path("unused"), "fixture"), info=agent).declaration.daytona_safety
+        is DaytonaSafety.UNASSESSED
+    )
+    assert (
+        replace(
+            number_source(Path("unused"), "fixture"), info=replace(agent, daytona_count_basis="x")
+        ).declaration.daytona_safety
+        is DaytonaSafety.UNASSESSED
     )
 
 
-def test_status_prefers_deprecated_then_excluded_then_inventory():
-    deprecated = RlDataSource(info=SourceInfo(id="trove:old", title="Old", origin="fixture", tags=("deprecated",)))
-    excluded = RlDataSource(
-        info=SourceInfo(id="trove:gone", title="Gone", origin="fixture", tags=("deprecated", "excluded"))
+def test_converted_status_preserves_deprecation_and_exclusion():
+    deprecated = replace(
+        number_source(Path("unused"), "fixture"),
+        info=SourceInfo(id="trove:old", title="Old", origin="fixture", tags=("deprecated",)),
     )
-    pointer = RlDataSource(info=SourceInfo(id="trove:new", title="New", origin="fixture", tags=("rlvr",)))
+    excluded = replace(
+        number_source(Path("unused"), "fixture"),
+        info=SourceInfo(id="trove:gone", title="Gone", origin="fixture", tags=("deprecated", "excluded")),
+    )
+    pointer = replace(
+        number_source(Path("unused"), "fixture"),
+        info=SourceInfo(id="trove:new", title="New", origin="fixture", tags=("rlvr",)),
+    )
     assert deprecated.declaration.status == "Deprecated"
     assert excluded.declaration.status == "Deprecated"
-    assert pointer.declaration.status == "Inventory"  # no pipeline: visible, never admitted
-    runnable = RlDataSource(
+    assert pointer.declaration.status == "Available"
+    runnable = replace(
+        number_source(Path("unused"), "fixture"),
         info=SourceInfo(id="trove:run", title="Run", origin="fixture", tags=("rlvr",)),
         pipeline=lambda source, options: None,
     )

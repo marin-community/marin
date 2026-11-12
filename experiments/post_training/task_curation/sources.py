@@ -68,7 +68,8 @@ def declared_sources() -> dict[str, RlDataSource]:
         *tasktrove_nl2bash.sources(),
         *tasktrove_repositories.sources(),
         *tasktrove_math.sources(),
-        *tasktrove_judged.sources(),
+        # Unqualified profiles remain available for converter QA, outside the catalog.
+        *(source for source in tasktrove_judged.sources() if source.pipeline is not None),
         *tasktrove_qa.sources(),
         *tasktrove_calendar.sources(),
         *tasktrove_instructions.sources(),

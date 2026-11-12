@@ -26,7 +26,7 @@ MEASURED = SourceCoverage(
 
 def test_the_catalog_rejects_a_declaration_without_coverage(monkeypatch):
     table = sources.load_coverage()
-    missing = next(iter(table))
+    missing = next(iter(sources.declared_sources()))
     monkeypatch.setattr(sources, "load_coverage", lambda: {key: value for key, value in table.items() if key != missing})
     with pytest.raises(ValueError, match=f"Source {missing} has no coverage entry"):
         sources.all_sources()
