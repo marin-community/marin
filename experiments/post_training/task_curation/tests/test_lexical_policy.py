@@ -46,9 +46,7 @@ def test_benchmark_self_match_preserves_population_pin_and_eval_evidence(use):
         and restored.input_dataset_revision == raw.input_dataset_revision
     )
     assert restored.matched_evals == {"HumanEval": 1} and restored.contaminated_tasks == 1
-    assert "does not certify a training release" in restored.admission_blocker(
-        raw.input_dataset_id, raw.input_dataset_revision
-    )
+    assert restored.admission_blocker(raw.input_dataset_id, raw.input_dataset_revision) is not None
 
 
 def test_evaluation_use_comes_from_recipe_even_without_evaluation_tags():

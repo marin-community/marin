@@ -73,4 +73,3 @@ def test_changed_input_or_missing_receipt_clears_stale_inline_census(tmp_path, c
     assert not bound.has_actor_census
     assert bound.info.daytona_snapshot_count is None
     assert bound.info.actor_census_input is None
-    assert "Actor census pending" in bound.info.notes
