@@ -31,8 +31,12 @@ the constraint keys.
 `task_image` is an image reference (`registry/path:tag`), which is needed to
 know what ran; a container runtime rejects credentials in a reference, and
 registry auth comes from the node's credential helper. The
-free-text `error` and `status_message` columns are the one exception, below. Rows are kept forever, so
-a column that fails the rule is left out, not redacted and kept.
+free-text `error` and `status_message` columns, below, and job tags are the
+exceptions. Job tags (`job_config.tags_json`, copied to
+`iris.controller_db__jobs.tags`) are user-written but exist for reporting, so
+they are copied with token-like strings in each value redacted, like `error`.
+Rows are kept forever, so any other column that fails the rule is left out, not
+redacted and kept.
 
 Not copied, all from `job_config`:
 
@@ -47,6 +51,7 @@ Copied columns that differ from the controller DB:
 
 | Column | Differs from the controller DB |
 | --- | --- |
+| `iris.controller_db__jobs.tags` | Added: `job_config.tags_json`, each value token-redacted |
 | `iris.controller_db__jobs.placement` | The DB's `jobs.cluster` ("local" or the peer the job was handed to), renamed because `cluster` here is the writing controller |
 | `iris.controller_db__job_config.accelerator_*` | Added: the device request flattened (below) |
 | `iris.controller_db__tasks.placement` | The DB's `tasks.cluster`, as for jobs |
@@ -137,8 +142,9 @@ ORDER BY accelerator_hours DESC;
 ```
 
 `iris.controller_db__jobs.tags` holds the job's tags as a JSON object
-(`json_get(tags, 'category')`), or NULL for an untagged job; jobs submitted
-before tags existed are untagged.
+(`json_get(tags, 'category')`), with token-like strings in each value
+redacted, or NULL for an untagged job; jobs submitted before tags existed are
+untagged.
 
 `error` is not truncated, but token-like strings in it are redacted (see
 **Free text** above).

@@ -352,6 +352,18 @@ def test_job_rows_carry_tags_and_children_inherit_them(state):
     }
 
 
+def test_job_tags_keep_plain_text_and_redact_tokens(state):
+    rows = _attach(state, "marin")
+    request = make_job_request("train")
+    request.tags.CopyFrom(
+        job_pb2.JobTags(project="made-up-project", description="Sweep sizes with ghp_madeUpToken0123456789abcdefghijkl")
+    )
+    submit_job(state, "train", request)
+
+    (job,) = rows.jobs
+    assert json.loads(job.tags) == {"project": "made-up-project", "description": "Sweep sizes with [REDACTED]"}
+
+
 _CLUSTER_CONFIGS = sorted((Path(__file__).parents[3] / "config").glob("*.yaml"))
 
 
@@ -427,7 +439,8 @@ class _Classified:
     docs/controller-rows.md ("Which columns are copied")."""
 
     row_class: type
-    # DB column -> the Finelog field it is copied to.
+    # DB column -> the Finelog field it is copied to; "<table>.<field>" for a
+    # field of another table's rows.
     copied: dict[str, str]
     # DB column -> why it is not copied.
     excluded: dict[str, str]
@@ -464,7 +477,7 @@ _COLUMNS: dict[str, _Classified] = {
             "cluster": "placement",
         },
         {},
-        frozenset({"cluster", "ts", "tags"}),
+        frozenset({"cluster", "ts"}),
     ),
     "job_config": _Classified(
         IrisJobConfig,
@@ -490,6 +503,9 @@ _COLUMNS: dict[str, _Classified] = {
             "fail_if_exists": "fail_if_exists",
             "container_profile": "container_profile",
             "egress_policy": "egress_policy",
+            # The stated exception to "no user-written text": kept for reporting,
+            # each value token-redacted like `error`.
+            "tags_json": "jobs.tags",
         },
         {
             "name": "duplicate",
@@ -578,13 +594,19 @@ def test_every_controller_db_column_is_classified(tmp_path, table):
         f"{_THIS_TEST}; see {_RULE}"
     )
     fields = {field.name: field for field in dataclasses.fields(classified.row_class)}
-    sources = set(copied.values()) | set(retired.values()) | classified.derived
+    copied_here = {target for target in copied.values() if "." not in target} | {
+        target.removeprefix(f"{table}.")
+        for other in _COLUMNS.values()
+        for target in other.copied.values()
+        if target.startswith(f"{table}.")
+    }
+    sources = copied_here | set(retired.values()) | classified.derived
     # Exact, so an EXCLUDED column copied anyway, or under a new name, fails too.
     assert fields.keys() == sources, (
         f"{classified.row_class.__name__} fields without a classified source: {sorted(fields.keys() - sources)}; "
         f"classified sources without a field: {sorted(sources - fields.keys())}; see {_RULE}"
     )
-    assert not set(retired.values()) & (set(copied.values()) | classified.derived), "a retired field is still live"
+    assert not set(retired.values()) & (copied_here | classified.derived), "a retired field is still live"
     for column, field in retired.items():
         assert column not in db_columns
         assert (

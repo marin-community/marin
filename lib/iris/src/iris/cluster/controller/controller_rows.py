@@ -25,6 +25,7 @@ A failed snapshot or write is logged and drops that transaction's rows; it never
 rolls back the controller's own writes or stops its later post-commit hooks.
 """
 
+import json
 import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -230,6 +231,14 @@ def _free_text(value: str | None) -> str | None:
     return redact_string(value) if value is not None else None
 
 
+def _redacted_tags(tags_json: str | None) -> str | None:
+    """Job tags are user-written but kept for reporting: each value stays
+    readable, with token-like strings redacted as in ``_free_text``."""
+    if tags_json is None:
+        return None
+    return json.dumps({name: redact_string(value) for name, value in json.loads(tags_json).items()})
+
+
 def _dt(value: Timestamp | None) -> datetime | None:
     return value.as_naive_utc() if value is not None else None
 
@@ -294,7 +303,7 @@ def _snapshot_jobs(cur: RowCursor, tables: ControllerRowTables, marked: _Marked,
                     backend_id=r.backend_id,
                     placement=r.cluster,
                     ts=ts,
-                    tags=r.tags_json,
+                    tags=_redacted_tags(r.tags_json),
                 )
             )
 

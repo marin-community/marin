@@ -78,6 +78,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_JOB_LIST_LIMIT = 50
 _SYSTEM_PRIORITY_NAME = "system"
 _SYSTEM_REASON_PATTERN = re.compile(r"\b(?:hero|finelog|iris)\b", re.IGNORECASE)
+_JOB_TAG_RETENTION = "Copied to Finelog and kept permanently: no credentials or sensitive content."
 
 
 def _remote_client(ctx: click.Context) -> IrisClient:
@@ -1067,19 +1068,22 @@ Examples:
     "--project",
     type=str,
     default=None,
-    help=f"Job tag: the effort this job belongs to, up to {MAX_JOB_TAG_CHARS} characters. Child jobs inherit it.",
+    help=f"Job tag: the effort this job belongs to, up to {MAX_JOB_TAG_CHARS} characters. Child jobs inherit it. "
+    + _JOB_TAG_RETENTION,
 )
 @click.option(
     "--category",
     type=str,
     default=None,
-    help=f"Job tag: the kind of work, up to {MAX_JOB_TAG_CHARS} characters. Child jobs inherit it. See OPS.md.",
+    help=f"Job tag: the kind of work, up to {MAX_JOB_TAG_CHARS} characters. Child jobs inherit it. See OPS.md. "
+    + _JOB_TAG_RETENTION,
 )
 @click.option(
     "--description",
     type=str,
     default=None,
-    help=f"Job tag: free-form text on what the job does, up to {MAX_JOB_DESCRIPTION_CHARS} characters.",
+    help=f"Job tag: free-form text on what the job does, up to {MAX_JOB_DESCRIPTION_CHARS} characters. "
+    + _JOB_TAG_RETENTION,
 )
 @click.option(
     "--cancel-on-exit/--no-cancel-on-exit",
