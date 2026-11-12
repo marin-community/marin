@@ -66,7 +66,7 @@ from experiments.post_training.task_curation.embedding import (
 from experiments.post_training.task_curation.inventory import SelectionRecipe, task_selection_step
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
-from experiments.post_training.task_curation.pipeline import CampaignMachines
+from experiments.post_training.task_curation.pipeline import CampaignMachines, CurationRecipe
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
 from experiments.post_training.task_curation.sources import all_sources, runnable_sources
 from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM
@@ -774,7 +774,7 @@ def main(
             rubric,
         )
     needs_review = assess or any(
-        source.config is not None and source.config.rubric is not None for source in selected.values()
+        isinstance(source.config, CurationRecipe) and source.config.rubric is not None for source in selected.values()
     )
     if do_run and needs_review and recipe_settings.api_key is None:
         raise click.UsageError("QA review requires an API key")
