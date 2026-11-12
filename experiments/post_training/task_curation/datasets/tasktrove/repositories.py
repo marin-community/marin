@@ -181,11 +181,14 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     title="laion/swesmith-oracle-filtered-v2",
                     origin="Task Trove",
                     family="swe-repo",
-                    tags=("agentic", "multi-turn", "language:python"),
+                    tags=("agentic", "multi-turn", "language:python", "deprecated"),
                     count=12927,
                     notes=(
-                        "Trusted repository pytest tests with unresolved Docker build contexts; "
-                        "original config patches remain oracle-only."
+                        "Deprecated: this upstream SWE-smith conversion predates the hardened "
+                        "bug-zero/reference-one admission and retains unresolved Docker contexts. "
+                        "The long-loop repair campaign found scratch, generated-metadata and verifier "
+                        "infrastructure defects in the derived Smartie cohort. Use its pinned repaired "
+                        "release with exact per-task control receipts."
                     ),
                     daytona_snapshot_count=12932,
                     daytona_count_basis=(

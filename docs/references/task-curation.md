@@ -345,6 +345,14 @@ name, revision and URL for an inventory dataset. Runnable sources expose their
 pinned input through `config.dataset`. Current grades come from the executed
 assessment records in `finestore.rl.curation.CurationCatalog`.
 
+Published native Harbor cohorts use `prebuilt.import_harbor_prebuilt` with
+`TaskFormat.HARBOR`. Their pinned `tasks.parquet` stores the original `task_spec`
+strings, including `task.toml`, environment files and verifier resources. Import
+matches every string's SHA-256 to `controls.jsonl` at the same revision and requires
+scored bug-zero/reference-one controls for the complete population. It retains
+package bytes and executes no controls during import. Infrastructure-error zeros
+cannot admit a task. Lowered TaskCompendium envelopes use `prebuilt.import_prebuilt`.
+
 ```python
 from finestore.rl.curation import CurationCatalog
 

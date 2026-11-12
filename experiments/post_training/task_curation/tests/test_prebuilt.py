@@ -3,6 +3,7 @@
 
 """The prebuilt importer admits a cohort only as published and only when valid."""
 
+import hashlib
 import json
 
 import pyarrow as pa
@@ -23,6 +24,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
+from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation import prebuilt
 
@@ -89,3 +91,48 @@ def test_an_envelope_without_machine_shapes_is_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
     with pytest.raises(ValueError, match="no runtime machines"):
         prebuilt.import_cohort(_cohort(1))
+
+
+@pytest.mark.parametrize("change", ["none", "package", "infrastructure_zero"])
+def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch, change):
+    task = TaskSpec.model_validate(json.loads(_task("native")["lowered_task_spec"])["task"])
+    task = task.model_copy(
+        update={
+            "tags": ("harbor",),
+            "resources": ResourceGroups(
+                verifier=tuple(
+                    inline_resource(path, content)
+                    for path, content in {
+                        "task.toml": b'[environment]\ndocker_image = "custom-task-image"\n',
+                        "instruction.md": b"Fix the repository.",
+                        "tests/test.sh": b"#!/bin/bash\nexit 0\n",
+                    }.items()
+                )
+            ),
+        }
+    )
+    serialized = task.model_dump_json()
+    receipt = {
+        "task_id": "native",
+        "task_sha256": hashlib.sha256(serialized.encode()).hexdigest(),
+        "status": "admitted",
+        "controls": {
+            "bug": {"status": "scored", "reward": 0},
+            "reference": {"status": "scored", "reward": 1},
+        },
+    }
+    if change == "package":
+        serialized = task.model_copy(update={"labels": {"changed": "after-controls"}}).model_dump_json()
+    elif change == "infrastructure_zero":
+        receipt["controls"]["bug"]["status"] = "infra_error"
+    path = tmp_path / "tasks.parquet"
+    pq.write_table(pa.Table.from_pylist([{"task_spec": serialized}]), path)
+    (tmp_path / "controls.jsonl").write_text(json.dumps(receipt) + "\n")
+    original = path.read_bytes()
+    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(tmp_path / kwargs["filename"]))
+    if change == "none":
+        assert prebuilt.import_harbor_cohort(_cohort(1)) == str(path)
+        assert path.read_bytes() == original
+    else:
+        with pytest.raises(ValueError, match=r"differs from its control|controls do not admit"):
+            prebuilt.import_harbor_cohort(_cohort(1))

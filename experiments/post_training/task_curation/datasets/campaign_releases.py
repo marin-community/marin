@@ -915,17 +915,17 @@ def sources() -> list[RlDataSource]:
                 title="Snowball Smartie SWE-Smith admitted cohort",
                 origin="Snowball Smartie RL",
                 family="swe-repo",
-                tags=("agentic", "multi-turn", "campaign-release"),
+                tags=("agentic", "multi-turn", "campaign-release", "deprecated"),
                 count=8045,
                 daytona_snapshot_count=5,
                 daytona_count_basis="shellbox-identity over the pinned tasks.parquet build contexts",
                 notes=(
-                    "8,045 quality-admitted SWE-Smith tasks. The release keeps only tasks that passed "
-                    "the Daytona oracle and a Good quality verdict; quality review is not a "
-                    "model-solving accuracy claim, and campaign-specific train and validation splits "
-                    "remain in the private archive. Tasks share five build contexts (two FROM bases, "
-                    "floating python:3.10/3.11-bookworm tags), so a run provisions five snapshots; "
-                    "the campaign's capacity check budgets all five."
+                    "Deprecated: the original 8,045-task admission did not enforce the hardened "
+                    "bug-zero/reference-one controls. Re-control excluded 2,417 tasks, including "
+                    "scratch permissions, generated metadata, verifier infrastructure failures, "
+                    "timeouts, degenerate references and passing bug commits. Use the separately "
+                    "pinned repaired cohort; its v4-admitted task packages retain their tested bytes. "
+                    "The original campaign's quality and oracle records remain historical evidence."
                 ),
                 dataset=swesmith,
                 independent_qc=IndependentQC(

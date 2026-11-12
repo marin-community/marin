@@ -15,6 +15,8 @@ source's oversight level and evidence describe the qualification the publish rec
 import hashlib
 import json
 import shutil
+import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -24,6 +26,7 @@ from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
+from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
@@ -31,6 +34,7 @@ from experiments.post_training.task_curation.environment_fidelity import missing
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference
 
 TASKS_FILENAME = "tasks.parquet"
+CONTROLS_FILENAME = "controls.jsonl"
 
 
 @dataclass(frozen=True)
@@ -91,8 +95,72 @@ def import_cohort(config: PrebuiltCohort) -> str:
     return str(local)
 
 
+def import_harbor_cohort(config: PrebuiltCohort) -> str:
+    """Import native Harbor packages only when exact package controls admit every row."""
+    local = Path(
+        hf_hub_download(
+            repo_id=config.repo, repo_type=config.repo_type, filename=TASKS_FILENAME, revision=config.revision
+        )
+    )
+    controls_path = Path(
+        hf_hub_download(
+            repo_id=config.repo, repo_type=config.repo_type, filename=CONTROLS_FILENAME, revision=config.revision
+        )
+    )
+    controls = {}
+    for line in controls_path.read_text().splitlines():
+        receipt = json.loads(line)
+        task_id = receipt["task_id"]
+        if task_id in controls:
+            raise ValueError(f"Duplicate Harbor control: {task_id}")
+        controls[task_id] = receipt
+    seen = set()
+    for batch in pq.ParquetFile(local).iter_batches(batch_size=32):
+        for row in batch.to_pylist():
+            serialized = row["task_spec"]
+            task = TaskSpec.model_validate_json(serialized)
+            if task.id in seen:
+                raise ValueError(f"Duplicate Harbor task: {task.id}")
+            seen.add(task.id)
+            receipt = controls[task.id]
+            if hashlib.sha256(serialized.encode()).hexdigest() != receipt["task_sha256"]:
+                raise ValueError(f"Harbor package differs from its control: {task.id}")
+            outcomes = receipt["controls"]
+            if not (
+                receipt["status"] == "admitted"
+                and outcomes["bug"]["status"] == outcomes["reference"]["status"] == "scored"
+                and outcomes["bug"]["reward"] == 0
+                and outcomes["reference"]["reward"] == 1
+            ):
+                raise ValueError(f"Harbor controls do not admit task: {task.id}")
+            files = {resource.path: resource for resource in task.resources.verifier}
+            required = {"task.toml", "instruction.md", "tests/test.sh"}
+            if "harbor" not in task.tags or not required <= files.keys():
+                raise ValueError(f"Incomplete native Harbor package: {task.id}")
+            environment = tomllib.loads(resource_bytes(files["task.toml"]).decode())["environment"]
+            if not environment.get("docker_image") and "environment/Dockerfile" not in files:
+                raise ValueError(f"Harbor package declares no environment: {task.id}")
+    if seen != controls.keys() or len(seen) != config.expected_rows:
+        raise ValueError(f"Harbor population differs from its controls or expected count: {config.repo}")
+    return str(local)
+
+
 def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
-    """Read the published cohort back and admit its tasks."""
+    """Read the published TaskCompendium cohort back and admit its tasks."""
+    return prebuilt_artifact(source, options, import_cohort)
+
+
+def import_harbor_prebuilt(
+    source: RlDataSource[PrebuiltCohort], options: PipelineOptions
+) -> ArtifactStep[CampaignArtifact]:
+    """Retain native Harbor packages and their exact bug/reference admission contracts."""
+    return prebuilt_artifact(source, options, import_harbor_cohort)
+
+
+def prebuilt_artifact(
+    source: RlDataSource[PrebuiltCohort], options: PipelineOptions, load: Callable[[PrebuiltCohort], str]
+) -> ArtifactStep[CampaignArtifact]:
+    """Publish a validated cohort without rewriting its task bytes."""
     config = source.config
     assert config is not None
     if options.mode is SourceProcessingMode.QUICK:
@@ -102,7 +170,7 @@ def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptio
         return context.output_path
 
     def run(output_path: str) -> CampaignArtifact:
-        local = Path(import_cohort(config))
+        local = Path(load(config))
         destination = Path(output_path)
         destination.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(local, destination / TASKS_FILENAME)
