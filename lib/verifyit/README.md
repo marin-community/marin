@@ -88,7 +88,7 @@ text to the mode's contract; missing files still score zero. Rewards must be fin
 in `[0, 1]`. Malformed verdicts, incomplete judge replies, and failed structured script producers
 become unscored infrastructure errors. Interrupted test runs cannot retain positive credit.
 
-Pytest collection errors score zero. When pytest fails before producing a report, VerifyIT
+Candidate-attributed pytest collection errors score zero. When pytest fails before producing a report, VerifyIT
 checks the interpreter and JSON-report plugin from a temporary directory isolated from task
 imports. A healthy baseline makes the failed task run a scored startup error; an unavailable
 baseline remains an infrastructure error. The task's original import paths and tests still
