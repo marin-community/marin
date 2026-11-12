@@ -134,10 +134,10 @@ class RebuiltTask:
 
 
 def parse_instructions(dockerfile: str) -> list[Instruction]:
-    """Parse the instruction subset the fixed bases serve; defer the rest.
+    """Parse Dockerfile instructions for the setup compiler.
 
     Handles line continuations, comments, JSON-form RUN arrays and heredoc
-    detection. Anything outside FROM/WORKDIR/COPY/RUN defers.
+    detection. Heredocs defer; compilation decides which instructions are supported.
     """
     instructions: list[Instruction] = []
     buffer = ""
@@ -210,7 +210,8 @@ def compile_recipe(
 
     Dependency installs move into the setup script verbatim; file copies are
     staged from the fixture payload; the FROM line maps onto the fixed base
-    set. Everything else defers with the reason admission records.
+    set. ENV assignments persist in the setup script. Unsupported steps defer
+    with the reason admission records.
     """
     bases = [item for item in instructions if item.command == "from"]
     if len(bases) != 1 or len(bases[0].args) != 1:
@@ -219,8 +220,6 @@ def compile_recipe(
     base_key, _, original_digest = original_from.partition("@")
     if base_key not in FIXED_BASES:
         raise DeferredRebuild("requires_unmapped_base:" + original_from)
-    # A digest-pinned original keeps its digest on the normalized reference; floating
-    # tags stay references until packaging resolves their digests.
     # The mapped base already carries a digest; a digest-pinned original keeps its own.
     base_ref = f"{base_key}@{original_digest}" if original_digest else FIXED_BASES[base_key]
     workdir = "/"

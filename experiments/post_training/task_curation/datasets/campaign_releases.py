@@ -1,20 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Inventory-only declarations for published campaign cohorts.
+"""Published campaign cohorts and runnable rebuilt releases.
 
-These entries make releases the Snowball Smartie RL campaign prepared and
-published outside the curation driver visible in the RL Data Atlas. Each pins
-one immutable Hugging Face revision. None has a conversion recipe: campaign
-admission, split assignment and qualification evidence already live in the
-release itself, so re-converting them here would invent a second provenance.
+Each entry pins an immutable Hugging Face revision in the RL Data Atlas.
+Rebuilt TaskCompendium cohorts use ``prebuilt.import_prebuilt`` to validate and
+admit their published tasks without repeating conversion. Their qualification
+evidence and oversight levels describe the checks behind admission.
 
-The rebuilt CalibForge cohort is the exception: it is a converted dataset published
-from this repository, so it is imported through ``prebuilt.import_prebuilt`` and is
-runnable. The rest carry host-local Docker image locators.
-Their screened public releases record instruction text and identity but no image
-bytes or verifier material, so no machine can execute these tasks from the public
-release alone. Treat every entry as a data pointer, not a runnable pipeline.
+Legacy Snowball Smartie releases remain inventory pointers: their host-local
+image locators, absent image bytes and omitted verifier material cannot be used
+to execute tasks from the screened public release alone.
 """
 
 from finestore.rl.curation import (
@@ -371,7 +367,8 @@ def sources() -> list[RlDataSource]:
                 ),
                 notes=(
                     "505 curriculum-easy tasks converted to run in their archived environment, lowered onto "
-                    "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_curriculum-easy @ "
+                    "the digest-pinned base, measured at the pinned upstream revision "
+                    "DCAgent__exp_rpt_curriculum-easy @ "
                     "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
                     "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
@@ -425,7 +422,8 @@ def sources() -> list[RlDataSource]:
                 ),
                 notes=(
                     "488 curriculum-medium tasks converted to run in their archived environment, lowered onto "
-                    "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_curriculum-medium-v2 @ "
+                    "the digest-pinned base, measured at the pinned upstream revision "
+                    "DCAgent__exp_rpt_curriculum-medium-v2 @ "
                     "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
                     "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
@@ -435,6 +433,62 @@ def sources() -> list[RlDataSource]:
                     "db17ab9b01d960d01f7a75c3d1d896504ceaf9fa",
                     "https://huggingface.co/datasets/open-athena/tasktrove-curriculum-medium-v1-taskcompendium-20261112"
                     "/tree/db17ab9b01d960d01f7a75c3d1d896504ceaf9fa",
+                ),
+            ),
+        ),
+        RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="e2egit-v2-rebuilt",
+                version="1",
+                repo="open-athena/tasktrove-e2egit-v2-taskcompendium-20261112",
+                revision="dd34672091d917c96c922fd2ebf0d583a1dfc5b9",
+                expected_rows=477,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:tasktrove-e2egit-v2-rebuilt",
+                title="TaskTrove e2egit-v2 rebuilt cohort (TaskCompendium)",
+                origin="Task Trove",
+                family="python-tests",
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=477,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over all 477 lowered specs at the pinned revision: "
+                    "one distinct agent identity at 1 CPU / 4096 MB, zero identity or execution failures. "
+                    "The compiler package-lock grader runs in the worker's local runtime and adds no Daytona identity"
+                ),
+                daytona_execution_failures=0,
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/python_tests.py version 8; verifyit @ f0155c1143",
+                    verification=(
+                        "setup fidelity compared on all 477 converted specs against their native archives; "
+                        "the sole shared setup recipe executed successfully with real package installation. "
+                        "Production grading with COMPILER_GRADER_PACKAGES, build identity "
+                        "42bb937b102dd758b4d1210769750d7e259a036169ef1458d11821809118888b, "
+                        "returned 20 negative verdicts (reward 0.0, no infrastructure errors) on the seed-0 sample. "
+                        "Evidence is published beside tasks.parquet at the pinned revision"
+                    ),
+                    reviewed=477,
+                    admitted=477,
+                    level=OversightLevel.SAMPLE,
+                ),
+                notes=(
+                    "477 e2egit-v2 tasks preserve their archived environment, lowered onto its digest-pinned base. "
+                    "The upstream is DCAgent__exp_rpt_e2egit-v2 at 02923004846e4e73862c20962f823a6d05100e7a; "
+                    "ten reviewed source defects remain excluded. The private release includes setup and liveness "
+                    "evidence, retained rejections, and an explicit durable compiler grader lock. "
+                    "Qualification uses an empty submission; no oracle or model-quality run is claimed. "
+                    "Daytona execution remains untested"
+                ),
+                dataset=SourceReference(
+                    "open-athena/tasktrove-e2egit-v2-taskcompendium-20261112",
+                    "dd34672091d917c96c922fd2ebf0d583a1dfc5b9",
+                    "https://huggingface.co/datasets/open-athena/tasktrove-e2egit-v2-taskcompendium-20261112"
+                    "/tree/dd34672091d917c96c922fd2ebf0d583a1dfc5b9",
                 ),
             ),
         ),
@@ -587,7 +641,8 @@ def sources() -> list[RlDataSource]:
                 ),
                 notes=(
                     "500 pymethods2test tasks converted to run in their archived environment, lowered onto "
-                    "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_pymethods2test-v3 @ "
+                    "the digest-pinned base, measured at the pinned upstream revision "
+                    "DCAgent__exp_rpt_pymethods2test-v3 @ "
                     "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
                     "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
@@ -641,7 +696,8 @@ def sources() -> list[RlDataSource]:
                 ),
                 notes=(
                     "4,990 pymethods2test-large tasks converted to run in their archived environment, lowered onto "
-                    "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_pymethods2test-large-v2 @ "
+                    "the digest-pinned base, measured at the pinned upstream revision "
+                    "DCAgent__exp_rpt_pymethods2test-large-v2 @ "
                     "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
                     "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
@@ -695,7 +751,8 @@ def sources() -> list[RlDataSource]:
                 ),
                 notes=(
                     "492 stack-pytest tasks converted to run in their archived environment, lowered onto "
-                    "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_stack-pytest-v2 @ "
+                    "the digest-pinned base, measured at the pinned upstream revision "
+                    "DCAgent__exp_rpt_stack-pytest-v2 @ "
                     "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
                     "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
@@ -749,7 +806,8 @@ def sources() -> list[RlDataSource]:
                 ),
                 notes=(
                     "4,991 unitsyn-python tasks converted to run in their archived environment, lowered onto "
-                    "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_unitsyn-python-v4 @ "
+                    "the digest-pinned base, measured at the pinned upstream revision "
+                    "DCAgent__exp_rpt_unitsyn-python-v4 @ "
                     "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
                     "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
@@ -803,7 +861,8 @@ def sources() -> list[RlDataSource]:
                 ),
                 notes=(
                     "4,991 unitsyn-python-large tasks converted to run in their archived environment, lowered onto "
-                    "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_unitsyn-python-large-v2 @ "
+                    "the digest-pinned base, measured at the pinned upstream revision "
+                    "DCAgent__exp_rpt_unitsyn-python-large-v2 @ "
                     "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
                     "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
