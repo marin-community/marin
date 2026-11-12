@@ -28,7 +28,6 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.models import (
-    ImportFailureKind,
     ImportRejection,
     NormalizationChange,
     NormalizedTask,
@@ -39,9 +38,7 @@ from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import PytestSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
-    DOCKERFILE,
     SOLVE_SH,
-    archive_file,
     archive_files,
     archive_resources,
 )
@@ -50,7 +47,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.resul
     ConvertFn,
     archive_conversion,
 )
-from experiments.post_training.task_curation.environment_fidelity import environment_unused
 
 SOLUTION_PATHS = ("/app/solution.py", "/app/solution.cpp")
 """The program files a competitive-programming grader runs, whichever language the agent chose."""
@@ -140,13 +136,6 @@ def tasktrove_archive_task(
         grader_environment=grader_environment,
         output_paths=output_paths,
     )
-    # The archive's environment is part of the task; a spec that replaces it with an
-    # image while the archive defines environment/Dockerfile is not admissible.
-    substituted = environment_unused(task.model_dump(mode="json"), archive_file(row.data, DOCKERFILE))
-    if substituted is not None:
-        return ImportRejection(
-            kind=ImportFailureKind.CONVERTER_ERROR, reason="environment_substituted", detail=substituted
-        )
     return NormalizedTask(task, _converter_changes(row, converted))
 
 

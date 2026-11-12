@@ -59,10 +59,9 @@ from pathlib import Path
 import pyarrow.parquet as pq
 
 from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT
-from experiments.post_training.task_curation.environment_fidelity import DEFAULT_WORKDIR
+from experiments.post_training.task_curation.environment_fidelity import DEFAULT_WORKDIR, ENVIRONMENT_PREFIX
 from experiments.post_training.task_curation.no_oracle_liveness import load_specs
 
-ENVIRONMENT_PREFIX = "environment/"
 COPY_SOURCE = re.compile(r"^\s*COPY\s+(?:--\S+\s+)*(?P<sources>.+)$", re.IGNORECASE | re.MULTILINE)
 ADD_SOURCE = re.compile(r"^\s*ADD\s", re.IGNORECASE | re.MULTILINE)
 
@@ -101,19 +100,24 @@ class SetupExecution:
     outcome: str
     written: int = 0
     missing: tuple[str, ...] = ()
+    """Expected paths the workspace scan found nowhere."""
+    altered: tuple[str, ...] = ()
+    """Expected paths present with different bytes."""
     extra: tuple[str, ...] = ()
-    changed: tuple[str, ...] = ()
+    remoded: tuple[str, ...] = ()
+    workspace_stdout: str | None = None
+    """The raw workspace scan output, when the script ran to completion."""
     detail: str = ""
 
     @property
     def passed(self) -> bool:
-        """Whether every expected file is present as written by the native recipe.
+        """Whether every expected file is present with the native bytes.
 
-        The comparison is on content. A mode difference is reported in ``changed``
+        A mode difference is reported in ``remoded`` and does not fail the check,
         because the native recipe's own ``chmod`` steps are replayed verbatim by the
         rebuild, so a faithful rebuild legitimately differs from the source byte mode.
         """
-        return self.outcome == "executed" and not self.missing
+        return self.outcome == "executed" and not (self.missing or self.altered)
 
 
 @dataclass(frozen=True)
@@ -198,7 +202,9 @@ class QualificationReport:
                     "outcome": result.outcome,
                     "written": result.written,
                     "missing": list(result.missing),
+                    "altered": list(result.altered),
                     "extra": list(result.extra),
+                    "remoded": list(result.remoded),
                     "passed": result.passed,
                     "detail": result.detail,
                 }
@@ -238,18 +244,32 @@ def native_workdir(dockerfile: str) -> str:
     return match.group(1) if match else DEFAULT_WORKDIR
 
 
+def _copy_steps(dockerfile: str) -> list[tuple[list[str], str]]:
+    """Each COPY's flag-free sources and destination, in recipe order."""
+    steps: list[tuple[list[str], str]] = []
+    for match in COPY_SOURCE.finditer(dockerfile):
+        tokens = [token for token in match.group("sources").split() if not token.startswith("--")]
+        if len(tokens) < 2:
+            continue
+        steps.append((tokens[:-1], tokens[-1]))
+    return steps
+
+
 def copied_paths(dockerfile: str) -> list[str]:
-    """The context-relative sources a native recipe copies into the workspace."""
+    """The context-relative sources a native recipe copies into the workspace.
+
+    These scans read the recipe as written rather than through ``parse_instructions``:
+    the preservation check must describe the literal archive even when the rebuild
+    would defer on it, so a malformed recipe still yields a report instead of a crash.
+    """
     if ADD_SOURCE.search(dockerfile):
         raise ValueError("ADD recipes have no preservation contract")
-    paths: list[str] = []
-    for match in COPY_SOURCE.finditer(dockerfile):
-        *sources, _destination = match.group("sources").split()
-        for source in sources:
-            if source.startswith("--") or "$" in source or "*" in source or "?" in source:
-                continue
-            paths.append(source.rstrip("/"))
-    return paths
+    return [
+        source.rstrip("/")
+        for sources, _destination in _copy_steps(dockerfile)
+        for source in sources
+        if not any(character in source for character in "$*?")
+    ]
 
 
 def copied_destinations(dockerfile: str, workdir: str) -> tuple[str, ...]:
@@ -319,11 +339,9 @@ class CopyMapping:
 def copy_mappings(dockerfile: str, workdir: str) -> list[CopyMapping]:
     """Each copied source with its absolute destination and whether that is a directory."""
     mappings: list[CopyMapping] = []
-    for match in COPY_SOURCE.finditer(dockerfile):
-        tokens = [token for token in match.group("sources").split() if not token.startswith("--")]
-        if len(tokens) < 2:
+    for sources, destination in _copy_steps(dockerfile):
+        if any(character in destination for character in "$*?"):
             continue
-        *sources, destination = tokens
         is_directory = len(sources) > 1 or destination.endswith("/")
         absolute = destination if destination.startswith("/") else f"{workdir.rstrip('/')}/{destination}"
         absolute = absolute.rstrip("/") or "/"
@@ -441,7 +459,7 @@ def _execute_container_setup(
     copies: tuple[tuple[Path, str], ...],
     dns: tuple[str, ...],
     timeout: int,
-) -> SetupExecution | str:
+) -> SetupExecution:
     resolvers = tuple(part for server in dns for part in ("--dns", server))
     created = _docker("create", *resolvers, image, "sh", "-c", command)
     if created.returncode:
@@ -461,7 +479,7 @@ def _execute_container_setup(
             raise RuntimeError(f"cannot remove Docker setup container {container}: {removed.stderr[-500:]}")
     if started.returncode:
         return SetupExecution(task_id=task_id, outcome="script_error", detail=started.stderr[-500:])
-    return started.stdout
+    return SetupExecution(task_id=task_id, outcome="executed", workspace_stdout=started.stdout)
 
 
 def _workspace_scan(roots: tuple[str, ...]) -> str:
@@ -480,8 +498,10 @@ def _setup_comparison(task_id: str, expectations: tuple[FileExpectation, ...], s
         outcome="executed",
         written=comparison.written,
         missing=comparison.missing,
+        altered=comparison.altered,
         extra=comparison.extra,
-        changed=comparison.changed,
+        remoded=comparison.remoded,
+        workspace_stdout=stdout,
     )
 
 
@@ -518,33 +538,40 @@ def execute_setup_in_docker(
             + _workspace_scan((workdir, *destinations))
         )
         result = _execute_container_setup(task_id, image, command, ((setup, SETUP_ROOT), (shim, "/shim")), dns, timeout)
-    if isinstance(result, SetupExecution):
+    if result.workspace_stdout is None:
         return result
-    return _setup_comparison(task_id, workspace_expectations(native_payload), result)
+    return _setup_comparison(task_id, workspace_expectations(native_payload), result.workspace_stdout)
 
 
 @dataclass(frozen=True)
 class WorkspaceComparison:
+    """A workspace scan against the files the native recipe should have written."""
+
     written: int
     missing: tuple[str, ...]
+    """Expected paths the scan found nowhere."""
+    altered: tuple[str, ...]
+    """Expected paths present with different bytes."""
     extra: tuple[str, ...]
-    changed: tuple[str, ...]
+    remoded: tuple[str, ...]
+    """Present paths whose mode differs from the native recipe's own chmod."""
 
 
 def _compare_workspace(expectations: tuple[FileExpectation, ...], stdout: str) -> WorkspaceComparison:
     """Require the native bytes at each native COPY destination, including duplicate contents."""
     observed = {item.path: item for item in _manifest(stdout)}
     expected = {item.path: item for item in expectations}
-    missing = tuple(
-        path for path, item in sorted(expected.items()) if path not in observed or observed[path].sha256 != item.sha256
+    missing = tuple(path for path, item in sorted(expected.items()) if path not in observed)
+    altered = tuple(
+        path for path, item in sorted(expected.items()) if path in observed and observed[path].sha256 != item.sha256
     )
     extra = tuple(sorted(observed.keys() - expected.keys()))
-    changed = tuple(
+    remoded = tuple(
         f"{item.sha256[:12]}:{path}:{oct(observed[path].mode)}->{oct(item.mode)}"
         for path, item in sorted(expected.items())
         if path in observed and observed[path].mode != item.mode
     )
-    return WorkspaceComparison(len(observed), missing, extra, changed)
+    return WorkspaceComparison(len(observed), missing, altered, extra, remoded)
 
 
 def execute_lowered_setup(
@@ -580,9 +607,9 @@ def execute_lowered_setup(
         result = _execute_container_setup(
             task["id"], requirements["docker_image"], command, ((root / "setup_files", SETUP_ROOT),), dns, timeout
         )
-    if isinstance(result, SetupExecution):
+    if result.workspace_stdout is None:
         return result
-    return _setup_comparison(task["id"], expectations, result)
+    return _setup_comparison(task["id"], expectations, result.workspace_stdout)
 
 
 def summarize(report: QualificationReport) -> dict:

@@ -159,12 +159,19 @@ def test_an_absolute_destination_keeps_its_mode():
     assert manifest == [WorkspaceFile("/data/products.csv", digest, 0o644)]
 
 
+def test_a_present_file_with_different_bytes_fails_as_altered():
+    """Content divergence fails the check and is named, not counted as missing."""
+    expectations = (FileExpectation(path="/app/run.sh", sha256="b" * 64, mode=0o644),)
+    comparison = _compare_workspace(expectations, f"644 /app/run.sh\n{'c' * 64}  /app/run.sh\n")
+    assert (comparison.written, comparison.missing, comparison.altered) == (1, (), ("/app/run.sh",))
+
+
 def test_a_faithful_mode_change_is_reported_not_failed():
     """The native recipe's own chmod is replayed, so mode alone cannot fail the check."""
     expectations = (FileExpectation(path="/app/run.sh", sha256="b" * 64, mode=0o644),)
     comparison = _compare_workspace(expectations, f"755 /app/run.sh\n{'b' * 64}  /app/run.sh\n")
-    assert (comparison.written, comparison.missing, comparison.extra) == (1, (), ())
-    assert comparison.changed and comparison.changed[0].startswith("bbbbbbbbbbbb:")
+    assert (comparison.written, comparison.missing, comparison.altered, comparison.extra) == (1, (), (), ())
+    assert comparison.remoded and comparison.remoded[0].startswith("bbbbbbbbbbbb:")
 
 
 def test_a_mode_zero_file_still_counts_as_present():

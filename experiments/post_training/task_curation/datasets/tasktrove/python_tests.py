@@ -18,7 +18,9 @@ from taskcompendium.pipeline.models import Controls, Converter, ImportRejection,
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, archive_file
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    archive_requirements,
+)
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
     SOLUTION_PATHS,
     solve_script,
@@ -27,7 +29,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.execu
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.python_unit_tests import (
     convert as convert_unit_tests,
 )
-from experiments.post_training.task_curation.environment_fidelity import archive_environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
@@ -168,7 +169,7 @@ def convert_python_tests(row: RawRow, context: ConversionContext) -> NormalizedT
     return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=archive_environment(archive_file(row.data, DOCKERFILE)),
+        environment=archive_requirements(row.data),
         grader_environment=required_grader_environment(context),
         output_paths=("/app",),
     )
@@ -179,7 +180,7 @@ def convert_unitsyn(row: RawRow, context: ConversionContext) -> NormalizedTask |
     return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=archive_environment(archive_file(row.data, DOCKERFILE)),
+        environment=archive_requirements(row.data),
         grader_environment=required_grader_environment(context),
         output_paths=SOLUTION_PATHS,
     )

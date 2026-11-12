@@ -39,7 +39,8 @@ from shellbox.machine import (
     NetworkPolicy,
 )
 
-ENVIRONMENT_PREFIX = "environment/"
+from experiments.post_training.task_curation.environment_fidelity import ENVIRONMENT_PREFIX
+
 DOCKERFILE = "Dockerfile"
 
 
@@ -131,10 +132,6 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
     fabricated snapshot. Unbuilt contexts retain their identity but are refused
     by the runtime's unresolved-environment check.
     """
-    # Native Harbor counting also runs in Harbor's standalone environment, which
-    # does not install TaskCompendium. Only lowered TaskCompendium inputs need it.
-    from taskcompendium.models import EnvironmentRequirements, require_resolved_environment  # noqa: PLC0415
-
     sizes: Counter[str] = Counter()
     failures: list[tuple[str, str]] = []
     execution_failures: list[tuple[str, str]] = []
@@ -142,63 +139,20 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
     for task_id, spec in tasks:
         task = spec.get("task") or {}
         runtime = spec.get("runtime") or {}
-        grader = task.get("grader") or {}
-        mapping_errors = []
-        execution_errors = []
         slots = (
             ("agent", task.get("environment_requirements"), runtime.get("task_machine")),
-            ("grader", grader.get("environment"), runtime.get("verifier_machine")),
+            ("grader", (task.get("grader") or {}).get("environment"), runtime.get("verifier_machine")),
         )
+        mapping_errors: list[str] = []
+        execution_errors: list[str] = []
         for role, declared, shape in slots:
-            if declared is None or shape is None:
-                continue
-            requirements = EnvironmentRequirements.model_validate(declared)
-            with tempfile.TemporaryDirectory() as tmp:
-                context = Path(tmp)
-                if requirements.docker_build is not None:
-                    for resource in requirements.docker_build.files:
-                        _write_context(
-                            context,
-                            resource.path,
-                            base64.b64decode(resource.source.content_base64, validate=True),
-                            int(resource.mode or "644", 8),
-                        )
-                    source = DockerfileSource(context, context / DOCKERFILE)
-                elif requirements.docker_image is not None:
-                    source = RegistryImage(requirements.docker_image)
-                elif requirements.packages_lock is not None:
-                    source = HostImage()
-                elif requirements.package_spec is not None:
-                    source = requirements.package_spec
-                else:
-                    mapping_errors.append(f"{role}: no declared environment")
-                    execution_errors.append(f"{role}: no declared environment")
-                    continue
-                machine = MachineSpec(
-                    source=source,
-                    workdir=requirements.working_directory or "",
-                    network=NetworkPolicy.ALLOW,
-                    cpus=shape.get("cpus"),
-                    memory_mb=shape.get("memory_mb"),
-                    storage_mb=shape.get("storage_mb"),
-                    gpus=shape.get("gpus", 0),
-                )
-                try:
-                    factory.check_environment(requirements, machine)
-                    require_resolved_environment(requirements)
-                except UnsupportedMachineSpec as error:
-                    execution_errors.append(f"{role}: {error}")
-                if not isinstance(source, RegistryImage | DockerfileSource):
-                    continue
-                try:
-                    name = snapshot_identity(
-                        source,
-                        snapshot_resources(machine),
-                    )
-                except UnsupportedMachineSpec as error:
-                    mapping_errors.append(f"{role}: {error}")
-                else:
-                    sizes[name] += 1
+            name, mapping_error, execution_error = _declared_identity(role, declared, shape, factory)
+            if name is not None:
+                sizes[name] += 1
+            if mapping_error is not None:
+                mapping_errors.append(mapping_error)
+            if execution_error is not None:
+                execution_errors.append(execution_error)
         if mapping_errors:
             failures.append((task_id, "; ".join(mapping_errors)))
         if execution_errors:
@@ -206,6 +160,62 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
     return SnapshotIdentityCount(
         distinct=len(sizes), sizes=dict(sizes), failures=failures, execution_failures=execution_failures
     )
+
+
+def _declared_identity(
+    role: str, declared: Mapping | None, shape: Mapping | None, factory: DaytonaMachineFactory
+) -> tuple[str | None, str | None, str | None]:
+    """One declared machine's snapshot name, mapping refusal and execution refusal."""
+    if declared is None or shape is None:
+        return None, None, None
+    # Native Harbor counting also runs in Harbor's standalone environment, which
+    # does not install TaskCompendium. Only lowered TaskCompendium inputs need it.
+    from taskcompendium.models import EnvironmentRequirements, require_resolved_environment  # noqa: PLC0415
+
+    requirements = EnvironmentRequirements.model_validate(declared)
+    with tempfile.TemporaryDirectory() as tmp:
+        context = Path(tmp)
+        if requirements.docker_build is not None:
+            for resource in requirements.docker_build.files:
+                _write_context(
+                    context,
+                    resource.path,
+                    base64.b64decode(resource.source.content_base64, validate=True),
+                    int(resource.mode or "644", 8),
+                )
+            source = DockerfileSource(context, context / DOCKERFILE)
+        elif requirements.docker_image is not None:
+            source = RegistryImage(requirements.docker_image)
+        elif requirements.packages_lock is not None:
+            source = HostImage()
+        elif requirements.package_spec is not None:
+            source = requirements.package_spec
+        else:
+            return None, f"{role}: no declared environment", f"{role}: no declared environment"
+        machine = MachineSpec(
+            source=source,
+            workdir=requirements.working_directory or "",
+            network=NetworkPolicy.ALLOW,
+            cpus=shape.get("cpus"),
+            memory_mb=shape.get("memory_mb"),
+            storage_mb=shape.get("storage_mb"),
+            gpus=shape.get("gpus", 0),
+        )
+        mapping_error = None
+        try:
+            factory.check_environment(requirements, machine)
+            require_resolved_environment(requirements)
+        except UnsupportedMachineSpec as error:
+            execution_error = f"{role}: {error}"
+        else:
+            execution_error = None
+        if not isinstance(source, RegistryImage | DockerfileSource):
+            return None, mapping_error, execution_error
+        try:
+            name = snapshot_identity(source, snapshot_resources(machine))
+        except UnsupportedMachineSpec as error:
+            return None, f"{role}: {error}", execution_error
+        return name, mapping_error, execution_error
 
 
 def count_registry_identities(references: Iterable[str]) -> SnapshotIdentityCount:

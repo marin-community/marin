@@ -30,12 +30,11 @@ from taskcompendium.pipeline.conversion import normalization_columns
 from taskcompendium.pipeline.models import SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
+from experiments.post_training.task_curation.calibforge_publish import TASKS_FILENAME
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.environment_fidelity import missing_environment
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference
-
-TASKS_FILENAME = "tasks.parquet"
 
 
 @dataclass(frozen=True)

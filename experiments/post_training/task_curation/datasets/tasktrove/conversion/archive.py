@@ -32,6 +32,8 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection
 from taskcompendium.runtime.resources import inline_resource
 
+from experiments.post_training.task_curation.environment_fidelity import archive_environment
+
 TASKS_FILE = "tasks.parquet"
 TASKTROVE_REPO = "open-thoughts/TaskTrove"
 
@@ -105,6 +107,11 @@ def archive_file(data: Mapping[str, Any], path: str) -> bytes | None:
     files = data.get("files")
     value = files.get(path) if isinstance(files, dict) else None
     return base64.b64decode(value, validate=True) if isinstance(value, str) else None
+
+
+def archive_requirements(data: Mapping[str, Any]) -> EnvironmentRequirements:
+    """The unpacked archive row's own environment, lowered onto its pinned base."""
+    return archive_environment(archive_file(data, DOCKERFILE))
 
 
 def archive_resource(data: Mapping[str, Any], path: str) -> TaskResource:

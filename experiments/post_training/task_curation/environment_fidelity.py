@@ -20,7 +20,10 @@ from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from experiments.post_training.task_curation.environment import dockerfile_lines
 
 FROM = re.compile(r"^\s*FROM\s+(\S+)", re.IGNORECASE | re.MULTILINE)
-ENVIRONMENT_DOCKERFILE = "environment/Dockerfile"
+ENVIRONMENT_PREFIX = "environment/"
+"""The tar prefix under which a native task archive carries its environment."""
+
+ENVIRONMENT_DOCKERFILE = f"{ENVIRONMENT_PREFIX}Dockerfile"
 
 DEFAULT_WORKDIR = "/app"
 """The workdir a task gets when neither the recipe nor the spec declares one."""
@@ -33,7 +36,7 @@ def _utf8_dockerfile(dockerfile: bytes) -> str:
         raise UnlowerableRecipe("archive environment/Dockerfile is not UTF-8") from error
 
 
-def environment_unused(spec: Mapping, dockerfile: bytes | None, *, bases: Mapping[str, str] | None = None) -> str | None:
+def environment_unused(spec: Mapping, dockerfile: bytes | None) -> str | None:
     """Why a converted task ignores its archive's environment, if it does.
 
     ``spec`` is a TaskCompendium task dict. An archive that defines an environment
@@ -48,7 +51,7 @@ def environment_unused(spec: Mapping, dockerfile: bytes | None, *, bases: Mappin
         # A spec may use the archive's environment by replaying its steps on a pinned
         # base instead of declaring a build context. Anything else replaced it.
         try:
-            lowered = lower_environment(_utf8_dockerfile(dockerfile), bases or PINNED_BASES)
+            lowered = lower_environment(_utf8_dockerfile(dockerfile), PINNED_BASES)
         except UnlowerableRecipe as error:
             return f"archive environment is not lowered: {error}"
         if requirements.get("docker_image") != lowered.base_ref:
@@ -187,7 +190,7 @@ def lower_environment(dockerfile: str, bases: Mapping[str, str]) -> LoweredEnvir
     )
 
 
-def archive_environment(dockerfile: bytes | None, bases: Mapping[str, str] | None = None):
+def archive_environment(dockerfile: bytes | None):
     """A TaskTrove archive's own environment, lowered onto a pinned base.
 
     The archive defines how the task's machine is built; using anything else would run the
@@ -196,7 +199,7 @@ def archive_environment(dockerfile: bytes | None, bases: Mapping[str, str] | Non
     """
     if dockerfile is None:
         raise ValueError("archive defines no environment/Dockerfile")
-    lowered = lower_environment(_utf8_dockerfile(dockerfile), bases or PINNED_BASES)
+    lowered = lower_environment(_utf8_dockerfile(dockerfile), PINNED_BASES)
     return EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS,
         docker_image=lowered.base_ref,

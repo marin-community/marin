@@ -48,9 +48,12 @@ from tomlkit.items import Table
 
 from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT, SETUP_SCRIPT
 from experiments.post_training.task_curation.environment import dockerfile_lines
-from experiments.post_training.task_curation.environment_fidelity import DEFAULT_WORKDIR, PINNED_BASES
+from experiments.post_training.task_curation.environment_fidelity import (
+    DEFAULT_WORKDIR,
+    ENVIRONMENT_PREFIX,
+    PINNED_BASES,
+)
 
-ENVIRONMENT_PREFIX = "environment/"
 REBUILT = "rebuilt_pending_oracle_and_admission"
 
 NORMALIZED_CPUS = 2
@@ -194,6 +197,11 @@ def compile_recipe(instructions: list[Instruction], files: dict[str, bytes], mod
     staged from the fixture payload; the FROM line maps onto the fixed base
     set. ENV assignments persist in the setup script. Unsupported steps defer
     with the reason admission records.
+
+    Unlike :func:`environment_fidelity.lower_environment` — which only checks
+    that a spec replays a recipe's simple steps — this compiles the task's full
+    native recipe, including COPY staging and package installs, and keeps a
+    digest the original FROM already carried.
     """
     bases = [item for item in instructions if item.command == "from"]
     if len(bases) != 1:
