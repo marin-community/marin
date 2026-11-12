@@ -30,7 +30,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.struc
     MISSING_INSTRUCTION,
     convert_nemotron_structured_outputs,
 )
-from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
@@ -113,7 +113,7 @@ def convert_structured_outputs(row: RawRow, context: ConversionContext) -> TaskS
 def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
-            pipeline=process_rows,
+            pipeline=None,
             info=replace(
                 SourceInfo(
                     id="Task Trove:laion__nemotron-gym-structured-outputs-v4",
@@ -122,7 +122,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     family="instruction-following",
                     tags=("agentic", "multi-turn"),
                     count=53870,
-                    notes="All formats require both a format check and a source-grounding judge.",
+                    notes=(
+                        "All formats require both a format check and a source-grounding judge. "
+                        "Inventory: the grounding judge model is unspecified. Pin the judge contract and "
+                        "complete grounding-verifier QA before admission."
+                    ),
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
             ),

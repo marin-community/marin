@@ -7,8 +7,8 @@ Each archive asks for a free-form answer in ``/app/response.txt`` and grades it 
 numeric judgement over a short rubric (``tests/judge.toml``, ``tests/verifier_data.json``). The
 task asks for the answer in the reply instead, and verifyit's checklist judge asks one yes/no
 question per source criterion and scores the fraction met. The source's judge configuration and
-data stay beside the grader for review. Verification cannot reach a judge endpoint, so these
-sources have no controls and their kept rows are admitted without them.
+data stay beside the grader for review. Sources with an unspecified judge model remain
+inventory until their grading contract is pinned and qualified.
 """
 
 import re
@@ -31,6 +31,21 @@ from experiments.post_training.task_curation.pipeline import CurationRecipe, pro
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
+INCOMPLETE_JUDGE_SOURCES = frozenset(
+    {
+        "tasktrove-codereview",
+        "tasktrove-glaive_code",
+        "tasktrove-stack_overflow",
+        "tasktrove-superuser",
+        "tasktrove-tezos",
+        "tasktrove-unix",
+        "tasktrove-wizard_orca",
+    }
+)
+JUDGE_SPEC_DEFECT = (
+    " Inventory: the converted checklist grader leaves its judge model unspecified and has no reference answers. "
+    "Pin the judge contract and complete verifier QA before admission."
+)
 
 NUMBERED = re.compile(r"^\s*\d+[.)]\s*")
 DOMAIN_TAGS = (
@@ -366,8 +381,16 @@ SOURCES = (
 def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
-            pipeline=process_rows,
-            info=replace(source.info, task_format=TaskFormat.TASKCOMPENDIUM),
+            pipeline=None if source.name in INCOMPLETE_JUDGE_SOURCES else process_rows,
+            info=replace(
+                source.info,
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                notes=(
+                    source.info.notes + JUDGE_SPEC_DEFECT
+                    if source.name in INCOMPLETE_JUDGE_SOURCES
+                    else source.info.notes
+                ),
+            ),
             config=CurationRecipe(
                 name=source.name,
                 source=tasktrove_source(source.config),
