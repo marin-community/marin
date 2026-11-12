@@ -163,7 +163,7 @@ class PrebuiltImport:
     cohort: PrebuiltCohort
     mode: SourceProcessingMode
     task_format: TaskFormat
-    lexical_contamination: LexicalContaminationEvidence
+    lexical_contamination: LexicalContaminationEvidence | None
 
 
 def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
@@ -178,6 +178,53 @@ def import_harbor_prebuilt(
     return prebuilt_artifact(source, options, import_harbor_cohort, task_format=TaskFormat.HARBOR)
 
 
+QUICK_VIEW_VERSION = "2026.11.12"
+"""Format version of the converted view a QUICK pass writes; the cohort revision is in the step identity."""
+COHORT_INTENDED_USE = "train"
+"""Published campaign cohorts are RL training populations."""
+
+
+def cohort_task_json(tasks: Path) -> list[str]:
+    """Each row's TaskSpec as canonical JSON, from a lowered envelope or a native Harbor package."""
+    columns = pq.ParquetFile(tasks).schema_arrow.names
+    rows = pq.read_table(tasks).to_pylist()
+    if "lowered_task_spec" in columns:
+        return [TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"]).model_dump_json() for row in rows]
+    return [TaskSpec.model_validate_json(row["task_spec"]).model_dump_json() for row in rows]
+
+
+def _quick_view(config: PrebuiltCohort, tasks: Path, destination: str) -> CampaignArtifact:
+    """Write the validated cohort as the converted view that QUICK consumers, such as embedding, read.
+
+    QUICK admits nothing. Every published row is a converted task, so there are no rejections.
+    """
+    task_json = cohort_task_json(tasks)
+    root = StoragePath(destination)
+    normalize = root / "normalize"
+    with (normalize / "part-00000.parquet").open("wb") as handle:
+        pq.write_table(pa.table({"task_json": task_json}), handle)
+    manifest = {
+        "status": "completed",
+        "mode": SourceProcessingMode.QUICK.value,
+        "repo": config.repo,
+        "revision": config.revision,
+        "intended_use": COHORT_INTENDED_USE,
+        "input_rows": len(task_json),
+        "converted_rows": len(task_json),
+        "rejections": {},
+    }
+    (root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    return CampaignArtifact(
+        status="completed",
+        result=PipelineResult(
+            status="completed",
+            outputs={"normalize": str(normalize)},
+            evidence={"manifest": str(root / "manifest.json")},
+            stages=("download", "validate", "normalize"),
+        ),
+    )
+
+
 def prebuilt_artifact(
     source: RlDataSource[PrebuiltCohort],
     options: PipelineOptions,
@@ -186,26 +233,29 @@ def prebuilt_artifact(
     task_format: TaskFormat,
 ) -> ArtifactStep[CampaignArtifact]:
     """Publish validated rows and corpus views while preserving their controlled package bytes."""
-    if "excluded" in source.info.tags:
-        raise ValueError(f"Published cohort is excluded pending qualification: {source.name}")
-    if source.admission_blockers:
-        raise ValueError(f"Source {source.name} cannot admit tasks: {'; '.join(source.admission_blockers)}")
     config = source.config
     assert config is not None
-    if options.mode is SourceProcessingMode.QUICK:
-        raise ValueError(f"A published cohort is imported for admission, not for a quick pass: {source.name}")
-    evidence = source.info.lexical_contamination
-    assert evidence is not None
-    assert evidence.receipt is not None
-    if evidence.receipt.retained_tasks != config.expected_rows:
-        raise ValueError(f"Decontamination receipt does not cover the published cohort: {source.name}")
+    quick = options.mode is SourceProcessingMode.QUICK
+    evidence = None if quick else source.info.lexical_contamination
+    if not quick:
+        if "excluded" in source.info.tags:
+            raise ValueError(f"Published cohort is excluded pending qualification: {source.name}")
+        if source.admission_blockers:
+            raise ValueError(f"Source {source.name} cannot admit tasks: {'; '.join(source.admission_blockers)}")
+        assert evidence is not None and evidence.receipt is not None
+        if evidence.receipt.retained_tasks != config.expected_rows:
+            raise ValueError(f"Decontamination receipt does not cover the published cohort: {source.name}")
 
     def build_config(context) -> PrebuiltImport:
         return PrebuiltImport(context.output_path, config, options.mode, task_format, evidence)
 
     def run(invocation: PrebuiltImport) -> CampaignArtifact:
-        require_private_release(invocation.lexical_contamination, invocation.cohort.repo, invocation.cohort.revision)
+        if not quick:
+            require_private_release(invocation.lexical_contamination, invocation.cohort.repo, invocation.cohort.revision)
         local = Path(load(invocation.cohort))
+        if quick:
+            return _quick_view(config, local, invocation.output_path)
+        assert invocation.lexical_contamination is not None
         destination = Path(invocation.output_path)
         destination.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(local, destination / TASKS_FILENAME)
@@ -283,9 +333,12 @@ def prebuilt_artifact(
             ),
         )
 
+    name = config.name
+    if evidence is not None:
+        name = f"{name}-{canonical_sha256(evidence.model_dump(mode='json'))[:16]}"
     return ArtifactStep(
-        name=f"{config.name}-{canonical_sha256(evidence.model_dump(mode='json'))[:16]}",
-        version=config.version,
+        name=name,
+        version=QUICK_VIEW_VERSION if quick else config.version,
         artifact_type=CampaignArtifact,
         run=partial(run),
         build_config=build_config,

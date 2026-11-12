@@ -316,3 +316,29 @@ def test_atlas_private_release_policy_blocks_prebuilt_download(tmp_path, monkeyp
     with pytest.raises(ValueError, match="private open-athena TaskCompendium"):
         prebuilt.import_prebuilt(source, PipelineOptions(SourceProcessingMode.SAMPLE, CampaignRuntime()))
     assert downloaded == []
+
+
+def test_quick_pass_writes_the_validated_cohort_as_converted_tasks(tmp_path, monkeypatch):
+    path = _write(tmp_path, [prebuilt_task("a"), prebuilt_task("b")])
+    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
+    output = tmp_path / "out"
+    source = RlDataSource(
+        config=_cohort(2),
+        pipeline=prebuilt.import_prebuilt,
+        info=SourceInfo(id="fixture:quick", title="quick", origin="fixture"),
+    )
+    step = prebuilt.import_prebuilt(source, PipelineOptions(SourceProcessingMode.QUICK, CampaignRuntime()))
+    artifact = step.run(step.build_config(StepContext.for_run(str(output), str(tmp_path))))
+
+    manifest = json.loads((output / "manifest.json").read_text())
+    tasks = [
+        TaskSpec.model_validate_json(item)
+        for item in pq.read_table(output / "normalize").column("task_json").to_pylist()
+    ]
+    assert artifact.status == "completed"
+    assert [task.id for task in tasks] == ["a", "b"]
+    assert manifest["input_rows"] == manifest["converted_rows"] == 2
+    assert manifest["rejections"] == {} and manifest["intended_use"] == "train"
+    assert manifest["mode"] == "quick"
+    assert not (output / "final").exists()
+    assert "admitted_rows" not in manifest
