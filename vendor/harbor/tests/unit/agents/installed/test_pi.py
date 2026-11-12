@@ -76,6 +76,9 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
         async def process_scope(self) -> ProcessScope:
             return ProcessScope(python=sys.executable)
 
+        def track_process_scope(self, scope, transport):
+            pass
+
         async def exec(self, command, **kwargs):
             completed = subprocess.run(
                 ["/bin/bash", "-c", command],
