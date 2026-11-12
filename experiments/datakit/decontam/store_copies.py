@@ -54,6 +54,8 @@ STORE_ROOT = "s3://marin-us-east-02a/marin"
 SOURCES_FILE = Path(__file__).with_name("hero_store_sources.json")
 DEFAULT_MIN_WORDS = 8
 READ_BATCH_ROWS = 64
+# Repository documents reach GBs, and a Python string costs up to 4 bytes per character.
+CHUNK_CHARS = 16_000_000
 SAMPLE_DOCS = 3
 TOP_SOURCES = 10
 
@@ -143,20 +145,58 @@ def targets_for(records: Iterable[dict], id_field: str | None, fields: list[str]
     return out
 
 
+def _chunks(text: str, chunk_chars: int, overlap_words: int) -> Iterator[str]:
+    """Split ``text`` at whitespace into chunks of about ``chunk_chars`` characters.
+
+    Each chunk repeats the previous chunk's last ``overlap_words`` words, so any run of
+    at most that many words and ``chunk_chars`` characters lies whole in some chunk.
+    Undoing escapes only splits words, so a target of ``overlap_words`` words spans at
+    most that many words of the raw text.
+    """
+    start = 0
+    while len(text) - start > chunk_chars:
+        boundary = _WHITESPACE.search(text, start + chunk_chars)
+        if boundary is None:
+            break
+        end = boundary.start()
+        yield text[start:end]
+        span = overlap_words * 16
+        while True:
+            lo = max(start + 1, end - span)
+            word_starts = [lo + m.start() for m in _WORD.finditer(text[lo:end])]
+            if len(word_starts) > overlap_words or lo == start + 1:
+                break
+            span *= 2
+        if word_starts and word_starts[0] == lo and not text[lo - 1].isspace():
+            word_starts = word_starts[1:]  # a word cut at ``lo``
+        if len(word_starts) >= overlap_words:
+            start = word_starts[-overlap_words]
+        else:  # the chunk has too few words: overlap all of it but its first word
+            start = word_starts[0] if word_starts else end
+    yield text[start:]
+
+
 class Matcher:
     """Find which targets occur in a document."""
 
-    def __init__(self, targets: list[Target]):
+    def __init__(self, targets: list[Target], chunk_chars: int = CHUNK_CHARS):
         self.targets = targets
+        self.chunk_chars = chunk_chars
+        self.overlap_words = max((t.text.count(" ") + 1 for t in targets), default=1)
         self.by_anchor: dict[str, list[int]] = defaultdict(list)
         for i, target in enumerate(targets):
             self.by_anchor[target.anchor].append(i)
 
     def found(self, text: str) -> list[Target]:
+        hits: dict[int, Target] = {}
+        for chunk in _chunks(text, self.chunk_chars, self.overlap_words):
+            self._add_hits(chunk, hits)
+        return list(hits.values())
+
+    def _add_hits(self, text: str, hits: dict[int, Target]) -> None:
         variants = [normalized(text)]
         if "\\" in text:
             variants.append(normalized(unescaped(text)))
-        hits: dict[int, Target] = {}
         for variant in variants:
             # Compare each target only where its anchor occurs, so the cost grows with the
             # document's length, not with its length times the number of targets.
@@ -173,7 +213,6 @@ class Matcher:
                         if start >= target.anchor_offset
                     ):
                         hits[i] = target
-        return list(hits.values())
 
 
 @dataclass(frozen=True)

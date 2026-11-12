@@ -62,6 +62,18 @@ def test_matcher_finds_exactly_the_targets_a_substring_search_finds():
         assert {t.record_id for t in matcher.found(doc)} == expected
 
 
+def test_chunked_search_finds_copies_that_cross_chunk_boundaries():
+    rng = random.Random(1)
+    vocab = ["ab", "abc", "abcd", "bcd", "cd", "x", "the", "of"]
+    records = [{"id": str(i), "text": " ".join(rng.choices(vocab, k=rng.randint(3, 8)))} for i in range(200)]
+    targets = targets_for(records, "id", ["text"], min_words=3)
+    # Chunks must hold the longest copy: 8 words of up to 4 letters with 3-character gaps.
+    whole, chunked = Matcher(targets), Matcher(targets, chunk_chars=60)
+    for _ in range(200):
+        doc = (" \\n " if rng.random() < 0.3 else " \n ").join(rng.choices(vocab, k=rng.randint(5, 80)))
+        assert {t.record_id for t in chunked.found(doc)} == {t.record_id for t in whole.found(doc)}
+
+
 def _write(path: Path, rows: list[dict]) -> str:
     pq.write_table(pa.Table.from_pylist(rows), path)
     return str(path)
