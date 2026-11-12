@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import LexicalContaminationEvidence, require_decontamination
+from finestore.rl.curation import LexicalContaminationEvidence
 from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
 from rigging.filesystem.storage_path import StoragePath
@@ -48,6 +48,7 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
+from experiments.post_training.task_curation.decontamination import require_private_release
 from experiments.post_training.task_curation.environment_fidelity import missing_environment
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference, TaskFormat
 
@@ -203,7 +204,7 @@ def prebuilt_artifact(
         return PrebuiltImport(context.output_path, config, options.mode, task_format, evidence)
 
     def run(invocation: PrebuiltImport) -> CampaignArtifact:
-        require_decontamination(invocation.lexical_contamination, invocation.cohort.repo, invocation.cohort.revision)
+        require_private_release(invocation.lexical_contamination, invocation.cohort.repo, invocation.cohort.revision)
         local = Path(load(invocation.cohort))
         destination = Path(invocation.output_path)
         destination.mkdir(parents=True, exist_ok=True)

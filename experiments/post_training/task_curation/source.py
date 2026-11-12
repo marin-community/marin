@@ -21,12 +21,12 @@ from finestore.rl.curation import (
     RoleExecutionEvidence,
     SourceDeclaration,
     daytona_verdict,
-    require_decontamination,
 )
 from marin.execution.lazy import ArtifactStep
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.config import PipelineOptions
+from experiments.post_training.task_curation.decontamination import require_private_release
 
 
 class PinnedReference(Protocol):
@@ -219,7 +219,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
         blockers = []
         dataset = self.dataset
         try:
-            require_decontamination(
+            require_private_release(
                 info.lexical_contamination, dataset.name if dataset else None, dataset.revision if dataset else None
             )
         except ValueError as error:

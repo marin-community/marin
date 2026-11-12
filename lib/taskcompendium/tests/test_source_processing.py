@@ -1065,7 +1065,7 @@ def test_decontamination_receipt_precedes_conversion_and_quality_review(tmp_path
     if state == "measurement_only":
         document["receipt"] = None
     elif state == "wrong_pin":
-        document["receipt"]["dataset_revision"] = "different-output-pin"
+        document["receipt"]["dataset_revision"] = "c" * 40
     elif state == "remediated":
         document.update(measured_tasks=2, contaminated_tasks=1, contaminated_fraction=0.5)
         document["receipt"].update(
@@ -1073,7 +1073,7 @@ def test_decontamination_receipt_precedes_conversion_and_quality_review(tmp_path
             dropped_tasks=1,
             drop_manifest_uri="s3://test/dropped-task.jsonl",
             original_private_dataset_id="open-athena/unfiltered",
-            original_private_dataset_revision="original-pin",
+            original_private_dataset_revision="b" * 40,
         )
     evidence = None if state == "missing" else type(evidence).model_validate(document)
     config = replace(pipeline_config(mode, reviewer), lexical_contamination=evidence)

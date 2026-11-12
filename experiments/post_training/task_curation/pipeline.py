@@ -23,7 +23,7 @@ from typing import Any, cast
 
 import click
 import requests
-from finestore.rl.curation import LexicalContaminationEvidence, require_decontamination
+from finestore.rl.curation import LexicalContaminationEvidence
 from fray.types import ResourceConfig
 from marin.datakit.download.huggingface import (
     DownloadConfig,
@@ -84,6 +84,7 @@ from zephyr.runners import SubprocessRunner
 from experiments.post_training.glm import GLM_REQUEST_ATTEMPTS, GLM_REQUEST_TIMEOUT, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
+from experiments.post_training.task_curation.decontamination import require_private_release
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
 from experiments.post_training.task_curation.images.build import (
     EnvironmentArtifact,
@@ -477,7 +478,7 @@ def process_rows(source: RlDataSource[CurationRecipe], options: PipelineOptions)
         config = replace(config, lexical_contamination=source.info.lexical_contamination)
     dataset = source.dataset
     assert dataset is not None
-    require_decontamination(config.lexical_contamination, dataset.name, dataset.revision)
+    require_private_release(config.lexical_contamination, dataset.name, dataset.revision)
     if recipe.controls is None:
         config = replace(config, machines=None)
     return cast(ArtifactStep[CampaignArtifact], _reviewed_step(recipe, config, options))
@@ -593,6 +594,10 @@ def _run_curation(
     missing = pipeline.inputs.keys() - inputs.keys()
     if missing:
         raise ValueError(f"Missing staged auxiliary inputs for {pipeline.name}: {sorted(missing)}")
+    if mode is not SourceProcessingMode.QUICK:
+        if config is None:
+            raise ValueError("Reviewed modes require source pipeline settings")
+        require_private_release(config.lexical_contamination, pipeline.dataset.name, pipeline.dataset.revision)
     if mode == SourceProcessingMode.QUICK:
         if config is not None:
             raise ValueError("QUICK conversion does not take review or verification settings")

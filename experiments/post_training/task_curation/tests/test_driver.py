@@ -326,17 +326,16 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
     monkeypatch.setattr(
         processor, "plan_download", lambda request: original(replace(request, source_url_override=str(remote)))
     )
-    source = replace(
-        source,
-        info=replace(
-            source.info, lexical_contamination=decontamination_evidence(source.dataset.name, source.dataset.revision, 1)
-        ),
-    )
+    evidence = decontamination_evidence(source.dataset.name, source.dataset.revision, 1)
+    decontamination_path = tmp_path / "decontamination.json"
+    decontamination_path.write_text(evidence.model_dump_json())
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     report = tmp_path / "report.json"
     options = [
         "--mode",
         mode,
+        "--decontamination-receipt",
+        str(decontamination_path),
         "--skip-assessment",
         "--max-workers",
         "1",
@@ -367,6 +366,8 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
             return
         assert executed.exit_code == 0, executed.output
         result = json.loads(report.read_text())["sources"][0]["result"]
+        manifest = json.loads(StoragePath(result["evidence"]["manifest"]).read_text())
+        assert manifest["lexical_contamination"] == evidence.model_dump(mode="json")
         rows = [
             row
             for shard in (StoragePath(result["outputs"]["final"]) / "*.parquet").glob()
@@ -579,3 +580,16 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
     recovered = json.loads((cache / "campaigns/campaign.json").read_text())
     assert recovered["sources"][0]["status"] == "completed"
     assert recovered["sources"][0]["path"] != outcome["path"]
+
+
+def test_mutable_decontamination_receipt_cannot_plan_a_reviewed_campaign(tmp_path, catalog):
+    dataset = math500().dataset
+    receipt = decontamination_evidence(dataset.name, dataset.revision, 1).model_dump(mode="json")
+    receipt["receipt"]["dataset_revision"] = "main"
+    path = tmp_path / "mutable-receipt.json"
+    path.write_text(json.dumps(receipt))
+    result = CliRunner().invoke(main, [*arguments(tmp_path), "--decontamination-receipt", str(path)])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, ValueError)
+    assert "dataset_revision" in str(result.exception)
+    assert not (tmp_path / "report.json").exists()
