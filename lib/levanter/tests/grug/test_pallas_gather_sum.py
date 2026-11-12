@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from levanter.grug._moe.ep_ring import _combine_rows, _dispatch_rows, _gather_sum_slots, _take_valid_rows
-from levanter.grug._moe.ep_ring_filtered import _gather_sum_slots_clamped
+from levanter.grug._moe.ep_ring_filtered import _gather_sum_slots_clamped, _send_rows
 from levanter.grug._moe.pallas_gather_sum import gather_sum_rows, gather_valid_rows
 from levanter.grug.grug_moe import moe_mlp
 from levanter.testing.devices import use_test_devices
@@ -86,6 +86,19 @@ def test_pallas_backward_falls_back_to_xla_for_untileable_widths():
     assert "pallas_call" not in jaxpr
     for a, e in zip(actual, expected, strict=True):
         np.testing.assert_array_equal(_bits(a), _bits(e))
+
+
+def test_pallas_send_gather_falls_back_to_xla_for_untileable_widths():
+    k_x, k_idx, k_valid, k_slots = jax.random.split(jax.random.key(4), 4)
+    x = _rows(k_x, (20, 24), jnp.float32)
+    slot_token = jax.random.randint(k_idx, (30,), 0, 20)
+    slot_valid = jax.random.bernoulli(k_valid, 0.7, (30,))
+    slots = _slots(k_slots, 20, 2, 30)
+    fn = jax.jit(
+        lambda x, send_gather: _send_rows(x, slot_token, slot_valid, slots, send_gather, "take"), static_argnums=1
+    )
+    assert "pallas_call" not in str(jax.make_jaxpr(fn, static_argnums=1)(x, "pallas"))
+    np.testing.assert_array_equal(_bits(fn(x, "pallas")), _bits(fn(x, "xla")))
 
 
 @pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float32])
