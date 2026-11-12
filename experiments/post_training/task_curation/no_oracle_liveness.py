@@ -95,7 +95,9 @@ def sample_by_base(specs: dict[str, dict], bases: dict[str, str], per_base: int,
     return chosen
 
 
-async def run_one(spec: dict, base: str, factory=None, lock_url: str | None = None) -> LivenessResult:
+async def run_one(
+    spec: dict, base: str, factory=None, lock_url: str | None = None, cgroup_parent: Path | None = None
+) -> LivenessResult:
     """Grade an empty submission with the task's own grader, on a fresh grading machine."""
     task = TaskSpec.model_validate(spec["task"])
     if lock_url is not None and getattr(task.grader, "environment", None) is not None:
@@ -135,7 +137,9 @@ async def run_one(spec: dict, base: str, factory=None, lock_url: str | None = No
             # The local backend provides no disk quota; declaring one is refused.
             storage_mb=None,
         )
-        grading_factory = LocalMachineFactory()
+        # A worker whose own cgroup is threaded cannot host the grading cgroups
+        # (cgroup.procs is unwritable there), so an explicit parent overrides discovery.
+        grading_factory = LocalMachineFactory(cgroup_parent=cgroup_parent) if cgroup_parent else LocalMachineFactory()
     else:
         from harbor.environments.daytona import machine_spec  # noqa: PLC0415
         from harbor_config.models.task.config import EnvironmentConfig  # noqa: PLC0415
@@ -183,11 +187,18 @@ async def run_one(spec: dict, base: str, factory=None, lock_url: str | None = No
 
 
 async def run(
-    specs: dict[str, dict], bases: dict[str, str], task_ids: list[str], output: Path, lock_url: str | None = None
+    specs: dict[str, dict],
+    bases: dict[str, str],
+    task_ids: list[str],
+    output: Path,
+    lock_url: str | None = None,
+    cgroup_parent: Path | None = None,
 ) -> None:
     with output.open("a") as handle:
         for index, task_id in enumerate(task_ids, start=1):
-            result = await run_one(specs[task_id], bases.get(task_id, "<unknown>"), lock_url=lock_url)
+            result = await run_one(
+                specs[task_id], bases.get(task_id, "<unknown>"), lock_url=lock_url, cgroup_parent=cgroup_parent
+            )
             handle.write(json.dumps(asdict(result)) + "\n")
             handle.flush()
             print(f"[{index}/{len(task_ids)}] {task_id}: {result.outcome}", flush=True)
@@ -202,6 +213,11 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=0, help="cap the sample for a pilot run")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--lock-url", help="grade packaged graders against this built lock")
+    parser.add_argument(
+        "--cgroup-parent",
+        type=Path,
+        help="cgroup v2 directory for the local placement when the worker's own cgroup cannot host processes",
+    )
     args = parser.parse_args()
     specs = load_specs(args.lowered)
     if args.manifest is not None:
@@ -216,7 +232,7 @@ def main() -> None:
     if args.limit:
         task_ids = task_ids[: args.limit]
     print(f"sampled {len(task_ids)} of {len(specs)} tasks", flush=True)
-    asyncio.run(run(specs, bases, task_ids, args.output, args.lock_url))
+    asyncio.run(run(specs, bases, task_ids, args.output, args.lock_url, args.cgroup_parent))
 
 
 if __name__ == "__main__":
