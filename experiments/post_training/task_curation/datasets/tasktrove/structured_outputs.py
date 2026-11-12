@@ -109,7 +109,8 @@ def convert_structured_outputs(row: RawRow, context: ConversionContext) -> TaskS
     return rewritten_task(task, original=original, reason=REWRITE_REASON)
 
 
-def sources() -> list[RlDataSource[CurationRecipe]]:
+def candidate_sources() -> list[RlDataSource[CurationRecipe]]:
+    """Keep the unqualified grounding recipe available to explicit QA."""
     return [
         RlDataSource(
             pipeline=None,
@@ -138,3 +139,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             ),
         )
     ]
+
+
+def sources() -> list[RlDataSource[CurationRecipe]]:
+    return []

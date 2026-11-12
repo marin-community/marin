@@ -8,7 +8,7 @@ numeric judgement over a short rubric (``tests/judge.toml``, ``tests/verifier_da
 task asks for the answer in the reply instead. The MEDIUM profile awards one only for full
 satisfaction of the source rubric and otherwise zero. The checklist profile scores the fraction
 of criteria met. The source's judge configuration and data stay beside the grader for review.
-Pinned source profiles remain inventory until qualification and publication are complete.
+Pinned source profiles remain QA candidates until qualification and publication are complete.
 """
 
 import json
@@ -383,7 +383,8 @@ SOURCES = (
 )
 
 
-def sources() -> list[RlDataSource[CurationRecipe]]:
+def candidate_sources() -> list[RlDataSource[CurationRecipe]]:
+    """Keep unqualified recipes available to explicit QA without registering them."""
     return [
         RlDataSource(
             pipeline=None if source.name in TIERED_JUDGE_SOURCES else process_rows,
@@ -418,3 +419,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         )
         for source in SOURCES
     ]
+
+
+def sources() -> list[RlDataSource[CurationRecipe]]:
+    return [source for source in candidate_sources() if source.pipeline is not None]
