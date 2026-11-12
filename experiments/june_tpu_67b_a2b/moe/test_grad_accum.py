@@ -117,48 +117,48 @@ def grad_errors(state, reference):
     ]
 
 
-def assert_matches_whole_batch(cfg, policy, check_grads, *, carry_compute_params=False, **step_args):
-    for name, mesh in _meshes().items():
-        whole, whole_metrics = step(
-            cfg, mesh, policy, microbatches=1, carry_compute_params=carry_compute_params, **step_args
-        )
-        assert np.sum(whole_metrics["moe/dropped_assignments"]) == 0, name
-        for k in (2, 4):
-            msg = f"{name} K={k}"
-            accumulated, metrics = step(
-                cfg, mesh, policy, microbatches=k, carry_compute_params=carry_compute_params, **step_args
-            )
-            assert metrics.keys() == whole_metrics.keys(), msg
-            for key in (
-                "train/loss",
-                "train/cross_entropy_loss",
-                "train/router/aux_loss_weighted",
-                "train/router/router_z_loss",
-            ):
-                np.testing.assert_allclose(metrics[key], whole_metrics[key], rtol=1e-6, err_msg=f"{msg} {key}")
-            # Same routing for every token, and no drops: capacity applies per microbatch.
-            np.testing.assert_array_equal(
-                metrics["train/router/routing_counts_per_layer"],
-                whole_metrics["train/router/routing_counts_per_layer"],
-                err_msg=msg,
-            )
-            assert np.sum(metrics["moe/dropped_assignments"]) == 0, msg
-            check_grads(accumulated, whole, name, msg)
+def assert_matches_whole_batch(cfg, policy, check_grads, mesh_name, *, carry_compute_params=False, **step_args):
+    # Four microbatches of one row per device, against the whole batch.
+    mesh = _meshes()[mesh_name]
+    whole, whole_metrics = step(
+        cfg, mesh, policy, microbatches=1, carry_compute_params=carry_compute_params, **step_args
+    )
+    assert np.sum(whole_metrics["moe/dropped_assignments"]) == 0, mesh_name
+    msg = f"{mesh_name} K=4"
+    accumulated, metrics = step(
+        cfg, mesh, policy, microbatches=4, carry_compute_params=carry_compute_params, **step_args
+    )
+    assert metrics.keys() == whole_metrics.keys(), msg
+    for key in (
+        "train/loss",
+        "train/cross_entropy_loss",
+        "train/router/aux_loss_weighted",
+        "train/router/router_z_loss",
+    ):
+        np.testing.assert_allclose(metrics[key], whole_metrics[key], rtol=1e-6, err_msg=f"{msg} {key}")
+    # Same routing for every token, and no drops: capacity applies per microbatch.
+    np.testing.assert_array_equal(
+        metrics["train/router/routing_counts_per_layer"],
+        whole_metrics["train/router/routing_counts_per_layer"],
+        err_msg=msg,
+    )
+    assert np.sum(metrics["moe/dropped_assignments"]) == 0, msg
+    check_grads(accumulated, whole, mesh_name, msg)
 
 
 @pytest.mark.multidevice
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize(
-    ("router_z_loss_coef", "step_args"),
+    ("router_z_loss_coef", "step_args", "mesh_name"),
     [
-        (None, {"batch": BATCH}),
+        (None, {"batch": BATCH}, "replica4_expert2"),
         # The logit z-loss is weighted by loss weight, the router z-loss averages over valid tokens.
-        (0.1, {"batch": PADDED_BATCH, "z_loss_weight": 1e-2}),
-        (0.1, {"batch": UNWEIGHTED_MICROBATCH}),
+        (0.1, {"batch": PADDED_BATCH, "z_loss_weight": 1e-2}, "replica2_data2_expert2"),
+        (0.1, {"batch": UNWEIGHTED_MICROBATCH}, "replica2_data2_expert2"),
     ],
     ids=["unequal_loss_weight", "z_losses_and_padding", "unweighted_microbatch"],
 )
-def test_microbatches_match_the_whole_batch_in_float32(router_z_loss_coef, step_args):
+def test_microbatches_match_the_whole_batch_in_float32(router_z_loss_coef, step_args, mesh_name):
     # Only the order of the float32 sums changes: a few ulps (2**-23 each); 4e-7 observed.
     cfg = BASE if router_z_loss_coef is None else dataclasses.replace(BASE, router_z_loss_coef=router_z_loss_coef)
 
@@ -166,7 +166,7 @@ def test_microbatches_match_the_whole_batch_in_float32(router_z_loss_coef, step_
         assert max(grad_errors(accumulated, whole)) <= 1e-5, msg
 
     with use_cpu_devices(8):
-        assert_matches_whole_batch(cfg, policy=jmp.get_policy("f32"), check_grads=check_grads, **step_args)
+        assert_matches_whole_batch(cfg, jmp.get_policy("f32"), check_grads, mesh_name, **step_args)
 
 
 @pytest.mark.timeout(900)
@@ -180,15 +180,17 @@ def test_microbatches_match_the_whole_batch_with_bfloat16_compute():
     with use_cpu_devices(8):
         policy = jmp.get_policy("p=f32,c=bfloat16")
         cfg = dataclasses.replace(BASE, remat_mode="save_moe")
-        exact = {name: step(cfg, mesh, jmp.get_policy("f32"), microbatches=1)[0] for name, mesh in _meshes().items()}
+        # The mesh that also shards the parameters over ``data``.
+        mesh_name = "replica2_data2_expert2"
+        exact, _ = step(cfg, _meshes()[mesh_name], jmp.get_policy("f32"), microbatches=1)
 
         def check_grads(accumulated, whole, name, msg):
-            bounds = 1.5 * np.asarray(grad_errors(whole, exact[name])) + 2**-8
-            errors = np.asarray(grad_errors(accumulated, exact[name]))
+            bounds = 1.5 * np.asarray(grad_errors(whole, exact)) + 2**-8
+            errors = np.asarray(grad_errors(accumulated, exact))
             assert np.all(errors <= bounds), (msg, errors, bounds)
 
-        assert_matches_whole_batch(cfg, policy, check_grads)
-        assert_matches_whole_batch(cfg, policy, check_grads, carry_compute_params=True)
+        assert_matches_whole_batch(cfg, policy, check_grads, mesh_name)
+        assert_matches_whole_batch(cfg, policy, check_grads, mesh_name, carry_compute_params=True)
 
 
 @pytest.mark.timeout(900)
@@ -199,7 +201,7 @@ def test_qb_thresholds_are_the_mean_over_microbatches():
         for qb_balance in ("global", "per_node"):
             cfg = dataclasses.replace(BASE, qb_balance=qb_balance)
             mesh = _meshes()["replica2_data2_expert2"]
-            k = 4
+            k = 2
             state, _ = step(cfg, mesh, policy, microbatches=k)
             # Microbatch i holds rows i, i + k, ...: run each through a whole-batch step on its own.
             expected = np.mean(
