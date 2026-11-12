@@ -190,9 +190,9 @@ def _runtime_cell(backend: str, requirement: Requirement) -> RuntimeSupport:
         )
     if requirement == Requirement.CLEANUP_TIMEOUT:
         return RuntimeSupport(
-            Support.SUPPORTED,
-            "lib/rolloutengine/src/rolloutengine/cleanup.py",
-            "Rolloutengine bounds cleanup independently of factory creation.",
+            Support.PARTIAL,
+            "lib/shellbox/src/shellbox/machine.py:Machine.close",
+            "Cleanup limits require caller orchestration; the machine close contract has no timeout parameter.",
         )
     return RuntimeSupport(
         Support.PARTIAL,

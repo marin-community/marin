@@ -24,7 +24,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rolloutengine.machines import _machine_spec
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.machine import UnsupportedMachineSpec
-from shellbox.requirements import Support
+from shellbox.requirements import Requirement, Support
 from shellbox.survey import CapabilityCell, Checker, capability_matrix, production_checkers
 from taskcompendium.backend_requirements import (
     BackendFit,
@@ -38,6 +38,24 @@ from taskcompendium.models import EnvironmentRequirements
 
 SUPPORT_ORDER = (Support.SUPPORTED, Support.PARTIAL, Support.UNSUPPORTED)
 RESOURCE_FIELDS = ("cpus", "memory_mb", "storage_mb", "gpus")
+
+
+def production_matrix(checkers: dict[str, Checker]) -> list[CapabilityCell]:
+    """Combine factory evidence with the consumer's cleanup guarantee."""
+    return [
+        (
+            cell.model_copy(
+                update={
+                    "support": Support.SUPPORTED,
+                    "evidence": (*cell.evidence, "lib/rolloutengine/src/rolloutengine/cleanup.py"),
+                    "note": "Rolloutengine bounds cleanup independently of factory creation.",
+                }
+            )
+            if cell.requirement == Requirement.CLEANUP_TIMEOUT
+            else cell
+        )
+        for cell in capability_matrix(checkers)
+    ]
 
 
 def combined_support(values: Iterable[Support]) -> Support:
@@ -142,7 +160,7 @@ def converted_specs(paths: list[Path], column: str) -> Iterable[dict]:
 
 def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) -> BackendSurvey:
     """Bind a census to its catalog inventory; unavailable sources remain unassessed."""
-    matrix = capability_matrix(checkers)
+    matrix = production_matrix(checkers)
     runtime_defaults = {
         role: RuntimeProfile.model_validate(manifest["runtime_defaults"][role]) for role in ("agent", "grader")
     }
