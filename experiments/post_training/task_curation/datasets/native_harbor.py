@@ -10,7 +10,10 @@ import json
 import tarfile
 import tomllib
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
+from functools import partial
+from itertools import batched
 from pathlib import PurePosixPath
 
 from rigging.filesystem.storage_path import StoragePath
@@ -33,6 +36,7 @@ from taskcompendium.runtime.resources import inline_resource
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import unpack_task_binary
 
 VERSION = "2026.11.12.1"
+HUB_READ_CONCURRENCY = 16
 
 
 def unpack_native(row: dict, context: ConversionContext) -> dict:
@@ -66,15 +70,21 @@ def unpack_native(row: dict, context: ConversionContext) -> dict:
     return data
 
 
+def read_hub_archive(root: StoragePath, context: ConversionContext, reference: str) -> dict:
+    identity = hashlib.sha256(reference.encode()).hexdigest()
+    archive = root / "tasks" / f"{identity}.tar.gz"
+    return unpack_task_binary({"path": reference, "task_binary": archive.read_bytes()}, context)
+
+
 def hub_rows(path: StoragePath, context: ConversionContext) -> Iterator[dict]:
     """Read precisely the immutable task references selected by Harbor acquisition."""
     manifest = json.loads(path.read_text())
     if set(manifest["selected"]) - set(manifest["task_refs"]):
         raise ValueError("Harbor release task count differs from its selected references")
-    for reference in manifest["selected"]:
-        identity = hashlib.sha256(reference.encode()).hexdigest()
-        archive = path.parent / "tasks" / f"{identity}.tar.gz"
-        yield unpack_task_binary({"path": reference, "task_binary": archive.read_bytes()}, context)
+    read = partial(read_hub_archive, path.parent, context)
+    with ThreadPoolExecutor(max_workers=HUB_READ_CONCURRENCY) as executor:
+        for references in batched(manifest["selected"], HUB_READ_CONCURRENCY):
+            yield from executor.map(read, references)
 
 
 def native_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:

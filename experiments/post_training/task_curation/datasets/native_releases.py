@@ -8,6 +8,7 @@ from pathlib import Path
 
 from finestore.rl.curation import (
     ConvertedExamples,
+    DaytonaMeasurement,
     GradingEnvironmentEvidence,
     IndependentQC,
     OracleValidation,
@@ -26,6 +27,11 @@ def sources() -> list[RlDataSource[PrebuiltCohort]]:
         if entry["disposition"] != "quick_converted":
             continue
         release = entry["disposition_release"]
+        if "daytona_measurement" not in release:
+            continue
+        measurement = DaytonaMeasurement.model_validate(release["daytona_measurement"])
+        if (measurement.dataset_id, measurement.dataset_revision) != (release["repo"], release["revision"]):
+            raise ValueError(f"Native actor measurement does not cover the private source pin: {entry['id']}")
         evidence = f"https://huggingface.co/datasets/{release['repo']}/blob/{release['revision']}/manifest.json"
         config = PrebuiltCohort(
             name=entry["name"],
@@ -57,6 +63,13 @@ def sources() -> list[RlDataSource[PrebuiltCohort]]:
                         IndependentQC.model_validate(entry["independent_qc"]) if entry["independent_qc"] else None
                     ),
                     oracle_validation=OracleValidation.SKIPPED,
+                    daytona_snapshot_count=measurement.daytona_snapshot_count,
+                    daytona_machine_slots=measurement.daytona_machine_slots,
+                    daytona_execution_failures=measurement.daytona_execution_failures,
+                    daytona_count_basis=measurement.daytona_count_basis,
+                    daytona_roles=measurement.daytona_roles,
+                    daytona_unsafe_reasons=tuple(measurement.daytona_unsafe_reasons),
+                    daytona_unsafe_details=measurement.daytona_unsafe_details,
                     grading_environment=GradingEnvironmentEvidence(
                         **release["grading_environment"], evidence_url=evidence
                     ),

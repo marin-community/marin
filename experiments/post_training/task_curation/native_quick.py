@@ -125,6 +125,11 @@ def run_entry(entry: dict, root: Path, hub_input: str | None) -> dict:
     if entry["origin"] == "Harbor Hub":
         if hub_input is None:
             raise ValueError("Harbor Hub conversion requires its completed pinned acquisition")
+        acquired = json.loads((StoragePath(hub_input) / "release.json").read_text())
+        if acquired["release"] != f"{entry['dataset_id']}@{entry['dataset_revision']}":
+            raise ValueError("Harbor acquisition differs from the declared source pin")
+        if acquired["selected"] != acquired["task_refs"] or acquired["population_count"] != len(acquired["selected"]):
+            raise ValueError("Native source ingestion requires the complete pinned Harbor population")
         source = SourceFiles(
             entry["dataset_id"], entry["dataset_revision"], ("release.json",), SourceFormat.JSON, read=hub_rows
         )

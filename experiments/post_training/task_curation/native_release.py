@@ -118,7 +118,7 @@ def import_native_quick(
         return NativeQuickImport(context.output_path, config)
 
     return ArtifactStep(
-        name=config.name,
+        name=f"native-harbor/{config.repo}/{config.revision}",
         version=config.version,
         artifact_type=CampaignArtifact,
         run=run_native_import,

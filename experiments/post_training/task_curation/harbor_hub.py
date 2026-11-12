@@ -22,6 +22,7 @@ from harbor.tasks.packager import Packager
 from rigging.filesystem.storage_path import StoragePath
 
 LOGGER = logging.getLogger(__name__)
+ACQUISITION_CONCURRENCY = 16
 
 
 async def acquire_release(release: str, output: StoragePath, selected: list[str]) -> None:
@@ -76,7 +77,7 @@ async def acquire_release(release: str, output: StoragePath, selected: list[str]
             pending.rename(destination)
             LOGGER.info("Acquired %s", ref)
 
-    semaphore = asyncio.Semaphore(16)
+    semaphore = asyncio.Semaphore(ACQUISITION_CONCURRENCY)
 
     async def bounded(ref: str) -> None:
         async with semaphore:
