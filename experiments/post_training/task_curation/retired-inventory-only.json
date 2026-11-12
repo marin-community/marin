@@ -40,8 +40,17 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "retired_unpinned_native_image",
+      "disposition_reason": "Full QUICK attempted 2,205 native packages and converted none: TaskSpec environment validation refused all rows. The inspected native package declares a mutable aweaiteam/calibforge image tag, which cannot populate the digest-pinned TaskSpec actor image. No image was resolved or substituted; a qualified immutable release is required.",
+      "disposition_evidence": {
+        "input_rows": 2205,
+        "converted_rows": 0,
+        "rejections": {
+          "converter_error:invalid_task_spec": 2205
+        },
+        "result_uri": "s3://marin-us-east-02a/marin/rl-data/atlas-disposition/2026.11.12.1/results/campaign-release-smartie-calibforge-admitted/result.json",
+        "representative_failure": "EnvironmentRequirements.docker_image requires a sha256 digest; native image is a mutable tag"
+      }
     },
     {
       "id": "Campaign Release:smartie-calibforge-shared-v2",
@@ -82,8 +91,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/campaign-release-smartie-calibforge-shared-v2-17ae7896-taskcompendium-20261112",
+        "revision": "bcfae8cd9d8a82338122945afdd843d46ca18b7e",
+        "file_hashes": {
+          "tasks.parquet": "78619d753666861835dcdfc1fa15dc3d6945b3fbec3e5ba26be072850020dedd",
+          "manifest.json": "a3091a3d10ec59484a894b02e01f62b0d2ba0560fac71641b473ae0431b60878",
+          "README.md": "8d2dc0856f9fba233ce584e840c52c0897b570ce4cded2c291643f460a10139b"
+        },
+        "input_rows": 324,
+        "converted_rows": 324,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 324,
+          "required_counts": {
+            "shared": 324
+          },
+          "declared_counts": {
+            "shared": 324
+          },
+          "status_counts": {
+            "matched": 324
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 324
+          }
+        },
+        "converter_identity": "1a887f2b06caf3c7ba826a4ec771917d6efce27c36e7a4ed48e06d32cd8e3bd2",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Campaign Release:smartie-swesmith-admitted",
@@ -123,8 +161,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/campaign-release-smartie-swesmith-admitted-41200e0b-taskcompendium-20261112",
+        "revision": "25cdd6a2737be2f500027ecd2c6dbb1fb96ae377",
+        "file_hashes": {
+          "tasks.parquet": "ec52ac0c8ce324b790d1eac6287ef83a14874db0cf40774615f47278c1811ed1",
+          "manifest.json": "5785a65ea7610fbe2a5b0ad21df2c6964c318796432bbdef3a41001c68e83978",
+          "README.md": "350b6a43eb09ea5c0e69afb18a2eb680ad581303cb4f913af58f6674bdc59c65"
+        },
+        "input_rows": 8045,
+        "converted_rows": 8045,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 8045,
+          "required_counts": {
+            "shared": 8045
+          },
+          "declared_counts": {
+            "shared": 8045
+          },
+          "status_counts": {
+            "matched": 8045
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 8045
+          }
+        },
+        "converter_identity": "538b514f55f7a9f114f5799d0e819320ac29cea7b5ff963bfdb39312f5f2cf7e",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Campaign Release:smartie-swesmith-staged-v1",
@@ -163,8 +230,16 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "retired_environment_unavailable",
+      "disposition_reason": "Distinct staged cohort retained separately. All 17 required actor images are host-local Docker configuration IDs and none are available. Public payloads omit execution material; the pinned private archive contains no image archive. A fresh build cannot recover the tested environment and would require a new pinned version plus SAMPLE/FULL QA.",
+      "disposition_evidence": {
+        "private_repo": "open-athena/task-trove-smartie-continuation-private",
+        "private_revision": "ab5173cc03cd4392d5b8cdf38a3392e1ff44a0bc",
+        "required_actor_images": 17,
+        "available_actor_images": 0,
+        "schema_version": "0.27",
+        "public_revision": "5d6a5c9cbbf1541ae7325cbdba290a102ab05ca0"
+      }
     },
     {
       "id": "Campaign Release:smartie-swesmith-staged-v2",
@@ -203,8 +278,16 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "retired_environment_unavailable",
+      "disposition_reason": "Distinct staged cohort retained separately. All 6 required actor images are host-local Docker configuration IDs and none are available. Public payloads omit execution material; the pinned private archive contains no image archive. A fresh build cannot recover the tested environment and would require a new pinned version plus SAMPLE/FULL QA.",
+      "disposition_evidence": {
+        "private_repo": "open-athena/task-trove-smartie-continuation-private",
+        "private_revision": "ab5173cc03cd4392d5b8cdf38a3392e1ff44a0bc",
+        "required_actor_images": 6,
+        "available_actor_images": 0,
+        "schema_version": "0.27",
+        "public_revision": "5d6a5c9cbbf1541ae7325cbdba290a102ab05ca0"
+      }
     },
     {
       "id": "Harbor Hub:skill2env",
@@ -304,8 +387,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-dcagent-exp-rle-adversarial-v6-aed4e1d5-taskcompendium-20261112",
+        "revision": "9f771e52037a4e039f75ec7f4de85a30cb350722",
+        "file_hashes": {
+          "tasks.parquet": "9a87b2daaecd36c8d304a96e6d2902f58371e5087561e8b7bd2e17b4a26fb105",
+          "manifest.json": "4caa3e004b7ae8fec6fc1d83e65a4ecf0c92f94a584155ab6c257a159dd9f039",
+          "README.md": "d927dc94869830ab7c9e223a1e581dca04fcfecd35826c6969b2f5699ccff585"
+        },
+        "input_rows": 2726,
+        "converted_rows": 2726,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 2726,
+          "required_counts": {
+            "shared": 2726
+          },
+          "declared_counts": {
+            "shared": 2726
+          },
+          "status_counts": {
+            "matched": 2726
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 2726
+          }
+        },
+        "converter_identity": "acf78953851c27bc611fe5ecd60bd75c5642226b974c2d4d7d10010ff09dea87",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Task Trove:DCAgent__exp_rpt_nemotron-cpp",
@@ -338,8 +450,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-dcagent-exp-rpt-nemotron-cpp-e06e77b2-taskcompendium-20261112",
+        "revision": "f3de913c5da917dd80379463c5007b0136ecb624",
+        "file_hashes": {
+          "tasks.parquet": "368e685852a46a26186d403095355e99acb3b2ec3f26cde48c685757327fcbc6",
+          "manifest.json": "e34d27192c765c62c6418d2c1d6816a792fbf8b39cb65fdbad0f9de7b5378243",
+          "README.md": "9fb2312f9a28fea5195b95285009694cfb47cc0812c8c5b61f687702d7cb0226"
+        },
+        "input_rows": 4196,
+        "converted_rows": 4196,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 4196,
+          "required_counts": {
+            "shared": 4196
+          },
+          "declared_counts": {
+            "shared": 4196
+          },
+          "status_counts": {
+            "matched": 4196
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 4196
+          }
+        },
+        "converter_identity": "593ac8dd9558f141a534c08be333bf26c588171bd4b0be7e693bb3136f4d8295",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Task Trove:DCAgent__inferredbugs-sandboxes-verifier",
@@ -372,8 +513,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-dcagent-inferredbugs-sandboxes-verifier-d35a1a27-taskcompendium-20261112",
+        "revision": "85ec560970adec8b9e1d409e6a63206422736834",
+        "file_hashes": {
+          "tasks.parquet": "11cd058053dd1181217084b7cf15330070610ceca8964bd284161be14f20f58c",
+          "manifest.json": "9e9849b84050bfd8f0de6f3381b5a9a80cc0fc01db181229b73b2b1536be11c3",
+          "README.md": "619a94fff9474034c7f518412bab45e67356b2371f8165a8ff53904eef972cda"
+        },
+        "input_rows": 9659,
+        "converted_rows": 9659,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 9659,
+          "required_counts": {
+            "shared": 9659
+          },
+          "declared_counts": {
+            "shared": 9659
+          },
+          "status_counts": {
+            "matched": 9659
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 9659
+          }
+        },
+        "converter_identity": "18bdabdd278b7a19cf3c06ec786cbf2c7359ed3f6e61e81ebc2ebc526660cfa1",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Task Trove:DCAgent__mix_h4_binary_easy",
@@ -406,8 +576,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-dcagent-mix-h4-binary-easy-cfefcc4b-taskcompendium-20261112",
+        "revision": "df8e9522875c7adc974cc28f54fc06848f1fd5c7",
+        "file_hashes": {
+          "tasks.parquet": "219f593131a215f5dece965331288f28796ff35396254f9978630e8db08c24a0",
+          "manifest.json": "b845f09bb1fba89c4fbd41eca42f0449ea1e5badbd1b3ffd77fa3b4609082e96",
+          "README.md": "a9d9f04cf9f3bf3e49c0a2f97cf4abbece14744305ec6d84dd5fe439d67e220a"
+        },
+        "input_rows": 1996,
+        "converted_rows": 1996,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 1996,
+          "required_counts": {
+            "shared": 1996
+          },
+          "declared_counts": {
+            "shared": 1996
+          },
+          "status_counts": {
+            "matched": 1996
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 1996
+          }
+        },
+        "converter_identity": "608e5dddda9912c2800d6f8a5e2cf0afe3668c913bb0db10aac38294a0d2bab1",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Task Trove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3",
@@ -440,8 +639,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-dcagent-selfinstruct-naive-sandboxes-2-verified-v3-fe3a228d-taskcompendium-20261112",
+        "revision": "c2dbc82c8e7e57c0966fba7a63a6e13e36305b79",
+        "file_hashes": {
+          "tasks.parquet": "4b694dc85becfa30fedcde0b7998f242fcf9333f125f4b1d554ac05bb6e1f8e4",
+          "manifest.json": "d6e5df59fbeaed8fb093202b78537e30756550deee2f5171ce28fc3e83c1d9ea",
+          "README.md": "7748ef0312f1462d143d33ed707ce8a44dd5d3f057d9c3aa4883d9d1c85961e1"
+        },
+        "input_rows": 6665,
+        "converted_rows": 6665,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 6665,
+          "required_counts": {
+            "shared": 6665
+          },
+          "declared_counts": {
+            "shared": 6665
+          },
+          "status_counts": {
+            "matched": 6665
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 6665
+          }
+        },
+        "converter_identity": "5f0dd963e21577e8cf10fd48f847dd04be1b7aab99c5bd9fe2097f9e3765f79e",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Task Trove:GAIR__OpenSWE__openswe_oss",
@@ -544,8 +772,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-laion-codeelo-v2-6889e089-taskcompendium-20261112",
+        "revision": "0e69f13daa2c805789d015637ad0cee9190a6fae",
+        "file_hashes": {
+          "tasks.parquet": "acb08b0e3eda7e86d5889aba82d28b7c78a3b00c63a57fcadedebf96dae27f13",
+          "manifest.json": "a1c06561ca6ac12847dfe8db42ced767e12c2810e14928da8df9ea0bdd59caf9",
+          "README.md": "82258c97d36daadb2983c4517466fa82d3abfc06be4bfadc5744604485be3422"
+        },
+        "input_rows": 500,
+        "converted_rows": 500,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 500,
+          "required_counts": {
+            "shared": 500
+          },
+          "declared_counts": {
+            "shared": 500
+          },
+          "status_counts": {
+            "matched": 500
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 500
+          }
+        },
+        "converter_identity": "6cde4ee719e28fb7c79cf7527c54dc5797695af65e04b0a0ffee8480d7ea12ed",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Task Trove:laion__exp_rpt_bugsinpy-v4",
@@ -578,8 +835,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-laion-exp-rpt-bugsinpy-v4-0d77757a-taskcompendium-20261112",
+        "revision": "b5bf846ac107cffe961a041800b5212f02ea7b13",
+        "file_hashes": {
+          "tasks.parquet": "b1b4c253844e13d260c0f3f7c6b085a5d7f8b3ba03318be65b1965e4d596fded",
+          "manifest.json": "53ff173130dfda40b5d138747e8af8ee90ae77d175b4b2b84f5947e6d64c3b86",
+          "README.md": "b2e08b9e6c47025793502b6dab9e8c4a24f17e2dc812bfdd67b2ef124fbbc512"
+        },
+        "input_rows": 479,
+        "converted_rows": 479,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 479,
+          "required_counts": {
+            "shared": 479
+          },
+          "declared_counts": {
+            "shared": 479
+          },
+          "status_counts": {
+            "matched": 479
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 479
+          }
+        },
+        "converter_identity": "d3220aa47fc613e8fdd4c3a1ad52599fccc81c5cd8d41f8689f0771db2f11bfc",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Task Trove:laion__exp_rpt_codenet-python-v4",
@@ -612,8 +898,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-laion-exp-rpt-codenet-python-v4-36a8f53c-taskcompendium-20261112",
+        "revision": "339b44af844aa0742706a9f8ab8a4d6a145f36f0",
+        "file_hashes": {
+          "tasks.parquet": "bcbb82403f067d978f077b708d95d0bb3ff7d639cddd8e10e22fdf98b48f79ff",
+          "manifest.json": "487c1490d631631216017ff51406e1b5507fae0ef5d88723e05bcf93f18f59fa",
+          "README.md": "c7f4625ecea3302695fccb398e23544a76ea0b8dce3450ccfee9bdb981f4fe75"
+        },
+        "input_rows": 6975,
+        "converted_rows": 6975,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 6975,
+          "required_counts": {
+            "shared": 6975
+          },
+          "declared_counts": {
+            "shared": 6975
+          },
+          "status_counts": {
+            "matched": 6975
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 6975
+          }
+        },
+        "converter_identity": "3e8d1a0c0a2f4a5788485e8427c47117075df9a00773131d6a76c18c9fb6c087",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Task Trove:laion__exp_rpt_crosscodeeval-csharp-v4",
@@ -646,8 +961,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-csharp-v4-600ade46-taskcompendium-20261112",
+        "revision": "663f98ee95ef60f218a236e2c28aafb8027240ac",
+        "file_hashes": {
+          "tasks.parquet": "0592ac11f17fdd09ba17131cf309a1bdc4a203bc8f65014b974c58dc580262c7",
+          "manifest.json": "d87de330b7853028fdf35f40677fe50ed31b35f32f0ba5815997e98d784bb383",
+          "README.md": "927bbd70c2155ebd5bf9b9bfdde10c2ca2c7ae5711f793019f749071da8b2dff"
+        },
+        "input_rows": 1768,
+        "converted_rows": 1768,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 1768,
+          "required_counts": {
+            "shared": 1768
+          },
+          "declared_counts": {
+            "shared": 1768
+          },
+          "status_counts": {
+            "matched": 1768
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 1768
+          }
+        },
+        "converter_identity": "836f80300de5cb2cc3f7bb677b21b220a03371634e5f7c04a0bfc9269ad721e5",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Task Trove:laion__exp_rpt_crosscodeeval-java-v3",
@@ -680,8 +1024,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-java-v3-d4f66a66-taskcompendium-20261112",
+        "revision": "397522f49f8f0cdf8a4f95df5ad9ec0a7722f6c7",
+        "file_hashes": {
+          "tasks.parquet": "8ea4f9e6249c165dc51e1022ff48c34aa80c0127062d29cd58e4fa6a0c45c88d",
+          "manifest.json": "5d3f67d106355154d98b5f8d1908566dcc84b8b13ee2e1ef7537056a010b4607",
+          "README.md": "08afa3f7093ae5c83cff3b855217cf8141efd8f95217290960454aed60912ac0"
+        },
+        "input_rows": 2139,
+        "converted_rows": 2139,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 2139,
+          "required_counts": {
+            "shared": 2139
+          },
+          "declared_counts": {
+            "shared": 2139
+          },
+          "status_counts": {
+            "matched": 2139
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 2139
+          }
+        },
+        "converter_identity": "0df37e3eb898efc9492b05b323f97b0017a9f9f38b2f7accd5adfd199517179e",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Task Trove:laion__exp_rpt_crosscodeeval-python-v2",
@@ -714,8 +1087,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-python-v2-dc0ebee3-taskcompendium-20261112",
+        "revision": "a953f93bc830704525ff2cce0b296dd262009662",
+        "file_hashes": {
+          "tasks.parquet": "a289d06a1200536208d59119fef38302b8a7ea8365b901666399fbc75fd000de",
+          "manifest.json": "fe3f0426bffb64dbf1ab3dc28d30e6bb6de24bbcacd42066c7e2657316b9199c",
+          "README.md": "02efd1862bf473296c872095941d7997040e4640221dc724a914da3a8eaffebe"
+        },
+        "input_rows": 500,
+        "converted_rows": 500,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 500,
+          "required_counts": {
+            "shared": 500
+          },
+          "declared_counts": {
+            "shared": 500
+          },
+          "status_counts": {
+            "matched": 500
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 500
+          }
+        },
+        "converter_identity": "5411f877ffec19b7e93f48bcc54ed70ea91267365c44ce78ddb279bf17e29ed5",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Task Trove:laion__exp_rpt_crosscodeeval-typescript-v2",
@@ -748,8 +1150,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-typescript-v2-d0a1cbe1-taskcompendium-20261112",
+        "revision": "f19d39a3923b02712d5674485f6eb230b1888372",
+        "file_hashes": {
+          "tasks.parquet": "2717390b34e8e653909490904f399158142238c107539fc54adc062cadecad6f",
+          "manifest.json": "153b6a5c0e22da4d6a6beac45aac3471eb969727309cf9eac2ff5a25f2826db4",
+          "README.md": "8fa70719b0e4239f5a7f809518eead88da970037d018c6421d001e13cd5fbe35"
+        },
+        "input_rows": 3356,
+        "converted_rows": 3356,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 3356,
+          "required_counts": {
+            "shared": 3356
+          },
+          "declared_counts": {
+            "shared": 3356
+          },
+          "status_counts": {
+            "matched": 3356
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 3356
+          }
+        },
+        "converter_identity": "be9b16fa142e9cf9a71e3d6060938fc2f18f0d19df06cedf58c3aec35b298846",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Task Trove:laion__exp_rpt_ghactions-v3",
@@ -782,8 +1213,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-laion-exp-rpt-ghactions-v3-398f0582-taskcompendium-20261112",
+        "revision": "d8ed772114021e7ad484bb51db5dc919b09bc676",
+        "file_hashes": {
+          "tasks.parquet": "5e5c797b6cb20e68e8a539bd9fa79aea54601d454c7d6d17a2681ee74471509d",
+          "manifest.json": "fdc7925e4a7721ad07b72fabb0b7500f64d70864c61c928518200c077ab31b84",
+          "README.md": "d65667b70d93130ea44468efe39b4fbb840c0b929170a396407a694ce12ffa6e"
+        },
+        "input_rows": 9930,
+        "converted_rows": 9930,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 9930,
+          "required_counts": {
+            "shared": 9930
+          },
+          "declared_counts": {
+            "shared": 9930
+          },
+          "status_counts": {
+            "matched": 9930
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 9930
+          }
+        },
+        "converter_identity": "c7011640ffde23bef4a5dc24583993e7a730c9b0170b03a0d8b1b5d2cb9b42f4",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Task Trove:laion__exp_rpt_methods2test-large-v4",
@@ -816,8 +1276,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-laion-exp-rpt-methods2test-large-v4-2879780c-taskcompendium-20261112",
+        "revision": "c226cc9adc5b086935d385f6592c354c3fd9f1b2",
+        "file_hashes": {
+          "tasks.parquet": "2011fcb0c0cfe0ac5806cb3de3bc0fd78142c43ff268d0d36eeb48b278974ed6",
+          "manifest.json": "fe89b5c5a80cfd2629688909c69b426a265ace699777d065c4de3d4c0a05df75",
+          "README.md": "c23407078f5c8fe7ab4f9772afc0be45fbc54d5bd9d131e019e934c890d0e4e5"
+        },
+        "input_rows": 1194,
+        "converted_rows": 1194,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 1194,
+          "required_counts": {
+            "shared": 1194
+          },
+          "declared_counts": {
+            "shared": 1194
+          },
+          "status_counts": {
+            "matched": 1194
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 1194
+          }
+        },
+        "converter_identity": "97a8f86ac373dcd9cc99ba2e6ea8ff8230dc2af710e4f31173379e7fe47dc08a",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Task Trove:laion__exp_rpt_nemotron-junit-v6",
@@ -850,8 +1339,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-laion-exp-rpt-nemotron-junit-v6-2fbbabc0-taskcompendium-20261112",
+        "revision": "92731ca6f403ec471f923d60e112e98c2e8b40d8",
+        "file_hashes": {
+          "tasks.parquet": "817ad3d65d3a232590911ec98b1b0914962dad568f2da5b0b0cfbc108776fcd1",
+          "manifest.json": "7e58280d846deb1a26ee7c701ec2e4135de3ac79038602bf7e8518f9616092df",
+          "README.md": "f0185795c0157e66c07253fa72cba423df6b30c7faa070ba00588fce911f6b83"
+        },
+        "input_rows": 447,
+        "converted_rows": 447,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 447,
+          "required_counts": {
+            "shared": 447
+          },
+          "declared_counts": {
+            "shared": 447
+          },
+          "status_counts": {
+            "matched": 447
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 447
+          }
+        },
+        "converter_identity": "0c7817b10f3a26e850d719e2c5d6e8905010ea3cfd434100189e297ec1815258",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Task Trove:laion__exp_rpt_scaffold-v3",
@@ -884,8 +1402,37 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-laion-exp-rpt-scaffold-v3-fad5ea9a-taskcompendium-20261112",
+        "revision": "223f8887d937df94b60aa65d7b67617a3b206e46",
+        "file_hashes": {
+          "tasks.parquet": "e30c61a93c81ef974fa68c40f58a6530b5087436bc705dbbda5d406e5768227c",
+          "manifest.json": "aefb2b455ca8d927eb073efa735ecaa86c386bc310a8ae61dfb76e7af023bf38",
+          "README.md": "bc4119d7084ae06d3704b54077314776f37c841e18d61d1549a69a4feed93e8e"
+        },
+        "input_rows": 3121,
+        "converted_rows": 3121,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 3121,
+          "required_counts": {
+            "shared": 3121
+          },
+          "declared_counts": {
+            "shared": 3121
+          },
+          "status_counts": {
+            "matched": 3121
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 3121
+          }
+        },
+        "converter_identity": "08a598f68dad2d9f2f137d08a45b2b43d811fb63d105853375f3cfb6b55e667b",
+        "combined_backend_pass": "handed_off"
+      }
     },
     {
       "id": "Task Trove:laion__exp_rpt_stack-cpp-v4",

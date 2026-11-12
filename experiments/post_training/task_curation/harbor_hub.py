@@ -49,12 +49,13 @@ async def acquire_release(release: str, output: StoragePath, selected: list[str]
     registry = RegistryDB()
     storage = SupabaseStorage()
     task_output = output / "tasks"
-    for ref in selected_refs:
+
+    async def acquire_task(ref: str) -> None:
         # Filenames preserve task identity even when multiple names share package contents.
         task_identity = hashlib.sha256(ref.encode()).hexdigest()
         destination = task_output / f"{task_identity}.tar.gz"
         if destination.exists():
-            continue
+            return
         task = refs[ref]
         resolved = await registry.resolve_task_version(task.org, task.name, task.ref)
         if f"sha256:{resolved.content_hash}" != task.ref:
@@ -74,6 +75,16 @@ async def acquire_release(release: str, output: StoragePath, selected: list[str]
                 shutil.copyfileobj(source, target)
             pending.rename(destination)
             LOGGER.info("Acquired %s", ref)
+
+    semaphore = asyncio.Semaphore(16)
+
+    async def bounded(ref: str) -> None:
+        async with semaphore:
+            await acquire_task(ref)
+
+    async with asyncio.TaskGroup() as group:
+        for ref in selected_refs:
+            group.create_task(bounded(ref))
 
     (output / "release.json").write_text(
         json.dumps(

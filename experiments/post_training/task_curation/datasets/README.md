@@ -90,14 +90,39 @@ reach an endpoint. Their verification stage is therefore empty: no task is sampl
 yet`, and kept rows are admitted to `final/`. Choosing where the judge runs and how
 it receives the endpoint and credentials is follow-up work.
 
-## Sources without conversion recipes
+## Native Harbor inspection releases
 
-[unconverted.py](unconverted.py) retains excluded sources and available releases
-whose TaskSpec conversions are unfinished. [campaign_releases.py](campaign_releases.py)
-declares externally published campaign releases kept as data pointers: their admission,
-split and qualification evidence lives in the pinned release itself, so a conversion
-recipe would invent a second provenance. Set `SourceInfo.independent_qc` so the
-Atlas presents the release's own verdict, method, counts and pinned evidence URL.
-These entries remain visible in the
-Atlas and are omitted from campaign execution. Add a recipe when a source's
-conversion is implemented, retaining its stable source ID.
+`native_harbor.py` preserves original Harbor task files, their permission bits and timestamps,
+including separately shipped solution archives. The TaskSpec keeps all execution and verifier
+files private and delegates grading to the native Harbor Trial. The original `task.toml` retains
+its resource shape, network policy, setup timeout and grading boundary. This path does not lower
+workspace state into a file-capture contract or substitute an actor environment.
+
+`native_quick.py` runs the full-population QUICK pipeline over a named entry in
+`retired-inventory-only.json`, publishes a private `open-athena` TaskCompendium release, and
+reads the upload back to verify file hashes. For example, inside a production-priority CPU Iris
+job with a three-day timeout:
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
+  experiments.post_training.task_curation.native_quick \
+  --source 'Task Trove:DCAgent__exp_rpt_nemotron-cpp' \
+  --root /tmp/native-quick-UNIQUE_VERSION \
+  --evidence-root s3://marin-us-east-02a/marin/rl-data/atlas-disposition/UNIQUE_VERSION/results
+```
+
+Choose a fresh output version. Hub inputs must first be acquired with `harbor_hub.py`; pass the
+completed acquisition root with `--hub-input`. The reader uses only its frozen selected task
+references. Archive links that inline TaskCompendium files cannot represent, missing environments,
+and grading-boundary mismatches remain mechanical exclusions. Quality warnings never exclude a
+package from this QUICK conversion.
+
+`native_releases.py` registers executed private releases from their ledger records. Its callable
+imports them through QUICK, verifies every serialized TaskSpec hash, and writes a normalized view
+without a `final/` view. These inspection releases require separate SAMPLE/FULL qualification,
+full-population oracle filtering when solutions exist, and an exact-pin lexical-decontamination
+receipt before admission. The backend capability pass supplies actor-only Daytona measurements,
+fingerprints, examples and decontamination evidence.
+
+Entries that cannot preserve an executable contract remain retired with a per-entry reason in the
+ledger. Their old artifacts and review history stay archived.

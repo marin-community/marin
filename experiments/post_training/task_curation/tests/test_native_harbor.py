@@ -1,0 +1,115 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Native QUICK imports preserve the package instead of capturing selected workspace files."""
+
+import hashlib
+import io
+import json
+import tarfile
+from pathlib import Path
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+from marin.execution.lazy import run
+from taskcompendium.grading_environment import assess_grading_environment
+from taskcompendium.models import Source, TaskSpec
+from taskcompendium.pipeline.conversion import convert_row
+from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.pipeline.models import NormalizedTask, RawRow
+from taskcompendium.pipeline.source_processing import SourceProcessingMode
+from taskcompendium.runtime.resources import resource_bytes
+
+from experiments.post_training.task_curation import native_release
+from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.config import PipelineOptions
+from experiments.post_training.task_curation.datasets.native_harbor import native_task, unpack_native
+from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+
+
+@pytest.mark.parametrize("separate_solution", [False, True])
+def test_native_package_round_trip_keeps_state_boundary_private_files_and_modes(
+    separate_solution, tmp_path, monkeypatch
+):
+    files = {
+        "instruction.md": (b"Repair /work and preserve the service state.", 0o644),
+        "task.toml": (
+            b"[environment]\ncpus = 3\nmemory_mb = 6144\nallow_internet = false\n"
+            b'[environment.setup]\ncommand = "start-service"\ntimeout_sec = 321\n'
+            b'[verifier]\nenvironment_mode = "shared"\n',
+            0o644,
+        ),
+        "environment/Dockerfile": (b"FROM ubuntu:24.04\nWORKDIR /work\n", 0o644),
+        "environment/entrypoint.sh": (b"#!/bin/sh\nexec service\n", 0o755),
+        "tests/test.sh": (b"#!/bin/sh\ncheck-service-and-links\n", 0o750),
+        "solution/solve.sh": (b"#!/bin/sh\nrepair-service\n", 0o700),
+    }
+    buffer = io.BytesIO()
+    solution_buffer = io.BytesIO()
+    with (
+        tarfile.open(fileobj=buffer, mode="w:gz") as archive,
+        tarfile.open(fileobj=solution_buffer, mode="w:gz") as solution_archive,
+    ):
+        for name, (content, mode) in files.items():
+            member = tarfile.TarInfo(name)
+            member.size, member.mode, member.mtime = len(content), mode, 123
+            target = solution_archive if separate_solution and name.startswith("solution/") else archive
+            target.addfile(member, io.BytesIO(content))
+    context = ConversionContext({}, None)
+    data = unpack_native(
+        {
+            "path": "native",
+            "task_binary": buffer.getvalue(),
+            "solution_binary": solution_buffer.getvalue() if separate_solution else None,
+        },
+        context,
+    )
+    raw = RawRow("native", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), data)
+    result = convert_row(raw, native_task, context)
+    assert isinstance(result, NormalizedTask)
+    task = TaskSpec.model_validate_json(result.task.model_dump_json())
+    assert task.resources.worker == ()
+    assert {r.path for r in task.resources.oracle} == {"solution/solve.sh"}
+    resources = (*task.resources.verifier, *task.resources.oracle)
+    assert {r.path: (resource_bytes(r), int(r.mode, 8)) for r in resources} == files
+    assert {r.mtime_ns for r in resources} == {123_000_000_000}
+    assert task.context.events[0].content == files["instruction.md"][0].decode()
+    assert assess_grading_environment(task).status == "matched"
+
+    published = tmp_path / "published"
+    published.mkdir()
+    serialized = task.model_dump_json()
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "path": "native",
+                    "task_spec": serialized,
+                    "task_sha256": hashlib.sha256(serialized.encode()).hexdigest(),
+                }
+            ]
+        ),
+        published / "tasks.parquet",
+    )
+    (published / "manifest.json").write_text('{"mode": "quick"}')
+    monkeypatch.setattr(native_release, "hf_hub_download", lambda _repo, filename, **_kwargs: str(published / filename))
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
+    source = RlDataSource(
+        info=SourceInfo(id="native", title="Native", origin="fixture"),
+        config=PrebuiltCohort(
+            name="native", version="2026.11.12.1", repo="fixture/native", revision="pin", expected_rows=1
+        ),
+        pipeline=native_release.import_native_quick,
+    )
+    artifact = run(source.pipeline(source, PipelineOptions(SourceProcessingMode.QUICK, CampaignRuntime())))[0]
+    output = Path(artifact.path)
+    imported = pq.read_table(next((output / "normalize").glob("*.parquet"))).to_pylist()
+    assert imported[0]["task_json"] == serialized
+    assert (output / "tasks.parquet").read_bytes() == (published / "tasks.parquet").read_bytes()
+    assert not (output / "final").exists()
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["mode"] == "quick"
+    assert manifest["grading_environment"]["assessed_tasks"] == manifest["converted_rows"] == 1

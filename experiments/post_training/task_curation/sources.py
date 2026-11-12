@@ -5,6 +5,7 @@
 
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
+    native_releases,
     structure_closure,
     thoughtcrime,
 )
@@ -78,6 +79,7 @@ def all_sources() -> dict[str, RlDataSource]:
         *structure_closure.sources(),
         *thoughtcrime.sources(),
         *campaign_releases.sources(),
+        *native_releases.sources(),
     ]
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
