@@ -3,14 +3,25 @@
 
 """Configured source identity controls whether a census can publish a verdict."""
 
+import json
 from dataclasses import replace
 
 import pyarrow as pa
 import pytest
-from finestore.rl.curation import ActorCensusInput, DaytonaMeasurement, DaytonaSafety, SourceDeclaration
+from finestore.rl.curation import (
+    ActorCensusInput,
+    DaytonaMeasurement,
+    DaytonaSafety,
+    IntegrityContractSummary,
+    SourceDeclaration,
+)
 from finestore.schema import arrow_schema
 
-from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
+from experiments.post_training.task_curation.census_binding import (
+    ActorCensusReceipt,
+    bind_actor_census,
+    integrity_summary_for_actor,
+)
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 
@@ -74,3 +85,48 @@ def test_changed_input_or_missing_receipt_clears_stale_inline_census(tmp_path, c
     assert bound.info.daytona_snapshot_count is None
     assert bound.info.actor_census_input is None
     assert "Actor census pending" in bound.info.notes
+
+
+def test_refreshed_contract_families_and_full_example_survive_arrow():
+    actor = {
+        "source_id": "fixture",
+        "input_artifact": "s3://fixture/specs",
+        "converter_version": "1",
+        "converter_revision": "a" * 40,
+        "task_count": 2,
+    }
+    contract = {"id": "native-shared", "native": {"family": "pytest"}, "harness": "protected-control"}
+    raw = {
+        "schema_version": 2,
+        "distinct_groups": 2,
+        "absent_contract_tasks": 0,
+        "required_shared_tasks": 2,
+        "shared_missing_contract_tasks": 0,
+        "evidence_url": "s3://fixture/contracts.json",
+        "dataset_id": "private/fixture",
+        "dataset_revision": "b" * 40,
+        "task_specs_sha256": "c" * 64,
+        "example": {"task_id": "task-1", "contract": contract},
+        "groups": [
+            {
+                "id": "native-shared",
+                "version": 1,
+                "dependency_state": "agent_mutable",
+                "native_family": family,
+                "present": True,
+                "count": 1,
+                "harness_policy": {"protected_root": "/protected", "family": family},
+            }
+            for family in ("pytest", "shell")
+        ],
+    }
+    integrity = {**actor, "summary": raw}
+    summary = integrity_summary_for_actor(actor, integrity)
+    table = pa.Table.from_pylist([summary.model_dump(mode="json")], schema=arrow_schema(IntegrityContractSummary))
+    restored = IntegrityContractSummary.model_validate(table.to_pylist()[0])
+    assert {group.native_family for group in restored.groups} == {"pytest", "shell"}
+    assert len({group.harness_policy_sha256 for group in restored.groups}) == 2
+    assert json.loads(restored.example.contract_json) == contract
+    assert restored.required_shared_tasks == 2 and restored.shared_missing_contract_tasks == 0
+    with pytest.raises(ValueError, match="input differs"):
+        integrity_summary_for_actor(actor, {**integrity, "converter_revision": "changed-converter"})
