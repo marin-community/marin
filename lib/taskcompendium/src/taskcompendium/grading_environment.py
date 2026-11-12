@@ -131,7 +131,7 @@ def assess_grading_environment(task: TaskSpec) -> GradingEnvironmentAssessment:
 
 
 def count_grading_environment(counts: Counter[str], assessment: dict | None) -> None:
-    """Accumulate row evidence without reading the task payload again."""
+    """Count assessed rows and each required mode, declared mode, status and reason."""
     if assessment is None:
         return
     counts["assessed_tasks"] += 1

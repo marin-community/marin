@@ -1,0 +1,2668 @@
+{
+  "TaskTrove:laion__nemotron-gym-agentic-swe-pivot-v4": {
+    "input": {
+      "converter_revision": "464333860d08f6c35f5431f507a9500852a202d17dd9b3274255f762be998e75",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-agentic-swe-pivot-v4-a95a3ee3-taskcompendium-20261112",
+      "dataset_revision": "56a2cb293a88f050443610cb9130d081357bfd92",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/58c9986a88b00b66aa47/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1541,
+      "task_specs_sha256": "9a86a1639a0a25b9b29d8a6849ab7472bfec95def12f97f270dfb72e5ad973c8"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "464333860d08f6c35f5431f507a9500852a202d17dd9b3274255f762be998e75",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/58c9986a88b00b66aa47",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/58c9986a88b00b66aa47/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-nemotron-gym-agentic-swe-pivot-v4-a95a3ee3-taskcompendium-20261112",
+      "input_dataset_revision": "56a2cb293a88f050443610cb9130d081357bfd92",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 1541,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/58c9986a88b00b66aa47/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-agentic-swe-pivot-v4",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-arc-agi-python-inductive-v2": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/e2c41fc3e354394820b3/2026.11.12.2/.artifact.json",
+      "measured_tasks": 10000,
+      "task_specs_sha256": "cc8ee415a87c7f08e1478a6e35c389669e86a3e3f712176984c9b2f768632298"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/e2c41fc3e354394820b3",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/e2c41fc3e354394820b3/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-thoughts/TaskTrove",
+      "input_dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 10000,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/e2c41fc3e354394820b3/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-arc-agi-python-inductive-v2",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-arc-agi-transductive-v3": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/e6c48d2fc45af135df6a/2026.11.12.2/.artifact.json",
+      "measured_tasks": 10000,
+      "task_specs_sha256": "7ec3ac36dfe13365b3fadd78e0a3bb9729121f6e1c9f6a39108d07106b1a2532"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/e6c48d2fc45af135df6a",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/e6c48d2fc45af135df6a/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-thoughts/TaskTrove",
+      "input_dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 10000,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/e6c48d2fc45af135df6a/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-arc-agi-transductive-v3",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-cfbench-v4": {
+    "input": {
+      "converter_revision": "ae4430641e3a34e8dd23a55cd8c467f7f309ee51aa31191b1f147f655cacf9a2",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-cfbench-v4-740a5919-taskcompendium-20261112",
+      "dataset_revision": "9dc0efb7aa5261f36e1ea3248467da9aac46ca5a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/e05502172ecb2c5df067/2026.11.12.4/.artifact.json",
+      "measured_tasks": 468,
+      "task_specs_sha256": "08693a7ad4df755f4215a03de2ffea02ce2e69987183caa9940f280c41dd5f7d"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "ae4430641e3a34e8dd23a55cd8c467f7f309ee51aa31191b1f147f655cacf9a2",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/e05502172ecb2c5df067",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/e05502172ecb2c5df067/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-nemotron-gym-cfbench-v4-740a5919-taskcompendium-20261112",
+      "input_dataset_revision": "9dc0efb7aa5261f36e1ea3248467da9aac46ca5a",
+      "matched_evals": {},
+      "max_overlap": 0.00251414204902577,
+      "mean_max_overlap": 5.37209839535421e-06,
+      "measured_tasks": 468,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/e05502172ecb2c5df067/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-cfbench-v4",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-competitive-coding-v2": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/41bb3c736795396bb921/2026.11.12.2/.artifact.json",
+      "measured_tasks": 13973,
+      "task_specs_sha256": "5add5f0d13ffbd0697279f5e00a1c28d76f5614f3762d294ba64ec7615f6f5a6"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0002862663708580835,
+      "contaminated_tasks": 4,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/41bb3c736795396bb921",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/41bb3c736795396bb921/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-thoughts/TaskTrove",
+      "input_dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "matched_evals": {
+        "Humanity's Last Exam": 4
+      },
+      "max_overlap": 1.0,
+      "mean_max_overlap": 0.0002889836701029935,
+      "measured_tasks": 13973,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/41bb3c736795396bb921/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-competitive-coding-v2",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-identity-following-v4": {
+    "input": {
+      "converter_revision": "55d2c11536b6caf2e693540dbbf55e80d39bd241940f88c4a1ccb449cdd97551",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-identity-following-v4-d2250e1e-taskcompendium-20261112",
+      "dataset_revision": "5192cf64e1469dd8db94fbfef7c99958a86e18e8",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/900eff4ca3c487a869c1/2026.11.12.4/.artifact.json",
+      "measured_tasks": 21660,
+      "task_specs_sha256": "78c825b855418acefeaad225f0298503a6faf955c3be65409ff09da7b6624fa2"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "55d2c11536b6caf2e693540dbbf55e80d39bd241940f88c4a1ccb449cdd97551",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/900eff4ca3c487a869c1",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/900eff4ca3c487a869c1/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-nemotron-gym-identity-following-v4-d2250e1e-taskcompendium-20261112",
+      "input_dataset_revision": "5192cf64e1469dd8db94fbfef7c99958a86e18e8",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 21660,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/900eff4ca3c487a869c1/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-identity-following-v4",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-instruction-following-adversarial-v5": {
+    "input": {
+      "converter_revision": "b05c3a43c194871baf80776dd6d012974ff59fe601b6f69151facd8ee8524011",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-instruction-following-adversarial-ab67f6a5-taskcompendium-20261112",
+      "dataset_revision": "622e4c0e18d26c04171784b35119717dfc507da7",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/fd61af78228363e4b26b/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1000,
+      "task_specs_sha256": "dc9271a2d4064059714300b0d0200038d2b1ac7556be7e18ce44473ed67e17b8"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "b05c3a43c194871baf80776dd6d012974ff59fe601b6f69151facd8ee8524011",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/fd61af78228363e4b26b",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/fd61af78228363e4b26b/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-nemotron-gym-instruction-following-adversarial-ab67f6a5-taskcompendium-20261112",
+      "input_dataset_revision": "622e4c0e18d26c04171784b35119717dfc507da7",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 1000,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/fd61af78228363e4b26b/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-instruction-following-adversarial-v5",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-instruction-following-calendar-v3": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/cfa583e70c9df055dbe1/2026.11.12.2/.artifact.json",
+      "measured_tasks": 5673,
+      "task_specs_sha256": "e5c9bfbdee7fadfa0cf3d1cca61c565be7fc5a1b0379cc29746ae1c17b8f09f3"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/cfa583e70c9df055dbe1",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/cfa583e70c9df055dbe1/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-thoughts/TaskTrove",
+      "input_dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 5673,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/cfa583e70c9df055dbe1/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-instruction-following-calendar-v3",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-instruction-following-citation-v2": {
+    "input": {
+      "converter_revision": "f0290c96bc826eacebb7ecc02b0518910f092fe0d014ebf43986970cfcf6430e",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-instruction-following-citation-v2-dec39027-taskcompendium-20261112",
+      "dataset_revision": "95c70b72caed9842dc3dd8ddc08a03e7e7723b90",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/fa62f39c347e88e4ecd7/2026.11.12.4/.artifact.json",
+      "measured_tasks": 9033,
+      "task_specs_sha256": "fdd5ad468e04b5294a1908369baa77e356835b0c4b921c663bc9b10944da29c8"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "f0290c96bc826eacebb7ecc02b0518910f092fe0d014ebf43986970cfcf6430e",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/fa62f39c347e88e4ecd7",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/fa62f39c347e88e4ecd7/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-nemotron-gym-instruction-following-citation-v2-dec39027-taskcompendium-20261112",
+      "input_dataset_revision": "95c70b72caed9842dc3dd8ddc08a03e7e7723b90",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 9033,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/fa62f39c347e88e4ecd7/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-instruction-following-citation-v2",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-instruction-following-freeform-v2": {
+    "input": {
+      "converter_revision": "f131eccbdc98c76d5a59fb585f30088c72ffef52ba6f1460279f3bdfee73fd73",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-instruction-following-freeform-v2-27f1f95f-taskcompendium-20261112",
+      "dataset_revision": "ea528c6db3751e3f72f561c2520660a225291c79",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/9a96a0c2c646a5f2f844/2026.11.12.4/.artifact.json",
+      "measured_tasks": 8869,
+      "task_specs_sha256": "af6d6965541a92a141768bd1390ad292fc97836d78c7e362aa30046c5c3bf7d5"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.00011275228323373548,
+      "contaminated_tasks": 1,
+      "converter_revision": "f131eccbdc98c76d5a59fb585f30088c72ffef52ba6f1460279f3bdfee73fd73",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/9a96a0c2c646a5f2f844",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/9a96a0c2c646a5f2f844/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-nemotron-gym-instruction-following-freeform-v2-27f1f95f-taskcompendium-20261112",
+      "input_dataset_revision": "ea528c6db3751e3f72f561c2520660a225291c79",
+      "matched_evals": {
+        "leaderboard_mmlu_pro": 1,
+        "mmlu_pro_history": 1
+      },
+      "max_overlap": 0.7142857142857143,
+      "mean_max_overlap": 0.00018580591387105187,
+      "measured_tasks": 8869,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/9a96a0c2c646a5f2f844/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-instruction-following-freeform-v2",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-instruction-following-multiturnchat-v4": {
+    "input": {
+      "converter_revision": "f6601a2ae2d87b5744fb17929e6a0cd6009812a548bd48f605ec5489d5b8afc4",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-instruction-following-multiturnch-4204a7e6-taskcompendium-20261112",
+      "dataset_revision": "fa863430ce6894ee333ddf5505ee87878a69fdbe",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/596990a6831850a1c1fa/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1982,
+      "task_specs_sha256": "3864eae98352374a3cc7101921f2479ff7cd637d04890aec3184d5bce0389692"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "f6601a2ae2d87b5744fb17929e6a0cd6009812a548bd48f605ec5489d5b8afc4",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/596990a6831850a1c1fa",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/596990a6831850a1c1fa/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-nemotron-gym-instruction-following-multiturnch-4204a7e6-taskcompendium-20261112",
+      "input_dataset_revision": "fa863430ce6894ee333ddf5505ee87878a69fdbe",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 1982,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/596990a6831850a1c1fa/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-instruction-following-multiturnchat-v4",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-instruction-following-structured-v3": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/79ea10360335df0417d0/2026.11.12.2/.artifact.json",
+      "measured_tasks": 9008,
+      "task_specs_sha256": "e4b7dc261cf1f235567b270f70eecdd8829ff4353e15846cb330fc272abe6f83"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/79ea10360335df0417d0",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/79ea10360335df0417d0/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-thoughts/TaskTrove",
+      "input_dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "matched_evals": {},
+      "max_overlap": 0.012578616352201259,
+      "mean_max_overlap": 1.3963828099690562e-06,
+      "measured_tasks": 9008,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/79ea10360335df0417d0/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-instruction-following-structured-v3",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-instruction-following-v3": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/3d54c17887ad1c3009be/2026.11.12.2/.artifact.json",
+      "measured_tasks": 46242,
+      "task_specs_sha256": "42a4d15d6dd32eefc67300beb33db107a9a0d4566df85ed7ef62d9dedc807249"
+    },
+    "measurement": {
+      "contaminated_fraction": 2.1625362224817266e-05,
+      "contaminated_tasks": 1,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/3d54c17887ad1c3009be",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/3d54c17887ad1c3009be/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-thoughts/TaskTrove",
+      "input_dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "matched_evals": {
+        "leaderboard_mmlu_pro": 1,
+        "mmlu_pro_math": 1
+      },
+      "max_overlap": 0.6444444444444445,
+      "mean_max_overlap": 1.3936344544882239e-05,
+      "measured_tasks": 46242,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/3d54c17887ad1c3009be/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-instruction-following-v3",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-inverse-ifeval-v4": {
+    "input": {
+      "converter_revision": "5b2f4c389c894a73ac5a40cfe826b02225bf7377dc2dede8ce02f9b7eb10d0d1",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-inverse-ifeval-v4-ed4f230d-taskcompendium-20261112",
+      "dataset_revision": "bdd5f7ede9001a8e4ce2edf07f8d98402b73c96b",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/c51da2e84e63296c8551/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1000,
+      "task_specs_sha256": "d64267702ced556eed4297617b5f0fc23300fa4f5b1438754205863221765440"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "5b2f4c389c894a73ac5a40cfe826b02225bf7377dc2dede8ce02f9b7eb10d0d1",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/c51da2e84e63296c8551",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/c51da2e84e63296c8551/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-nemotron-gym-inverse-ifeval-v4-ed4f230d-taskcompendium-20261112",
+      "input_dataset_revision": "bdd5f7ede9001a8e4ce2edf07f8d98402b73c96b",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 1000,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/c51da2e84e63296c8551/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-inverse-ifeval-v4",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-knowledge-mcqa-v2": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "6",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/77fef2f6504161e9a6f0/2026.11.12.2/.artifact.json",
+      "measured_tasks": 613002,
+      "task_specs_sha256": "c085a67f10e9ad8bf80d40818cdbffa268a31d0fb4e6eec9ce95cdf46d6b4f95"
+    },
+    "measurement": {
+      "contaminated_fraction": 9.62476468266009e-05,
+      "contaminated_tasks": 59,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/77fef2f6504161e9a6f0",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/77fef2f6504161e9a6f0/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-thoughts/TaskTrove",
+      "input_dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "matched_evals": {
+        "Humanity's Last Exam": 59
+      },
+      "max_overlap": 1.0,
+      "mean_max_overlap": 9.466563824016467e-05,
+      "measured_tasks": 613002,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/77fef2f6504161e9a6f0/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-knowledge-mcqa-v2",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-knowledge-openqa-v4": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "5",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/61ead038087e39b5e4e9/2026.11.12.2/.artifact.json",
+      "measured_tasks": 122357,
+      "task_specs_sha256": "3dd8b9128e9054e5ba2ff6fc4ecc943d077ca4e32e3caf50a4ce9f66000113f9"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/61ead038087e39b5e4e9",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/61ead038087e39b5e4e9/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-thoughts/TaskTrove",
+      "input_dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "matched_evals": {},
+      "max_overlap": 0.03488372093023256,
+      "mean_max_overlap": 6.78905404094455e-07,
+      "measured_tasks": 122357,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/61ead038087e39b5e4e9/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-knowledge-openqa-v4",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-knowledge-web-search-mcqa-v2": {
+    "input": {
+      "converter_revision": "0e2708e9d47293da34876d5507927595e5deb006919b10a3c7a67c92d48d8537",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-knowledge-web-search-mcqa-v2-cf7653cf-taskcompendium-20261112",
+      "dataset_revision": "f6ed25ba8058ac0fdc418cbb08c9a4c23c104583",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/3e37b13257fba4f990e0/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2915,
+      "task_specs_sha256": "d9cfdbfe0abf677f0d99fb20f02ae43b4c7402d1c69ab43eacce715ef7905a81"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "0e2708e9d47293da34876d5507927595e5deb006919b10a3c7a67c92d48d8537",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/3e37b13257fba4f990e0",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/3e37b13257fba4f990e0/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-nemotron-gym-knowledge-web-search-mcqa-v2-cf7653cf-taskcompendium-20261112",
+      "input_dataset_revision": "f6ed25ba8058ac0fdc418cbb08c9a4c23c104583",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 2915,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/3e37b13257fba4f990e0/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-knowledge-web-search-mcqa-v2",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-litmus-bench-v2": {
+    "input": {
+      "converter_revision": "52eb5a90b6fde8646e55645fa12ebe739ea8fc81110dd67e92068a040f03075f",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-litmus-bench-v2-ab16deee-taskcompendium-20261112",
+      "dataset_revision": "3853f45c40511a136bff8c4e678de55867e9651a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/de1e3d9442317cd613a5/2026.11.12.4/.artifact.json",
+      "measured_tasks": 5232,
+      "task_specs_sha256": "ad886571c55c05d5585c1b70eba9a9193aa51d1f74480b100834bd9fefb764a0"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "52eb5a90b6fde8646e55645fa12ebe739ea8fc81110dd67e92068a040f03075f",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/de1e3d9442317cd613a5",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/de1e3d9442317cd613a5/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-nemotron-gym-litmus-bench-v2-ab16deee-taskcompendium-20261112",
+      "input_dataset_revision": "3853f45c40511a136bff8c4e678de55867e9651a",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 5232,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/de1e3d9442317cd613a5/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-litmus-bench-v2",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-math-advanced-calculations-v4": {
+    "input": {
+      "converter_revision": "5d7e40985089da06d47a43e612e12d0ac7db9fdf75af9215b0c12fac7c04053c",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-math-advanced-calculations-v4-73ac1999-taskcompendium-20261112",
+      "dataset_revision": "94d7747fed57139e68e9ce09ed1b2d8c5a9b6a50",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/d560ca817263834188cf/2026.11.12.4/.artifact.json",
+      "measured_tasks": 5291,
+      "task_specs_sha256": "bd773cc6c536032f597c9b8c45fff62bd2ce31b9aaecec91ad548e4292724764"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "5d7e40985089da06d47a43e612e12d0ac7db9fdf75af9215b0c12fac7c04053c",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/d560ca817263834188cf",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/d560ca817263834188cf/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-nemotron-gym-math-advanced-calculations-v4-73ac1999-taskcompendium-20261112",
+      "input_dataset_revision": "94d7747fed57139e68e9ce09ed1b2d8c5a9b6a50",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 5291,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/d560ca817263834188cf/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-math-advanced-calculations-v4",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-math-openmathreasoning-v2": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/79b48167a791efb3a04a/2026.11.12.2/.artifact.json",
+      "measured_tasks": 42621,
+      "task_specs_sha256": "981b4c295d18b335a5d008c9dc3e4f7277a5e9e9e5f1aa7e9cda2cbba66ad8a8"
+    },
+    "measurement": {
+      "contaminated_fraction": 7.038783698176955e-05,
+      "contaminated_tasks": 3,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/79b48167a791efb3a04a",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/79b48167a791efb3a04a/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-thoughts/TaskTrove",
+      "input_dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "matched_evals": {
+        "agieval_math": 2,
+        "hendrycks_math_counting_and_prob": 1,
+        "hendrycks_math_intermediate_algebra": 2
+      },
+      "max_overlap": 0.9069767441860465,
+      "mean_max_overlap": 0.00011026073343355352,
+      "measured_tasks": 42621,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/79b48167a791efb3a04a/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-math-openmathreasoning-v2",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-math-stack-overflow-v3": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/4fdbef24502dc5fc71e8/2026.11.12.2/.artifact.json",
+      "measured_tasks": 110604,
+      "task_specs_sha256": "ff824c8da61bee2f4742daabb1fdd3045357b6bd8ff1dd6aaadd1ca235e99a35"
+    },
+    "measurement": {
+      "contaminated_fraction": 3.6165057321615855e-05,
+      "contaminated_tasks": 4,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/4fdbef24502dc5fc71e8",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/4fdbef24502dc5fc71e8/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-thoughts/TaskTrove",
+      "input_dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "matched_evals": {
+        "leaderboard_mmlu_pro": 2,
+        "mmlu_pro_math": 2,
+        "qqp": 2
+      },
+      "max_overlap": 1.0,
+      "mean_max_overlap": 6.606024893896986e-05,
+      "measured_tasks": 110604,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/4fdbef24502dc5fc71e8/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-math-stack-overflow-v3",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-math-v5": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/07cde821b9324106d558/2026.11.12.2/.artifact.json",
+      "measured_tasks": 3941,
+      "task_specs_sha256": "e871a9944c7762bd44644eb6f17f0b0469d20b3a069daa2769eb92ff31461aa7"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0005074854097944684,
+      "contaminated_tasks": 2,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/07cde821b9324106d558",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/07cde821b9324106d558/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-thoughts/TaskTrove",
+      "input_dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "matched_evals": {
+        "Humanity's Last Exam": 2
+      },
+      "max_overlap": 0.75,
+      "mean_max_overlap": 0.0006867357784347234,
+      "measured_tasks": 3941,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/07cde821b9324106d558/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-math-v5",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-multichallenge-advanced-v4": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/120ee561261046b5bd60/2026.11.12.2/.artifact.json",
+      "measured_tasks": 1068,
+      "task_specs_sha256": "b0eea974246e7aedbea6b72d2234bad3339ccf8a438b523b8f6f1667411b6848"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/120ee561261046b5bd60",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/120ee561261046b5bd60/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-thoughts/TaskTrove",
+      "input_dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 1068,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/120ee561261046b5bd60/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-multichallenge-advanced-v4",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-multichallenge-vanilla-v3": {
+    "input": {
+      "converter_revision": "573996df47ed9843601b9b224a0acf55002591f59bdbfb8bbaf3a90f8c708bd8",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-multichallenge-vanilla-v3-750d2afa-taskcompendium-20261112",
+      "dataset_revision": "f942306720990197fbc2a0eeea676fccfc825d09",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/b261dbbc7eb0b9966780/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1050,
+      "task_specs_sha256": "a767276023b72771fa0eab691d47d20c7b1eb0f1c4d02acda1d8720fe08f6ea5"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "573996df47ed9843601b9b224a0acf55002591f59bdbfb8bbaf3a90f8c708bd8",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/b261dbbc7eb0b9966780",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/b261dbbc7eb0b9966780/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-nemotron-gym-multichallenge-vanilla-v3-750d2afa-taskcompendium-20261112",
+      "input_dataset_revision": "f942306720990197fbc2a0eeea676fccfc825d09",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 1050,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/b261dbbc7eb0b9966780/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-multichallenge-vanilla-v3",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-qa-abstention-v4": {
+    "input": {
+      "converter_revision": "7e7e529fb039226a7fb0f746379bafcfc4089c88fc95cbab5abe4b3d560a00ce",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-qa-abstention-v4-da254a94-taskcompendium-20261112",
+      "dataset_revision": "ffd2a82011192c8ae2896ea37065ae3e1eb04987",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/42547c630d51290fd2b6/2026.11.12.4/.artifact.json",
+      "measured_tasks": 3150,
+      "task_specs_sha256": "42579aeed7f4078c7e2e3b15282186505078410a86b533955865dafcf80be305"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "7e7e529fb039226a7fb0f746379bafcfc4089c88fc95cbab5abe4b3d560a00ce",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/42547c630d51290fd2b6",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/42547c630d51290fd2b6/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-nemotron-gym-qa-abstention-v4-da254a94-taskcompendium-20261112",
+      "input_dataset_revision": "ffd2a82011192c8ae2896ea37065ae3e1eb04987",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 3150,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/42547c630d51290fd2b6/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-qa-abstention-v4",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-reasoning-gym-v2": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "4",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/afb9822c0f7fcc62c930/2026.11.12.2/.artifact.json",
+      "measured_tasks": 14259,
+      "task_specs_sha256": "9c46bc3249a33ad33a0daf223042449a9d2749786f1673e11b2cd79fd3e8338d"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/afb9822c0f7fcc62c930",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/afb9822c0f7fcc62c930/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-thoughts/TaskTrove",
+      "input_dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 14259,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/afb9822c0f7fcc62c930/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-reasoning-gym-v2",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-safety-v3": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/3711fe05c4d197d92d52/2026.11.12.2/.artifact.json",
+      "measured_tasks": 89066,
+      "task_specs_sha256": "7a787ff02da1bc5bd35eeaadc0aa6b1c9d0e479e76e92c099b5cf299f22a22a3"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/3711fe05c4d197d92d52",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/3711fe05c4d197d92d52/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-thoughts/TaskTrove",
+      "input_dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 89066,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/3711fe05c4d197d92d52/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-safety-v3",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-science-so-openq-v3": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "5",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/6c5eb3b41f3e32edb01e/2026.11.12.2/.artifact.json",
+      "measured_tasks": 150644,
+      "task_specs_sha256": "d5a19f7e7f9988941aae9d53df240e8395b9024ea22e968d4bee91b8cb48e869"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/6c5eb3b41f3e32edb01e",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/6c5eb3b41f3e32edb01e/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-thoughts/TaskTrove",
+      "input_dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "matched_evals": {},
+      "max_overlap": 0.21052631578947367,
+      "mean_max_overlap": 2.1350828901289448e-06,
+      "measured_tasks": 150644,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/6c5eb3b41f3e32edb01e/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-science-so-openq-v3",
+    "use": "train"
+  },
+  "TaskTrove:laion__nemotron-gym-sysbench-v4": {
+    "input": {
+      "converter_revision": "77277231a60d89e19ff9ef2645db56349e639f27f26b289cfafc71e0351c6bc7",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-sysbench-v4-c970685e-taskcompendium-20261112",
+      "dataset_revision": "b88f28b27180193ab8dfdce4ca479ac033a58abc",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/697776f5e1dd50417fff/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1010,
+      "task_specs_sha256": "8f68160dcdd8ed3d6e7d3e98380b0f502c29af95d80b41cdaa38f710203abf50"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "77277231a60d89e19ff9ef2645db56349e639f27f26b289cfafc71e0351c6bc7",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/697776f5e1dd50417fff",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/697776f5e1dd50417fff/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-nemotron-gym-sysbench-v4-c970685e-taskcompendium-20261112",
+      "input_dataset_revision": "b88f28b27180193ab8dfdce4ca479ac033a58abc",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 1010,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/697776f5e1dd50417fff/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__nemotron-gym-sysbench-v4",
+    "use": "train"
+  },
+  "TaskTrove:laion__openswe-tasks-patched-v7-oracle-success": {
+    "input": {
+      "converter_revision": "6a8b0b79b68d9c713c72007cfc3487e3ec564a1e18f4fca2acdeb2e2aaf5bef0",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-openswe-tasks-patched-v7-oracle-success-e8190b4c-taskcompendium-20261112",
+      "dataset_revision": "6178d686e6b736a9b112f7d06262b488da131ed2",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/9ff8b9b2dd2607b5c060/2026.11.12.4/.artifact.json",
+      "measured_tasks": 11730,
+      "task_specs_sha256": "746d028e243efcb4907d32829bbe93c904067112c5fb67f6096c894ba28dd210"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "6a8b0b79b68d9c713c72007cfc3487e3ec564a1e18f4fca2acdeb2e2aaf5bef0",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/9ff8b9b2dd2607b5c060",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/9ff8b9b2dd2607b5c060/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-openswe-tasks-patched-v7-oracle-success-e8190b4c-taskcompendium-20261112",
+      "input_dataset_revision": "6178d686e6b736a9b112f7d06262b488da131ed2",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 11730,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/9ff8b9b2dd2607b5c060/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__openswe-tasks-patched-v7-oracle-success",
+    "use": "train"
+  },
+  "TaskTrove:laion__r2egym-patched-full-oracle-v3": {
+    "input": {
+      "converter_revision": "19e0196e9e09b870b72e067495563550fd4e49a7aaf9dfc81090d0a7e19d7075",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-r2egym-patched-full-oracle-v3-f80aff0d-taskcompendium-20261112",
+      "dataset_revision": "77c0df7718f6e7d8bab9b71432407ac0428fe2fc",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/2e37b002ecc5f4b110ed/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2574,
+      "task_specs_sha256": "cb3f5cbd1c2d82420c79d85b9461dbcd92e130282da46695fe2148bfd71d36bf"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "19e0196e9e09b870b72e067495563550fd4e49a7aaf9dfc81090d0a7e19d7075",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/2e37b002ecc5f4b110ed",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/2e37b002ecc5f4b110ed/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-r2egym-patched-full-oracle-v3-f80aff0d-taskcompendium-20261112",
+      "input_dataset_revision": "77c0df7718f6e7d8bab9b71432407ac0428fe2fc",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 2574,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/2e37b002ecc5f4b110ed/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__r2egym-patched-full-oracle-v3",
+    "use": "train"
+  },
+  "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2": {
+    "input": {
+      "converter_revision": "63ea5e7fb1450b54379b1479cf5a5b5a61d504a6",
+      "converter_version": "3",
+      "dataset_id": "open-athena/tasktrove-codereview-medium-quick-20261112",
+      "dataset_revision": "52c90a79a59262b1a25f76992430a1d81e42f0e4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/reply-public-mirror/20261112/9f8bd77b7f9f3e4a392c/.artifact.json",
+      "measured_tasks": 10000,
+      "task_specs_sha256": "6448eb5cfca3fa7ed827e9df63439efab8d3d63d6665f4a55cc1544e0495b62b"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "63ea5e7fb1450b54379b1479cf5a5b5a61d504a6",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/9f8bd77b7f9f3e4a392c",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/9f8bd77b7f9f3e4a392c/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-codereview-medium-quick-20261112",
+      "input_dataset_revision": "52c90a79a59262b1a25f76992430a1d81e42f0e4",
+      "matched_evals": {},
+      "max_overlap": 0.007352941176470588,
+      "mean_max_overlap": 1.1361923766913852e-06,
+      "measured_tasks": 10000,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/9f8bd77b7f9f3e4a392c/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2",
+    "use": "train"
+  },
+  "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2": {
+    "input": {
+      "converter_revision": "63ea5e7fb1450b54379b1479cf5a5b5a61d504a6",
+      "converter_version": "3",
+      "dataset_id": "open-athena/tasktrove-stack_overflow-medium-quick-20261112",
+      "dataset_revision": "07603684451d8db4caef836dbb07c89a4a7e0588",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/reply-public-mirror/20261112/3883f7e6e3dc926e01a5/.artifact.json",
+      "measured_tasks": 10000,
+      "task_specs_sha256": "a52a234547fdef61f8574908a8a490612107d46e446c885bff13077b3b906983"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "63ea5e7fb1450b54379b1479cf5a5b5a61d504a6",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/3883f7e6e3dc926e01a5",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/3883f7e6e3dc926e01a5/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-stack_overflow-medium-quick-20261112",
+      "input_dataset_revision": "07603684451d8db4caef836dbb07c89a4a7e0588",
+      "matched_evals": {},
+      "max_overlap": 0.011111111111111112,
+      "mean_max_overlap": 1.1111111111111112e-06,
+      "measured_tasks": 10000,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/3883f7e6e3dc926e01a5/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2",
+    "use": "train"
+  },
+  "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2": {
+    "input": {
+      "converter_revision": "63ea5e7fb1450b54379b1479cf5a5b5a61d504a6",
+      "converter_version": "3",
+      "dataset_id": "open-athena/tasktrove-superuser-medium-quick-20261112",
+      "dataset_revision": "01237834f87d26f4c26f92d0e876904071dd2dd1",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/reply-public-mirror/20261112/7d072a4776115e40dd3b/.artifact.json",
+      "measured_tasks": 10000,
+      "task_specs_sha256": "784d87e0b55e575be1b8bb08d44fc5605a303e02042b379ea96c44c0d91a3415"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "63ea5e7fb1450b54379b1479cf5a5b5a61d504a6",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/7d072a4776115e40dd3b",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/7d072a4776115e40dd3b/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-superuser-medium-quick-20261112",
+      "input_dataset_revision": "01237834f87d26f4c26f92d0e876904071dd2dd1",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 10000,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/7d072a4776115e40dd3b/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2",
+    "use": "train"
+  },
+  "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2": {
+    "input": {
+      "converter_revision": "63ea5e7fb1450b54379b1479cf5a5b5a61d504a6",
+      "converter_version": "3",
+      "dataset_id": "open-athena/tasktrove-unix-medium-quick-20261112",
+      "dataset_revision": "2287a9698aa508aa6ae442d923d2cd68c2b7075c",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/reply-public-mirror/20261112/0a7f9a881ddd8834fee4/.artifact.json",
+      "measured_tasks": 10000,
+      "task_specs_sha256": "5401965a21b8cf550395b0d8bbde785545b7e23e1c1c778a3e47722659822344"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "63ea5e7fb1450b54379b1479cf5a5b5a61d504a6",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/0a7f9a881ddd8834fee4",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/0a7f9a881ddd8834fee4/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-unix-medium-quick-20261112",
+      "input_dataset_revision": "2287a9698aa508aa6ae442d923d2cd68c2b7075c",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 10000,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/0a7f9a881ddd8834fee4/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2",
+    "use": "train"
+  },
+  "TaskTrove:laion__swegym-tasks-patched-validated-v5": {
+    "input": {
+      "converter_revision": "a4a0784a34366cfb396607791e7c7a6b7f00bac85529b7f396ab7782770c666e",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-swegym-tasks-patched-validated-v5-6bceda5a-taskcompendium-20261112",
+      "dataset_revision": "8dbf618490a58626c3829928ed648a2f513ae4e9",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/fbab7945a8925cce024b/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2428,
+      "task_specs_sha256": "cc8c71bb6ac61f84357cffdf1de76463c3f0e6e927b49bf7443ca48c9202a23f"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "a4a0784a34366cfb396607791e7c7a6b7f00bac85529b7f396ab7782770c666e",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/fbab7945a8925cce024b",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/fbab7945a8925cce024b/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-swegym-tasks-patched-validated-v5-6bceda5a-taskcompendium-20261112",
+      "input_dataset_revision": "8dbf618490a58626c3829928ed648a2f513ae4e9",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 2428,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/fbab7945a8925cce024b/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__swegym-tasks-patched-validated-v5",
+    "use": "train"
+  },
+  "TaskTrove:laion__swesmith-oracle-filtered-v2": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "4",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/437216b25a51b8f4f80d/2026.11.12.2/.artifact.json",
+      "measured_tasks": 12720,
+      "task_specs_sha256": "60a49f86a7a351261f1db6a1c87c9ac31c778cf3e8aa66239418cecc34825c08"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/437216b25a51b8f4f80d",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/437216b25a51b8f4f80d/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-thoughts/TaskTrove",
+      "input_dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 12720,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/437216b25a51b8f4f80d/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__swesmith-oracle-filtered-v2",
+    "use": "train"
+  },
+  "TaskTrove:laion__toolscale-v4": {
+    "input": {
+      "converter_revision": "438fa72165955472cdcc2a0b8eafc13ace4cc0c84ed3331778b8ab7736bb5dd0",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-toolscale-v4-2d3990a5-taskcompendium-20261112",
+      "dataset_revision": "f7fb60a9d76428a021b1c0e051f7ca71be73ddbd",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/9fd3ea3b156fd1cf8807/2026.11.12.4/.artifact.json",
+      "measured_tasks": 4048,
+      "task_specs_sha256": "3b5fa17b9bf2273dadc9c68b4decd4502744abf57ff59ef78885ff9e13f86e5b"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "438fa72165955472cdcc2a0b8eafc13ace4cc0c84ed3331778b8ab7736bb5dd0",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/9fd3ea3b156fd1cf8807",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/9fd3ea3b156fd1cf8807/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-toolscale-v4-2d3990a5-taskcompendium-20261112",
+      "input_dataset_revision": "f7fb60a9d76428a021b1c0e051f7ca71be73ddbd",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 4048,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/9fd3ea3b156fd1cf8807/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__toolscale-v4",
+    "use": "train"
+  },
+  "TaskTrove:laion__tulu3-sft-personas-math-sandboxes-verified-v3": {
+    "input": {
+      "converter_revision": "a47b617ff80a30096606c113a128994bb013e20d65e55e13a016e54f3ee07c81",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-tulu3-sft-personas-math-sandboxes-verified-v3-5de37fd5-taskcompendium-20261112",
+      "dataset_revision": "5bdb54edd8813ad0f3839af7f09c6d252f22bc20",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/54aa232d4c56d35ea839/2026.11.12.4/.artifact.json",
+      "measured_tasks": 9998,
+      "task_specs_sha256": "9968f4be6c9e61eaaab95580a2d953e7547900bad7859c960a06badfda1c1b7e"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "a47b617ff80a30096606c113a128994bb013e20d65e55e13a016e54f3ee07c81",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/54aa232d4c56d35ea839",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/54aa232d4c56d35ea839/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/task-trove-laion-tulu3-sft-personas-math-sandboxes-verified-v3-5de37fd5-taskcompendium-20261112",
+      "input_dataset_revision": "5bdb54edd8813ad0f3839af7f09c6d252f22bc20",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 9998,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/54aa232d4c56d35ea839/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__tulu3-sft-personas-math-sandboxes-verified-v3",
+    "use": "train"
+  },
+  "TaskTrove:laion__wizardlm-orca-v4": {
+    "input": {
+      "converter_revision": "63ea5e7fb1450b54379b1479cf5a5b5a61d504a6",
+      "converter_version": "3",
+      "dataset_id": "open-athena/tasktrove-wizard_orca-medium-quick-20261112",
+      "dataset_revision": "04b33f3773ddadb6dd0f35a79d7a56b62dd4068b",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/reply-public-mirror/20261112/d8deaa2424d7ddf7b333/.artifact.json",
+      "measured_tasks": 9999,
+      "task_specs_sha256": "99ff76cb619a5c112833bb9da7c8bd98bca13282f275b2f05649cf5299431992"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "63ea5e7fb1450b54379b1479cf5a5b5a61d504a6",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/d8deaa2424d7ddf7b333",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/d8deaa2424d7ddf7b333/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-wizard_orca-medium-quick-20261112",
+      "input_dataset_revision": "04b33f3773ddadb6dd0f35a79d7a56b62dd4068b",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 9999,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/d8deaa2424d7ddf7b333/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:laion__wizardlm-orca-v4",
+    "use": "train"
+  },
+  "TaskTrove:smartie-calibforge-rebuilt-v1": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/calibforge-v1-rebuilt-taskcompendium-20261111",
+      "dataset_revision": "8f00c12884d6a68107b245e7c98711b6bd64f4af",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/dd231e74b7763e2a105a/2026.11.12.2/.artifact.json",
+      "measured_tasks": 1357,
+      "task_specs_sha256": "90681b30a2b4a7fbc1908a7abd9789b9583db5fb092e7c8df27f21e4e42b4877"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/dd231e74b7763e2a105a",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/dd231e74b7763e2a105a/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/calibforge-v1-rebuilt-taskcompendium-20261111",
+      "input_dataset_revision": "8f00c12884d6a68107b245e7c98711b6bd64f4af",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 1357,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/dd231e74b7763e2a105a/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:smartie-calibforge-rebuilt-v1",
+    "use": "train"
+  },
+  "TaskTrove:smartie-calibforge-shared-v2": {
+    "input": {
+      "converter_revision": "1a887f2b06caf3c7ba826a4ec771917d6efce27c36e7a4ed48e06d32cd8e3bd2",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/campaign-release-smartie-calibforge-shared-v2-17ae7896-taskcompendium-20261112",
+      "dataset_revision": "bcfae8cd9d8a82338122945afdd843d46ca18b7e",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/e61968f19a77c9bdf226/2026.11.12.4/.artifact.json",
+      "measured_tasks": 324,
+      "task_specs_sha256": "8585b75d37849c768462913c5a74faf62c3da307e1234deaac7f27408cf54da5"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1a887f2b06caf3c7ba826a4ec771917d6efce27c36e7a4ed48e06d32cd8e3bd2",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/e61968f19a77c9bdf226",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/e61968f19a77c9bdf226/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/campaign-release-smartie-calibforge-shared-v2-17ae7896-taskcompendium-20261112",
+      "input_dataset_revision": "bcfae8cd9d8a82338122945afdd843d46ca18b7e",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 324,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/e61968f19a77c9bdf226/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:smartie-calibforge-shared-v2",
+    "use": "train"
+  },
+  "TaskTrove:smartie-swesmith-admitted": {
+    "input": {
+      "converter_revision": "538b514f55f7a9f114f5799d0e819320ac29cea7b5ff963bfdb39312f5f2cf7e",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/campaign-release-smartie-swesmith-admitted-41200e0b-taskcompendium-20261112",
+      "dataset_revision": "25cdd6a2737be2f500027ecd2c6dbb1fb96ae377",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/8d82c995ab8a8fca4323/2026.11.12.4/.artifact.json",
+      "measured_tasks": 8045,
+      "task_specs_sha256": "d4dca64713b98ab4f9c77f3879a31cad893faefb3ab69d69028a251b44a883ec"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "538b514f55f7a9f114f5799d0e819320ac29cea7b5ff963bfdb39312f5f2cf7e",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/8d82c995ab8a8fca4323",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/8d82c995ab8a8fca4323/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/campaign-release-smartie-swesmith-admitted-41200e0b-taskcompendium-20261112",
+      "input_dataset_revision": "25cdd6a2737be2f500027ecd2c6dbb1fb96ae377",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 8045,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/8d82c995ab8a8fca4323/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:smartie-swesmith-admitted",
+    "use": "train"
+  },
+  "TaskTrove:swesmith-verifier-repaired-v5": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.2",
+      "dataset_id": "open-athena/swesmith-verifier-repaired-v5-20261112",
+      "dataset_revision": "26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/ba83ebf5ecb958937ee8/2026.11.12.2/.artifact.json",
+      "measured_tasks": 7016,
+      "task_specs_sha256": "7adca8c4980ba7493cc410c10ea222eaadbd9c2c0f3941c065842efe6b2d69a8"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/ba83ebf5ecb958937ee8",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/ba83ebf5ecb958937ee8/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/swesmith-verifier-repaired-v5-20261112",
+      "input_dataset_revision": "26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 7016,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/ba83ebf5ecb958937ee8/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:swesmith-verifier-repaired-v5",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-code-contests-built-image": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-code-contests-taskcompendium-20261112",
+      "dataset_revision": "5b43c6f4c2322a5808e4dbdfaf4f0052037d3607",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/d2ad424fe4baf7f6a332/2026.11.12.2/.artifact.json",
+      "measured_tasks": 8222,
+      "task_specs_sha256": "2f368840e68bc1b660578bd4789e9a13a2403d9c815c0616f4c2dcf4149f1ac2"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0006081245439065921,
+      "contaminated_tasks": 5,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/d2ad424fe4baf7f6a332",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/d2ad424fe4baf7f6a332/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-code-contests-taskcompendium-20261112",
+      "input_dataset_revision": "5b43c6f4c2322a5808e4dbdfaf4f0052037d3607",
+      "matched_evals": {
+        "Humanity's Last Exam": 5
+      },
+      "max_overlap": 1.0,
+      "mean_max_overlap": 0.0005918593946222005,
+      "measured_tasks": 8222,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/d2ad424fe4baf7f6a332/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-code-contests-built-image",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-codeforces-rebuilt-v1": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-codeforces-v1-taskcompendium-20261112",
+      "dataset_revision": "05167566303b67a1adea08743d26c39101c5c30a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/701eeaa08e0a650db271/2026.11.12.2/.artifact.json",
+      "measured_tasks": 9745,
+      "task_specs_sha256": "610dbc328fc5b86ef5ee5847ac79179807c4dcf4d8df5ff15042d675fea572d9"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0007183170856849666,
+      "contaminated_tasks": 7,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/701eeaa08e0a650db271",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/701eeaa08e0a650db271/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-codeforces-v1-taskcompendium-20261112",
+      "input_dataset_revision": "05167566303b67a1adea08743d26c39101c5c30a",
+      "matched_evals": {
+        "Humanity's Last Exam": 7
+      },
+      "max_overlap": 1.0,
+      "mean_max_overlap": 0.0007118436764653525,
+      "measured_tasks": 9745,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/701eeaa08e0a650db271/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-codeforces-rebuilt-v1",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-competitive-coding-rebuilt-v1": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-competitive-coding-v1-taskcompendium-20261112",
+      "dataset_revision": "5a7b7a75eb32901947157e39516a15d894db332b",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/8149db222644c85add1d/2026.11.12.2/.artifact.json",
+      "measured_tasks": 13973,
+      "task_specs_sha256": "474d7792f0c4c490641201ad0a08ca0d2cd48c21af45a106c73bf089c918c561"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0002862663708580835,
+      "contaminated_tasks": 4,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/8149db222644c85add1d",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/8149db222644c85add1d/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-competitive-coding-v1-taskcompendium-20261112",
+      "input_dataset_revision": "5a7b7a75eb32901947157e39516a15d894db332b",
+      "matched_evals": {
+        "Humanity's Last Exam": 4
+      },
+      "max_overlap": 1.0,
+      "mean_max_overlap": 0.0002889836701029935,
+      "measured_tasks": 13973,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/8149db222644c85add1d/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-curriculum-easy-rebuilt-v1": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-curriculum-easy-v1-taskcompendium-20261112",
+      "dataset_revision": "4151b071dbb38df532b38c7de1becb12ca1e0f73",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/f1b33a7b614f574e2525/2026.11.12.2/.artifact.json",
+      "measured_tasks": 505,
+      "task_specs_sha256": "8cd42419fbf5ee0807eeda04268b571a4b307528646fe7f763d61af68252282f"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/f1b33a7b614f574e2525",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/f1b33a7b614f574e2525/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-curriculum-easy-v1-taskcompendium-20261112",
+      "input_dataset_revision": "4151b071dbb38df532b38c7de1becb12ca1e0f73",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 505,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/f1b33a7b614f574e2525/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-curriculum-easy-rebuilt-v1",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-curriculum-medium-rebuilt-v1": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-curriculum-medium-v1-taskcompendium-20261112",
+      "dataset_revision": "db17ab9b01d960d01f7a75c3d1d896504ceaf9fa",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/47176ac8468e8280b2c4/2026.11.12.2/.artifact.json",
+      "measured_tasks": 488,
+      "task_specs_sha256": "1c803f58112bfb0d7e761c7aa53254d5e4545151e07320690a18a6849389bc98"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/47176ac8468e8280b2c4",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/47176ac8468e8280b2c4/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-curriculum-medium-v1-taskcompendium-20261112",
+      "input_dataset_revision": "db17ab9b01d960d01f7a75c3d1d896504ceaf9fa",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 488,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/47176ac8468e8280b2c4/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-curriculum-medium-rebuilt-v1",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-e2egit-large-rebuilt-v1": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-e2egit-large-v1-taskcompendium-20261112",
+      "dataset_revision": "4bdaeaaf069eb6ad7b0a716d445e9e789f37a758",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/f8741b47ee779e088d7b/2026.11.12.2/.artifact.json",
+      "measured_tasks": 4993,
+      "task_specs_sha256": "a66021ce9575a354123db6f0d4d4e5f68a69f86087597c24be0dcd89e4e44e75"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/f8741b47ee779e088d7b",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/f8741b47ee779e088d7b/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-e2egit-large-v1-taskcompendium-20261112",
+      "input_dataset_revision": "4bdaeaaf069eb6ad7b0a716d445e9e789f37a758",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 4993,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/f8741b47ee779e088d7b/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-e2egit-large-rebuilt-v1",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-e2egit-v2-rebuilt": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-e2egit-v2-taskcompendium-20261112",
+      "dataset_revision": "dd34672091d917c96c922fd2ebf0d583a1dfc5b9",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/891e2421a0f198fb52cf/2026.11.12.2/.artifact.json",
+      "measured_tasks": 477,
+      "task_specs_sha256": "24a8539624875870db087dfe8073d89cb61e4728625772fb6cb5387f957b9c79"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/891e2421a0f198fb52cf",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/891e2421a0f198fb52cf/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-e2egit-v2-taskcompendium-20261112",
+      "input_dataset_revision": "dd34672091d917c96c922fd2ebf0d583a1dfc5b9",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 477,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/891e2421a0f198fb52cf/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-e2egit-v2-rebuilt",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-knowledge-openqa-qa": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-knowledge-openqa-taskcompendium-20261112",
+      "dataset_revision": "f8f83ffcc9779f8314f381a095de2d29525e48dc",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/f4e350c8d9894f123bd5/2026.11.12.2/.artifact.json",
+      "measured_tasks": 122314,
+      "task_specs_sha256": "867e854c20bfc3cdd2ef665e681ae5d7919d06cd5ddf3b190bd3e721294550a0"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/f4e350c8d9894f123bd5",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/f4e350c8d9894f123bd5/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-knowledge-openqa-taskcompendium-20261112",
+      "input_dataset_revision": "f8f83ffcc9779f8314f381a095de2d29525e48dc",
+      "matched_evals": {},
+      "max_overlap": 0.03488372093023256,
+      "mean_max_overlap": 6.791440761383425e-07,
+      "measured_tasks": 122314,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/f4e350c8d9894f123bd5/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-knowledge-openqa-qa",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-math_gym-qa": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-math_gym-taskcompendium-20261112",
+      "dataset_revision": "8b9af73ebed3b62f5a73dacf6c238cf2d82391ef",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/71e174a5aa3e399d6509/2026.11.12.2/.artifact.json",
+      "measured_tasks": 3941,
+      "task_specs_sha256": "0021d04f92183fa4d3f11911cbd456f7a28a52caa1e848434f1378c39e3563cb"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0005074854097944684,
+      "contaminated_tasks": 2,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/71e174a5aa3e399d6509",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/71e174a5aa3e399d6509/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-math_gym-taskcompendium-20261112",
+      "input_dataset_revision": "8b9af73ebed3b62f5a73dacf6c238cf2d82391ef",
+      "matched_evals": {
+        "Humanity's Last Exam": 2
+      },
+      "max_overlap": 0.75,
+      "mean_max_overlap": 0.0006867357784347234,
+      "measured_tasks": 3941,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/71e174a5aa3e399d6509/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-math_gym-qa",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-math_openreasoning-qa": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-math_openreasoning-taskcompendium-20261112",
+      "dataset_revision": "af81284226c98852a60e0946ec084867e22875e1",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/96fc19f9b4b2e033c9b3/2026.11.12.2/.artifact.json",
+      "measured_tasks": 42621,
+      "task_specs_sha256": "41a275a70219d41abefe2d1ce71bf81136ff3d8345be0ae7b488deee6b2fe221"
+    },
+    "measurement": {
+      "contaminated_fraction": 7.038783698176955e-05,
+      "contaminated_tasks": 3,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/96fc19f9b4b2e033c9b3",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/96fc19f9b4b2e033c9b3/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-math_openreasoning-taskcompendium-20261112",
+      "input_dataset_revision": "af81284226c98852a60e0946ec084867e22875e1",
+      "matched_evals": {
+        "agieval_math": 2,
+        "hendrycks_math_counting_and_prob": 1,
+        "hendrycks_math_intermediate_algebra": 2
+      },
+      "max_overlap": 0.9069767441860465,
+      "mean_max_overlap": 0.00011026073343355352,
+      "measured_tasks": 42621,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/96fc19f9b4b2e033c9b3/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-math_openreasoning-qa",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-math_oracle-qa": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-math_oracle-taskcompendium-20261112",
+      "dataset_revision": "1ac3735fcbd85bb059053b37d1c5891622e4fc5a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/a4aa7960267026ac4e7c/2026.11.12.2/.artifact.json",
+      "measured_tasks": 57424,
+      "task_specs_sha256": "a248669ecc4693537c5fcfb3b16d20a23f580578896ce90022d6a8208323df90"
+    },
+    "measurement": {
+      "contaminated_fraction": 8.707160769016439e-05,
+      "contaminated_tasks": 5,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/a4aa7960267026ac4e7c",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/a4aa7960267026ac4e7c/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-math_oracle-taskcompendium-20261112",
+      "input_dataset_revision": "1ac3735fcbd85bb059053b37d1c5891622e4fc5a",
+      "matched_evals": {
+        "agieval_math": 1,
+        "hendrycks_math_geometry": 1,
+        "hendrycks_math_intermediate_algebra": 2,
+        "leaderboard_mmlu_pro": 2,
+        "mmlu_pro_math": 2
+      },
+      "max_overlap": 0.9166666666666666,
+      "mean_max_overlap": 0.00010086660368913614,
+      "measured_tasks": 57424,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/a4aa7960267026ac4e7c/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-math_oracle-qa",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-math_prism-qa": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-math_prism-taskcompendium-20261112",
+      "dataset_revision": "ddb6f6cc8dbb09638d496739ab204b3ba5c6c37e",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/2552b39df05e85f232a0/2026.11.12.2/.artifact.json",
+      "measured_tasks": 2221,
+      "task_specs_sha256": "6f0564cf3a0dbafdf2151c472e8bca59c9eeb459a46fba9757e7f5e97fde2ef4"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/2552b39df05e85f232a0",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/2552b39df05e85f232a0/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-math_prism-taskcompendium-20261112",
+      "input_dataset_revision": "ddb6f6cc8dbb09638d496739ab204b3ba5c6c37e",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 2221,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/2552b39df05e85f232a0/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-math_prism-qa",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-math_stack-qa": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-math_stack-taskcompendium-20261112",
+      "dataset_revision": "2cef971f0e6de40011aa5b5a423aca97be27cac7",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/2b71ed0cb2396be03c49/2026.11.12.2/.artifact.json",
+      "measured_tasks": 110604,
+      "task_specs_sha256": "e4bc73efe86ad3786364a94ca4511170fca2b4b471d60f5a762510d08f4dce70"
+    },
+    "measurement": {
+      "contaminated_fraction": 3.6165057321615855e-05,
+      "contaminated_tasks": 4,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/2b71ed0cb2396be03c49",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/2b71ed0cb2396be03c49/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-math_stack-taskcompendium-20261112",
+      "input_dataset_revision": "2cef971f0e6de40011aa5b5a423aca97be27cac7",
+      "matched_evals": {
+        "leaderboard_mmlu_pro": 2,
+        "mmlu_pro_math": 2,
+        "qqp": 2
+      },
+      "max_overlap": 1.0,
+      "mean_max_overlap": 6.606024893896986e-05,
+      "measured_tasks": 110604,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/2b71ed0cb2396be03c49/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-math_stack-qa",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-multifile-rebuilt-v1": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-multifile-v1-taskcompendium-20261112",
+      "dataset_revision": "5accbb5851dc5774a05424aa7d22f995cbfd7e34",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/81f7cd6d3b080e675bc5/2026.11.12.2/.artifact.json",
+      "measured_tasks": 4842,
+      "task_specs_sha256": "5a0de297917ada5b0c3273332375befd5e0bf0742f3505428545433cf33de34a"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/81f7cd6d3b080e675bc5",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/81f7cd6d3b080e675bc5/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-multifile-v1-taskcompendium-20261112",
+      "input_dataset_revision": "5accbb5851dc5774a05424aa7d22f995cbfd7e34",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 4842,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/81f7cd6d3b080e675bc5/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-multifile-rebuilt-v1",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-nl2bash-rebuilt-v1": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/nl2bash-v1-rebuilt-taskcompendium-20261111",
+      "dataset_revision": "1be6be13a89ab3ef30c7390ca2f29d7b9eeb40dd",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/604f1178cf2f9eb44c52/2026.11.12.2/.artifact.json",
+      "measured_tasks": 1498,
+      "task_specs_sha256": "119a5be2ab6db0d7f26323b6101f1948f1dd7fbea292a59331f76b4e671b2d1b"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/604f1178cf2f9eb44c52",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/604f1178cf2f9eb44c52/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/nl2bash-v1-rebuilt-taskcompendium-20261111",
+      "input_dataset_revision": "1be6be13a89ab3ef30c7390ca2f29d7b9eeb40dd",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 1498,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/604f1178cf2f9eb44c52/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-nl2bash-rebuilt-v1",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-pymethods2test-large-v1-taskcompendium-20261112",
+      "dataset_revision": "a9ed5c72ade6670853fc28af8bf1b59541d3827c",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/dd8c2ac8fb642b3bba2d/2026.11.12.2/.artifact.json",
+      "measured_tasks": 4990,
+      "task_specs_sha256": "76c4556b6d1828dcfab4394ecd02fea79f81f6da4ca42ed3523097fb688b206d"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/dd8c2ac8fb642b3bba2d",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/dd8c2ac8fb642b3bba2d/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-pymethods2test-large-v1-taskcompendium-20261112",
+      "input_dataset_revision": "a9ed5c72ade6670853fc28af8bf1b59541d3827c",
+      "matched_evals": {},
+      "max_overlap": 0.18604651162790697,
+      "mean_max_overlap": 9.738575882491622e-05,
+      "measured_tasks": 4990,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/dd8c2ac8fb642b3bba2d/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-pymethods2test-rebuilt-v1": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-pymethods2test-v1-taskcompendium-20261112",
+      "dataset_revision": "f6a20442763e152ec662483dc0ee1476caa6d541",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/bd131ad6d9f923d1e092/2026.11.12.2/.artifact.json",
+      "measured_tasks": 500,
+      "task_specs_sha256": "790e46a96d5129421972e01aac626c134c195e5dbff34f6def7c7cde04f9e20f"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/bd131ad6d9f923d1e092",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/bd131ad6d9f923d1e092/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-pymethods2test-v1-taskcompendium-20261112",
+      "input_dataset_revision": "f6a20442763e152ec662483dc0ee1476caa6d541",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 500,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/bd131ad6d9f923d1e092/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-safety-qa": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-safety-taskcompendium-20261112",
+      "dataset_revision": "b4f15e07796b5bea1f311892583ecce129efe0fa",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/69345ab6e41aa0387666/2026.11.12.2/.artifact.json",
+      "measured_tasks": 44939,
+      "task_specs_sha256": "ca75430b0899a5dac18baa09abb27971c23f36d92edfd65261b5805857b88f3d"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/69345ab6e41aa0387666",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/69345ab6e41aa0387666/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-safety-taskcompendium-20261112",
+      "input_dataset_revision": "b4f15e07796b5bea1f311892583ecce129efe0fa",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 44939,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/69345ab6e41aa0387666/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-safety-qa",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-science-openqa-qa": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-science-openqa-taskcompendium-20261112",
+      "dataset_revision": "e3b624988578da13c523fcc3e39e65f752a781ff",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/c91b2152d941740d3f67/2026.11.12.2/.artifact.json",
+      "measured_tasks": 150644,
+      "task_specs_sha256": "50c95dcf347e7da06b6e3f8ef61c173a91706a8a5f5f85ad586e1c5fb5f319e3"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/c91b2152d941740d3f67",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/c91b2152d941740d3f67/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-science-openqa-taskcompendium-20261112",
+      "input_dataset_revision": "e3b624988578da13c523fcc3e39e65f752a781ff",
+      "matched_evals": {},
+      "max_overlap": 0.21052631578947367,
+      "mean_max_overlap": 2.1350828901289448e-06,
+      "measured_tasks": 150644,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/c91b2152d941740d3f67/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-science-openqa-qa",
+    "use": "train"
+  },
+  "TaskTrove:tasktrove-stack-pytest-rebuilt-v1": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/tasktrove-stack-pytest-v1-taskcompendium-20261112",
+      "dataset_revision": "f6909b5b5fe8d207fb442f24d4140556431d02a3",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/340ee131ebd169476b1a/2026.11.12.2/.artifact.json",
+      "measured_tasks": 492,
+      "task_specs_sha256": "08a61a2101edc2b26d4a55c281d0cc4251b2576b370455fae5cfed71c8bf4777"
+    },
+    "measurement": {
+      "contaminated_fraction": 0.0,
+      "contaminated_tasks": 0,
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "drop_set_uris": [
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/340ee131ebd169476b1a",
+        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+      ],
+      "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+      "eval_corpus_version": "aa-index-v4.1.1-v3",
+      "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/340ee131ebd169476b1a/measurement.json",
+      "feature_filter_version": 4,
+      "input_dataset_id": "open-athena/tasktrove-stack-pytest-v1-taskcompendium-20261112",
+      "input_dataset_revision": "f6909b5b5fe8d207fb442f24d4140556431d02a3",
+      "matched_evals": {},
+      "max_overlap": 0.0,
+      "mean_max_overlap": 0.0,
+      "measured_tasks": 492,
+      "min_matched_features": 2,
+      "ngram_length": 13,
+      "overlap_threshold": 0.5,
+      "p95_max_overlap": 0.0,
+      "receipt": null,
+      "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/340ee131ebd169476b1a/task_flags",
+      "text_renderer_version": "taskcompendium-format-conversation-v1",
+      "version": 1
+    },
+    "source_id": "TaskTrove:tasktrove-stack-pytest-rebuilt-v1",
+    "use": "train"
+  }
+}

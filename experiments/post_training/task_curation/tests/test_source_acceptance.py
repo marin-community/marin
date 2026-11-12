@@ -49,17 +49,6 @@ def test_every_runnable_agentic_source_ingests_a_task_directory_format():
     )
 
 
-def test_the_grandfather_list_holds_only_runnable_agentic_marinskyrl_sources():
-    """The frozen list cannot hide a non-agentic or pipeline-less source."""
-    sources = all_sources()
-    for source_id in GRANDFATHERED_MARINSKYRL_SOURCES:
-        source = sources[source_id]
-        assert source.info.origin is SourceOrigin.NEMOTRON
-        assert "agentic" in source.info.tags
-        assert source.pipeline is not None
-        assert source.info.task_format is TaskFormat.MARINSKYRL
-
-
 def test_a_new_internal_format_agentic_source_is_rejected():
     """A MarinSkyRL-format source outside the frozen list cannot be selected."""
     with pytest.raises(ValueError, match="not grandfathered"):

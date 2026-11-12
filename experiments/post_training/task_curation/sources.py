@@ -26,6 +26,7 @@ from experiments.post_training.task_curation.datasets.evalchemy import mmlu as e
 from experiments.post_training.task_curation.datasets.evalchemy import nupa as eval_nupa
 from experiments.post_training.task_curation.datasets.evalchemy import reasoning as eval_reasoning
 from experiments.post_training.task_curation.datasets.evalchemy import simpleqa as eval_simpleqa
+from experiments.post_training.task_curation.datasets.lexical_measurements import LEXICAL_MEASUREMENTS
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
 from experiments.post_training.task_curation.datasets.skyrl import code as skyrl_code
@@ -45,6 +46,8 @@ from experiments.post_training.task_curation.datasets.tasktrove import python_te
 from experiments.post_training.task_curation.datasets.tasktrove import qa as tasktrove_qa
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
+from experiments.post_training.task_curation.lexical_binding import bind_lexical_measurement
+from experiments.post_training.task_curation.lexical_policy import source_lexical_use
 from experiments.post_training.task_curation.source import RlDataSource, TaskFormat
 
 
@@ -87,6 +90,10 @@ def all_sources() -> dict[str, RlDataSource]:
         *native_releases.sources(),
     ]
     sources = [bind_actor_census(source, ACTOR_CENSUS_RECEIPTS.get(source.info.id)) for source in sources]
+    sources = [
+        bind_lexical_measurement(source, LEXICAL_MEASUREMENTS.get(source.info.id), source_lexical_use(source))
+        for source in sources
+    ]
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")
