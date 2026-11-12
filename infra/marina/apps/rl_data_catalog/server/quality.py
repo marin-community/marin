@@ -72,7 +72,10 @@ def result(
 
 def daytona(declaration: dict[str, Any], limit: int) -> dict[str, Any]:
     """``na`` for a source that provisions no agent machine, else its measured verdict."""
-    if "agentic" not in declaration.get("tags", []):
+    slots = declaration.get("daytona_machine_slots")
+    if slots == 0 and declaration.get("daytona_safety") != "unsafe":
+        return {"state": "na", "reason": "A complete census measured zero machine slots"}
+    if "agentic" not in declaration.get("tags", []) and slots is None:
         return {"state": "na", "reason": "Non-agentic tasks provision no sandbox"}
     count = declaration.get("daytona_snapshot_count")
     if count is None:

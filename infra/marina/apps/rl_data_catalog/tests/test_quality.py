@@ -68,3 +68,10 @@ def test_grader_only_host_image_execution_failure_is_unsafe_with_zero_snapshots(
     label = daytona(declaration, 10)
     assert label["state"] == "unsafe"
     assert label["snapshots"] == 0
+
+
+def test_measured_machine_slots_distinguish_no_machine_from_grader_only_failure():
+    no_machine = {"tags": ["agentic"], "daytona_snapshot_count": 0, "daytona_machine_slots": 0, "daytona_safety": "safe"}
+    grader_only = {**no_machine, "daytona_machine_slots": 12, "daytona_safety": "unsafe"}
+    assert daytona(no_machine, 10)["state"] == "na"
+    assert daytona(grader_only, 10)["state"] == "unsafe"

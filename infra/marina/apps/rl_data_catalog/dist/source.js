@@ -91,7 +91,9 @@ async function render(data, sourceId) {
     ['Top curriculum area', data.coverage?.top_area && `${data.coverage.top_area.name} (${number.format(data.coverage.top_area.instances)} placed tasks)`],
     ['Coverage basis', data.coverage?.basis], ['Coverage gap', data.coverage?.unavailable_reason],
     ['Daytona', data.daytona.state === 'na' || data.daytona.state === 'unmeasured' ? data.daytona.reason : `${data.daytona.state}: ${number.format(data.daytona.snapshots)} unique snapshots, limit ${data.daytona.limit}`],
-    ['Daytona basis', data.daytona.basis],
+    ['Daytona basis', data.daytona.basis || d.daytona_count_basis],
+    ['Daytona machine slots', d.daytona_machine_slots], ['Daytona roles', d.daytona_roles],
+    ['Daytona execution failures', d.daytona_execution_failures],
   ]));
   const capabilities = data.backend_capabilities;
   sections.push(card('Backend requirements and overlap', [

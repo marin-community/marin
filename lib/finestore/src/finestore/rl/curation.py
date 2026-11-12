@@ -91,6 +91,7 @@ class DaytonaSafety(StrEnum):
 
     SAFE = "safe"
     UNSAFE = "unsafe"
+    NOT_APPLICABLE = "not_applicable"
     UNASSESSED = "unassessed"
 
 
@@ -208,6 +209,13 @@ class SourceCoverage(CatalogRecord):
     unavailable_reason: str | None = None
 
 
+class DaytonaRoleMeasurement(CatalogRecord):
+    """Measured machine slots and execution failures for one role/backend pair."""
+
+    machine_slots: int = Field(ge=0)
+    failures: dict[str, int]
+
+
 class SourceDeclaration(CatalogRecord):
     id: str
     name: str
@@ -235,6 +243,9 @@ class SourceDeclaration(CatalogRecord):
     daytona_snapshot_count: int | None = None
     daytona_snapshot_threshold: int | None = None
     daytona_count_basis: str | None = None
+    daytona_execution_failures: int | None = Field(default=None, ge=0)
+    daytona_machine_slots: int | None = Field(default=None, ge=0)
+    daytona_roles: dict[str, dict[str, DaytonaRoleMeasurement]] | None = None
     # How execution was qualified when the source ships no oracle solutions.
     oracle_validation: OracleValidation | None = None
     # The weakest review behind the admission, with the pointers that establish it.

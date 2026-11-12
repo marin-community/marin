@@ -292,6 +292,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             daytona_safety=safety,
             daytona_snapshot_count=info.daytona_snapshot_count,
             daytona_count_basis=info.daytona_count_basis,
+            daytona_execution_failures=info.daytona_execution_failures,
             oracle_validation=info.oracle_validation,
             oversight=info.oversight.level if info.oversight else OversightLevel.NONE,
             oversight_evidence=info.oversight,

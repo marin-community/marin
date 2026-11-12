@@ -10,7 +10,9 @@ import enum
 
 import pyarrow as pa
 import pytest
+from finestore.reader import ReadView
 from finestore.schema import arrow_schema
+from finestore.store import DataStore
 from pydantic import BaseModel
 
 
@@ -66,3 +68,26 @@ def test_pa_schema_passes_through_unchanged():
 def test_unsupported_input_raises():
     with pytest.raises(TypeError):
         arrow_schema(42)
+
+
+class NestedMeasurements(BaseModel):
+    id: str
+    roles: dict[str, dict[str, dict[str, int]]]
+
+
+def test_nested_measurements_round_trip_as_dictionaries(tmp_path):
+    row = NestedMeasurements(
+        id="source",
+        roles={
+            "agent": {"daytona": {"machine_slots": 7, "execution_failures": 2}},
+            "grader": {"local": {"machine_slots": 7}},
+        },
+    )
+    with DataStore.open(str(tmp_path), writer_id="measurements") as store:
+        table = store.table("measurements", primary_key=("id",), schema=arrow_schema(NestedMeasurements))
+        table.append(row.model_dump())
+    view = ReadView(str(tmp_path))
+    point = NestedMeasurements.model_validate(view.point("measurements", id="source"))
+    streamed = [NestedMeasurements.model_validate(item) for item in view.iter_rows("measurements")]
+    assert point.roles["agent"]["daytona"]["execution_failures"] == 2
+    assert streamed == [row]
