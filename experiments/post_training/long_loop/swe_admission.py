@@ -63,7 +63,9 @@ def build_image(prepared: PreparedTask, output: Path) -> str:
         [
             "docker",
             "build",
-            "--quiet",
+            "--progress=plain",
+            "--iidfile",
+            str(directory / "image.id"),
             "--platform",
             "linux/amd64",
             "-f",
@@ -75,7 +77,7 @@ def build_image(prepared: PreparedTask, output: Path) -> str:
     )
     if completed.returncode:
         raise RuntimeError(f"Docker image build failed: {completed.stderr.decode(errors='replace')[-16000:]}")
-    image = completed.stdout.decode().strip()
+    image = (directory / "image.id").read_text().strip()
     write_json(directory / "image.json", {"context_sha256": digest, "image": image, "platform": "linux/amd64"})
     return image
 
