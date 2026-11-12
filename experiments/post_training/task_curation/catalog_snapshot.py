@@ -33,6 +33,7 @@ from finestore.rl.curation import (
     CurrentCatalog,
     JudgmentStatus,
     SnapshotSource,
+    SourceDeclaration,
     register_catalog,
     validate_items,
 )
@@ -313,7 +314,24 @@ def _refresh_snapshot(
                     where=[("snapshot_id", "==", pointer["snapshot_id"])],
                 )
             )
-            rows = [{**row, "snapshot_id": snapshot_id} for row in transform(prior)]
+            rows = []
+            for row in transform(prior):
+                declaration = {
+                    key: value
+                    for key, value in row["declaration"].items()
+                    if value is not None
+                    or SourceDeclaration.model_fields[key].is_required()
+                    or SourceDeclaration.model_fields[key].default is None
+                }
+                rows.append(
+                    SnapshotSource.model_validate(
+                        {
+                            **row,
+                            "snapshot_id": snapshot_id,
+                            "declaration": declaration,
+                        }
+                    ).model_dump(mode="json")
+                )
             snapshot = CatalogSnapshot(
                 snapshot_id=snapshot_id, created_at=datetime.now(UTC).isoformat(), source_count=len(rows)
             )

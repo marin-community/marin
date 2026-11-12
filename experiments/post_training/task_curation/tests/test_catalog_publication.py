@@ -8,9 +8,12 @@ import pytest
 from finestore.rl.curation import (
     ASSESSMENTS,
     ATTEMPTS,
+    CURRENT,
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
+    INVENTORY,
     ITEMS,
     POPULATIONS,
+    SNAPSHOTS,
     Assessment,
     AssessmentAttempt,
     AssessmentItem,
@@ -302,3 +305,33 @@ def test_publication_rejects_a_source_without_a_registered_converter(tmp_path):
     with pytest.raises(ValueError, match="no registered conversion pipeline"):
         publish_catalog(root, "invalid-source", [pointer])
     assert not (tmp_path / "production").exists()
+
+
+def test_retirement_materializes_legacy_missing_defaults_without_changing_archived_rows(tmp_path):
+    root = str(tmp_path / "production")
+    kept = number_source(tmp_path / "input", "kept")
+    retired = number_source(tmp_path / "input", "retired")
+    record_attempt(root, kept, "first", "2026-10-16T10:00:00Z", "kept-key", source_count=2)
+    record_attempt(root, retired, "first", "2026-10-16T10:00:00Z", "retired-key")
+    publish_catalog(root, "first", [kept, retired])
+    with DataStore.open(root) as store:
+        register_catalog(store)
+        records = [
+            store.read_view().point(INVENTORY, snapshot_id="first", id=source.info.id) for source in (kept, retired)
+        ]
+        records[0]["declaration"]["daytona_safety"] = None
+        records[0]["declaration"]["oversight"] = None
+        with store.transaction() as transaction:
+            transaction.table(INVENTORY).extend({**row, "snapshot_id": "legacy"} for row in records)
+            transaction.table(SNAPSHOTS).add(
+                {"snapshot_id": "legacy", "created_at": "2026-10-16T10:30:00Z", "source_count": 2}
+            )
+            transaction.table(CURRENT).add({"name": "latest", "snapshot_id": "legacy"})
+    retire_catalog_sources(root, "retired", frozenset({retired.info.id}))
+    (current,) = CurationCatalog(root).sources("retired")
+    assert current.declaration.daytona_safety is DaytonaSafety.UNASSESSED
+    assert current.declaration.oversight.value == "none"
+    assert current.declaration.daytona_snapshot_count is None
+    original = CurationCatalog(root).view.point(INVENTORY, snapshot_id="legacy", id=kept.info.id)
+    assert original["declaration"]["daytona_safety"] is None
+    assert original["declaration"]["oversight"] is None

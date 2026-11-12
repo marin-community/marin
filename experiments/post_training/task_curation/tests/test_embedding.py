@@ -28,7 +28,8 @@ from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.embedding import DescriptionEndpoint, curation_embedding_pipeline
 from experiments.post_training.task_curation.local import artifact_prefix
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import SourceInfo
+from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_source
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
 
@@ -203,9 +204,7 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
                     population="admitted",
                     sample_size=None,
                     seed=0,
-                    inventory=[
-                        RlDataSource(info=SourceInfo(id="source", title="Fixture", origin="fixture")).declaration
-                    ],
+                    inventory=[prebuilt_source(SourceInfo(id="source", title="Fixture", origin="fixture")).declaration],
                 )
             )
         first, second = stages
@@ -298,7 +297,7 @@ def test_driver_converts_embeds_and_resumes_without_rereading_raw_inputs(
     assert tasks[0]["matches"]["subjects"][0]["subject_id"] == "D01"
 
 
-def test_publication_adds_declared_inventory_sources_without_placement(tmp_path, description_server):
+def test_publication_includes_registered_sources_without_placement(tmp_path, description_server):
     curated = tmp_path / "curated"
     (curated / "final").mkdir(parents=True)
     (curated / "manifest.json").write_text(json.dumps({"intended_use": "train", "revision": "fixture-1"}))
@@ -342,25 +341,25 @@ def test_publication_adds_declared_inventory_sources_without_placement(tmp_path,
             sample_size=None,
             seed=0,
             inventory=[
-                RlDataSource(info=SourceInfo(id="source", title="Fixture", origin="fixture")).declaration,
-                RlDataSource(
-                    info=SourceInfo(id="Pointer:release", title="Pointer", origin="fixture", count=7)
+                prebuilt_source(SourceInfo(id="source", title="Fixture", origin="fixture")).declaration,
+                prebuilt_source(
+                    SourceInfo(id="Registered:release", title="Registered", origin="fixture", count=7)
                 ).declaration,
-                RlDataSource(info=SourceInfo(id="Pointer:no-count", title="NoCount", origin="fixture")).declaration,
+                prebuilt_source(SourceInfo(id="Registered:no-count", title="NoCount", origin="fixture")).declaration,
             ],
         )
         built = run(stages.publication, max_concurrent=1)[0]
     release = json.loads((Path(built.path) / "release.json").read_text())
     rows = {row["source_id"]: row for row in release["sources"]}
     assert rows["source"]["basis"] == "matched"
-    assert rows["Pointer:release"]["basis"] == "declared"
-    assert rows["Pointer:release"]["task_count"] == 7
-    assert rows["Pointer:release"]["intended_use"] is None
-    assert "Pointer:no-count" not in rows
+    assert rows["Registered:release"]["basis"] == "declared"
+    assert rows["Registered:release"]["task_count"] == 7
+    assert rows["Registered:release"]["intended_use"] is None
+    assert "Registered:no-count" not in rows
     assert release["task_count"] == 1
 
 
-def test_corpus_resume_refreshes_inventory_and_declares_pointer_sources(tmp_path, monkeypatch, description_server):
+def test_corpus_resume_refreshes_registered_sources(tmp_path, monkeypatch, description_server):
     monkeypatch.setattr(
         "experiments.post_training.task_curation.driver.load_harrier",
         lambda config: EmbeddingEndpoint(str(tmp_path / "embeddings.jsonl"), config.dimensions),
@@ -417,4 +416,5 @@ def test_corpus_resume_refreshes_inventory_and_declares_pointer_sources(tmp_path
     assert sources["MarinSkyRL:aime24"]["basis"] == "matched"
     declared = [row for row in sources.values() if row["basis"] == "declared"]
     assert declared and all(row["task_count"] > 0 and row["intended_use"] is None for row in declared)
-    assert any(row["source_id"] == "Campaign Release:smartie-calibforge-admitted" for row in declared)
+    retired = json.loads((Path(__file__).parents[1] / "retired-inventory-only.json").read_text())
+    assert {row["id"] for row in retired["entries"]}.isdisjoint(sources)

@@ -21,7 +21,24 @@ from taskcompendium.models import (
     TextMessage,
 )
 
+from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_prebuilt
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+
 IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
+
+
+def prebuilt_source(info: SourceInfo) -> RlDataSource[PrebuiltCohort]:
+    return RlDataSource(
+        info=info,
+        config=PrebuiltCohort(
+            name=info.id.rsplit(":", 1)[-1],
+            version="fixture-1",
+            repo="fixture/tasks",
+            revision="pin",
+            expected_rows=info.count if info.count is not None else 1,
+        ),
+        pipeline=import_taskcompendium_prebuilt,
+    )
 
 
 def prebuilt_task(task_id: str, *, image: str | None = IMAGE, capabilities: tuple[str, ...] = ()) -> dict:
