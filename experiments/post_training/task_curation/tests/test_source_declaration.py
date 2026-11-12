@@ -74,5 +74,11 @@ def test_quick_curation_cannot_admit_tasks():
         "unprocessed_rows": None,
         "verification": None,
     }
-    with pytest.raises(ValueError, match="QUICK curation cannot carry admitted tasks"):
+    # The rule is the admissions, not the mode: QUICK with no admissions and
+    # FULL with admissions are both valid summaries.
+    with pytest.raises(ValueError, match="cannot carry admitted tasks"):
         CurationSummary(mode=CurationMode.QUICK, admission_counts=AdmissionCounts(admitted=1), **summary)
+    quick = CurationSummary(mode=CurationMode.QUICK, admission_counts=AdmissionCounts(), **summary)
+    assert quick.mode is CurationMode.QUICK
+    full = CurationSummary(mode=CurationMode.FULL, admission_counts=AdmissionCounts(admitted=1), **summary)
+    assert full.admission_counts.admitted == 1

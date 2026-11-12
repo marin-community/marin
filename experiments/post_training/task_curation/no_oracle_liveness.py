@@ -32,6 +32,7 @@ import random
 import tempfile
 from collections import defaultdict
 from dataclasses import asdict, dataclass, replace
+from enum import StrEnum
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -51,6 +52,19 @@ VERIFIER_TIMEOUT = 900.0
 UNKNOWN_BASE = "<unknown>"
 """The base bucket for tasks whose rebuild manifest names no base."""
 
+
+class LivenessOutcome(StrEnum):
+    """Why one sampled verifier run qualified or did not."""
+
+    INFRA_ERROR = "infra_error"
+    TIMEOUT = "timeout"
+    VERIFIER_ERROR = "verifier_error"
+    MISSING_REWARD = "missing_reward"
+    UNVERIFIED_EXECUTION = "unverified_execution"
+    NEGATIVE_VERDICT = "negative_verdict"
+    POSITIVE_REWARD = "positive_reward"
+
+
 DETAIL_LIMIT = 500
 """Characters of a provider error kept for a report; the rest is truncation noise."""
 
@@ -59,7 +73,7 @@ DETAIL_LIMIT = 500
 class LivenessResult:
     task_id: str
     base: str
-    outcome: str
+    outcome: LivenessOutcome
     exit_code: int | None
     reward: float | None
     snapshot: str
@@ -68,7 +82,7 @@ class LivenessResult:
 
     @property
     def passed(self) -> bool:
-        return self.outcome == "negative_verdict"
+        return self.outcome == LivenessOutcome.NEGATIVE_VERDICT
 
 
 def load_specs(path: Path) -> dict[str, LoweredSpec]:
@@ -87,7 +101,7 @@ def manifest_bases(path: Path) -> dict[str, str]:
     return {row["task_id"]: row["base_ref"] for row in manifest["tasks"] if row.get("status", "").startswith("rebuilt")}
 
 
-def sample_by_base(specs: dict[str, dict], bases: dict[str, str], per_base: int, seed: int = 0) -> list[str]:
+def sample_by_base(specs: dict[str, LoweredSpec], bases: dict[str, str], per_base: int, seed: int = 0) -> list[str]:
     grouped: dict[str, list[str]] = defaultdict(list)
     for task_id in sorted(specs):
         grouped[bases.get(task_id, UNKNOWN_BASE)].append(task_id)
@@ -105,22 +119,30 @@ async def run_one(spec: LoweredSpec, base: str, cgroup_parent: Path | None = Non
         runtime = _verifier_runtime(spec)
         grader = task.grader
         if not isinstance(grader, ScriptGrader | VerifyitGrader) or grader.environment is None:
-            return LivenessResult(task.id, base, "infra_error", None, None, "", "Grader declares no sandbox environment")
+            return LivenessResult(
+                task.id, base, LivenessOutcome.INFRA_ERROR, None, None, "", "Grader declares no sandbox environment"
+            )
         requirements = grader.environment
         if runtime.gpus:
             return LivenessResult(
-                task.id, base, "infra_error", None, None, "", "CPU qualification cannot provision GPUs"
+                task.id, base, LivenessOutcome.INFRA_ERROR, None, None, "", "CPU qualification cannot provision GPUs"
             )
         if runtime.user is not None:
             return LivenessResult(
-                task.id, base, "infra_error", None, None, "", "Explicit runtime users require rollout execution"
+                task.id,
+                base,
+                LivenessOutcome.INFRA_ERROR,
+                None,
+                None,
+                "",
+                "Explicit runtime users require rollout execution",
             )
         placement = _grader_placement(requirements, runtime, Path(context), cgroup_parent)
         spec_machine = replace(placement.machine, startup_timeout=runtime.startup_timeout)
         try:
             result = await grade_empty_in_sandbox(task, placement.factory, spec_machine, timeout=VERIFIER_TIMEOUT)
         except TimeoutError as error:
-            return LivenessResult(task.id, base, "timeout", None, None, placement.snapshot, str(error))
+            return LivenessResult(task.id, base, LivenessOutcome.TIMEOUT, None, None, placement.snapshot, str(error))
         except Exception as error:
             # One task's failure must not end the cohort run; the traceback separates
             # programming errors from sandbox failures in the run log.
@@ -208,18 +230,18 @@ def classify_result(task_id: str, base: str, snapshot: str, result: GradeResult)
     if not isinstance(tests_executed, int) or tests_executed < 0:
         tests_executed = 0
     if result.status is not Outcome.GRADED or exit_code != 0:
-        outcome = "verifier_error"
+        outcome = LivenessOutcome.VERIFIER_ERROR
     elif result.reward is None:
-        outcome = "missing_reward"
+        outcome = LivenessOutcome.MISSING_REWARD
     elif tests_executed == 0:
-        outcome = "unverified_execution"
+        outcome = LivenessOutcome.UNVERIFIED_EXECUTION
     else:
-        outcome = "negative_verdict" if result.reward < 1.0 else "positive_reward"
+        outcome = LivenessOutcome.NEGATIVE_VERDICT if result.reward < 1.0 else LivenessOutcome.POSITIVE_REWARD
     return LivenessResult(task_id, base, outcome, exit_code, result.reward, snapshot, detail, tests_executed)
 
 
 async def run(
-    specs: dict[str, dict],
+    specs: dict[str, LoweredSpec],
     bases: dict[str, str],
     task_ids: list[str],
     output: Path,

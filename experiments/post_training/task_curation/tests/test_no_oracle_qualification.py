@@ -9,20 +9,22 @@ import tarfile
 
 import pytest
 
-from experiments.post_training.task_curation.no_oracle_qualification import (
+from experiments.post_training.task_curation.no_oracle_preservation import (
     FileExpectation,
     PreservationResult,
-    QualificationReport,
-    SetupExecution,
-    VerifierResult,
     _compare_workspace,
     _manifest,
     check_preservation,
     copied_destinations,
     copied_paths,
-    summarize,
     workspace_expectations,
 )
+from experiments.post_training.task_curation.no_oracle_qualification import (
+    QualificationReport,
+    VerifierResult,
+    summarize,
+)
+from experiments.post_training.task_curation.no_oracle_setup import SetupExecution
 
 
 def _tar(members: dict[str, tuple[bytes, int]], gz: bool = True) -> bytes:

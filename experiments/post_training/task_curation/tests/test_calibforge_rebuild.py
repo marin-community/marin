@@ -30,13 +30,7 @@ def native_task(dockerfile: str, files: dict[str, bytes] | None = None) -> bytes
     members["task.toml"] = b'[task]\nid = "fixture"\n\n[environment]\nworkdir = "/app"\n'
     for name, content in (files or {"data/input.csv": b"a,b\n1,2\n"}).items():
         members[f"environment/{name}"] = content
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w") as archive:
-        for name, content in members.items():
-            info = tarfile.TarInfo(name)
-            info.size = len(content)
-            archive.addfile(info, io.BytesIO(content))
-    return gzip.compress(buffer.getvalue(), mtime=0)
+    return native_task_bytes(members)
 
 
 def unpack(task_binary: bytes) -> dict[str, bytes]:
@@ -103,7 +97,7 @@ def test_a_task_declaring_more_than_the_normalized_shape_defers():
 
 
 def native_task_bytes(members: dict[str, bytes]) -> bytes:
-    """Pack tar members without gzip, as ``native_task``'s builder does."""
+    """Pack tar members deterministically and gzip them."""
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
         for name, content in members.items():
