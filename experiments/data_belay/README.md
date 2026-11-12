@@ -50,9 +50,11 @@ checkpoints. It writes one JSON per run under `data_belay/choice/` in
 the training cluster's `MARIN_PREFIX` (`s3://marin-us-east-02a/marin/data_belay/choice/`), outside the TTL root, and
 `report` reads it from there.
 
-`check` refuses a license that is not on the allowlist (NC and ND licenses, `other`, a missing license, or a second
-license that is not on the list) and a share that reads the dataset more than 4 times at the largest rung. It sizes
-the head commit only, because the row count comes from the datasets-server, which sizes the head.
+`check` allows the licenses on the Blue Oak Council's [list of permissive licenses](https://blueoakcouncil.org/list)
+(every rating, version 16) and OpenMDW. It rejects NC and ND licenses, and refuses any other license for a person to
+review: a data license such as CC BY, CC BY-SA or ODC-By, which the list does not cover, `other`, a missing license,
+or a second license that is not on the list. It also refuses a share that reads the dataset more than 4 times at the
+largest rung. It sizes the head commit only, because the row count comes from the datasets-server, which sizes the head.
 `prepare` checks the epochs again on the cache it built, and writes the manifest that `train` reads only when they
 pass. `prepare-datakit` records the licenses on the sources' Hugging Face cards and does not refuse one off the
 allowlist, since the Datakit registry has already admitted the sources.
