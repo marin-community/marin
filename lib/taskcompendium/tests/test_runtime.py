@@ -122,6 +122,25 @@ def finished(task: TaskSpec) -> ConversationTrace:
     return ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
 
 
+async def staged_commands(machine, command):
+    """Let boundary fakes execute the same short-circuit staging sequence as the shell."""
+    if (
+        len(command.argv) < 4
+        or command.argv[:2] != ("sh", "-c")
+        or command.argv[3] not in {"grading-inputs", "resources"}
+    ):
+        return None
+    _, _, script, _, archive, root, *workspace = command.argv
+    commands = [("tar", "-xf", archive, "-C", root), ("rm", "-f", archive)]
+    if 'mkdir -p "$3"' in script:
+        commands.append(("mkdir", "-p", workspace[0]))
+    for argv in commands:
+        result = await machine.run(replace(command, argv=argv))
+        if result.exit_code != 0:
+            return result
+    return result
+
+
 @dataclass
 class FileMachine:
     """External machine boundary with uploaded files and bounded capture reads."""
@@ -130,6 +149,8 @@ class FileMachine:
     closed: bool = False
 
     async def run(self, command: Command):
+        if (result := await staged_commands(self, command)) is not None:
+            return result
         if command.argv[0] == "mkdir":
             return EXITED
         if command.argv[0] == "tar":
@@ -269,6 +290,8 @@ class LocalGradingMachine:
         self.closed = True
 
     async def run(self, command: Command):
+        if (result := await staged_commands(self, command)) is not None:
+            return result
         program = command.argv[0]
         if command.argv[:2] == ("rm", "-f"):
             if self.remove_exit_code and STAGING_ARCHIVE in command.argv:

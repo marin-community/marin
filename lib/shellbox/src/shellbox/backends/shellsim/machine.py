@@ -30,7 +30,10 @@ from shellbox.machine import (
     CommandSemantics,
     ExecutionRequirements,
     ExitReason,
+    MachineOutputLimitExceeded,
+    MachineResourceExhausted,
     MachineSpec,
+    MachineTerminated,
     NetworkPolicy,
     PackageSpec,
     Result,
@@ -112,7 +115,7 @@ class ShellSimShellSession:
             action.cancellation.cancel()
             deadline = asyncio.get_running_loop().time() + INTERRUPT_GRACE
             if not await self.machine._drain_worker(action.worker, deadline):
-                raise RuntimeError("ShellSim did not stop after interruption; machine is closed")
+                raise MachineTerminated("ShellSim did not stop after interruption; machine is closed")
 
     async def close(self) -> None:
         await self.interrupt()
@@ -151,10 +154,10 @@ class ShellSimMachine:
     async def _operation(self) -> AsyncIterator[None]:
         """Reject closed machines before queueing and recheck after acquiring the worker lock."""
         if self._closed:
-            raise RuntimeError("Machine is closed")
+            raise MachineTerminated("Machine is closed")
         async with self._lock:
             if self._closed:
-                raise RuntimeError("Machine is closed")
+                raise MachineTerminated("Machine is closed")
             yield
 
     async def _drain_worker[T](self, worker: asyncio.Task[T], deadline: float) -> bool:
@@ -213,14 +216,19 @@ class ShellSimMachine:
         try:
             result = await self._await_worker(worker, cancellation)
             if self.simulation.terminated:
-                raise RuntimeError(f"ShellSim terminated: {result.stop_reason}")
+                kind = (
+                    MachineOutputLimitExceeded
+                    if result.stop_reason == "output_limit_exceeded"
+                    else MachineResourceExhausted
+                )
+                raise kind(f"ShellSim terminated: {result.stop_reason}")
             return result
         finally:
             self._active = None
 
     async def open_shell(self) -> ShellSimShellSession:
         if self._closed:
-            raise RuntimeError("Machine is closed")
+            raise MachineTerminated("Machine is closed")
         return self._shell
 
     async def run(self, command: Command) -> Result:

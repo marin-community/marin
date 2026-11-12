@@ -5,12 +5,12 @@
 
 import asyncio
 import os
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import replace
 from typing import Any
 
-from shellbox.machine import Machine, MachineFactory
+from shellbox.machine import Machine, MachineFactory, MachineSpec
 from taskcompendium.chat import chat_conversation
 from taskcompendium.grading import grade_answer, grade_remote_judge_answer
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -67,8 +67,9 @@ async def _grade_rollout(
     resources: AsyncExitStack,
     *,
     stop_reason: str,
+    verifier: Callable[[MachineSpec], Awaitable[Machine]] | None = None,
 ) -> GradeResult:
-    """Grade in process, through the judge service, or in a fresh verifier machine that the attempt owns.
+    """Grade in process, through the judge service, or in a supplied or attempt-owned verifier.
 
     ``outputs`` holds the task's ``output_paths`` that the engine captured after the harness ended.
     """
@@ -89,7 +90,7 @@ async def _grade_rollout(
     return await grade_in_sandbox(
         task,
         attempt,
-        _AttemptMachineFactory(selection, factories, cleanup, resources),
+        _AttemptMachineFactory(selection, factories, cleanup, resources, verifier),
         _machine_spec(grader.environment, selection),
         task_machine=machine,
         timeout=spec.limits.verifier_timeout,

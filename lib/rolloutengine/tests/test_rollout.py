@@ -460,6 +460,35 @@ async def test_deadline_during_grading_keeps_captured_outputs(deadline):
     assert caught.value.rollout.outputs == {"/workspace/report.txt": b"ready\n"}
 
 
+# Pilot l: confirmed leaf or parent links are submission failures, not infrastructure loss.
+@pytest.mark.parametrize("parent_link", [False, True])
+async def test_linked_output_is_a_zero_grade_without_restart(parent_link):
+    command = (
+        "mkdir -p /workspace/real; echo answer > /workspace/real/report; ln -s /workspace/real /workspace/out"
+        if parent_link
+        else "mkdir -p /workspace/out; echo answer > /workspace/real; ln -s /workspace/real /workspace/out/report"
+    )
+    factory = RecordingShellSimFactory()
+    record = await engine(
+        ReplayModel([{"role": "assistant", "content": "ready"}]),
+        {"local": factory},
+        harnesses={"fixture": StepHarness(lambda context: OutputWritingEpisode(context, command))},
+    ).run_task(
+        rollout_spec(
+            report_task(output_paths=("/workspace/out/report",)),
+            machine=machine_runtime(),
+            verifier_machine=machine_runtime(),
+            harness="fixture",
+        )
+    )
+    assert (record.grade.status, record.grade.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+    assert "link" in record.grade.error and "/workspace/out/report" in record.grade.error
+    assert record.rollout.outputs == {}
+    assert len(factory.machines) == 1
+    with pytest.raises(RuntimeError):
+        await factory.machines[0].run(Command(("true",)))
+
+
 async def test_output_capture_over_the_file_budget_interrupts_grading():
     command = f"mkdir -p /workspace/out && cd /workspace/out && touch $(seq {MAX_OUTPUT_FILES + 1})"
     factory = RecordingShellSimFactory()
@@ -3812,3 +3841,44 @@ async def test_context_rejection_allows_a_shorter_request_without_ending_the_att
     assert len(replay.requests) == 2
     assert len(result.rollout.conversations) == (2 if compact else 1)
     assert all("Oversized tool output" not in str(record.messages) for record in result.rollout.conversations)
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_supplied_verifier_remains_caller_owned(fails):
+    task = file_task()
+    model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done"}])
+    factory = RecordingShellSimFactory()
+    borrowed = []
+
+    async def acquire(prepared):
+        assert prepared.workdir == "/workspace"
+        assert prepared.env["TASKCOMPENDIUM_STOP_REASON"] == "stop"
+        machine = await FixtureImageFactory().create(prepared)
+        borrowed.append(machine)
+        if fails:
+
+            async def fail(command):
+                raise RuntimeError("borrowed verifier interrupted")
+
+            machine.run = fail
+        return machine
+
+    runner = engine(model, {"local": factory}).engine
+    spec = rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    try:
+        if fails:
+            with pytest.raises(GradedRolloutInterrupted):
+                await runner.run_task(spec, model.complete, verifier=acquire)
+        else:
+            assert (await runner.run_task(spec, model.complete, verifier=acquire)).grade.reward == 1
+        assert len(factory.machines) == len(borrowed) == 1
+        with pytest.raises(RuntimeError):
+            await factory.machines[0].run(Command(("true",)))
+        # Unlike the task machine, the supplied verifier still accepts file operations.
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "proof"
+            source.write_text("caller owns cleanup")
+            await borrowed[0].upload(source, "/tmp/proof")
+    finally:
+        for machine in borrowed:
+            await machine.close()

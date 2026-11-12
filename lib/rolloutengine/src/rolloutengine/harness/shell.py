@@ -48,6 +48,7 @@ from rolloutengine.models import (
     ToolCallCompleted,
     Transition,
 )
+from rolloutengine.validation import InvalidTaskSpec, check_grader
 
 UNKNOWN_TOOL_ERROR = "Unknown tool"
 DEFAULT_SHELL_TOOL = ShellToolConfig()
@@ -192,7 +193,13 @@ class ShellHarness:
             raise ValueError(f"The output limit must be a positive number of bytes: {self.output_limit_bytes!r}")
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
-        shell_tool = resolve_shell_tool(task, self.shell_tool)
+        check_grader(task.grader)
+        try:
+            shell_tool = resolve_shell_tool(task, self.shell_tool)
+            if task.answer_type in CONVERSATION_ANSWERS:
+                require_submission_compatibility(task)
+        except ValueError as error:
+            raise InvalidTaskSpec(str(error)) from error
         turn_limit = limits.tool_turn_timeout
         if self.command_timeout is not None and turn_limit is not None and self.command_timeout >= turn_limit:
             raise ValueError("The command timeout must be less than the tool-turn timeout")

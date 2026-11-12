@@ -7,9 +7,9 @@ from collections.abc import Mapping
 from pathlib import PurePosixPath
 
 from shellbox.machine import Machine
-from shellbox.transfer import download_files
+from shellbox.transfer import LinkedDownloadPath, download_files
 
-from taskcompendium.models import normalized_absolute_path, validate_output_paths
+from taskcompendium.models import SubmissionFailure, normalized_absolute_path, validate_output_paths
 
 MAX_OUTPUT_FILES = 1024
 MAX_OUTPUT_BYTES = 16 * 1024 * 1024
@@ -39,14 +39,17 @@ async def captured_output_files(
 ) -> dict[str, bytes]:
     """Capture declared output files and directories without private grading resources."""
     validate_output_paths(paths)
-    files = await download_files(
-        machine,
-        paths,
-        timeout=timeout,
-        max_files=MAX_OUTPUT_FILES,
-        max_bytes=MAX_OUTPUT_BYTES,
-        max_file_bytes=limit_bytes,
-    )
+    try:
+        files = await download_files(
+            machine,
+            paths,
+            timeout=timeout,
+            max_files=MAX_OUTPUT_FILES,
+            max_bytes=MAX_OUTPUT_BYTES,
+            max_file_bytes=limit_bytes,
+        )
+    except LinkedDownloadPath as error:
+        raise SubmissionFailure(str(error)) from error
     selected = selected_output_files(paths, files)
     if selected != files:
         raise ValueError("Downloaded files fall outside the declared output paths")

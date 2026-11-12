@@ -10,6 +10,7 @@ from typing import ClassVar, Protocol, runtime_checkable
 
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage
 
+DEFAULT_WORKDIR = "/workspace"
 DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES = 1_048_576
 
 
@@ -150,7 +151,7 @@ class MachineSpec:
     """
 
     source: QemuBundle | DockerImage | PreparedImage | RegistryImage | DockerfileSource | PackageSpec | HostImage
-    workdir: str = "/workspace"
+    workdir: str = DEFAULT_WORKDIR
     env: dict[str, str] = field(default_factory=dict)
     network: NetworkPolicy = NetworkPolicy.DENY
     memory_mb: int | None = None
@@ -219,6 +220,26 @@ class MachineTerminated(RuntimeError):
     """The machine ended before ``close``: killed, expired, preempted, or lost with its host."""
 
 
+class MachineUnavailable(ConnectionError):
+    """The machine controller remained unavailable through its bounded retry budget."""
+
+
+class MachineCancelled(RuntimeError):
+    """The machine or its owning job was cancelled before the operation completed."""
+
+
+class MachineResourceExhausted(MachineTerminated):
+    """The machine exhausted its resource budget; recreating it cannot repair the task."""
+
+
+class MachineOutputLimitExceeded(MachineResourceExhausted):
+    """The machine exhausted its cumulative output budget."""
+
+
+class ExecSetupFailed(RuntimeError):
+    """Transport setup failed before the command was sent, so retry is safe."""
+
+
 class Machine(Protocol):
     """One writable task environment. Files persist until close."""
 
@@ -229,6 +250,24 @@ class Machine(Protocol):
     async def download(self, source: str, target: Path) -> None: ...
 
     async def close(self) -> None: ...
+
+
+@runtime_checkable
+class ResettableMachine(Protocol):
+    """Optional exclusive reset of task files and processes, preserving the runtime.
+
+    Call before the first use to establish the baseline, then between uses. Machines
+    without this capability must be closed and recreated. Reset failure requires replacement.
+    """
+
+    async def reset(self) -> None: ...
+
+
+@runtime_checkable
+class FileReader(Protocol):
+    """Optional byte-range reads that reject directories without downloading them."""
+
+    async def read_file(self, path: str, *, offset: int = 0, limit: int | None = None) -> bytes: ...
 
 
 class MachineFactory(Protocol):
