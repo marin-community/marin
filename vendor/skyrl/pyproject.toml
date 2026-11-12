@@ -184,7 +184,8 @@ no-build-isolation-package = [
 override-dependencies = [
     # Published dependency floors do not apply to the checkout's development version.
     "marin-rigging[secrets,prometheus]",
-    # Megatron Bridge declares this native extension but does not import or use it.
+    # This profile uses Core checkpointing and no Hadamard transforms.
+    # Bridge's NVRx training entry points are not included.
     "fast-hadamard-transform ; sys_platform == 'never'",
     "nvidia-resiliency-ext ; sys_platform == 'never'",
     "fsspec==2026.4.0",

@@ -490,6 +490,7 @@ class GrugColumnParallelGroupedLinear(TEColumnParallelGroupedLinear):
             or torch.cuda.get_device_capability(x.device)[0] < 10
             or self.config.fp8
             or self.config.fp4
+            or self.te_quant_params is not None
             or self.single_grouped_weight
         ):
             return super().forward(x, m_splits)
