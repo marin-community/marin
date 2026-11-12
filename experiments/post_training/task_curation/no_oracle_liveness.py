@@ -176,7 +176,7 @@ async def run_one(
         return LivenessResult(
             task.id, base, "infra_error", None, None, snapshot, f"{type(error).__name__}: {error}"[:500]
         )
-    if result.status is not Outcome.SUCCESS:
+    if result.status is not Outcome.GRADED:
         return LivenessResult(
             task.id, base, "infra_error", None, result.reward, snapshot, (result.error or str(result.status))[:300]
         )
