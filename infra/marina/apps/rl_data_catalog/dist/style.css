@@ -210,3 +210,7 @@ a.secondary:hover { text-decoration: none; }
   .filters > label { white-space: normal; }
   .notes { grid-template-columns: 1fr; gap: 0; }
 }
+.duplicate-toggle { display: block; padding: 6px 0 0; font-size: 11px; }
+.duplicate-member td { background: #fafcfa; }
+.duplicate-member td:first-child { padding-left: 34px; border-left: 3px solid #d8e6dc; }
+.duplicate-note { color: #6b7f72; }
