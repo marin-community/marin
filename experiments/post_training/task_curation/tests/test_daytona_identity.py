@@ -17,7 +17,7 @@ from daytona import Resources
 from shellbox.backends.daytona.machine import snapshot_identity
 from shellbox.image import DockerfileSource, RegistryImage
 
-from experiments.post_training.task_curation.calibforge_rebuild import LoweredSpec
+from experiments.post_training.task_curation.calibforge_envelope import LoweredSpec
 from experiments.post_training.task_curation.daytona_identity import (
     count_lowered_spec_identities,
     count_registry_identities,

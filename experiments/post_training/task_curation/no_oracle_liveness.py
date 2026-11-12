@@ -43,7 +43,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements, ScriptGrader, VerifyitGrader
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 
-from experiments.post_training.task_curation.calibforge_rebuild import LoweredSpec
+from experiments.post_training.task_curation.calibforge_envelope import LoweredSpec
 
 logger = logging.getLogger(__name__)
 

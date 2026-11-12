@@ -21,8 +21,7 @@ import re
 import shlex
 import tarfile
 import tomllib
-from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 import pyarrow as pa
@@ -48,6 +47,7 @@ from taskcompendium.models import (
 )
 from tomlkit.items import Table
 
+from experiments.post_training.task_curation.calibforge_envelope import LoweredSpec, MachineShape
 from experiments.post_training.task_curation.calibforge_fixtures import (
     FIXTURE_ARCHIVE,
     SETUP_ROOT,
@@ -69,25 +69,6 @@ REBUILT = "rebuilt_pending_oracle_and_admission"
 DEFERRED = "deferred"
 EXCLUDED_DECONTAMINATION = "excluded_decontamination"
 EXCLUDED_SETUP_FAILURE = "excluded_setup_failure"
-
-
-@dataclass(frozen=True)
-class MachineShape:
-    """The cpus, memory, storage and gpu count a runtime declares for one machine."""
-
-    cpus: int | None = None
-    memory_mb: int | None = None
-    storage_mb: int | None = None
-    gpus: int = 0
-
-    @classmethod
-    def from_mapping(cls, shape: Mapping) -> "MachineShape":
-        return cls(
-            cpus=shape.get("cpus"),
-            memory_mb=shape.get("memory_mb"),
-            storage_mb=shape.get("storage_mb"),
-            gpus=shape.get("gpus", 0),
-        )
 
 
 NORMALIZED_CPUS = 2
@@ -481,34 +462,6 @@ def setup_script_name(command: str) -> str:
     return command.split()[-1].rsplit("/", 1)[-1]
 
 
-@dataclass(frozen=True)
-class LoweredSpec:
-    """One lowered task envelope: its validated TaskSpec and runtime machine shapes."""
-
-    task: TaskSpec
-    task_machine: MachineShape
-    verifier_machine: MachineShape
-
-    @classmethod
-    def from_document(cls, document: dict) -> "LoweredSpec":
-        runtime = document.get("runtime") or {}
-        return cls(
-            TaskSpec.model_validate(document.get("task") or {}),
-            MachineShape.from_mapping(runtime.get("task_machine") or {}),
-            MachineShape.from_mapping(runtime.get("verifier_machine") or {}),
-        )
-
-    def envelope(self) -> dict:
-        """The JSON envelope the rollout runtime and the measurement code consume."""
-        return {
-            "task": self.task.model_dump(mode="json"),
-            "runtime": {
-                "task_machine": asdict(self.task_machine),
-                "verifier_machine": asdict(self.verifier_machine),
-            },
-        }
-
-
 def lowered_task_spec(task_id: str, task_binary: bytes) -> LoweredSpec:
     """Lower a rebuilt task into the rollout envelope preserving its workspace, setup and verifier."""
     with open_task_tar(task_binary) as archive:
@@ -566,56 +519,90 @@ class _RebuildOutcome:
     base_refs: list[str]
 
 
+@dataclass(frozen=True)
+class TaskEvidence:
+    """One cohort task's rebuild outcome, as the evidence manifest records it."""
+
+    task_id: str
+    status: str
+    source_archive_sha256: str | None = None
+    reason: str | None = None
+    base_ref: str | None = None
+    workdir: str | None = None
+    payload_sha256: str | None = None
+    setup_sha256: str | None = None
+    archive_sha256: str | None = None
+
+    def to_dict(self) -> dict:
+        """The manifest row: only the fields this task's status carries."""
+        if self.status in (EXCLUDED_DECONTAMINATION,):
+            return {"task_id": self.task_id, "status": self.status}
+        if self.status in (EXCLUDED_SETUP_FAILURE, DEFERRED):
+            return {"task_id": self.task_id, "status": self.status, "reason": self.reason}
+        return {
+            "task_id": self.task_id,
+            "status": self.status,
+            "source_archive_sha256": self.source_archive_sha256,
+            "base_ref": self.base_ref,
+            "workdir": self.workdir,
+            "payload_sha256": self.payload_sha256,
+            "setup_sha256": self.setup_sha256,
+            "archive_sha256": self.archive_sha256,
+        }
+
+
 def _rebuild_cohort(cohort: Path, excluded: set[str]) -> _RebuildOutcome:
     """Rebuild each unexcluded task, staging its payload and lowered spec."""
     records: list[dict] = []
     lowered: list[dict] = []
-    evidence: list[dict] = []
+    evidence: list[TaskEvidence] = []
     base_refs: list[str] = []
     for batch in pq.ParquetFile(cohort).iter_batches(batch_size=64, columns=["path", "task_binary"]):
         for path, blob in zip(batch.to_pydict()["path"], batch.to_pydict()["task_binary"], strict=True):
             raw = bytes(blob)
             if path in excluded:
-                evidence.append({"task_id": path, "status": EXCLUDED_DECONTAMINATION})
+                evidence.append(TaskEvidence(task_id=path, status=EXCLUDED_DECONTAMINATION))
                 continue
             if path in SETUP_FAILURES:
-                evidence.append({"task_id": path, "status": EXCLUDED_SETUP_FAILURE, "reason": SETUP_FAILURES[path]})
+                evidence.append(TaskEvidence(task_id=path, status=EXCLUDED_SETUP_FAILURE, reason=SETUP_FAILURES[path]))
                 continue
-            record: dict = {"task_id": path, "source_archive_sha256": hashlib.sha256(raw).hexdigest()}
+            source_sha256 = hashlib.sha256(raw).hexdigest()
             try:
                 rebuilt = rebuild_task(raw)
             except DeferredRebuild as error:
-                record.update(status=DEFERRED, reason=str(error))
-                evidence.append(record)
+                evidence.append(TaskEvidence(task_id=path, status=DEFERRED, reason=str(error)))
                 continue
             base_refs.append(rebuilt.base_ref)
-            record.update(
-                status=REBUILT,
-                base_ref=rebuilt.base_ref,
-                workdir=rebuilt.workdir,
-                payload_sha256=rebuilt.payload_sha256,
-                setup_sha256=rebuilt.setup_sha256,
-                archive_sha256=hashlib.sha256(rebuilt.task_binary).hexdigest(),
+            evidence.append(
+                TaskEvidence(
+                    task_id=path,
+                    status=REBUILT,
+                    source_archive_sha256=source_sha256,
+                    base_ref=rebuilt.base_ref,
+                    workdir=rebuilt.workdir,
+                    payload_sha256=rebuilt.payload_sha256,
+                    setup_sha256=rebuilt.setup_sha256,
+                    archive_sha256=hashlib.sha256(rebuilt.task_binary).hexdigest(),
+                )
             )
             records.append({"path": path, "source": path, "task_binary": rebuilt.task_binary})
             lowered.append(
                 {"path": path, "lowered_task_spec": json.dumps(lowered_task_spec(path, rebuilt.task_binary).envelope())}
             )
-            evidence.append(record)
     return _RebuildOutcome(records, lowered, evidence, base_refs)
 
 
 def _evidence_manifest(
-    cohort: Path, excluded: Path, records: list[dict], evidence: list[dict], base_refs: list[str]
+    cohort: Path, excluded: Path, records: list[dict], evidence: list[TaskEvidence], base_refs: list[str]
 ) -> dict:
     """The admission-facing summary of one rebuild run."""
     return {
         "cohort_sha256": hashlib.sha256(cohort.read_bytes()).hexdigest(),
         "excluded_sha256": hashlib.sha256(excluded.read_bytes()).hexdigest(),
         "cohort_count": len(evidence),
-        "excluded_count": sum(1 for row in evidence if row["status"] == EXCLUDED_DECONTAMINATION),
+        "excluded_count": sum(1 for row in evidence if row.status == EXCLUDED_DECONTAMINATION),
         "rebuilt_count": len(records),
-        "deferred_count": sum(1 for row in evidence if row["status"] == DEFERRED),
+        "deferred_count": sum(1 for row in evidence if row.status == DEFERRED),
         # The Atlas counter measures the snapshot identities from these refs; the
         # rebuild itself stays free of the Harbor measurement environment.
         "snapshot_identity_count": None,
@@ -625,7 +612,7 @@ def _evidence_manifest(
         # no_oracle_qualification over the lowered specs. Rebuild alone knows neither.
         "admission": "not_run",
         "oracle_validation": "skipped",
-        "tasks": evidence,
+        "tasks": [row.to_dict() for row in evidence],
     }
 
 

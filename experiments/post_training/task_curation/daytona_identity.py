@@ -38,7 +38,7 @@ from shellbox.machine import (
 )
 from taskcompendium.models import EnvironmentRequirements, ScriptGrader, VerifyitGrader, require_resolved_environment
 
-from experiments.post_training.task_curation.calibforge_rebuild import LoweredSpec, MachineShape
+from experiments.post_training.task_curation.calibforge_envelope import LoweredSpec, MachineShape
 from experiments.post_training.task_curation.environment_fidelity import ENVIRONMENT_PREFIX
 from experiments.post_training.task_curation.task_tars import open_task_tar
 
@@ -197,10 +197,9 @@ def declared_machine(
     """The shellbox MachineSpec a task's declared requirements and machine shape resolve to.
 
     A Docker build context is materialized into ``context``; a registry image, package
-    spec or host requirement maps onto the matching source. This mirrors
-    ``rolloutengine.machines._machine_spec`` — the resolution a rollout runs — but
-    adds the Docker-build branch, which the rollout never sees because the runtime
-    builds a pinned image before execution.
+    spec or host requirement maps onto the matching source, with the declared
+    working directory. The measurement never invents a source the requirements
+    do not declare.
     """
     if requirements.docker_build is not None:
         for resource in requirements.docker_build.files:
