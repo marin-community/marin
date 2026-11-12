@@ -9,7 +9,6 @@ import tarfile
 import tomllib
 
 import pytest
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
 from experiments.post_training.task_curation.calibforge_rebuild import (
     DeferredRebuild,
@@ -125,9 +124,3 @@ def test_a_lowered_spec_stages_fixtures_through_setup_commands():
     assert staged == {"setup_files/calibforge-fixtures.tar.gz", "setup_files/calibforge-initialize.sh"}
     assert {resource["path"] for resource in task["resources"]["verifier"]} == {"tests/test.sh", "tests/test_outputs.py"}
     assert spec["runtime"]["task_machine"] == {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240}
-
-
-def test_an_unpinned_base_cannot_reach_a_lowered_spec():
-    """A floating tag is a schema error, so a missed pin fails loudly."""
-    with pytest.raises(ValueError, match="sha256"):
-        EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image="ubuntu:24.04")

@@ -35,7 +35,10 @@ def dockerfile_of(files: Mapping[str, bytes | str]) -> str | None:
         return None
     if isinstance(blob, str):
         blob = base64.b64decode(blob, validate=True)
-    return blob.decode(errors="replace")
+    try:
+        return blob.decode()
+    except UnicodeDecodeError as error:
+        raise UnlowerableRecipe("archive environment/Dockerfile is not UTF-8") from error
 
 
 def environment_unused(
