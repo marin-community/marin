@@ -357,7 +357,6 @@ fn normalize_artifact_policy(spec: &mut ProtoTableSpec, schema: &Schema) -> Resu
             let index = column.index.into_option()?;
             let has_index = index.trigram.unwrap_or(false)
                 || index.value_counts.unwrap_or(false)
-                || index.catalog_bounds.unwrap_or(false)
                 || !index.exact_values.is_empty();
             has_index.then(|| crate::proto::finelog::stats::ColumnArtifactPolicy {
                 column: column.name,
