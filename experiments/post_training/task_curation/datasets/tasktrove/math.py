@@ -164,15 +164,16 @@ class MathConverter:
         prompt = replace_phrases(prompt, self.phrases).strip()
         if not prompt:
             return source_defect("missing_instruction", "The instruction has no problem before its delivery section")
-        # The production grader parses the typed reference before grading; reject rows whose
-        # reference it cannot parse (same check as grade_math) so admission never sees them.
-        reference_members = _parsed_members(expected) if math_type is MathType.LIST else [_parse(expected)]
-        if not all(_is_expression(member) for member in reference_members):
-            return unsupported("unparsable_reference", "math-verify cannot parse the typed reference")
         # Both source sequence types compare members in order. Math-verify can interpret a
         # parenthesized tuple as an interval, so use verifyit's ordered-member comparator.
         if math_type is MathType.TUPLE:
             math_type = MathType.LIST
+        # The production grader parses the typed reference before grading; reject rows whose
+        # reference it cannot parse (same check as grade_math, after the type mapping) so
+        # admission never sees them.
+        reference_members = _parsed_members(expected) if math_type is MathType.LIST else [_parse(expected)]
+        if not all(_is_expression(member) for member in reference_members):
+            return unsupported("unparsable_reference", "math-verify cannot parse the typed reference")
         package = verifyit_package(
             MathSpec(expected=expected, math_type=math_type),
             resources=(
