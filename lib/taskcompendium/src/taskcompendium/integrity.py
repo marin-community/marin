@@ -18,7 +18,7 @@ class SharedIntegrityContract(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     id: Literal["shared-pytest"] = "shared-pytest"
-    version: Literal[1] = 1
+    version: Literal[2] = 2
     dependency_state: SharedDependencyState
     workspace: str = "/testbed"
     protected_root: str = "/opt/taskcompendium-shared"
@@ -38,6 +38,7 @@ class SharedIntegrityContract(BaseModel):
         "**/conftest.py",
     )
     pinned_plugins: tuple[str, ...] = ("pytest_jsonreport.plugin",)
+    plugin_discovery: Literal["pre_agent_entrypoints_and_conftests"] = "pre_agent_entrypoints_and_conftests"
     reference_sha256: str
     harness_sha256: str
     agent_may_modify: str = "Dependencies and filesystem paths outside the protected grading infrastructure"
