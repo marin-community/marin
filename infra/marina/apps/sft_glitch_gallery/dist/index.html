@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SFT Glitch Gallery</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>SFT Glitch Gallery</h1>
+      <p class="help">
+        Flawed documents from the 10.05 Grug SFT training mix. Pick a kind of flaw, then an example; the document
+        opens at the highlighted passage. These are examples chosen to be clear, not a measure of how common each
+        flaw is. The rate found in the data review is shown with each kind.
+      </p>
+    </header>
+    <main>
+      <nav id="categories" aria-label="Kinds of flaw"></nav>
+      <div class="examples">
+        <div id="category-head"></div>
+        <div id="examples" aria-label="Examples"></div>
+      </div>
+      <section id="reader">
+        <div id="example-head"></div>
+        <pre id="text"></pre>
+      </section>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

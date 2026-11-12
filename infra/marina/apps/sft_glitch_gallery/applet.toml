@@ -1,0 +1,5 @@
+applet_id = "52f10c19-26a0-42d4-b221-808824763bae"
+
+title = "SFT Glitch Gallery"
+description = "Browse flawed documents found in the 10.05 Grug SFT training mix, grouped by kind of flaw. Each example opens at the offending passage."
+python_entrypoint = "server.app:create_api"
