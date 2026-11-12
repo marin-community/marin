@@ -49,7 +49,7 @@ import huggingface_hub.constants
 from filelock import FileLock
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from cloud.iris.artifacts import (
     ArtifactSource,
@@ -2267,9 +2267,9 @@ def _write_final_config(
     OmegaConf.save(root, destination, resolve=True)
     # Preserve the exact post-staging bytes consumed below, not only the pre-staging recipe.
     consumed_uri = prefix_join(str(root.artifacts.attempts_root), f"{root.run.attempt_id}/consumed-config.yaml")
-    fs, key = fs_and_path(consumed_uri)
-    fs.makedirs(key.rsplit("/", 1)[0], exist_ok=True)
-    fs.pipe_file(key, destination.read_bytes())
+    consumed_path = StoragePath(consumed_uri)
+    consumed_path.parent.mkdirs()
+    consumed_path.write_bytes(destination.read_bytes())
     return destination
 
 

@@ -234,7 +234,7 @@ def template_for_candidate_layout(
 
 
 def take_master_as_params(state: "GrugTrainState") -> "GrugTrainState":
-    """Move a master restored through ``template_for_candidate_layout`` into ``params``."""
+    """Return state with restored master parameters as the active parameters."""
     if state.master_params is None:
         return state
     return dataclasses.replace(state, params=state.master_params, master_params=None)

@@ -47,6 +47,9 @@ class DaytonaSnapshotPool:
     async def release(self, token: str) -> None:
         await self.pool.release(token)
 
+    async def abandon(self, token: str) -> None:
+        await self.pool.abandon(token)
+
     async def inventory(self) -> dict:
         return await self.pool.inventory()
 
@@ -83,13 +86,26 @@ class DaytonaSnapshotPool:
         logger.info("snapshot_deleted name={} elapsed_seconds={}", name, time.monotonic()-started)
 
 
+def _log_abandoned_acquisition(request: asyncio.Future) -> None:
+    if not request.cancelled() and (error := request.exception()) is not None:
+        logger.warning("Abandoned snapshot acquisition finished with {}", type(error).__name__)
+
+
 class RaySnapshotLeaser:
     def __init__(self, actor):
         self.actor = actor
 
     async def acquire(self, spec: MachineSpec) -> SnapshotLease:
         token = uuid4().hex
-        name = await self.actor.acquire.remote(spec, token)
+        request = asyncio.ensure_future(self.actor.acquire.remote(spec, token))
+        try:
+            name = await asyncio.shield(request)
+        except BaseException:
+            # A cancelled/lost reply must not leave a lease on the remote actor.
+            # Let provider work finish so its outcome can be reconciled safely.
+            request.add_done_callback(_log_abandoned_acquisition)
+            await asyncio.shield(self.actor.abandon.remote(token))
+            raise
         return SnapshotLease(name, token)
 
     async def release(self, lease: SnapshotLease) -> None:

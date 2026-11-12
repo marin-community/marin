@@ -35,21 +35,41 @@ class SnapshotLeasePool:
         self.delete = delete
         self.entries: dict[str, SnapshotEntry] = {}
         self.leases: dict[str, str] = {}
+        # Remember abandoned tokens even when their acquire RPC has not arrived.
+        self.abandoned: set[str] = set()
+        self.pending: set[str] = set()
         self.changed = asyncio.Condition()
 
     async def acquire(self, identity: str, lease: str) -> str:
         async with self.changed:
-            if lease in self.leases:
+            if lease in self.leases or lease in self.pending:
                 raise ValueError("Snapshot lease already acquired")
+            self.pending.add(lease)
+        try:
+            return await self._acquire(identity, lease)
+        except BaseException:
+            await self.abandon(lease)
+            raise
+        finally:
+            async with self.changed:
+                self.pending.remove(lease)
+
+    async def _acquire(self, identity: str, lease: str) -> str:
+        async with self.changed:
             await self.changed.wait_for(
-                lambda: (identity in self.entries and self.entries[identity].phase in (SnapshotPhase.BUILDING, SnapshotPhase.READY))
+                lambda: lease in self.abandoned
+                or (identity in self.entries and self.entries[identity].phase in (SnapshotPhase.BUILDING, SnapshotPhase.READY))
                 or (identity not in self.entries and len(self.entries) < self.capacity)
             )
+            if lease in self.abandoned:
+                raise asyncio.CancelledError("Snapshot acquisition was abandoned")
             if identity in self.entries:
                 entry = self.entries[identity]
                 entry.references.add(lease)
                 self.leases[lease] = identity
-                await self.changed.wait_for(lambda: entry.phase is not SnapshotPhase.BUILDING)
+                await self.changed.wait_for(lambda: lease in self.abandoned or entry.phase is not SnapshotPhase.BUILDING)
+                if lease in self.abandoned:
+                    raise asyncio.CancelledError("Snapshot acquisition was abandoned")
                 if entry.phase is not SnapshotPhase.READY:
                     raise RuntimeError("Shared snapshot build requires reconciliation")
                 assert entry.name is not None
@@ -66,9 +86,30 @@ class SnapshotLeasePool:
             raise
         async with self.changed:
             entry.name = name
-            entry.phase = SnapshotPhase.READY
+            entry.phase = SnapshotPhase.READY if entry.references else SnapshotPhase.DELETING
             self.changed.notify_all()
-            return name
+            abandoned = lease in self.abandoned
+            delete_unused = not entry.references
+        if delete_unused:
+            await self._delete_entry(identity, entry)
+        if abandoned:
+            raise asyncio.CancelledError("Snapshot acquisition was abandoned")
+        return name
+
+    async def abandon(self, lease: str) -> None:
+        """Drop an acquisition that will never create a sandbox, including a late RPC."""
+        async with self.changed:
+            self.abandoned.add(lease)
+            identity = self.leases.pop(lease, None)
+            self.changed.notify_all()
+            if identity is None:
+                return
+            entry = self.entries[identity]
+            entry.references.remove(lease)
+            if entry.references or entry.phase is not SnapshotPhase.READY:
+                return
+            entry.phase = SnapshotPhase.DELETING
+        await self._delete_entry(identity, entry)
 
     async def release(self, lease: str) -> None:
         async with self.changed:
@@ -81,10 +122,12 @@ class SnapshotLeasePool:
             if entry.references:
                 return
             entry.phase = SnapshotPhase.DELETING
-            assert entry.name is not None
-            name = entry.name
+        await self._delete_entry(identity, entry)
+
+    async def _delete_entry(self, identity: str, entry: SnapshotEntry) -> None:
+        assert entry.name is not None
         try:
-            await self.delete(name)
+            await self.delete(entry.name)
         except BaseException:
             async with self.changed:
                 entry.phase = SnapshotPhase.UNCERTAIN

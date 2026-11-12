@@ -12,7 +12,7 @@ import dataclasses
 import math
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 import equinox as eqx
 import jax
@@ -914,6 +914,12 @@ def _bincount_upper_quantile(
     return lower_edge + bin_width * (ct_b - target_rank) / jnp.maximum(h_b, 1.0)
 
 
+class QuantileThresholds(NamedTuple):
+    beta: jax.Array
+    margin_min: jax.Array
+    margin_max: jax.Array
+
+
 def _qb_beta_hist(
     s_ma: jax.Array,
     token_valid: jax.Array,
@@ -922,7 +928,7 @@ def _qb_beta_hist(
     num_experts_per_token: int,
     num_experts: int,
     n_bins: int,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
+) -> QuantileThresholds:
     """Return per-expert global quantile thresholds and margin bounds, excluding padding."""
 
     token_axes = _token_axes(mesh)
@@ -957,12 +963,14 @@ def _qb_beta_hist(
         beta = jnp.where(valid_tokens > 0, beta, 0)
         return beta, lo, hi  # surface the live margin range for logging
 
-    return shard_map(
-        _fn,
-        mesh=mesh,
-        in_specs=(P(token_axes, None), P(token_axes)),
-        out_specs=(P(), P(), P()),
-    )(s_ma, token_valid)
+    return QuantileThresholds(
+        *shard_map(
+            _fn,
+            mesh=mesh,
+            in_specs=(P(token_axes, None), P(token_axes)),
+            out_specs=(P(), P(), P()),
+        )(s_ma, token_valid)
+    )
 
 
 class MoEMLP(eqx.Module):
@@ -1056,7 +1064,7 @@ class MoEMLP(eqx.Module):
         # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha`.
         s_minus_alpha = reshard(router_logits - qb_alpha, _token_spec())
         if self.cfg.qb_estimator == QbEstimator.HIST:
-            beta, margin_min, margin_max = _qb_beta_hist(
+            thresholds = _qb_beta_hist(
                 s_minus_alpha,
                 reshard(token_valid_flat, _token_spec()),
                 mesh,
@@ -1064,9 +1072,10 @@ class MoEMLP(eqx.Module):
                 num_experts=self.cfg.num_experts,
                 n_bins=self.cfg.qb_hist_bins,
             )
+            beta = thresholds.beta
             router_stats["qb_beta"] = beta
-            router_stats["margin_min"] = margin_min
-            router_stats["margin_max"] = margin_max
+            router_stats["margin_min"] = thresholds.margin_min
+            router_stats["margin_max"] = thresholds.margin_max
         else:
             token_axes = _token_axes(mesh)
 
