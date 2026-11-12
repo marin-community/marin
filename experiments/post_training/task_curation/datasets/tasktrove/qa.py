@@ -20,11 +20,12 @@ from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
-from verifyit.spec import JudgeSpec
+from verifyit.spec import RUBRIC_REFERENCE
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_resources
+from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
@@ -119,9 +120,12 @@ def convert_openqa(row: RawRow, context: ConversionContext) -> TaskSpec | Normal
         return source_defect("missing_question", "The semantic judge requires its source question")
     if not references:
         return source_defect("invalid_references", "At least one reference is required")
+    subject = "knowledge" if isinstance(data.get("expected_answers"), list) else "science"
+    # QA-admitted tiers: knowledge-openqa validates on MEDIUM, science-openqa on HEAVY.
+    tier = JudgeTier.MEDIUM if subject == "knowledge" else JudgeTier.HEAVY
     # JudgeSpec carries the grading inputs; archived scripts remain private provenance only.
     package = verifyit_package(
-        JudgeSpec(references=references, question=question),
+        replace(JUDGE_TIERS[tier].spec, references=references, question=question, rubric=RUBRIC_REFERENCE),
         tuple(
             resource.model_copy(update={"path": "source/" + resource.path})
             for resource in archive_resources(row.data).verifier
@@ -130,7 +134,6 @@ def convert_openqa(row: RawRow, context: ConversionContext) -> TaskSpec | Normal
     )
     prompt = TextMessage(role="user", content=replace_phrases(instruction, OPENQA_DELIVERY))
     task = conversation_task(row, events=(prompt,), package=package)
-    subject = "knowledge" if isinstance(data.get("expected_answers"), list) else "science"
     task = task.model_copy(update={"tags": ("qa", "openqa", "judge", "reference", "nemotron", subject)})
     return rewritten_task(task, original=instruction, reason=OPENQA_REWRITE_REASON)
 
@@ -273,7 +276,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     name=name,
                     source=tasktrove_source(config),
                     convert=TaskTroveConverter(config, convert_openqa),
-                    version="4",
+                    version="5",
                     intended_use=IntendedUse.TRAIN,
                     rubric=OPENQA_RUBRIC,
                     grader=GRADER_PACKAGES,

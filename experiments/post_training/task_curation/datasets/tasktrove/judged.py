@@ -34,8 +34,12 @@ from experiments.post_training.task_curation.pipeline import CurationRecipe, pro
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
+QA_PINNED_SOURCES = frozenset({"tasktrove-safety"})
+"""Sources whose QA pinned the judge tier while keeping their own pipeline, grader and evidence."""
+
 TIERED_JUDGE_SOURCES = frozenset(
     {
+        "tasktrove-safety",
         "tasktrove-codereview",
         "tasktrove-glaive_code",
         "tasktrove-stack_overflow",
@@ -402,13 +406,13 @@ SOURCES = (
 def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
-            pipeline=None if source.name in TIERED_JUDGE_SOURCES else process_rows,
+            pipeline=None if source.name in TIERED_JUDGE_SOURCES - QA_PINNED_SOURCES else process_rows,
             info=replace(
                 source.info,
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 notes=(
                     source.info.notes + JUDGE_QUALIFICATION_PENDING
-                    if source.name in TIERED_JUDGE_SOURCES
+                    if source.name in TIERED_JUDGE_SOURCES - QA_PINNED_SOURCES
                     else source.info.notes
                 ),
             ),
@@ -429,7 +433,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 version="3" if source.name in TIERED_JUDGE_SOURCES else "2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=source.rubric,
-                grader=None if source.name in TIERED_JUDGE_SOURCES else GRADER_PACKAGES,
+                grader=None if source.name in TIERED_JUDGE_SOURCES - QA_PINNED_SOURCES else GRADER_PACKAGES,
             ),
         )
         for source in SOURCES

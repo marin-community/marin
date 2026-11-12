@@ -37,6 +37,7 @@ from taskcompendium.pipeline.models import (
     RawRow,
 )
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from verifyit.modes.grade_math import _is_expression, _parse, _parsed_members
 from verifyit.spec import DEFAULT_OUTPUT, MathSpec, MathType
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
@@ -163,6 +164,11 @@ class MathConverter:
         prompt = replace_phrases(prompt, self.phrases).strip()
         if not prompt:
             return source_defect("missing_instruction", "The instruction has no problem before its delivery section")
+        # The production grader parses the typed reference before grading; reject rows whose
+        # reference it cannot parse (same check as grade_math) so admission never sees them.
+        reference_members = _parsed_members(expected) if math_type is MathType.LIST else [_parse(expected)]
+        if not all(_is_expression(member) for member in reference_members):
+            return unsupported("unparsable_reference", "math-verify cannot parse the typed reference")
         # Both source sequence types compare members in order. Math-verify can interpret a
         # parenthesized tuple as an interval, so use verifyit's ordered-member comparator.
         if math_type is MathType.TUPLE:
@@ -329,7 +335,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name=source.name,
                 source=tasktrove_source(source.config),
                 convert=TaskTroveConverter(source.config, source.convert),
-                version="2",
+                version="3",
                 intended_use=IntendedUse.TRAIN,
                 rubric=source.rubric,
                 controls=MATH_CONTROLS,
