@@ -427,3 +427,42 @@ def test_quick_pass_writes_the_validated_cohort_as_converted_tasks(tmp_path, mon
     assert manifest["mode"] == "quick"
     assert not (output / "final").exists()
     assert "admitted_rows" not in manifest
+
+
+def test_full_oracle_native_loader_does_not_require_population_bug_controls(tmp_path, monkeypatch):
+    task = TaskSpec.model_validate(json.loads(prebuilt_task("native-oracle")["lowered_task_spec"])["task"])
+    task = task.model_copy(
+        update={
+            "tags": ("harbor",),
+            "grader": NoGrader(reason="Native Harbor grades the completed trial"),
+            "resources": ResourceGroups(
+                verifier=(
+                    inline_resource("task.toml", f'[environment]\ndocker_image = "{IMAGE}"\n'.encode()),
+                    inline_resource("instruction.md", b"Repair the task."),
+                    inline_resource("tests/test.sh", b"#!/bin/sh\nexit 0\n"),
+                )
+            ),
+        }
+    )
+    serialized = task.model_dump_json()
+    path = tmp_path / "native-tasks.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "task_spec": serialized,
+                    "task_sha256": hashlib.sha256(serialized.encode()).hexdigest(),
+                }
+            ]
+        ),
+        path,
+    )
+    downloads = []
+
+    def download(**kwargs):
+        downloads.append(kwargs["filename"])
+        return str(path)
+
+    monkeypatch.setattr(prebuilt, "hf_hub_download", download)
+    assert prebuilt.import_oracle_harbor_cohort(_cohort(1)) == str(path)
+    assert downloads == [prebuilt.TASKS_FILENAME]

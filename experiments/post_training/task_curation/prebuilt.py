@@ -39,7 +39,7 @@ from taskcompendium.grading_environment import (
     grading_environment_census,
 )
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import NoGrader, TaskSpec
 from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
 from taskcompendium.pipeline.conversion import normalization_columns
 from taskcompendium.pipeline.models import SourceStatus
@@ -146,16 +146,20 @@ def import_harbor_cohort(config: PrebuiltCohort) -> str:
                 and outcomes["reference"]["reward"] == 1
             ):
                 raise ValueError(f"Harbor controls do not admit task: {task.id}")
-            files = {resource.path: resource for resource in task.resources.verifier}
-            required = {"task.toml", "instruction.md", "tests/test.sh"}
-            if "harbor" not in task.tags or not required <= files.keys():
-                raise ValueError(f"Incomplete native Harbor package: {task.id}")
-            environment = tomllib.loads(resource_bytes(files["task.toml"]).decode())["environment"]
-            if not environment.get("docker_image") and "environment/Dockerfile" not in files:
-                raise ValueError(f"Harbor package declares no environment: {task.id}")
+            validate_native_package(task)
     if seen != controls.keys() or len(seen) != config.expected_rows:
         raise ValueError(f"Harbor population differs from its controls or expected count: {config.repo}")
     return str(local)
+
+
+def validate_native_package(task: TaskSpec) -> None:
+    files = {resource.path: resource for resource in task.resources.verifier}
+    required = {"task.toml", "instruction.md", "tests/test.sh"}
+    if not isinstance(task.grader, NoGrader) or "harbor" not in task.tags or not required <= files.keys():
+        raise ValueError(f"Incomplete native Harbor package: {task.id}")
+    environment = tomllib.loads(resource_bytes(files["task.toml"]).decode())["environment"]
+    if not environment.get("docker_image") and "environment/Dockerfile" not in files:
+        raise ValueError(f"Harbor package declares no environment: {task.id}")
 
 
 def import_taskcompendium_cohort(config: PrebuiltCohort) -> str:
@@ -181,6 +185,15 @@ def import_taskcompendium_cohort(config: PrebuiltCohort) -> str:
     if len(seen) != config.expected_rows:
         raise ValueError(f"{config.repo}@{config.revision} has {len(seen)} rows, expected {config.expected_rows}")
     return str(local)
+
+
+def import_oracle_harbor_cohort(config: PrebuiltCohort) -> str:
+    """Validate native packages qualified by the full oracle receipt and sampled negative controls."""
+    local = import_taskcompendium_cohort(config)
+    for batch in pq.ParquetFile(local).iter_batches(batch_size=32):
+        for row in batch.to_pylist():
+            validate_native_package(TaskSpec.model_validate_json(row["task_spec"]))
+    return local
 
 
 class PrebuiltEncoding(StrEnum):
@@ -223,6 +236,19 @@ def import_taskcompendium_prebuilt(
         options,
         import_taskcompendium_cohort,
         task_format=TaskFormat.TASKCOMPENDIUM,
+        encoding=PrebuiltEncoding.CANONICAL,
+    )
+
+
+def import_oracle_harbor_prebuilt(
+    source: RlDataSource[PrebuiltCohort], options: PipelineOptions
+) -> ArtifactStep[CampaignArtifact]:
+    """Import full-population oracle filtering with SAMPLE/FULL negative-control oversight."""
+    return prebuilt_artifact(
+        source,
+        options,
+        import_oracle_harbor_cohort,
+        task_format=TaskFormat.HARBOR,
         encoding=PrebuiltEncoding.CANONICAL,
     )
 
