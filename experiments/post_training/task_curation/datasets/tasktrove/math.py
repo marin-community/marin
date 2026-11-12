@@ -11,7 +11,7 @@ The solver returns its answer in the reply. Archived oracle scripts still supply
 
 import hashlib
 import json
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
@@ -235,19 +235,17 @@ SOURCES = (
         "laion__nemotron-gym-math-v5",
         convert_tasktrove_math,
         GYM_RUBRIC,
-        info=replace(
-            SourceInfo(
-                id="Task Trove:laion__nemotron-gym-math-v5",
-                title="laion/nemotron-gym-math-v5",
-                origin="Task Trove",
-                family="math-answer",
-                tags=("agentic", "multi-turn"),
-                count=4096,
-                notes=(
-                    "Strict trailing boxed compare. No oracle to validate against, so run a no-op gate at " "conversion."
-                ),
-                task_format=TaskFormat.TASKCOMPENDIUM,
-            )
+        info=SourceInfo(
+            id="Task Trove:laion__nemotron-gym-math-v5",
+            title="laion/nemotron-gym-math-v5",
+            origin="Task Trove",
+            family="math-answer",
+            tags=("agentic", "multi-turn"),
+            count=4096,
+            notes=(
+                "Strict trailing boxed compare. No oracle to validate against, so run a no-op gate at " "conversion."
+            ),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     MathSource(
@@ -255,19 +253,15 @@ SOURCES = (
         "laion__nemotron-gym-math-openmathreasoning-v2",
         convert_openreasoning,
         OPENREASONING_RUBRIC,
-        info=replace(
-            SourceInfo(
-                id="Task Trove:laion__nemotron-gym-math-openmathreasoning-v2",
-                title="laion/nemotron-gym-math-openmathreasoning-v2",
-                origin="Task Trove",
-                family="math-answer",
-                tags=("agentic", "multi-turn"),
-                count=42636,
-                notes=(
-                    "Most rigorous math verifier in the corpus (scalar/interval/set/tuple/equation), " "oracle present."
-                ),
-                task_format=TaskFormat.TASKCOMPENDIUM,
-            )
+        info=SourceInfo(
+            id="Task Trove:laion__nemotron-gym-math-openmathreasoning-v2",
+            title="laion/nemotron-gym-math-openmathreasoning-v2",
+            origin="Task Trove",
+            family="math-answer",
+            tags=("agentic", "multi-turn"),
+            count=42636,
+            notes=("Most rigorous math verifier in the corpus (scalar/interval/set/tuple/equation), " "oracle present."),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     MathSource(
@@ -275,17 +269,15 @@ SOURCES = (
         "SankalpKJ__nemotron-math-oracle-filtered-v2",
         convert_tasktrove_math,
         ORACLE_RUBRIC,
-        info=replace(
-            SourceInfo(
-                id="Task Trove:SankalpKJ__nemotron-math-oracle-filtered-v2",
-                title="SankalpKJ/nemotron-math-oracle-filtered-v2",
-                origin="Task Trove",
-                family="math-answer",
-                tags=("agentic", "multi-turn"),
-                count=57777,
-                notes=("Scalar sympy compare, hidden gold. Overlaps the other Nemotron math sources; " "subsample."),
-                task_format=TaskFormat.TASKCOMPENDIUM,
-            )
+        info=SourceInfo(
+            id="Task Trove:SankalpKJ__nemotron-math-oracle-filtered-v2",
+            title="SankalpKJ/nemotron-math-oracle-filtered-v2",
+            origin="Task Trove",
+            family="math-answer",
+            tags=("agentic", "multi-turn"),
+            count=57777,
+            notes=("Scalar sympy compare, hidden gold. Overlaps the other Nemotron math sources; " "subsample."),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     MathSource(
@@ -293,17 +285,15 @@ SOURCES = (
         "laion__nemo-prism-math-v3",
         convert_tasktrove_math,
         PRISM_RUBRIC,
-        info=replace(
-            SourceInfo(
-                id="Task Trove:laion__nemo-prism-math-v3",
-                title="laion/nemo-prism-math-v3",
-                origin="Task Trove",
-                family="math-answer",
-                tags=("agentic", "multi-turn"),
-                count=2404,
-                notes="Symbolic exact compare, hidden gold. Add a numeric tolerance path at conversion.",
-                task_format=TaskFormat.TASKCOMPENDIUM,
-            )
+        info=SourceInfo(
+            id="Task Trove:laion__nemo-prism-math-v3",
+            title="laion/nemo-prism-math-v3",
+            origin="Task Trove",
+            family="math-answer",
+            tags=("agentic", "multi-turn"),
+            count=2404,
+            notes="Symbolic exact compare, hidden gold. Add a numeric tolerance path at conversion.",
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     MathSource(
@@ -311,17 +301,15 @@ SOURCES = (
         "laion__nemotron-gym-math-stack-overflow-v3",
         convert_tasktrove_math,
         STACK_RUBRIC,
-        info=replace(
-            SourceInfo(
-                id="Task Trove:laion__nemotron-gym-math-stack-overflow-v3",
-                title="laion/nemotron-gym-math-stack-overflow-v3",
-                origin="Task Trove",
-                family="math-answer",
-                tags=("agentic", "multi-turn"),
-                count=110730,
-                notes=("Typed sympy comparison with oracle per task. Remove the non-boxed fallback " "extraction."),
-                task_format=TaskFormat.TASKCOMPENDIUM,
-            )
+        info=SourceInfo(
+            id="Task Trove:laion__nemotron-gym-math-stack-overflow-v3",
+            title="laion/nemotron-gym-math-stack-overflow-v3",
+            origin="Task Trove",
+            family="math-answer",
+            tags=("agentic", "multi-turn"),
+            count=110730,
+            notes=("Typed sympy comparison with oracle per task. Remove the non-boxed fallback " "extraction."),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
 )
@@ -331,7 +319,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             pipeline=process_rows,
-            info=replace(source.info, task_format=TaskFormat.TASKCOMPENDIUM),
+            info=source.info,
             config=CurationRecipe(
                 name=source.name,
                 source=tasktrove_source(source.config),

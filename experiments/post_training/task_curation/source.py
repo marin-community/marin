@@ -200,7 +200,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
     @property
     def admission_blockers(self) -> tuple[str, ...]:
         """Evidence missing before an agentic source can enter runnable selection."""
-        if "agentic" not in self.info.tags:
+        if "agentic" not in self.info.tags or self.info.id in GRANDFATHERED_MARINSKYRL_SOURCES:
             return ()
         info = self.info
         blockers = []

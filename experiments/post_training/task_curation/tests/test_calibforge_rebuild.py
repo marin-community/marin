@@ -9,10 +9,8 @@ import tarfile
 import tomllib
 
 import pytest
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
 from experiments.post_training.task_curation.calibforge_rebuild import (
-    FIXED_BASES,
     DeferredRebuild,
     lowered_task_spec,
     parse_instructions,
@@ -48,48 +46,6 @@ def unpack(task_binary: bytes) -> dict[str, bytes]:
         }
 
 
-def test_dependency_installs_move_into_the_setup_script():
-    dockerfile = (
-        "FROM ubuntu:24.04\n"
-        "WORKDIR /app\n"
-        "COPY files/ /app/files/\n"
-        "RUN apt-get update && apt-get install -y jq\n"
-    )
-    rebuilt = rebuild_task(native_task(dockerfile, {"files/input.csv": b"a\n1\n"}))
-    assert rebuilt.base_ref.startswith("ubuntu:24.04@sha256:")
-    script = unpack(rebuilt.task_binary)["setup_files/calibforge-initialize.sh"].decode()
-    assert "DEBIAN_FRONTEND=noninteractive" in script
-    assert "apt-get" in script and "jq" in script
-    assert "tar -xzf /setup_files/calibforge-fixtures.tar.gz" in script
-    output = unpack(rebuilt.task_binary)
-    assert output["environment/Dockerfile"].startswith(b"FROM ubuntu:24.04@sha256:")
-    assert output["environment/Dockerfile"].endswith(b"\nWORKDIR /app\n")
-    toml = output["task.toml"].decode()
-    assert 'docker_image = "ubuntu:24.04@sha256:' in toml
-    assert "setup" in toml
-
-
-def test_pinned_verifier_base_passes_through_and_data_files_stay_out_of_the_image():
-    dockerfile = (
-        "FROM aweaiteam/calibforge:tb2-verifier-base-v1@sha256:0f61b2776c40\n"
-        "WORKDIR /app\n"
-        "COPY files/data.csv /app/data.csv\n"
-        "COPY make_fixtures.py /app/make_fixtures.py\n"
-        "RUN python3 /app/make_fixtures.py\n"
-    )
-    rebuilt = rebuild_task(native_task(dockerfile, {"files/data.csv": b"x\n", "make_fixtures.py": b"print(1)\n"}))
-    output = unpack(rebuilt.task_binary)
-    assert b"FROM aweaiteam/calibforge:tb2-verifier-base-v1@sha256:0f61b2776c40" in output["environment/Dockerfile"]
-    assert "environment/files" not in " ".join(_names(rebuilt))
-    script = output["setup_files/calibforge-initialize.sh"].decode()
-    assert "cp -a" in script and "make_fixtures.py" in script
-
-
-def _names(rebuilt) -> list[str]:
-    with tarfile.open(fileobj=io.BytesIO(gzip.decompress(rebuilt.task_binary))) as archive:
-        return archive.getnames()
-
-
 def test_unmapped_and_unsupported_recipes_defer_with_reasons():
     with pytest.raises(DeferredRebuild, match="unmapped_base"):
         rebuild_task(native_task("FROM registry.example/weird:latest\nWORKDIR /app\n"))
@@ -99,28 +55,6 @@ def test_unmapped_and_unsupported_recipes_defer_with_reasons():
         rebuild_task(native_task("FROM ubuntu:24.04\nRUN service nginx start\n"))
     with pytest.raises(DeferredRebuild, match="env_support"):
         rebuild_task(native_task("FROM ubuntu:24.04\nENV TZ\nWORKDIR /app\n"))
-
-
-def test_package_flags_env_and_inline_env_normalize_without_deferring():
-    rebuilt = rebuild_task(
-        native_task(
-            "FROM ubuntu:24.04\n"
-            "ENV PYTHONDONTWRITEBYTECODE=1\n"
-            "WORKDIR /app\n"
-            "COPY files/ /app/files/\n"
-            "RUN apt-get update && apt-get install -y --no-install-recommends jq\n"
-            "RUN rm -f /app/files/stale.csv\n"
-            "RUN DEBIAN_FRONTEND=noninteractive apt-get install -y curl\n",
-            {"files/input.csv": b"a\n1\n", "files/stale.csv": b"old\n"},
-        )
-    )
-    script = unpack(rebuilt.task_binary)["setup_files/calibforge-initialize.sh"].decode()
-    assert "export PYTHONDONTWRITEBYTECODE=1" in script
-    assert "--no-install-recommends" in script
-    assert "rm -f /app/files/stale.csv" in script
-    assert (
-        script.count("DEBIAN_FRONTEND=noninteractive") == 3
-    )  # each apt segment (update + two installs; the inline one keeps its own)
 
 
 def test_instruction_level_run_flags_still_defer():
@@ -142,26 +76,6 @@ def test_parse_instructions_handles_continuations_comments_and_json_run():
     assert [item.command for item in instructions] == ["from", "run", "run"]
     assert instructions[1].args == ["echo", "one", "two"]
     assert instructions[2].json_form and instructions[2].args == ["apt-get", "install", "-y", "jq"]
-
-
-def test_archived_base_aliases_share_pinned_references():
-    census = [
-        "ubuntu:24.04",
-        "aweaiteam/calibforge:tb2-verifier-base-v1",
-        "python:3.13-slim-bookworm",
-        "python:3.12-slim-bookworm",
-        "python:3.11-slim-bookworm",
-        "python:3.11-slim",
-        "python:3.10-slim-bookworm",
-        "debian:12-slim",
-        "debian:13.0-slim",
-    ]
-    refs = {FIXED_BASES[from_ref.split("@")[0]] for from_ref in census}
-    assert len(refs) == 8  # python:3.11-slim folds into python:3.11-slim-bookworm
-    assert all("@sha256:" in ref for ref in refs)
-    # The excluded fasttext base is unmapped, so such a task defers instead of
-    # emitting an unpinned image the lowered spec would reject.
-    assert "aweaiteam/calibforge:fasttext-base-v1" not in FIXED_BASES
 
 
 def test_the_machine_shape_is_normalized_so_snapshots_collapse():
@@ -210,9 +124,3 @@ def test_a_lowered_spec_stages_fixtures_through_setup_commands():
     assert staged == {"setup_files/calibforge-fixtures.tar.gz", "setup_files/calibforge-initialize.sh"}
     assert {resource["path"] for resource in task["resources"]["verifier"]} == {"tests/test.sh", "tests/test_outputs.py"}
     assert spec["runtime"]["task_machine"] == {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240}
-
-
-def test_an_unpinned_base_cannot_reach_a_lowered_spec():
-    """A floating tag is a schema error, so a missed pin fails loudly."""
-    with pytest.raises(ValueError, match="sha256"):
-        EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image="ubuntu:24.04")

@@ -7,6 +7,8 @@ A converted dataset is published once and then read back, never regenerated: the
 published revision is the artifact a reader and a run both consume. This stage
 downloads the pinned revision through the cached Hugging Face login, validates every
 row as a task spec under the admission predicates, and records what it admitted.
+Native Harbor cohorts use ``import_harbor_prebuilt`` and require exact-package
+control receipts for admission.
 
 It converts nothing, so it cannot improve on the published cohort's review; the
 source's oversight level and evidence describe the qualification the publish recorded.
@@ -18,20 +20,27 @@ import shutil
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from functools import partial
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
+from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.models import TaskSpec
+from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
+from taskcompendium.pipeline.conversion import normalization_columns
+from taskcompendium.pipeline.models import SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.environment_fidelity import missing_environment
-from experiments.post_training.task_curation.source import RlDataSource, SourceReference
+from experiments.post_training.task_curation.source import RlDataSource, SourceReference, TaskFormat
 
 TASKS_FILENAME = "tasks.parquet"
 CONTROLS_FILENAME = "controls.jsonl"
@@ -59,14 +68,6 @@ class PrebuiltCohort:
         return (TASKS_FILENAME,)
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def import_cohort(config: PrebuiltCohort) -> str:
     """Download the pinned cohort, validate every row, and return the local path.
 
@@ -89,7 +90,7 @@ def import_cohort(config: PrebuiltCohort) -> str:
         if not envelope.get("runtime"):
             raise ValueError(f"{row['path']}: envelope carries no runtime machines")
         spec = TaskSpec.model_validate(task)
-        reason = missing_environment(spec.model_dump(mode="json"), agentic=True)
+        reason = missing_environment(spec.model_dump(mode="json"))
         if reason is not None:
             raise ValueError(f"{row['path']}: {reason}")
     return str(local)
@@ -145,51 +146,139 @@ def import_harbor_cohort(config: PrebuiltCohort) -> str:
     return str(local)
 
 
+def import_taskcompendium_cohort(config: PrebuiltCohort) -> str:
+    """Validate canonical tasks without requiring a machine for conversation-only graders."""
+    local = Path(
+        hf_hub_download(
+            repo_id=config.repo, repo_type=config.repo_type, filename=TASKS_FILENAME, revision=config.revision
+        )
+    )
+    seen = set()
+    for batch in pq.ParquetFile(local).iter_batches(batch_size=32):
+        for row in batch.to_pylist():
+            serialized = row["task_spec"]
+            task = TaskSpec.model_validate_json(serialized)
+            if hashlib.sha256(serialized.encode()).hexdigest() != row["task_sha256"]:
+                raise ValueError(f"Published task differs from its recorded hash: {task.id}")
+            if task.id in seen:
+                raise ValueError(f"Duplicate published task: {task.id}")
+            seen.add(task.id)
+            reason = missing_environment(task.model_dump(mode="json"))
+            if reason is not None:
+                raise ValueError(f"{task.id}: {reason}")
+    if len(seen) != config.expected_rows:
+        raise ValueError(f"{config.repo}@{config.revision} has {len(seen)} rows, expected {config.expected_rows}")
+    return str(local)
+
+
+class PrebuiltEncoding(StrEnum):
+    LOWERED = "lowered_task_spec"
+    CANONICAL = "task_spec"
+
+
+@dataclass(frozen=True)
+class PrebuiltImport:
+    output_path: str
+    cohort: PrebuiltCohort
+    mode: SourceProcessingMode
+    task_format: TaskFormat
+    encoding: PrebuiltEncoding
+
+
 def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
-    """Read the published TaskCompendium cohort back and admit its tasks."""
-    return prebuilt_artifact(source, options, import_cohort)
+    """Read the pinned lowered cohort into admitted corpus views."""
+    return prebuilt_artifact(
+        source, options, import_cohort, task_format=TaskFormat.TASKCOMPENDIUM, encoding=PrebuiltEncoding.LOWERED
+    )
 
 
 def import_harbor_prebuilt(
     source: RlDataSource[PrebuiltCohort], options: PipelineOptions
 ) -> ArtifactStep[CampaignArtifact]:
-    """Retain native Harbor packages and their exact bug/reference admission contracts."""
-    return prebuilt_artifact(source, options, import_harbor_cohort)
+    """Admit native Harbor packages through exact bug/reference control receipts."""
+    return prebuilt_artifact(
+        source, options, import_harbor_cohort, task_format=TaskFormat.HARBOR, encoding=PrebuiltEncoding.CANONICAL
+    )
+
+
+def import_taskcompendium_prebuilt(
+    source: RlDataSource[PrebuiltCohort], options: PipelineOptions
+) -> ArtifactStep[CampaignArtifact]:
+    """Admit a qualified canonical TaskCompendium release without lowering its tasks again."""
+    return prebuilt_artifact(
+        source,
+        options,
+        import_taskcompendium_cohort,
+        task_format=TaskFormat.TASKCOMPENDIUM,
+        encoding=PrebuiltEncoding.CANONICAL,
+    )
 
 
 def prebuilt_artifact(
-    source: RlDataSource[PrebuiltCohort], options: PipelineOptions, load: Callable[[PrebuiltCohort], str]
+    source: RlDataSource[PrebuiltCohort],
+    options: PipelineOptions,
+    load: Callable[[PrebuiltCohort], str],
+    *,
+    task_format: TaskFormat,
+    encoding: PrebuiltEncoding,
 ) -> ArtifactStep[CampaignArtifact]:
-    """Publish a validated cohort without rewriting its task bytes."""
+    """Publish validated rows and corpus views while preserving their controlled package bytes."""
+    if "excluded" in source.info.tags:
+        raise ValueError(f"Published cohort is excluded pending qualification: {source.name}")
+    if source.admission_blockers:
+        raise ValueError(f"Source {source.name} cannot admit tasks: {'; '.join(source.admission_blockers)}")
     config = source.config
     assert config is not None
     if options.mode is SourceProcessingMode.QUICK:
         raise ValueError(f"A published cohort is imported for admission, not for a quick pass: {source.name}")
 
-    if source.declaration.status != "Available":
-        reasons = source.admission_blockers or (source.declaration.status,)
-        raise ValueError(f"Source {source.name} cannot admit tasks: {'; '.join(reasons)}")
+    def build_config(context) -> PrebuiltImport:
+        return PrebuiltImport(context.output_path, config, options.mode, task_format, encoding)
 
-    def build_config(context) -> str:
-        return context.output_path
-
-    def run(output_path: str) -> CampaignArtifact:
-        local = Path(load(config))
-        destination = Path(output_path)
+    def run(invocation: PrebuiltImport) -> CampaignArtifact:
+        local = Path(load(invocation.cohort))
+        destination = Path(invocation.output_path)
         destination.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(local, destination / TASKS_FILENAME)
+        tasks = []
+        for row in pq.read_table(local).to_pylist():
+            if invocation.encoding is PrebuiltEncoding.CANONICAL:
+                serialized = row["task_spec"]
+                task = TaskSpec.model_validate_json(serialized)
+                original_path = task.source.row
+            else:
+                task = TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"])
+                serialized = task.model_dump_json()
+                original_path = row["path"]
+            tasks.append(
+                {
+                    **normalization_columns(task.id, task.source, task, None, (), original_path),
+                    "task_json": serialized,
+                }
+            )
+        for view in ("normalize", "final"):
+            folder = destination / view
+            folder.mkdir()
+            pq.write_table(pa.Table.from_pylist(tasks, schema=NORMALIZED_SCHEMA), folder / "part-00000.parquet")
         manifest = {
+            "mode": invocation.mode.value,
+            "task_format": invocation.task_format.value,
+            "intended_use": "train",
+            "input_rows": len(tasks),
+            "converted_rows": len(tasks),
+            "admitted_rows": len(tasks),
+            "rejections": {},
             "status": "completed",
             "repo": config.repo,
             "revision": config.revision,
             "row_count": config.expected_rows,
-            "tasks_sha256": _sha256(destination / TASKS_FILENAME),
+            "tasks_sha256": file_sha256(StoragePath(str(destination / TASKS_FILENAME))),
         }
         (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         return CampaignArtifact(
             status="completed",
             result=PipelineResult(
-                status="completed",
+                status=SourceStatus.COMPLETED,
                 outputs={"tasks": str(destination / TASKS_FILENAME)},
                 evidence={"manifest": str(destination / "manifest.json")},
                 stages=("download", "validate"),

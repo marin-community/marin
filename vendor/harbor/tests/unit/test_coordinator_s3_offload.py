@@ -29,10 +29,9 @@ from unittest import mock
 from unittest.mock import AsyncMock
 
 import pytest
-from harbor.environments.base import ExecResult
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.task.config import TaskOS
 from harbor.models.task.task import Task
-from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.paths import TrialPaths
 from harbor.trial import artifact_handler as artifact_handler_module
 from harbor.trial import trial as trial_module
@@ -181,32 +180,34 @@ async def test_init_result_mkdirs_on_local_trials_dir(
 # ── verifier layer ───────────────────────────────────────────────────────────
 
 
-@pytest.mark.unit
-@pytest.mark.parametrize(
-    ("filename", "content", "expected"),
-    [("reward.json", '{"reward": 1.0}', 1.0), ("reward.txt", "0.5", 0.5)],
-)
-async def test_verifier_resolve_rewards_reads_files(tmp_path: Path, filename: str, content: str, expected: float) -> None:
+@pytest.fixture
+def reward_verifier(tmp_path: Path) -> Verifier:
     task_dir = tmp_path / "task"
-    (task_dir / "tests").mkdir(parents=True)
+    tests_dir = task_dir / "tests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test.sh").write_text("#!/bin/sh\nexit 0\n")
     (task_dir / "task.toml").write_text("[environment]\n")
-    (task_dir / "instruction.md").write_text("Complete the task.")
-    (task_dir / "tests/test.sh").write_text("#!/bin/bash\nexit 0\n")
+    (task_dir / "instruction.md").write_text("Fixture task.")
+    environment_dir = task_dir / "environment"
+    environment_dir.mkdir()
+    (environment_dir / "Dockerfile").write_text("FROM ubuntu:24.04\n")
     paths = TrialPaths(trial_dir=tmp_path / "trial")
     paths.mkdir()
-    (paths.verifier_dir / filename).write_text(content)
-    environment = mock.MagicMock()
-    environment.capabilities.mounted = True
-    environment.upload_dir = AsyncMock()
-    environment.exec = AsyncMock(return_value=ExecResult(return_code=0))
-    environment.os = TaskOS.LINUX
-    verifier = Verifier(
-        task=Task(task_dir),
-        trial_paths=paths,
-        environment=environment,
-    )
-    result = await verifier.verify()
-    assert result.rewards == {"reward": expected}
+    return Verifier(Task(task_dir), paths, mock.MagicMock(os=TaskOS.LINUX))
+
+
+@pytest.mark.unit
+def test_verifier_resolve_rewards_reads_json(reward_verifier: Verifier) -> None:
+    verifier = reward_verifier
+    verifier.trial_paths.reward_json_path.write_text('{"reward": 1.0}')
+    assert verifier._resolve_rewards() == {"reward": 1.0}
+
+
+@pytest.mark.unit
+def test_verifier_resolve_rewards_reads_text_fallback(reward_verifier: Verifier) -> None:
+    verifier = reward_verifier
+    verifier.trial_paths.reward_text_path.write_text("0.5")
+    assert verifier._resolve_rewards() == {"reward": 0.5}
 
 
 # ── artifact layer ───────────────────────────────────────────────────────────

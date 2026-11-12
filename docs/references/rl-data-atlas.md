@@ -281,11 +281,3 @@ Historical reviews and raw artifacts remain in their original Postgres tables.
 They do not affect current grades. Atlas retains an archive reader; the previous
 manual review, source-verification and difficulty workflows are removed.
 
-### Oversight level
-
-Each entry shows how its admission was reviewed: `none` for inventory pointers,
-`sample` when a documented sample of tasks was executed end to end, and `full` when
-every task was. The evidence beside it names the campaign, the recipe revision and the
-verification summary, so the label can be checked rather than trusted. A `QUICK`
-curation pass admits nothing and its corpus cannot be selected for training.
-
