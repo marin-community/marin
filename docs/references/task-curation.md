@@ -1447,6 +1447,27 @@ dataset revision and TaskSpec digest. `BackendSourceMap.integrity_contracts`
 carries this optional summary beside the published grading-environment census.
 Missing contracts remain missing evidence for qualification.
 
+Actor census receipts bind the configured dataset ID, immutable revision and
+converter version. `all_sources()` clears stale or missing actor evidence and
+keeps the source pending measurement. Receipt IDs absent from the source
+registry remain staged; they do not register a new source. The declaration
+persists the input binding in `actor_census_input` and rejects a later input or
+converter change that carries the old census.
+
+Freeze a complete set of measured actor artifacts into the checked-in receipt
+shards with:
+
+```bash
+uv run python -m experiments.post_training.task_curation.census_binding \
+  --censuses actor-censuses.json \
+  --output-dir experiments/post_training/task_curation/datasets/daytona_census_receipts
+```
+
+Integrity-contract summaries are optional and independent of actor safety.
+Only refreshed summaries distinguish required SHARED tasks missing a contract
+from all tasks without a contract. Full contract groups stay in the referenced
+artifact; catalog summaries retain at most 64 groups and one 16 KiB example.
+
 ### Package-lock graders use the worker's local runtime
 
 A grader that declares `packages_lock` runs in the worker's local bubblewrap

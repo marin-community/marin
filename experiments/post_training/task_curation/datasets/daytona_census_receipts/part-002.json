@@ -1,0 +1,2117 @@
+{
+  "MarinSkyRL:asdiv": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "ASDiv.xml",
+      "dataset_revision": "ef8904068482919ac48c8eeaaf6df344b8a308ba66d048c2d4d87eab82dc4929",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/9d7386fb9abe0a4c659b/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2305,
+      "task_specs_sha256": "308e5906a216ace617ff4df5338368b61e3125033fcd09fc9a0b4d146c253324"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "ASDiv.xml",
+      "dataset_revision": "ef8904068482919ac48c8eeaaf6df344b8a308ba66d048c2d4d87eab82dc4929",
+      "daytona_count_basis": "Complete 2305-TaskSpec census from ASDiv.xml@ef8904068482919ac48c8eeaaf6df344b8a308ba66d048c2d4d87eab82dc4929; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/9d7386fb9abe0a4c659b/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:asdiv"
+  },
+  "MarinSkyRL:dapo_math": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "BytedTsinghua-SIA/DAPO-Math-17k",
+      "dataset_revision": "65877096c24ffa7abc4e4fa5edb95cf3413a5674",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/cd2c29d1eb23ff75c599/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1791700,
+      "task_specs_sha256": "9bf44e8b0866d1596cf36fa01c4a7312c166d3139321e00fbaf2b4e4fc84f3c1"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "BytedTsinghua-SIA/DAPO-Math-17k",
+      "dataset_revision": "65877096c24ffa7abc4e4fa5edb95cf3413a5674",
+      "daytona_count_basis": "Complete 1791700-TaskSpec census from BytedTsinghua-SIA/DAPO-Math-17k@65877096c24ffa7abc4e4fa5edb95cf3413a5674; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/cd2c29d1eb23ff75c599/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:dapo_math"
+  },
+  "MarinSkyRL:deepscaler": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "agentica-org/DeepScaleR-Preview-Dataset",
+      "dataset_revision": "b6ae8c60f5c1f2b594e2140b91c49c9ad0949e29",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/76d4216cd229f5f9836b/2026.11.12.4/.artifact.json",
+      "measured_tasks": 40309,
+      "task_specs_sha256": "6ef765136e786de2aa3517cd74802700ebca18565201118747a242578bfb043e"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "agentica-org/DeepScaleR-Preview-Dataset",
+      "dataset_revision": "b6ae8c60f5c1f2b594e2140b91c49c9ad0949e29",
+      "daytona_count_basis": "Complete 40309-TaskSpec census from agentica-org/DeepScaleR-Preview-Dataset@b6ae8c60f5c1f2b594e2140b91c49c9ad0949e29; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/76d4216cd229f5f9836b/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:deepscaler"
+  },
+  "MarinSkyRL:eurus2_code": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "PRIME-RL/Eurus-2-RL-Data",
+      "dataset_revision": "9776b13264b5aaa0b16495fcf086a0a8d86fd655",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/fbf2fb95bbe19beab223/2026.11.12.4/.artifact.json",
+      "measured_tasks": 24608,
+      "task_specs_sha256": "0ccb791f810f0235ce31f7e29b2f153ef3ea26e819fe63f9e3f1ac46d910a072"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "PRIME-RL/Eurus-2-RL-Data",
+      "dataset_revision": "9776b13264b5aaa0b16495fcf086a0a8d86fd655",
+      "daytona_count_basis": "Complete 24608-TaskSpec census from PRIME-RL/Eurus-2-RL-Data@9776b13264b5aaa0b16495fcf086a0a8d86fd655; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/fbf2fb95bbe19beab223/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 24608
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:eurus2_code"
+  },
+  "MarinSkyRL:gpqa": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "Idavidrein/gpqa",
+      "dataset_revision": "83022cefff930aea54f654c0b282e74b9eeda5c6",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/88613f0d3e29e8bfc3e8/2026.11.12.4/.artifact.json",
+      "measured_tasks": 196,
+      "task_specs_sha256": "d0a87a75d42023c506eff34f1ee8e8e453f181eb88c70159dce9ef22edf8c01e"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "Idavidrein/gpqa",
+      "dataset_revision": "83022cefff930aea54f654c0b282e74b9eeda5c6",
+      "daytona_count_basis": "Complete 196-TaskSpec census from Idavidrein/gpqa@83022cefff930aea54f654c0b282e74b9eeda5c6; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/88613f0d3e29e8bfc3e8/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:gpqa"
+  },
+  "MarinSkyRL:gretel_text_to_sql": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "gretelai/synthetic_text_to_sql",
+      "dataset_revision": "740ab236e64503fba51be1101df7a1be83bf455d",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/0ea810f4d46ed221d2bd/2026.11.12.4/.artifact.json",
+      "measured_tasks": 55316,
+      "task_specs_sha256": "2ad21d2d02e4947c0759b9581b3bfe730f8cad428e23dcf0c862eb87750ce866"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "gretelai/synthetic_text_to_sql",
+      "dataset_revision": "740ab236e64503fba51be1101df7a1be83bf455d",
+      "daytona_count_basis": "Complete 55316-TaskSpec census from gretelai/synthetic_text_to_sql@740ab236e64503fba51be1101df7a1be83bf455d; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/0ea810f4d46ed221d2bd/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 55316
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:gretel_text_to_sql"
+  },
+  "MarinSkyRL:gsm8k": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "openai/gsm8k",
+      "dataset_revision": "740312add88f781978c0658806c59bc2815b9866",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/e8dd9cd2bbb26182da94/2026.11.12.4/.artifact.json",
+      "measured_tasks": 7473,
+      "task_specs_sha256": "603f65c7621fc0093b68015605854641a0be67a4aea495d393440406a05448ba"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "openai/gsm8k",
+      "dataset_revision": "740312add88f781978c0658806c59bc2815b9866",
+      "daytona_count_basis": "Complete 7473-TaskSpec census from openai/gsm8k@740312add88f781978c0658806c59bc2815b9866; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/e8dd9cd2bbb26182da94/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:gsm8k"
+  },
+  "MarinSkyRL:hardmath": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "pafitis/HARDMath_processed_training",
+      "dataset_revision": "937e9f10356e31e854f6efb9a2507f1e200c8b25",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/260fb4c40ddba12d3799/2026.11.12.4/.artifact.json",
+      "measured_tasks": 702,
+      "task_specs_sha256": "33a1fe510cda5687f1dc0f8e77b94668ac835186b831d1c7f7e1aa4828588f98"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "pafitis/HARDMath_processed_training",
+      "dataset_revision": "937e9f10356e31e854f6efb9a2507f1e200c8b25",
+      "daytona_count_basis": "Complete 702-TaskSpec census from pafitis/HARDMath_processed_training@937e9f10356e31e854f6efb9a2507f1e200c8b25; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/260fb4c40ddba12d3799/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:hardmath"
+  },
+  "MarinSkyRL:hendrycks_math": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "EleutherAI/hendrycks_math",
+      "dataset_revision": "21a5633873b6a120296cce3e2df9d5550074f4a3",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/b89809699250281a1d4c/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1744,
+      "task_specs_sha256": "11251900d6fac169433a7636b859f6176ea0b1687f49909c34062cfed87a658c"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "EleutherAI/hendrycks_math",
+      "dataset_revision": "21a5633873b6a120296cce3e2df9d5550074f4a3",
+      "daytona_count_basis": "Complete 1744-TaskSpec census from EleutherAI/hendrycks_math@21a5633873b6a120296cce3e2df9d5550074f4a3; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/b89809699250281a1d4c/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:hendrycks_math"
+  },
+  "MarinSkyRL:hh_rlhf/harmless-base": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "Anthropic/hh-rlhf",
+      "dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/a30e97f3e7f1594ff1cd/2026.11.12.4/.artifact.json",
+      "measured_tasks": 42378,
+      "task_specs_sha256": "333140deb1673ab44ef1daf9ffad0eaa02a5bf98252bf92eb8accbb3f379d918"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "Anthropic/hh-rlhf",
+      "dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+      "daytona_count_basis": "Complete 42378-TaskSpec census from Anthropic/hh-rlhf@09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/a30e97f3e7f1594ff1cd/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:hh_rlhf/harmless-base"
+  },
+  "MarinSkyRL:hh_rlhf/helpful-base": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "Anthropic/hh-rlhf",
+      "dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/5b1d6c49d6456f6971a7/2026.11.12.4/.artifact.json",
+      "measured_tasks": 43699,
+      "task_specs_sha256": "bfd6f1cad832d16e7cc2b41571b44ef0418cc08e3d469adb8718fd526c4181b5"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "Anthropic/hh-rlhf",
+      "dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+      "daytona_count_basis": "Complete 43699-TaskSpec census from Anthropic/hh-rlhf@09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/5b1d6c49d6456f6971a7/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:hh_rlhf/helpful-base"
+  },
+  "MarinSkyRL:hh_rlhf/helpful-online": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "Anthropic/hh-rlhf",
+      "dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/6b685865956477dbeb48/2026.11.12.4/.artifact.json",
+      "measured_tasks": 21989,
+      "task_specs_sha256": "3503da05413d05042410d6e4081fbcf67000c2ce804c3a3574fa374788503c7a"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "Anthropic/hh-rlhf",
+      "dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+      "daytona_count_basis": "Complete 21989-TaskSpec census from Anthropic/hh-rlhf@09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/6b685865956477dbeb48/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:hh_rlhf/helpful-online"
+  },
+  "MarinSkyRL:hh_rlhf/helpful-rejection-sampled": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "Anthropic/hh-rlhf",
+      "dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/ceb4b6b6a1282a2eed05/2026.11.12.4/.artifact.json",
+      "measured_tasks": 52382,
+      "task_specs_sha256": "83ce1dba8ac33e3b7a1996e1a98e4f879e75e68adf5004367316d1b8bf172e6a"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "Anthropic/hh-rlhf",
+      "dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+      "daytona_count_basis": "Complete 52382-TaskSpec census from Anthropic/hh-rlhf@09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/ceb4b6b6a1282a2eed05/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:hh_rlhf/helpful-rejection-sampled"
+  },
+  "MarinSkyRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "trl-lib/kto-mix-14k",
+      "dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/acfe6a1974f3a3e598a3/2026.11.12.4/.artifact.json",
+      "measured_tasks": 4502,
+      "task_specs_sha256": "df574c2ff6e58b5d41e3c77d409460cbc101789d7406e1600df58aa65af0c576"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "trl-lib/kto-mix-14k",
+      "dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+      "daytona_count_basis": "Complete 4502-TaskSpec census from trl-lib/kto-mix-14k@4470f033f33364e7d064c9f920c3df54d0cce767; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/acfe6a1974f3a3e598a3/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized"
+  },
+  "MarinSkyRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "trl-lib/kto-mix-14k",
+      "dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/bef9b36cd36b481b26b6/2026.11.12.4/.artifact.json",
+      "measured_tasks": 4544,
+      "task_specs_sha256": "c5952cdc444ac32f3ad10f5f9e21e94d70d519245f896f442773d16fd0efd162"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "trl-lib/kto-mix-14k",
+      "dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+      "daytona_count_basis": "Complete 4544-TaskSpec census from trl-lib/kto-mix-14k@4470f033f33364e7d064c9f920c3df54d0cce767; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/bef9b36cd36b481b26b6/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs"
+  },
+  "MarinSkyRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "trl-lib/kto-mix-14k",
+      "dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/6034c3321421e0612e9b/2026.11.12.4/.artifact.json",
+      "measured_tasks": 4454,
+      "task_specs_sha256": "24c98bf950b1d7038f3127b238278ab859c88f079964bdf99139b39e222693f0"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "trl-lib/kto-mix-14k",
+      "dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+      "daytona_count_basis": "Complete 4454-TaskSpec census from trl-lib/kto-mix-14k@4470f033f33364e7d064c9f920c3df54d0cce767; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/6034c3321421e0612e9b/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned"
+  },
+  "MarinSkyRL:math500": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "HuggingFaceH4/MATH-500",
+      "dataset_revision": "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/af19f87ffd13d2190377/2026.11.12.4/.artifact.json",
+      "measured_tasks": 500,
+      "task_specs_sha256": "72522d50c9c19b3ab9f60bc5daede83e8e895b49c3cd03238ea5bf5a60cf9a58"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "HuggingFaceH4/MATH-500",
+      "dataset_revision": "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be",
+      "daytona_count_basis": "Complete 500-TaskSpec census from HuggingFaceH4/MATH-500@6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/af19f87ffd13d2190377/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:math500"
+  },
+  "MarinSkyRL:nemotron_if": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "nvidia/Llama-Nemotron-Post-Training-Dataset",
+      "dataset_revision": "ab2a40d258a6a4d9d4c277d702aeea445081766c",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/c1baca157f9aa66027c0/2026.11.12.4/.artifact.json",
+      "measured_tasks": 54954,
+      "task_specs_sha256": "ce7c6b81385b489fc8db2c860b6bfdd605cb883d19e00d9fc7f069f642bb7998"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Llama-Nemotron-Post-Training-Dataset",
+      "dataset_revision": "ab2a40d258a6a4d9d4c277d702aeea445081766c",
+      "daytona_count_basis": "Complete 54954-TaskSpec census from nvidia/Llama-Nemotron-Post-Training-Dataset@ab2a40d258a6a4d9d4c277d702aeea445081766c; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/c1baca157f9aa66027c0/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 54954
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_if"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/d6db0cb51593eb9f6f09/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1884,
+      "task_specs_sha256": "9a743ef6b3686125575eed40d44ea51059bff36dc3b023692392ca2bf1ad7de3"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 1884-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/d6db0cb51593eb9f6f09/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 1884
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/1b4163c18d76141e6824/2026.11.12.4/.artifact.json",
+      "measured_tasks": 5307,
+      "task_specs_sha256": "2697cba306ae8581094798d4bfc3b8c99806030a81d2419374bc62771942e914"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 5307-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/1b4163c18d76141e6824/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 5307
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/hs3_en": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/0a850d2ad0f99151b960/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1281,
+      "task_specs_sha256": "4fe3d3aa2ea9340bbb11068cd305a954dbf9211add742b1bbf1aefd9b935f261"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 1281-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/0a850d2ad0f99151b960/2026.11.12.2",
+      "daytona_execution_failures": 1281,
+      "daytona_machine_slots": 1281,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 1281
+            },
+            "machine_slots": 1281
+          }
+        },
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 1281
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ]
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/hs3_en"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/hs3_multi": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/a4e6156dd0178b060fef/2026.11.12.4/.artifact.json",
+      "measured_tasks": 962,
+      "task_specs_sha256": "98d47e1a11d87d0f065677c066eace547d908de00e7cbff33a756dbd59bfa60b"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 962-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/a4e6156dd0178b060fef/2026.11.12.2",
+      "daytona_execution_failures": 962,
+      "daytona_machine_slots": 962,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 962
+            },
+            "machine_slots": 962
+          }
+        },
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 962
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ]
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/hs3_multi"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/hs3_multiturn": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/97fbc5c67d5428601448/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1243,
+      "task_specs_sha256": "beec5351f543ac0879dd1e63df90e0c9b26ed19f9857032e9cc3b0c02178e949"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 1243-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/97fbc5c67d5428601448/2026.11.12.2",
+      "daytona_execution_failures": 1243,
+      "daytona_machine_slots": 1243,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 1243
+            },
+            "machine_slots": 1243
+          }
+        },
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 1243
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ]
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/hs3_multiturn"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/8e4c4d11beab791fdf89/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2000,
+      "task_specs_sha256": "36d108bcf76cf41a2633053853520cb2193759fb5b946d34b746c06ec46eab84"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 2000-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/8e4c4d11beab791fdf89/2026.11.12.2",
+      "daytona_execution_failures": 2000,
+      "daytona_machine_slots": 2000,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 2000
+            },
+            "machine_slots": 2000
+          }
+        },
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 2000
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ]
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/safety_en": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/33000d444daf083e8a77/2026.11.12.4/.artifact.json",
+      "measured_tasks": 629,
+      "task_specs_sha256": "b1e1af0adfe142fa6092975a5b46350197e6f144694f693893b1f3e8ce241c85"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 629-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/33000d444daf083e8a77/2026.11.12.2",
+      "daytona_execution_failures": 629,
+      "daytona_machine_slots": 629,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 629
+            },
+            "machine_slots": 629
+          }
+        },
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 629
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ]
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/safety_en"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/2801eb628187b42fcb02/2026.11.12.4/.artifact.json",
+      "measured_tasks": 860,
+      "task_specs_sha256": "ace30cc9f93b4013f5415c58ff63d59b23cd303cc0b73860766ca688ba33c546"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 860-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/2801eb628187b42fcb02/2026.11.12.2",
+      "daytona_execution_failures": 860,
+      "daytona_machine_slots": 860,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 860
+            },
+            "machine_slots": 860
+          }
+        },
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 860
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ]
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/0f5a5918ef89d504cc72/2026.11.12.4/.artifact.json",
+      "measured_tasks": 3903,
+      "task_specs_sha256": "c74d21b80dd1804f985f43f421302fe706d98f618646fc7494651e238b2b976f"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 3903-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/0f5a5918ef89d504cc72/2026.11.12.2",
+      "daytona_execution_failures": 3903,
+      "daytona_machine_slots": 3903,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 3903
+            },
+            "machine_slots": 3903
+          }
+        },
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 3903
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ]
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_abstention": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/706b968ad2d97787c7a2/2026.11.12.4/.artifact.json",
+      "measured_tasks": 4025,
+      "task_specs_sha256": "0ff095a2787abcc8d9b32e4d67d75ef131c372c9fea00f1a142835eb01e5a17f"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 4025-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/706b968ad2d97787c7a2/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 4025
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_abstention"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_calendar_v2": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "7",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/bd6b7261c18424e121fd/2026.11.12.4/.artifact.json",
+      "measured_tasks": 910,
+      "task_specs_sha256": "e54b6ca2e0fb053954f97a682fd895ff99f4aff808aa8700b3b8683e2d823df9"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 910-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/bd6b7261c18424e121fd/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 910
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_calendar_v2"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_comp_coding": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "7",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/bbc08d074c086f33bf2c/2026.11.12.4/.artifact.json",
+      "measured_tasks": 7929,
+      "task_specs_sha256": "0d487ade87ff40dcffe3f6c2b6f85edb0e7b85532205307351d1b60754221cb3"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 7929-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/bbc08d074c086f33bf2c/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 7929
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_comp_coding"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/82682fcb9df9e2cb958c/2026.11.12.4/.artifact.json",
+      "measured_tasks": 10409,
+      "task_specs_sha256": "e0b17c889cb5027008173f62318a4a0ed00eef9ede398938411c8fa9535664f8"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 10409-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/82682fcb9df9e2cb958c/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 10409
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/fc4cefdfb40e97c9b498/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2861,
+      "task_specs_sha256": "788d80f97fa273674b715656c7c318114b2ada106bd7d8f3ef2a32449d36b4d5"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 2861-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/fc4cefdfb40e97c9b498/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 2861
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_lean": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "6",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/b2e08371c573bb8eae51/2026.11.12.4/.artifact.json",
+      "measured_tasks": 902,
+      "task_specs_sha256": "62d78e208dc3eeeab3b5f6a05113aedf756dbaffa6d556764c7dbb3a797a96c8"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 902-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/b2e08371c573bb8eae51/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 902
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_lean"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_cot": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/bbf471634866b5b5c6fd/2026.11.12.4/.artifact.json",
+      "measured_tasks": 4404,
+      "task_specs_sha256": "554ccbac55ca0c316a1375729676134421cca77b237a9703a379f4e4a59dfed4"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 4404-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/bbf471634866b5b5c6fd/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_cot"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_tir": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/968151c684dd2ad6feaf/2026.11.12.4/.artifact.json",
+      "measured_tasks": 5796,
+      "task_specs_sha256": "2a1c9555039e2814bc13a781410014ff1e42b8e02629af7fbd54bf5ae1823e56"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 5796-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/968151c684dd2ad6feaf/2026.11.12.2",
+      "daytona_execution_failures": 5796,
+      "daytona_machine_slots": 5796,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 5796
+            },
+            "machine_slots": 5796
+          }
+        },
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 5796
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ]
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_tir"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/4eb28e6daf309e8bc40b/2026.11.12.4/.artifact.json",
+      "measured_tasks": 4028,
+      "task_specs_sha256": "b5636e67ddf61d1e5996196c9c6f7146f13eb3e8b466607b25ac448505b5d07d"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 4028-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/4eb28e6daf309e8bc40b/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 4028
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_inductive": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/3d89a916ea7cc4b5b424/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2097,
+      "task_specs_sha256": "9147e22fc29f83c505615e5aa7f78bc06f1df282468b130483c273bce3bafbf8"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 2097-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/3d89a916ea7cc4b5b424/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 2097
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_inductive"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "4",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/a24965cb24e91ec4a577/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2069,
+      "task_specs_sha256": "c76abdb73a82ccbee596028075997b35dc4b52a3f43fd5e1ba6dbdf000109c56"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 2069-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/a24965cb24e91ec4a577/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 2069
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_rdkit": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/bd5a3215f5b8407f04b3/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1403,
+      "task_specs_sha256": "903eca976c8f7b97fdf2792ef8b54c8354969a04c59168b2fca9a7c05784103b"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 1403-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/bd5a3215f5b8407f04b3/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 1403
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_rdkit"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_reasoning_gym": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "6",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/7146a7155fcf08a2442d/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1385,
+      "task_specs_sha256": "02e65a4d9bcc38f62cb1fa927946555a4c4bd808591d448c86bc94ae7639df8a"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 1385-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/7146a7155fcf08a2442d/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 1385
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_reasoning_gym"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/be5d167a4bd9bb2f149a/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2097,
+      "task_specs_sha256": "a7b60e519973f38c0bdefdace9e0a8eda726c276a53ccf5952ae67a6a3beaeb9"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 2097-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/be5d167a4bd9bb2f149a/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 2097
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa_cot_rima_new": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/7e504c9af6d3c82a40c3/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2077,
+      "task_specs_sha256": "30a7fcf9fab1ec75aeb7eb4ee711fab684006c2b0f6e8feb3a3058c57173b857"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 2077-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/7e504c9af6d3c82a40c3/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 2077
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa_cot_rima_new"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_structured_outputs_v2": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "4",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/4ebde6b4eea957df68ab/2026.11.12.4/.artifact.json",
+      "measured_tasks": 682,
+      "task_specs_sha256": "f6e6b146f1adf1817a0bfd8c8b548e0d7b52a834f78b7f02ea5726f842a14371"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 682-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/4ebde6b4eea957df68ab/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 682
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_structured_outputs_v2"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "6",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/fa4cccc03d51a9f48fd0/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2663,
+      "task_specs_sha256": "67069f96a694b5fd66093781385cb6eddbfb128402f7b8dd06d020ded50b419f"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 2663-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/fa4cccc03d51a9f48fd0/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 2663
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_citation_format_v2": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/060ad5f04ab77df53b31/2026.11.12.4/.artifact.json",
+      "measured_tasks": 250,
+      "task_specs_sha256": "76c7096beb3ec992b63512c27d0883fbb24bd612199b7c6781704837da2e7444"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 250-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/060ad5f04ab77df53b31/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 250
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_citation_format_v2"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_freeform_text_v2": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/aaf7452c946b6cafe62a/2026.11.12.4/.artifact.json",
+      "measured_tasks": 250,
+      "task_specs_sha256": "1a6bf8d7b347690d1939422da7a17e8fbbd0d2ddc8f10048598673e8f98ea4d5"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 250-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/aaf7452c946b6cafe62a/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 250
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_freeform_text_v2"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_structured_outputs_v2": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "4",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/041b7ec0fe25e2ab8525/2026.11.12.4/.artifact.json",
+      "measured_tasks": 7143,
+      "task_specs_sha256": "a7dde82dc50e7e8d9db47e077634aa2395e00077900d985183a225ca33c721e2"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 7143-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/041b7ec0fe25e2ab8525/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 7143
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_structured_outputs_v2"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/3f465a6ff9bd77b94d61/2026.11.12.4/.artifact.json",
+      "measured_tasks": 246,
+      "task_specs_sha256": "83007c0a1b03a2b8a04a93efe6509c8d32bba9d622ff5370e06265851476d88b"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 246-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/3f465a6ff9bd77b94d61/2026.11.12.2",
+      "daytona_execution_failures": 246,
+      "daytona_machine_slots": 246,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 246
+            },
+            "machine_slots": 246
+          }
+        },
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 246
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ]
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym"
+  },
+  "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/dab3b5f24ff023011b6b/2026.11.12.4/.artifact.json",
+      "measured_tasks": 932,
+      "task_specs_sha256": "d0f5dd7ac2a461e8337531dc530b321f0c5f6748365bb88c1c4ba0dac2c3aa6c"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 932-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/dab3b5f24ff023011b6b/2026.11.12.2",
+      "daytona_execution_failures": 932,
+      "daytona_machine_slots": 932,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 932
+            },
+            "machine_slots": 932
+          }
+        },
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 932
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ]
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2"
+  },
+  "MarinSkyRL:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/e2649211bf6143e2d47e/2026.11.12.4/.artifact.json",
+      "measured_tasks": 4795,
+      "task_specs_sha256": "d4e8c965e2154c1a49cca898bb64212b543a345d531ce9a6464e05aa4202ced3"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 4795-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/e2649211bf6143e2d47e/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 4795
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt"
+  },
+  "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_abstention": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/e563619dad4bb84b9380/2026.11.12.4/.artifact.json",
+      "measured_tasks": 4025,
+      "task_specs_sha256": "3f516f79ee8b4770378d70c9c6845e42a9db416582a79f27ca96e049f55baef6"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 4025-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/e563619dad4bb84b9380/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 4025
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_abstention"
+  },
+  "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "7",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/4e556fff061b3b771e78/2026.11.12.4/.artifact.json",
+      "measured_tasks": 910,
+      "task_specs_sha256": "f5a45abba7fca490a38c0c02df091d020bf2fae23f8e52628f357d87ed915efb"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 910-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/4e556fff061b3b771e78/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 910
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2"
+  },
+  "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "7",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/b1f437e94bb1153b48ec/2026.11.12.4/.artifact.json",
+      "measured_tasks": 7928,
+      "task_specs_sha256": "e0130bc9719b22d0c74d0a65f0f53b44e847efecf7f90b939f7dc4de22ec421a"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 7928-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/b1f437e94bb1153b48ec/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 7928
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding"
+  },
+  "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/3a6e5cd6448dfc501bf3/2026.11.12.4/.artifact.json",
+      "measured_tasks": 11828,
+      "task_specs_sha256": "04c8d795e5f855c2ac24a669f3fdd08571654e6015e665d5b1ad35f8d93a64fc"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 11828-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/3a6e5cd6448dfc501bf3/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 11828
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following"
+  },
+  "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/19a95719c118b98a8421/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2861,
+      "task_specs_sha256": "3a55b5f26f42fda32ad3db9440d6b1838150c0af427d54d3288bc282218c84a6"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 2861-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/19a95719c118b98a8421/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 2861
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak"
+  },
+  "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_lean": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "6",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/5eea58806ee54df813f3/2026.11.12.4/.artifact.json",
+      "measured_tasks": 902,
+      "task_specs_sha256": "0da36edc111c0b32940475371dc7d95dfe3b7707337d65c56b4b44146fb7dfc3"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 902-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/5eea58806ee54df813f3/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 902
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_lean"
+  },
+  "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/5b887d99a1b0032d32ac/2026.11.12.4/.artifact.json",
+      "measured_tasks": 4404,
+      "task_specs_sha256": "ab7a9025e6f7c02c1c5201cac9ec2cba1d2c3ce30dad6a4334369ff8be3eb65a"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 4404-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/5b887d99a1b0032d32ac/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot"
+  },
+  "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/79b4bc55927370a73666/2026.11.12.4/.artifact.json",
+      "measured_tasks": 5796,
+      "task_specs_sha256": "5fbef80b88123bf90380cea0ab5337988317472b53a9b959eb43018d456dce81"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 5796-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/79b4bc55927370a73666/2026.11.12.2",
+      "daytona_execution_failures": 5796,
+      "daytona_machine_slots": 5796,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 5796
+            },
+            "machine_slots": 5796
+          }
+        },
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 5796
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ]
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir"
+  },
+  "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/d8cf89cbb7230ed4acb1/2026.11.12.4/.artifact.json",
+      "measured_tasks": 4028,
+      "task_specs_sha256": "b37d696b53c38f78dfaa603c36d8acac5c02eecc77d73f0bd0d64972e8177219"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 4028-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/d8cf89cbb7230ed4acb1/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 4028
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k"
+  },
+  "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_inductive": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/7d42e8ea9086b3b16d11/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2097,
+      "task_specs_sha256": "ab00ad23cba431b81b3fac298cc9db22f56787c14b21a31600614ac5254f9fe4"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 2097-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/7d42e8ea9086b3b16d11/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 2097
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_inductive"
+  },
+  "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_transductive": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "4",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/3ac6369b70145d49e781/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2069,
+      "task_specs_sha256": "accc45d75710397b91b3c2343c2a939d3ec9511a7114d43a0cd7f752629029bb"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 2069-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/3ac6369b70145d49e781/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 2069
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_transductive"
+  },
+  "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "6",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/724dc16deb80ae437542/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2088,
+      "task_specs_sha256": "ddf1d6cb56aaa70a6f8e5688b887ef61f2bfb397d8ef1d291c28c248abca750a"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 2088-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/724dc16deb80ae437542/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 2088
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym"
+  },
+  "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/09efd3a57026bf54a4ab/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2097,
+      "task_specs_sha256": "2dc3ef992de45c83b8dbb1ce2975b4b595220947e324fc8fb1ec838a703c19c0"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 2097-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/09efd3a57026bf54a4ab/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 2097
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa"
+  },
+  "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa_cot_rima_new": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/3da7821cf0c522bf158d/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2077,
+      "task_specs_sha256": "c83e03b7d5307ae2bf60d42573152a9a46bb826a1d36c070a144f86d60db11f0"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 2077-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/3da7821cf0c522bf158d/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {
+          "local": {
+            "failures": {},
+            "machine_slots": 2077
+          }
+        }
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa_cot_rima_new"
+  }
+}

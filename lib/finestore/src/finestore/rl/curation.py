@@ -465,6 +465,52 @@ def require_decontamination(
         raise ValueError(f"Decontamination admission blocked: {blocker}")
 
 
+class IntegrityContractGroup(CatalogRecord):
+    id: str | None
+    version: int | None
+    dependency_state: str | None
+    native_family: str | None
+    harness_policy_sha256: str | None
+    present: bool
+    count: int = Field(gt=0)
+
+
+class IntegrityContractExample(CatalogRecord):
+    task_id: str
+    contract_json: str
+
+    @model_validator(mode="after")
+    def _bounded_payload(self) -> "IntegrityContractExample":
+        if len(self.contract_json.encode()) > 16384:
+            raise ValueError("Contract example exceeds 16 KiB")
+        return self
+
+
+class IntegrityContractSummary(CatalogRecord):
+    """Bounded census metadata; full contract groups remain in the evidence artifact."""
+
+    groups: list[IntegrityContractGroup] = Field(max_length=64)
+    distinct_groups: int = Field(ge=0)
+    absent_contract_tasks: int = Field(ge=0)
+    required_shared_tasks: int = Field(ge=0)
+    shared_missing_contract_tasks: int = Field(ge=0)
+    example: IntegrityContractExample | None
+    evidence_url: str
+    dataset_id: str
+    dataset_revision: str
+    task_specs_sha256: str
+
+
+class ActorCensusInput(CatalogRecord):
+    dataset_id: str
+    dataset_revision: str
+    converter_version: str
+    converter_revision: str
+    measured_tasks: int = Field(gt=0)
+    task_specs_sha256: str
+    evidence_url: str
+
+
 class SourceDeclaration(CatalogRecord):
     id: str
     name: str
@@ -494,12 +540,13 @@ class SourceDeclaration(CatalogRecord):
     daytona_snapshot_count: int | None = None
     daytona_snapshot_threshold: int | None = None
     daytona_count_basis: str | None = None
-    # How execution was qualified when the source ships no oracle solutions.
     oracle_validation: OracleValidation | None = None
     # The weakest review behind the admission, with the pointers that establish it.
     oversight: OversightLevel = OversightLevel.NONE
     oversight_evidence: OversightEvidence | None = None
     grading_environment: GradingEnvironmentEvidence | None = None
+    integrity_contracts: IntegrityContractSummary | None = None
+    actor_census_input: ActorCensusInput | None = None
     converted_examples: ConvertedExamples | None = None
     lexical_contamination: LexicalContaminationEvidence | None = None
     daytona_machine_slots: int | None = None
@@ -512,6 +559,13 @@ class SourceDeclaration(CatalogRecord):
 
     @model_validator(mode="after")
     def _canonical_identity(self) -> "SourceDeclaration":
+        census = self.actor_census_input
+        if census is not None and (
+            self.pipeline is None
+            or (census.dataset_id, census.dataset_revision, census.converter_version)
+            != (self.dataset_id, self.dataset_revision, self.pipeline.version)
+        ):
+            raise ValueError("Actor census input or converter version differs from the declaration")
         if PENDING_SOURCE_ID_RETIREMENTS.get(self.id, self.id) != source_identifier(
             self.origin, self.upstream_dataset, self.subset, self.variant
         ):
