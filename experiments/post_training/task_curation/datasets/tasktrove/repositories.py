@@ -128,7 +128,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "DCAgent__swe_rebench_v2_patched_oracle-v2",
             SWE_REBENCH_RUBRIC,
             convert=convert_swe_rebench_task,
-            version="3",
+            version="4",
             info=replace(
                 SourceInfo(
                     id="Task Trove:DCAgent__swe_rebench_v2_patched_oracle-v2",
@@ -158,13 +158,16 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     count=18319,
                     notes=(
                         "Patched trusted repository tests with deferred Docker builds. Python uses pytest; "
-                        "retained non-Python sources keep their parser with exit-code credit disabled."
+                        "retained non-Python sources keep their parser with exit-code credit disabled. "
+                        "Inventory: Docker builds require exact pinning and oracle qualification is incomplete."
                     ),
-                    daytona_snapshot_count=17706,
+                    daytona_snapshot_count=13162,
                     daytona_count_basis=(
-                        "pinned release per-task build-context inventory from the conversion ledger, "
-                        "resources defaulted; production-named recount runs with the conversion program"
+                        "Production converted agent and grader snapshot_identity census of all 13,562 retained rows "
+                        "at TaskTrove 02923004846e4e73862c20962f823a6d05100e7a; each role uses 2 CPUs, "
+                        "4096 MB RAM and 10240 MB storage. Raw archive identities are not this count."
                     ),
+                    daytona_execution_failures=13562,
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
             ),
