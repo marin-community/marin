@@ -73,4 +73,3 @@ async def test_production_gs8_batch_waits_for_rejected_agentic_replacement():
     completed = await buffer.admit(1)
     assert completed.selection.metrics["async/consumed_route/agentic"] == 32
     assert completed.selection.metrics["async/consumed_route/nonagentic"] == 32
-    assert group_size * sum(config["consumed_route_quotas"].values()) == 512

@@ -153,7 +153,7 @@ def _token_spec() -> P:
 
 
 def _activation_spec(x: Float[Array, "B S D"]) -> P:
-    """Preserve the input residual layout after an MLP flattens and restores tokens."""
+    """Return the input partition spec, or the ambient batch spec when unsharded."""
     return _partition_spec_of(x) or _batch_spec()
 
 

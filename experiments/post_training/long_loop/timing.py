@@ -17,6 +17,7 @@ from statistics import median, quantiles
 from uuid import uuid4
 
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath
 
 
 @dataclass(frozen=True)
@@ -101,7 +102,7 @@ def durable_event_log(destination: str, run: str, stage: str, attempt: str) -> I
     finally:
         if log.path.exists():
             fs, key = filesystem_for(destination)
-            fs.makedirs(key.rsplit("/", 1)[0], exist_ok=True)
+            fs.makedirs(str(StoragePath(key).parent), exist_ok=True)
             fs.pipe_file(key, log.path.read_bytes())
 
 
