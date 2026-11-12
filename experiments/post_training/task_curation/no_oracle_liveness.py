@@ -71,6 +71,12 @@ def load_specs(path: Path) -> dict[str, dict]:
     return specs
 
 
+def manifest_bases(path: Path) -> dict[str, str]:
+    """Each rebuilt task's base reference from a rebuild manifest."""
+    manifest = json.loads(path.read_text())
+    return {row["task_id"]: row["base_ref"] for row in manifest["tasks"] if row.get("status", "").startswith("rebuilt")}
+
+
 def sample_by_base(specs: dict[str, dict], bases: dict[str, str], per_base: int, seed: int = 0) -> list[str]:
     grouped: dict[str, list[str]] = defaultdict(list)
     for task_id in sorted(specs):
@@ -224,10 +230,7 @@ def main() -> None:
     args = parser.parse_args()
     specs = load_specs(args.lowered)
     if args.manifest is not None:
-        manifest = json.loads(args.manifest.read_text())
-        bases = {
-            row["task_id"]: row["base_ref"] for row in manifest["tasks"] if row.get("status", "").startswith("rebuilt")
-        }
+        bases = manifest_bases(args.manifest)
     else:
         # A published cohort carries each task's own base in its spec.
         bases = {task_id: spec["task"]["environment_requirements"]["docker_image"] for task_id, spec in specs.items()}

@@ -622,9 +622,8 @@ resources installed under `/setup_files`, then compare the files it writes at th
 native recipe's `COPY` destinations against the same expectation set. A spec that
 declares no setup commands reports `no_setup_commands` rather than passing: a hook
 the runtime never executes must not count as evidence. Container DNS may need an
-explicit resolver (`--docker-dns 1.1.1.1`); package installation is real, because
-the rebuilt setup no longer installs task dependencies and the base image owns
-provisioning.
+explicit resolver (`--docker-dns 1.1.1.1`); package installation runs for real,
+because the rebuilt setup installs the task's declared dependencies verbatim.
 
 **Empty-submission grading (sandbox).** `no_oracle_liveness` samples tasks by
 base and calls `grade_empty_in_sandbox` on a fresh grading machine. The task

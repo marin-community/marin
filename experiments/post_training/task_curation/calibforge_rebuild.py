@@ -203,10 +203,7 @@ def compile_recipe(instructions: list[Instruction], files: dict[str, bytes], mod
     installs move into the setup script verbatim, file copies are staged from
     the fixture payload, and ENV assignments persist in the setup script. A
     step that cannot run that way without changing the task defers with the
-    reason admission records. This envelope is deliberately wider than the
-    replay check in ``environment_fidelity`` and the fixture-extraction
-    compiler in ``calibforge_fixtures``, which accept only the steps they must
-    replay or extract.
+    reason admission records.
     """
     bases = [item for item in instructions if item.command == "from"]
     if len(bases) != 1:
@@ -497,8 +494,18 @@ def lowered_task_spec(task_id: str, task_binary: bytes) -> dict:
     }
 
 
-def _rebuild_cohort(cohort: Path, excluded: set[str]) -> tuple[list[dict], list[dict], list[dict], list[str]]:
-    """Rebuild each unexcluded task, returning staged tasks, lowered specs, evidence and base refs."""
+@dataclass(frozen=True)
+class _RebuildOutcome:
+    """One rebuild run's staged tasks, lowered specs, evidence rows and base refs."""
+
+    records: list[dict]
+    lowered: list[dict]
+    evidence: list[dict]
+    base_refs: list[str]
+
+
+def _rebuild_cohort(cohort: Path, excluded: set[str]) -> _RebuildOutcome:
+    """Rebuild each unexcluded task, staging its payload and lowered spec."""
     records: list[dict] = []
     lowered: list[dict] = []
     evidence: list[dict] = []
@@ -531,7 +538,7 @@ def _rebuild_cohort(cohort: Path, excluded: set[str]) -> tuple[list[dict], list[
             records.append({"path": path, "source": path, "task_binary": rebuilt.task_binary})
             lowered.append({"path": path, "lowered_task_spec": json.dumps(lowered_task_spec(path, rebuilt.task_binary))})
             evidence.append(record)
-    return records, lowered, evidence, base_refs
+    return _RebuildOutcome(records, lowered, evidence, base_refs)
 
 
 def _evidence_manifest(
@@ -567,12 +574,12 @@ def main() -> None:
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     excluded = set(json.loads(args.excluded.read_text()))
-    records, lowered, evidence, base_refs = _rebuild_cohort(args.cohort, excluded)
+    outcome = _rebuild_cohort(args.cohort, excluded)
     schema = pa.schema([("path", pa.string()), ("source", pa.string()), ("task_binary", pa.binary())])
-    pq.write_table(pa.Table.from_pylist(records, schema=schema), args.output / "pending-tasks.parquet")
+    pq.write_table(pa.Table.from_pylist(outcome.records, schema=schema), args.output / "pending-tasks.parquet")
     lowered_schema = pa.schema([("path", pa.string()), ("lowered_task_spec", pa.string())])
-    pq.write_table(pa.Table.from_pylist(lowered, schema=lowered_schema), args.output / "lowered-tasks.parquet")
-    manifest = _evidence_manifest(args.cohort, args.excluded, records, evidence, base_refs)
+    pq.write_table(pa.Table.from_pylist(outcome.lowered, schema=lowered_schema), args.output / "lowered-tasks.parquet")
+    manifest = _evidence_manifest(args.cohort, args.excluded, outcome.records, outcome.evidence, outcome.base_refs)
     (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(json.dumps({key: value for key, value in manifest.items() if key != "tasks"}))
 

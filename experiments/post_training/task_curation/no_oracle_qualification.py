@@ -65,7 +65,7 @@ from experiments.post_training.task_curation.environment_fidelity import (
     ENVIRONMENT_DOCKERFILE,
     ENVIRONMENT_PREFIX,
 )
-from experiments.post_training.task_curation.no_oracle_liveness import load_specs
+from experiments.post_training.task_curation.no_oracle_liveness import load_specs, manifest_bases
 
 COPY_SOURCE = re.compile(r"^\s*COPY\s+(?:--\S+\s+)*(?P<sources>.+)$", re.IGNORECASE | re.MULTILINE)
 ADD_SOURCE = re.compile(r"^\s*ADD\s", re.IGNORECASE | re.MULTILINE)
@@ -430,14 +430,7 @@ def _normalized_path(path: str) -> str:
     return path[2:] if path.startswith("./") else path
 
 
-@dataclass(frozen=True)
-class WorkspaceFile:
-    path: str
-    sha256: str
-    mode: int
-
-
-def _manifest(stdout: str) -> list[WorkspaceFile]:
+def _manifest(stdout: str) -> list[FileExpectation]:
     """Parse paired absolute-path mode and SHA-256 records from a container scan."""
     entries: dict[str, int] = {}
     digests: dict[str, str] = {}
@@ -453,7 +446,7 @@ def _manifest(stdout: str) -> list[WorkspaceFile]:
             entries[path] = int(first, 8)
         elif re.fullmatch(r"[0-9a-f]{64}", first):
             digests[path] = first
-    return [WorkspaceFile(path, digest, entries[path]) for path, digest in digests.items() if path in entries]
+    return [FileExpectation(path, digest, entries[path]) for path, digest in digests.items() if path in entries]
 
 
 def _execute_container_setup(
@@ -757,8 +750,7 @@ def main() -> None:
     parser.add_argument("--liveness", type=Path, help="JSONL receipts from no_oracle_liveness")
     args = parser.parse_args()
 
-    manifest = json.loads((args.rebuild_out / "manifest.json").read_text())
-    bases = {row["task_id"]: row["base_ref"] for row in manifest["tasks"] if row.get("status", "").startswith("rebuilt")}
+    bases = manifest_bases(args.rebuild_out / "manifest.json")
     rebuilt = dict(_native_tasks(args.rebuild_out / "pending-tasks.parquet"))
 
     report = QualificationReport(bases=bases)
