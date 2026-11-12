@@ -216,10 +216,17 @@ def prebuilt_artifact(
     assert config is not None
     quick = options.mode is SourceProcessingMode.QUICK
 
-    def build_config(context) -> str:
-        return context.output_path
+    def build_config(context) -> dict:
+        # The recorded config must be a mapping; the pin makes the cohort part of the identity.
+        return {
+            "output_path": context.output_path,
+            "repo": config.repo,
+            "revision": config.revision,
+            "expected_rows": config.expected_rows,
+        }
 
-    def run(output_path: str) -> CampaignArtifact:
+    def run(step: dict) -> CampaignArtifact:
+        output_path = step["output_path"]
         local = Path(load(config))
         if quick:
             return _quick_view(config, local, output_path)
