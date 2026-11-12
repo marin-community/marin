@@ -330,3 +330,26 @@ def test_native_envelope_counts_original_toml_shape_without_unbuilt_lowering():
     task["execution_requirements"]["storage_mb"] = 8192
     with pytest.raises(ValueError, match="storage_mb conflicts"):
         count_native_spec_identities([("native", task)])
+
+
+@pytest.mark.usefixtures("taskcompendium_environment")
+def test_actor_capacity_keeps_separate_grader_snapshot_resources():
+    environment = {"command_semantics": "linux_process", "docker_image": "example/image@sha256:" + "0" * 64}
+    task = {
+        "id": "independent",
+        "environment_requirements": environment,
+        "grader": {"environment": environment},
+        "execution_requirements": {
+            "cpus": 2,
+            "memory_mb": 4096,
+            "storage_mb": 10240,
+            "agent_timeout_sec": 900,
+            "verifier_timeout_sec": 600,
+        },
+    }
+    runtime = {
+        "task_machine": {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240},
+        "verifier_machine": {"cpus": 4, "memory_mb": 8192, "storage_mb": 20480},
+    }
+    measured = count_lowered_spec_identities([("independent", {"task": task, "runtime": runtime})])
+    assert measured.distinct == 2 and not measured.execution_failures

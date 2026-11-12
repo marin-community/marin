@@ -23,33 +23,17 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from daytona import Resources
-from harbor.environments.daytona import machine_spec
-from harbor_config.models.task.config import EnvironmentConfig
-from shellbox.backends.daytona.machine import (
-    DaytonaMachineFactory,
-    UnsupportedMachineSpec,
-    snapshot_identity,
-    snapshot_resources,
-)
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
     HostImage,
     MachineSpec,
     NetworkPolicy,
+    UnsupportedMachineSpec,
 )
 from shellbox.survey import ProbeRequirements
 
 ENVIRONMENT_PREFIX = "environment/"
 DOCKERFILE = "Dockerfile"
-
-
-def _task_environment_config(task_toml: bytes | None) -> EnvironmentConfig:
-    """Harbor's own environment config for a task, defaulted when absent."""
-    if task_toml is None:
-        return EnvironmentConfig()
-    document = tomllib.loads(task_toml.decode(errors="replace"))
-    return EnvironmentConfig(**document.get("environment") or {})
 
 
 @dataclass
@@ -92,11 +76,23 @@ def _unpack_environment(payload: bytes) -> tuple[list[tuple[str, bytes, int]], b
 
 def _registry_identity(reference: str) -> str:
     """Production snapshot name for a registry reference with default resources."""
+    from daytona import Resources  # noqa: PLC0415
+    from shellbox.backends.daytona.machine import snapshot_identity  # noqa: PLC0415
+
     return snapshot_identity(RegistryImage(reference), Resources())
 
 
 def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentityCount:
     """Count snapshot identities for native cohort tars, one per task."""
+    # Harbor's optional runtime is needed only for a requested native probe.
+    from harbor.environments.daytona import machine_spec  # noqa: PLC0415
+    from harbor_config.models.task.config import EnvironmentConfig  # noqa: PLC0415
+    from shellbox.backends.daytona.machine import (  # noqa: PLC0415
+        DaytonaMachineFactory,
+        snapshot_identity,
+        snapshot_resources,
+    )
+
     sizes: Counter[str] = Counter()
     failures: list[tuple[str, str]] = []
     factory = DaytonaMachineFactory()
@@ -106,7 +102,8 @@ def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentit
             try:
                 for name, content, mode in entries:
                     _write_context(Path(tmp), name, content, mode)
-                config = _task_environment_config(task_toml)
+                document = tomllib.loads(task_toml.decode(errors="replace")) if task_toml is not None else {}
+                config = EnvironmentConfig.model_validate(document.get("environment") or {})
                 if not config.docker_image and not (Path(tmp) / DOCKERFILE).exists():
                     raise UnsupportedMachineSpec(f"missing {ENVIRONMENT_PREFIX}{DOCKERFILE}")
                 spec = machine_spec(
@@ -141,6 +138,7 @@ def native_task_toml(task: Mapping) -> bytes:
 
 def count_native_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> SnapshotIdentityCount:
     """Count lossless Harbor envelopes through their unchanged native files and task.toml."""
+    from harbor_config.models.task.config import EnvironmentConfig  # noqa: PLC0415
     from taskcompendium.backend_requirements import execution_resource_shape  # noqa: PLC0415
     from taskcompendium.models import TaskResource  # noqa: PLC0415
     from taskcompendium.runtime.resources import resource_bytes  # noqa: PLC0415
@@ -180,6 +178,11 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
     """
     # Native Harbor counting also runs in Harbor's standalone environment, which
     # does not install TaskCompendium. Only lowered TaskCompendium inputs need it.
+    from shellbox.backends.daytona.machine import (  # noqa: PLC0415
+        DaytonaMachineFactory,
+        snapshot_identity,
+        snapshot_resources,
+    )
     from taskcompendium.backend_requirements import execution_resource_shape  # noqa: PLC0415
     from taskcompendium.models import EnvironmentRequirements, require_resolved_environment  # noqa: PLC0415
 
