@@ -146,7 +146,8 @@ class GrugModelConfig:
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
-        _ = self.inferred_head_dim
+        if self.inferred_head_dim % 4 != 0:
+            raise ValueError(f"head_dim must be a multiple of 4 for half-RoPE, got {self.inferred_head_dim}")
         if not math.isfinite(self.capacity_factor) or self.capacity_factor <= 0:
             raise ValueError("capacity_factor must be finite and positive")
         if self.num_heads % self.num_kv_heads != 0:
@@ -198,25 +199,24 @@ def _apply_half_rope(
     rope: RotaryConfig,
     position_ids: jax.Array | None = None,
 ) -> tuple[jax.Array, jax.Array]:
-    """RoPE applied to the first ``head_dim`` channels of q/k.
-
-    Matches ``levanter.grug.attention.apply_rotary_embedding``. Convention:
-    ``x1, x2 = split(x, 2, axis=-1)``; rotation is
-    ``[x1*cos - x2*sin, x2*cos + x1*sin]``.
-    """
-    half_dim = head_dim // 2
-    inv_freq = _rope_inv_freq(half_dim, rope.theta)
+    """Rotate the first half of each Q/K head and leave the second half unchanged."""
+    quarter = head_dim // 4
+    inv_freq = _rope_inv_freq(quarter, rope.theta)
     positions = (
         jnp.arange(seq_len, dtype=jnp.float32)[None, :] if position_ids is None else position_ids.astype(jnp.float32)
     )
     angles = positions[..., None] * inv_freq
-    cos = jnp.cos(angles)[:, :, None, :]
-    sin = jnp.sin(angles)[:, :, None, :]
+    cos, sin = jnp.cos(angles), jnp.sin(angles)
+    one, zero = jnp.ones_like(cos), jnp.zeros_like(sin)
+    # [batch, seq, 1 (heads), half, part, quarter]
+    c = jnp.stack([jnp.stack([cos, cos], axis=-2), jnp.stack([one, one], axis=-2)], axis=-3)[:, :, None]
+    s = jnp.stack([jnp.stack([-sin, sin], axis=-2), jnp.stack([zero, zero], axis=-2)], axis=-3)[:, :, None]
 
     def _apply(x: jax.Array) -> jax.Array:
-        dtype = x.dtype
-        x1, x2 = jnp.split(x, 2, axis=-1)
-        return jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1).astype(dtype)
+        # ``x*c + flip(x)*s`` on a (half, part, quarter) view, with c = 1 and s = 0 on the rope-free half: no
+        # split or concatenate of head_dim, whose fusions run at a third of HBM bandwidth on GPU.
+        blocks = x.reshape(*x.shape[:-1], 2, 2, quarter)
+        return (blocks * c + jnp.flip(blocks, axis=-2) * s).reshape(x.shape).astype(x.dtype)
 
     return _apply(q), _apply(k)
 
@@ -305,24 +305,12 @@ class CausalSelfAttention(eqx.Module):
         k = rms_norm(k)
         cfg = self.cfg
         if not disable_rope:
-            # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim.
-            # Second half is rope-free on every layer.
-            half = head_dim // 2
-            q_rot, k_rot = _apply_half_rope(
-                q[..., :half],
-                k[..., :half],
-                seq_len=seq_len,
-                head_dim=half,
-                rope=cfg.rope,
-                position_ids=position_ids,
-            )
-            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
+            # Half-RoPE: rotary embedding only on the first half of Q/K head_dim; the second half is rope-free
+            # on every layer.
+            q, k = _apply_half_rope(q, k, seq_len=seq_len, head_dim=head_dim, rope=cfg.rope, position_ids=position_ids)
         q = q * cfg.qk_mult * qk_mult_scale
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
-        # Half-RoPE's slice+concat on the head_dim axis can leave the explicit-mesh
-        # propagator with ``model`` annotated on ``head_dim`` rather than
-        # ``num_q_heads``; force the canonical TP layout so it matches ``aligned_v``.
+        # Restore ``model`` sharding on ``num_q_heads`` after head_dim operations so it matches ``aligned_v``.
         attn_out = reshard(attn_out, P(_BATCH_AXES, None, "model", None))
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = reshard(aligned_v, P(_BATCH_AXES, None, "model", None))
