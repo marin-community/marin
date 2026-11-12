@@ -32,7 +32,7 @@ from experiments.post_training.task_curation.campaign import CampaignArtifact, P
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.environment_fidelity import missing_environment
 from experiments.post_training.task_curation.lowered_envelope import LOWERED_TASK_SPEC_COLUMN, LoweredSpec
-from experiments.post_training.task_curation.source import RlDataSource, SourceReference
+from experiments.post_training.task_curation.source import EXCLUDED_TAG, RlDataSource, SourceReference
 
 
 @dataclass(frozen=True)
@@ -90,7 +90,7 @@ class PrebuiltImport:
 
 def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
     """Read the published cohort back and admit its tasks."""
-    if "excluded" in source.info.tags:
+    if EXCLUDED_TAG in source.info.tags:
         raise ValueError(f"Published cohort is excluded pending qualification: {source.name}")
     config = source.config
     assert config is not None

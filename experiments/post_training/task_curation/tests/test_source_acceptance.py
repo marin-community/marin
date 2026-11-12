@@ -7,6 +7,7 @@ import pytest
 from finestore.rl.curation import DaytonaSafety
 
 from experiments.post_training.task_curation.source import (
+    EXCLUDED_TAG,
     GRANDFATHERED_MARINSKYRL_SOURCES,
     RlDataSource,
     SourceInfo,
@@ -75,7 +76,7 @@ def test_pipeline_less_pointers_are_inventory_never_admitted():
         status = source.declaration.status
         if "deprecated" in source.info.tags:
             assert status == "Deprecated"
-        elif "excluded" in source.info.tags:
+        elif EXCLUDED_TAG in source.info.tags:
             assert status == "Excluded"
         else:
             assert status == "Inventory"

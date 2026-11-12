@@ -14,7 +14,7 @@ from finestore.rl.curation import (
     DaytonaSafety,
 )
 
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import EXCLUDED_TAG, RlDataSource, SourceInfo
 
 MEASURED = {"daytona_snapshot_count": 5, "daytona_count_basis": "shellbox-identity over pinned payloads"}
 
@@ -50,7 +50,7 @@ def test_an_unmeasured_agentic_source_is_unassessed_whatever_it_declares():
 def test_status_prefers_deprecated_then_excluded_then_inventory():
     deprecated = RlDataSource(info=SourceInfo(id="trove:old", title="Old", origin="fixture", tags=("deprecated",)))
     excluded = RlDataSource(
-        info=SourceInfo(id="trove:gone", title="Gone", origin="fixture", tags=("deprecated", "excluded"))
+        info=SourceInfo(id="trove:gone", title="Gone", origin="fixture", tags=("deprecated", EXCLUDED_TAG))
     )
     pointer = RlDataSource(info=SourceInfo(id="trove:new", title="New", origin="fixture", tags=("rlvr",)))
     assert deprecated.declaration.status == "Deprecated"

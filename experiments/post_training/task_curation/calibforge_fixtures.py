@@ -13,7 +13,7 @@ import tarfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from experiments.post_training.task_curation.environment_fidelity import COPY_GLOB_CHARACTERS
+from experiments.post_training.task_curation.environment_fidelity import dynamic_copy_error
 
 FIXTURE_ARCHIVE = "calibforge-fixtures.tar.gz"
 SETUP_SCRIPT = "calibforge-initialize.sh"
@@ -112,20 +112,13 @@ def fixture_bundle(context: Path, instructions: list[dict]) -> FixtureBundle:
             commands.append("(cd " + shlex.quote(workdir) + " && " + shlex.join(arguments) + ")")
             continue
         *sources, destination = item["args"]
-        if (
-            any(character in destination for character in COPY_GLOB_CHARACTERS)
-            or ".." in PurePosixPath(destination).parts
-        ):
-            raise DeferredEnvironment("requires_dynamic_destination_support")
+        for source in sources:
+            dynamic = dynamic_copy_error(destination, source)
+            if dynamic is not None:
+                raise DeferredEnvironment(dynamic)
         target = str(PurePosixPath(workdir) / destination)
         directory_target = destination.endswith("/") or len(sources) > 1
         for source in sources:
-            if (
-                any(character in source for character in COPY_GLOB_CHARACTERS)
-                or PurePosixPath(source).is_absolute()
-                or ".." in PurePosixPath(source).parts
-            ):
-                raise DeferredEnvironment("requires_dynamic_source_support")
             path = context / source
             if not path.exists():
                 raise DeferredEnvironment("missing_source:" + source)

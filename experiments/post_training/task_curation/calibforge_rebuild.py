@@ -57,11 +57,11 @@ from experiments.post_training.task_curation.calibforge_fixtures import (
 )
 from experiments.post_training.task_curation.environment import dockerfile_lines
 from experiments.post_training.task_curation.environment_fidelity import (
-    COPY_GLOB_CHARACTERS,
     DEFAULT_WORKDIR,
     ENVIRONMENT_DOCKERFILE,
     ENVIRONMENT_PREFIX,
     PINNED_BASES,
+    dynamic_copy_error,
 )
 from experiments.post_training.task_curation.lowered_envelope import (
     LOWERED_TASK_SPEC_COLUMN,
@@ -346,17 +346,13 @@ def _stage_copy(item: Instruction, workdir: str, files: dict[str, bytes], steps:
     if item.flags:
         raise DeferredRebuild("requires_copy_flags_support")
     *sources, destination = item.args
-    if any(character in destination for character in COPY_GLOB_CHARACTERS) or ".." in PurePosixPath(destination).parts:
-        raise DeferredRebuild("requires_dynamic_destination_support")
+    for source_name in sources:
+        dynamic = dynamic_copy_error(destination, source_name)
+        if dynamic is not None:
+            raise DeferredRebuild(dynamic)
     target = str(PurePosixPath(workdir) / destination)
     directory_target = destination.endswith("/") or len(sources) > 1
     for source_name in sources:
-        if (
-            any(character in source_name for character in COPY_GLOB_CHARACTERS)
-            or PurePosixPath(source_name).is_absolute()
-            or ".." in PurePosixPath(source_name).parts
-        ):
-            raise DeferredRebuild("requires_dynamic_source_support")
         prefix = source_name.rstrip("/") + "/"
         matches = [name for name in files if name == source_name or name.startswith(prefix)]
         if not matches:

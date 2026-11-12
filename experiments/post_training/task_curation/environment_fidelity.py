@@ -14,6 +14,7 @@ import re
 import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskSpec
 
@@ -27,6 +28,20 @@ ENVIRONMENT_DOCKERFILE = f"{ENVIRONMENT_PREFIX}Dockerfile"
 
 COPY_GLOB_CHARACTERS = "$*?["
 """Shell glob syntax a Docker COPY treats as a pattern rather than a literal path."""
+
+
+def dynamic_copy_error(destination: str, source: str) -> str | None:
+    """Why Docker could not copy this COPY pair literally, or None when it would."""
+    if any(character in destination for character in COPY_GLOB_CHARACTERS) or ".." in PurePosixPath(destination).parts:
+        return "requires_dynamic_destination_support"
+    if (
+        any(character in source for character in COPY_GLOB_CHARACTERS)
+        or PurePosixPath(source).is_absolute()
+        or ".." in PurePosixPath(source).parts
+    ):
+        return "requires_dynamic_source_support"
+    return None
+
 
 DEFAULT_WORKDIR = "/app"
 """The workdir a task gets when neither the recipe nor the spec declares one."""

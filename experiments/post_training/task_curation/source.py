@@ -109,6 +109,10 @@ class SourceReference:
     url: str
 
 
+EXCLUDED_TAG = "excluded"
+"""The source tag that keeps a declared source out of admission."""
+
+
 @dataclass(frozen=True, kw_only=True)
 class SourceInfo:
     """Identity and discovery information for one source population.
