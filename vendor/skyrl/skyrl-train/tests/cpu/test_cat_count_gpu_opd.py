@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 import torch
+from ci.marin_nightly import opd as nightly_opd
 from examples.cat_count.cpu_canary import build_tokenizer
 from examples.cat_count.gpu_opd import opd_config, parse_args
 from skyrl_train.objective.teacher import teacher_advantages
@@ -25,29 +26,57 @@ def test_gpu_opd_runner_requires_an_explicit_spec_for_evens_only():
     assert result.returncode == 2
 
 
-@pytest.mark.parametrize(("flags", "expected"), [([], 5.0), (["--advantage-clip", "none"], 10.0)])
-def test_gpu_opd_clip_option_controls_teacher_credit(tmp_path, flags, expected):
+@pytest.mark.parametrize(
+    ("builder", "flags", "expected"),
+    [
+        ("cat_count", [], 5.0),
+        ("cat_count", ["--advantage-clip", "none"], 10.0),
+        ("nightly", ["--max-staleness-steps", "0"], 10.0),
+        ("nightly", ["--max-staleness-steps", "1"], 10.0),
+    ],
+)
+def test_opd_clip_option_controls_teacher_credit(tmp_path, builder, flags, expected):
     model = tmp_path / "policy"
     build_tokenizer().save_pretrained(model)
-    args = parse_args(
-        [
-            "--model",
-            str(model),
-            "--output",
-            str(tmp_path / "run"),
-            "--teacher",
-            "cat=http://127.0.0.1:18080/v1",
-            "--teacher-revision",
-            "test",
-            *flags,
-        ]
-    )
-    cfg = opd_config(args)
+    if builder == "nightly":
+        args = nightly_opd.parse_args(
+            [
+                "--model",
+                str(model),
+                "--teacher-model",
+                "fixture/teacher",
+                "--teacher-revision",
+                "fixture",
+                "--teacher-source",
+                "local_inference",
+                "--data-dir",
+                str(tmp_path / "data"),
+                "--steps",
+                "2",
+                *flags,
+            ]
+        )
+        cfg = nightly_opd.opd_config(args)
+    else:
+        args = parse_args(
+            [
+                "--model",
+                str(model),
+                "--output",
+                str(tmp_path / "run"),
+                "--teacher",
+                "cat=http://127.0.0.1:18080/v1",
+                "--teacher-revision",
+                "test",
+                *flags,
+            ]
+        )
+        cfg = opd_config(args)
     advantages, _ = teacher_advantages(
         torch.tensor([[-1.0]]),
         torch.tensor([[-11.0]]),
         torch.tensor([[True]]),
         torch.ones(1, 1),
-        clip=cfg.trainer.algorithm.distillation.advantage_clip,
+        clip=cfg.trainer.algorithm.distillation.get("advantage_clip"),
     )
     assert advantages.item() == expected

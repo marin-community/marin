@@ -1,6 +1,7 @@
 from pathlib import Path
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
+from skyrlrecipe import SkyRLRecipe
 
 CONFIG_DIR = Path(__file__).parent  # skyrl-train/config
 DEFAULT_CONFIG_NAME = "ppo_base_config.yaml"
@@ -16,6 +17,16 @@ def generation_context_limit(config: DictConfig) -> int:
 def get_default_config():
     with initialize_config_dir(config_dir=str(CONFIG_DIR)):
         cfg = compose(config_name=DEFAULT_CONFIG_NAME)
+    return cfg
+
+
+def compose_recipe(recipe: SkyRLRecipe) -> DictConfig:
+    """Compose a local training recipe with Hydra's base and its request token limits."""
+    cfg = get_default_config()
+    OmegaConf.set_struct(cfg, False)
+    cfg = OmegaConf.merge(cfg, recipe.model_dump(mode="json", exclude_unset=True, exclude={"context_budget"}))
+    cfg.trainer.max_prompt_length = recipe.context_budget.max_input_tokens
+    cfg.generator.sampling_params.max_generate_length = recipe.context_budget.max_new_tokens_per_turn
     return cfg
 
 
