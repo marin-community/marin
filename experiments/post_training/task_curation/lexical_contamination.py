@@ -17,6 +17,7 @@ from typing import NamedTuple
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
@@ -269,6 +270,7 @@ def main() -> None:
         with ExitStack() as cleanup:
             client = LocalClient()
             cleanup.callback(client.shutdown)
+            cleanup.enter_context(set_current_client(client))
             with ZephyrContext(
                 client=client, max_workers=args.max_workers, resources=ResourceConfig(cpu=2, ram="4g")
             ) as context:
