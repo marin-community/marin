@@ -19,6 +19,7 @@ from shellbox.image import DockerfileSource, RegistryImage
 
 from experiments.post_training.task_curation.daytona_identity import (
     count_lowered_spec_identities,
+    count_native_spec_identities,
     count_registry_identities,
     count_task_identities,
 )
@@ -274,3 +275,43 @@ def test_actor_unsafe_reasons_distinguish_snapshot_budget_build_and_host_image()
     assert daytona_unsafe_counts(build) == {"unbuilt_image": 1}
     locked = measure_envelopes([(actor({"command_semantics": "linux_process", "packages_lock": "actor.lock"}), {})])
     assert "requires a registry image or Docker build context" in daytona_unsafe_reasons(locked)["host_image_required"]
+
+
+@pytest.mark.usefixtures("taskcompendium_environment")
+def test_native_envelope_counts_original_toml_shape_without_unbuilt_lowering():
+    from taskcompendium.runtime.resources import inline_resource  # noqa: PLC0415
+
+    from experiments.post_training.task_curation.daytona_census import measure_envelopes  # noqa: PLC0415
+
+    dockerfile = "FROM ubuntu:24.04\nCOPY setup.sh /app/setup.sh\n"
+    toml = b"[environment]\ncpus=2\nmemory_mb=2048\nstorage_mb=4096\nallow_internet=false\n"
+    resources = [
+        inline_resource("task.toml", toml),
+        inline_resource("environment/Dockerfile", dockerfile.encode()),
+        inline_resource("environment/setup.sh", b"#!/bin/sh\necho native\n").model_copy(update={"mode": "755"}),
+    ]
+    task = {
+        "id": "native",
+        "tags": ["harbor"],
+        "resources": {"verifier": [r.model_dump(mode="json") for r in resources]},
+        "environment_requirements": {
+            "command_semantics": "linux_process",
+            "docker_build": {
+                "files": [
+                    inline_resource("Dockerfile", dockerfile.encode()).model_dump(mode="json"),
+                    inline_resource("setup.sh", b"#!/bin/sh\necho native\n")
+                    .model_copy(update={"mode": "755"})
+                    .model_dump(mode="json"),
+                ]
+            },
+        },
+        "grader": {"environment": None},
+    }
+    measured = measure_envelopes([(task, {"task_machine": {"cpus": 99}})])
+    direct = count_native_spec_identities([("native", task)])
+    assert measured.converted == measured.machine_slots == 1
+    assert measured.snapshot_sizes == direct.sizes and len(direct.sizes) == 1
+    assert not measured.execution_failures and not measured.mapping_failures
+    # The generic unbuilt TaskCompendium route is distinct from native Harbor's build path.
+    lowered = count_lowered_spec_identities([("native", {"task": task, "runtime": {"task_machine": {}}})])
+    assert any("Unresolved Docker build context" in reason for _, reason in lowered.execution_failures)
