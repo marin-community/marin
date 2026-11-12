@@ -86,6 +86,17 @@ CREATE TABLE IF NOT EXISTS atlas_packets (
     packet TEXT NOT NULL,
     PRIMARY KEY (load_id, pipeline_key, task_id)
 );
+CREATE TABLE IF NOT EXISTS atlas_backend_surveys (
+    load_id TEXT PRIMARY KEY, survey_id TEXT NOT NULL, survey JSONB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS atlas_backend_sources (
+    load_id TEXT NOT NULL, source_id TEXT NOT NULL, capabilities JSONB NOT NULL,
+    PRIMARY KEY (load_id, source_id)
+);
+CREATE TABLE IF NOT EXISTS atlas_backend_cells (
+    load_id TEXT NOT NULL, backend TEXT NOT NULL, requirement TEXT NOT NULL, cell JSONB NOT NULL,
+    PRIMARY KEY (load_id, backend, requirement)
+);
 CREATE OR REPLACE VIEW atlas_cohort_summary AS
 WITH counts AS (
 SELECT p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count,

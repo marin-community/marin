@@ -118,10 +118,11 @@ def create_api(services: AppletServices) -> FastAPI:
             rows = connection.execute(
                 text(
                     """
-                SELECT s.*, a.scope, a.model, summary.cohorts,
+                SELECT s.*, a.scope, a.model, summary.cohorts, b.capabilities AS backend_capabilities,
                     COALESCE((s.curation->>'raw_population_count')::bigint,
                         (s.declaration->>'task_count')::bigint) AS task_count
                 FROM atlas_sources s
+                LEFT JOIN atlas_backend_sources b ON b.load_id = s.load_id AND b.source_id = s.id
                 LEFT JOIN atlas_assessments a
                     ON a.load_id = s.load_id AND a.pipeline_key = s.assessment_key
                 LEFT JOIN (
@@ -142,6 +143,7 @@ def create_api(services: AppletServices) -> FastAPI:
                         "task_count": row["task_count"],
                         "curation": row["curation"],
                         "coverage": coverage.get(row["id"]),
+                        "backend_capabilities": row["backend_capabilities"],
                         "assessment": {
                             "status": "complete" if row["assessment_key"] else row["latest_attempt_status"],
                             "pipeline_key": row["assessment_key"],
@@ -161,6 +163,30 @@ def create_api(services: AppletServices) -> FastAPI:
             "synced_at": metadata["loaded_at"],
             "daytona_snapshot_limit": DAYTONA_SAFE_SNAPSHOT_LIMIT,
         }
+
+    @api.get("/backends")
+    def backends() -> dict[str, Any]:
+        with engine.connect() as connection:
+            metadata = loaded_catalog(connection)
+            row = (
+                connection.execute(
+                    text("SELECT survey_id, survey FROM atlas_backend_surveys WHERE load_id = :load_id"),
+                    {"load_id": metadata["load_id"]},
+                )
+                .mappings()
+                .first()
+            )
+            if row is None:
+                raise HTTPException(503, "Selected catalog has no backend survey")
+            cells = (
+                connection.execute(
+                    text("SELECT cell FROM atlas_backend_cells WHERE load_id = :load_id ORDER BY backend, requirement"),
+                    {"load_id": metadata["load_id"]},
+                )
+                .scalars()
+                .all()
+            )
+            return {"survey_id": row["survey_id"], **row["survey"], "matrix": cells}
 
     @api.get("/assessment")
     def assessment(source_id: str) -> dict[str, Any]:

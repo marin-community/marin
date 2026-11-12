@@ -7,12 +7,15 @@ import json
 import time
 import uuid
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 import click
 from finestore.rl.curation import MAX_UNAVAILABLE_JUDGMENT_SHARE, CurationCatalog, JudgmentStatus, validate_items
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from taskcompendium.backend_requirements import BackendSurvey, backend_schema_sha256
+from taskcompendium.identity import canonical_sha256
 
 MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
@@ -32,6 +35,9 @@ TABLE_COLUMNS = {
         "evidence_ids JSONB, packet_uri TEXT, has_task BOOLEAN, omissions JSONB, exclusion_reason TEXT"
     ),
     "packets": "pipeline_key TEXT, task_id TEXT, packet TEXT",
+    "backend_surveys": "survey_id TEXT, survey JSONB",
+    "backend_sources": "source_id TEXT, capabilities JSONB",
+    "backend_cells": "backend TEXT, requirement TEXT, cell JSONB",
 }
 
 
@@ -68,18 +74,28 @@ def insert_rows(query: AppletQuery, table: str, columns: str, load_id: str, rows
     return count
 
 
-def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]:
+def load_catalog(catalog: CurationCatalog, query: AppletQuery, backend_map: BackendSurvey) -> dict[str, Any]:
     """Stage and validate a snapshot, then select it if the serving pointer is unchanged."""
     started = time.monotonic()
     snapshot = catalog.current()
+    if (backend_map.catalog_root, backend_map.snapshot_id) != (catalog.root, snapshot.snapshot_id):
+        raise ValueError("Backend map belongs to another catalog snapshot; survey the selected catalog")
+    if backend_map.schema_sha256 != backend_schema_sha256():
+        raise ValueError("Backend map uses another requirement schema; rerun the survey")
+    survey_id = canonical_sha256(backend_map.model_dump(mode="json"))
     current = query(
         """
-        SELECT c.load_id, l.catalog_root, l.snapshot_id FROM atlas_current c
-        JOIN atlas_loads l USING (load_id) WHERE c.name = 'latest'
+        SELECT c.load_id, l.catalog_root, l.snapshot_id, b.survey_id FROM atlas_current c
+        JOIN atlas_loads l USING (load_id)
+        LEFT JOIN atlas_backend_surveys b USING (load_id) WHERE c.name = 'latest'
     """,
         {},
     )["rows"]
-    if current and (current[0]["catalog_root"], current[0]["snapshot_id"]) == (catalog.root, snapshot.snapshot_id):
+    if current and (current[0]["catalog_root"], current[0]["snapshot_id"], current[0]["survey_id"]) == (
+        catalog.root,
+        snapshot.snapshot_id,
+        survey_id,
+    ):
         return {"changed": False, "snapshot_id": snapshot.snapshot_id}
     expected_load_id = current[0]["load_id"] if current else None
     obsolete_load_ids = json.dumps([row["load_id"] for row in query("SELECT load_id FROM atlas_loads", {})["rows"]])
@@ -109,11 +125,24 @@ def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]
     sources = list(catalog.sources(snapshot.snapshot_id))
     if len(sources) != snapshot.source_count:
         raise ValueError("Catalog inventory does not cover its declared source count")
+    if {source.id for source in sources} != {source.source_id for source in backend_map.sources}:
+        raise ValueError("Backend map does not cover the selected catalog inventory")
     metadata: dict[str, list[dict[str, Any]]] = {
         "sources": [row.model_dump(mode="json", exclude={"snapshot_id"}) for row in sources],
         "assessments": [],
         "populations": [],
         "items": [],
+        "backend_surveys": [
+            {"survey_id": survey_id, "survey": backend_map.model_dump(mode="json", exclude={"sources", "matrix"})}
+        ],
+        "backend_cells": [
+            {"backend": cell.backend, "requirement": cell.requirement.value, "cell": cell.model_dump(mode="json")}
+            for cell in backend_map.matrix
+        ],
+        "backend_sources": [
+            {"source_id": source.source_id, "capabilities": source.model_dump(mode="json")}
+            for source in backend_map.sources
+        ],
     }
     all_items = []
     for source in sources:
@@ -133,6 +162,12 @@ def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]
         metadata["items"].extend(row.model_dump(mode="json") for row in items)
         all_items.extend(items)
     counts = {table: insert(table, rows) for table, rows in metadata.items()}
+    if (
+        counts["backend_sources"] != len(sources)
+        or counts["backend_surveys"] != 1
+        or counts["backend_cells"] != len(backend_map.matrix)
+    ):
+        raise ValueError("Backend survey import is incomplete")
 
     def packet_rows() -> Iterable[dict[str, Any]]:
         for offset in range(0, len(all_items), PACKET_READ_BATCH):
@@ -189,9 +224,11 @@ def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]
 )
 @click.option("--app-id", "applet_id", required=True)
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
-def main(catalog_root: str, applet_id: str, service_url: str) -> None:
+@click.option("--backend-map", type=click.Path(exists=True, path_type=Path), required=True)
+def main(catalog_root: str, applet_id: str, service_url: str, backend_map: Path) -> None:
     configure_coreweave_s3()
-    click.echo(json.dumps(load_catalog(CurationCatalog(catalog_root), applet_query(service_url, applet_id))))
+    survey = BackendSurvey.model_validate_json(backend_map.read_text())
+    click.echo(json.dumps(load_catalog(CurationCatalog(catalog_root), applet_query(service_url, applet_id), survey)))
 
 
 if __name__ == "__main__":

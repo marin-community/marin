@@ -75,10 +75,10 @@ with the most mapped examples. Search names, datasets or tags; filter by catalog
 use or quality; select a column heading to sort. Filters and sorting are included in the URL. CSV export
 includes the filtered rows in the displayed order.
 
-**Daytona safe** marks sources whose execution needs at most ten unique Daytona
-snapshots. Every non-agentic source is safe because it never provisions a
-sandbox; an agentic source shows a dash until its unique snapshot count is
-assessed against that budget.
+**Daytona safe** requires both execution compatibility and at most ten unique
+Daytona snapshots. Check agent and grader machines independently: a package-lock
+grader requires local execution even when the agent's image works on Daytona.
+The backend map records these separate machine slots and their blockers.
 
 Example counts describe successfully converted tasks before curation admission.
 A dash means no processed examples from that source are in the currently
@@ -99,6 +99,72 @@ visible; source details contain the remaining fields.
 
 ## Updating Atlas
 
+### Deployment checklist
+
+1. Use Marin latest and inspect the current Atlas package version and selected catalog.
+2. Survey the production backends at Marin latest for their current capabilities
+   with the [survey procedure](#backend-survey), and publish the matrix beside the deployment record.
+   Execute this survey at each deployment; do not reuse an older deployment's matrix.
+3. Validate and release the app against the inspected package version, then load
+   the catalog with that survey's `--backend-map` artifact.
+4. Check `/backends`, `/sources`, an assessment and its evidence. Confirm the
+   selected snapshot and survey revision agree with the deployment record.
+
+### Backend survey
+
+The enum in `shellbox.requirements` classifies TaskCompendium environments,
+resources, runtime shapes, machine sources and commands, plus Harbor environment
+fields. Schema tests fail when a field is added without classification. Backend
+selection stays deployment metadata. The survey calls production factory checks
+over generated specs, then validates each converted task's combined agent and
+grader machine demands through rolloutengine's machine mapping.
+
+Prepare `survey-inputs.json` with `inputs` entries containing `source_id`, local
+Parquet `paths`, JSON spec `column` and `expected_tasks`. Use complete converted
+populations, not sampled assessment packets. Each entry must match the selected
+catalog's pinned source revision. Stage remote shards with `uv run fsutil cp`
+near their storage region. The survey streams rows and records input SHA-256s.
+Sources without converted inputs remain explicitly `unassessed`.
+
+Set `runtime_defaults.agent` and `runtime_defaults.grader` to the deployment's
+explicit machine settings: `network`, `cpus`, `memory_mb`, `storage_mb`, `gpus`,
+`user`, `startup_timeout` and `cleanup_timeout`. Use JSON null for unset limits.
+Published task values override this profile. The artifact records the profile;
+it never infers missing resource or network policy from backend choice.
+
+```bash
+uv run --prerelease allow --with-editable './lib/shellbox[daytona,qemu,shellsim,iris]' python -m \
+  experiments.post_training.task_curation.backend_capabilities \
+  --catalog-root s3://marin-us-east-02a/marin/rl-data/catalog/production \
+  --manifest survey-inputs.json --output backend-map.json
+```
+
+The versioned artifact contains every backend/requirement cell, evidence and
+conditions, per-role requirement counts and resource ranges, and per-backend task
+outcomes. `supported` means the declared feature passes its check; `partial`
+records an implementation or deployment condition; `unsupported` records a
+rejection or missing implementation. These are execution-contract checks, not
+provider capacity or verifier-liveness measurements. Docker storage quotas depend
+on its storage driver; Iris disk is a scheduling request. QEMU OCI inputs need
+configured assets and caches. Uploaded mtimes and non-root users have separate cells.
+
+This offline survey makes no provider calls and creates no machines or snapshots.
+Record measured account limits separately in `deployment_limits`, keyed by backend,
+with `max_concurrent_sandboxes`, `snapshot_cap`, `observed_at` and `evidence`.
+Unmeasured limits stay null. The ten-snapshot source budget differs from an
+account's snapshot quota. Live Daytona observations use only the RL organization
+and existing snapshots; the designated long-loop operator owns snapshot cleanup.
+
+`/backends` serves the selected matrix, revision, profile and limit observations.
+Each `/sources` row includes `backend_capabilities`: census basis, input digests,
+role demands, resource ranges, supported/partial/unsupported task counts and
+blockers. Both slots must fit for a single-backend deployment; per-role results
+also describe mixed deployments. Backend names are never distribution features.
+The loader checks schema, snapshot and source coverage and stages the matrix and
+source maps under the catalog load ID before its conditional atomic selection.
+Changing a survey refreshes an otherwise unchanged catalog. A failed import
+preserves the selected map.
+
 Source code lives in `infra/marina/apps/rl_data_catalog/`. Its migration
 creates the SQL tables; it does not read object storage or run curation.
 Publish code when the schema or UI changes, then load data explicitly:
@@ -110,7 +176,7 @@ uv run marina apps versions fb11c931-5861-4878-8bb5-a964d652b45f --json
 uv run marina release infra/marina/apps/rl_data_catalog --base-version CURRENT_VERSION
 
 uv run python infra/marina/apps/rl_data_catalog/load.py \
-  --app-id fb11c931-5861-4878-8bb5-a964d652b45f
+  --app-id fb11c931-5861-4878-8bb5-a964d652b45f --backend-map backend-map.json
 ```
 
 `applet.toml` declares the existing app's UUID. Any authenticated internal
@@ -195,7 +261,7 @@ loader against a local curation cache using the printed app ID and origin:
 uv run marina release infra/marina/apps/rl_data_catalog --local --json
 uv run python infra/marina/apps/rl_data_catalog/load.py \
   --catalog-root ~/.cache/marin/rl-curation/campaigns/catalog \
-  --app-id PRINTED_ID --url PRINTED_ORIGIN
+  --app-id PRINTED_ID --url PRINTED_ORIGIN --backend-map local-backend-map.json
 ```
 
 Inspect the inventory, an assessment and its task evidence. Stop the local stack
