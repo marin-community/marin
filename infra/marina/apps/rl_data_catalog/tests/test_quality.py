@@ -49,5 +49,11 @@ def test_sampled_grade_then_executed_qa_then_upstream_qc_decide_the_result():
 def test_daytona_is_not_applicable_without_a_sandbox_and_measured_otherwise():
     assert daytona({"tags": ["rlvr"]}, 10)["state"] == "na"
     assert daytona({"tags": ["agentic"], "daytona_snapshot_count": None}, 10)["state"] == "unmeasured"
-    measured = {"tags": ["agentic"], "daytona_snapshot_count": 15, "daytona_safety": "unsafe", "daytona_snapshot_threshold": 10}
+    assert daytona({"tags": ["agentic"], "daytona_snapshot_count": 0}, 10)["state"] == "na"
+    measured = {
+        "tags": ["agentic"],
+        "daytona_snapshot_count": 15,
+        "daytona_safety": "unsafe",
+        "daytona_snapshot_threshold": 10,
+    }
     assert daytona(measured, 10) == {"state": "unsafe", "snapshots": 15, "limit": 10, "basis": None}

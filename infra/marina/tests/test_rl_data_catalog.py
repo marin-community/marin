@@ -376,6 +376,7 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
     load_catalog(CurationCatalog(catalog_root), query)
     with TestClient(create_api(cast(AppletServices, CatalogServices(engine)))) as client:
         source = client.get("/sources").json()["sources"][0]
+        assert source["updated_at"] == client.get("/sources").json()["synced_at"]
         assert source["task_count"] == 3
         assert source["coverage"] == {
             "example_count": 300,

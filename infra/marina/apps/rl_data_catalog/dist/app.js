@@ -2,7 +2,7 @@
 const number = new Intl.NumberFormat('en-US');
 const resultLabels = {GOOD: 'Good', SOME_ISSUES: 'Some issues', BAD: 'Bad', none: 'Not assessed'};
 const resultClasses = {GOOD: 'good', SOME_ISSUES: 'some_issues', BAD: 'bad', none: 'unassessed'};
-const useLabels = {train: 'Training', eval: 'Evaluation', unknown: 'Not measured'};
+const useLabels = {train: 'Training', eval: 'Evaluation', unknown: 'Unknown'};
 const oracleValidationLabels = {executed: 'Oracle executed', verifier_executed: 'Verifier executed', skipped: 'Skipped'};
 const columns = [
   ['display_name', 'Source'], ['examples', 'Examples'], ['use', 'Use'], ['quality', 'Quality'], ['result', 'Result'],
@@ -137,7 +137,7 @@ function sourceRow(row, others, canonical) {
       toggle.addEventListener('click', () => { expanded ? expandedGroups.delete(groupId) : expandedGroups.add(groupId); render(); });
       name.append(toggle);
     }
-    const examples = node('td', row.coverage?.example_count != null ? number.format(row.coverage.example_count) : '—', 'num');
+    const examples = node('td', row.coverage?.example_count != null ? number.format(row.coverage.example_count) : 'Unknown', 'num');
     examples.title = row.coverage?.basis || 'No coverage measurement in this catalog';
     const use = node('td', useLabels[value(row, 'use')], 'use-cell');
     const quality = node('td'); quality.append(node('span', row.quality, `chip level level-${row.quality.toLowerCase()}`));
@@ -154,10 +154,10 @@ function sourceRow(row, others, canonical) {
       anchor.title = `${number.format(row.coverage.top_area.instances)} placed examples in this subject`;
       area.append(anchor);
     } else {
-      const gap = node('span', '—', 'muted'); gap.title = row.coverage?.unavailable_reason || 'No curriculum release covers this source'; area.append(gap);
+      const gap = node('span', 'Unknown', 'muted'); gap.title = row.coverage?.unavailable_reason || 'No curriculum release covers this source'; area.append(gap);
     }
     const updated = node('td', day(row.updated_at), 'date-cell');
-    updated.title = row.updated_at ? 'Start of the latest published campaign that processed this source' : 'No published campaign has processed this source';
+    updated.title = row.updated_at ? 'Load time of the selected catalog snapshot (UTC)' : 'Catalog load time unavailable';
     const evidence = node('td'), link = node('a', 'Evidence →', 'evidence-link'); link.href = evidenceLink(row); evidence.append(link);
     tr.append(name, examples, use, quality, result, daytonaCell(row), area, updated, evidence); return tr;
 }

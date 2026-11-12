@@ -28,7 +28,7 @@
       <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search names, datasets, or tags…" aria-label="Search sources"></label>
     </div>
     <form id="filters" class="filters" role="search">
-      <label>Use<select id="use"><option value="all">All uses</option><option value="train">Training</option><option value="eval">Evaluation</option><option value="unknown">Not measured</option></select></label>
+      <label>Use<select id="use"><option value="all">All uses</option><option value="train">Training</option><option value="eval">Evaluation</option><option value="unknown">Unknown</option></select></label>
       <label>Quality<select id="quality"><option value="all">All quality</option><option value="FULL">FULL</option><option value="SAMPLE">SAMPLE</option><option value="QUICK">QUICK</option></select></label>
       <label>Result<select id="result"><option value="all">All results</option><option value="GOOD">Good</option><option value="SOME_ISSUES">Some issues</option><option value="BAD">Bad</option><option value="none">Not assessed</option></select></label>
       <label class="checkbox"><input id="show-all" type="checkbox"> Show QUICK-quality and BAD-result sources</label>
@@ -42,7 +42,7 @@
   </section>
   <section class="notes">
     <div><span class="note-number">01</span><p><b>Quality is how much QA ran; Result is what it found.</b> QUICK means no executed QA (inventory, conversion only, or upstream QC alone). SAMPLE and FULL mean executed controls or declared oversight on a sample or on every task. The colour of Result follows its value. The default view hides QUICK and BAD sources.</p></div>
-    <div><span class="note-number">02</span><p><b>Counts and areas are measured.</b> Examples is the converted task count and Top curriculum area the subject most converted tasks match, both from a curriculum release named in the source's evidence. Daytona shows N/A when the tasks provision no sandbox.</p></div>
+    <div><span class="note-number">02</span><p><b>Counts and areas are measured.</b> Examples is the converted task count and Top curriculum area the subject most converted tasks match, both from a curriculum release named in the source's evidence. Unknown counts or areas include a reason in source details. Daytona shows N/A when the tasks provision no sandbox.</p></div>
   </section>
   <footer class="page-footer"><span>OPEN ATHENA / RL DATA ATLAS</span><span id="snapshot-info"></span></footer>
 </main>

@@ -84,8 +84,8 @@ not declared*. Edit the rules in the reference first, then the page text in
 
 **By source** lists individual sources with their converted example count,
 training/evaluation use, Quality, Result, Daytona label, the curriculum subject
-with the most converted tasks, the start of the latest published campaign that
-processed the source (**Last updated**) and a link to its evidence page. Catalog
+with the most converted tasks, the selected catalog snapshot’s load time
+(**Last updated**, UTC) and a link to its evidence page. Catalog
 tabs show per-catalog counts. Search names, datasets or tags, filter by use,
 Quality or Result, and select a column heading to sort. The default view hides
 QUICK-quality and BAD-result sources; **Show QUICK-quality and BAD-result
@@ -97,7 +97,7 @@ Examples, Use and Top curriculum area come from the declaration's measured
 [coverage](task-curation.md#coverage); a declaration from an older snapshot
 without coverage falls back to the selected curriculum release.
 
-**Daytona** shows N/A for non-agentic sources, which provision no sandbox.
+**Daytona** shows N/A for non-agentic sources or a measured count of zero machine snapshots.
 An agentic source shows Safe or Unsafe with its measured unique snapshot count
 against the limit of ten, or *Not measured* when its declaration records no
 production snapshot-identity measurement.

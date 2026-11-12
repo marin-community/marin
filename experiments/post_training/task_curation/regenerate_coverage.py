@@ -49,9 +49,7 @@ def main(releases: tuple[str, ...], coverages: tuple[str, ...], output: Path) ->
         source_id: measured.get(source_id) or declared_coverage(source.declaration)
         for source_id, source in sorted(declared_sources().items())
     }
-    output.write_text(
-        json.dumps({key: value.model_dump(mode="json") for key, value in table.items()}, indent=1) + "\n"
-    )
+    output.write_text(json.dumps({key: value.model_dump(mode="json") for key, value in table.items()}, indent=1) + "\n")
     click.echo(json.dumps({"sources": len(table), "measured": sum(key in measured for key in table)}))
 
 

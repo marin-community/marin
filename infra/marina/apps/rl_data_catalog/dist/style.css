@@ -214,3 +214,21 @@ a.secondary:hover { text-decoration: none; }
 .duplicate-member td { background: #fafcfa; }
 .duplicate-member td:first-child { padding-left: 34px; border-left: 3px solid #d8e6dc; }
 .duplicate-note { color: #6b7f72; }
+
+@media (prefers-color-scheme: dark) {
+  :root { color-scheme: dark; color: #d9e5dd; background: #151d19; --muted: #a1b3a7; --line: #34493b; --green: #7dd5a8; }
+  .masthead, .catalog, .metrics, dialog, .search, .secondary, .filters select { background: #1d2922; color: #d9e5dd; }
+  .brand, .atlas-name, .atlas-header > .atlas-name, .source-name, .notes b, .empty h2 { color: #c5ead3; }
+  .metrics .freshness, .filters, thead th, .table-footer, .duplicate-member td, .data-notes pre { background: #24352a; }
+  tbody tr:hover, .secondary:hover { background: #2b4032; }
+  td { border-color: var(--line); }
+  .intro, .notes p, .date-cell, .use-cell, .table-footer > span:first-child { color: #a9bfb0; }
+  .tab span, .close { background: #34493b; color: #c3d6ca; }
+  .tab.selected span { background: #264e38; color: #a0e6ba; }
+  .level-full, .quality-good { background: #244b32; color: #a9e7bd; }
+  .level-sample { background: #254b47; color: #a8e1da; }
+  .quality-some_issues { background: #51421f; color: #f0d18d; }
+  .quality-bad { background: #542e2b; color: #f2b5ab; }
+  .level-quick, .quality-unassessed, .quality-unknown { background: #354239; color: #c3d0c6; }
+  .filters > label, .filters .checkbox, .sync-banner, .tab { color: var(--muted); }
+}

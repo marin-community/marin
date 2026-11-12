@@ -164,7 +164,7 @@ def create_api(services: AppletServices) -> FastAPI:
                         "quality": level,
                         "result": result(declaration, row["curation"], grade, level),
                         "daytona": daytona(declaration, DAYTONA_SAFE_SNAPSHOT_LIMIT),
-                        "updated_at": row["updated_at"],
+                        "updated_at": metadata["loaded_at"],
                         "assessment": {
                             "status": "complete" if row["assessment_key"] else row["latest_attempt_status"],
                             "pipeline_key": row["assessment_key"],
@@ -317,7 +317,7 @@ def create_api(services: AppletServices) -> FastAPI:
             "quality": level,
             "result": result(declaration, source["curation"], grade, level),
             "daytona": daytona(declaration, DAYTONA_SAFE_SNAPSHOT_LIMIT),
-            "updated_at": source["updated_at"],
+            "updated_at": load["loaded_at"],
             "catalog": {"root": load["catalog_root"], "snapshot_id": load["snapshot_id"]},
         }
 

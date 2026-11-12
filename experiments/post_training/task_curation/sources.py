@@ -97,11 +97,7 @@ def all_sources() -> dict[str, RlDataSource]:
     sources = {}
     for source_id, source in declared_sources().items():
         attached = replace(source, info=replace(source.info, coverage=coverage.get(source_id)))
-        require_coverage(
-            source_id,
-            attached.info.coverage,
-            runnable=source.pipeline is not None and source.declaration.status == "Available",
-        )
+        require_coverage(source_id, attached.info.coverage)
         sources[source_id] = attached
     return sources
 

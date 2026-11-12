@@ -7,7 +7,7 @@ The values are measurements, so they live in one generated table,
 ``source_coverage.json``, rather than in hand-edited declarations.
 ``regenerate_coverage`` writes the table from curriculum releases.
 ``all_sources()`` attaches each entry to its declaration and rejects a catalog in
-which any source has none, or a runnable source has no measured values.
+which any source has none. Unmeasured fields require an explicit reason.
 """
 
 import json
@@ -36,26 +36,15 @@ def load_coverage(path: Path = COVERAGE_TABLE) -> dict[str, SourceCoverage]:
     return {source_id: SourceCoverage.model_validate(row) for source_id, row in json.loads(path.read_text()).items()}
 
 
-def require_coverage(source_id: str, coverage: SourceCoverage | None, *, runnable: bool) -> None:
-    """Reject a declaration without coverage, and a runnable one without measured coverage.
-
-    A runnable source must have a measured example count and either a leading subject or
-    the measured outcome that none of its tasks placed. Other sources may record why a
-    value has no measurement.
-    """
+def require_coverage(source_id: str, coverage: SourceCoverage | None) -> None:
+    """Require ingestion fields, allowing documented unknown counts and areas."""
     if coverage is None:
-        raise ValueError(f"Source {source_id} has no coverage entry; regenerate {COVERAGE_TABLE.name}")
+        raise ValueError(f"Source {source_id} has no coverage entry; update {COVERAGE_TABLE.name}")
     gaps = {gap.value for gap in CoverageGap}
     if coverage.unavailable_reason is not None and coverage.unavailable_reason not in gaps:
         raise ValueError(f"Source {source_id} gives an unrecognized coverage gap: {coverage.unavailable_reason}")
-    unmeasured = coverage.example_count is None or coverage.top_area is None
-    if unmeasured and coverage.unavailable_reason is None:
+    if (coverage.example_count is None or coverage.top_area is None) and not coverage.unavailable_reason:
         raise ValueError(f"Source {source_id} leaves coverage unmeasured without a reason")
-    if runnable and (
-        coverage.example_count is None
-        or (coverage.top_area is None and coverage.unavailable_reason != CoverageGap.NO_PLACEMENT)
-    ):
-        raise ValueError(f"Runnable source {source_id} has no measured coverage: {coverage.unavailable_reason}")
 
 
 def top_subjects(statistics: Iterable[Mapping], names: Mapping[str, str]) -> dict[str, CurriculumArea]:

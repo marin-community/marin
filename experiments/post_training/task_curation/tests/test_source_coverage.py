@@ -3,8 +3,11 @@
 
 """Every declaration carries measured coverage, and the catalog refuses one that does not."""
 
+import json
+
 import pytest
 from finestore.rl.curation import CurriculumArea, SourceCoverage, SourceUse
+from pydantic import ValidationError
 
 from experiments.post_training.task_curation import sources
 from experiments.post_training.task_curation.source_coverage import (
@@ -29,21 +32,30 @@ def test_the_catalog_rejects_a_declaration_without_coverage(monkeypatch):
         sources.all_sources()
 
 
-def test_every_declaration_has_coverage_and_runnable_sources_are_measured():
-    catalog = sources.all_sources()
-    assert all(source.declaration.coverage is not None for source in catalog.values())
-    assert all(source.declaration.coverage.example_count is not None for source in sources.runnable_sources().values())
+def test_every_declaration_has_coverage_or_a_documented_unknown():
+    for source in sources.all_sources().values():
+        coverage = source.declaration.coverage
+        assert coverage is not None
+        assert coverage.example_count is not None or coverage.unavailable_reason
+        assert coverage.top_area is not None or coverage.unavailable_reason
 
 
-def test_a_runnable_source_cannot_stand_on_a_declared_count():
+@pytest.mark.parametrize("field", ["intended_use", "example_count", "top_area"])
+def test_ingestion_rejects_omitted_required_fields(tmp_path, field):
+    row = MEASURED.model_dump(mode="json")
+    del row[field]
+    table = tmp_path / "coverage.json"
+    table.write_text(json.dumps({"source": row}))
+    with pytest.raises(ValidationError) as error:
+        sources.load_coverage(table)
+    assert any(item["loc"] == (field,) and item["type"] == "missing" for item in error.value.errors())
+
+
+def test_ingestion_accepts_documented_unknowns_but_rejects_unexplained_gaps():
     declared = MEASURED.model_copy(update={"top_area": None, "unavailable_reason": CoverageGap.NOT_EMBEDDED.value})
-    require_coverage("inventory", declared, runnable=False)
-    with pytest.raises(ValueError, match="no measured coverage"):
-        require_coverage("runnable", declared, runnable=True)
-    unplaced = declared.model_copy(update={"unavailable_reason": CoverageGap.NO_PLACEMENT.value})
-    require_coverage("runnable", unplaced, runnable=True)
+    require_coverage("not-embedded", declared)
     with pytest.raises(ValueError, match="without a reason"):
-        require_coverage("runnable", MEASURED.model_copy(update={"top_area": None}), runnable=True)
+        require_coverage("unexplained", MEASURED.model_copy(update={"top_area": None}))
 
 
 def test_release_coverage_counts_conversions_and_picks_the_most_placed_subject():
