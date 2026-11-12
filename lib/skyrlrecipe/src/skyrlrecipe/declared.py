@@ -101,11 +101,23 @@ class BestCheckpointCallback(Section):
     initial_model_uri: str
     expected_tasks: int
     minimum_scored_tasks: int
+    ema_window: PositiveInt = unset_field()
+    evaluation_interval: PositiveInt = unset_field()
+    selection_metric: str = unset_field()
+    save_after_fraction: float = unset_field()
+    preservation_max_drop: OpenMap | None = unset_field()
 
 
 class DistillationTokenBudgetCallback(Section):
     type: Literal["distillation_token_budget"]
     token_budget: PositiveInt
+
+
+class WallTimeBudgetCallback(Section):
+    type: Literal["wall_time_budget"]
+    seconds: int | float
+    drain_margin: int | float
+    groups_per_step: PositiveInt
 
 
 class EvaluationCallback(Section):
@@ -188,6 +200,7 @@ Callback = Annotated[
     CheckpointCallback
     | BestCheckpointCallback
     | DistillationTokenBudgetCallback
+    | WallTimeBudgetCallback
     | EvaluationCallback
     | ReferenceLikelihoodCallback
     | HarborEvaluationCallback

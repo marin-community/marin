@@ -11,7 +11,6 @@ from skyrl_train.config.objective_spec import CorrectionAction, SequenceAggregat
 from skyrlrecipe.declared import Callback, SequenceRule, Teacher, TokenRule
 from skyrlrecipe.documents import MISSING, get_path, set_path
 from skyrlrecipe.ownership import LAUNCH_PATHS
-from skyrlrecipe.rules import SKYRL_INTERNAL_ENGINE_KWARGS
 
 from cloud.iris import rl_config_translation as launcher
 from cloud.iris import task_runtime
@@ -106,6 +105,7 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_laun
         {
             "run": {"id": "ownership-B", "attempt_id": "1"},
             "inputs": {"model": {"uri": "/launch/model"}},
+            "artifacts": {"attempts_root": str(tmp_path / "attempts")},
             "skyrl": staged,
         }
     )
@@ -143,7 +143,6 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_laun
 
 
 def test_code_default_declarations_match_native_dataclasses_and_canonical_choices():
-    assert SKYRL_INTERNAL_ENGINE_KWARGS == launcher.SKYRL_INTERNAL_ENGINE_KWARGS
     for prefix, config in (
         ("trainer.algorithm.ftpo", FTPOConfig),
         ("generator.speculative_decoding.training", speculative_decoding.SpeculatorTrainingConfig),

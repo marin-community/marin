@@ -17,6 +17,7 @@ from typing import Any, Dict, Mapping, Optional, Protocol
 
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
+from skyrlrecipe.rules import SKYRL_INTERNAL_ENGINE_KWARGS
 
 from skyrl_train.config.objective_spec import validate_objective
 from skyrl_train.config.ftpo import FTPOConfig
@@ -319,46 +320,6 @@ def write_resolved_context_budget(budget: ContextBudget, destination: Path | str
     with open_output_stream(filesystem, path) as artifact:
         artifact.write(payload.encode())
     return destination
-
-
-# =============================================================================
-# SkyRL Internal Engine Kwargs - DO NOT SET IN YAML CONFIGS
-# =============================================================================
-# These kwargs are set internally by SkyRL and will cause "duplicate keyword
-# argument" errors if also specified in engine_init_kwargs.
-#
-# Source: skyrl_train/inference_engines/ray_wrapped_inference_engine.py
-# =============================================================================
-
-SKYRL_INTERNAL_ENGINE_KWARGS = frozenset(
-    {
-        # Hardcoded values
-        "trust_remote_code",  # Always True
-        "worker_extension_cls",  # vLLM SkyRL extension path
-        "data_parallel_backend",  # Hardcoded "mp"
-        "max_logprobs",  # Hardcoded 1
-        # Calculated from config/environment
-        "distributed_executor_backend",  # Calculated from TP size ("uni" or "ray")
-        "enforce_eager",  # Set from generator.enforce_eager config
-        "tensor_parallel_size",  # Set from generator config
-        "data_parallel_size",  # Set from generator config
-        "seed",  # Set from config
-        "enable_prefix_caching",  # Set from generator config
-        "dtype",  # Set from generator.model_dtype
-        "gpu_memory_utilization",  # Set from generator config
-        "max_num_batched_tokens",  # Set from generator config
-        "max_num_seqs",  # Set from generator config
-        "enable_sleep_mode",  # Set from trainer.placement.colocate_all
-        "vllm_v1_disable_multiproc",  # Set from generator config
-        # Ray internal management
-        "bundle_indices",  # Calculated from parallelism config
-        "num_gpus",  # Ray resource allocation
-        "noset_visible_devices",  # Ray CUDA_VISIBLE_DEVICES handling
-        "attention_backend",  # Set from generator.vllm_attention_backend
-        "tokenizer",  # Set from trainer.policy.model.tokenizer_path
-        "speculative_config",  # Derived from generator.speculative_decoding
-    }
-)
 
 
 def validate_engine_init_kwargs(
