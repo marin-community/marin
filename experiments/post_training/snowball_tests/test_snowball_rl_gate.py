@@ -378,7 +378,7 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
     [
         (("skyrl", "generator", "enable_prefix_caching"), False, ("generator.enable_prefix_caching=false",), "pass"),
         (("skyrl", "generator", "enable_prefix_caching"), False, (), "invalid"),
-        (("runtime", "task_env", "VLLM_PROBE"), "1", ('+extra_env.VLLM_PROBE="1"',), "pass"),
+        (("runtime", "task_env", "VLLM_PROBE"), "1", ('extra_env.VLLM_PROBE="1"',), "pass"),
         (("skyrl", "generator", "eval_sampling_params", "temperature"), 0.5, (), "invalid"),
         (("skyrl", "generator", "chat_template"), "different", (), "invalid"),
         (("runtime", "task_env", "TASK_PROBE"), "1", (), "invalid"),
@@ -438,15 +438,26 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
         ("changed-source", 0),
         ("stale-control", 4),
         ("stale-control-no-wait", 4),
+        ("candidate-compose", 4),
+        ("candidate-compose-no-wait", 4),
+        ("train-candidate-compose", 4),
+        ("train-candidate-compose-no-wait", 4),
     ],
 )
 def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
-    roots = controls(recorded_runs, "speed-medium")
-    preset = presets.PRESETS["speed-medium"]
+    preset = presets.PRESETS["train-long" if case.startswith("train-candidate") else "speed-medium"]
+    roots = controls(recorded_runs, preset.name) if presets.gated(preset) else []
     built = snowball.build_run(preset)
-    source = recorded_runs(
-        preset.name, built.runs[0].name, speed=150 if case == "fail" else 101, fingerprint=built.runs[0].fingerprint()
+    source = (
+        None
+        if "candidate-compose" in case
+        else recorded_runs(
+            preset.name,
+            built.runs[0].name,
+            speed=150 if case == "fail" else 101,
+            fingerprint=built.runs[0].fingerprint(),
+        )
     )
     if case == "invalid":
         receipt = json.loads((source / "terminal.json").read_text())
@@ -479,6 +490,8 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     client.submit.return_value.job_id = job
     if case.startswith("stale-control"):
         client.submit.side_effect = AssertionError("stale controls reached the coordinator RPC")
+    if "candidate-compose" in case:
+        client.submit.side_effect = AssertionError("a candidate that cannot compose reached the coordinator RPC")
     client.job.side_effect = lambda name: jobs[name]
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
@@ -491,11 +504,12 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
             snowball.main,
             [
                 "--preset",
-                "speed-medium",
+                preset.name,
                 "--version",
                 preset.revision,
                 "--run",
-                *(() if case == "stale-control-no-wait" else ("--wait",)),
+                *(("--set", "trainer.algorithm.policy_loss_type=gspo") if "candidate-compose" in case else ()),
+                *(() if case.endswith("no-wait") else ("--wait",)),
             ],
         )
     finally:
@@ -503,6 +517,8 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     assert result.exit_code == expected, (result.output, result.exception)
     if case.startswith("stale-control"):
         assert "skyrl.trainer.policy.optimizer_config.lr" in result.output
+    if "candidate-compose" in case:
+        assert "current preset recipe cannot be composed" in result.output
     if case == "child":
         report = gate.completed_gate(built.gate)
         assert Path(report.path(), gate.GATE_REPORT_FILENAME).exists()
@@ -520,7 +536,17 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
         snowball.build_run(presets.PRESETS["speed-medium"], control=True)
 
 
-@pytest.mark.parametrize("arguments", [("--wait",), ("--replicates", "0"), ("--set", "trainer.resume_mode=latest")])
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("--wait",),
+        ("--replicates", "0"),
+        ("--set", "trainer.resume_mode=latest"),
+        ("--set", "generator.unrecognised_knob=1"),
+        ("--set", "trainer.policy.optimizer_config.lr=wrong"),
+        ("--set", "+generator.engine_init_kwargs.probe={}"),
+    ],
+)
 def test_refusals_use_exit_four(selection, arguments):
     result = CliRunner().invoke(
         snowball.main, ["--preset", "speed-medium", "--version", presets.PRESETS["speed-medium"].revision, *arguments]
@@ -674,7 +700,7 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
         inputs = gate.GateInputs(preset_name=preset.name, init=f"{name}@{version}")
     if case in ("stale-default", "explicit-equal", "untouched-sibling"):
         control_roots = controls(recorded_runs, preset.name)
-        promoted = replace(preset, settings=(*preset.settings, setting))
+        promoted = replace(preset, patch=preset.patch.with_settings((setting,)))
         monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset.name: promoted})
         if case == "stale-default":
             inputs = gate.GateInputs(preset_name=preset.name)
@@ -765,7 +791,9 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
     if case in ("cached-default", "cached-execution", "cached-source"):
         assert report["verdict"] == "pass", report
         if case == "cached-default":
-            promoted = replace(preset, settings=(*preset.settings, "trainer.policy.optimizer_config.weight_decay=0.1"))
+            promoted = replace(
+                preset, patch=preset.patch.with_settings(("trainer.policy.optimizer_config.weight_decay=0.1",))
+            )
             changed_key = "skyrl.trainer.policy.optimizer_config.weight_decay"
         elif case == "cached-execution":
             promoted = replace(
@@ -874,8 +902,8 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
     monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset_name: preset})
     controls(recorded_runs, preset_name)
     tasks = selection if preset_name == "data-medium" else None
-    setting_text = ("trainer.policy.optimizer_config.lr=2.0e-6", '+extra_env.VLLM_PROBE="1"') if tasks is None else ()
-    settings = tuple(map(presets.parse_setting, setting_text))
+    setting_text = ("trainer.policy.optimizer_config.lr=2.0e-6", 'extra_env.VLLM_PROBE="1"') if tasks is None else ()
+    settings = setting_text
     built = snowball.build_run(preset, settings=settings, tasks=tasks, requirements=("policy/raw_grad_norm<=10",))
     task_name = SELECTION_IDENTITY if tasks else None
     source = recorded_runs(
@@ -901,7 +929,7 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
     assert recorded.preset_name == preset_name and recorded.requirements == ("policy/raw_grad_norm<=10",)
     decoded = dict(item.split("=", 1) for item in recorded.settings)
     assert {key: json.loads(value) for key, value in decoded.items()} == (
-        {} if tasks else {"trainer.policy.optimizer_config.lr": 2e-6, "+extra_env.VLLM_PROBE": "1"}
+        {} if tasks else {"trainer": {"policy": {"optimizer_config": {"lr": 2e-6}}}, "extra_env": {"VLLM_PROBE": "1"}}
     )
     assert recorded.tasks == task_name
     before = {path: path.read_bytes() for path in source.rglob("*") if path.is_file()}

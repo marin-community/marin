@@ -52,7 +52,7 @@ def _snowball_step(preset: snowball.Preset, settings: tuple[str, ...] = ()) -> A
     return snowball_rl.build_run(
         preset,
         tasks=selection if preset.focus == snowball.Focus.DATA else None,
-        settings=tuple(map(snowball.parse_setting, settings)),
+        settings=settings,
     ).runs[0]
 
 

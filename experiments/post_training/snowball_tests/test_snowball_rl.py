@@ -48,9 +48,7 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
             path = tmp_path / f"{name}-{index}.yaml"
             _render(step, path, runtime=True)
             paths.append(str(path))
-    off_boundary = snowball.build_run(
-        presets.PRESETS["train-long"], settings=(presets.parse_setting("trainer.max_steps=2"),)
-    ).runs[0]
+    off_boundary = snowball.build_run(presets.PRESETS["train-long"], settings=("trainer.max_steps=2",)).runs[0]
     path = tmp_path / "off-boundary.yaml"
     _render(off_boundary, path, runtime=True)
     paths.append(str(path))
@@ -64,17 +62,12 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
     monkeypatch.setenv("WANDB_ENTITY", "test-team")
     changed = snowball.build_run(
         presets.PRESETS["learning-medium"],
-        settings=tuple(
-            map(
-                presets.parse_setting,
-                (
-                    "trainer={train_batch_size: 64, policy_mini_batch_size: 64}",
-                    "generator.n_samples_per_prompt=8",
-                    "trainer.micro_train_batch_size_per_gpu=2",
-                    "trainer.policy.optimizer_config.lr=2.0e-6",
-                    "+generator.engine_init_kwargs.probe={}",
-                ),
-            )
+        settings=(
+            'trainer={"policy_mini_batch_size": 64, "train_batch_size": 64}',
+            "generator.n_samples_per_prompt=8",
+            "trainer.micro_train_batch_size_per_gpu=2",
+            "trainer.policy.optimizer_config.lr=2.0e-6",
+            "generator.engine_init_kwargs.probe={}",
         ),
     ).runs[0]
     path = tmp_path / "changed-batch.yaml"
@@ -114,13 +107,14 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
             tokenizer_uri="fixture-tokenizer",
             tokenizer_revision="v2",
         ),
-        settings=(
-            *learning.settings,
-            "trainer.train_batch_size=64",
-            "trainer.policy_mini_batch_size=64",
-            "generator.n_samples_per_prompt=8",
-            "trainer.micro_train_batch_size_per_gpu=2",
-            "trainer.policy.optimizer_config={lr: 0.000002}",
+        patch=learning.patch.with_settings(
+            (
+                "trainer.train_batch_size=64",
+                "trainer.policy_mini_batch_size=64",
+                "generator.n_samples_per_prompt=8",
+                "trainer.micro_train_batch_size_per_gpu=2",
+                'trainer.policy.optimizer_config={"lr": 2e-06}',
+            )
         ),
     )
     shared = replace(promoted, focus=presets.Focus.DATA)
@@ -330,7 +324,7 @@ print(json.dumps([{
     with pytest.raises(click.BadParameter, match="owned by"):
         snowball.build_run(
             presets.PRESETS["learning-medium"],
-            settings=(presets.parse_setting("generator.sampling_params={ignore_eos: true}"),),
+            settings=('generator.sampling_params={"ignore_eos": true}',),
         )
     summary = Path(presets.default_selection(presets.PRESETS["learning-medium"]).path()) / "summary.json"
     content = json.loads(summary.read_text())
@@ -435,12 +429,12 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     long = presets.PRESETS["train-long"]
 
     def run(preset=learning, *settings, **kwargs):
-        return snowball.build_run(preset, settings=tuple(map(presets.parse_setting, settings)), **kwargs).runs[0]
+        return snowball.build_run(preset, settings=settings, **kwargs).runs[0]
 
     def name(preset=learning, *settings, **kwargs):
         return run(preset, *settings, **kwargs).name
 
-    assert name(learning, "+generator.engine_init_kwargs.probe={}") != name()
+    assert name(learning, "generator.engine_init_kwargs.probe={}") != name()
     repeated = snowball.build_run(learning, replicates=3)
     assert [step.name for step in snowball.build_run(learning, replicates=2).runs] == [
         step.name for step in repeated.runs[:2]
@@ -464,7 +458,9 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     ]
     assert all(left != right for left, right in pairs), pairs
     assert name(
-        learning, "trainer.policy.optimizer_config={lr: 0.000002}", "trainer.policy.optimizer_config={weight_decay: 0.1}"
+        learning,
+        'trainer.policy.optimizer_config={"lr": 2e-06}',
+        'trainer.policy.optimizer_config={"weight_decay": 0.1}',
     ) == name(
         learning, "trainer.policy.optimizer_config.lr=0.000002", "trainer.policy.optimizer_config.weight_decay=0.1"
     )

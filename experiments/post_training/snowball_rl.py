@@ -114,14 +114,13 @@ def build_run(
     *,
     tasks: ArtifactStep | None = None,
     init: ArtifactStep | None = None,
-    settings: tuple[presets.Setting, ...] = (),
+    settings: tuple[str, ...] = (),
     replicates: int = 1,
     control: bool = False,
     requirements: tuple[str, ...] = (),
 ) -> SnowballRun:
     """Construct a Snowball experiment: one run step per replicate and, for a gated preset, its gate step."""
     wandb_entity = os.environ.get(_WANDB_ENTITY_ENV)
-    settings = tuple(leaf for setting in settings for leaf in presets.setting_leaves(setting))
     if not 1 <= replicates <= 5:
         raise click.BadParameter("replicates must be between 1 and 5")
     if preset.focus == presets.Focus.DATA:
@@ -164,7 +163,7 @@ def build_run(
         "tasks": (selection.name, selection.version),
         "init": None if init is None else (init.name, init.version),
         "layout": preset.recipe.layout.name,
-        "settings": sorted({setting.key: setting.value for setting in settings}.items()),
+        "settings": sorted(presets.override_document(settings).items()),
         "evaluations": sorted(evaluation_inputs),
     }
     snowball_rl_gate.validate_requirements(preset, requirements, control=control)
@@ -475,7 +474,7 @@ def _run_command(function: Callable) -> click.Command:
             raise click.BadParameter("--wait requires --run")
         try:
             return function(*args, **kwargs)
-        except scoring.InvalidComparison as error:
+        except (scoring.InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
             click.echo(
                 json.dumps(
                     {
@@ -492,12 +491,6 @@ def _run_command(function: Callable) -> click.Command:
         preset = presets.PRESETS[options["preset_name"]]
         try:
             if get_job_info() is None:
-                if _from_handles(handles).gate is not None:
-                    try:
-                        snowball_rl_gate.validate_candidate(preset)
-                    except (scoring.InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
-                        click.echo(json.dumps({"preset": preset.name, "verdict": "invalid", "reason": str(error)}))
-                        raise click.exceptions.Exit(snowball_rl_gate.REFUSAL_EXIT_CODE) from error
                 job = submit_or_run("experiments.post_training.snowball_rl", handles, max_concurrent, os.environ)
             else:
                 planned = _from_handles(handles)
@@ -540,8 +533,8 @@ def _run_command(function: Callable) -> click.Command:
     "settings",
     multiple=True,
     metavar="KEY=VALUE",
-    help="Change one key of the composed SkyRL config: a dotted key and a YAML value, for example "
-    "trainer.algorithm.advantage_estimator=grpo. Use +KEY=VALUE for a key the base config lacks. "
+    help="Change one typed SkyRL setting: a dotted key and a JSON value, for example "
+    "trainer.algorithm.advantage_estimator=grpo. Text values may be bare. "
     "Repeatable. Keys the preset owns (placement, data, evaluation, measurement) are refused with the "
     "reason; data presets accept none. Code changes need no flag: the run name includes the source "
     "tree hash.",
@@ -602,7 +595,7 @@ def main(
     preset = presets.PRESETS[preset_name]
     run = build_run(
         preset,
-        settings=tuple(presets.parse_setting(setting) for setting in settings),
+        settings=settings,
         tasks=presets.selection_artifact(tasks_name) if tasks_name else None,
         init=presets.published_artifact(init_name, revision=preset.revision) if init_name else None,
         replicates=replicates,
@@ -610,6 +603,12 @@ def main(
         requirements=requirements,
     )
     do_run = click.get_current_context().params.get("do_run", False)
+    if do_run and get_job_info() is None:
+        snowball_rl_gate.validate_candidate(
+            preset,
+            snowball_rl_gate.gate_inputs(preset.name, settings, tasks_name, init_name, requirements),
+            control=control,
+        )
     snapshot = _status(run, preset, stored_only=do_run, issue=issue)
     click.echo(yaml.safe_dump(snapshot, sort_keys=False, width=1000))
     if not do_run and "verdict" in snapshot:

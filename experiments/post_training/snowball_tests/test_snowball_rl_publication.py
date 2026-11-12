@@ -98,9 +98,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(recorded
     )
     receipt = json.loads((source / "terminal.json").read_text())
     if case == "native-composed":
-        training = snowball.build_run(
-            preset, settings=(presets.parse_setting("trainer.policy.optimizer_config.lr=2.0e-6"),)
-        ).runs[0]
+        training = snowball.build_run(preset, settings=("trainer.policy.optimizer_config.lr=2.0e-6",)).runs[0]
         context = StepContext.for_run(
             str(source), str(source.parent), runtime_args=training.runtime_args, deps=training.deps
         )

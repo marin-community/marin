@@ -90,7 +90,9 @@ uv run python -m experiments.post_training.snowball_rl --preset train-long \
   --set trainer.max_steps=100 --version dev
 ```
 
-`--set` takes a dotted SkyRL key and YAML value. Unknown keys require `+KEY=VALUE`.
+`--set` takes a typed dotted SkyRL key and a JSON value; text values may be bare.
+JSON objects update nested settings. Unknown keys, wrong value types and `+` prefixes
+are refused locally.
 Placement, data bindings, retention, evaluation and measurement settings belong to the preset.
 Learning and train-long can change task sampling, optimizer, schedule and batch shape.
 Data presets require `--tasks` and refuse `--set`.
@@ -133,7 +135,8 @@ Re-scoring reads that file rather than interpreting a command line.
 The gate selects exact control names in `snowball_rl_gate.CONTROLS` at the selected preset's
 revision. Pins record the collection source and replicate count. Multiple pins pool deviations
 from each pin's own mean. A missing pin refuses submission with exit 4 and a collection command.
-Current default configurations are composed on CPU. Every control must match those defaults in
+The submitted inputs and current defaults are composed on CPU before submission, including for
+`train-long`. Every control must match those defaults in
 all compared keys; every candidate must match its recorded inputs. Submission checks every pinned
 control before starting a GPU job and refuses stale configurations with exit 4 and the differing
 keys. Config differences found during scoring make the comparison INVALID.

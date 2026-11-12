@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from copy import deepcopy
 from dataclasses import asdict, replace
@@ -12,10 +13,10 @@ from dataclasses import asdict, replace
 import click
 import yaml
 from iris.rpc import job_pb2
+from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import read_record
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import (
-    BEST_CHECKPOINT_CALLBACK,
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
     ArtifactHfModel,
@@ -26,9 +27,20 @@ from marin.rl.skyrl import (
     SkyRLRun,
     SkyRLSpec,
     SkyRLTopology,
-    set_config_value,
     skyrl_step,
 )
+from rigging.filesystem.storage_path import prefix_join
+from skyrlrecipe import ContextBudget, RecipePatch, SkyRLRecipe, sections
+from skyrlrecipe.declared import (
+    BestCheckpointCallback,
+    Callback,
+    CheckpointCallback,
+    EvaluationCallback,
+    EvaluationSampling,
+    HFModelSaveCallback,
+)
+from skyrlrecipe.documents import MISSING, get_path
+from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training.task_curation.selection import TRAIN_FILENAME, GraderKind
@@ -39,39 +51,39 @@ DEFAULT_WANDB_ENTITY = "marin-community"
 
 def _training_config(
     preset: presets.Preset,
-    settings: tuple[presets.Setting, ...],
-) -> dict:
+    settings: tuple[str, ...],
+) -> RecipePatch:
     recipe = preset.recipe
     plan = recipe.layout.role_plan
-    config = {
-        "context_budget": {
-            "request_window_tokens": recipe.request_window_tokens,
-            "max_new_tokens_per_turn": (
-                recipe.fixed_reply_tokens if recipe.fixed_reply_tokens is not None else recipe.max_new_tokens
-            ),
-        },
-        "trainer": {
-            "max_steps": preset.updates or 1,
-            "micro_forward_batch_size_per_gpu": plan.micro_train_batch_size_per_gpu,
-            "eval_interval": max(1, preset.updates) if preset.evaluations else -1,
-            "resume_mode": "latest" if preset.focus == presets.Focus.TRAIN else "none",
-            "seed": presets.SEED,
-            "algorithm": deepcopy(dict(recipe.estimator)),
-            "policy": {"optimizer_config": deepcopy(dict(recipe.optimizer))},
-            "rollout_buffer": {"max_staleness_steps": recipe.staleness, "max_in_flight": plan.train_batch_size},
-        },
-        "generator": {"sampling_params": {"ignore_eos": recipe.fixed_reply_tokens is not None}},
-    }
     geometry = asdict(recipe.layout.megatron)
-    config["trainer"]["policy"]["megatron_config"] = geometry
-    config["trainer"]["ref"] = {"megatron_config": deepcopy(geometry)}
-    for text in preset.settings:
-        setting = presets.parse_setting(text)
-        for leaf in presets.setting_leaves(setting):
-            set_config_value(config, leaf.key, leaf.value)
-    for setting in settings:
-        presets.apply_setting(config, setting, preset)
-    return config
+    config = recipe.config.merge(
+        RecipePatch(
+            context_budget=ContextBudget(
+                request_window_tokens=recipe.request_window_tokens,
+                max_new_tokens_per_turn=(
+                    recipe.fixed_reply_tokens if recipe.fixed_reply_tokens is not None else recipe.max_new_tokens
+                ),
+                max_turns=1,
+            ),
+            trainer=sections.Trainer(
+                max_steps=preset.updates or 1,
+                micro_forward_batch_size_per_gpu=plan.micro_train_batch_size_per_gpu,
+                eval_interval=max(1, preset.updates) if preset.evaluations else -1,
+                resume_mode="latest" if preset.focus == presets.Focus.TRAIN else "none",
+                policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(**geometry)),
+                ref=sections.Ref(megatron_config=sections.RefMegatronConfig(**geometry)),
+                rollout_buffer=sections.RolloutBuffer(
+                    max_staleness_steps=recipe.staleness,
+                    max_in_flight=plan.train_batch_size,
+                ),
+            ),
+            generator=sections.Generator(
+                sampling_params=sections.SamplingParams(ignore_eos=recipe.fixed_reply_tokens is not None),
+            ),
+        ),
+        preset.patch,
+    )
+    return presets.apply_settings(config, settings, preset)
 
 
 def _model_input(preset: presets.Preset, init: ArtifactStep | None) -> SkyRLModelSource:
@@ -91,42 +103,64 @@ def _model_input(preset: presets.Preset, init: ArtifactStep | None) -> SkyRLMode
 def _callbacks(
     preset: presets.Preset,
     evaluation: presets.Evaluation | None,
-    profiles: dict,
+    profiles: dict[str, EvaluationSampling],
     expected_tasks: int,
-) -> list[dict]:
+    model: SkyRLModelSource,
+) -> tuple[Callback, ...]:
     if preset.recipe.layout.role_plan.generate_only:
-        return [{"type": "evaluation", "additional_evaluations": profiles}] if profiles else []
-    callbacks = []
+        return (EvaluationCallback(type="evaluation", additional_evaluations=profiles),) if profiles else ()
+    callbacks: list[Callback] = []
     if preset.checkpoint_every:
-        callbacks.append({"type": "checkpoint", "save_steps": preset.checkpoint_every})
+        callbacks.append(CheckpointCallback(type="checkpoint", save_steps=preset.checkpoint_every))
     if evaluation is not None:
-        for callback in presets.evaluation_callbacks(evaluation, updates=preset.updates):
-            if profiles and callback["type"] == "evaluation":
-                callback["additional_evaluations"] = profiles
-            callbacks.append(callback)
+        callbacks.append(
+            EvaluationCallback(
+                type="evaluation",
+                eval_steps=evaluation.every or preset.updates + 1,
+                eval_before_train=evaluation.at_start,
+                eval_on_train_end=not evaluation.every or preset.updates % evaluation.every != 0,
+                **({"additional_evaluations": profiles} if profiles else {}),
+            )
+        )
     if preset.focus == presets.Focus.TRAIN:
         callbacks.extend(
             [
-                {
-                    "type": BEST_CHECKPOINT_CALLBACK,
-                    "expected_tasks": expected_tasks,
-                    "minimum_scored_tasks": math.ceil(presets.MINIMUM_PANEL_COVERAGE * expected_tasks),
-                },
-                {
-                    "type": "hf_model_save",
-                    "save_steps": ((preset.updates // preset.checkpoint_every) + 1) * preset.checkpoint_every,
-                    "save_on_train_end": True,
-                },
+                BestCheckpointCallback(
+                    type="best_checkpoint",
+                    initial_model_uri=_initial_model_uri(model),
+                    expected_tasks=expected_tasks,
+                    minimum_scored_tasks=math.ceil(presets.MINIMUM_PANEL_COVERAGE * expected_tasks),
+                ),
+                HFModelSaveCallback(
+                    type="hf_model_save",
+                    save_steps=((preset.updates // preset.checkpoint_every) + 1) * preset.checkpoint_every,
+                    save_on_train_end=True,
+                ),
             ]
         )
     if preset.keep_weights and preset.focus != presets.Focus.TRAIN:
         callbacks.extend(
             (
-                {"type": "checkpoint", "save_steps": preset.updates + 1, "save_on_train_end": True},
-                {"type": "hf_model_save", "save_steps": -1, "save_on_train_end": True},
+                CheckpointCallback(type="checkpoint", save_steps=preset.updates + 1, save_on_train_end=True),
+                HFModelSaveCallback(type="hf_model_save", save_steps=-1, save_on_train_end=True),
             )
         )
-    return callbacks
+    return tuple(callbacks)
+
+
+def _initial_model_uri(model: SkyRLModelSource) -> str:
+    if isinstance(model, SkyRLPolicyModel):
+        record = read_record(model.step.path())
+        uri = (record.result or {}).get("hf_model_uri") if record is not None else None
+        if not isinstance(uri, str) or not uri:
+            raise click.BadParameter("the initializer requires a completed HF export")
+        return uri
+    if model.relative_path is not None:
+        return prefix_join(model.step.path(), model.relative_path)
+    exports = discover_hf_checkpoints(model.step.path())
+    if not exports:
+        raise click.BadParameter("the initializer artifact has no HF export")
+    return exports[-1]
 
 
 def _refuse_judged(summary: dict, filename: str) -> None:
@@ -140,13 +174,12 @@ def run_spec(
     name: str,
     tasks: ArtifactStep | None = None,
     init: ArtifactStep | None = None,
-    settings: tuple[presets.Setting, ...] = (),
+    settings: tuple[str, ...] = (),
 ) -> SkyRLSpec:
     """Build the complete default recipe with explicit candidate inputs and settings."""
-    settings = tuple(leaf for setting in settings for leaf in presets.setting_leaves(setting))
-    defaults = tuple(leaf for text in preset.settings for leaf in presets.setting_leaves(presets.parse_setting(text)))
+    initial = _training_config(preset, settings).to_skyrl()
     batch_changes = {
-        field: setting.value for setting in (*defaults, *settings) if (field := presets.BATCH_SETTINGS.get(setting.key))
+        field: value for key, field in presets.BATCH_SETTINGS.items() if (value := get_path(initial, key)) is not MISSING
     }
     if batch_changes:
         plan = replace(preset.recipe.layout.role_plan, **batch_changes)
@@ -156,7 +189,7 @@ def run_spec(
     _refuse_judged(presets.selection_summary(selection), "train")
     chosen = preset.evaluations
     generating = preset.recipe.layout.role_plan.generate_only
-    config = _training_config(preset, settings)
+    config = _training_config(preset, settings).to_skyrl()
     preset = replace(preset, updates=config["trainer"]["max_steps"])
     model = _model_input(preset, init)
     validation_data = ()
@@ -176,25 +209,29 @@ def run_spec(
                 config["trajectory_runner"]["max_concurrent_tasks"] = answer_count
         else:
             evaluation_data.append((evaluation.name, sources))
-            profiles[evaluation.name] = {
-                "sampling_params": profile_config["generator"]["eval_sampling_params"],
-                "n_samples_per_prompt": profile_config["generator"]["eval_n_samples_per_prompt"],
-            }
-            if not generating:
-                profiles[evaluation.name]["schedule"] = "final"
-    config["trainer"]["callbacks"] = _callbacks(preset, chosen[0] if chosen else None, profiles, expected_tasks)
+            profiles[evaluation.name] = EvaluationSampling(
+                sampling_params=EvalSamplingParams.model_validate_json(
+                    json.dumps(profile_config["generator"]["eval_sampling_params"])
+                ),
+                n_samples_per_prompt=profile_config["generator"]["eval_n_samples_per_prompt"],
+                **({"schedule": "final"} if not generating else {}),
+            )
+    config["trainer"]["callbacks"] = [
+        callback.to_skyrl()
+        for callback in _callbacks(preset, chosen[0] if chosen else None, profiles, expected_tasks, model)
+    ]
     plan = preset.recipe.layout.role_plan
     return SkyRLSpec(
         name=name,
         version=preset.revision,
-        config_yaml=yaml.safe_dump(config, sort_keys=False),
+        config_yaml=yaml.safe_dump(SkyRLRecipe.from_document(config).to_skyrl(), sort_keys=False),
         model=model,
         train_data=(() if plan.generate_only else (ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),)),
         validation_data=validation_data,
         evaluation_data=tuple(evaluation_data),
         topology=SkyRLTopology(num_nodes=plan.num_nodes, gpus_per_node=8, gpu_variant="H100", role_plan=plan),
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=5 if preset.checkpoint_every else 2),
-        seed=config["trainer"]["seed"],
+        seed=presets.SEED,
     )
 
 

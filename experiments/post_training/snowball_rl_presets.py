@@ -7,8 +7,7 @@ from __future__ import annotations
 
 import json
 import random
-from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -25,15 +24,12 @@ from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import (
-    MISSING_CONFIG_VALUE,
     ArtifactDataSource,
     ArtifactHfModel,
     MegatronGeometry,
     SkyRLRolePlan,
     SkyRLRun,
-    declared_config_value,
     role_plan_config_values,
-    set_config_value,
 )
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from marin.training.training import LevanterCheckpoint
@@ -41,6 +37,9 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
+from skyrlrecipe import RecipePatch, sections
+from skyrlrecipe.documents import MISSING, get_path, merge_mappings, set_path
+from skyrlrecipe.settings import parse_setting as typed_setting_value
 
 from experiments.post_training.task_curation.driver import CANONICAL_ARTIFACT_ROOT
 from experiments.post_training.task_curation.selection import (
@@ -79,65 +78,88 @@ _DEFAULT_MODEL = ArtifactHfModel(
     MODEL_REVISION,
     relative_path="",
 )
-_DEFAULT_SETTINGS = (
-    "context_budget.max_turns=1",
-    "environment.task_sessions.local={}",
-    'data.kind="parquet"',
-    "data.shuffle=true",
-    'trainer.strategy="megatron"',
-    "trainer.flash_attn=false",
-    "trainer.use_sample_packing=false",
-    "trainer.gradient_checkpointing=true",
-    "trainer.offload_optimizer_during_rollouts=false",
-    "trainer.epochs=50",
-    "trainer.update_epochs_per_batch=1",
-    "trainer.eval_batch_size=256",
-    "trainer.eval_before_train=false",
-    'trainer.logger=["console","records","wandb"]',
-    'trainer.project_name="marin-snowball-rl"',
-    "trainer.tracker_commit_each_step=true",
-    "trainer.training_metrics=true",
-    "trainer.rollout_spans=true",
-    "trainer.policy_train_spans=true",
-    "trainer.algorithm.batch_invariant=false",
-    'trainer.rollout_buffer.batch_policy="full_batch"',
-    "trainer.rollout_buffer.object_store_root=null",
-    "trainer.ckpt_interval=0",
-    "trainer.hf_save_interval=-1",
-    'generator.backend="vllm"',
-    'generator.model_dtype="bfloat16"',
-    'generator.vllm_attention_backend="FLASH_ATTN"',
-    "generator.run_engines_locally=true",
-    'generator.weight_sync_backend="nccl"',
-    'generator.weight_sync_pause.mode="keep"',
-    "generator.weight_sync_pause.clear_cache=true",
-    'generator.weight_sync_transport="expert_block"',
-    "generator.expert_block_sync.timeout_seconds=600",
-    "generator.expert_block_sync.verify=false",
-    "generator.gpu_memory_utilization=0.75",
-    "generator.max_num_seqs=1024",
-    "generator.max_num_batched_tokens=8192",
-    "generator.enable_prefix_caching=true",
-    "generator.trajectory_reward_shaping.enabled=true",
-    "generator.trajectory_reward_shaping.overlong.penalty_scale=0.0",
-    "generator.trajectory_reward_shaping.reasoning_span.penalty=0.1",
-    'generator.trajectory_reward_shaping.reasoning_span.target="marker"',
-    "generator.enable_chunked_prefill=true",
-    "generator.enforce_eager=false",
-    "generator.enable_http_endpoint=false",
-    "generator.chat_template=null",
-    "generator.apply_overlong_filtering=false",
-    'generator.engine_init_kwargs.moe_backend="triton"',
-    "generator.engine_init_kwargs.enable_auto_tools=true",
-    'generator.engine_init_kwargs.tool_parser="hermes"',
-    "generator.sampling_params.temperature=1.0",
-    "generator.sampling_params.top_p=1.0",
-    "generator.sampling_params.logprobs=0",
-    "trajectory_runner.max_concurrent_tasks=1024",
-    'extra_env.PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"',
-    'extra_env.NCCL_NET="Socket"',
-    'extra_env.NCCL_IB_DISABLE="1"',
-    'extra_env.NCCL_SOCKET_FAMILY="AF_INET"',
+_DEFAULT_PATCH = RecipePatch(
+    environment=sections.Environment(task_sessions={"local": {}}),
+    data=sections.Data(kind="parquet", shuffle=True),
+    trainer=sections.Trainer(
+        strategy="megatron",
+        flash_attn=False,
+        use_sample_packing=False,
+        gradient_checkpointing=True,
+        offload_optimizer_during_rollouts=False,
+        epochs=50,
+        update_epochs_per_batch=1,
+        eval_batch_size=256,
+        eval_before_train=False,
+        logger=("console", "records", "wandb"),
+        project_name="marin-snowball-rl",
+        tracker_commit_each_step=True,
+        training_metrics=True,
+        rollout_spans=True,
+        policy_train_spans=True,
+        algorithm=sections.Algorithm(
+            batch_invariant=False,
+            advantage_estimator="rloo_n",
+            policy_loss_type="regular",
+            loss_reduction="token_mean",
+            use_kl_loss=False,
+            kl_estimator_type="k3_unbiased_gradient",
+            off_policy_correction="none",
+            eps_clip_low=0.2,
+            eps_clip_high=0.2,
+            group_advantage_min_size=2,
+            advantage_batch_normalize=False,
+            rloo_n_filter_zero_reward_groups=True,
+            use_entropy_loss=False,
+        ),
+        policy=sections.Policy(
+            optimizer_config=sections.PolicyOptimizerConfig(
+                optimizer="AdamW",
+                lr=1e-6,
+                adam_betas=(0.9, 0.999),
+                weight_decay=0.0,
+                max_grad_norm=0.5,
+                scheduler="constant_with_warmup",
+                num_warmup_steps=0,
+            ),
+        ),
+        rollout_buffer=sections.RolloutBuffer(batch_policy="full_batch", object_store_root=None),
+        ckpt_interval=0,
+        hf_save_interval=-1,
+    ),
+    generator=sections.Generator(
+        backend="vllm",
+        model_dtype="bfloat16",
+        vllm_attention_backend="FLASH_ATTN",
+        run_engines_locally=True,
+        weight_sync_backend="nccl",
+        weight_sync_pause=sections.WeightSyncPause(mode="keep", clear_cache=True),
+        weight_sync_transport="expert_block",
+        expert_block_sync=sections.ExpertBlockSync(timeout_seconds=600, verify=False),
+        gpu_memory_utilization=0.75,
+        max_num_seqs=1024,
+        max_num_batched_tokens=8192,
+        enable_prefix_caching=True,
+        trajectory_reward_shaping=sections.TrajectoryRewardShaping(
+            enabled=True,
+            overlong=sections.Overlong(penalty_scale=0.0),
+            reasoning_span=sections.ReasoningSpan(penalty=0.1, target="marker"),
+        ),
+        enable_chunked_prefill=True,
+        enforce_eager=False,
+        enable_http_endpoint=False,
+        chat_template=None,
+        apply_overlong_filtering=False,
+        engine_init_kwargs={"moe_backend": "triton", "enable_auto_tools": True, "tool_parser": "hermes"},
+        sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
+    ),
+    trajectory_runner=sections.TrajectoryRunner(max_concurrent_tasks=1024),
+    extra_env={
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+        "NCCL_NET": "Socket",
+        "NCCL_IB_DISABLE": "1",
+        "NCCL_SOCKET_FAMILY": "AF_INET",
+    },
 )
 
 
@@ -208,8 +230,7 @@ class Recipe:
     max_new_tokens: int
     fixed_reply_tokens: int | None
     staleness: int
-    estimator: Mapping[str, object]
-    optimizer: Mapping[str, object]
+    config: RecipePatch = _DEFAULT_PATCH
 
 
 @dataclass(frozen=True)
@@ -229,7 +250,7 @@ class Preset:
     measured: range
     tasks: str = _DEFAULT_TASKS
     model: ArtifactHfModel = _DEFAULT_MODEL
-    settings: tuple[str, ...] = _DEFAULT_SETTINGS
+    patch: RecipePatch = field(default_factory=RecipePatch)
     eval_lite: str = _DEFAULT_EVAL_LITE
     evaluations: tuple[Evaluation, ...] = ()
     keep_weights: bool = False
@@ -249,52 +270,22 @@ class Preset:
         return f"{self.focus}-{self.duration}"
 
 
-@dataclass(frozen=True)
-class Setting:
-    key: str
-    value: object
-    allows_new_key: bool
-
-
-def parse_setting(text: str) -> Setting:
-    key, separator, value = text.partition("=")
-    if not separator or not key:
-        raise click.BadParameter(f"expected dotted.key=value, got {text!r}")
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
-        parsed = yaml.safe_load(value)
-    return Setting(key.lstrip("+"), parsed, key.startswith("+"))
-
-
-def setting_leaves(setting: Setting) -> tuple[Setting, ...]:
-    if isinstance(setting.value, Mapping) and setting.value:
-        return tuple(
-            leaf
-            for key, value in setting.value.items()
-            for leaf in setting_leaves(Setting(f"{setting.key}.{key}", value, setting.allows_new_key))
-        )
-    return (setting,)
-
-
-def evaluation_callbacks(evaluation: Evaluation, *, updates: int) -> list[dict]:
-    return [
-        {
-            "type": "evaluation",
-            "eval_steps": evaluation.every or updates + 1,
-            "eval_before_train": evaluation.at_start,
-            "eval_on_train_end": not evaluation.every or updates % evaluation.every != 0,
-        }
-    ]
+def override_document(settings: tuple[str, ...]) -> dict:
+    """Canonical explicit user values for preset ownership and stored input identity."""
+    document = {}
+    for text in settings:
+        key, _, raw = text.partition("=")
+        patch = {}
+        set_path(patch, key, typed_setting_value(RecipePatch, key, raw))
+        document = merge_mappings(document, patch)
+    return document
 
 
 def configure_evaluation(
     evaluation: Evaluation, config: dict, tasks: ArtifactStep, *, revision: str
 ) -> tuple[ArtifactDataSource, ...]:
     if evaluation.sample is not None:
-        tasks = sampled_tasks_step(
-            tasks, evaluation.file, evaluation.sample, config["trainer"]["seed"], revision=revision
-        )
+        tasks = sampled_tasks_step(tasks, evaluation.file, evaluation.sample, SEED, revision=revision)
     config["trainer"].update(eval_num_prompts=None, dump_eval_results=True)
     sampling = (
         {
@@ -355,44 +346,20 @@ P40 = Layout(
     host_memory="1800GB",
 )
 E8 = replace(P40, name="e8", role_plan=replace(_P40_PLAN, generate_only=True))
-_ESTIMATOR = MappingProxyType(
-    {
-        "advantage_estimator": "rloo_n",
-        "policy_loss_type": "regular",
-        "loss_reduction": "token_mean",
-        "use_kl_loss": False,
-        "use_kl_in_reward": False,
-        "kl_estimator_type": "k3_unbiased_gradient",
-        "off_policy_correction": "none",
-        "eps_clip_low": 0.2,
-        "eps_clip_high": 0.2,
-        "group_advantage_min_size": 2,
-        "advantage_batch_normalize": False,
-        "rloo_n_filter_zero_reward_groups": True,
-        "use_entropy_loss": False,
-    }
-)
-_OPTIMIZER = MappingProxyType(
-    {
-        "optimizer": "AdamW",
-        "lr": 1e-6,
-        "adam_betas": [0.9, 0.999],
-        "weight_decay": 0.0,
-        "max_grad_norm": 0.5,
-        "scheduler": "constant_with_warmup",
-        "num_warmup_steps": 0,
-    }
-)
 _LEARNING = Recipe(
     layout=P40,
     request_window_tokens=24576,
     max_new_tokens=8192,
     fixed_reply_tokens=None,
     staleness=0,
-    estimator=_ESTIMATOR,
-    optimizer=_OPTIMIZER,
 )
-_ASYNC_P40 = replace(_LEARNING, staleness=2, estimator={**_ESTIMATOR, "off_policy_correction": "tis"})
+_ASYNC_P40 = replace(
+    _LEARNING,
+    staleness=2,
+    config=_DEFAULT_PATCH.merge(
+        RecipePatch(trainer=sections.Trainer(algorithm=sections.Algorithm(off_policy_correction="tis")))
+    ),
+)
 _GAPS = (
     Gap.AAII_COVERAGE,
     Gap.NO_AGENTIC_TASKS,
@@ -451,7 +418,13 @@ PRESETS = MappingProxyType(
                 recipe=replace(
                     _LEARNING,
                     fixed_reply_tokens=4096,
-                    estimator={**_ESTIMATOR, "rloo_n_filter_zero_reward_groups": False},
+                    config=_DEFAULT_PATCH.merge(
+                        RecipePatch(
+                            trainer=sections.Trainer(
+                                algorithm=sections.Algorithm(rloo_n_filter_zero_reward_groups=False)
+                            )
+                        )
+                    ),
                 ),
                 updates=10,
                 measured=range(2, 11),
@@ -570,79 +543,72 @@ BATCH_SETTINGS = {
     "trainer.micro_train_batch_size_per_gpu": "micro_train_batch_size_per_gpu",
 }
 _COMPARISON_KEYS = {"trainer.max_steps", "trainer.seed", "trainer.logger", "trainer.project_name"}
-_DERIVED_KEYS = {
-    "generator.max_input_length",
-    "trainer.max_prompt_length",
-    "generator.max_turns",
-    "generator.engine_init_kwargs.max_model_len",
-    "generator.sampling_params.max_generate_length",
-    "generator.trajectory_reward_shaping.overlong.l_max",
-    "generator.trajectory_reward_shaping.overlong.l_cache",
-}
 
 
-def apply_setting(config: dict, setting: Setting, preset: Preset) -> None:
-    key = setting.key
+def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Preset) -> RecipePatch:
+    """Validate typed settings, then enforce the preset's input and measurement ownership."""
+    try:
+        updated = config.with_settings(settings)
+        values = override_document(settings)
+    except (ValueError, TypeError) as error:
+        raise click.BadParameter(str(error)) from error
+
+    def has(path: str) -> bool:
+        return get_path(values, path) is not MISSING
+
+    trainer = values.get("trainer", {})
+    generator = values.get("generator", {})
+    role_paths = set(role_plan_config_values(preset.recipe.layout.role_plan)) - BATCH_SETTINGS.keys()
     owners = {
-        "choose the preset's role plan": key.startswith("entrypoint"),
-        "checkpoint resume mode is fixed by the preset": key.startswith("trainer.resume_mode"),
-        "choose network transport in Layout": key.startswith("extra_env.NCCL_"),
-        "choose role geometry with Layout.role_plan": (
-            key.startswith(("trainer.placement", "generator.inference_engine_", "generator.num_inference_engines"))
-            or (key in role_plan_config_values(preset.recipe.layout.role_plan) and key not in BATCH_SETTINGS)
+        "choose the preset's role plan": has("entrypoint"),
+        "checkpoint resume mode is fixed by the preset": has("trainer.resume_mode"),
+        "choose network transport in Layout": any(key.startswith("NCCL_") for key in values.get("extra_env", {})),
+        "choose role geometry with Layout.role_plan": has("trainer.placement") or any(has(path) for path in role_paths),
+        "set checkpoint retention in the preset": has("generator.trajectory_retention"),
+        "choose the preset's Layout": has("generator.run_engines_locally"),
+        "evaluation requests are fixed by the preset": (
+            has("trainer.callbacks") or any(key.startswith("eval_") for key in (*trainer, *generator))
         ),
-        "set checkpoint retention in the preset": key.startswith(
-            ("generator.trajectory_retention", "trainer.max_ckpts_to_keep")
-        ),
-        "choose the preset's Layout": key.startswith("generator.run_engines_locally"),
-        "evaluation requests are fixed by the preset": key.startswith(
-            ("trainer.callbacks", "trainer.eval_", "generator.eval_")
-        ),
-        "set checkpoint frequency in the preset": key.startswith(("trainer.ckpt_interval", "trainer.hf_save_interval")),
-        "set the recipe's context budget instead of a derived key": key in _DERIVED_KEYS,
+        "set checkpoint frequency in the preset": has("trainer.ckpt_interval") or has("trainer.hf_save_interval"),
         "select curated data with --tasks on a data or train-long preset": (
-            key.startswith("data.")
+            has("data")
             and (
-                not (
-                    preset.focus in (Focus.LEARNING, Focus.TRAIN)
-                    and (key == "data.shuffle" or key.startswith("data.sampling."))
-                )
+                preset.focus not in (Focus.LEARNING, Focus.TRAIN)
+                or bool(values["data"].keys() - {"shuffle", "sampling"})
             )
         ),
         "change the preset and recalibrate its control to keep runs comparable": (
             preset.focus != Focus.TRAIN
             and (
-                key in _COMPARISON_KEYS
-                or key.startswith("context_budget.")
-                or any(part in key.split(".") for part in ("max_generate_length", "ignore_eos", "min_tokens"))
+                any(has(path) for path in _COMPARISON_KEYS)
+                or has("context_budget")
+                or has("generator.sampling_params.ignore_eos")
+                or has("generator.sampling_params.min_tokens")
             )
         ),
         "keep mismatch metrics and fixed-length training masks enabled in speed presets": (
             preset.focus == Focus.SPEED
-            and key
-            in ("generator.sampling_params.logprobs", "trainer.training_metrics", "generator.apply_overlong_filtering")
+            and any(
+                has(path)
+                for path in (
+                    "generator.sampling_params.logprobs",
+                    "trainer.training_metrics",
+                    "generator.apply_overlong_filtering",
+                )
+            )
         ),
         "change batch shape only in a learning or train-long preset": (
-            key in BATCH_SETTINGS and preset.focus not in (Focus.LEARNING, Focus.TRAIN)
+            preset.focus not in (Focus.LEARNING, Focus.TRAIN) and any(has(path) for path in BATCH_SETTINGS)
         ),
         "use generator performance keys; generate-only sampling belongs to the evaluation": (
             preset.recipe.layout.role_plan.generate_only
-            and (not key.startswith("generator.") or key.startswith("generator.sampling_params."))
+            and (bool(values.keys() - {"generator"}) or has("generator.sampling_params"))
         ),
     }
     fix = next((message for message, owned in owners.items() if owned), None)
     if fix:
-        raise click.BadParameter(f"{key} is owned by the preset: {fix}")
-    if (
-        declared_config_value(config, key) is MISSING_CONFIG_VALUE
-        and key not in BATCH_SETTINGS
-        and not setting.allows_new_key
-    ):
-        raise click.BadParameter(f"unknown setting {key}; prefix with + to add it")
-    try:
-        set_config_value(config, key, setting.value)
-    except ValueError as error:
-        raise click.BadParameter(str(error)) from error
+        raise click.BadParameter(f"setting is owned by the preset: {fix}")
+    return updated
 
 
 def default_selection(preset: Preset) -> ArtifactStep[Artifact]:
