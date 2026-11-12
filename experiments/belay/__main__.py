@@ -307,12 +307,15 @@ def own_session(session_id: str) -> SessionCredentials:
     return credentials
 
 
-def finish(session_id: str, summary: str) -> None:
-    """Report a scheduled session's final message, which frees the queue for the next session."""
+def finish(session_id: str, summary: str, *, blocked: bool) -> None:
+    """Report a scheduled session's final message, which frees the queue for the next session. A ``blocked``
+    session (one that could not work its events: a crashed command it may not work around) reports failure, and the
+    page offers its events once more to a later session."""
     own_session(session_id)
-    call(f"agent/sessions/{session_id}/finish", {"state": "succeeded", "summary": summary})
+    state = "failed" if blocked else "succeeded"
+    call(f"agent/sessions/{session_id}/finish", {"state": state, "summary": summary})
     SESSION_FILE.unlink(missing_ok=True)
-    print(f"session {session_id} finished")
+    print(f"session {session_id} finished ({state}{'; its events are queued again' if blocked else ''})")
     say_next("stop")
 
 
@@ -1968,6 +1971,11 @@ def main(argv: list[str]) -> None:
     p = command("finish")
     p.add_argument("--session", required=True, help="the session id claim printed")
     p.add_argument("--summary", required=True, help="the final message (RUNBOOK section 7)")
+    p.add_argument(
+        "--blocked",
+        action="store_true",
+        help="the session could not work its events (RUNBOOK section 7): report failure so they are offered again",
+    )
     p = command("start")
     events = p.add_mutually_exclusive_group(required=True)
     events.add_argument("--events", type=Path, help="the session's events file, named in its prompt")
@@ -2050,7 +2058,7 @@ def main(argv: list[str]) -> None:
     elif args.command == "claim":
         claim()
     elif args.command == "finish":
-        finish(args.session, args.summary)
+        finish(args.session, args.summary, blocked=args.blocked)
     elif args.command == "start" and args.check_only:
         check_only()
     elif args.command == "start":
