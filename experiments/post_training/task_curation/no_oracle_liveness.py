@@ -27,9 +27,11 @@ no code path that deletes Daytona snapshots (see ``.agents/ops/daytona.md``).
 
 import argparse
 import asyncio
+import base64
 import json
 import math
 import random
+import tempfile
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -149,10 +151,24 @@ async def run_one(
         )
         from shellbox.image import RegistryImage  # noqa: PLC0415
 
-        snapshot = snapshot_identity(
-            RegistryImage(requirements.docker_image),
-            _resources(runtime.cpus, runtime.memory_mb, runtime.storage_mb, runtime.gpus),
-        )
+        if requirements.docker_build is not None:
+            # A build-graded task is graded on the backend against the declared build
+            # context; the backend builds it, so no snapshot identity is derived here.
+            context_dir = Path(tempfile.mkdtemp(prefix="liveness-build-"))
+            for resource in requirements.docker_build.files:
+                target = context_dir / resource.path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(base64.b64decode(resource.source.content_base64))
+            environment_dir = context_dir
+        else:
+            environment_dir = Path("/nonexistent")
+        if requirements.docker_image is not None:
+            snapshot = snapshot_identity(
+                RegistryImage(requirements.docker_image),
+                _resources(runtime.cpus, runtime.memory_mb, runtime.storage_mb, runtime.gpus),
+            )
+        else:
+            snapshot = ""
         spec_machine = machine_spec(
             EnvironmentConfig(
                 docker_image=requirements.docker_image,
@@ -161,7 +177,7 @@ async def run_one(
                 memory_mb=runtime.memory_mb,
                 storage_mb=runtime.storage_mb,
             ),
-            Path("/nonexistent"),
+            environment_dir,
             {},
             cpus=runtime.cpus,
             memory_mb=runtime.memory_mb,
