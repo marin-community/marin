@@ -144,7 +144,7 @@ def test_parse_instructions_handles_continuations_comments_and_json_run():
     assert instructions[2].json_form and instructions[2].args == ["apt-get", "install", "-y", "jq"]
 
 
-def test_the_ten_from_census_maps_onto_nine_bases():
+def test_archived_base_aliases_share_pinned_references():
     census = [
         "ubuntu:24.04",
         "aweaiteam/calibforge:tb2-verifier-base-v1",

@@ -159,14 +159,13 @@ def mode_admits_training(mode: "CurationMode") -> bool:
 
 
 class OracleValidation(StrEnum):
-    """How an admitted source was qualified when it ships no oracle solutions."""
+    """How an admitted source's grader was qualified."""
 
     EXECUTED = "executed"
     """Every sampled task's oracle solution ran and scored its expected reward."""
 
     VERIFIER_EXECUTED = "verifier_executed"
-    """No oracle solutions exist; the grader was executed against a solved and an empty
-    submission instead, and both behaved as the task's contract requires."""
+    """The grader rejected an untouched submission; successful oracle execution is not certified."""
 
     SKIPPED = "skipped"
     """Neither qualification ran; the source's execution is not certified."""

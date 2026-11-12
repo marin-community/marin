@@ -1,20 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Inventory-only declarations for published campaign cohorts.
+"""Published campaign cohorts and runnable rebuilt releases.
 
-These entries make releases the Snowball Smartie RL campaign prepared and
-published outside the curation driver visible in the RL Data Atlas. Each pins
-one immutable Hugging Face revision. None has a conversion recipe: campaign
-admission, split assignment and qualification evidence already live in the
-release itself, so re-converting them here would invent a second provenance.
+Each entry pins an immutable Hugging Face revision in the RL Data Atlas.
+Rebuilt TaskCompendium cohorts use ``prebuilt.import_prebuilt`` to validate and
+admit their published tasks without repeating conversion. Their qualification
+evidence and oversight levels describe the checks behind admission.
 
-The rebuilt CalibForge cohort is the exception: it is a converted dataset published
-from this repository, so it is imported through ``prebuilt.import_prebuilt`` and is
-runnable. The rest carry host-local Docker image locators.
-Their screened public releases record instruction text and identity but no image
-bytes or verifier material, so no machine can execute these tasks from the public
-release alone. Treat every entry as a data pointer, not a runnable pipeline.
+Legacy Snowball Smartie releases remain inventory pointers: their host-local
+image locators, absent image bytes and omitted verifier material cannot be used
+to execute tasks from the screened public release alone.
 """
 
 from finestore.rl.curation import (

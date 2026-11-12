@@ -6,7 +6,7 @@
 Curation that converts data must publish the converted artifact, so the Atlas can
 point at something a reader can actually load instead of at the deprecated native
 release. This uploads the lowered task spec rows beside the dataset card, verifies the
-result by fetching it anonymously, and prints the revision to record.
+result through an authenticated read-back, and prints the revision to record.
 
 Campaign datasets stay private until release, so the repo is created private and the
 artifact is verified by reading it back through the cached login and comparing hashes.
