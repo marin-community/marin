@@ -23,6 +23,11 @@ from experiments.post_training.task_curation.daytona_identity import (
 )
 
 
+@pytest.fixture
+def taskcompendium_environment():
+    pytest.importorskip("taskcompendium")
+
+
 def _native_tar(dockerfile: str, files: dict[str, bytes]) -> bytes:
     members = {
         "environment/Dockerfile": dockerfile.encode(),
@@ -56,6 +61,7 @@ def test_data_baked_into_contexts_splits_identities():
     assert count.distinct == 2 and not count.failures
 
 
+@pytest.mark.usefixtures("taskcompendium_environment")
 def test_lowered_specs_collapse_and_cite_the_registry_image():
     def spec(dockerfile: str, mode: str | None) -> dict:
         resource = {
@@ -121,6 +127,7 @@ def test_counter_names_match_the_production_name_for_the_staged_tree(tmp_path):
     assert list(plain.sizes) != [expected]  # the executable bit is part of the identity
 
 
+@pytest.mark.usefixtures("taskcompendium_environment")
 def test_a_task_needing_a_container_runtime_is_refused_on_daytona():
     """Snapshot count is not enough: an unsupported capability blocks the verdict."""
     image = "ubuntu:24.04@sha256:" + "a" * 64
@@ -134,6 +141,7 @@ def test_a_task_needing_a_container_runtime_is_refused_on_daytona():
     assert count.execution_failures == [("container-runtime", "agent: Unsupported capabilities: docker")]
 
 
+@pytest.mark.usefixtures("taskcompendium_environment")
 def test_grader_environment_is_counted_independently_and_lock_refusals_are_retained():
     actor = "actor@sha256:" + "a" * 64
     grader = "grader@sha256:" + "b" * 64

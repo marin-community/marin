@@ -38,7 +38,6 @@ from shellbox.machine import (
     MachineSpec,
     NetworkPolicy,
 )
-from taskcompendium.models import EnvironmentRequirements, require_resolved_environment
 
 ENVIRONMENT_PREFIX = "environment/"
 DOCKERFILE = "Dockerfile"
@@ -132,6 +131,10 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
     fabricated snapshot. Unbuilt contexts retain their identity but are refused
     by the runtime's unresolved-environment check.
     """
+    # Native Harbor counting also runs in Harbor's standalone environment, which
+    # does not install TaskCompendium. Only lowered TaskCompendium inputs need it.
+    from taskcompendium.models import EnvironmentRequirements, require_resolved_environment  # noqa: PLC0415
+
     sizes: Counter[str] = Counter()
     failures: list[tuple[str, str]] = []
     execution_failures: list[tuple[str, str]] = []
