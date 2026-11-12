@@ -59,7 +59,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 
 from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT
-from experiments.post_training.task_curation.calibforge_rebuild import setup_script_name
+from experiments.post_training.task_curation.calibforge_rebuild import LoweredSpec, setup_script_name
 from experiments.post_training.task_curation.environment_fidelity import (
     DEFAULT_WORKDIR,
     ENVIRONMENT_DOCKERFILE,
@@ -68,7 +68,6 @@ from experiments.post_training.task_curation.environment_fidelity import (
 from experiments.post_training.task_curation.no_oracle_liveness import (
     DETAIL_LIMIT,
     UNKNOWN_BASE,
-    LoweredSpec,
     load_specs,
     manifest_bases,
 )
@@ -700,10 +699,10 @@ def _execute_lowered(
 ) -> list[SetupExecution]:
     def run(task_id: str) -> SetupExecution:
         expectations = workspace_expectations(native[task_id])
-        requirements = lowered[task_id].task.get("environment_requirements") or {}
-        workdir = requirements.get("working_directory") or DEFAULT_WORKDIR
+        requirements = lowered[task_id].task.environment_requirements
+        workdir = requirements.working_directory or DEFAULT_WORKDIR
         return execute_lowered_setup(
-            {"task": lowered[task_id].task},
+            {"task": lowered[task_id].task.model_dump(mode="json")},
             expectations,
             destinations=_native_destinations(native[task_id], workdir),
             dns=dns,

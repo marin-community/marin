@@ -169,6 +169,25 @@ class _DeclaredIdentity:
     execution_error: str | None = None
 
 
+@dataclass(frozen=True)
+class MachineShape:
+    """The cpus, memory, storage and gpu count a runtime declares for one machine."""
+
+    cpus: int | None = None
+    memory_mb: int | None = None
+    storage_mb: int | None = None
+    gpus: int = 0
+
+    @classmethod
+    def from_mapping(cls, shape: Mapping) -> "MachineShape":
+        return cls(
+            cpus=shape.get("cpus"),
+            memory_mb=shape.get("memory_mb"),
+            storage_mb=shape.get("storage_mb"),
+            gpus=shape.get("gpus", 0),
+        )
+
+
 def declared_machine(
     requirements: EnvironmentRequirements,
     context: Path,
@@ -220,16 +239,17 @@ def _declared_identity(
     if declared is None or shape is None:
         return _DeclaredIdentity()
     requirements = EnvironmentRequirements.model_validate(declared)
+    machine_shape = MachineShape.from_mapping(shape)
     with tempfile.TemporaryDirectory() as tmp:
         try:
             machine = declared_machine(
                 requirements,
                 Path(tmp),
                 network=NetworkPolicy.ALLOW,
-                cpus=shape.get("cpus"),
-                memory_mb=shape.get("memory_mb"),
-                storage_mb=shape.get("storage_mb"),
-                gpus=shape.get("gpus", 0),
+                cpus=machine_shape.cpus,
+                memory_mb=machine_shape.memory_mb,
+                storage_mb=machine_shape.storage_mb,
+                gpus=machine_shape.gpus,
             )
         except ValueError as error:
             return _DeclaredIdentity(mapping_error=f"{role}: {error}", execution_error=f"{role}: {error}")

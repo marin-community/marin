@@ -71,28 +71,20 @@ def _lock_grader_count_basis(identities: int, lock_graders: int) -> str:
     )
 
 
-def _single_environment_verification(converted: int, sampled: int) -> str:
-    """The oversight evidence a rebuilt single-environment cohort records."""
+def _rebuilt_verification(converted: int, sampled: int, *, environments: str) -> str:
+    """The oversight evidence a rebuilt cohort records; ``environments`` names the sample's spread."""
     return (
         "Unverified historical reward-only sample; does not certify test execution. "
         "setup fidelity executed on all "
         f"{converted:,} converted specs at this revision (all reproduce their archive's "
         "lowered base, working directory, steps and environment variables) and verifier "
-        f"liveness on {sampled} sampled tasks drawn across the cohort's single environment "
+        f"liveness on {sampled} sampled tasks {environments} "
         f"({sampled} negative verdicts, reward 0.0, no infrastructure errors)"
     )
 
 
-def _multi_environment_verification(converted: int, sampled: int) -> str:
-    """The oversight evidence a rebuilt multi-environment cohort records."""
-    return (
-        "Unverified historical reward-only sample; does not certify test execution. "
-        "setup fidelity executed on all "
-        f"{converted:,} converted specs at this revision (all reproduce their archive's "
-        "lowered base, working directory, steps and environment variables) and verifier "
-        f"liveness on {sampled} sampled tasks across the cohort's environments "
-        f"({sampled} negative verdicts, reward 0.0, no infrastructure errors)"
-    )
+SINGLE_ENVIRONMENT_SPREAD = "drawn across the cohort's single environment"
+MULTI_ENVIRONMENT_SPREAD = "across the cohort's environments"
 
 
 def _rebuilt_cohort(config: PrebuiltCohort, info: SourceInfo) -> RlDataSource[PrebuiltCohort]:
@@ -215,7 +207,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/nl2bash.py @ e6be97168d",
-                    verification=_single_environment_verification(1498, 20),
+                    verification=_rebuilt_verification(1498, 20, environments=SINGLE_ENVIRONMENT_SPREAD),
                     reviewed=1498,
                     admitted=1498,
                     level=OversightLevel.NONE,
@@ -254,7 +246,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/code.py @ e6be97168d",
-                    verification=_single_environment_verification(9745, 20),
+                    verification=_rebuilt_verification(9745, 20, environments=SINGLE_ENVIRONMENT_SPREAD),
                     reviewed=9745,
                     admitted=9745,
                     level=OversightLevel.NONE,
@@ -294,7 +286,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/code.py @ e6be97168d",
-                    verification=_single_environment_verification(13973, 20),
+                    verification=_rebuilt_verification(13973, 20, environments=SINGLE_ENVIRONMENT_SPREAD),
                     reviewed=13973,
                     admitted=13973,
                     level=OversightLevel.NONE,
@@ -335,7 +327,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_multi_environment_verification(505, 20),
+                    verification=_rebuilt_verification(505, 20, environments=MULTI_ENVIRONMENT_SPREAD),
                     reviewed=505,
                     admitted=505,
                     level=OversightLevel.NONE,
@@ -372,7 +364,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_multi_environment_verification(488, 20),
+                    verification=_rebuilt_verification(488, 20, environments=MULTI_ENVIRONMENT_SPREAD),
                     reviewed=488,
                     admitted=488,
                     level=OversightLevel.NONE,
@@ -454,7 +446,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_multi_environment_verification(4993, 20),
+                    verification=_rebuilt_verification(4993, 20, environments=MULTI_ENVIRONMENT_SPREAD),
                     reviewed=4993,
                     admitted=4993,
                     level=OversightLevel.NONE,
@@ -490,7 +482,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_multi_environment_verification(4842, 20),
+                    verification=_rebuilt_verification(4842, 20, environments=MULTI_ENVIRONMENT_SPREAD),
                     reviewed=4842,
                     admitted=4842,
                     level=OversightLevel.NONE,
@@ -526,7 +518,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_multi_environment_verification(500, 20),
+                    verification=_rebuilt_verification(500, 20, environments=MULTI_ENVIRONMENT_SPREAD),
                     reviewed=500,
                     admitted=500,
                     level=OversightLevel.NONE,
@@ -563,7 +555,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_multi_environment_verification(4990, 20),
+                    verification=_rebuilt_verification(4990, 20, environments=MULTI_ENVIRONMENT_SPREAD),
                     reviewed=4990,
                     admitted=4990,
                     level=OversightLevel.NONE,
@@ -600,7 +592,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_multi_environment_verification(492, 20),
+                    verification=_rebuilt_verification(492, 20, environments=MULTI_ENVIRONMENT_SPREAD),
                     reviewed=492,
                     admitted=492,
                     level=OversightLevel.NONE,
@@ -637,7 +629,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_multi_environment_verification(4991, 20),
+                    verification=_rebuilt_verification(4991, 20, environments=MULTI_ENVIRONMENT_SPREAD),
                     reviewed=4991,
                     admitted=4991,
                     level=OversightLevel.NONE,
@@ -674,7 +666,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=_multi_environment_verification(4991, 20),
+                    verification=_rebuilt_verification(4991, 20, environments=MULTI_ENVIRONMENT_SPREAD),
                     reviewed=4991,
                     admitted=4991,
                     level=OversightLevel.NONE,

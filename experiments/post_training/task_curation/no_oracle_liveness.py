@@ -38,8 +38,10 @@ from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import HostImage, MachineFactory, MachineSpec, NetworkPolicy
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import EnvironmentRequirements, ScriptGrader, TaskSpec, VerifyitGrader
+from taskcompendium.models import EnvironmentRequirements, ScriptGrader, VerifyitGrader
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
+
+from experiments.post_training.task_curation.calibforge_rebuild import LoweredSpec
 
 VERIFIER_TIMEOUT = 900.0
 
@@ -66,21 +68,13 @@ class LivenessResult:
         return self.outcome == "negative_verdict"
 
 
-@dataclass(frozen=True)
-class LoweredSpec:
-    """One lowered task envelope: its TaskSpec dict and runtime machine shapes."""
-
-    task: dict
-    runtime: dict
-
-
 def load_specs(path: Path) -> dict[str, LoweredSpec]:
+    """Each lowered task envelope in a published cohort parquet, validated at load."""
     specs = {}
     for batch in pq.ParquetFile(path).iter_batches(batch_size=32, columns=["path", "lowered_task_spec"]):
         columns = batch.to_pydict()
         for task_id, spec in zip(columns["path"], columns["lowered_task_spec"], strict=True):
-            document = json.loads(spec)
-            specs[task_id] = LoweredSpec(document.get("task") or {}, document.get("runtime") or {})
+            specs[task_id] = LoweredSpec.from_document(json.loads(spec))
     return specs
 
 
@@ -104,7 +98,7 @@ def sample_by_base(specs: dict[str, dict], bases: dict[str, str], per_base: int,
 async def run_one(spec: LoweredSpec, base: str, cgroup_parent: Path | None = None) -> LivenessResult:
     """Grade an empty submission in the declared grader environment."""
     with tempfile.TemporaryDirectory(prefix="liveness-build-") as context:
-        task = TaskSpec.model_validate(spec.task)
+        task = spec.task
         runtime = _verifier_runtime(spec)
         grader = task.grader
         if not isinstance(grader, ScriptGrader | VerifyitGrader) or grader.environment is None:
@@ -146,7 +140,7 @@ def _verifier_runtime(spec: LoweredSpec) -> MachineRuntimeSpec:
             "user": None,
             "startup_timeout": 900.0,
             "cleanup_timeout": 120.0,
-            **(spec.runtime.get("verifier_machine") or {}),
+            **spec.verifier_machine,
         }
     )
 
@@ -252,7 +246,7 @@ def main() -> None:
         bases = manifest_bases(args.manifest)
     else:
         # A published cohort carries each task's own base in its spec.
-        bases = {task_id: spec.task["environment_requirements"]["docker_image"] for task_id, spec in specs.items()}
+        bases = {task_id: str(spec.task.environment_requirements.docker_image) for task_id, spec in specs.items()}
     task_ids = sample_by_base(specs, bases, args.sample_per_base, args.seed)
     if args.limit:
         task_ids = task_ids[: args.limit]

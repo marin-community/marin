@@ -450,9 +450,34 @@ def setup_script_name(command: str) -> str:
     return command.split()[-1].rsplit("/", 1)[-1]
 
 
-def lowered_task_spec(task_id: str, task_binary: bytes) -> dict:
-    """Return a rollout envelope preserving a rebuilt task's workspace, setup and verifier."""
-    with tarfile.open(fileobj=io.BytesIO(gzip.decompress(task_binary))) as archive:
+@dataclass(frozen=True)
+class LoweredSpec:
+    """One lowered task envelope: its validated TaskSpec and runtime machine shapes."""
+
+    task: TaskSpec
+    task_machine: dict
+    verifier_machine: dict
+
+    @classmethod
+    def from_document(cls, document: dict) -> "LoweredSpec":
+        runtime = document.get("runtime") or {}
+        return cls(
+            TaskSpec.model_validate(document.get("task") or {}),
+            runtime.get("task_machine") or {},
+            runtime.get("verifier_machine") or {},
+        )
+
+    def envelope(self) -> dict:
+        """The JSON envelope the rollout runtime and the measurement code consume."""
+        return {
+            "task": self.task.model_dump(mode="json"),
+            "runtime": {"task_machine": self.task_machine, "verifier_machine": self.verifier_machine},
+        }
+
+
+def lowered_task_spec(task_id: str, task_binary: bytes) -> LoweredSpec:
+    """Lower a rebuilt task into the rollout envelope preserving its workspace, setup and verifier."""
+    with open_task_tar(task_binary) as archive:
         files = {member.name: archive.extractfile(member).read() for member in archive.getmembers() if member.isfile()}
     document = tomllib.loads(files["task.toml"].decode())
     environment = document["environment"]
@@ -494,10 +519,7 @@ def lowered_task_spec(task_id: str, task_binary: bytes) -> dict:
         source=Source(dataset="smartie-calibforge-rebuilt", revision="1", row=task_id, importer_revision="1"),
         resources=ResourceGroups(verifier=verifier, all=setup),
     )
-    return {
-        "task": spec.model_dump(mode="json"),
-        "runtime": {"task_machine": LOWERED_RUNTIME, "verifier_machine": LOWERED_RUNTIME},
-    }
+    return LoweredSpec(spec, LOWERED_RUNTIME, LOWERED_RUNTIME)
 
 
 @dataclass(frozen=True)
@@ -542,7 +564,9 @@ def _rebuild_cohort(cohort: Path, excluded: set[str]) -> _RebuildOutcome:
                 archive_sha256=hashlib.sha256(rebuilt.task_binary).hexdigest(),
             )
             records.append({"path": path, "source": path, "task_binary": rebuilt.task_binary})
-            lowered.append({"path": path, "lowered_task_spec": json.dumps(lowered_task_spec(path, rebuilt.task_binary))})
+            lowered.append(
+                {"path": path, "lowered_task_spec": json.dumps(lowered_task_spec(path, rebuilt.task_binary).envelope())}
+            )
             evidence.append(record)
     return _RebuildOutcome(records, lowered, evidence, base_refs)
 

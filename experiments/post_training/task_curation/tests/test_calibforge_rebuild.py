@@ -9,6 +9,7 @@ import tarfile
 import tomllib
 
 import pytest
+from taskcompendium.models import CommandSemantics
 
 from experiments.post_training.task_curation.calibforge_rebuild import (
     DeferredRebuild,
@@ -129,11 +130,11 @@ def test_a_lowered_spec_stages_fixtures_through_setup_commands():
         )
     )
     spec = lowered_task_spec("fixture", rebuilt.task_binary)
-    task = spec["task"]
-    assert task["environment_requirements"]["setup_commands"] == ["sh /setup_files/calibforge-initialize.sh"]
-    assert task["environment_requirements"]["docker_image"] == rebuilt.base_ref
-    assert task["environment_requirements"]["command_semantics"] == "linux_process"
-    staged = {resource["path"] for resource in task["resources"]["all"]}
+    requirements = spec.task.environment_requirements
+    assert requirements.setup_commands == ("sh /setup_files/calibforge-initialize.sh",)
+    assert requirements.docker_image == rebuilt.base_ref
+    assert requirements.command_semantics == CommandSemantics.LINUX_PROCESS
+    staged = {resource.path for resource in spec.task.resources.all}
     assert staged == {"setup_files/calibforge-fixtures.tar.gz", "setup_files/calibforge-initialize.sh"}
-    assert {resource["path"] for resource in task["resources"]["verifier"]} == {"tests/test.sh", "tests/test_outputs.py"}
-    assert spec["runtime"]["task_machine"] == {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240}
+    assert {resource.path for resource in spec.task.resources.verifier} == {"tests/test.sh", "tests/test_outputs.py"}
+    assert spec.task_machine == {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240}
