@@ -168,7 +168,11 @@ spec["datasets"]["sft"]["path"] = "sft-contrib-data.yaml"
 spec["sft"]["path"] = "sft-contrib.yaml"
 spec["initializer"]["path"] = "initializer-1005.yaml"
 spec["smoke_overrides"] = {"sft_steps": 2, "rl_steps": 2, "eval_tasks_per_benchmark": 1, "eval_replicas": 1}
-spec["storage"]["output_prefix"] = "s3://marin-us-east-08a/marin/users/karan/long-loop-t436"
+# Compute is on rno2a; intermediates stay in its TTL scratch.
+spec["storage"] = {
+    "output_prefix": "s3://marin-rno2a/tmp/ttl=14d/long-loop-t436",
+    "temporary_prefix": "s3://marin-rno2a/tmp/ttl=3d/long-loop-t436",
+}
 
 
 def pin(section):

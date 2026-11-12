@@ -161,6 +161,30 @@ def test_changed_pin_and_semantic_smoke_override_fail_before_graph(tmp_path):
         resolve_spec(path, smoke=False)
 
 
+@pytest.mark.parametrize(
+    "output, temporary, admitted",
+    [
+        ("s3://marin-us-east-08a/marin/users/x/loop", "s3://marin-us-east-08a/tmp", True),
+        ("s3://marin-rno2a/tmp/ttl=14d/loop", "s3://marin-rno2a/tmp/ttl=3d/loop", True),
+        ("s3://marin-rno2a/marin/users/x/loop", "s3://marin-rno2a/tmp/ttl=3d/loop", False),
+        ("s3://marin-rno2a/tmp/ttl=14d/loop", "s3://marin-us-east-08a/tmp", False),
+        ("s3://marin-us-east-02a/marin/loop", "s3://marin-us-east-02a/tmp", False),
+    ],
+)
+def test_outputs_use_one_allowed_root(tmp_path, output, temporary, admitted):
+    root = tmp_path / "specs"
+    shutil.copytree(SPEC.parent, root)
+    path = root / SPEC.name
+    raw = yaml.safe_load(path.read_text())
+    raw["storage"] = {"output_prefix": output, "temporary_prefix": temporary}
+    path.write_text(yaml.safe_dump(raw))
+    if admitted:
+        assert resolve_spec(path, smoke=True)["storage"]["output_prefix"] == output
+    else:
+        with pytest.raises(ValueError, match="must both use one of"):
+            resolve_spec(path, smoke=True)
+
+
 def test_actual_sft_graph_constructs_without_admitting_unprepared_rl(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
     resolved = resolve_spec(SPEC, smoke=False)
