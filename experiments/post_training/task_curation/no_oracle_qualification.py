@@ -41,7 +41,6 @@ Use ``no_oracle_liveness`` through the procedure in
 
 import argparse
 import base64
-import gzip
 import hashlib
 import io
 import json
@@ -60,12 +59,20 @@ from pathlib import Path
 import pyarrow.parquet as pq
 
 from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT
+from experiments.post_training.task_curation.calibforge_rebuild import setup_script_name
 from experiments.post_training.task_curation.environment_fidelity import (
     DEFAULT_WORKDIR,
     ENVIRONMENT_DOCKERFILE,
     ENVIRONMENT_PREFIX,
 )
-from experiments.post_training.task_curation.no_oracle_liveness import DETAIL_LIMIT, load_specs, manifest_bases
+from experiments.post_training.task_curation.no_oracle_liveness import (
+    DETAIL_LIMIT,
+    UNKNOWN_BASE,
+    LoweredSpec,
+    load_specs,
+    manifest_bases,
+)
+from experiments.post_training.task_curation.task_tars import open_task_tar
 
 COPY_SOURCE = re.compile(r"^\s*COPY\s+(?:--\S+\s+)*(?P<sources>.+)$", re.IGNORECASE | re.MULTILINE)
 ADD_SOURCE = re.compile(r"^\s*ADD\s", re.IGNORECASE | re.MULTILINE)
@@ -169,7 +176,7 @@ class QualificationReport:
     def by_base(self) -> dict[str, dict[str, float | int | None]]:
         grouped: dict[str, list[PreservationResult]] = defaultdict(list)
         for result in self.preservation:
-            grouped[self.bases.get(result.task_id, "<unknown>")].append(result)
+            grouped[self.bases.get(result.task_id, UNKNOWN_BASE)].append(result)
         return {
             base: {"tasks": len(results), "preservation_rate": self._rate(results)}
             for base, results in sorted(grouped.items())
@@ -229,14 +236,9 @@ class QualificationReport:
         }
 
 
-def _read_tar(payload: bytes) -> tarfile.TarFile:
-    raw = gzip.decompress(payload) if payload[:2] == b"\x1f\x8b" else payload
-    return tarfile.open(fileobj=io.BytesIO(raw))
-
-
 def _native_dockerfile(native_payload: bytes) -> str | None:
     """The native recipe's Dockerfile text, or None when the tar carries none."""
-    with _read_tar(native_payload) as archive:
+    with open_task_tar(native_payload) as archive:
         member = next((item for item in archive.getmembers() if item.name == ENVIRONMENT_DOCKERFILE), None)
         if member is None:
             return None
@@ -287,7 +289,7 @@ def preservation_expectations(native_payload: bytes) -> tuple[FileExpectation, .
     dockerfile = _native_dockerfile(native_payload)
     if dockerfile is None:
         raise ValueError("native task has no environment/Dockerfile")
-    with _read_tar(native_payload) as archive:
+    with open_task_tar(native_payload) as archive:
         members = {member.name: member for member in archive.getmembers() if member.isfile()}
         expectations: list[FileExpectation] = []
         for source in copied_paths(dockerfile):
@@ -387,7 +389,7 @@ def check_preservation(task_id: str, native_payload: bytes, rebuilt_payload: byt
     """Compare the native recipe's copied files with the rebuilt setup payload."""
     expected = preservation_expectations(native_payload)
     payload_member = f"{SETUP_ROOT.lstrip(chr(47))}/{FIXTURE_ARCHIVE}"
-    with _read_tar(rebuilt_payload) as archive:
+    with open_task_tar(rebuilt_payload) as archive:
         member = next((item for item in archive.getmembers() if item.name == payload_member), None)
         if member is None:
             return PreservationResult(task_id=task_id, expected=expected, missing=tuple(item.path for item in expected))
@@ -518,7 +520,7 @@ def execute_setup_in_docker(
     """Run one rebuilt setup script in its base image and compare the written files."""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        with _read_tar(rebuilt_payload) as archive:
+        with open_task_tar(rebuilt_payload) as archive:
             archive.extractall(root, filter="data")
         setup = root / SETUP_ROOT.lstrip("/")
         script = setup / setup_script
@@ -643,7 +645,7 @@ class RebuiltMetadata:
 
 def _rebuilt_metadata(rebuilt_payload: bytes) -> RebuiltMetadata:
     """The image, workdir and setup script a rebuilt task declares."""
-    with _read_tar(rebuilt_payload) as archive:
+    with open_task_tar(rebuilt_payload) as archive:
         member = next((item for item in archive.getmembers() if item.name == "task.toml"), None)
         if member is None:
             raise ValueError("rebuilt task has no task.toml")
@@ -651,7 +653,7 @@ def _rebuilt_metadata(rebuilt_payload: bytes) -> RebuiltMetadata:
     environment = document.get("environment") or {}
     setup = environment.get("setup") or {}
     command = str(setup.get("command") or "")
-    script = command.split()[-1].rsplit("/", 1)[-1]
+    script = setup_script_name(command)
     workdir = environment.get("workdir") or DEFAULT_WORKDIR
     return RebuiltMetadata(environment["docker_image"], workdir, script)
 
@@ -694,13 +696,14 @@ def _execute_setups(
 
 
 def _execute_lowered(
-    lowered: dict[str, Mapping], native: dict[str, bytes], workers: int, *, dns: tuple[str, ...] = ()
+    lowered: dict[str, LoweredSpec], native: dict[str, bytes], workers: int, *, dns: tuple[str, ...] = ()
 ) -> list[SetupExecution]:
     def run(task_id: str) -> SetupExecution:
         expectations = workspace_expectations(native[task_id])
-        workdir = lowered[task_id]["task"]["environment_requirements"].get("working_directory") or DEFAULT_WORKDIR
+        requirements = lowered[task_id].task.get("environment_requirements") or {}
+        workdir = requirements.get("working_directory") or DEFAULT_WORKDIR
         return execute_lowered_setup(
-            lowered[task_id],
+            {"task": lowered[task_id].task},
             expectations,
             destinations=_native_destinations(native[task_id], workdir),
             dns=dns,

@@ -59,6 +59,7 @@ from experiments.post_training.task_curation.environment_fidelity import (
     ENVIRONMENT_PREFIX,
     PINNED_BASES,
 )
+from experiments.post_training.task_curation.task_tars import open_task_tar
 
 REBUILT = "rebuilt_pending_oracle_and_admission"
 
@@ -366,9 +367,7 @@ def _stage_copy(item: Instruction, workdir: str, files: dict[str, bytes], steps:
 
 def rebuild_task(task_binary: bytes) -> RebuiltTask:
     """Lower one native task tar onto the fixed base set."""
-    with tarfile.open(
-        fileobj=io.BytesIO(gzip.decompress(task_binary) if task_binary[:2] == b"\x1f\x8b" else task_binary)
-    ) as archive:
+    with open_task_tar(task_binary) as archive:
         files: dict[str, bytes] = {}
         modes: dict[str, int] = {}
         environment_modes: dict[str, int] = {}
@@ -446,6 +445,11 @@ LOWERED_RUNTIME = {"cpus": NORMALIZED_CPUS, "memory_mb": NORMALIZED_MEMORY_MB, "
 """The machine shape every lowered task declares."""
 
 
+def setup_script_name(command: str) -> str:
+    """The script filename a rebuilt task's setup command ends with."""
+    return command.split()[-1].rsplit("/", 1)[-1]
+
+
 def lowered_task_spec(task_id: str, task_binary: bytes) -> dict:
     """Return a rollout envelope preserving a rebuilt task's workspace, setup and verifier."""
     with tarfile.open(fileobj=io.BytesIO(gzip.decompress(task_binary))) as archive:
@@ -456,7 +460,7 @@ def lowered_task_spec(task_id: str, task_binary: bytes) -> dict:
     workdir = environment.get("workdir") or DEFAULT_WORKDIR
     if workdir == "/":
         raise DeferredRebuild("requires_explicit_output_workspace")
-    setup_script = (environment.get("setup") or {}).get("command", "").split()[-1].rsplit("/", 1)[-1]
+    setup_script = setup_script_name((environment.get("setup") or {}).get("command", ""))
 
     def resource(path: str, content: bytes, mode: str | None = None) -> TaskResource:
         payload = base64.b64encode(content).decode()

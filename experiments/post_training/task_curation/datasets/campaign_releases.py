@@ -83,6 +83,18 @@ def _single_environment_verification(converted: int, sampled: int) -> str:
     )
 
 
+def _multi_environment_verification(converted: int, sampled: int) -> str:
+    """The oversight evidence a rebuilt multi-environment cohort records."""
+    return (
+        "Unverified historical reward-only sample; does not certify test execution. "
+        "setup fidelity executed on all "
+        f"{converted:,} converted specs at this revision (all reproduce their archive's "
+        "lowered base, working directory, steps and environment variables) and verifier "
+        f"liveness on {sampled} sampled tasks across the cohort's environments "
+        f"({sampled} negative verdicts, reward 0.0, no infrastructure errors)"
+    )
+
+
 def _rebuilt_cohort(config: PrebuiltCohort, info: SourceInfo) -> RlDataSource[PrebuiltCohort]:
     """Derive inventory identity and row counts from the pinned import configuration."""
     return RlDataSource(
@@ -323,13 +335,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=(
-                        "Unverified historical reward-only sample; does not certify test execution. "
-                        "setup fidelity executed on all 505 converted specs at this revision (all "
-                        "reproduce their archive's lowered base, working directory, steps and environment "
-                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
-                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
-                    ),
+                    verification=_multi_environment_verification(505, 20),
                     reviewed=505,
                     admitted=505,
                     level=OversightLevel.NONE,
@@ -366,13 +372,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=(
-                        "Unverified historical reward-only sample; does not certify test execution. "
-                        "setup fidelity executed on all 488 converted specs at this revision (all "
-                        "reproduce their archive's lowered base, working directory, steps and environment "
-                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
-                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
-                    ),
+                    verification=_multi_environment_verification(488, 20),
                     reviewed=488,
                     admitted=488,
                     level=OversightLevel.NONE,
@@ -454,13 +454,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=(
-                        "Unverified historical reward-only sample; does not certify test execution. "
-                        "setup fidelity executed on all 4,993 converted specs at this revision (all "
-                        "reproduce their archive's lowered base, working directory, steps and environment "
-                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
-                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
-                    ),
+                    verification=_multi_environment_verification(4993, 20),
                     reviewed=4993,
                     admitted=4993,
                     level=OversightLevel.NONE,
@@ -496,13 +490,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=(
-                        "Unverified historical reward-only sample; does not certify test execution. "
-                        "setup fidelity executed on all 4,842 converted specs at this revision (all "
-                        "reproduce their archive's lowered base, working directory, steps and environment "
-                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
-                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
-                    ),
+                    verification=_multi_environment_verification(4842, 20),
                     reviewed=4842,
                     admitted=4842,
                     level=OversightLevel.NONE,
@@ -538,13 +526,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=(
-                        "Unverified historical reward-only sample; does not certify test execution. "
-                        "setup fidelity executed on all 500 converted specs at this revision (all "
-                        "reproduce their archive's lowered base, working directory, steps and environment "
-                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
-                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
-                    ),
+                    verification=_multi_environment_verification(500, 20),
                     reviewed=500,
                     admitted=500,
                     level=OversightLevel.NONE,
@@ -581,13 +563,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=(
-                        "Unverified historical reward-only sample; does not certify test execution. "
-                        "setup fidelity executed on all 4,990 converted specs at this revision (all "
-                        "reproduce their archive's lowered base, working directory, steps and environment "
-                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
-                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
-                    ),
+                    verification=_multi_environment_verification(4990, 20),
                     reviewed=4990,
                     admitted=4990,
                     level=OversightLevel.NONE,
@@ -624,13 +600,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=(
-                        "Unverified historical reward-only sample; does not certify test execution. "
-                        "setup fidelity executed on all 492 converted specs at this revision (all "
-                        "reproduce their archive's lowered base, working directory, steps and environment "
-                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
-                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
-                    ),
+                    verification=_multi_environment_verification(492, 20),
                     reviewed=492,
                     admitted=492,
                     level=OversightLevel.NONE,
@@ -667,13 +637,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=(
-                        "Unverified historical reward-only sample; does not certify test execution. "
-                        "setup fidelity executed on all 4,991 converted specs at this revision (all "
-                        "reproduce their archive's lowered base, working directory, steps and environment "
-                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
-                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
-                    ),
+                    verification=_multi_environment_verification(4991, 20),
                     reviewed=4991,
                     admitted=4991,
                     level=OversightLevel.NONE,
@@ -710,13 +674,7 @@ def sources() -> list[RlDataSource]:
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
-                    verification=(
-                        "Unverified historical reward-only sample; does not certify test execution. "
-                        "setup fidelity executed on all 4,991 converted specs at this revision (all "
-                        "reproduce their archive's lowered base, working directory, steps and environment "
-                        "variables) and verifier liveness on 20 sampled tasks across the cohort's "
-                        "environments (20 negative verdicts, reward 0.0, no infrastructure errors)"
-                    ),
+                    verification=_multi_environment_verification(4991, 20),
                     reviewed=4991,
                     admitted=4991,
                     level=OversightLevel.NONE,

@@ -14,9 +14,6 @@ Daytona-safe. No Daytona API calls are made.
 """
 
 import base64
-import gzip
-import io
-import tarfile
 import tempfile
 import tomllib
 from collections import Counter
@@ -39,9 +36,10 @@ from shellbox.machine import (
     MachineSpec,
     NetworkPolicy,
 )
-from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.models import EnvironmentRequirements, require_resolved_environment
 
 from experiments.post_training.task_curation.environment_fidelity import ENVIRONMENT_PREFIX
+from experiments.post_training.task_curation.task_tars import open_task_tar
 
 DOCKERFILE = "Dockerfile"
 
@@ -78,9 +76,7 @@ def _unpack_environment(payload: bytes) -> tuple[list[tuple[str, bytes, int]], b
     """The extracted ``environment/`` entries and the task's own ``task.toml``."""
     entries: list[tuple[str, bytes, int]] = []
     task_toml: bytes | None = None
-    with tarfile.open(
-        fileobj=io.BytesIO(gzip.decompress(payload) if payload[:2] == b"\x1f\x8b" else payload)
-    ) as archive:
+    with open_task_tar(payload) as archive:
         for member in archive.getmembers():
             if member.isdir() or member.issym():
                 continue
@@ -223,10 +219,6 @@ def _declared_identity(
     """Measure one declared agent or grader machine through the production identity."""
     if declared is None or shape is None:
         return _DeclaredIdentity()
-    # Native Harbor counting also runs in Harbor's standalone environment, which
-    # does not install TaskCompendium. Only lowered TaskCompendium inputs need it.
-    from taskcompendium.models import require_resolved_environment  # noqa: PLC0415
-
     requirements = EnvironmentRequirements.model_validate(declared)
     with tempfile.TemporaryDirectory() as tmp:
         try:

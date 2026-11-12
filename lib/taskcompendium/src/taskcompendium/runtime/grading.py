@@ -660,8 +660,8 @@ async def _install_grading_archive(
         Command(("tar", "-xf", STAGING_ARCHIVE, "-C", "/"), cwd="/", timeout=preparation_timeout, user=user),
         "Could not unpack grading inputs",
     )
-    # The staging archive now also carries the candidate submission; removing it
-    # keeps the machine clean and the submission from surviving into later commands.
+    # Each grading call stages exactly the inputs it needs; removing the archive
+    # keeps them from surviving into later commands.
     await _run_checked(
         machine,
         Command(("rm", "-f", STAGING_ARCHIVE), cwd="/", timeout=preparation_timeout, user=user),

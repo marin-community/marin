@@ -41,9 +41,10 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements, ScriptGrader, TaskSpec, VerifyitGrader
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 
-VERIFIER_COMMAND = "bash /tests/test.sh"
 VERIFIER_TIMEOUT = 900.0
-REWARD_PATH = "/logs/verifier/reward.txt"
+
+UNKNOWN_BASE = "<unknown>"
+"""The base bucket for tasks whose rebuild manifest names no base."""
 
 DETAIL_LIMIT = 500
 """Characters of a provider error kept for a report; the rest is truncation noise."""
@@ -65,12 +66,21 @@ class LivenessResult:
         return self.outcome == "negative_verdict"
 
 
-def load_specs(path: Path) -> dict[str, dict]:
+@dataclass(frozen=True)
+class LoweredSpec:
+    """One lowered task envelope: its TaskSpec dict and runtime machine shapes."""
+
+    task: dict
+    runtime: dict
+
+
+def load_specs(path: Path) -> dict[str, LoweredSpec]:
     specs = {}
     for batch in pq.ParquetFile(path).iter_batches(batch_size=32, columns=["path", "lowered_task_spec"]):
         columns = batch.to_pydict()
         for task_id, spec in zip(columns["path"], columns["lowered_task_spec"], strict=True):
-            specs[task_id] = json.loads(spec)
+            document = json.loads(spec)
+            specs[task_id] = LoweredSpec(document.get("task") or {}, document.get("runtime") or {})
     return specs
 
 
@@ -83,7 +93,7 @@ def manifest_bases(path: Path) -> dict[str, str]:
 def sample_by_base(specs: dict[str, dict], bases: dict[str, str], per_base: int, seed: int = 0) -> list[str]:
     grouped: dict[str, list[str]] = defaultdict(list)
     for task_id in sorted(specs):
-        grouped[bases.get(task_id, "<unknown>")].append(task_id)
+        grouped[bases.get(task_id, UNKNOWN_BASE)].append(task_id)
     rng = random.Random(seed)
     chosen: list[str] = []
     for base in sorted(grouped):
@@ -91,10 +101,10 @@ def sample_by_base(specs: dict[str, dict], bases: dict[str, str], per_base: int,
     return chosen
 
 
-async def run_one(spec: dict, base: str, cgroup_parent: Path | None = None) -> LivenessResult:
+async def run_one(spec: LoweredSpec, base: str, cgroup_parent: Path | None = None) -> LivenessResult:
     """Grade an empty submission in the declared grader environment."""
     with tempfile.TemporaryDirectory(prefix="liveness-build-") as context:
-        task = TaskSpec.model_validate(spec["task"])
+        task = TaskSpec.model_validate(spec.task)
         runtime = _verifier_runtime(spec)
         grader = task.grader
         if not isinstance(grader, ScriptGrader | VerifyitGrader) or grader.environment is None:
@@ -127,7 +137,7 @@ async def run_one(spec: dict, base: str, cgroup_parent: Path | None = None) -> L
         return classify_result(task.id, base, placement.snapshot, result)
 
 
-def _verifier_runtime(spec: dict) -> MachineRuntimeSpec:
+def _verifier_runtime(spec: LoweredSpec) -> MachineRuntimeSpec:
     return MachineRuntimeSpec.model_validate(
         {
             "backend": "daytona",
@@ -136,7 +146,7 @@ def _verifier_runtime(spec: dict) -> MachineRuntimeSpec:
             "user": None,
             "startup_timeout": 900.0,
             "cleanup_timeout": 120.0,
-            **(spec["runtime"].get("verifier_machine") or {}),
+            **(spec.runtime.get("verifier_machine") or {}),
         }
     )
 
@@ -217,7 +227,7 @@ async def run(
 ) -> None:
     with output.open("a") as handle:
         for index, task_id in enumerate(task_ids, start=1):
-            result = await run_one(specs[task_id], bases.get(task_id, "<unknown>"), cgroup_parent=cgroup_parent)
+            result = await run_one(specs[task_id], bases.get(task_id, UNKNOWN_BASE), cgroup_parent=cgroup_parent)
             handle.write(json.dumps(asdict(result)) + "\n")
             handle.flush()
             print(f"[{index}/{len(task_ids)}] {task_id}: {result.outcome}", flush=True)
@@ -242,7 +252,7 @@ def main() -> None:
         bases = manifest_bases(args.manifest)
     else:
         # A published cohort carries each task's own base in its spec.
-        bases = {task_id: spec["task"]["environment_requirements"]["docker_image"] for task_id, spec in specs.items()}
+        bases = {task_id: spec.task["environment_requirements"]["docker_image"] for task_id, spec in specs.items()}
     task_ids = sample_by_base(specs, bases, args.sample_per_base, args.seed)
     if args.limit:
         task_ids = task_ids[: args.limit]
