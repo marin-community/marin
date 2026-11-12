@@ -196,6 +196,13 @@ function absolute(iso) {
   return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`
 }
 
+// The watch syncs every 10 minutes; a sync older than this means run states on the page may be out of date.
+const WATCHER_STALE_MS = 25 * 60 * 1000
+
+function watcherStale(syncedAt, now) {
+  return !syncedAt || Date.parse(now) - Date.parse(syncedAt) > WATCHER_STALE_MS
+}
+
 function when(iso) {
   if (!iso) return el('time', { text: '—' })
   return el('time', { datetime: iso, title: `${absolute(iso)} · ${new Date(iso).toString()}` }, relative(iso))

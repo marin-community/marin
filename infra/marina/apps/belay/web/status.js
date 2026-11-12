@@ -622,7 +622,16 @@ function render() {
   renderChecklist()
   renderAgentLog()
   renderFeed()
-  setChildren('updated', 'updated ', when(state.now))
+  const synced = state.watcher.synced_at
+  setChildren(
+    'updated',
+    'updated ',
+    when(state.now),
+    ' · runs synced ',
+    when(synced),
+    watcherStale(synced, state.now) ? el('span', { class: 'warn' }, ' (stale: run states may be out of date)') : null,
+    state.watcher.ok ? null : el('span', { class: 'warn' }, ' (last sync hit a problem)'),
+  )
 }
 
 // #status/X#### (from a #9514 reply, the agent log or the admin page) opens that idea's row and scrolls to it;

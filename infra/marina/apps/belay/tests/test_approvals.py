@@ -7,6 +7,7 @@ import datetime
 import hashlib
 import json
 from collections.abc import Iterator
+from unittest.mock import ANY
 
 import pytest
 from belay.app import (
@@ -507,6 +508,16 @@ def test_migrate_moves_a_rung_out_of_an_older_runs_registry_id(conn) -> None:
         ("belay-X0014d512-seed0", "X0014", "X0014d512"),
         ("belay-X0037-seed0", "X0037", "X0037"),
     ]
+
+
+def test_the_public_state_says_when_runs_last_synced_and_whether_that_sync_hit_a_problem(api: TestClient) -> None:
+    agent = {"X-Belay-Token": API_TOKEN}
+    assert api.post("/agent/tick", json={"nodes_in_use": 0}, headers=agent).status_code == 200
+    synced = api.get("/public/state").json()["watcher"]
+    assert synced["synced_at"] is not None and synced["ok"]
+    api.post("/agent/tick", json={"nodes_in_use": 0, "error": "registry checkout: /home/app/x"}, headers=agent)
+    assert api.get("/public/state").json()["watcher"] == {**synced, "ok": False, "synced_at": ANY}
+    assert "/home/app" not in api.get("/public/state").text  # the error text stays admin-only
 
 
 def test_a_lost_sessions_secret_is_refused(api: TestClient, database_url: str) -> None:

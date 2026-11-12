@@ -63,10 +63,11 @@ function renderControls() {
     settings.storage_limit_bytes,
     `${bytes(watcher.storage_bytes)} / ${bytes(settings.storage_limit_bytes)}`,
   )
-  const stale = !watcher.ticked_at || Date.parse(state.now) - Date.parse(watcher.ticked_at) > 6 * 60 * 1000
+  const stale = watcherStale(watcher.ticked_at, state.now)
   setChildren(
     'watcher-v',
     el('span', { class: stale ? 'warn' : 'ok' }, watcher.ticked_at ? relative(watcher.ticked_at) : 'not running'),
+    watcher.last_error ? el('div', { class: 'warn small' }, watcher.last_error) : null,
   )
   document.getElementById('queued-v').textContent = queued.length ? `${queued.length} queued` : 'queue empty'
 }

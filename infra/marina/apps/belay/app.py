@@ -1197,6 +1197,7 @@ def create_api(services: Services) -> RegisteredApi:
             threads = _rows(conn, "SELECT registry_id, title, body, updated_at FROM threads ORDER BY updated_at DESC")
             active = _session_active(conn)
             queued = len(_rows(conn, "SELECT id FROM events WHERE session_id IS NULL"))
+            watcher = _rows(conn, "SELECT ticked_at, last_error FROM watcher WHERE id = 1")
             posts = _rows(
                 conn,
                 "SELECT at, kind, registry_id, idea_id FROM activity WHERE kind IN ('plan', 'result') ORDER BY at DESC "
@@ -1215,6 +1216,11 @@ def create_api(services: Services) -> RegisteredApi:
             # The agent's posts (plans, stage tables, verdicts): no transcripts or escalations, which stay admin-only.
             "threads": _plain(threads),
             "activity": _public_activity(ideas, runs, posts),
+            # When the watch last reported runs, and whether that pass hit a problem (its text stays admin-only).
+            "watcher": {
+                "synced_at": _iso(watcher[0]["ticked_at"]) if watcher else None,
+                "ok": not watcher or watcher[0]["last_error"] is None,
+            },
         }
 
     @public.get("/results")
