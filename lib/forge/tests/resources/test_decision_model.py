@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import json
 from collections.abc import Mapping
 from dataclasses import replace
@@ -39,7 +40,7 @@ from forge.model.stage import Exit
 from forge.model.workpiece import Conversation, Submission, Terminal, Workpiece
 from forge.policy import load_policy
 from forge.policy.defaults import DEFAULTS_DIR
-from forge.resources.decision_model import UNAVAILABLE_MARKER, ClefDecisionModel
+from forge.resources.decision_model import UNAVAILABLE_MARKER, ClefDecisionModel, clef_healthy
 from forge.resources.grading import GradeCandidate, GradingResource, ScriptedModel, candidate_turns
 from forge.resources.inference import InferenceClient
 from forge.resources.rollouts import RolloutResource
@@ -272,3 +273,29 @@ def test_driver_reads_the_decision_model_hold_the_coordinator_recorded(proposal:
     assert decision_model_held(held)
     assert not decision_model_held(wp.with_(terminal=Terminal.HELD, decisions=(Incomplete(reasons(Hold("GLM"))),)))
     assert not decision_model_held(wp)
+
+
+async def test_clef_health_is_a_get_of_the_gateway_health_route_and_anything_but_200_is_down() -> None:
+    requests: list[tuple[str, str]] = []
+
+    def gateway(status: int) -> httpx.AsyncClient:
+        def respond(request: httpx.Request) -> httpx.Response:
+            requests.append((request.method, request.url.path))
+            return httpx.Response(status, json={})
+
+        return httpx.AsyncClient(transport=httpx.MockTransport(respond))
+
+    async def hang(request: httpx.Request) -> httpx.Response:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("relay down")
+
+    source = FixedEndpoint(GlmEndpoint("http://gateway/v1", "token", Pool.HIGH))
+    assert await clef_healthy(source, gateway(200))
+    assert not await clef_healthy(source, gateway(503))
+    assert requests == [("GET", "/v1/systemone/health")] * 2  # never a Clef read
+    assert not await clef_healthy(source, httpx.AsyncClient(transport=httpx.MockTransport(unreachable)))
+    hung = httpx.AsyncClient(transport=httpx.MockTransport(hang))
+    assert not await asyncio.wait_for(clef_healthy(source, hung, timeout=0.05), 5)

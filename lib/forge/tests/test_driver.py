@@ -173,9 +173,20 @@ async def test_driver_defers_decision_model_proposals_while_held_and_resumes_the
     manifest.write_text("\n".join(paths) + "\n")
     overlay = tmp_path / "overlay.json"
     overlay.write_text(json.dumps({"proposals.environments": ["container"], "decision_model.retry_interval": 0.2}))
-    # Slot 1 is held twice (its first resume is the probe that finds Clef still down), then Clef answers.
-    exits = {paths[0]: [driver.DECISION_MODEL_HELD, driver.DECISION_MODEL_HELD]}
+    # Slot 1 is held; the first health read finds Clef still down, the second finds it back.
+    exits = {paths[0]: [driver.DECISION_MODEL_HELD]}
     launches: list[tuple[str, bool]] = []
+    health = [False, True]
+    reads: list[int] = []
+    delays: list[tuple[float, float]] = []
+
+    async def healthy() -> bool:
+        reads.append(len(launches))
+        return health.pop(0)
+
+    def uniform(low: float, high: float) -> float:
+        delays.append((low, high))
+        return 0.05
 
     class FakeProcess:
         def __init__(self, command: list[str]) -> None:
@@ -191,6 +202,8 @@ async def test_driver_defers_decision_model_proposals_while_held_and_resumes_the
 
     monkeypatch.setattr(driver, "configure_coreweave_s3", lambda: None)
     monkeypatch.setattr(driver.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(driver, "decision_model_health", lambda policy: healthy)
+    monkeypatch.setattr(driver.random, "uniform", uniform)
     args = argparse.Namespace(
         proposals=str(manifest),
         ranks=(),
@@ -209,7 +222,8 @@ async def test_driver_defers_decision_model_proposals_while_held_and_resumes_the
         ("slot-1", False),  # held: Clef unavailable
         ("slot-2", False),  # slot-3 is deferred without a launch; other kinds continue
         ("slot-4", False),
-        ("slot-1", True),  # the one probe after retry_interval, still down
-        ("slot-3", True),  # the next probe answers
-        ("slot-1", True),
+        ("slot-1", True),  # resumed only once the health read reports Clef back
+        ("slot-3", True),
     ]
+    assert reads == [1, 3]  # health is read, not probed with a workpiece: nothing launched while Clef is down
+    assert delays == [(0, 0.2)]  # each driver resumes at a random point within retry_interval

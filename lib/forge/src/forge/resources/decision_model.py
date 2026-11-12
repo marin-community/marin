@@ -45,6 +45,9 @@ UNAVAILABLE_MARKER = "DECISION_MODEL_UNAVAILABLE"
 """Starts every ``DecisionModelUnavailable`` reason; watchers count held workpieces by it."""
 UNAVAILABLE_STATUSES = frozenset({404, 408, 429})
 RETRY_DELAY_MIN, RETRY_DELAY_MAX = 1.0, 60.0
+HEALTH_PATH = "/systemone/health"
+"""The gateway's Clef readiness read: answered from its own checker's state, never a Clef read."""
+HEALTH_TIMEOUT = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +170,26 @@ class ClefDecisionModel(DecisionModelClient):
             )
         except (KeyError, TypeError, ValueError) as error:
             raise RuntimeError(f"Decision model answered 200 without a score read: {error}") from error
+
+
+async def clef_healthy(source: EndpointSource, http: httpx.AsyncClient, *, timeout: float = HEALTH_TIMEOUT) -> bool:
+    """Whether the gateway, reached through ``source``, reports a bound and freshly checked Clef backend.
+
+    Anything but 200 within ``timeout`` (a 503, an unregistered relay, a transport error, a hang) reads as down.
+    """
+
+    async def probe() -> int:
+        endpoint = await asyncio.to_thread(source.current)
+        response = await http.get(
+            f"{endpoint.base_url}{HEALTH_PATH}", headers={"Authorization": f"Bearer {endpoint.token}"}, timeout=timeout
+        )
+        return response.status_code
+
+    try:
+        return await asyncio.wait_for(probe(), timeout) == 200
+    except (httpx.TransportError, RuntimeError, TimeoutError) as error:  # RuntimeError: no relay endpoint yet
+        logging.info("%s: health read failed: %s", UNAVAILABLE_MARKER, type(error).__name__)
+        return False
 
 
 async def read(event: DecisionModelRead, client: DecisionModelClient, *, notify: Notify) -> DecisionModelLevel:

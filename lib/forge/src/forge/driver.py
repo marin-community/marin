@@ -9,14 +9,17 @@ import hashlib
 import json
 import logging
 import os
+import random
 import subprocess
 import sys
 import time
 import traceback
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
+import httpx
 from pydantic import TypeAdapter
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -33,6 +36,7 @@ from forge.model.review import Incomplete
 from forge.model.workpiece import WORKPIECE, Submission, Terminal, Workpiece
 from forge.policy import Policy, load_policy, parse_overlay
 from forge.report import report
+from forge.resources.decision_model import clef_healthy
 from forge.stages.classify import replayable_grade
 from forge.wiring import endpoint_source, install, runtime
 
@@ -249,6 +253,23 @@ async def one(args: argparse.Namespace) -> int:
     return DECISION_MODEL_HELD if decision_model_held(wp) else 0
 
 
+def decision_model_health(policy: Policy) -> Callable[[], Awaitable[bool]]:
+    """The gateway's Clef health read on the decision model's own route, built on first use."""
+
+    async def healthy() -> bool:
+        source = endpoint_source(
+            os.environ.get("GLM_BASE_URL"),
+            os.environ.get("GLM_RELAY_JOB"),
+            os.environ["GLM_API_KEY"],
+            policy.setting("decision_model.route", str),
+            policy.setting("provider.pool", str),
+        )
+        async with httpx.AsyncClient() as http:
+            return await clef_healthy(source, http)
+
+    return healthy
+
+
 async def run(args: argparse.Namespace) -> None:
     configure_coreweave_s3()
     start, end = args.bucket_range or (0, args.buckets)
@@ -260,23 +281,43 @@ async def run(args: argparse.Namespace) -> None:
     failures: list[str] = []
     _, policy = run_policy(args.policy)
     retry_interval = policy.setting("decision_model.retry_interval", float)
-    # Decision-model proposals wait here while the decision model is down; one probe resumes after retry_interval.
+    healthy = decision_model_health(policy)
+    # Decision-model proposals wait here while the decision model is down. Every retry_interval the driver reads the
+    # gateway's Clef health (never a Clef read); once healthy it resumes them all after a per-driver random delay,
+    # so drivers released by one Clef restart do not refill in the same second.
     deferred: list[str] = []
-    down_since: float | None = None
-    probe: str | None = None
+    down = False
+    next_probe = 0.0
+    resume_at: float | None = None
     skipped = completed = submitted = held = 0
 
-    def decision_model_ready() -> bool:
-        return down_since is None or (probe is None and time.monotonic() - down_since >= retry_interval)
+    async def advance_gate() -> None:
+        nonlocal down, next_probe, resume_at
+        if not down:
+            return
+        if resume_at is None and time.monotonic() >= next_probe:
+            next_probe = time.monotonic() + retry_interval
+            if await healthy():
+                resume_at = time.monotonic() + random.uniform(0, retry_interval)
+                logging.info(
+                    "Decision model healthy; resuming %d deferred proposals within %gs", len(deferred), retry_interval
+                )
+        if resume_at is not None and time.monotonic() >= resume_at:
+            logging.info("Decision model answered again; resuming %d deferred proposals", len(deferred))
+            down, resume_at = False, None
+
+    def gate_wake() -> float | None:
+        if not down:
+            return None
+        return max(0.0, (resume_at if resume_at is not None else next_probe) - time.monotonic())
 
     try:
         exhausted = False
         while active or not exhausted or deferred:
+            await advance_gate()
             while len(active) < args.concurrency:
-                if deferred and decision_model_ready():
+                if deferred and not down:
                     path, resume = deferred.pop(0), True
-                    if down_since is not None:
-                        probe = path
                 elif not exhausted:
                     path = next(proposals, None)
                     if path is None:
@@ -286,7 +327,7 @@ async def run(args: argparse.Namespace) -> None:
                     if loaded is None or not eligible(proposal := loaded[0], policy):
                         skipped += 1
                         continue
-                    if proposal.header.verification is Verification.DECISION_MODEL and not decision_model_ready():
+                    if proposal.header.verification is Verification.DECISION_MODEL and down:
                         deferred.append(path)
                         continue
                     resume = args.resume_held
@@ -305,26 +346,25 @@ async def run(args: argparse.Namespace) -> None:
                 process = subprocess.Popen(command)
                 submitted += 1
                 active[asyncio.create_task(asyncio.to_thread(process.wait))] = (path, process)
+            wake = gate_wake()
             if active:
-                done, _ = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
+                done, _ = await asyncio.wait(active, timeout=wake, return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
                     path, _ = active.pop(task)
                     completed += 1
                     if task.result() == DECISION_MODEL_HELD:
                         held += 1
-                        down_since, probe = time.monotonic(), None
+                        # Re-read health now: a hold can come from a wait that began before Clef returned.
+                        down, resume_at, next_probe = True, None, time.monotonic()
                         deferred.append(path)
                         logging.warning(
                             "DECISION_MODEL_HELD %s: %d decision_model proposals deferred", path, len(deferred)
                         )
                         continue
-                    if path == probe:
-                        logging.info("Decision model answered again; resuming %d deferred proposals", len(deferred))
-                        down_since = probe = None
                     if task.result() != 0:
                         failures.append(path)
-            elif deferred and down_since is not None:
-                await asyncio.sleep(max(0.0, down_since + retry_interval - time.monotonic()))
+            elif wake is not None:
+                await asyncio.sleep(wake)
     finally:
         for _, process in active.values():
             if process.poll() is None:
