@@ -38,6 +38,7 @@ from marin.rl.skyrl import (
     ArtifactHfModel,
     IrisSkyRLExecution,
     MegatronGeometry,
+    SkyRLGenerationPlan,
     SkyRLPolicyModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
@@ -447,7 +448,7 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
 @pytest.mark.parametrize("failure", ["extra-node", "node-width", "entrypoint"])
 def test_generation_rejects_allocation_and_entrypoint_conflicts(failure):
     spec = _spec()
-    plan = dataclasses.replace(spec.topology.role_plan, generate_only=True)
+    plan = SkyRLGenerationPlan(spec.topology.role_plan)
     topology = dataclasses.replace(spec.topology, role_plan=plan)
     with pytest.raises(
         ValueError,
@@ -461,7 +462,10 @@ def test_generation_rejects_allocation_and_entrypoint_conflicts(failure):
             dataclasses.replace(topology, num_nodes=topology.num_nodes + 1)
         elif failure == "node-width":
             dataclasses.replace(
-                topology, role_plan=dataclasses.replace(plan, policy_num_gpus_per_node=2, num_inference_engines=2)
+                topology,
+                role_plan=SkyRLGenerationPlan(
+                    dataclasses.replace(plan.geometry, policy_num_gpus_per_node=2, num_inference_engines=2)
+                ),
             )
         else:
             dataclasses.replace(spec, topology=topology, config_yaml="entrypoint: generate\n" + spec.config_yaml)
@@ -489,8 +493,10 @@ def _colocated_expert_block_spec(entrypoint: str | None = None) -> SkyRLSpec:
         expert_block_sync={"verify": True},
         engine_init_kwargs={"kernel_config": {"moe_backend": "triton"}},
     )
-    if entrypoint is not None:
-        recipe["entrypoint"] = entrypoint
+    if entrypoint in ("generate", "terminal_bench_generate"):
+        plan = SkyRLGenerationPlan(plan, entrypoint=entrypoint)
+    elif entrypoint is not None:
+        plan = dataclasses.replace(plan, entrypoint=entrypoint)
 
     return dataclasses.replace(
         _spec(),
@@ -720,7 +726,6 @@ def test_native_writers_round_trip_through_stored_readers(tmp_path, monkeypatch)
     spec = dataclasses.replace(
         spec,
         config_yaml=(
-            "entrypoint: standard\n"
             "context_budget: {request_window_tokens: 1024, max_new_tokens_per_turn: 256, max_turns: 1}\n"
             "model_num_attention_heads: 8\n" + spec.config_yaml
         ),
