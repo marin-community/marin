@@ -368,37 +368,60 @@ class ConvertedExamples(CatalogRecord):
         return self
 
 
+class LexicalUse(StrEnum):
+    TRAIN = "train"
+    EVAL = "eval"
+    BENCHMARK = "benchmark"
+
+
 class DeconReceiptStatus(StrEnum):
     CLEAN = "clean"
     REMEDIATED = "remediated"
+    BENCHMARK_MEASURED = "measured (benchmark, not remediated)"
 
 
-class DeconAdmissionReceipt(CatalogRecord):
+class DecontaminatedRelease(CatalogRecord):
     private: bool
     format: str
-    status: DeconReceiptStatus
     dataset_id: str
     dataset_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
-    retained_tasks: int = Field(ge=0)
-    dropped_tasks: int = Field(ge=0)
     drop_manifest_uri: str | None
     original_private_dataset_id: str | None
     original_private_dataset_revision: str | None = Field(pattern=r"^[0-9a-f]{40}$")
 
+
+class LexicalReceipt(CatalogRecord):
+    use: LexicalUse
+    status: DeconReceiptStatus
+    retained_tasks: int = Field(ge=0)
+    dropped_tasks: int = Field(ge=0)
+    release: DecontaminatedRelease | None
+
     @model_validator(mode="after")
-    def _remediation_provenance(self) -> "DeconAdmissionReceipt":
+    def _remediation_provenance(self) -> "LexicalReceipt":
+        if self.use in {LexicalUse.EVAL, LexicalUse.BENCHMARK}:
+            if (
+                self.status is not DeconReceiptStatus.BENCHMARK_MEASURED
+                or self.release is not None
+                or self.dropped_tasks
+            ):
+                raise ValueError("Evaluation and benchmark receipts measure the unchanged population without a release")
+            return self
+        if self.status is DeconReceiptStatus.BENCHMARK_MEASURED or self.release is None:
+            raise ValueError("Training receipts require a clean or remediated release")
         if self.status is DeconReceiptStatus.CLEAN and self.dropped_tasks:
             raise ValueError("A clean receipt cannot drop contaminated tasks")
         if self.status is DeconReceiptStatus.REMEDIATED:
+            release = self.release
             if (
-                not self.drop_manifest_uri
-                or not self.original_private_dataset_id
-                or not self.original_private_dataset_revision
+                not release.drop_manifest_uri
+                or not release.original_private_dataset_id
+                or not release.original_private_dataset_revision
             ):
                 raise ValueError("Remediation requires the drop manifest and exact original private pin")
-            if (self.dataset_id, self.dataset_revision) == (
-                self.original_private_dataset_id,
-                self.original_private_dataset_revision,
+            if (release.dataset_id, release.dataset_revision) == (
+                release.original_private_dataset_id,
+                release.original_private_dataset_revision,
             ):
                 raise ValueError("Remediation requires a new dataset pin")
         return self
@@ -427,7 +450,7 @@ class LexicalContaminationEvidence(CatalogRecord):
     drop_set_uris: list[str]
     task_flags_uri: str
     evidence_url: str
-    receipt: DeconAdmissionReceipt | None = None
+    receipt: LexicalReceipt | None = None
 
     @model_validator(mode="after")
     def _receipt_matches_measurement(self) -> "LexicalContaminationEvidence":
@@ -450,7 +473,11 @@ class LexicalContaminationEvidence(CatalogRecord):
     def admission_blocker(self, dataset_id: str | None, dataset_revision: str | None) -> str | None:
         if self.receipt is None:
             return "clean or remediated decontamination receipt is missing"
-        if (self.receipt.dataset_id, self.receipt.dataset_revision) != (dataset_id, dataset_revision):
+        if self.receipt.status is DeconReceiptStatus.BENCHMARK_MEASURED:
+            return "benchmark measurement does not certify a training release"
+        release = self.receipt.release
+        assert release is not None
+        if (release.dataset_id, release.dataset_revision) != (dataset_id, dataset_revision):
             return "decontamination receipt belongs to a different dataset pin"
         return None
 

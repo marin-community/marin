@@ -1145,12 +1145,11 @@ def test_decontamination_receipt_precedes_conversion_and_quality_review(tmp_path
     if state == "measurement_only":
         document["receipt"] = None
     elif state == "wrong_pin":
-        document["receipt"]["dataset_revision"] = "c" * 40
+        document["receipt"]["release"]["dataset_revision"] = "c" * 40
     elif state == "remediated":
         document.update(measured_tasks=2, contaminated_tasks=1, contaminated_fraction=0.5)
-        document["receipt"].update(
-            status="remediated",
-            dropped_tasks=1,
+        document["receipt"].update(status="remediated", dropped_tasks=1)
+        document["receipt"]["release"].update(
             drop_manifest_uri="s3://test/dropped-task.jsonl",
             original_private_dataset_id="open-athena/unfiltered",
             original_private_dataset_revision="b" * 40,

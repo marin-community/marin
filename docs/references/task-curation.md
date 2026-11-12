@@ -1468,6 +1468,26 @@ Only refreshed summaries distinguish required SHARED tasks missing a contract
 from all tasks without a contract. Full contract groups stay in the referenced
 artifact; catalog summaries retain at most 64 groups and one 16 KiB example.
 
+Evaluation and benchmark Use values receive a lexical receipt with status
+`measured (benchmark, not remediated)`. Expected self-matches stay in the
+measurement and matched-evaluation evidence. These receipts retain every task,
+name no new release, and never certify a training release. Use comes from the
+registered converter's `intended_use` and the explicit benchmark marker.
+
+After a full scan, apply the frozen Use declarations and produce the training
+review table before publishing any remediation versions:
+
+```bash
+uv run python -m experiments.post_training.task_curation.lexical_policy \
+  --measurements lexical-measurements.json --source-uses measured-source-uses.json \
+  --output lexical-outcomes.json
+```
+
+Only training rows appear in `training_review`. Their measurement receipts
+remain absent until private clean/remediated TaskCompendium publication and
+readback. A training release receipt stores its output pin and archive lineage
+under `receipt.release`; benchmark measurement receipts set that field to null.
+
 ### Package-lock graders use the worker's local runtime
 
 A grader that declares `packages_lock` runs in the worker's local bubblewrap

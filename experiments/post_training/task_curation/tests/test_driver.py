@@ -634,7 +634,7 @@ def test_full_campaign_requires_qa_transport_availability(tmp_path, monkeypatch,
 def test_mutable_decontamination_receipt_cannot_plan_a_reviewed_campaign(tmp_path, catalog):
     dataset = math500().dataset
     receipt = decontamination_evidence(dataset.name, dataset.revision, 1).model_dump(mode="json")
-    receipt["receipt"]["dataset_revision"] = "main"
+    receipt["receipt"]["release"]["dataset_revision"] = "main"
     path = tmp_path / "mutable-receipt.json"
     path.write_text(json.dumps(receipt))
     result = CliRunner().invoke(main, [*arguments(tmp_path), "--decontamination-receipt", str(path)])
