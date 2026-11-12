@@ -56,9 +56,13 @@ export function seriesKey(run: Run): string {
   if (run.calibration)
     return `calibration_${run.calibration.curve_fingerprint}`;
   const a = run.aggregate;
+  const submission =
+    run.source.kind === "github-actions"
+      ? [run.source.run_id, run.source.run_attempt]
+      : [submissionIdentity(run)];
   return [
     "s",
-    submissionIdentity(run),
+    ...submission,
     run.hardware,
     run.precision,
     run.framework,
