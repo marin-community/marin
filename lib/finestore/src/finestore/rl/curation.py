@@ -193,7 +193,7 @@ class SourceDeclaration(CatalogRecord):
     daytona_snapshot_count: int | None = None
     daytona_snapshot_threshold: int | None = None
     daytona_count_basis: str | None = None
-    # How execution was qualified when the source ships no oracle solutions.
+    # How the grader's execution was qualified: oracle runs, an executed verifier, or neither.
     oracle_validation: OracleValidation | None = None
     # The weakest review behind the admission, with the pointers that establish it.
     oversight: OversightLevel = OversightLevel.NONE

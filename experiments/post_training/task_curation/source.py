@@ -152,9 +152,6 @@ class SourceInfo:
     daytona_execution_failures: int | None = None
     """Tasks the Daytona backend refuses on their declared execution requirements."""
 
-    daytona_run_evidence: str | None = None
-    """A campaign run that executed this source on the Daytona RL org, when one exists."""
-
     oracle_validation: OracleValidation | None = None
     """How the source's grader was qualified.
 

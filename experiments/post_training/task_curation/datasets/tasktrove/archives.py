@@ -10,8 +10,10 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Converter, ImportFailureKind, ImportRejection, NormalizedTask, RawRow
 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    DOCKERFILE,
     TASKS_FILE,
     TASKTROVE_REPO,
+    archive_file,
     archive_resource,
     unpack_task_binary,
 )
@@ -53,7 +55,9 @@ class TaskTroveConverter:
         reply_only = (
             task.answer_type in CONVERSATION_ANSWERS and task.environment_requirements == EnvironmentRequirements()
         )
-        reused = None if reply_only else environment_unused(task.model_dump(mode="json"), row.data["files"])
+        reused = (
+            None if reply_only else environment_unused(task.model_dump(mode="json"), archive_file(row.data, DOCKERFILE))
+        )
         if reused is not None:
             return ImportRejection(
                 kind=ImportFailureKind.CONVERTER_ERROR, reason="environment_substituted", detail=reused

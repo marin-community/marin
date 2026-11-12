@@ -59,6 +59,8 @@ from pathlib import Path
 import pyarrow.parquet as pq
 
 from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT
+from experiments.post_training.task_curation.environment_fidelity import DEFAULT_WORKDIR
+from experiments.post_training.task_curation.no_oracle_liveness import load_specs
 
 ENVIRONMENT_PREFIX = "environment/"
 COPY_SOURCE = re.compile(r"^\s*COPY\s+(?:--\S+\s+)*(?P<sources>.+)$", re.IGNORECASE | re.MULTILINE)
@@ -221,6 +223,21 @@ def _read_tar(payload: bytes) -> tarfile.TarFile:
     return tarfile.open(fileobj=io.BytesIO(raw))
 
 
+def _native_dockerfile(native_payload: bytes) -> str | None:
+    """The native recipe's Dockerfile text, or None when the tar carries none."""
+    with _read_tar(native_payload) as archive:
+        member = next((item for item in archive.getmembers() if item.name == f"{ENVIRONMENT_PREFIX}Dockerfile"), None)
+        if member is None:
+            return None
+        return archive.extractfile(member).read().decode(errors="replace")
+
+
+def native_workdir(dockerfile: str) -> str:
+    """The workdir a native recipe declares, or the default when it sets none."""
+    match = re.search(r"^\s*WORKDIR\s+(\S+)", dockerfile, re.IGNORECASE | re.MULTILINE)
+    return match.group(1) if match else DEFAULT_WORKDIR
+
+
 def copied_paths(dockerfile: str) -> list[str]:
     """The context-relative sources a native recipe copies into the workspace."""
     if ADD_SOURCE.search(dockerfile):
@@ -237,14 +254,7 @@ def copied_paths(dockerfile: str) -> list[str]:
 
 def copied_destinations(dockerfile: str, workdir: str) -> tuple[str, ...]:
     """Absolute destinations the native recipe writes, resolved against its workdir."""
-    roots: list[str] = []
-    for match in COPY_SOURCE.finditer(dockerfile):
-        destination = match.group("sources").split()[-1]
-        if "$" in destination or "*" in destination or "?" in destination:
-            continue
-        absolute = destination if destination.startswith("/") else f"{workdir.rstrip('/')}/{destination}"
-        roots.append(absolute.rstrip("/") or "/")
-    return tuple(dict.fromkeys(roots))
+    return tuple(dict.fromkeys(mapping.destination for mapping in copy_mappings(dockerfile, workdir)))
 
 
 def preservation_expectations(native_payload: bytes) -> tuple[FileExpectation, ...]:
@@ -327,13 +337,10 @@ def copy_mappings(dockerfile: str, workdir: str) -> list[CopyMapping]:
 def workspace_expectations(native_payload: bytes) -> tuple[FileExpectation, ...]:
     """The copied files the native recipe leaves in the workspace, read from its own tar."""
     expectations = preservation_expectations(native_payload)
-    with _read_tar(native_payload) as archive:
-        member = next((item for item in archive.getmembers() if item.name == f"{ENVIRONMENT_PREFIX}Dockerfile"), None)
-        if member is None:
-            return expectations
-        dockerfile = archive.extractfile(member).read().decode(errors="replace")
-    workdir_match = re.search(r"^\s*WORKDIR\s+(\S+)", dockerfile, re.IGNORECASE | re.MULTILINE)
-    workdir = workdir_match.group(1) if workdir_match else "/app"
+    dockerfile = _native_dockerfile(native_payload)
+    if dockerfile is None:
+        return expectations
+    workdir = native_workdir(dockerfile)
     removed = removed_workspace_paths(dockerfile, workdir)
     mappings = copy_mappings(dockerfile, workdir)
     kept: dict[str, FileExpectation] = {}
@@ -559,7 +566,7 @@ def execute_lowered_setup(
     commands = tuple(requirements.get("setup_commands") or ())
     if not commands:
         return SetupExecution(task_id=task["id"], outcome="no_setup_commands")
-    workdir = requirements.get("working_directory") or "/app"
+    workdir = requirements.get("working_directory") or DEFAULT_WORKDIR
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         for resource in task["resources"].get("all") or ():
@@ -621,22 +628,16 @@ def _rebuilt_metadata(rebuilt_payload: bytes) -> RebuiltMetadata:
     setup = environment.get("setup") or {}
     command = str(setup.get("command") or "")
     script = command.split()[-1].rsplit("/", 1)[-1]
-    workdir = environment.get("workdir") or "/app"
+    workdir = environment.get("workdir") or DEFAULT_WORKDIR
     return RebuiltMetadata(environment["docker_image"], workdir, script)
 
 
 def _native_destinations(native_payload: bytes, workdir: str) -> tuple[str, ...]:
     """Absolute destinations the native recipe writes, resolved against its own workdir."""
-    with _read_tar(native_payload) as archive:
-        member = next((item for item in archive.getmembers() if item.name == "environment/Dockerfile"), None)
-        if member is None:
-            return (workdir,)
-        dockerfile = archive.extractfile(member).read().decode(errors="replace")
-    native_workdir = "/app"
-    match = re.search(r"^\s*WORKDIR\s+(\S+)", dockerfile, re.IGNORECASE | re.MULTILINE)
-    if match:
-        native_workdir = match.group(1)
-    return copied_destinations(dockerfile, native_workdir)
+    dockerfile = _native_dockerfile(native_payload)
+    if dockerfile is None:
+        return (workdir,)
+    return copied_destinations(dockerfile, native_workdir(dockerfile))
 
 
 def _execute_setups(
@@ -673,7 +674,7 @@ def _execute_lowered(
 ) -> list[SetupExecution]:
     def run(task_id: str) -> SetupExecution:
         expectations = workspace_expectations(native[task_id])
-        workdir = lowered[task_id]["task"]["environment_requirements"].get("working_directory") or "/app"
+        workdir = lowered[task_id]["task"]["environment_requirements"].get("working_directory") or DEFAULT_WORKDIR
         return execute_lowered_setup(
             lowered[task_id],
             expectations,
@@ -686,7 +687,7 @@ def _execute_lowered(
 
 
 def main() -> None:
-    """Run the offline preservation phase and write the qualification report."""
+    """Check preservation, execute setup in Docker or the lowered runtime, and merge liveness receipts."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cohort", type=Path, required=True, help="native cohort parquet (path, task_binary)")
     parser.add_argument("--rebuild-out", type=Path, required=True, help="rebuild output directory")
@@ -705,11 +706,7 @@ def main() -> None:
     manifest = json.loads((args.rebuild_out / "manifest.json").read_text())
     bases = {row["task_id"]: row["base_ref"] for row in manifest["tasks"] if row.get("status", "").startswith("rebuilt")}
 
-    rebuilt = {}
-    for batch in pq.ParquetFile(rebuilt_path).iter_batches(batch_size=64, columns=["path", "task_binary"]):
-        columns = batch.to_pydict()
-        for task_id, blob in zip(columns["path"], columns["task_binary"], strict=True):
-            rebuilt[task_id] = bytes(blob)
+    rebuilt = dict(_native_tasks(rebuilt_path))
 
     report = QualificationReport(bases=bases)
     wanted = set(args.task)
@@ -726,13 +723,8 @@ def main() -> None:
         report.preservation.append(check_preservation(task_id, native_payload, rebuilt[task_id]))
 
     if args.docker and args.lowered:
-        lowered = {}
         lowered_path = args.rebuild_out / "lowered-tasks.parquet"
-        for batch in pq.ParquetFile(lowered_path).iter_batches(batch_size=32, columns=["path", "lowered_task_spec"]):
-            columns = batch.to_pydict()
-            for task_id, spec in zip(columns["path"], columns["lowered_task_spec"], strict=True):
-                if task_id in native:
-                    lowered[task_id] = json.loads(spec)
+        lowered = {task_id: spec for task_id, spec in load_specs(lowered_path).items() if task_id in native}
         report.execution = _execute_lowered(lowered, native, args.workers, dns=tuple(args.docker_dns))
     elif args.docker:
         report.execution = _execute_setups(

@@ -16,6 +16,7 @@ from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUs
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, archive_file
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
     solve_script,
     tasktrove_archive_task,
@@ -46,7 +47,7 @@ def convert_nl2bash_task(row: RawRow, context: ConversionContext) -> NormalizedT
     return tasktrove_archive_task(
         row,
         convert=convert_nl2bash,
-        environment=archive_environment(row.data["files"]),
+        environment=archive_environment(archive_file(row.data, DOCKERFILE)),
         grader_environment=required_grader_environment(context),
         output_paths=(OUTPUT_PATH,),
     )

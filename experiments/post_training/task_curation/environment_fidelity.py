@@ -10,7 +10,6 @@ spec does not carry, which happens when a conversion replaces it.
 The rule applies to agentic tasks: a conversation-only task needs no machine.
 """
 
-import base64
 import re
 import shlex
 from collections.abc import Mapping
@@ -23,34 +22,24 @@ from experiments.post_training.task_curation.environment import dockerfile_lines
 FROM = re.compile(r"^\s*FROM\s+(\S+)", re.IGNORECASE | re.MULTILINE)
 ENVIRONMENT_DOCKERFILE = "environment/Dockerfile"
 
+DEFAULT_WORKDIR = "/app"
+"""The workdir a task gets when neither the recipe nor the spec declares one."""
 
-def dockerfile_of(files: Mapping[str, bytes | str]) -> str | None:
-    """The archive's environment Dockerfile, when it defines one.
 
-    ``unpack_task_binary`` exposes archived files as base64 text, so both forms are
-    accepted; anything that is not text is rejected rather than guessed at.
-    """
-    blob = files.get(ENVIRONMENT_DOCKERFILE)
-    if blob is None:
-        return None
-    if isinstance(blob, str):
-        blob = base64.b64decode(blob, validate=True)
+def _utf8_dockerfile(dockerfile: bytes) -> str:
     try:
-        return blob.decode()
+        return dockerfile.decode()
     except UnicodeDecodeError as error:
         raise UnlowerableRecipe("archive environment/Dockerfile is not UTF-8") from error
 
 
-def environment_unused(
-    spec: Mapping, archive_files: Mapping[str, bytes | str], *, bases: Mapping[str, str] | None = None
-) -> str | None:
+def environment_unused(spec: Mapping, dockerfile: bytes | None, *, bases: Mapping[str, str] | None = None) -> str | None:
     """Why a converted task ignores its archive's environment, if it does.
 
-    ``spec`` is a TaskCompendium task dict. A task whose archive defines
-    ``environment/Dockerfile`` must declare its build context or replay its lowered
-    steps, working directory and variables on the matching digest-pinned base.
+    ``spec`` is a TaskCompendium task dict. An archive that defines an environment
+    Dockerfile must be declared as a build context or replayed as lowered steps,
+    working directory and variables on the matching digest-pinned base.
     """
-    dockerfile = dockerfile_of(archive_files)
     if dockerfile is None:
         return None
     requirements = spec.get("environment_requirements") or {}
@@ -59,7 +48,7 @@ def environment_unused(
         # A spec may use the archive's environment by replaying its steps on a pinned
         # base instead of declaring a build context. Anything else replaced it.
         try:
-            lowered = lower_environment(dockerfile, bases or PINNED_BASES)
+            lowered = lower_environment(_utf8_dockerfile(dockerfile), bases or PINNED_BASES)
         except UnlowerableRecipe as error:
             return f"archive environment is not lowered: {error}"
         if requirements.get("docker_image") != lowered.base_ref:
@@ -198,17 +187,16 @@ def lower_environment(dockerfile: str, bases: Mapping[str, str]) -> LoweredEnvir
     )
 
 
-def archive_environment(files: Mapping[str, bytes | str], bases: Mapping[str, str] | None = None):
+def archive_environment(dockerfile: bytes | None, bases: Mapping[str, str] | None = None):
     """A TaskTrove archive's own environment, lowered onto a pinned base.
 
     The archive defines how the task's machine is built; using anything else would run the
     task somewhere it never specified. A recipe the lowering cannot express raises, so the
     row is refused rather than quietly given a different environment.
     """
-    dockerfile = dockerfile_of(files)
     if dockerfile is None:
         raise ValueError("archive defines no environment/Dockerfile")
-    lowered = lower_environment(dockerfile, bases or PINNED_BASES)
+    lowered = lower_environment(_utf8_dockerfile(dockerfile), bases or PINNED_BASES)
     return EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS,
         docker_image=lowered.base_ref,

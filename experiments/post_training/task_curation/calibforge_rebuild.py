@@ -21,7 +21,7 @@ import re
 import shlex
 import tarfile
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 import pyarrow as pa
@@ -48,7 +48,7 @@ from tomlkit.items import Table
 
 from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT, SETUP_SCRIPT
 from experiments.post_training.task_curation.environment import dockerfile_lines
-from experiments.post_training.task_curation.environment_fidelity import PINNED_BASES
+from experiments.post_training.task_curation.environment_fidelity import DEFAULT_WORKDIR, PINNED_BASES
 
 ENVIRONMENT_PREFIX = "environment/"
 REBUILT = "rebuilt_pending_oracle_and_admission"
@@ -174,6 +174,19 @@ class CompiledRecipe:
     payload: bytes
 
 
+def _pack_tar(files: dict[str, bytes], modes: dict[str, int]) -> bytes:
+    """Pack files deterministically: sorted members, fixed modes, gzip with mtime=0."""
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w") as archive:
+        for name in sorted(files):
+            content = files[name]
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            info.mode = modes.get(name, 0o644)
+            archive.addfile(info, io.BytesIO(content))
+    return gzip.compress(payload.getvalue(), mtime=0)
+
+
 def compile_recipe(instructions: list[Instruction], files: dict[str, bytes], modes: dict[str, int]) -> CompiledRecipe:
     """Compile a native recipe into a base, workdir, setup script and fixture archive.
 
@@ -183,137 +196,168 @@ def compile_recipe(instructions: list[Instruction], files: dict[str, bytes], mod
     with the reason admission records.
     """
     bases = [item for item in instructions if item.command == "from"]
-    if len(bases) != 1 or len(bases[0].args) != 1:
+    if len(bases) != 1:
         raise DeferredRebuild("requires_multistage_support")
-    original_from = bases[0].args[0]
+    base_ref = _resolved_base(bases[0])
+    workdir, steps = _recipe_body(instructions, files)
+    steps.commands.append(f"rm -f {SETUP_ROOT}/{FIXTURE_ARCHIVE} {SETUP_ROOT}/{SETUP_SCRIPT}")
+    steps.commands.append(f"rmdir {SETUP_ROOT}")
+    if steps.env_exports:
+        steps.commands[2:2] = steps.env_exports
+    return CompiledRecipe(base_ref, workdir, "\n".join(steps.commands) + "\n", _pack_tar(steps.resources, modes))
+
+
+def _resolved_base(from_instruction: Instruction) -> str:
+    """The pinned base reference a native recipe's single FROM line maps onto."""
+    if len(from_instruction.args) != 1:
+        raise DeferredRebuild("requires_multistage_support")
+    original_from = from_instruction.args[0]
     base_key, _, original_digest = original_from.partition("@")
     if base_key not in PINNED_BASES:
         raise DeferredRebuild("requires_unmapped_base:" + original_from)
     # The mapped base already carries a digest; a digest-pinned original keeps its own.
-    base_ref = f"{base_key}@{original_digest}" if original_digest else PINNED_BASES[base_key]
+    return f"{base_key}@{original_digest}" if original_digest else PINNED_BASES[base_key]
+
+
+@dataclass
+class _RecipeSteps:
+    """Setup commands, exports and staged files accumulated while lowering a recipe."""
+
+    commands: list[str] = field(default_factory=list)
+    env_exports: list[str] = field(default_factory=list)
+    resources: dict[str, bytes] = field(default_factory=dict)
+    copied_files: set[str] = field(default_factory=set)
+
+
+def _recipe_body(instructions: list[Instruction], files: dict[str, bytes]) -> tuple[str, _RecipeSteps]:
+    """Lower the recipe's steps, returning the final workdir and accumulated steps."""
+    steps = _RecipeSteps(
+        commands=[
+            "#!/bin/sh",
+            "set -eu",
+            "stage=$(mktemp -d /tmp/calibforge-setup.XXXXXXXX)",
+            "trap 'rm -rf \"$stage\"' EXIT",
+            f'tar -xzf {SETUP_ROOT}/{FIXTURE_ARCHIVE} -C "$stage"',
+        ]
+    )
     workdir = "/"
-    commands = [
-        "#!/bin/sh",
-        "set -eu",
-        "stage=$(mktemp -d /tmp/calibforge-setup.XXXXXXXX)",
-        "trap 'rm -rf \"$stage\"' EXIT",
-        f'tar -xzf {SETUP_ROOT}/{FIXTURE_ARCHIVE} -C "$stage"',
-    ]
-    env_exports: list[str] = []
-    resources: dict[str, bytes] = {}
-    copied_files: set[str] = set()
     for item in instructions:
         if item.command in _META_COMMANDS:
             continue
         if item.command == "env":
-            if item.json_form or item.flags:
-                raise DeferredRebuild("requires_env_flags_support")
-            if not item.args or any("=" not in argument for argument in item.args) or _tainted(item.args):
-                raise DeferredRebuild("requires_env_support")
-            env_exports.extend("export " + shlex.quote(argument) for argument in item.args)
-            continue
-        if item.command == "arg":
+            _extend_env_exports(item, steps)
+        elif item.command == "arg":
             raise DeferredRebuild("requires_arg_support")
-        if item.command == "workdir":
-            value = item.args[0]
-            if "$" in value or ".." in PurePosixPath(value).parts:
-                raise DeferredRebuild("requires_dynamic_workdir_support")
-            workdir = str(PurePosixPath(workdir) / value)
-            commands.append("mkdir -p " + shlex.quote(workdir))
-            continue
-        if item.command == "run":
-            if item.flags:
-                raise DeferredRebuild("requires_run_flags_support")
-            if item.json_form:
-                segments = [item.args]
-            else:
-                segments: list[list[str]] = [[]]
-                for token in item.raw.split():
-                    if token in {"&&", ";"}:
-                        segments.append([])
-                    elif token in {"|", "<", ">", "&"}:
-                        raise DeferredRebuild("requires_pipeline_support")
-                    else:
-                        segments[-1].append(token)
-            for raw_segment in segments:
-                if not raw_segment:
-                    raise DeferredRebuild("requires_empty_run")
-                inline_env = ""
-                while raw_segment and re.match(r"^[A-Za-z_][A-Za-z_0-9]*=", raw_segment[0]):
-                    inline_env += raw_segment[0] + " "
-                    raw_segment = raw_segment[1:]
-                arguments = raw_segment
-                fixture_generator = (
-                    len(arguments) == 2
-                    and arguments[0] == "python3"
-                    and arguments[1].startswith("/app/")
-                    and arguments[1].endswith(".py")
-                    and arguments[1] in copied_files
-                )
-                if _dependency_run(arguments) or arguments[0] in _INNOCUOUS_RUN or fixture_generator:
-                    if "`" in " ".join(raw_segment):
-                        raise DeferredRebuild("requires_command_substitution_support")
-                    prefix = inline_env
-                    if arguments[0] in {"apt-get", "apt"} and "DEBIAN_FRONTEND" not in inline_env:
-                        prefix = "DEBIAN_FRONTEND=noninteractive " + prefix
-                    # Emit the segment verbatim: globs and variables keep their shell
-                    # semantics at sandbox start (the recipe is the task's own content).
-                    commands.append(f"(cd {shlex.quote(workdir)} && {prefix}{' '.join(raw_segment)})")
-                    continue
-                raise DeferredRebuild("requires_unsupported_run:" + arguments[0])
-            continue
-        if item.command != "copy":
+        elif item.command == "workdir":
+            workdir = _enter_workdir(item, workdir, steps)
+        elif item.command == "run":
+            steps.commands.append(_run_command(item, workdir, steps.copied_files))
+        elif item.command == "copy":
+            _stage_copy(item, workdir, files, steps)
+        else:
             raise DeferredRebuild("requires_instruction_support:" + item.command)
-        if item.flags:
-            raise DeferredRebuild("requires_copy_flags_support")
-        *sources, destination = item.args
-        if any(character in destination for character in "$*?[") or ".." in PurePosixPath(destination).parts:
-            raise DeferredRebuild("requires_dynamic_destination_support")
-        target = str(PurePosixPath(workdir) / destination)
-        directory_target = destination.endswith("/") or len(sources) > 1
-        for source_name in sources:
-            if (
-                any(character in source_name for character in "$*?[")
-                or PurePosixPath(source_name).is_absolute()
-                or ".." in PurePosixPath(source_name).parts
-            ):
-                raise DeferredRebuild("requires_dynamic_source_support")
-            prefix = source_name.rstrip("/") + "/"
-            matches = [name for name in files if name == source_name or name.startswith(prefix)]
-            if not matches:
-                raise DeferredRebuild("missing_source:" + source_name)
-            is_directory = any(name != source_name and name.startswith(prefix) for name in matches)
-            if is_directory:
-                directory_source = source_name.rstrip("/")
-                for name in matches:
-                    # Every file under a directory source must reach the setup payload;
-                    # the script copies the staged directory, not the build context.
-                    resources[name] = files[name]
-                    copied_files.add(str(PurePosixPath(target) / name[len(prefix) :]))
-                commands.append("mkdir -p " + shlex.quote(target))
-                commands.append(
-                    "cp -a " + f'"$stage"/{shlex.quote(directory_source)}' + "/. " + shlex.quote(target + "/")
-                )
-                continue
-            name = matches[0]
-            resources[name] = files[name]
-            file_target = str(PurePosixPath(target) / PurePosixPath(name).name) if directory_target else target
-            copied_files.add(file_target)
-            commands.append("mkdir -p " + shlex.quote(str(PurePosixPath(file_target).parent)))
-            commands.append("cp -a " + f'"$stage"/{shlex.quote(name)}' + " " + shlex.quote(file_target))
-    commands.append(f"rm -f {SETUP_ROOT}/{FIXTURE_ARCHIVE} {SETUP_ROOT}/{SETUP_SCRIPT}")
-    commands.append(f"rmdir {SETUP_ROOT}")
-    if env_exports:
-        commands[2:2] = env_exports
-    payload = io.BytesIO()
-    with tarfile.open(fileobj=payload, mode="w") as archive:
-        for name in sorted(resources):
-            content = resources[name]
-            info = tarfile.TarInfo(name)
-            info.size = len(content)
-            info.mode = modes.get(name, 0o644)
-            archive.addfile(info, io.BytesIO(content))
-    return CompiledRecipe(base_ref, workdir, "\n".join(commands) + "\n", gzip.compress(payload.getvalue(), mtime=0))
+    return workdir, steps
+
+
+def _extend_env_exports(item: Instruction, steps: _RecipeSteps) -> None:
+    if item.json_form or item.flags:
+        raise DeferredRebuild("requires_env_flags_support")
+    if not item.args or any("=" not in argument for argument in item.args) or _tainted(item.args):
+        raise DeferredRebuild("requires_env_support")
+    steps.env_exports.extend("export " + shlex.quote(argument) for argument in item.args)
+
+
+def _enter_workdir(item: Instruction, workdir: str, steps: _RecipeSteps) -> str:
+    value = item.args[0]
+    if "$" in value or ".." in PurePosixPath(value).parts:
+        raise DeferredRebuild("requires_dynamic_workdir_support")
+    workdir = str(PurePosixPath(workdir) / value)
+    steps.commands.append("mkdir -p " + shlex.quote(workdir))
+    return workdir
+
+
+def _run_command(item: Instruction, workdir: str, copied_files: set[str]) -> str:
+    """The setup command one RUN becomes, or a deferral when it cannot be expressed."""
+    if item.flags:
+        raise DeferredRebuild("requires_run_flags_support")
+    if item.json_form:
+        segments = [item.args]
+    else:
+        segments: list[list[str]] = [[]]
+        for token in item.raw.split():
+            if token in {"&&", ";"}:
+                segments.append([])
+            elif token in {"|", "<", ">", "&"}:
+                raise DeferredRebuild("requires_pipeline_support")
+            else:
+                segments[-1].append(token)
+    for raw_segment in segments:
+        if not raw_segment:
+            raise DeferredRebuild("requires_empty_run")
+        inline_env = ""
+        while raw_segment and re.match(r"^[A-Za-z_][A-Za-z_0-9]*=", raw_segment[0]):
+            inline_env += raw_segment[0] + " "
+            raw_segment = raw_segment[1:]
+        arguments = raw_segment
+        fixture_generator = (
+            len(arguments) == 2
+            and arguments[0] == "python3"
+            and arguments[1].startswith("/app/")
+            and arguments[1].endswith(".py")
+            and arguments[1] in copied_files
+        )
+        if _dependency_run(arguments) or arguments[0] in _INNOCUOUS_RUN or fixture_generator:
+            if "`" in " ".join(raw_segment):
+                raise DeferredRebuild("requires_command_substitution_support")
+            prefix = inline_env
+            if arguments[0] in {"apt-get", "apt"} and "DEBIAN_FRONTEND" not in inline_env:
+                prefix = "DEBIAN_FRONTEND=noninteractive " + prefix
+            # Emit the segment verbatim: globs and variables keep their shell
+            # semantics at sandbox start (the recipe is the task's own content).
+            return f"(cd {shlex.quote(workdir)} && {prefix}{' '.join(raw_segment)})"
+        raise DeferredRebuild("requires_unsupported_run:" + arguments[0])
+    raise DeferredRebuild("requires_empty_run")
+
+
+def _stage_copy(item: Instruction, workdir: str, files: dict[str, bytes], steps: _RecipeSteps) -> None:
+    """Stage one COPY's sources into the fixture payload and emit its copy commands."""
+    if item.flags:
+        raise DeferredRebuild("requires_copy_flags_support")
+    *sources, destination = item.args
+    if any(character in destination for character in "$*?[") or ".." in PurePosixPath(destination).parts:
+        raise DeferredRebuild("requires_dynamic_destination_support")
+    target = str(PurePosixPath(workdir) / destination)
+    directory_target = destination.endswith("/") or len(sources) > 1
+    for source_name in sources:
+        if (
+            any(character in source_name for character in "$*?[")
+            or PurePosixPath(source_name).is_absolute()
+            or ".." in PurePosixPath(source_name).parts
+        ):
+            raise DeferredRebuild("requires_dynamic_source_support")
+        prefix = source_name.rstrip("/") + "/"
+        matches = [name for name in files if name == source_name or name.startswith(prefix)]
+        if not matches:
+            raise DeferredRebuild("missing_source:" + source_name)
+        is_directory = any(name != source_name and name.startswith(prefix) for name in matches)
+        if is_directory:
+            directory_source = source_name.rstrip("/")
+            for name in matches:
+                # Every file under a directory source must reach the setup payload;
+                # the script copies the staged directory, not the build context.
+                steps.resources[name] = files[name]
+                steps.copied_files.add(str(PurePosixPath(target) / name[len(prefix) :]))
+            steps.commands.append("mkdir -p " + shlex.quote(target))
+            steps.commands.append(
+                "cp -a " + f'"$stage"/{shlex.quote(directory_source)}' + "/. " + shlex.quote(target + "/")
+            )
+            continue
+        name = matches[0]
+        steps.resources[name] = files[name]
+        file_target = str(PurePosixPath(target) / PurePosixPath(name).name) if directory_target else target
+        steps.copied_files.add(file_target)
+        steps.commands.append("mkdir -p " + shlex.quote(str(PurePosixPath(file_target).parent)))
+        steps.commands.append("cp -a " + f'"$stage"/{shlex.quote(name)}' + " " + shlex.quote(file_target))
 
 
 def rebuild_task(task_binary: bytes) -> RebuiltTask:
@@ -350,16 +394,8 @@ def rebuild_task(task_binary: bytes) -> RebuiltTask:
     output_files["environment/Dockerfile"] = f"FROM {base_ref}\nWORKDIR {workdir}\n".encode()
     output_files[f"setup_files/{FIXTURE_ARCHIVE}"] = payload
     output_files[f"setup_files/{SETUP_SCRIPT}"] = setup_script.encode()
-    packed = io.BytesIO()
-    with tarfile.open(fileobj=packed, mode="w") as archive:
-        for name in sorted(output_files):
-            content = output_files[name]
-            info = tarfile.TarInfo(name)
-            info.size = len(content)
-            info.mode = modes.get(name, 0o644)
-            archive.addfile(info, io.BytesIO(content))
     return RebuiltTask(
-        task_binary=gzip.compress(packed.getvalue(), mtime=0),
+        task_binary=_pack_tar(output_files, modes),
         base_ref=base_ref,
         workdir=workdir,
         payload_sha256=hashlib.sha256(payload).hexdigest(),
@@ -426,7 +462,7 @@ def lowered_task_spec(task_id: str, task_binary: bytes) -> dict:
     document = tomllib.loads(files["task.toml"].decode())
     environment = document["environment"]
     base_ref = environment["docker_image"]
-    workdir = environment.get("workdir") or "/app"
+    workdir = environment.get("workdir") or DEFAULT_WORKDIR
     if workdir == "/":
         raise DeferredRebuild("requires_explicit_output_workspace")
     setup_script = (environment.get("setup") or {}).get("command", "").split()[-1].rsplit("/", 1)[-1]
@@ -435,6 +471,12 @@ def lowered_task_spec(task_id: str, task_binary: bytes) -> dict:
         payload = base64.b64encode(content).decode()
         return TaskResource(path=path, source=InlineFile(content_base64=payload), mode=mode)
 
+    requirements = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_image=base_ref,
+        working_directory=workdir,
+        setup_commands=(f"sh {SETUP_ROOT}/{setup_script}",),
+    )
     verifier = tuple(resource(path, files[path]) for path in sorted(files) if path.startswith("tests/"))
     setup = tuple(
         resource(path, files[path], "0755" if files[path].startswith(b"#!") else None)
@@ -444,24 +486,14 @@ def lowered_task_spec(task_id: str, task_binary: bytes) -> dict:
     spec = TaskSpec(
         id=task_id,
         context=ConversationInput(events=(TextMessage(role="user", content=files["instruction.md"].decode()),)),
-        environment_requirements=EnvironmentRequirements(
-            command_semantics=CommandSemantics.LINUX_PROCESS,
-            docker_image=base_ref,
-            working_directory=workdir,
-            setup_commands=(f"sh {SETUP_ROOT}/{setup_script}",),
-        ),
+        environment_requirements=requirements,
         output_paths=(workdir,),
         answer_type=AnswerType.TEXT,
         answer_format=PlainText(),
         grader=ScriptGrader(
             argv=("bash", "/tests/test.sh"),
             cwd=workdir,
-            environment=EnvironmentRequirements(
-                command_semantics=CommandSemantics.LINUX_PROCESS,
-                docker_image=base_ref,
-                working_directory=workdir,
-                setup_commands=(f"sh {SETUP_ROOT}/{setup_script}",),
-            ),
+            environment=requirements,
             reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)),
         ),
         source=Source(dataset="smartie-calibforge-rebuilt", revision="1", row=task_id, importer_revision="1"),

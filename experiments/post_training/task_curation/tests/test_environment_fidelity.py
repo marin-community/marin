@@ -20,12 +20,12 @@ AGENT = "ghcr.io/marin-community/iris-task@sha256:" + "a" * 64
 
 
 def test_a_spec_that_replaces_its_archive_environment_is_flagged():
-    archive = {"environment/Dockerfile": b"FROM ubuntu:24.04\nRUN pip install pandas\n"}
+    dockerfile = b"FROM ubuntu:24.04\nRUN pip install pandas\n"
     replaced = {"environment_requirements": {"docker_image": AGENT}}
     # The archive lowers onto ubuntu:24.04, so an iris-task image is not its environment.
-    assert "does not use the archive's base image" in environment_unused(replaced, archive)
+    assert "does not use the archive's base image" in environment_unused(replaced, dockerfile)
     faithful = {"environment_requirements": {"docker_build": {"files": [{"path": "Dockerfile", "source": {}}]}}}
-    assert environment_unused(faithful, archive) is None
+    assert environment_unused(faithful, dockerfile) is None
 
 
 def test_an_agentic_task_without_an_environment_is_rejected():
@@ -63,8 +63,8 @@ def test_a_recipe_is_refused_when_it_cannot_be_expressed(recipe):
 
 
 def test_replaying_the_archive_steps_counts_as_using_its_environment():
-    archive = {"environment/Dockerfile": b"FROM ubuntu:24.04\nWORKDIR /workspace\nRUN mkdir -p /out\n"}
-    lowered = lower_environment(archive["environment/Dockerfile"].decode(), PINNED_BASES)
+    dockerfile = b"FROM ubuntu:24.04\nWORKDIR /workspace\nRUN mkdir -p /out\n"
+    lowered = lower_environment(dockerfile.decode(), PINNED_BASES)
     faithful = {
         "environment_requirements": {
             "docker_image": lowered.base_ref,
@@ -72,18 +72,14 @@ def test_replaying_the_archive_steps_counts_as_using_its_environment():
             "setup_commands": list(lowered.setup_commands),
         }
     }
-    assert environment_unused(faithful, archive) is None
+    assert environment_unused(faithful, dockerfile) is None
     stale = {**faithful, "environment_requirements": {**faithful["environment_requirements"], "setup_commands": []}}
-    assert "does not replay" in environment_unused(stale, archive)
+    assert "does not replay" in environment_unused(stale, dockerfile)
 
 
 def test_lowering_retains_runtime_environment_and_working_directory():
-    archive = {
-        "environment/Dockerfile": (
-            b'FROM python:3.11-slim-bookworm\nENV LABEL="two words" PYTHONUNBUFFERED=1\nWORKDIR /app\n'
-        )
-    }
-    lowered = lower_environment(archive["environment/Dockerfile"].decode(), PINNED_BASES)
+    dockerfile = b'FROM python:3.11-slim-bookworm\nENV LABEL="two words" PYTHONUNBUFFERED=1\nWORKDIR /app\n'
+    lowered = lower_environment(dockerfile.decode(), PINNED_BASES)
     assert lowered.environment_variables == {"LABEL": "two words", "PYTHONUNBUFFERED": "1"}
     requirements = {
         "docker_image": lowered.base_ref,
@@ -91,11 +87,11 @@ def test_lowering_retains_runtime_environment_and_working_directory():
         "setup_commands": list(lowered.setup_commands),
         "environment_variables": lowered.environment_variables,
     }
-    assert environment_unused({"environment_requirements": requirements}, archive) is None
+    assert environment_unused({"environment_requirements": requirements}, dockerfile) is None
     missing_variables = {**requirements, "environment_variables": {}}
-    assert "environment variables" in environment_unused({"environment_requirements": missing_variables}, archive)
+    assert "environment variables" in environment_unused({"environment_requirements": missing_variables}, dockerfile)
     wrong_directory = {**requirements, "working_directory": "/workspace"}
-    assert "working directory" in environment_unused({"environment_requirements": wrong_directory}, archive)
+    assert "working directory" in environment_unused({"environment_requirements": wrong_directory}, dockerfile)
 
 
 def test_env_applies_to_every_command_in_a_run(tmp_path):

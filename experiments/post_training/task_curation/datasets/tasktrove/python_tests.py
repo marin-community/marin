@@ -18,6 +18,7 @@ from taskcompendium.pipeline.models import Controls, Converter, ImportRejection,
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, archive_file
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
     SOLUTION_PATHS,
     solve_script,
@@ -167,7 +168,7 @@ def convert_python_tests(row: RawRow, context: ConversionContext) -> NormalizedT
     return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=archive_environment(row.data["files"]),
+        environment=archive_environment(archive_file(row.data, DOCKERFILE)),
         grader_environment=required_grader_environment(context),
         output_paths=("/app",),
     )
@@ -178,7 +179,7 @@ def convert_unitsyn(row: RawRow, context: ConversionContext) -> NormalizedTask |
     return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=archive_environment(row.data["files"]),
+        environment=archive_environment(archive_file(row.data, DOCKERFILE)),
         grader_environment=required_grader_environment(context),
         output_paths=SOLUTION_PATHS,
     )

@@ -19,23 +19,16 @@ Run it with that login (``HfApi()``/``hf_hub_download`` need no explicit token):
 """
 
 import argparse
-import hashlib
 import shutil
 import tempfile
 from pathlib import Path
 
 from huggingface_hub import HfApi, hf_hub_download
+from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.evaluation.corpus import file_sha256
 
 TASKS_FILENAME = "tasks.parquet"
 CARD_FILENAME = "README.md"
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def publish(tasks: Path, card: Path, repo: str) -> str:
@@ -57,7 +50,8 @@ def publish(tasks: Path, card: Path, repo: str) -> str:
     # a truncated or rewritten file fails here rather than at a reader.
     for source, name in ((tasks, TASKS_FILENAME), (card, CARD_FILENAME)):
         downloaded = hf_hub_download(repo_id=repo, repo_type="dataset", filename=name, revision=revision)
-        if _sha256(Path(downloaded)) != _sha256(source):
+        local, remote = StoragePath(str(source)), StoragePath(str(downloaded))
+        if file_sha256(remote) != file_sha256(local):
             raise ValueError(f"{name} at {repo}@{revision} does not match the uploaded file")
     return revision
 

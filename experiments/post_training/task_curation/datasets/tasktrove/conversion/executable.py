@@ -39,7 +39,9 @@ from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import PytestSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    DOCKERFILE,
     SOLVE_SH,
+    archive_file,
     archive_files,
     archive_resources,
 )
@@ -140,7 +142,7 @@ def tasktrove_archive_task(
     )
     # The archive's environment is part of the task; a spec that replaces it with an
     # image while the archive defines environment/Dockerfile is not admissible.
-    substituted = environment_unused(task.model_dump(mode="json"), row.data["files"])
+    substituted = environment_unused(task.model_dump(mode="json"), archive_file(row.data, DOCKERFILE))
     if substituted is not None:
         return ImportRejection(
             kind=ImportFailureKind.CONVERTER_ERROR, reason="environment_substituted", detail=substituted

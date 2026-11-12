@@ -22,6 +22,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     INSTRUCTION,
     VERIFIER_DATA,
     TaskFiles,
+    archive_file,
     archive_resources,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.code_contests import convert_code_contests
@@ -115,7 +116,7 @@ def stdio_task(row: RawRow, context: ConversionContext, convert: ConvertFn) -> N
     return tasktrove_archive_task(
         row,
         convert=convert,
-        environment=archive_environment(row.data["files"]),
+        environment=archive_environment(archive_file(row.data, DOCKERFILE)),
         grader_environment=required_grader_environment(context),
         output_paths=SOLUTION_PATHS,
     )
@@ -178,7 +179,7 @@ def convert_competitive_coding_task(row: RawRow, context: ConversionContext) -> 
     return tasktrove_archive_task(
         row,
         convert=convert_competitive_coding,
-        environment=archive_environment(row.data["files"]),
+        environment=archive_environment(archive_file(row.data, DOCKERFILE)),
         grader_environment=required_grader_environment(context),
         output_paths=SOLUTION_PATHS,
     )
