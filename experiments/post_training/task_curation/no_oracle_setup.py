@@ -13,11 +13,12 @@ import shlex
 import subprocess
 import tempfile
 import tomllib
-from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+
+from taskcompendium.models import TaskSpec
 
 from experiments.post_training.task_curation.calibforge_fixtures import SETUP_ROOT
 from experiments.post_training.task_curation.calibforge_rebuild import LoweredSpec, setup_script_name
@@ -181,7 +182,7 @@ def execute_setup_in_docker(
 
 
 def execute_lowered_setup(
-    task: Mapping,
+    task: TaskSpec,
     expectations: tuple[FileExpectation, ...],
     *,
     destinations: tuple[str, ...] = (),
@@ -190,31 +191,30 @@ def execute_lowered_setup(
 ) -> SetupExecution:
     """Run a lowered task's setup commands in its image and compare the written files.
 
-    ``task`` is the lowered TaskSpec as JSON: resources carry the fixtures and
-    ``environment_requirements.setup_commands`` stage them. This executes exactly
-    those commands, so a task that declares a hook nothing runs cannot pass.
+    Resources carry the fixtures and ``environment_requirements.setup_commands``
+    stage them. This executes exactly those commands, so a task that declares a
+    hook nothing runs cannot pass.
     """
-    requirements = task["environment_requirements"]
-    commands = tuple(requirements.get("setup_commands") or ())
+    requirements = task.environment_requirements
+    commands = tuple(requirements.setup_commands or ())
     if not commands:
-        return SetupExecution(task_id=task["id"], outcome=SetupOutcome.NO_SETUP_COMMANDS)
-    workdir = requirements.get("working_directory") or DEFAULT_WORKDIR
+        return SetupExecution(task_id=task.id, outcome=SetupOutcome.NO_SETUP_COMMANDS)
+    workdir = requirements.working_directory or DEFAULT_WORKDIR
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        for resource in task["resources"].get("all") or ():
-            target = root / "setup_files" / Path(resource["path"]).name
+        for resource in task.resources.all or ():
+            target = root / "setup_files" / Path(resource.path).name
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(base64.b64decode(resource["source"]["content_base64"], validate=True))
-            mode = resource.get("mode")
-            if mode is not None:
-                target.chmod(int(mode, 8))
+            target.write_bytes(base64.b64decode(resource.source.content_base64, validate=True))
+            if resource.mode is not None:
+                target.chmod(int(resource.mode, 8))
         command = " && ".join(commands) + " && " + _workspace_scan((workdir, *destinations))
         result = _execute_container_setup(
-            task["id"], requirements["docker_image"], command, ((root / "setup_files", SETUP_ROOT),), dns, timeout
+            task.id, requirements.docker_image, command, ((root / "setup_files", SETUP_ROOT),), dns, timeout
         )
     if result.workspace_stdout is None:
         return result
-    return _setup_comparison(task["id"], expectations, result.workspace_stdout)
+    return _setup_comparison(task.id, expectations, result.workspace_stdout)
 
 
 @dataclass(frozen=True)
@@ -258,7 +258,9 @@ def _execute_setups(
     def run(task_id: str) -> SetupExecution:
         try:
             metadata = _rebuilt_metadata(rebuilt[task_id])
-        except (KeyError, ValueError) as error:
+        except ValueError as error:
+            # A missing rebuilt[task_id] is a cohort-join bug and propagates;
+            # only an unusable rebuilt tar is a task-level refusal.
             return SetupExecution(task_id=task_id, outcome=SetupOutcome.INVALID_TASK, detail=str(error))
         return execute_setup_in_docker(
             task_id,
@@ -284,7 +286,7 @@ def _execute_lowered(
         requirements = lowered[task_id].task.environment_requirements
         workdir = requirements.working_directory or DEFAULT_WORKDIR
         return execute_lowered_setup(
-            {"task": lowered[task_id].task.model_dump(mode="json")},
+            lowered[task_id].task,
             expectations,
             destinations=_native_destinations(native[task_id], workdir),
             dns=dns,

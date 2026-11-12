@@ -38,6 +38,7 @@ from shellbox.machine import (
 )
 from taskcompendium.models import EnvironmentRequirements, require_resolved_environment
 
+from experiments.post_training.task_curation.calibforge_rebuild import LoweredSpec
 from experiments.post_training.task_curation.environment_fidelity import ENVIRONMENT_PREFIX
 from experiments.post_training.task_curation.task_tars import open_task_tar
 
@@ -72,9 +73,18 @@ def _write_context(root: Path, name: str, content: bytes, mode: int = 0o644) -> 
     target.chmod(mode & 0o7777)
 
 
-def _unpack_environment(payload: bytes) -> tuple[list[tuple[str, bytes, int]], bytes | None]:
+@dataclass(frozen=True)
+class EnvironmentEntry:
+    """One file inside a native task archive's ``environment/`` build context."""
+
+    path: str
+    content: bytes
+    mode: int
+
+
+def _unpack_environment(payload: bytes) -> tuple[list[EnvironmentEntry], bytes | None]:
     """The extracted ``environment/`` entries and the task's own ``task.toml``."""
-    entries: list[tuple[str, bytes, int]] = []
+    entries: list[EnvironmentEntry] = []
     task_toml: bytes | None = None
     with open_task_tar(payload) as archive:
         for member in archive.getmembers():
@@ -84,7 +94,11 @@ def _unpack_environment(payload: bytes) -> tuple[list[tuple[str, bytes, int]], b
                 task_toml = archive.extractfile(member).read()
                 continue
             if member.name.startswith(ENVIRONMENT_PREFIX):
-                entries.append((member.name[len(ENVIRONMENT_PREFIX) :], archive.extractfile(member).read(), member.mode))
+                entries.append(
+                    EnvironmentEntry(
+                        member.name[len(ENVIRONMENT_PREFIX) :], archive.extractfile(member).read(), member.mode
+                    )
+                )
     return entries, task_toml
 
 
@@ -101,8 +115,8 @@ def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentit
         entries, task_toml = _unpack_environment(payload)
         with tempfile.TemporaryDirectory() as tmp:
             try:
-                for name, content, mode in entries:
-                    _write_context(Path(tmp), name, content, mode)
+                for entry in entries:
+                    _write_context(Path(tmp), entry.path, entry.content, entry.mode)
                 config = _task_environment_config(task_toml)
                 if not config.docker_image and not (Path(tmp) / DOCKERFILE).exists():
                     raise UnsupportedMachineSpec(f"missing {ENVIRONMENT_PREFIX}{DOCKERFILE}")
@@ -122,7 +136,7 @@ def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentit
     return SnapshotIdentityCount(distinct=len(sizes), sizes=dict(sizes), failures=failures)
 
 
-def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> SnapshotIdentityCount:
+def count_lowered_spec_identities(tasks: Iterable[tuple[str, LoweredSpec]]) -> SnapshotIdentityCount:
     """Measure each declared agent and grader machine through production identities.
 
     Package-lock graders require a local host and are recorded as execution
@@ -135,11 +149,10 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
     execution_failures: list[tuple[str, str]] = []
     factory = DaytonaMachineFactory()
     for task_id, spec in tasks:
-        task = spec.get("task") or {}
-        runtime = spec.get("runtime") or {}
+        grader = spec.task.grader
         slots = (
-            ("agent", task.get("environment_requirements"), runtime.get("task_machine")),
-            ("grader", (task.get("grader") or {}).get("environment"), runtime.get("verifier_machine")),
+            ("agent", spec.task.environment_requirements, spec.task_machine),
+            ("grader", getattr(grader, "environment", None), spec.verifier_machine),
         )
         mapping_errors: list[str] = []
         execution_errors: list[str] = []

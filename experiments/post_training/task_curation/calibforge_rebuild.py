@@ -174,7 +174,7 @@ def _dependency_run(arguments: list[str]) -> bool:
     return False
 
 
-def _tainted(arguments: list[str]) -> bool:
+def _has_shell_metacharacters(arguments: list[str]) -> bool:
     return any(character in argument for argument in arguments for character in _METACHARACTERS)
 
 
@@ -187,7 +187,13 @@ class CompiledRecipe:
 
 
 def _pack_tar(files: dict[str, bytes], modes: dict[str, int]) -> bytes:
-    """Pack files deterministically: sorted members, fixed modes, gzip with mtime=0."""
+    """Pack files deterministically: sorted members, fixed modes, gzip with mtime=0.
+
+    Unlike ``tasktrove.harbor_export.archive_bytes`` this takes integer modes
+    straight from the native tar and uses the default gzip level: the rebuild's
+    payload digests must stay stable against previously built cohorts, not match
+    the verifier-export archives.
+    """
     payload = io.BytesIO()
     with tarfile.open(fileobj=payload, mode="w") as archive:
         for name in sorted(files):
@@ -267,7 +273,7 @@ def _recipe_body(instructions: list[Instruction], files: dict[str, bytes]) -> tu
 def _extend_env_exports(item: Instruction, steps: _RecipeSteps) -> None:
     if item.json_form or item.flags:
         raise DeferredRebuild("requires_env_flags_support")
-    if not item.args or any("=" not in argument for argument in item.args) or _tainted(item.args):
+    if not item.args or any("=" not in argument for argument in item.args) or _has_shell_metacharacters(item.args):
         raise DeferredRebuild("requires_env_support")
     steps.env_exports.extend("export " + shlex.quote(argument) for argument in item.args)
 
@@ -322,10 +328,10 @@ def _run_commands(item: Instruction, workdir: str, copied_files: set[str]) -> li
 def _stage_copy(item: Instruction, workdir: str, files: dict[str, bytes], steps: _RecipeSteps) -> None:
     """Stage one COPY's sources into the fixture payload and emit its copy commands.
 
-    This mirrors ``calibforge_fixtures.fixture_bundle``'s COPY staging, but reads
-    the tar's bytes instead of a filesystem context and never defers: the rebuild
-    must faithfully reproduce every COPY the recipe makes, including sources the
-    conservative fixture extractor would refuse.
+    The rebuild must faithfully reproduce every COPY the recipe makes: sources
+    come from the tar's bytes, the destination resolves against the recipe's
+    final workdir, and every staged file lands in the fixture archive the
+    setup script unpacks. A COPY that cannot be expressed defers.
     """
     if item.flags:
         raise DeferredRebuild("requires_copy_flags_support")

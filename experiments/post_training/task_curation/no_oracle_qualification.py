@@ -53,13 +53,12 @@ import pyarrow.parquet as pq
 
 from experiments.post_training.task_curation.no_oracle_liveness import (
     UNKNOWN_BASE,
+    LivenessOutcome,
     load_specs,
     manifest_bases,
 )
 from experiments.post_training.task_curation.no_oracle_preservation import PreservationResult, check_preservation
 from experiments.post_training.task_curation.no_oracle_setup import SetupExecution, _execute_lowered, _execute_setups
-
-PASSING_VERIFIER_OUTCOMES = ("negative_verdict",)
 
 
 @dataclass(frozen=True)
@@ -74,7 +73,8 @@ class VerifierResult:
 
     @property
     def passed(self) -> bool:
-        return self.outcome in PASSING_VERIFIER_OUTCOMES and self.exit_code == 0 and self.tests_executed > 0
+        # Receipts carry plain strings from JSON, so compare by value.
+        return self.outcome == LivenessOutcome.NEGATIVE_VERDICT and self.exit_code == 0 and self.tests_executed > 0
 
 
 @dataclass
