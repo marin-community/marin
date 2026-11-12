@@ -26,6 +26,7 @@ from iris.rpc import job_pb2
 from rigging.timing import Duration
 
 from scripts.iris.dev_gpu import (
+    HOLDER_COMMAND,
     PRIORITY_BANDS,
     CoreweaveTarget,
     PodRef,
@@ -34,21 +35,14 @@ from scripts.iris.dev_gpu import (
     is_job_active,
     kubectl_base,
     kubectl_connect_cmd,
+    release_holder_job,
     require_coreweave_platform,
     run_logged,
+    state_path,
     wait_for_running_pod,
     wait_for_running_tasks,
 )
 
-logger = logging.getLogger(__name__)
-
-HOLDER_COMMAND = (
-    "import signal, sys, time; "
-    "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); "
-    "signal.signal(signal.SIGINT, lambda *_: sys.exit(0)); "
-    "print('iris dev cpu holder ready', flush=True); "
-    "time.sleep(365 * 24 * 60 * 60)"
-)
 STATE_DIR = Path.home() / ".cache" / "marin" / "dev_cpu_iris"
 
 
@@ -130,10 +124,6 @@ def session_summary(state: DevCpuState) -> str:
             f"Pod: {state.pod.pod_name} (namespace={state.pod.namespace}, container={state.pod.container})",
         ]
     )
-
-
-def state_path(state_dir: Path, session_name: str) -> Path:
-    return state_dir / f"{session_name}.json"
 
 
 def load_state(path: Path) -> DevCpuState:
@@ -291,17 +281,7 @@ def release(obj: Context, force: bool) -> None:
     """Terminate the holder job and clear the local session file."""
     state_file = state_path(obj.state_dir, obj.session_name)
     state = load_state(state_file)
-    try:
-        with controller_client(state.config_file) as client:
-            client.cancel_job(JobName.from_wire(state.job_id))
-    except Exception as exc:
-        if not force:
-            raise click.ClickException(
-                f"Failed to terminate holder job {state.job_id}; the box may still be running. "
-                f"Retry `release`, or pass --force to drop local state. Error: {exc}"
-            ) from exc
-        logger.warning("Terminate failed but --force given; deleting local session state anyway.", exc_info=True)
-    state_file.unlink(missing_ok=True)
+    release_holder_job(state.config_file, state.job_id, state_file, force=force)
 
 
 if __name__ == "__main__":
