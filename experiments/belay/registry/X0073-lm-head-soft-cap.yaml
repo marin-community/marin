@@ -560,7 +560,8 @@ trials:
   batch: X0073
   date: '2026-11-12'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0073
-  wandb: []
+  wandb:
+  - belay-X0073d1280-seed0
   settings:
     logit_soft_cap: '10'
   commit: fc80e05aed
