@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Callable, Collection
+from dataclasses import asdict
 from enum import StrEnum
 import os
 import time
@@ -13,7 +14,7 @@ from ray.util.placement_group import PlacementGroupSchedulingStrategy, placement
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 from transformers import AutoConfig, PretrainedConfig
 
-from marinskyrl.inference_placement import InferenceReplicaPlacement
+from marinskyrl.inference_placement import COLOCATED_EXPERT_BLOCK_GPU_COUNT, InferenceReplicaPlacement
 from skyrl_train.inference_engines.base import (
     InferenceEngineInterface,
     InferenceEngineInput,
@@ -52,6 +53,7 @@ from skyrl_train.utils.constants import DEFAULT_RAY_PLACEMENT_GROUP_TIMEOUT_SECO
 from skyrl_train.utils.utils import use_per_engine_pg
 from skyrl_train.inference_engines.placement import (
     colocated_engine_bundle_layout,
+    colocated_inference_bundle_nodes,
     inference_bundle_nodes,
     verified_inference_replica_placements,
 )
@@ -303,6 +305,15 @@ class RayWrappedInferenceEngine(InferenceEngineInterface):
         self.weight_sync_relative_rank_offset = weight_sync_relative_rank_offset
         # The verified placement of each worker of a replica, in worker order.
         self.worker_placements: list[InferenceReplicaPlacement] | None = None
+
+    async def recheck_worker_placements(self) -> None:
+        """Fail if a receiver moved or restarted onto a different GPU after startup."""
+        if self.worker_placements is None:
+            raise ValueError("Inference worker placements were not verified at startup")
+        reports = await self.inference_engine_actor.report_engine_placement.remote()
+        expected = [asdict(placement.worker) for placement in self.worker_placements]
+        if list(reports) != expected:
+            raise RuntimeError("Inference worker placement changed since startup")
 
     def tp_size(self):
         # Diagnostic: unwrap un-pickleable Ray exceptions into a plain
@@ -590,10 +601,23 @@ def create_ray_wrapped_inference_engines(
     verify_workers = (
         tensor_parallel_size == 1
         and (data_parallel_size > 1 or require_verified_placements)
-        and not (use_hybrid_engine or use_mp_backend or inference_engine_enable_sleep)
+        and not use_mp_backend
+        and (not (use_hybrid_engine or inference_engine_enable_sleep) or require_verified_placements)
     )
     if require_verified_placements and not verify_workers:
-        raise ValueError("Verified expert-block placements require non-colocated TP=1 vLLM workers")
+        raise ValueError("Verified expert-block placements require local TP=1 vLLM workers")
+    if require_verified_placements and inference_engine_enable_sleep and not use_hybrid_engine:
+        raise ValueError("Sleeping expert-block receivers require a shared placement group")
+    if require_verified_placements and use_hybrid_engine and (
+        num_inference_engines != 1
+        or data_parallel_size != COLOCATED_EXPERT_BLOCK_GPU_COUNT
+        or expert_parallel_size != COLOCATED_EXPERT_BLOCK_GPU_COUNT
+        or pipeline_parallel_size != 1
+        or not inference_engine_enable_sleep
+        or sleep_level != 2
+        or enable_lora
+    ):
+        raise ValueError("Colocated expert-block receivers require one TP=PP=1 DP=EP=4 engine with level-2 sleep")
     cross_node_ep = verify_workers and pipeline_parallel_size == 1 and expert_parallel_size == data_parallel_size > 1
     node_hosts: dict[str, str] = {}
     node_gpu_capacities: dict[str, int] = {}
@@ -702,13 +726,22 @@ def create_ray_wrapped_inference_engines(
     bundle_nodes: list[list[str]] = []
     if verify_workers:
         try:
-            bundle_nodes = inference_bundle_nodes(
-                per_engine_pgs,
-                data_parallel_size=data_parallel_size,
-                node_gpu_capacities=node_gpu_capacities,
-                pipeline_parallel_size=pipeline_parallel_size,
-                expert_parallel_size=expert_parallel_size,
-            )
+            if use_hybrid_engine:
+                bundle_nodes = colocated_inference_bundle_nodes(
+                    shared_pg,
+                    colocated_engine_bundles,
+                    num_inference_engines=num_inference_engines,
+                    data_parallel_size=data_parallel_size,
+                    pipeline_parallel_size=pipeline_parallel_size,
+                )
+            else:
+                bundle_nodes = inference_bundle_nodes(
+                    per_engine_pgs,
+                    data_parallel_size=data_parallel_size,
+                    node_gpu_capacities=node_gpu_capacities,
+                    pipeline_parallel_size=pipeline_parallel_size,
+                    expert_parallel_size=expert_parallel_size,
+                )
         except Exception:
             _release_node_local_gang([], per_engine_pgs)
             raise
@@ -921,11 +954,6 @@ def create_ray_wrapped_inference_engines(
         elif not inference_engine_enable_sleep:
             startup_refs = [engine.inference_engine_actor.report_engine_hosts.remote() for engine in engines]
 
-        if inference_engine_enable_sleep:
-            # NOTE(shu): set to 1 for LoRA
-            sleep_level = 1 if enable_lora else sleep_level
-            startup_refs = [engine.inference_engine_actor.sleep.remote(level=sleep_level) for engine in engines]
-
         if startup_refs:
             startup_results = wait_for_inference_engine_startup(
                 startup_refs,
@@ -949,6 +977,17 @@ def create_ray_wrapped_inference_engines(
                     ]
                     for placement in engine.worker_placements:
                         logger.info("Verified inference replica placement: {}", placement)
+
+        if inference_engine_enable_sleep:
+            # NOTE(shu): set to 1 for LoRA
+            sleep_level = 1 if enable_lora else sleep_level
+            sleep_refs = [engine.inference_engine_actor.sleep.remote(level=sleep_level) for engine in engines]
+            wait_for_inference_engine_startup(
+                sleep_refs,
+                [engine.inference_engine_actor for engine in engines],
+                timeout_seconds=engine_init_timeout_seconds,
+                kill_on_failure=False,
+            )
 
         populate_engine_max_model_lens(
             engines,
