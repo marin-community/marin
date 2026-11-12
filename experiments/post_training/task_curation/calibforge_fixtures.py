@@ -67,7 +67,6 @@ def copy_commands(staged: str, target: str, *, into_directory: bool) -> tuple[st
 
 
 def teardown_commands() -> tuple[str, str]:
-    """The setup lines that remove the staged archive and script after setup ran."""
     return (f"rm -f {SETUP_ROOT}/{FIXTURE_ARCHIVE} {SETUP_ROOT}/{SETUP_SCRIPT}", f"rmdir {SETUP_ROOT}")
 
 

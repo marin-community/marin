@@ -5,6 +5,7 @@
 
 import gzip
 import io
+import subprocess
 import tarfile
 import tomllib
 from dataclasses import asdict
@@ -12,6 +13,7 @@ from dataclasses import asdict
 import pytest
 from taskcompendium.models import CommandSemantics
 
+from experiments.post_training.task_curation.calibforge_fixtures import SETUP_ROOT
 from experiments.post_training.task_curation.calibforge_rebuild import (
     DeferredRebuild,
     lowered_task_spec,
@@ -98,12 +100,19 @@ def test_a_task_declaring_more_than_the_normalized_shape_defers():
         rebuild_task(native_task_bytes(members))
 
 
-def test_every_run_segment_lowers_into_its_own_setup_command():
-    """A RUN with chained commands lowers each segment; none is dropped."""
-    rebuilt = rebuild_task(native_task("FROM ubuntu:24.04\nWORKDIR /app\nRUN pip install pytest && chmod 755 /app\n"))
-    commands = unpack(rebuilt.task_binary)["setup_files/calibforge-initialize.sh"].decode().splitlines()
-    assert "(cd /app && pip install pytest)" in commands
-    assert "(cd /app && chmod 755 /app)" in commands
+def test_every_run_segment_executes_during_setup(tmp_path):
+    workdir = tmp_path / "work"
+    rebuilt = rebuild_task(native_task(f"FROM ubuntu:24.04\nWORKDIR {workdir}\nRUN touch first && touch second\n"))
+    files = unpack(rebuilt.task_binary)
+    stage = tmp_path / "setup_files"
+    stage.mkdir()
+    for name, content in files.items():
+        if name.startswith("setup_files/"):
+            (stage / name.removeprefix("setup_files/")).write_bytes(content)
+    script = files["setup_files/calibforge-initialize.sh"].decode().replace(SETUP_ROOT, str(stage))
+    subprocess.run(["sh"], input=script, text=True, check=True)
+    assert {path.name for path in workdir.iterdir()} == {"first", "second"}
+    assert not stage.exists()
 
 
 def test_a_lowered_spec_stages_fixtures_through_setup_commands():

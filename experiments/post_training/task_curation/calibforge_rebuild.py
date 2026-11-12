@@ -339,7 +339,7 @@ def _stage_copy(item: Instruction, workdir: str, files: dict[str, bytes], steps:
 
     The rebuild must faithfully reproduce every COPY the recipe makes: sources
     come from the tar's bytes, the destination resolves against the recipe's
-    final workdir, and every staged file lands in the fixture archive the
+    active workdir, and every staged file lands in the fixture archive the
     setup script unpacks. A COPY that cannot be expressed defers.
     """
     if item.flags:
