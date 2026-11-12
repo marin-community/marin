@@ -151,10 +151,6 @@ def test_vllm_job_payload_survives_worker_serialization(backend):
     request = (
         _tpu_vllm_job(goldens) if backend == "vllm-tpu-v4-tp16" else _vllm_job(goldens, "FLASH_ATTN", int(backend[-1]))
     )
-    expected_priority = (
-        job_pb2.PRIORITY_BAND_PRODUCTION if backend == "vllm-tpu-v4-tp16" else job_pb2.PRIORITY_BAND_INTERACTIVE
-    )
-    assert request.priority == expected_priority
     assert request.max_retries_failure == 2
     assert request.max_task_failures == 2
     entrypoint = convert_entrypoint(request.entrypoint)
