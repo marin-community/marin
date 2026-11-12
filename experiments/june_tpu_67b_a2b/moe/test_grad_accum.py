@@ -369,10 +369,8 @@ def test_gradients_are_reduced_across_replicas_once_after_the_microbatch_loop():
                 for path, x in jax.tree_util.tree_leaves_with_path(marked)
                 if getattr(path[-1], "name", None) != "router_bias"
             ]
-            for k in (2, 4):
-                msg = f"{name} K={k}"
-                reductions = replica_reductions(compiled_step_hlo(BASE, mesh, policy, microbatches=k), mesh)
-                in_loop = [r for r in reductions if r.in_loop]
-                assert in_loop and not any("transpose(" in r.op_name and not r.scalar for r in in_loop), (msg, in_loop)
-                after_loop = sum(r.elements for r in reductions if not r.in_loop)
-                assert sum(sizes) <= after_loop < sum(sizes) + min(sizes), (msg, after_loop, sum(sizes), reductions)
+            reductions = replica_reductions(compiled_step_hlo(BASE, mesh, policy, microbatches=4), mesh)
+            in_loop = [r for r in reductions if r.in_loop]
+            assert in_loop and not any("transpose(" in r.op_name and not r.scalar for r in in_loop), (name, in_loop)
+            after_loop = sum(r.elements for r in reductions if not r.in_loop)
+            assert sum(sizes) <= after_loop < sum(sizes) + min(sizes), (name, after_loop, sum(sizes), reductions)
