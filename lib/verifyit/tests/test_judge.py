@@ -372,12 +372,15 @@ def test_checklist_truncated_criterion_keeps_partial_diagnostics_without_score(t
 
 
 def test_checklist_shows_the_context_file_to_the_judge(tmp_path, fake_judge):
-    context = "é" * (grade_judge.CONTEXT_LIMIT - 4) + "TAIL" + "excluded"
+    context_limit = 24
+    context = "é" * (context_limit - 4) + "TAIL" + "excluded"
     (tmp_path / "conversation.txt").write_text(context)
     fake_judge.replies = ["SCORE: 1"]
-    spec = JudgeSpec(rubric="checklist", criteria=(CRITERIA[0],), context="conversation.txt")
+    spec = JudgeSpec(
+        rubric="checklist", criteria=(CRITERIA[0],), context="conversation.txt", context_char_limit=context_limit
+    )
     grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "1. 2. 3."))
-    assert context[: grade_judge.CONTEXT_LIMIT] in fake_judge.prompts[0]
+    assert context[:context_limit] in fake_judge.prompts[0]
     assert "excluded" not in fake_judge.prompts[0]
 
 
@@ -917,6 +920,8 @@ def test_responses_whole_labels_preserve_source_request_and_reject_prose(tmp_pat
         label_scores={"CORRECT": 1, "INCORRECT": 0},
         max_completion_tokens=1024,
         reasoning_effort="low",
+        temperature=None,
+        parse_attempts=1,
     )
     path = tmp_path / "verifier.toml"
     path.write_text(render_spec(spec))

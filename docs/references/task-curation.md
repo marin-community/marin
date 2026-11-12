@@ -660,6 +660,31 @@ model are interchangeable for curation. `JudgeConnection` supplies the base URL
 and key at run time. A specification may not depend on a particular endpoint's
 defaults; if a verdict changes with an unstated setting, state the setting.
 
+Every tier sets temperature to **0.7**. If an API cannot accept temperature,
+omit that request parameter and explicitly record **API default** in the preset.
+`context_char_limit` bounds auxiliary context in characters; it is separate
+from the preset's declared model context window in tokens. `max_turns` is one:
+parse retries issue independent requests without conversation continuation.
+
+`JUDGE_TIERS` maps each `JudgeTier` to a `JudgeTierDefinition`. Bind a task's
+question and rubric by replacing fields on its `.spec`; keep the accompanying
+`context_window_tokens`, model identity and revision in the qualification evidence.
+The presets do not certify endpoint availability or source admission.
+
+| Tier | Model requested | Completion budget | Request timeout | Transport attempts | Parse attempts |
+|---|---|---:|---:|---:|---:|
+| LIGHT | `openai/gpt-oss-120b` | 8,192 | 120 seconds | 3 | 2 |
+| MEDIUM | `MiniMaxAI/MiniMax-M3-MXFP8` | 2,048 | 300 seconds | 6 | 1 |
+| HEAVY | `glm-5.3` | 4,096, then 8,192 if truncated | 300 seconds | 3 | 3 |
+
+MEDIUM requires checkpoint `c5454eb03678d8710e54a4e0fc681b9f3b4a3dba`.
+The historical HEAVY deployment reports GLM-5.3 FP8 but exposes no immutable
+weight revision; its tokenizer revision does not establish the weight identity.
+Qualification records that limitation. LIGHT uses explicit low reasoning;
+MEDIUM uses explicit adaptive thinking; HEAVY uses explicit low reasoning
+through its chat template. These presets pin temperature and reasoning settings
+that historical callers sometimes left to provider defaults.
+
 ### Validate the judge end to end
 
 A judged source is repaired and quality-checked only after its pinned judge has
