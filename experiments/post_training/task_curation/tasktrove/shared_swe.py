@@ -89,7 +89,7 @@ def harden_shared_swe(
     config["agent"]["user"] = str(contract.agent_uid)
     config["verifier"]["user"] = "root"
     config["verifier"]["restart_environment"] = False
-    config["metadata"]["integrity_contract"] = contract.model_dump(mode="json")
+    config["metadata"]["integrity_contract"] = contract.model_dump(mode="json", exclude_none=True)
     config["metadata"]["execution_policy"] = f"shared_agent_mutable_v{contract.version}"
     files["task.toml"] = tomlkit.dumps(config).encode()
     files["instruction.md"] = (
