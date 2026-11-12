@@ -15,7 +15,7 @@ import pyarrow.parquet as pq
 import pytest
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
-from taskcompendium.pipeline.oracle_filter import NoOracleLivenessReceipt, require_oracle_filter
+from taskcompendium.pipeline.oracle_filter import NoOracleLivenessReceipt, OracleExclusionReason, require_oracle_filter
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.oracle_filter import (
@@ -33,7 +33,16 @@ from .prebuilt_fixtures import prebuilt_task
 def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_path):
     rows = []
     mappings = {}
-    for task_id in ("pass", "failed-solution", "missing-exit", "infra", "calibration-only", "live"):
+    for task_id in (
+        "pass",
+        "failed-solution",
+        "missing-exit",
+        "infra",
+        "source-env",
+        "unmatched-env",
+        "calibration-only",
+        "live",
+    ):
         row = prebuilt_task(task_id)
         envelope = json.loads(row["lowered_task_spec"])
         task = TaskSpec.model_validate(envelope["task"])
@@ -57,7 +66,12 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
         (native / "solution/solve.sh").write_text("true\n")
         (native / "task.toml").write_text(
             "[environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n"
-            "[agent]\ntimeout_sec=300\n[verifier]\ntimeout_sec=60\n"
+            + (
+                '[environment.setup]\ncommand="pip install -q pytest==6.2.5"\ntimeout_sec=300\n'
+                if task_id == "source-env"
+                else ""
+            )
+            + "[agent]\ntimeout_sec=300\n[verifier]\ntimeout_sec=60\n"
         )
         checksum = harbor_inspection("tasks", [str(native)])[str(native)]["task_checksum"]
         mappings[task_id] = {
@@ -67,7 +81,7 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
             "task_sha256": canonical_sha256(task.model_dump(mode="json")),
             "runtime_sha256": canonical_sha256(envelope["runtime"]),
         }
-        for attempt in range(3 if task_id == "infra" else 1):
+        for attempt in range(3 if task_id in {"infra", "source-env", "unmatched-env"} else 1):
             root = tmp_path / "jobs" / f"{task_id}-{attempt}"
             (root / "verifier").mkdir(parents=True)
             (root / "agent").mkdir()
@@ -103,7 +117,22 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
                 ),
             }
             (root / "result.json").write_text(json.dumps(result))
-            (root / "verifier/verdict.json").write_text(json.dumps({"status": "scored", "reward": 1}))
+            verdict = (
+                {
+                    "status": "infra_error",
+                    "reward": 0,
+                    "detail": {
+                        "error": (
+                            "RuntimeError: pytest wrote no json report (exit 1):\n"
+                            'File "/opt/taskcompendium-shared/runner/pytest_metadata/plugin.py", line 36\n'
+                            "AttributeError: module 'pytest' has no attribute 'StashKey'"
+                        )
+                    },
+                }
+                if task_id in {"source-env", "unmatched-env"}
+                else {"status": "scored", "reward": 1}
+            )
+            (root / "verifier/verdict.json").write_text(json.dumps(verdict))
             if task_id != "missing-exit":
                 (root / "agent/exit-code.txt").write_text("7" if task_id == "failed-solution" else "0")
     cohort = tmp_path / "cohort.parquet"
@@ -126,7 +155,18 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
     output = tmp_path / "filtered/tasks.parquet"
     receipt = filter_cohort(cohort, task_map, tmp_path / "jobs", output, no_oracle_liveness=liveness)
     assert [row["path"] for row in pq.read_table(output).to_pylist()] == ["pass", "live"]
-    assert receipt.input_rows == 6
+    assert receipt.input_rows == 8
+    incompatible = receipt.tasks["source-env"]
+    assert incompatible.exclusion_reason is OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE
+    assert (
+        incompatible.source_environment_incompatibility.source_setup_sha256
+        == hashlib.sha256(b"pip install -q pytest==6.2.5").hexdigest()
+    )
+    assert incompatible.calibration.attempts[-1].verdict["status"] == "infra_error"
+    assert not incompatible.passed
+    unmatched = receipt.tasks["unmatched-env"]
+    assert unmatched.exclusion_reason is OracleExclusionReason.INFRASTRUCTURE
+    assert unmatched.source_environment_incompatibility is None
     calibration_only = receipt.tasks["calibration-only"]
     assert calibration_only.calibration.passed and not calibration_only.passed
     assert calibration_only.exclusion_reason == "no_oracle_liveness_missing_or_failed"

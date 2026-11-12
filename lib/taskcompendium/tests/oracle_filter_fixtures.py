@@ -81,7 +81,11 @@ def oracle_receipt(
             exclusion_reason=(
                 "oracle_failed"
                 if reward == 0
-                else "no_oracle_liveness_missing" if not has_oracle_solution(task) and not no_oracle_liveness else None
+                else (
+                    "no_oracle_liveness_missing_or_failed"
+                    if not has_oracle_solution(task) and not no_oracle_liveness
+                    else None
+                )
             ),
         )
     return OracleFilterReceipt(

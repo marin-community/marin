@@ -1124,6 +1124,16 @@ Receipts retain actor and verifier measurements separately. A separate grader's
 failure at its declared memory or disk limit stops calibration without increasing
 the actor's allocation; a shared grader uses the task's container budget.
 
+`SOURCE_ENV_INCOMPATIBLE` identifies a measured source-environment defect.
+The current signature requires a source setup explicitly installing
+`pytest==6.2.5`, a successful oracle exit, and a protected pre-agent
+`pytest_metadata/plugin.py` failing because `pytest.StashKey` is absent.
+The exclusion records the signature and hashes of the unchanged setup and raw
+verdict. Preserve the declared environment and the raw infrastructure verdict;
+this exclusion does not establish an oracle score of zero. Unrecognized
+infrastructure failures remain unscored after the retry budget, while other
+population tasks continue. The summary counts exclusions by typed reason.
+
 For tasks without original solutions, write calibration-only `solve.sh` scripts
 under `CALIBRATION_SOLUTIONS/TASK_ID/` and supply `--calibration-solutions`.
 These scripts run through the same production Trial path but remain outside the

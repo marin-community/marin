@@ -9,6 +9,7 @@ import json
 import shutil
 import subprocess
 import tomllib
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
 from taskcompendium.pipeline.oracle_filter import (
     NoOracleLivenessReceipt,
+    OracleExclusionReason,
     OracleFilterReceipt,
     OracleTaskReceipt,
     OracleTrialReceipt,
@@ -29,6 +31,7 @@ from taskcompendium.pipeline.oracle_filter import (
     VerifierResourceProfile,
     has_oracle_solution,
     next_trial_requirements,
+    source_environment_incompatibility,
 )
 from taskcompendium.pipeline.resource_calibration import (
     INITIAL_REQUIREMENTS,
@@ -291,10 +294,23 @@ def filter_cohort(
                     }
                 )
                 row = row_with_task(row, task)
+                source_setup = (
+                    tomllib.loads((original / "task.toml").read_text())
+                    .get("environment", {})
+                    .get("setup", {})
+                    .get("command", "")
+                )
+                incompatibility = source_environment_incompatibility(calibration.attempts[-1], source_setup)
                 reason = (
                     None
                     if calibration.passed
-                    else (f"resource_calibration:{calibration.attempts[-1].failure_signal.value}")
+                    else (
+                        OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE
+                        if incompatibility is not None
+                        else OracleExclusionReason(
+                            f"resource_calibration:{calibration.attempts[-1].failure_signal.value}"
+                        )
+                    )
                 )
                 entry = OracleTaskReceipt(
                     task_sha256=canonical_sha256(task.model_dump(mode="json")),
@@ -305,9 +321,10 @@ def filter_cohort(
                     calibration=calibration,
                     no_oracle_liveness=liveness.get(task.id),
                     exclusion_reason=reason,
+                    source_environment_incompatibility=incompatibility,
                 )
                 if not oracle and calibration.passed and not entry.passed:
-                    entry = entry.model_copy(update={"exclusion_reason": "no_oracle_liveness_missing_or_failed"})
+                    entry = entry.model_copy(update={"exclusion_reason": OracleExclusionReason.NO_ORACLE_LIVENESS})
                 entries[task.id] = entry
                 if entry.passed:
                     kept.append(row)
@@ -342,6 +359,7 @@ def filter_cohort(
         "oracle_tasks": sum(e.has_oracle for e in entries.values()),
         "oracle_passed": sum(e.has_oracle and e.passed for e in entries.values()),
         "oracle_excluded": sum(e.has_oracle and not e.passed for e in entries.values()),
+        "exclusions_by_reason": dict(Counter(e.exclusion_reason.value for e in entries.values() if e.exclusion_reason)),
         "output_rows": len(kept),
         "receipt": str(receipt_path),
         "output_sha256": file_sha256(StoragePath(str(output))),

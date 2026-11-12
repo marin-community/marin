@@ -46,7 +46,7 @@ def test_oracle_filter_requires_scored_success_instead_of_reward_only_receipts()
     document = oracle_receipt([current]).model_dump(mode="json")
     document["tasks"][current.id]["trials"][0]["verdict"] = {"status": "infra_error", "reward": 1}
     document["tasks"][current.id]["calibration"]["attempts"][0]["verdict"] = {"status": "infra_error", "reward": 1}
-    document["tasks"][current.id]["exclusion_reason"] = "unscored verifier"
+    document["tasks"][current.id]["exclusion_reason"] = "resource_calibration:infrastructure"
     with pytest.raises(ValueError, match="infrastructure retry budget is incomplete"):
         OracleFilterReceipt.model_validate(document)
     document["tasks"][current.id]["calibration"]["attempts"] *= 3
@@ -127,6 +127,6 @@ def test_no_oracle_admission_requires_exact_empty_submission_liveness(changes):
     entry = document["tasks"][current.id]
     entry["no_oracle_liveness"].update(changes)
     if changes:
-        entry["exclusion_reason"] = "no_oracle_liveness_failed"
+        entry["exclusion_reason"] = "no_oracle_liveness_missing_or_failed"
     receipt = OracleFilterReceipt.model_validate(document)
     assert require_oracle_filter(current, receipt) is (not changes)

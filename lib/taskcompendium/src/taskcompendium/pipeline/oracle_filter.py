@@ -3,6 +3,8 @@
 
 """Full-population Harbor oracle receipts bound to the converted task contents."""
 
+import hashlib
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -219,6 +221,46 @@ class NoOracleLivenessReceipt(BaseModel):
         )
 
 
+class OracleExclusionReason(StrEnum):
+    ORACLE_FAILED = "oracle_failed"
+    OOM = "resource_calibration:oom"
+    DISK_FULL = "resource_calibration:disk_full"
+    AGENT_TIMEOUT = "resource_calibration:agent_timeout"
+    VERIFIER_TIMEOUT = "resource_calibration:verifier_timeout"
+    NON_RESOURCE = "resource_calibration:non_resource"
+    INFRASTRUCTURE = "resource_calibration:infrastructure"
+    NO_ORACLE_LIVENESS = "no_oracle_liveness_missing_or_failed"
+    SOURCE_ENV_INCOMPATIBLE = "SOURCE_ENV_INCOMPATIBLE"
+
+
+class SourceEnvironmentIncompatibility(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    signature: Literal["pytest-6.2.5/pytest-metadata-stashkey"] = "pytest-6.2.5/pytest-metadata-stashkey"
+    source_setup_sha256: str
+    verdict_sha256: str
+
+
+def source_environment_incompatibility(
+    trial: OracleTrialReceipt, source_setup: str
+) -> SourceEnvironmentIncompatibility | None:
+    """Recognize the measured pre-agent pytest/plugin conflict without changing its environment."""
+    verdict = trial.verdict or {}
+    error = verdict.get("detail", {}).get("error", "")
+    if (
+        trial.oracle_exit_code != 0
+        or verdict.get("status") != "infra_error"
+        or "pip install -q pytest==6.2.5" not in source_setup.splitlines()
+        or "pytest wrote no json report (exit 1)" not in error
+        or "/opt/taskcompendium-shared/runner/pytest_metadata/plugin.py" not in error
+        or "AttributeError: module 'pytest' has no attribute 'StashKey'" not in error
+    ):
+        return None
+    return SourceEnvironmentIncompatibility(
+        source_setup_sha256=hashlib.sha256(source_setup.encode()).hexdigest(),
+        verdict_sha256=canonical_sha256(verdict),
+    )
+
+
 class OracleTaskReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     task_sha256: str
@@ -228,7 +270,17 @@ class OracleTaskReceipt(BaseModel):
     trials: tuple[OracleTrialReceipt, ...]
     calibration: ResourceCalibrationReceipt
     no_oracle_liveness: NoOracleLivenessReceipt | None = None
-    exclusion_reason: str | None = None
+    exclusion_reason: OracleExclusionReason | None = None
+    source_environment_incompatibility: SourceEnvironmentIncompatibility | None = None
+
+    @model_validator(mode="after")
+    def validate_source_environment_exclusion(self):
+        evidence = self.source_environment_incompatibility
+        if (self.exclusion_reason is OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE) != (evidence is not None):
+            raise ValueError("Source environment exclusions require their measured incompatibility evidence")
+        if evidence is not None and evidence.verdict_sha256 != canonical_sha256(self.calibration.attempts[-1].verdict):
+            raise ValueError("Source environment evidence belongs to another verdict")
+        return self
 
     @property
     def passed(self) -> bool:
