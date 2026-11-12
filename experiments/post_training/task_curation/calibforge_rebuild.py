@@ -47,7 +47,6 @@ from taskcompendium.models import (
 )
 from tomlkit.items import Table
 
-from experiments.post_training.task_curation.calibforge_envelope import LoweredSpec, MachineShape
 from experiments.post_training.task_curation.calibforge_fixtures import (
     FIXTURE_ARCHIVE,
     SETUP_ROOT,
@@ -62,6 +61,11 @@ from experiments.post_training.task_curation.environment_fidelity import (
     ENVIRONMENT_DOCKERFILE,
     ENVIRONMENT_PREFIX,
     PINNED_BASES,
+)
+from experiments.post_training.task_curation.lowered_envelope import (
+    LOWED_TASK_SPEC_COLUMN,
+    LoweredSpec,
+    MachineShape,
 )
 from experiments.post_training.task_curation.task_tars import open_task_tar
 
@@ -587,7 +591,10 @@ def _rebuild_cohort(cohort: Path, excluded: set[str]) -> _RebuildOutcome:
             )
             records.append({"path": path, "source": path, "task_binary": rebuilt.task_binary})
             lowered.append(
-                {"path": path, "lowered_task_spec": json.dumps(lowered_task_spec(path, rebuilt.task_binary).envelope())}
+                {
+                    "path": path,
+                    LOWED_TASK_SPEC_COLUMN: json.dumps(lowered_task_spec(path, rebuilt.task_binary).envelope()),
+                }
             )
     return _RebuildOutcome(records, lowered, evidence, base_refs)
 

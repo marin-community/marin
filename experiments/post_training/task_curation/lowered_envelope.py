@@ -13,6 +13,9 @@ from dataclasses import asdict, dataclass
 
 from taskcompendium.models import TaskSpec
 
+LOWED_TASK_SPEC_COLUMN = "lowered_task_spec"
+"""The parquet column carrying a rebuilt task's envelope."""
+
 
 @dataclass(frozen=True)
 class MachineShape:

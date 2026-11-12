@@ -20,10 +20,10 @@ from pathlib import Path
 
 from taskcompendium.models import TaskSpec
 
-from experiments.post_training.task_curation.calibforge_envelope import LoweredSpec
 from experiments.post_training.task_curation.calibforge_fixtures import SETUP_ROOT
 from experiments.post_training.task_curation.calibforge_rebuild import setup_script_name
 from experiments.post_training.task_curation.environment_fidelity import DEFAULT_WORKDIR
+from experiments.post_training.task_curation.lowered_envelope import LoweredSpec
 from experiments.post_training.task_curation.no_oracle_liveness import DETAIL_LIMIT
 from experiments.post_training.task_curation.no_oracle_preservation import (
     FileExpectation,

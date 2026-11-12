@@ -43,7 +43,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements, ScriptGrader, VerifyitGrader
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 
-from experiments.post_training.task_curation.calibforge_envelope import LoweredSpec
+from experiments.post_training.task_curation.lowered_envelope import LOWED_TASK_SPEC_COLUMN, LoweredSpec
 
 logger = logging.getLogger(__name__)
 
@@ -88,9 +88,9 @@ class LivenessResult:
 def load_specs(path: Path) -> dict[str, LoweredSpec]:
     """Each lowered task envelope in a published cohort parquet, validated at load."""
     specs = {}
-    for batch in pq.ParquetFile(path).iter_batches(batch_size=32, columns=["path", "lowered_task_spec"]):
+    for batch in pq.ParquetFile(path).iter_batches(batch_size=32, columns=["path", LOWED_TASK_SPEC_COLUMN]):
         columns = batch.to_pydict()
-        for task_id, spec in zip(columns["path"], columns["lowered_task_spec"], strict=True):
+        for task_id, spec in zip(columns["path"], columns[LOWED_TASK_SPEC_COLUMN], strict=True):
             specs[task_id] = LoweredSpec.from_document(json.loads(spec))
     return specs
 

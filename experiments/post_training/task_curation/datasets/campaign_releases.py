@@ -97,20 +97,22 @@ def _rebuilt_cohort(
     oversight_campaign: str | None = None,
     oversight_recipe_revision: str | None = None,
     oversight_level: OversightLevel | None = None,
+    verification: str | None = None,
 ) -> RlDataSource[PrebuiltCohort]:
     """Derive the inventory identity and row counts from the pinned import configuration.
 
-    When a cohort's evidence follows the standard lock-grader shape, pass its
-    oversight pointers and the measured agent identities and sample size; the
-    task counts then come from the import configuration the artifact is read
-    back through. Cohorts with different evidence declare their fields directly.
+    When a cohort's evidence follows the lock-grader shape, pass its oversight
+    pointers and the measured agent identities and sample size; the task counts
+    then come from the import configuration the artifact is read back through.
+    ``verification`` overrides the standard prose for a cohort whose evidence
+    reads differently. Cohorts with other evidence declare their fields directly.
     """
     rows = config.expected_rows
     if agent_identities is not None:
         oversight = OversightEvidence(
             campaign=oversight_campaign,
             recipe_revision=oversight_recipe_revision,
-            verification=_rebuilt_verification(rows, sampled, environments=spread),
+            verification=verification or _rebuilt_verification(rows, sampled, environments=spread),
             level=oversight_level,
             reviewed=rows,
             admitted=rows,
@@ -407,25 +409,7 @@ def sources() -> list[RlDataSource]:
                 tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
-                daytona_count_basis=_lock_grader_count_basis(1, 477),
-                daytona_execution_failures=477,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
-                    campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py version 8; verifyit @ f0155c1143",
-                    verification=(
-                        "Unverified historical reward-only sample; does not certify test execution. "
-                        "setup fidelity compared on all 477 converted specs against their native archives; "
-                        "the sole shared setup recipe executed successfully with real package installation. "
-                        "Production grading with COMPILER_GRADER_PACKAGES, build identity "
-                        "42bb937b102dd758b4d1210769750d7e259a036169ef1458d11821809118888b, "
-                        "returned 20 negative verdicts (reward 0.0, no infrastructure errors) on the seed-0 sample. "
-                        "Evidence is published beside tasks.parquet at the pinned revision"
-                    ),
-                    reviewed=477,
-                    admitted=477,
-                    level=OversightLevel.NONE,
-                ),
                 notes=(
                     "477 e2egit-v2 tasks preserve their archived environment, lowered onto its digest-pinned base. "
                     f"The upstream is DCAgent__exp_rpt_e2egit-v2 at {TASKTROVE_REVISION}; "
@@ -435,6 +419,19 @@ def sources() -> list[RlDataSource]:
                     "Daytona execution remains untested"
                 ),
             ),
+            agent_identities=1,
+            sampled=20,
+            spread=MULTI_ENVIRONMENT_SPREAD,
+            oversight_campaign="RL Data Atlas",
+            oversight_recipe_revision="datasets/tasktrove/python_tests.py version 8; verifyit @ f0155c1143",
+            oversight_level=OversightLevel.NONE,
+            verification="Unverified historical reward-only sample; does not certify test execution. "
+            "setup fidelity compared on all 477 converted specs against their native archives; "
+            "the sole shared setup recipe executed successfully with real package installation. "
+            "Production grading with COMPILER_GRADER_PACKAGES, build identity "
+            "42bb937b102dd758b4d1210769750d7e259a036169ef1458d11821809118888b, "
+            "returned 20 negative verdicts (reward 0.0, no infrastructure errors) on the seed-0 sample. "
+            "Evidence is published beside tasks.parquet at the pinned revision",
         ),
         _rebuilt_cohort(
             config=PrebuiltCohort(
