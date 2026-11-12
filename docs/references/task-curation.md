@@ -1166,12 +1166,12 @@ Create a fresh partition and run one approved fixed-backend phase:
 
 ```bash
 uv run python -m experiments.post_training.task_curation.oracle_filter retry-plan \
-  --cohort ORIGINAL_COHORT --task-map ORIGINAL_CALIBRATED_MAP \
+  --cohort ORIGINAL_COHORT --task-map ORIGINAL_FULL_CALIBRATED_MAP \
   --approvals APPROVED_TASKS.json --backend-fix backend-fix.json --output-dir NEW_PLAN
 uv run python -m experiments.post_training.task_curation.oracle_filter retry \
   --plan NEW_PLAN/plan.json --output-dir NEW_PHASE --concurrency APPROVED_CONCURRENCY
 uv run python -m experiments.post_training.task_curation.oracle_filter merge-retries \
-  --task-map ORIGINAL_FULL_MAP --retry-map NEW_PHASE/task-map.json --output NEW_FULL_MAP
+  --task-map ORIGINAL_FULL_CALIBRATED_MAP --retry-map NEW_PHASE/task-map.json --output NEW_FULL_MAP
 ```
 
 Use a fresh phase directory under the existing calibration root so `collect` can

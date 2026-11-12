@@ -13,8 +13,8 @@ from uuid import uuid4
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from taskcompendium.models import TaskSpec
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import BackendFixIdentity, OracleExclusionReason
 from taskcompendium.runtime.resources import inline_resource
 
@@ -50,9 +50,11 @@ def retry_case(tmp_path, monkeypatch, request):
     row = prebuilt_task("task")
     envelope = json.loads(row["lowered_task_spec"])
     task = TaskSpec.model_validate(envelope["task"])
-    task = task.model_copy(update={"resources": task.resources.model_copy(
-        update={"oracle": (inline_resource("solution/solve.sh", b"true\n"),)}
-    )})
+    task = task.model_copy(
+        update={
+            "resources": task.resources.model_copy(update={"oracle": (inline_resource("solution/solve.sh", b"true\n"),)})
+        }
+    )
     envelope["task"] = task.model_dump(mode="json")
     row["lowered_task_spec"] = json.dumps(envelope)
     cohort = tmp_path / "cohort.parquet"
@@ -81,8 +83,10 @@ def retry_case(tmp_path, monkeypatch, request):
         calls.append(str(package))
         shape = native_requirements(package)
         config["resolved_timeouts"] = {
-            "agent": shape.agent_timeout_sec, "verifier": shape.verifier_timeout_sec,
-            "agent_setup": 360, "environment_build": 600,
+            "agent": shape.agent_timeout_sec,
+            "verifier": shape.verifier_timeout_sec,
+            "agent_setup": 360,
+            "environment_build": 600,
         }
         if "retry-run" in package.parts:
             current = "pass" if outcome == "legacy-unknown" else outcome
@@ -93,22 +97,38 @@ def retry_case(tmp_path, monkeypatch, request):
         (root / "verifier").mkdir()
         checksum = harbor_inspection("tasks", [str(package)])[str(package)]["task_checksum"]
         result = {
-            "id": str(uuid4()), "task_name": "task", "trial_name": "oracle", "trial_uri": root.as_uri(),
-            "task_id": {"path": str(package)}, "task_checksum": checksum, "config": config,
+            "id": str(uuid4()),
+            "task_name": "task",
+            "trial_name": "oracle",
+            "trial_uri": root.as_uri(),
+            "task_id": {"path": str(package)},
+            "task_checksum": checksum,
+            "config": config,
             "agent_info": {"name": "oracle", "version": "1"},
             "verifier_result": {"rewards": {"reward": int(current == "pass")}},
             "finished_at": datetime(2026, 11, 12, tzinfo=UTC).isoformat(),
             "completion": {"trajectory_present": False},
-            "exception_info": ({
-                "exception_type": "ConnectionError" if current == "infra" else "RuntimeError", "exception_message": "Provider connection failed",
-                "exception_traceback": "", "occurred_at": datetime(2026, 11, 12, tzinfo=UTC).isoformat(),
-            } if current in {"infra", "unknown"} else None),
+            "exception_info": (
+                {
+                    "exception_type": "ConnectionError" if current == "infra" else "RuntimeError",
+                    "exception_message": "Provider connection failed",
+                    "exception_traceback": "",
+                    "occurred_at": datetime(2026, 11, 12, tzinfo=UTC).isoformat(),
+                }
+                if current in {"infra", "unknown"}
+                else None
+            ),
         }
         (root / "result.json").write_text(json.dumps(result))
         if current != "unknown":
-            (root / "verifier/verdict.json").write_text(json.dumps({
-                "status": "infra_error" if current == "infra" else "scored", "reward": int(current == "pass"),
-            }))
+            (root / "verifier/verdict.json").write_text(
+                json.dumps(
+                    {
+                        "status": "infra_error" if current == "infra" else "scored",
+                        "reward": int(current == "pass"),
+                    }
+                )
+            )
         if current not in {"infra", "unknown"}:
             (root / "agent/exit-code.txt").write_text("0")
         return subprocess.CompletedProcess(args, 0)
@@ -123,10 +143,18 @@ def retry_case(tmp_path, monkeypatch, request):
     parent_map.write_text(json.dumps(document))
     parent = document["task"]
     approvals = tmp_path / "approvals.json"
-    approvals.write_text(json.dumps({"task": {
-        "classification": "our_infrastructure", "parent_result_sha256": parent["calibration"]["attempts"][-1]["result_sha256"],
-        "failure_signature": "provider-connection", "decision_ref": "coordinator:test-task-partition",
-    }}))
+    approvals.write_text(
+        json.dumps(
+            {
+                "task": {
+                    "classification": "our_infrastructure",
+                    "parent_result_sha256": parent["calibration"]["attempts"][-1]["result_sha256"],
+                    "failure_signature": "provider-connection",
+                    "decision_ref": "coordinator:test-task-partition",
+                }
+            }
+        )
+    )
     code_root = tmp_path / "code"
     backend_file = code_root / "lib/shellbox/src/fixed_backend.py"
     backend_file.parent.mkdir(parents=True)
@@ -134,7 +162,9 @@ def retry_case(tmp_path, monkeypatch, request):
     (code_root / "pyproject.toml").write_text("")
     monkeypatch.setattr(oracle_filter, "PROJECT_ROOT", code_root)
     backend_fix = tmp_path / "backend-fix.json"
-    backend_fix.write_text(BackendFixIdentity(revision="a"*40, files_sha256=backend_code_files(code_root)).model_dump_json())
+    backend_fix.write_text(
+        BackendFixIdentity(revision="a" * 40, files_sha256=backend_code_files(code_root)).model_dump_json()
+    )
     return RetryCase(cohort, parent_map, approvals, backend_fix, backend_file, native, calls)
 
 
@@ -157,7 +187,7 @@ def test_fixed_backend_phase_preserves_parent_attempts_and_never_turns_failed_re
     assert len(entry.infrastructure_retries) == 1
     transition = entry.infrastructure_retries[0]
     assert len(transition.parent_calibration.attempts) == parent_attempt_count
-    assert transition.backend_fix.revision == "a"*40
+    assert transition.backend_fix.revision == "a" * 40
     assert case.parent_map.read_bytes() == parent_bytes
     assert (case.native / "task.toml").read_bytes() == native_bytes
     assert all(Path(attempt.path).exists() for attempt in transition.parent_calibration.attempts)
@@ -182,14 +212,14 @@ def test_changed_retry_inputs_do_not_dispatch_any_new_provider_attempt(tmp_path,
     plan = json.loads((frozen / "plan.json").read_text())
     if changed == "task":
         path = Path(plan["cohort_path"])
-        path.write_bytes(path.read_bytes()+b"changed")
+        path.write_bytes(path.read_bytes() + b"changed")
     elif changed == "native":
         (case.native / "tests/test.sh").write_text("echo changed\n")
     elif changed == "code":
         case.backend_file.write_text("FIXED = False\n")
     else:
-        case.parent_map.write_text(case.parent_map.read_text()+"\n")
-    with pytest.raises(ValueError, match="changed|differ"):
+        case.parent_map.write_text(case.parent_map.read_text() + "\n")
+    with pytest.raises(ValueError, match=r"changed|differ"):
         retry_cohort(frozen / "plan.json", tmp_path / "retry-run", 1)
     assert len(case.calls) == 3
 
@@ -212,7 +242,7 @@ def test_recollection_checks_parent_artifacts_and_distinct_phase_attempts(tmp_pa
     destination = tmp_path / "retry-run"
     retry_cohort(frozen / "plan.json", destination, 1)
     if changed == "parent-file":
-        case.parent_map.write_text(case.parent_map.read_text()+"\n")
+        case.parent_map.write_text(case.parent_map.read_text() + "\n")
     elif changed == "reused-attempts":
         current = json.loads((destination / "task-map.json").read_text())
         current["task"]["calibration"] = json.loads(case.parent_map.read_text())["task"]["calibration"]
@@ -226,9 +256,11 @@ def test_recollection_checks_parent_artifacts_and_distinct_phase_attempts(tmp_pa
         (destination / "task-map.json").write_text(json.dumps(current))
     else:
         current = json.loads((destination / "task-map.json").read_text())
-        current["task"]["calibration"]["attempts"][0]["infrastructure_retry"]["backend_fix_revision"] = "b"*40
+        current["task"]["calibration"]["attempts"][0]["infrastructure_retry"]["backend_fix_revision"] = "b" * 40
         (destination / "task-map.json").write_text(json.dumps(current))
     combined = tmp_path / "combined-map.json"
     merge_retry_maps(case.parent_map, [destination / "task-map.json"], combined)
-    with pytest.raises(ValueError, match="retry input changed|repeats a prior attempt|backend configuration|attempt context differs"):
+    with pytest.raises(
+        ValueError, match=r"retry input changed|repeats a prior attempt|backend configuration|attempt context differs"
+    ):
         filter_cohort(case.cohort, combined, tmp_path, tmp_path / "filtered/tasks.parquet")
