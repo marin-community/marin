@@ -226,7 +226,7 @@ def measure_envelopes(documents: Iterable[tuple[dict, dict]]) -> EnvelopeCensus:
             ("agent", "task_machine", task["environment_requirements"], "allow"),
             ("grader", "verifier_machine", task["grader"].get("environment"), "deny"),
         ):
-            needs_machine = declared is not None and any(declared.values())
+            needs_machine = (native and role == "agent") or (declared is not None and any(declared.values()))
             shape = {**PROFILE, "backend": "daytona", "network": network, **(shapes.get(slot) or {})}
             if role == "grader" and declared and declared.get("packages_lock"):
                 shape["backend"] = "local"
@@ -266,7 +266,16 @@ def measure_envelopes(documents: Iterable[tuple[dict, dict]]) -> EnvelopeCensus:
                 if task["environment_requirements"].get(name) is not None
             )
         envelope = {"task": task, "runtime": actor_runtime}
-        key = canonical_sha256([task["environment_requirements"], actor_runtime])
+        identity_inputs = (
+            [
+                row
+                for row in task["resources"]["verifier"]
+                if row["path"] == "task.toml" or row["path"].startswith("environment/")
+            ]
+            if native
+            else task["environment_requirements"]
+        )
+        key = canonical_sha256([identity_inputs, actor_runtime])
         if key not in identities:
             identities[key] = (
                 count_native_spec_identities([(task["id"], task)])
