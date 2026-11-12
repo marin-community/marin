@@ -303,7 +303,20 @@ def load_oracle_filter(path: str) -> OracleFilterReceipt:
 
 
 def require_oracle_filter(task: TaskSpec, receipt: OracleFilterReceipt | None, runtime: dict | None = None) -> bool:
-    """Require calibration and original-oracle or separate empty-submission liveness evidence."""
+    """Validate task identity before returning its recorded qualification outcome.
+
+    The full TaskSpec hash, oracle presence and calibrated execution requirements
+    must match the receipt. Providing ``runtime`` also checks its hash; ``None``
+    skips that comparison. Identity errors raise even for an excluded task.
+
+    Returns:
+        ``OracleTaskReceipt.passed``: True when calibration and oracle or liveness
+        qualification passed, or False when the receipt explicitly excludes the task.
+
+    Raises:
+        ValueError: Execution requirements, the receipt or its task entry are missing,
+            or a checked identity differs from the recorded measurement.
+    """
     if task.execution_requirements is None:
         raise ValueError(f"SAMPLE/FULL admission requires explicit execution requirements: {task.id}")
     if receipt is None:

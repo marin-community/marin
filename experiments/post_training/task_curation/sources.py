@@ -6,8 +6,6 @@
 
 from pathlib import Path
 
-from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
-
 from experiments.post_training.task_curation.census_binding import bind_actor_census
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
@@ -51,6 +49,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import structure
 from experiments.post_training.task_curation.lexical_binding import bind_lexical_measurement
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
 from experiments.post_training.task_curation.source import RlDataSource, TaskFormat
+from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
 
 WITHIN_SOURCE_DEDUP_RECEIPTS = read_dedup_receipts(Path(__file__).with_name("datasets") / "within_source_dedup.json")

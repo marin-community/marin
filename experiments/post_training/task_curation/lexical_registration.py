@@ -11,10 +11,11 @@ from pathlib import Path
 from finestore.rl.curation import ActorCensusInput, LexicalContaminationEvidence
 from finestore.rl.source_identity import canonical_source_map
 
-from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, read_census_receipts
+from experiments.post_training.task_curation.census_binding import ActorCensusReceipt
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_binding import LexicalMeasurementReceipt
 from experiments.post_training.task_curation.lexical_policy import LexicalInputUse
+from experiments.post_training.task_curation.receipt_shards import read_receipt_shards, write_receipt_shards
 
 
 def measurement_receipts(
@@ -74,14 +75,10 @@ def main() -> None:
         {key: LexicalContaminationEvidence.model_validate(row) for key, row in outcomes["measurements"].items()},
         [SourceTextPopulation.model_validate(row) for row in json.loads(args.populations.read_text())],
         [LexicalInputUse.model_validate(row) for row in json.loads(args.source_uses.read_text())],
-        read_census_receipts(args.actor_receipts_dir),
+        read_receipt_shards(args.actor_receipts_dir, ActorCensusReceipt, "census"),
     )
     args.output_dir.mkdir(parents=True, exist_ok=False)
-    entries = sorted((key, receipt.model_dump(mode="json")) for key, receipt in receipts.items())
-    for part, offset in enumerate(range(0, len(entries), 64)):
-        (args.output_dir / f"part-{part:03d}.json").write_text(
-            json.dumps(dict(entries[offset : offset + 64]), indent=2, sort_keys=True) + "\n"
-        )
+    write_receipt_shards(args.output_dir, {key: receipt.model_dump(mode="json") for key, receipt in receipts.items()})
 
 
 if __name__ == "__main__":

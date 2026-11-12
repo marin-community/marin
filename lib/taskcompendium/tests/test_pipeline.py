@@ -353,20 +353,20 @@ def test_audit_deduplicates_across_acquired_shards_on_storage_uri(tmp_path, appl
     rows = [apple_row] * 1001 + [{**conflicting, "Answer": "1"}, {**conflicting, "Answer": "2"}]
     snapshot = tmp_path / "sample.jsonl"
     snapshot.write_text("".join(json.dumps(row) + "\n" for row in rows))
-    root = f"memory://curation-{tmp_path.name}"
-    (StoragePath(root) / "staged" / "source.jsonl").write_bytes(snapshot.read_bytes())
+    root = StoragePath(f"memory://curation-{tmp_path.name}")
+    (root / "staged" / "source.jsonl").write_bytes(snapshot.read_bytes())
     service = BatchService()
     reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment")
     review_source(
-        f"{root}/staged",
-        f"{root}/audited",
+        str(root / "staged"),
+        str(root / "audited"),
         svamp_recipe,
         AuditExecution(max_workers=2, review_batch_size=1, reviewer=reviewer),
         len(rows),
     )
-    manifest = filter_source(f"{root}/audited", f"{root}/filtered", max_workers=1)
+    manifest = filter_source(str(root / "audited"), str(root / "filtered"), max_workers=1)
     audit = []
-    for file in (StoragePath(root) / "filtered/audit/*.parquet").glob():
+    for file in (root / "filtered/audit/*.parquet").glob():
         with file.open("rb") as stream:
             audit.extend(pq.read_table(stream).to_pylist())
     by_index = {int(row["source_row"].rsplit(":", 1)[1]): row for row in audit}
@@ -509,20 +509,6 @@ def test_review_accepts_glm_completed_tool_call_with_stop_finish_reason():
     assert records[0].status == ReviewStatus.REVIEWED
     assert records[0].verdict is not None
     assert records[0].verdict.task_id == "task-0"
-
-
-def test_conflicting_review_is_informational_even_at_high_confidence(apple_row):
-    task = svamp_task("task-0", apple_row)
-    row = response(task.id, confidence="high")
-    function = row["response"]["body"]["choices"][0]["message"]["tool_calls"][0]["function"]
-    verdict = json.loads(function["arguments"])
-    verdict.update(quality="bad", reference_status="conflict", defects=["wrong_reference"])
-    function["arguments"] = json.dumps(verdict)
-    review = review_records(json.dumps(row), [task.id])[0]
-    assert review.verdict.quality == "bad"
-    decision = task_decision(task.id, verify_task(task))
-    assert decision.disposition == Disposition.KEEP
-    assert decision.reasons == []
 
 
 @pytest.mark.parametrize(

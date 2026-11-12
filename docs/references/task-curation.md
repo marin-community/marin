@@ -1364,6 +1364,11 @@ Incomplete curation produces retained artifacts and downstream assessment, then
 the campaign reports failure. `--curation-attempt N` selects a new curation key
 when controls need a retry; successful exact review requests and pinned downloads
 remain cached. Rerun the same campaign to reuse completed dependencies.
+When `run_source_pipeline` runs SAMPLE or FULL again at an existing output root, it writes a
+new `attempts/<uuid>/` directory. The returned manifest and view paths identify
+that attempt; previous telemetry, partial shards and completed phase evidence
+remain in place. The configured request cache is shared across attempts and reuses only requests
+with the same serialized body and model revision.
 `--assessment-model-revision` changes the grading model revision separately from
 the curation review revision.
 

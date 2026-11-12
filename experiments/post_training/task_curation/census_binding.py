@@ -14,6 +14,7 @@ from finestore.rl.source_identity import SourceId, canonical_source_id
 from pydantic import BaseModel, ConfigDict, model_validator
 from taskcompendium.identity import canonical_sha256
 
+from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.source import RlDataSource
 
 
@@ -160,18 +161,6 @@ def integrity_summary_for_actor(actor: Mapping, integrity: Mapping) -> Integrity
     )
 
 
-def read_census_receipts(directory: Path) -> dict[str, ActorCensusReceipt]:
-    receipts = {}
-    for path in sorted(directory.glob("part-*.json")):
-        for source_id, record in json.loads(path.read_text()).items():
-            source_id = canonical_source_id(source_id)
-            receipt = ActorCensusReceipt.model_validate(record)
-            if source_id != receipt.source_id or source_id in receipts:
-                raise ValueError(f"Duplicate or mismatched census source identity: {source_id}")
-            receipts[source_id] = receipt
-    return receipts
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--censuses", type=Path, nargs="+", required=True)
@@ -197,13 +186,7 @@ def main() -> None:
     if unknown := set(integrities) - set(receipts):
         raise ValueError(f"Integrity censuses have no actor receipt: {sorted(unknown)}")
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    entries = sorted(receipts.items())
-    for old in args.output_dir.glob("part-*.json"):
-        old.unlink()
-    for part, offset in enumerate(range(0, len(entries), 64)):
-        (args.output_dir / f"part-{part:03d}.json").write_text(
-            json.dumps(dict(entries[offset : offset + 64]), indent=2, sort_keys=True) + "\n"
-        )
+    write_receipt_shards(args.output_dir, receipts)
 
 
 if __name__ == "__main__":
