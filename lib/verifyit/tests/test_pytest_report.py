@@ -328,6 +328,34 @@ def test_pytest_trusted_shlex_bootstrap_failure_stays_unscored(tmp_path):
         grade_pytest.grade(_spec(restore=("shlex.py",)), trusted, workspace)
 
 
+@pytest.mark.timeout(180)
+def test_python39_preserves_startup_failure_provenance(tmp_path):
+    environment = tmp_path / "python39"
+    subprocess.run(
+        ["uv", "venv", "--python", "3.9", "--managed-python", str(environment)],
+        check=True,
+        capture_output=True,
+    )
+    python = str(environment / "bin/python")
+    subprocess.run(
+        ["uv", "pip", "install", "--python", python, "pytest==8.4.2", "pytest-json-report==1.5.0"],
+        check=True,
+        capture_output=True,
+    )
+    workspace = _project(tmp_path, "raise AttributeError('startup root cause')\n")
+    (workspace / "conftest.py").write_text("from calc import add\n")
+    spec = _spec(python=python)
+    broken = grade_pytest.grade(spec, tmp_path, workspace)
+    assert (broken.status, broken.reward) == (Status.SCORED, 0.0)
+    assert broken.detail["category"] == "agent"
+    assert broken.detail["files"] == ["calc.py"]
+
+    (tmp_path / "protected.txt").write_text("calc.py\n")
+    protected = _spec(python=python, protected_paths_files=("protected.txt",))
+    with pytest.raises(RuntimeError, match="AttributeError: startup root cause"):
+        grade_pytest.grade(protected, tmp_path, workspace)
+
+
 def test_pytest_missing_interpreter_remains_infrastructure_failure(tmp_path):
     workspace = _project(tmp_path, FIXED)
     with pytest.raises(FileNotFoundError):
