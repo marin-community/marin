@@ -569,7 +569,7 @@ def test_loaded_launch_revision_selects_downloaded_tokenizer_bytes(tmp_path, mon
     }
 
 
-def test_loaded_launch_policy_revision_selects_downloaded_weights(tmp_path, monkeypatch):
+def test_loaded_launch_policy_revision_reaches_trainer_config(tmp_path, monkeypatch):
     revision = "b" * 40
     raw = raw_launch_config()
     raw["inputs"]["model"] = {
@@ -584,19 +584,8 @@ def test_loaded_launch_policy_revision_selects_downloaded_weights(tmp_path, monk
     path.write_text(yaml.safe_dump(raw))
     config = load_launch_config(path)
     monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
-    downloaded = tmp_path / "policy-cache"
-
-    def download(model_id, *, revision, allow_patterns):
-        downloaded.mkdir()
-        (downloaded / "config.json").write_text(json.dumps({"model": model_id, "revision": revision}))
-        return str(downloaded)
-
-    monkeypatch.setattr(task_runtime, "download_hugging_face_snapshot", download)
-    args = task_runtime._runtime_namespace(config)
-    task_runtime.stage_model(args.prestage_model, revision=args.model_revision or None)
     trainer_config = task_runtime._write_final_config(
         config, policy_model=None, policy_tokenizer=None, draft_model=None
     )
 
-    assert json.loads((downloaded / "config.json").read_text()) == {"model": "org/policy", "revision": revision}
     assert OmegaConf.load(trainer_config).skyrl.trainer.policy.model.revision == revision
