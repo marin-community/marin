@@ -380,8 +380,7 @@ DOCKER_SETUP_TIMEOUT = 300
 """Seconds one rebuilt setup script may run in its base image."""
 
 APT_SHIM = """#!/bin/sh
-# The rebuilt setup no longer installs task dependencies; the base image owns
-# provisioning. This keeps the script's apt steps from reaching the network.
+# Skip apt provisioning while diagnosing fixture staging without network access.
 exit 0
 """
 

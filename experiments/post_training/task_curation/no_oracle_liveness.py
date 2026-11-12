@@ -3,12 +3,9 @@
 
 """Run a lowered task's verifier in its real sandbox, with no agent.
 
-The verifier-liveness phase of the no-oracle procedure. Each sampled task gets one
-machine through ``rolloutengine.task_machine``, the same path a rollout uses: the
-resources are installed and ``environment_requirements.setup_commands`` run before
-the body executes. The body then runs the task's own verifier against the
-workspace exactly as the setup left it, which is what makes the verdict mean
-"this environment can grade", not "this agent solved it".
+The verifier-liveness phase of the no-oracle procedure grades an empty submission
+in each task's declared environment. Lock-based graders run locally; other
+graders use a sandbox. No agent solution is executed.
 
 A verifier that runs writes a reward below 1 for the unsolved workspace. A crash,
 timeout, missing reward or positive reward is not a pass.
