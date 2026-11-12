@@ -288,8 +288,10 @@ SOURCES = (
                 "Most rigorous math verifier in the corpus (scalar/interval/set/tuple/equation), "
                 "oracle present. QA (RL Data Atlas): every row re-converted with zero fidelity "
                 "discrepancies; 15 unparsable-reference rows rejected at conversion; contained grader "
-                "controls 72/72; blinded review 16/16 attempted agree, 2 of 20 sampled rows carry "
-                "suspected conversion defects (statements unanswerable as converted; see qa-knowledge/blinded)."
+                "controls 72/72; blinded review 16/16 attempted agree. 2 of 20 sampled rows are "
+                "underdetermined; both verified against the raw archive where the converted statements "
+                "match the upstream instructions verbatim, so the defects are in the source data, not "
+                "the conversion. Admitted at SAMPLE with Result = SOME_ISSUES for that caveat."
             ),
             oversight=OversightEvidence(
                 campaign="RL Data Atlas",
@@ -363,9 +365,11 @@ SOURCES = (
                 "QA (RL Data Atlas): every row re-converted with zero fidelity discrepancies; 2 "
                 "unparsable-reference rows rejected at conversion and 181 exact-duplicate rows "
                 "collapse under the pipeline dedup key (2,221 published). Contained grader controls "
-                "72/72. Blinded review found 1 provably wrong reference among 20 sampled rows "
-                "(unicyclic-graph spanning-tree bound exceeded by the recorded answer) and 1 "
-                "statement-ambiguity mismatch: the source's reference data is noisy."
+                "72/72. Admitted at SAMPLE with Result = SOME_ISSUES: blinded review confirmed a "
+                "provably impossible reference in 1 of 20 sampled rows (a connected 20-vertex/21-edge "
+                "graph is unicyclic, so its spanning-tree count cannot exceed the 20-cycle length; the "
+                "row records 147) and one ambiguous statement (a transport-mode connectivity case whose "
+                "natural reading gives 12 against the recorded 18). The source's reference data is noisy."
             ),
             oversight=OversightEvidence(
                 campaign="RL Data Atlas",
@@ -378,8 +382,8 @@ SOURCES = (
                     "wrong 24/24. Blinded review of 20 seeded cases: 5 agree, 1 solver error admitted "
                     "(reference verified correct), 1 reference answer proven impossible for the stated "
                     "graph, 1 statement-ambiguity mismatch; 12 competition-difficulty cases excluded. "
-                    "Data-quality caveat: the source demonstrably contains wrong reference answers. "
-                    "Evidence: atlas-env-audit qa-knowledge/"
+                    "Admitted at SAMPLE with Result = SOME_ISSUES for the two named caveats. "
+                    "Evidence accompanies tasks.parquet at the pinned private revision"
                 ),
                 level=OversightLevel.SAMPLE,
                 reviewed=2404,

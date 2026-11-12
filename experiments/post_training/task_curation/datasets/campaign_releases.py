@@ -95,6 +95,7 @@ def _tasktrove_qa_release(
     recipe_revision: str,
     notes: str,
     tags: tuple[str, ...] = ("rlvr", "single-turn", "campaign-release", "converted"),
+    qc: IndependentQC | None = None,
 ) -> RlDataSource[PrebuiltCohort]:
     """A privately published, QA-qualified TaskTrove cohort pending release."""
     config = PrebuiltCohort(
@@ -112,6 +113,7 @@ def _tasktrove_qa_release(
             origin="Task Trove",
             family=family,
             tags=tags,
+            independent_qc=qc,
             oracle_validation=OracleValidation.VERIFIER_EXECUTED,
             oversight=OversightEvidence(
                 campaign="RL Data Atlas",
@@ -1190,10 +1192,14 @@ def sources() -> list[RlDataSource]:
                 "converted), recorded in the audit evidence."
             ),
             notes=(
-                "Rigorous scalar/interval/set/tuple/equation verifier with oracle. 15 rows whose typed "
-                "references the production math-verify parser rejects are excluded at admission. "
-                "Private release; conversation-only tasks import canonical task specs. The pinned "
-                "cohort revision was downloaded back and every task hash re-validated."
+                "Open-reasoning problems with a rigorous scalar/interval/set/tuple/equation verifier "
+                "and oracle. 15 rows whose typed references the production math-verify parser rejects "
+                "are excluded at admission. QA (RL Data Atlas): blinded review flagged 2 sampled rows "
+                "as underdetermined; both were compared against the raw archive and the converted "
+                "statements match the upstream instructions verbatim, so the defects are in the source "
+                "data, not the conversion. Admitted at SAMPLE with Result = SOME_ISSUES and that caveat. "
+                "Private release; conversation-only tasks import canonical task specs. The pinned cohort "
+                "revision was downloaded back and every task hash re-validated."
             ),
         ),
         _tasktrove_qa_release(
@@ -1228,17 +1234,32 @@ def sources() -> list[RlDataSource]:
                 "All 2,404 rows re-converted and compared row-by-row against the archive with zero "
                 "discrepancies; 2 unparsable-reference rows rejected at conversion; 181 exact duplicates "
                 "collapse under the pipeline dedup key, 2,221 retained. Contained grader controls on the "
-                "24-task seeded sample: 72/72. Blinded review: 5 agree, 1 solver error admitted after the "
-                "reference was verified correct, 1 reference answer proven impossible for the stated "
-                "graph (spanning trees of a unicyclic 20-vertex graph cannot exceed the cycle length of "
-                "20; the row records 147), 1 statement-ambiguity mismatch."
+                "24-task seeded sample: 72/72. Blinded review of 20 seeded cases: 5 agree, 1 solver error "
+                "admitted after the reference was verified correct, 1 reference answer proven impossible "
+                "for the stated graph (spanning trees of a unicyclic 20-vertex graph cannot exceed the "
+                "cycle length of 20; the row records 147), 1 statement-ambiguity mismatch (transport-mode "
+                "connectivity: natural reading 12, recorded 18)."
+            ),
+            qc=IndependentQC(
+                verdict=Verdict.SOME_ISSUES,
+                method=(
+                    "Blind solve of the 20-case seeded sample with post-unsealing adjudication; "
+                    "1 confirmed impossible reference and 1 ambiguous statement in the sample"
+                ),
+                reviewed=20,
+                admitted=20,
+                evidence_url=(
+                    "https://huggingface.co/datasets/open-athena/tasktrove-math_prism-taskcompendium-20261112"
+                    "/blob/ddb6f6cc8dbb09638d496739ab204b3ba5c6c37e/build.json"
+                ),
             ),
             notes=(
-                "Symbolic exact compare with hidden gold references. Data-quality caveat: blinded review "
-                "found a provably wrong reference answer in the sampled rows, so the source's reference "
-                "data is noisy even though its grader mechanics are sound. Private release; "
-                "conversation-only tasks import canonical task specs. The pinned cohort revision was "
-                "downloaded back and every task hash re-validated."
+                "Symbolic exact compare with hidden gold references. Admitted at SAMPLE with "
+                "Result = SOME_ISSUES: blinded review confirmed a provably impossible reference in 1 of "
+                "20 sampled rows and one ambiguous statement whose natural reading differs from the "
+                "recorded answer; the source's reference data is noisy even though its grader mechanics "
+                "are sound. Private release; conversation-only tasks import canonical task specs. The "
+                "pinned cohort revision was downloaded back and every task hash re-validated."
             ),
         ),
         _tasktrove_qa_release(
