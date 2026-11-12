@@ -60,7 +60,7 @@ def prepare_hf_models(
             jobs are terminated first.
     """
     try:
-        pinned = _pinned_models(model, engine, iris.cache_ttl_days)
+        pinned = _pinned_models(model, engine, iris.cache_ttl_days, token=environment.secrets.get("HF_TOKEN"))
     except Exception as exc:
         raise ModelPreparationError(f"Model cache preparation failed: {exc}", jobs=()) from exc
     if (
@@ -114,18 +114,20 @@ def prepare_hf_models(
     return pinned.model, pinned.engine
 
 
-def _pinned_models(model: ServedModelConfig, engine: InferenceEngineConfig, cache_ttl_days: int) -> _PinnedModels:
+def _pinned_models(
+    model: ServedModelConfig, engine: InferenceEngineConfig, cache_ttl_days: int, *, token: str | None
+) -> _PinnedModels:
     if cache_ttl_days <= 0:
         return _PinnedModels(model, engine, ())
     entries: list[str] = []
-    pinned = resolve_hf_model_ref(f"{model.weights}@{model.revision}" if model.revision else model.weights)
+    pinned = resolve_hf_model_ref(f"{model.weights}@{model.revision}" if model.revision else model.weights, token=token)
     if pinned is not None:
         entries.append(pinned)
         repo, _, revision = pinned.partition("@")
         model = replace(model, weights=repo, revision=revision, api_model=model.model_id)
     if isinstance(engine, VllmEngineConfig) and engine.speculative is not None:
         speculative = engine.speculative
-        pinned_draft = resolve_hf_model_ref(speculative.model.uri)
+        pinned_draft = resolve_hf_model_ref(speculative.model.uri, token=token)
         if pinned_draft is not None:
             entries.append(pinned_draft)
             draft_model = replace(speculative.model, uri=pinned_draft)

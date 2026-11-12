@@ -6,8 +6,10 @@
 import os
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
+import huggingface_hub
 import marin.inference.iris as iris_module
 import marin.inference.iris_cli as cli_module
 import marin.inference.model_cache as cache_module
@@ -29,6 +31,7 @@ from marin.inference.config import (
 from marin.inference.iris import InferenceStartupPhase, RemoteInferenceStartupError, remote_inference
 from marin.inference.model_preparation import resolve_model_path
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import secret_file_contents, secret_file_environment
 
 REVISION = "a" * 40
 DRAFT_REVISION = "b" * 40
@@ -335,3 +338,128 @@ def test_cli_prepares_only_a_pinned_cache_before_accelerator_submission(serving,
     if not prepares:
         assert "skipping CPU model preparation" in result.output
         assert "Preparing Hugging Face weights on CPU" not in result.output
+
+
+@pytest.mark.parametrize("failure", [None, "revision", "download"])
+def test_cli_private_model_uses_explicit_secret_through_preparation(monkeypatch, tmp_path, caplog, failure):
+    token = "hf-explicit-test-token"
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    monkeypatch.setenv("MODEL_TOKEN", token)
+    monkeypatch.setattr(huggingface_hub.constants, "HF_TOKEN_PATH", str(tmp_path / "absent-token"))
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "cache"))
+    monkeypatch.setattr(cache_module, "get_job_info", lambda: None)
+    events = []
+    submissions = []
+
+    def model_info(repo, *, revision=None, token=None):
+        assert huggingface_hub.get_token() is None
+        assert repo == "org/private"
+        if token != "hf-explicit-test-token":
+            raise OSError("private revision requires explicit authentication")
+        events.append("revision")
+        if failure == "revision":
+            raise OSError("private revision access denied")
+        return SimpleNamespace(sha=REVISION)
+
+    def list_repo_tree(repo, *, revision, recursive):
+        assert repo == "org/private" and revision == REVISION
+        assert huggingface_hub.get_token() == token
+        assert "HF_TOKEN" not in os.environ
+        events.append("list")
+        return [huggingface_hub.RepoFile(path="config.json", size=2, oid="0" * 40)]
+
+    def download(repo, filename, *, revision, local_dir):
+        assert huggingface_hub.get_token() == token
+        assert repo == "org/private" and revision == REVISION
+        events.append("download")
+        if failure == "download":
+            raise OSError("private download access denied")
+        path = Path(local_dir) / filename
+        path.write_text("{}")
+        return str(path)
+
+    monkeypatch.setattr("levanter.model_cache.model_info", model_info)
+    monkeypatch.setattr("levanter.model_cache.list_repo_tree", list_repo_tree)
+    monkeypatch.setattr("levanter.model_cache.hf_hub_download", download)
+
+    class Job:
+        job_id = "/test/private-prepare"
+
+        def __init__(self, submission):
+            self.submission = submission
+
+        def state_only(self):
+            # Emulate Iris's file delivery in a fresh worker, including HF's import-time path.
+            environment = self.submission["environment"]
+            directory = tmp_path / "secrets"
+            directory.mkdir(exist_ok=True)
+            for name, value in secret_file_contents(environment.secrets).items():
+                (directory / name).write_text(value)
+            with pytest.MonkeyPatch.context() as env:
+                env.delenv("MODEL_TOKEN", raising=False)
+                for name, value in secret_file_environment(environment.secrets, directory=directory).items():
+                    env.setenv(name, value)
+                env.setattr(huggingface_hub.constants, "HF_TOKEN_PATH", str(directory / "HF_TOKEN"))
+                function, args, kwargs = self.submission["entrypoint"].resolve()
+                try:
+                    function(*args, **kwargs)
+                except OSError:
+                    return JobState.FAILED
+            return JobState.SUCCEEDED
+
+        def cancel(self):
+            events.append("cancel")
+
+    def submit(**kwargs):
+        submissions.append(kwargs)
+        events.append("prepare" if kwargs["name"].startswith("prepare-model-") else "serve")
+        return Job(kwargs)
+
+    @contextmanager
+    def connect(**_kwargs):
+        yield SimpleNamespace(url="https://controller", config=None, credentials=None)
+
+    @contextmanager
+    def remote(*_args, **_kwargs):
+        yield SimpleNamespace(submit=submit, resolve_endpoint=lambda _endpoint: "https://controller/proxy/test")
+
+    monkeypatch.setattr(cli_module, "connect_controller", connect)
+    monkeypatch.setattr(cli_module.IrisClient, "remote", remote)
+    result = CliRunner().invoke(
+        cli_module.main,
+        [
+            "org/private",
+            "--no-wait",
+            "--region",
+            "us-central2",
+            "--secret",
+            "HF_TOKEN",
+            "env:MODEL_TOKEN",
+            "--secret",
+            "SERVING_ONLY",
+            "env:MODEL_TOKEN",
+        ],
+    )
+    assert token not in result.output + caplog.text
+    assert huggingface_hub.get_token() is None
+    assert "HF_TOKEN" not in os.environ
+    for submission in submissions:
+        assert token not in repr(submission["environment"])
+        assert token not in repr(submission["entrypoint"].resolve())
+        assert token not in repr(submission["environment"].env_vars)
+    if failure is None:
+        assert result.exit_code == 0, result.output
+        assert events == ["revision", "prepare", "list", "download", "serve"]
+        assert submissions[0]["environment"].secrets == {"HF_TOKEN": token}
+        assert submissions[1]["environment"].secrets == {"HF_TOKEN": token, "SERVING_ONLY": token}
+        _, (service,), _ = submissions[1]["entrypoint"].resolve()
+        assert service.model.revision == REVISION
+        # A completed snapshot is usable without credentials or another Hub download.
+        resolved = resolve_model_path(service.model.weights, service.iris.cache_ttl_days, service.model.revision)
+        assert (Path(resolved) / "config.json").read_text() == "{}"
+    else:
+        assert result.exit_code != 0
+        assert events == (
+            ["revision"] if failure == "revision" else ["revision", "prepare", "list", "download", "cancel"]
+        )
