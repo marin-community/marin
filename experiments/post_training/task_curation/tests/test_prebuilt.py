@@ -28,6 +28,7 @@ from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.driver import _write_corpus
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 from lib.taskcompendium.tests.oracle_filter_fixtures import oracle_receipt
 
 from .prebuilt_fixtures import prebuilt_task
@@ -44,11 +45,7 @@ def _write(tmp_path, rows: list[dict]):
 
 def _cohort(rows: int):
     return prebuilt.PrebuiltCohort(
-        name="c",
-        version="2026.11.12.1",
-        repo="org/repo",
-        revision="1111111111111111111111111111111111111111",
-        expected_rows=rows,
+        name="c", version="2026.11.12.1", repo="open-athena/repo", revision="a" * 40, expected_rows=rows
     )
 
 
@@ -89,6 +86,7 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
             upstream_name="fixture",
             build_path="test",
             origin=SourceOrigin.MARIN,
+            lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 2),
         ),
     )
     artifact = run(prebuilt.import_prebuilt(source, PipelineOptions(mode, CampaignRuntime())))[0]
@@ -158,6 +156,7 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
                 upstream_name="native",
                 build_path="test",
                 origin=SourceOrigin.MARIN,
+                lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
                 task_format=TaskFormat.HARBOR,
             ),
         )
@@ -192,11 +191,7 @@ def test_direct_prebuilt_admission_requires_oversight_but_allows_unsafe_tasks(tm
     path = _write(tmp_path, [prebuilt_task("a")])
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
     config = prebuilt.PrebuiltCohort(
-        name="unsafe-cohort",
-        version="2026.11.12.1",
-        repo="org/repo",
-        revision="1111111111111111111111111111111111111111",
-        expected_rows=1,
+        name="unsafe-cohort", version="2026.11.12.1", repo="open-athena/repo", revision="a" * 40, expected_rows=1
     )
     source = RlDataSource(
         config=config,
@@ -207,6 +202,7 @@ def test_direct_prebuilt_admission_requires_oversight_but_allows_unsafe_tasks(tm
             upstream_name=("Marin:unsafe").partition(":")[2],
             build_path="test",
             origin=SourceOrigin.MARIN,
+            lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
             tags=("agentic",),
             task_format=TaskFormat.TASKCOMPENDIUM,
             daytona_snapshot_count=11,
@@ -288,6 +284,7 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
             upstream_name=("Marin:oracle").partition(":")[2],
             build_path="test",
             origin=SourceOrigin.MARIN,
+            lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     )
@@ -306,3 +303,35 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
         manifest = json.loads((destination / "manifest.json").read_text())
         assert manifest["admitted_rows"] == 1
         assert (destination / prebuilt.ORACLE_FILTER_FILENAME).exists()
+
+
+@pytest.mark.parametrize("policy", ["public", "other_namespace", "raw_format"])
+def test_atlas_private_release_policy_blocks_prebuilt_download(tmp_path, monkeypatch, policy):
+    config = _cohort(1)
+    if policy == "other_namespace":
+        config = prebuilt.PrebuiltCohort(
+            name=config.name, version=config.version, repo="other/private", revision=config.revision, expected_rows=1
+        )
+    document = decontamination_evidence(config.repo, config.revision, 1).model_dump(mode="json")
+    if policy == "public":
+        document["receipt"]["private"] = False
+    elif policy == "raw_format":
+        document["receipt"]["format"] = "raw"
+    evidence = type(decontamination_evidence(config.repo, config.revision, 1)).model_validate(document)
+    source = RlDataSource(
+        config=config,
+        pipeline=prebuilt.import_prebuilt,
+        info=SourceInfo(
+            id="Marin:policy",
+            upstream_dataset="policy",
+            upstream_name="policy",
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+            lexical_contamination=evidence,
+        ),
+    )
+    downloaded = []
+    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: downloaded.append(kwargs))
+    with pytest.raises(ValueError, match="private open-athena TaskCompendium"):
+        prebuilt.import_prebuilt(source, PipelineOptions(SourceProcessingMode.SAMPLE, CampaignRuntime()))
+    assert downloaded == []

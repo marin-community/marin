@@ -400,7 +400,7 @@ def test_measured_refresh_preserves_assessments_and_roundtrips_arrow_maps(tmp_pa
         source_dataset_id=source.dataset.name,
         source_revision=source.dataset.revision,
         converter_revision="converter-pin",
-        converter_version="2",
+        converter_version=source.version,
         evidence_url="s3://test/converted.json",
     )
     refresh_daytona_measurements(
@@ -423,5 +423,14 @@ def test_measured_refresh_preserves_assessments_and_roundtrips_arrow_maps(tmp_pa
             "wrong-pin",
             {source.info.id: measurement.model_copy(update={"dataset_revision": "wrong"})},
             retired_source_ids=frozenset(),
+        )
+    assert CurationCatalog(root).current().snapshot_id == "measured"
+    with pytest.raises(ValueError, match="different converter version"):
+        refresh_daytona_measurements(
+            root,
+            "wrong-converter",
+            {source.info.id: measurement},
+            retired_source_ids=frozenset(),
+            converted_examples={source.info.id: counts.model_copy(update={"converter_version": "stale"})},
         )
     assert CurationCatalog(root).current().snapshot_id == "measured"

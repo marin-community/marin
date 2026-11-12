@@ -54,7 +54,7 @@ def test_repaired_release_pin_is_separate_from_upstream_url(tmp_path):
     source = replace(
         source,
         config=replace(source.config, dataset=pin),
-        info=replace(source.info, upstream_url="https://example.org/upstream"),
+        info=replace(source.info, upstream_url="https://example.org/upstream", lexical_contamination=None),
     )
     declaration = source.declaration
     assert declaration.url == "https://example.org/upstream"

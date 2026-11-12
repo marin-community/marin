@@ -32,6 +32,7 @@ from marin.execution.lazy import ArtifactStep
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.config import PipelineOptions
+from experiments.post_training.task_curation.decontamination import require_private_release
 
 
 class PinnedReference(Protocol):
@@ -255,11 +256,20 @@ class RlDataSource[ConfigT: CatalogConfig]:
 
     @property
     def admission_blockers(self) -> tuple[str, ...]:
-        """Evidence missing before an agentic source can enter runnable selection."""
-        if "agentic" not in self.info.tags or self.info.id in GRANDFATHERED_MARINSKYRL_SOURCES:
+        """Evidence missing before a source can enter admitted selection."""
+        if self.info.id in GRANDFATHERED_MARINSKYRL_SOURCES:
             return ()
         info = self.info
         blockers = []
+        dataset = self.dataset
+        try:
+            require_private_release(
+                info.lexical_contamination, dataset.name if dataset else None, dataset.revision if dataset else None
+            )
+        except ValueError as error:
+            blockers.append(str(error))
+        if "agentic" not in info.tags:
+            return tuple(blockers)
         if info.task_format is None or (
             info.task_format is TaskFormat.MARINSKYRL and info.id not in GRANDFATHERED_MARINSKYRL_SOURCES
         ):
