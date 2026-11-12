@@ -290,6 +290,7 @@ class DirectModelClient:
     ) -> _ChatResult:
         prompt_ids = assistant_prefix_token_ids(self._client.tokenizer, messages, options)
         sampling = dict(request.get("sampling_params") or {})
+        skip_special_tokens = options.get("skip_special_tokens", sampling.get("skip_special_tokens", True))
         requested_tokens = [
             int(options[key])
             for key in ("max_completion_tokens", "max_output_tokens")
@@ -311,11 +312,10 @@ class DirectModelClient:
         )
         if output.get("prompt_ids") != [prompt_ids]:
             raise RolloutContractError("Assistant prefix inference did not report the rendered prompt token IDs")
-        # response_ids keep the stop token. The grader scores this text, and a stop token after a closing fence
-        # leaves the fence open.
+        # Training keeps the stop token; default grader text omits it so a closing fence stays closed.
         text = output["responses"][0]
         response_ids = output["response_ids"][0]
-        if _ends_turn(self._client.tokenizer, response_ids, output["stop_reasons"][0]):
+        if skip_special_tokens and _ends_turn(self._client.tokenizer, response_ids, output["stop_reasons"][0]):
             text = text.removesuffix(self._client.tokenizer.decode(response_ids[-1:], skip_special_tokens=False))
         message = {**(output.get("assistant_messages") or [{"role": "assistant"}])[0], "content": text}
         return _ChatResult(
@@ -438,6 +438,7 @@ class DirectModelClient:
             tokenizer = self._client.tokenizer
             stop_reason = choice["finish_reason"]
             semantic_ids = response_ids[:-1] if _ends_turn(tokenizer, response_ids, stop_reason) else response_ids
+            terminator_text = ""
             if len(semantic_ids) != len(response_ids):
                 terminator_text = tokenizer.decode(response_ids[-1:], skip_special_tokens=False)
                 text = text.removesuffix(terminator_text)
@@ -448,6 +449,11 @@ class DirectModelClient:
                 text = final_answer_text(decoded)
                 if not message.get("tool_calls"):
                     message = {**message, "content": text}
+            # Extract the answer before restoring a requested turn terminator.
+            if terminator_text and not body.get("skip_special_tokens", True):
+                text += terminator_text
+                if message.get("content") is not None:
+                    message = {**message, "content": message["content"] + terminator_text}
             logprob_items = (choice.get("logprobs") or {}).get("content")
             response_logprobs = (
                 [float(item["logprob"]) for item in logprob_items] if logprob_items is not None else None
