@@ -15,11 +15,9 @@ Only work this controller executes is written: rows for jobs whose ``cluster`` i
 a peer's jobs and attempts, are written by the peer that runs them, so every job
 has one writer and one key.
 
-Each row's ``cluster`` column is Finelog's forwarding origin. A regional
-Finelog forwards to the hub only rows that leave it empty, and stamps them with
-its ``forwarding.cluster``. A controller behind such a store leaves it empty;
-one whose Finelog is the hub (no ``forwarding:``) sets its own cluster name, so
-no row reaches the hub without a cluster (see ``row_cluster``).
+Each row's ``cluster`` column is the writing controller's cluster name. A
+regional Finelog forwards to the hub the rows named for its own
+``forwarding.cluster``, which each cluster config sets to the cluster's name.
 
 A failed snapshot or write is logged and drops that transaction's rows; it never
 rolls back the controller's own writes or stops its later post-commit hooks.
@@ -52,35 +50,11 @@ _MEMO_KEY = "controller_rows"
 _ID_CHUNK_SIZE = 400
 
 
-def row_cluster(cluster_id: str, forwarding_cluster: str | None) -> str:
-    """The value the controller writes to its rows' ``cluster`` column.
-
-    Args:
-        cluster_id: this cluster's config name.
-        forwarding_cluster: the ``forwarding.cluster`` of this cluster's Finelog,
-            or None when that Finelog does not forward (it is the hub, or local).
-
-    Returns ``""`` when the Finelog forwards, so its forwarder ships the rows and
-    stamps them; otherwise ``cluster_id``.
-    """
-    if not cluster_id:
-        raise ValueError("controller rows need a non-empty cluster_id (the cluster config name)")
-    if forwarding_cluster is None:
-        return cluster_id
-    if forwarding_cluster != cluster_id:
-        raise ValueError(
-            f"Finelog forwarding.cluster={forwarding_cluster!r} differs from cluster_id={cluster_id!r}; "
-            "the hub would key this cluster's rows under another name"
-        )
-    return ""
-
-
 @dataclass(frozen=True)
 class ControllerRowTables:
     """The Finelog tables the controller copies its rows to.
 
-    ``cluster`` is written to every row's ``cluster`` column, as ``row_cluster``
-    returns it: empty when this cluster's Finelog forwards and stamps it.
+    ``cluster`` is this cluster's name, written to every row's ``cluster`` column.
     """
 
     cluster: str

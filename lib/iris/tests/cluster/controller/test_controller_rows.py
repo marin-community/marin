@@ -10,12 +10,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from finelog.deploy.config import load_finelog_config
 from iris.cluster.config import load_config
 from iris.cluster.controller import controller_rows, ops, writes
 from iris.cluster.controller.controller_rows import ControllerRowTables
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.federation_store import ControllerFederationStore
-from iris.cluster.controller.main import _finelog_forwarding_cluster
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec
@@ -326,21 +326,15 @@ def test_a_replaced_child_gets_its_own_job_key(state):
 _CLUSTER_CONFIGS = sorted((Path(__file__).parents[3] / "config").glob("*.yaml"))
 
 
-def test_rows_leave_cluster_empty_only_behind_a_forwarding_finelog():
-    # A forwarder skips rows whose cluster is set, so behind a forwarding Finelog the
-    # controller leaves it for the forwarder to stamp; on the hub it names itself.
-    assert controller_rows.row_cluster("cw-rno2a", forwarding_cluster="cw-rno2a") == ""
-    assert controller_rows.row_cluster("marin", forwarding_cluster=None) == "marin"
-    with pytest.raises(ValueError, match="differs from cluster_id"):
-        controller_rows.row_cluster("cw-rno2a", forwarding_cluster="cw-us-east-02a")
-
-
 @pytest.mark.parametrize("config_path", _CLUSTER_CONFIGS, ids=lambda p: p.stem)
 def test_every_cluster_config_forwards_under_its_own_name_or_not_at_all(config_path):
-    # Each production cluster either forwards under its own name (the forwarder stamps
-    # it) or writes straight to the hub with its own name.
+    # A forwarder ships only rows named for its forwarding.cluster, and the controller
+    # names its rows with the cluster config name, so a mismatch would drop them.
     config = load_config(config_path)
-    assert _finelog_forwarding_cluster(config) in (None, config.name)
+    if not config.finelog.config:
+        return
+    forwarding = load_finelog_config(config.finelog.config).forwarding
+    assert forwarding is None or forwarding.cluster == config.name
 
 
 @pytest.mark.parametrize(

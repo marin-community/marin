@@ -170,14 +170,6 @@ def _resolve_cluster_endpoints(cluster_config: IrisClusterConfig) -> dict[str, s
     return resolved
 
 
-def _finelog_forwarding_cluster(cluster_config: IrisClusterConfig) -> str | None:
-    """The origin name this cluster's Finelog forwards under, or None if it does not forward."""
-    if not cluster_config.finelog.config:
-        return None
-    forwarding = load_finelog_config(cluster_config.finelog.config).forwarding
-    return forwarding.cluster if forwarding is not None else None
-
-
 def run_controller_serve(
     cluster_config: IrisClusterConfig,
     *,
@@ -273,7 +265,6 @@ def run_controller_serve(
         endpoints=endpoints,
         autoscaler_evaluation_interval=cluster_config.defaults.autoscaler.evaluation_interval,
         cluster_id=cluster_config.name,
-        finelog_forwarding_cluster=_finelog_forwarding_cluster(cluster_config),
         dashboard_url=cluster_config.dashboard_url,
         federation_public_parent=cluster_config.federation_public_parent,
         budget_parent=cluster_config.budget_parent,

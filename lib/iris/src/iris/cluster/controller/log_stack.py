@@ -83,7 +83,7 @@ class LogStack:
     server: Any = None
 
     def controller_row_tables(self, cluster: str) -> ControllerRowTables:
-        """The ``iris.controller_db__*`` tables, writing ``cluster`` (see ``controller_rows.row_cluster``)."""
+        """The ``iris.controller_db__*`` tables, writing ``cluster`` on every row."""
         return ControllerRowTables(
             cluster=cluster,
             job_table=self.job_table,
