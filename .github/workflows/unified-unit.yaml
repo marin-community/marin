@@ -368,7 +368,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install local sandbox tools
-        run: |
+        run: &install_sandbox_tools |
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|https://mirrors.kernel.org/ubuntu/|' /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install --yes bubblewrap umoci busybox-static
       - uses: astral-sh/setup-uv@v7
@@ -392,9 +393,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install local sandbox tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes bubblewrap umoci busybox-static
+        run: *install_sandbox_tools
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
@@ -563,10 +562,11 @@ jobs:
       - name: Exercise packaging, launchers, and verifier
         working-directory: vendor/skyrl
         run: |
-          uv run --isolated --frozen --extra cpu --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
+          uv run --isolated --frozen --extra cpu --group harbor-test --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
             infra/tests/test_*.py cloud/iris/tests/test_*.py skyrl-gym/tests/test_*.py skyrl-train/tests/test_*.py \
             skyrl-train/tests/cpu/test_megatron_router_replay_plumbing.py \
             skyrl-train/tests/cpu/test_compact_distillation.py \
+            skyrl-train/tests/cpu/test_grug_log_scaling.py \
             skyrl-train/tests/cpu/test_reference_likelihood.py
 
   unit_tests:
