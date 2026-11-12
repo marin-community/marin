@@ -110,10 +110,10 @@ function pickFirstNonEmpty(
 /**
  * Parse the server_metrics_json → time-series arrays for KV cache util and
  * prefix cache hit rate (per-interval, computed from the prometheus
- * counters the same way trace-server-metrics does it).
+ * counters).
  *
  * Aggregates across all engine series so multi-engine DP/PP deployments are
- * counted correctly (previously we only read engine 0).
+ * counted correctly.
  */
 export function extractServerMetricSamples(json: string): {
   kvCacheUtil: number[];

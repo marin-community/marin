@@ -149,8 +149,13 @@ export function measurementLabel(run: Run) {
   return `${measurementSeconds(run) / 60}-minute ${run.source.kind === "private-calibration" ? "calibration" : "baseline"}`;
 }
 export function topologyLabel(run: Run) {
+  const collective =
+    run.framework === "vllm" &&
+    run.configuration.disable_custom_all_reduce === true
+      ? " · NCCL"
+      : "";
   return run.topology
-    ? `TP${run.topology.tp} / DP${run.topology.dp} / EP${run.topology.ep}`
+    ? `TP${run.topology.tp} / DP${run.topology.dp} / EP${run.topology.ep}${collective}`
     : "Parallelism not reported";
 }
 export function seriesLabel(run: Run) {

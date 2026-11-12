@@ -14,6 +14,8 @@ from typing import Any
 from .adapter import ImportRun, read_json
 from .replay import prepare_requests, profile_records
 
+CALIBRATION_SECONDS = 900
+
 # Placement, listening ports and output paths do not change the serving recipe.
 PLACEMENT_ARGUMENTS = {
     "--host",
@@ -105,11 +107,11 @@ def prepare_calibrations(root: Path, job: str | None = None) -> Iterator[ImportR
             or attempt["screening"]
             or validation["submission_valid"] is not True
             or len(phases) != 1
-            or phases[0]["duration"] != 900
+            or phases[0]["duration"] != CALIBRATION_SECONDS
             or phases[0]["concurrency"] != aggregate["conc"]
-            or config["duration"] != 900
+            or config["duration"] != CALIBRATION_SECONDS
             or len(coverage) != 1
-            or coverage[0]["expected_duration_seconds"] != 900
+            or coverage[0]["expected_duration_seconds"] != CALIBRATION_SECONDS
             or any(coverage[0][k] < coverage[0]["required_ratio"] for k in ["ttft_ratio", "inter_token_latency_ratio"])
             or aggregate["recipe_fingerprint"] != attempt["recipe_fingerprint"]
             or aggregate["num_gpus"] != physical_gpus
@@ -141,7 +143,7 @@ def prepare_calibrations(root: Path, job: str | None = None) -> Iterator[ImportR
             )
         ):
             raise ValueError(f"Calibration request accounting or GPU normalization disagrees: {row['job']}")
-        controls = curve_controls(attempt, 900)
+        controls = curve_controls(attempt, CALIBRATION_SECONDS)
         curve_fingerprint = hashlib.sha256(json.dumps(controls, sort_keys=True).encode()).hexdigest()
         key = f"calibration-{attempt['iris_attempt_uid']}"
         created = datetime.fromisoformat(native["start_time"]).replace(tzinfo=UTC).isoformat()
@@ -167,7 +169,7 @@ def prepare_calibrations(root: Path, job: str | None = None) -> Iterator[ImportR
                 source
                 | {"job_id": row["job"], "attempt_uid": attempt["iris_attempt_uid"], "artifact_uri": row["raw_archive"]}
             ),
-            "measurement_seconds": 900,
+            "measurement_seconds": CALIBRATION_SECONDS,
             "topology": topology,
             "calibration": {
                 "curve_fingerprint": curve_fingerprint,

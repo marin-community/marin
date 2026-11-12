@@ -16,6 +16,7 @@ from typing import Any
 from .replay import RequestRecord, prepare_requests, profile_records
 
 BUNDLE_MANIFEST = "agentx-source.json"
+BASELINE_SECONDS = 3600
 
 
 @dataclass(frozen=True)
@@ -111,7 +112,7 @@ def prepare_bundle(bundle: Path, source_attempt: dict[str, Any]) -> list[ImportR
             len(requests) != aggregate["num_requests_total"]
             or profiling != aggregate["num_requests_successful"]
             or profiling != validation["profiling_requests"]
-            or validation["coverage"]["expected_duration_seconds"] != 3600
+            or validation["coverage"]["expected_duration_seconds"] != BASELINE_SECONDS
             or not math.isclose(output, throughput["output"]["tokens_per_second"] / physical_gpus, abs_tol=0.00001)
         ):
             raise ValueError("Request counts, full-hour coverage or physical-GPU normalization differs")
@@ -126,7 +127,7 @@ def prepare_bundle(bundle: Path, source_attempt: dict[str, Any]) -> list[ImportR
             "date": source_attempt["created_at"][:10],
             "source_created_at": source_attempt["created_at"],
             "source": source,
-            "measurement_seconds": 3600,
+            "measurement_seconds": BASELINE_SECONDS,
             "topology": attempt["server_parallelism"],
             "model": aggregate["model"],
             "hardware": hardware["gpu"],
