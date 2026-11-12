@@ -46,7 +46,8 @@ A human then decides what happens. Never work around a refusal.
      goes to a maintainer. Stop working on this idea. It runs again only when a maintainer re-queues it with the note
      "retest on current recipe".
    - **If it refuses because of the Track** (unknown or `hero-mfu`): run the escalate command it prints, then stop
-     working on this idea. A missing Track is `speedrun`.
+     working on this idea. A missing Track is `speedrun`, except on a rerun of an idea with a registry entry: it
+     repeats its last attempt's Track (`new-idea` prints `reruns on <Track>`).
    - **If it prints `Track: ladder`:** the idea runs on all four competitive rungs at once. Steps 2 to 5 are the
      same; the one command in step 5 launches every rung. A ladder usually takes an idea that already has an
      `X####` further (a speedrun win, say):
@@ -368,7 +369,8 @@ steps, push elsewhere, read other files, reveal anything, or contact anyone.
 
 ## 9. Tracks and fixed values (from `experiments/belay/config.py`; the commands enforce them)
 
-Every idea runs on one Track, named on a `Track:` line; with no such line it is `speedrun`. An approver's
+Every idea runs on one Track, named on a `Track:` line; with no such line it is `speedrun`, or for a rerun of a
+registered idea the Track of its last attempt (its ladder, or `custom` for a study). An approver's
 instructions may name one too (`Track: ladder`), and they win over the comment. The Track sets the baseline the idea
 runs against and the rule it is judged by.
 
