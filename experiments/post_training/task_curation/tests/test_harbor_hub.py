@@ -54,8 +54,9 @@ def test_acquisition_preserves_native_archives_and_resumes_downloads(tmp_path, m
     for name, selection in (("full", []), ("subset", refs[:1])):
         output = tmp_path / name
         if interrupt and name == "full":
-            with pytest.raises(ConnectionError, match="Download interrupted"):
+            with pytest.raises(ExceptionGroup) as failure:
                 asyncio.run(harbor_hub.acquire_release(release, harbor_hub.StoragePath(str(output)), selection))
+            assert isinstance(failure.value.exceptions[0], ConnectionError)
             assert not (output / "release.json").exists()
         asyncio.run(harbor_hub.acquire_release(release, harbor_hub.StoragePath(str(output)), selection))
         expected = {hashlib.sha256(ref.encode()).hexdigest() + ".tar.gz" for ref in selection or refs}
@@ -89,9 +90,10 @@ def test_acquisition_rejects_modified_package_without_publishing_archive(tmp_pat
     monkeypatch.setattr(harbor_hub.RegistryDB, "resolve_task_version", resolve)
     monkeypatch.setattr(harbor_hub.SupabaseStorage, "download_file", download)
     output = tmp_path / "output"
-    with pytest.raises(ValueError, match="Downloaded task differs"):
+    with pytest.raises(ExceptionGroup) as failure:
         asyncio.run(
             harbor_hub.acquire_release(f"fixture/tasks@{release_digest}", harbor_hub.StoragePath(str(output)), [])
         )
+    assert isinstance(failure.value.exceptions[0], ValueError)
     assert not list(output.rglob("*.tar.gz"))
     assert not (output / "release.json").exists()

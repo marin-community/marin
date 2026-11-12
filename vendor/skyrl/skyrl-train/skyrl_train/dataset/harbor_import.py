@@ -166,7 +166,7 @@ def harbor_trial_task(directory: Path, *, source: Source) -> TaskSpec:
 def restore_harbor_trial_task(task: TaskSpec, directory: Path) -> None:
     """Restore a package into a fresh host directory, never an agent workspace."""
     directory.mkdir(parents=True, exist_ok=False)
-    for resource in task.resources.verifier:
+    for resource in (*task.resources.verifier, *task.resources.oracle):
         path = directory / resource.path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(resource_bytes(resource))

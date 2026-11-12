@@ -9,6 +9,7 @@ from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
+    native_releases,
     structure_closure,
     thoughtcrime,
 )
@@ -83,6 +84,7 @@ def all_sources() -> dict[str, RlDataSource]:
         *structure_closure.sources(),
         *thoughtcrime.sources(),
         *campaign_releases.sources(),
+        *native_releases.sources(),
     ]
     measured_sources = []
     for source in sources:
