@@ -84,9 +84,8 @@ def test_settings_merge_required_sections_and_preserve_empty_mappings(base_recip
         "policy": {
             "optimizer_config": {"scheduler": "constant_with_warmup"},
             "megatron_config": {"optimizer_checkpoint_sharding_type": "dp_reshardable"},
-            "model": {"lora": {"dropout": 0.05}},
+            "model": {"lora": {"rank": 8, "adapter_path": "org/adapter"}},
         },
-        "critic": {"optimizer_config": {"scheduler": "constant_with_warmup"}},
         "ref": {"megatron_config": {"optimizer_checkpoint_sharding_type": "fully_reshardable"}},
         "algorithm": {"resolved_group_advantage": {"kind": "none"}},
     }
