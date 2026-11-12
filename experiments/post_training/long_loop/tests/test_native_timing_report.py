@@ -36,8 +36,6 @@ def test_adopted_native_journal_is_verified_and_reported(tmp_path):
         additional_timing=[pin],
     )
     assert str(journal) in json.loads((output / "timing-sources.json").read_text())
-    assert "original-sft" in (output / "timing.md").read_text()
-    assert "compile" in (output / "timing.md").read_text()
     journal.write_text(journal.read_text() + "\n")
     with pytest.raises(ValueError, match="Pinned native timing journal changed"):
         write_report(

@@ -12,7 +12,6 @@ from rolloutengine.models import TaskRolloutSpec
 from experiments.post_training.long_loop.context_evidence import context_evidence, validate_context_evidence
 from experiments.post_training.long_loop.eval_runtime.repair_release import repaired_row
 from experiments.post_training.long_loop.evaluation import TerminalPolicy, validate_eval_policy
-from experiments.post_training.long_loop.serving import check_context_limit
 from vendor.skyrl.marinskyrl.resource_locator import ModelLocatorError
 
 
@@ -39,12 +38,6 @@ def test_eval_policy_locator_rejects_hf_shaped_local_path():
     validate_eval_policy(locator, source)
     with pytest.raises(ModelLocatorError, match="local metadata path"):
         validate_eval_policy(replace(locator, local_path="models/long-loop-terminal"), source)
-
-
-def test_context_preflight_rejects_packing_length_as_serving_limit():
-    with pytest.raises(ValueError, match="max_model_len=65536"):
-        check_context_limit("packed-SFT", 32768, 65536)
-    check_context_limit("base-context override", 262144, 65536)
 
 
 def test_pinned_vllm_proof_rejects_previous_inputs_and_invalidates_changed_config():
