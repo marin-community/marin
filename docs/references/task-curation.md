@@ -431,6 +431,13 @@ uv run --isolated --project vendor/harbor --extra runtime --no-default-groups --
 
 ## Environments
 
+Harbor's LOCAL environment runs prepared, digest-pinned task images through
+bubblewrap and umoci, using shellbox-images.json. It honors the task's
+allow_internet: allowed tasks share the backend's network; denied tasks keep
+the isolated network. LOCAL accepts only root commands (None, root, 0
+or 0:0). A task requiring another user needs a supporting environment rather
+than a user override.
+
 An `Environment` declares grader build inputs. The converter records agent and
 grader requirements on each TaskSpec; execution selects suitable Shellbox machines.
 

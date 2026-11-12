@@ -26,6 +26,7 @@ from shellbox.machine import (
     Command,
     ExitReason,
     MachineTerminated,
+    NetworkPolicy,
     Result,
     UnsupportedMachineSpec,
 )
@@ -48,8 +49,9 @@ class ProcessTaskFactory:
 
 
 @pytest.mark.parametrize("workdir_source", ["task", "compose", "image"])
+@pytest.mark.parametrize("allow_internet", [False, True])
 async def test_imported_plan_freezes_sources_and_executes_workdir_and_environment_precedence(
-    tmp_path, monkeypatch, workdir_source
+    tmp_path, monkeypatch, workdir_source, allow_internet
 ):
     environment_dir = tmp_path / "environment"
     environment_dir.mkdir()
@@ -76,7 +78,7 @@ async def test_imported_plan_freezes_sources_and_executes_workdir_and_environmen
     compose.write_text(json.dumps({"services": {"main": service}}))
     task_values = {"workdir": "/workspace/task"} if workdir_source == "task" else {}
     task_config = EnvironmentConfig(
-        allow_internet=False,
+        allow_internet=allow_internet,
         env={"SELECTED": "task", "PATH": "/workspace/task/bin:/usr/bin:/bin"},
         **task_values,
     )
@@ -112,6 +114,8 @@ async def test_imported_plan_freezes_sources_and_executes_workdir_and_environmen
     async with asyncio.TaskGroup() as service_tasks:
         await adapter.start(False, service_tasks=service_tasks)
         try:
+            expected_network = NetworkPolicy.ALLOW if allow_internet else NetworkPolicy.DENY
+            assert adapter.execution.spec.primary_container.machine.network is expected_network
             response = await adapter.exec('pwd; worktool; printf " %s" "$SELECTED"')
             assert response.return_code == 0, response.stderr
             assert (
