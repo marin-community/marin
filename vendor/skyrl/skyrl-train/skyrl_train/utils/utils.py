@@ -196,10 +196,7 @@ def policy_force_cvd_mask_enabled(cfg: DictConfig) -> bool:
 
 
 def policy_per_gpu_bundles_enabled(cfg: DictConfig) -> bool:
-    """Whether the dedicated policy PG should use per-GPU {GPU:1} bundles.
-
-    Export and explicitly supplied policy placement groups select per-GPU bundles.
-    """
+    """Whether policy placement groups use one GPU per bundle."""
     return bool(getattr(cfg.trainer.placement, "policy_per_gpu_bundles", False))
 
 

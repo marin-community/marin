@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from omegaconf import DictConfig, OmegaConf
 
 from skyrl_train.config.weight_sync_pause import resolve_weight_sync_pause_policy
-
-
-if TYPE_CHECKING:
-    from transformers import PreTrainedTokenizerBase
 
 
 @dataclass(frozen=True)
@@ -35,7 +31,7 @@ def inference_engine_kwargs_from_config(
     cfg: DictConfig,
     role: InferenceEngineRoleConfig,
     *,
-    tokenizer: PreTrainedTokenizerBase | None = None,
+    tokenizer: object | None = None,
     engine_init_kwargs: dict[str, Any],
 ) -> dict[str, Any]:
     """Combine generator settings and role geometry; the tokenizer argument is unused."""
