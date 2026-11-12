@@ -255,7 +255,6 @@ def test_checkpoint_steps():
 
 def test_tensorstore_gpt2_mlp():
     with use_test_mesh():
-
         key0 = jax.random.PRNGKey(0)
         key1 = jax.random.PRNGKey(1)
 
@@ -488,6 +487,78 @@ def test_serialization_starts_all_opens_before_the_staging_budget_waits(monkeypa
     assert {int(value[0]) for value in writes} == {0, 100}
 
 
+def _ocdbt_version_count(checkpoint_dir) -> int:
+    """Manifest commits since the database was created.
+
+    Old versions move out of the manifest into version tree nodes, so count generations instead
+    of the inline ``versions`` list.
+    """
+    base = ts.KvStore.open({"driver": "file", "path": str(checkpoint_dir)}).result()
+    manifest = ts.ocdbt.dump(base).result()
+    return manifest["versions"][-1]["generation_number"]
+
+
+def _commit_each_array(checkpoint_dir, arrays: dict[str, np.ndarray]) -> None:
+    """Publish each array with its own TensorStore commit, one manifest version per write."""
+    for name, value in arrays.items():
+        store = ts.open(
+            {
+                "driver": "zarr3",
+                "kvstore": {
+                    "driver": "ocdbt",
+                    "base": {"driver": "file", "path": str(checkpoint_dir)},
+                    "path": name,
+                },
+                "metadata": {
+                    "shape": list(value.shape),
+                    "data_type": np.dtype(value.dtype).name,
+                    "chunk_grid": {
+                        "name": "regular",
+                        "configuration": {"chunk_shape": list(value.shape)},
+                    },
+                },
+            },
+            create=True,
+        ).result()
+        store.write(value).result()
+
+
+@pytest.mark.parametrize(
+    "arrays_per_wave, expected_versions",
+    [
+        # The empty database, then one version for the wave.
+        (6, 2),
+        # Three waves. A non-atomic transaction would add two versions per wave.
+        (2, 4),
+    ],
+)
+def test_a_lock_file_save_publishes_one_manifest_version_per_wave(tmp_path, arrays_per_wave, expected_versions):
+    """Under lock files each manifest version is a lock acquisition every other writer waits on."""
+    arrays = {f"w{i}": np.full(1024, i, dtype=np.float32) for i in range(6)}
+    one_array = next(iter(arrays.values())).nbytes
+    separate = tmp_path / "separate"
+    batched = tmp_path / "batched"
+    separate.mkdir()
+    batched.mkdir()
+    _commit_each_array(separate, arrays)
+
+    tree_serialize_leaves_tensorstore(
+        str(batched),
+        arrays,
+        write_config=TensorStoreWriteConfig(
+            max_staged_host_bytes=one_array * arrays_per_wave, file_io_locking="lockfile"
+        ),
+    )
+
+    assert _ocdbt_version_count(batched) == expected_versions
+    assert _ocdbt_version_count(separate) > expected_versions
+    restored = tree_deserialize_leaves_tensorstore(
+        str(batched), {name: jnp.zeros_like(value) for name, value in arrays.items()}
+    )
+    for name, value in arrays.items():
+        np.testing.assert_array_equal(np.asarray(restored[name]), value)
+
+
 def test_a_save_larger_than_the_staging_budget_rolls_through_it():
     """Peak host memory follows the budget. The checkpoint that comes back is still complete."""
     with use_test_mesh():
@@ -563,6 +634,26 @@ def test_replica_aware_restore_reads_each_shard_once():
 
 def test_replica_aware_restore_broadcasts_across_processes():
     eight_device_checkpoints.replica_aware_restore_across_processes()
+
+
+def test_processes_sharing_a_local_checkpoint_lock_with_lock_files():
+    """Advisory OS locks do not exclude writers on different NFS clients; lock files do."""
+    assert eight_device_checkpoints.commit_waits_for_held_lock_across_processes()
+
+
+def test_a_save_after_an_interrupted_save_to_the_same_directory_commits():
+    """A lock file left by a crashed save would otherwise block every later save to that step."""
+    results = eight_device_checkpoints.resave_after_interrupted_save_across_processes()
+
+    values = np.arange(eight_device_checkpoints.DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+    for restored in results:
+        np.testing.assert_array_equal(restored, np.stack([values, values + 1, values + 2]))
+
+
+def test_a_single_process_save_keeps_default_locking(tmp_path):
+    assert tensorstore_serialization._file_io_locking(TensorStoreWriteConfig(), str(tmp_path)) is None
+    explicit = TensorStoreWriteConfig(file_io_locking="os")
+    assert tensorstore_serialization._file_io_locking(explicit, str(tmp_path)) == "os"
 
 
 def test_checkpoint_written_on_one_mesh_loads_on_another():

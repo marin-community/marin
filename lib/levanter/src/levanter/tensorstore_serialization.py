@@ -9,6 +9,7 @@ import ctypes
 import logging
 import math
 import os
+import pathlib
 import sys
 import threading
 import time
@@ -17,7 +18,7 @@ import zlib
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache, partial
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Literal, Optional, Sequence
 
 import equinox
 import haliax as hax
@@ -47,7 +48,11 @@ from levanter.utils.byte_budget import HostByteBudget
 logger = logging.getLogger(__name__)
 
 ARRAY_DRIVER = "zarr3"
+FileIoLocking = Literal["os", "lockfile", "none"]
 KVSTORE_DRIVER = "ocdbt"
+_FILE_KVSTORE_DRIVER = "file"
+# TensorStore's file driver writes a key through "<key>.__lock" and renames it into place.
+_LOCK_FILE_SUFFIX = ".__lock"
 # JAX's memory kind for host memory a device can address. Offloaded optimizer state lives here.
 _HOST_MEMORY_KIND = "pinned_host"
 _PAGEABLE_HOST_MEMORY_KIND = "unpinned_host"
@@ -155,7 +160,7 @@ def build_kvstore_spec(path: str) -> dict:
         return {"driver": "gcs", "bucket": parsed.netloc, "path": parsed.path.lstrip("/")}
     elif parsed.scheme in ("", "file"):
         file_path = urllib.parse.unquote(parsed.path) if parsed.scheme == "file" else path
-        return {"driver": "file", "path": os.path.abspath(file_path)}
+        return {"driver": _FILE_KVSTORE_DRIVER, "path": os.path.abspath(file_path)}
     else:
         raise ValueError(f"Unsupported URI scheme for tensorstore: {parsed.scheme!r} in {path!r}")
 
@@ -216,6 +221,8 @@ class TensorStoreWriteConfig:
     """Host memory this process may hold in staged snapshots at once.
 
     A save whose share fits returns while the commits drain. A larger save rolls through.
+    Under ``lockfile`` locking, the arrays staged together are one OCDBT manifest commit, so a
+    share that fits is a single commit and a larger save commits once per wave of this budget.
     """
 
     cache_pool_bytes: int = 1024**3
@@ -223,6 +230,17 @@ class TensorStoreWriteConfig:
 
     data_copy_concurrency: int = 16
     """Maximum CPU concurrency TensorStore uses to copy and encode checkpoint data."""
+
+    file_io_locking: FileIoLocking | None = None
+    """How TensorStore's file driver locks a key while committing it.
+
+    None picks ``lockfile`` when several processes save to a local path, and TensorStore's default
+    otherwise. The default advisory OS locks do not exclude writers on different NFS clients, which
+    then race on the OCDBT manifest commit (``Failed to rename ... manifest.ocdbt.__lock``); an
+    exclusively created lock file is enforced by the NFS server. A lock file outlives a process that
+    crashes mid-commit and would then block every later save to that directory, so a ``lockfile``
+    save first removes lock files abandoned there by an earlier, interrupted save.
+    """
 
     def __post_init__(self) -> None:
         if self.max_write_replicas < 1:
@@ -287,11 +305,51 @@ def _tensorstore_read_context(config: TensorStoreReadConfig) -> ts.Context:
     return ts.Context(spec)
 
 
-def _tensorstore_write_context(config: TensorStoreWriteConfig) -> ts.Context:
+def _file_io_locking(config: TensorStoreWriteConfig, checkpoint_dir: str) -> FileIoLocking | None:
+    if config.file_io_locking is not None:
+        return config.file_io_locking
+    if jax.process_count() > 1 and build_kvstore_spec(checkpoint_dir)["driver"] == _FILE_KVSTORE_DRIVER:
+        return "lockfile"
+    return None
+
+
+def _remove_abandoned_lock_files(checkpoint_dir: str) -> None:
+    """Delete lock files that an interrupted save left in a local checkpoint directory.
+
+    Callers run this before any process opens the checkpoint's stores, so every lock file present
+    belongs to a commit that can no longer finish. Removing it leaves the OCDBT database as OS
+    locking would see it: the last committed manifest, plus unreferenced data files.
+    """
+    kvstore = build_kvstore_spec(checkpoint_dir)
+    if kvstore["driver"] != _FILE_KVSTORE_DRIVER or not os.path.isdir(kvstore["path"]):
+        return
+    for lock_file in pathlib.Path(kvstore["path"]).rglob(f"*{_LOCK_FILE_SUFFIX}"):
+        logger.warning("Removing lock file %s abandoned by an interrupted save", lock_file)
+        lock_file.unlink(missing_ok=True)
+
+
+def _prepare_file_io_locking(config: TensorStoreWriteConfig, checkpoint_dir: str) -> FileIoLocking | None:
+    """Resolve the save's locking mode and, for ``lockfile``, clear abandoned lock files.
+
+    Call once every process has finished its previous save and before any opens this one's stores.
+    Process 0 sweeps while the others wait at a barrier, so no lock file it removes is held by a
+    live commit.
+    """
+    file_io_locking = _file_io_locking(config, checkpoint_dir)
+    if file_io_locking == "lockfile":
+        if jax.process_index() == 0:
+            _remove_abandoned_lock_files(checkpoint_dir)
+        jax_utils.barrier_sync()
+    return file_io_locking
+
+
+def _tensorstore_write_context(config: TensorStoreWriteConfig, file_io_locking: FileIoLocking | None) -> ts.Context:
     spec = ts_impl._TS_CONTEXT.spec.to_json()
     spec["cache_pool"] = {"total_bytes_limit": config.cache_pool_bytes}
     spec["cache_pool#remote"] = {"total_bytes_limit": config.cache_pool_bytes}
     spec["data_copy_concurrency"] = {"limit": config.data_copy_concurrency}
+    if file_io_locking is not None:
+        spec["file_io_locking"] = {"mode": file_io_locking}
     return ts.Context(spec)
 
 
@@ -668,6 +726,7 @@ def tree_serialize_leaves_tensorstore(
         plans,
         manager,
         write_config,
+        str(checkpoint_dir),
         commit_callback,
         on_local_commit,
         on_staged,
@@ -684,12 +743,428 @@ def tree_serialize_leaves_tensorstore(
     return staged_host_bytes
 
 
+class _Wave:
+    """One transaction's worth of checkpoint writes. Committing it publishes the manifest once."""
+
+    def __init__(self, txn: ts.Transaction, bound: ts.KvStore):
+        self.txn = txn
+        self.bound = bound
+        self.pending = 0
+        self.bytes = 0
+        self.error: BaseException | None = None
+        self.closing = False
+        self.stores: dict[str, ts.Future] = {}
+        self.writes: list[ts.WriteFutures] = []
+        promise, self.future = ts.Promise.new()
+        self._promise = promise
+
+    def open_store(self, path: str, metadata: dict, context: ts.Context, *, create: bool) -> ts.Future:
+        store = self.stores.get(path)
+        if store is None:
+            # The trailing slash is the OCDBT path separator. Without it, zarr.json is appended
+            # onto the array name and a reader looking up ``path/zarr.json`` finds nothing.
+            spec = {"driver": ARRAY_DRIVER, "metadata": metadata}
+            kvstore = self.bound / f"{path}/"
+            if create:
+                store = ts.open(spec, kvstore=kvstore, create=True, open=True, context=context)
+            else:
+                # Another process published this metadata. Reading it back reads the manifest
+                # without the lock, and on NFS that fails with ESTALE when another client's
+                # commit replaces the manifest during the read.
+                store = ts.open(spec, kvstore=kvstore, assume_metadata=True, context=context)
+            self.stores[path] = store
+        return store
+
+    def succeed(self) -> None:
+        self._promise.set_result(None)
+
+    def fail(self, error: BaseException) -> None:
+        self._promise.set_exception(error)
+
+
+class _ManifestWaves:
+    """Group this process's checkpoint writes into one OCDBT commit per staging wave.
+
+    Every array in the save shares one OCDBT database, so each ``write().commit`` rewrites
+    ``manifest.ocdbt``. On a file kvstore that rewrite takes the file lock. A wave instead
+    opens every array on one atomic transactional view of that database and commits it once,
+    after every write is staged in it. The next wave starts when the host-byte budget has a
+    waiter and this wave's writes are staged, or when every write has been staged.
+    """
+
+    def __init__(
+        self,
+        base: ts.KvStore,
+        context: ts.Context,
+        gate: HostByteBudget,
+        expected_writes: int,
+        *,
+        create_metadata: bool,
+    ):
+        self._base = base
+        self._context = context
+        self._gate = gate
+        self._expected = expected_writes
+        self._create_metadata = create_metadata
+        self._finished = 0
+        self._wave: _Wave | None = None
+        self._lock = threading.Lock()
+        self.commits: list[ts.Future] = []
+
+    def reserve(self, num_bytes: int) -> _Wave:
+        """Count ``num_bytes`` in the open wave. Call only after the budget has been acquired.
+
+        The caller must not await between acquiring the budget and this call. The event loop
+        would otherwise run a waiter that closes the wave before this write joins it.
+        """
+        with self._lock:
+            wave = self._ensure_wave()
+            wave.pending += 1
+            wave.bytes += num_bytes
+            return wave
+
+    def cancel(self, wave: _Wave, num_bytes: int, error: BaseException) -> None:
+        with self._lock:
+            wave.pending -= 1
+            wave.bytes -= num_bytes
+            if wave.error is None:
+                wave.error = error
+            self._finished += 1
+            self._gate.release(num_bytes)
+            self._close_if_ready(wave)
+
+    def launch(self, wave: _Wave, data, path: str, metadata: dict, region: _ShardWrite | None) -> None:
+        with self._lock:
+            store_future = wave.open_store(path, metadata, self._context, create=self._create_metadata)
+        store_future.force()
+
+        def opened(fut: ts.Future) -> None:
+            try:
+                store = fut.result()
+                target = store if region is None else store[region.index]
+                # TensorStore's referenced-source fast path can commit only fill values
+                # for large bfloat16 chunks. Let it copy the staged snapshot instead.
+                write = target.write(data)
+                write.commit.force()
+            except BaseException as error:
+                self._write_finished(wave, error)
+                return
+            with self._lock:
+                wave.writes.append(write)
+            # A transactional write's commit means it is staged in the transaction, not stored.
+            write.commit.add_done_callback(lambda fut: self._write_finished(wave, _future_error(fut)))
+
+        store_future.add_done_callback(opened)
+
+    def close_blocked_wave(self) -> None:
+        """Close the wave a budget waiter is stuck behind, once its writes are staged."""
+        with self._lock:
+            wave = self._wave
+            if wave is not None:
+                self._close_if_ready(wave)
+
+    def _write_finished(self, wave: _Wave, error: BaseException | None) -> None:
+        with self._lock:
+            if error is not None and wave.error is None:
+                wave.error = error
+            wave.pending -= 1
+            self._finished += 1
+            self._close_if_ready(wave)
+
+    def _ensure_wave(self) -> _Wave:
+        if self._wave is None or self._wave.closing:
+            # A non-atomic transaction commits metadata and chunks as separate manifest versions.
+            # An atomic one over the single OCDBT database is one version, and all or nothing.
+            txn = ts.Transaction(atomic=True)
+            wave = _Wave(txn, self._base.with_transaction(txn))
+            self._wave = wave
+            self.commits.append(wave.future)
+        return self._wave
+
+    def _close_if_ready(self, wave: _Wave) -> None:
+        if wave.closing or wave.pending != 0 or wave is not self._wave:
+            return
+        # A writer the loop has not scheduled yet must still be able to join this wave.
+        # Close early only when a later writer is already blocked on the budget.
+        if self._finished != self._expected and not self._gate.has_waiters:
+            return
+        wave.closing = True
+        self._wave = None
+        held = wave.bytes
+        wave.bytes = 0
+        if wave.error is not None:
+            wave.txn.abort()
+            wave.fail(wave.error)
+            self._gate.release(held)
+            return
+        try:
+            commit = wave.txn.commit_async()
+        except BaseException as error:
+            wave.fail(error)
+            self._gate.release(held)
+            return
+
+        def committed(fut: ts.Future) -> None:
+            try:
+                fut.result()
+            except BaseException as error:
+                wave.fail(error)
+            else:
+                wave.succeed()
+            self._gate.release(held)
+
+        commit.add_done_callback(committed)
+
+
+@dataclass(frozen=True)
+class _CheckpointWrite:
+    """One staged write: a host array, or one device's slice of a sharded array."""
+
+    path: str
+    metadata: dict
+    num_bytes: int
+    region: _ShardWrite | None
+    stage: Callable
+
+
+def _checkpoint_writes(
+    arrays: Sequence[Any],
+    tspecs: Sequence[dict],
+    plans: Sequence[_WritePlan],
+) -> list[_CheckpointWrite]:
+    """The writes this process contributes. Other processes skip arrays they do not own."""
+    jobs: list[_CheckpointWrite] = []
+    for array, tspec, plan in zip(arrays, tspecs, plans):
+        metadata = tspec["metadata"]
+        path = tspec["kvstore"].get("path", "")
+        if not isinstance(array, jax.Array):
+            # Unsharded and identical everywhere, so process 0 writes all of it.
+            if jax.process_index() != 0:
+                continue
+
+            def stage_host(array=array):
+                async def stage():
+                    # The caller owns this buffer and may mutate it after the save returns.
+                    return np.array(array, copy=True)
+
+                return stage
+
+            jobs.append(
+                _CheckpointWrite(
+                    path=path,
+                    metadata=metadata,
+                    num_bytes=_estimate_array_nbytes(array),
+                    region=None,
+                    stage=stage_host(),
+                )
+            )
+            continue
+
+        for shard in array.addressable_shards:
+            region = _shard_write_region(shard, plan)
+            if region is None:
+                continue
+
+            def stage_shard(shard=shard, region=region, plan=plan):
+                async def stage():
+                    return await _transfer_shard_to_pageable_host(shard, region.local_slice)
+
+                return stage
+
+            jobs.append(
+                _CheckpointWrite(
+                    path=path,
+                    metadata=metadata,
+                    num_bytes=_estimate_array_nbytes(shard.data) // plan.write_replicas,
+                    region=region,
+                    stage=stage_shard(),
+                )
+            )
+    return jobs
+
+
+def _commit_array_metadata(base: ts.KvStore, context: ts.Context, tspecs: Sequence[dict]) -> None:
+    """Publish every array's metadata in one transaction.
+
+    Two processes must not create the same ``zarr.json`` in separate transactions: the second
+    commit fails with ``ALREADY_EXISTS``. One process publishes the metadata, then every process
+    commits only the chunks it owns.
+    """
+    txn = ts.Transaction(atomic=True)
+    bound = base.with_transaction(txn)
+    opened: list[ts.Future] = []
+    seen: set[str] = set()
+    for tspec in tspecs:
+        path = tspec["kvstore"].get("path", "")
+        if path in seen:
+            continue
+        seen.add(path)
+        opened.append(
+            ts.open(
+                {"driver": ARRAY_DRIVER, "metadata": tspec["metadata"]},
+                kvstore=bound / f"{path}/",
+                create=True,
+                open=True,
+                context=context,
+            )
+        )
+    for future in opened:
+        future.result()
+    if opened:
+        txn.commit_sync()
+
+
+def _future_error(fut: ts.Future) -> BaseException | None:
+    try:
+        fut.result()
+    except BaseException as error:
+        return error
+    return None
+
+
+def _uses_manifest_waves(file_io_locking: FileIoLocking | None) -> bool:
+    """Whether a save batches its chunks into one manifest commit per staging wave.
+
+    Under lock files every manifest commit takes a lock the NFS server enforces across clients,
+    so fewer commits means less serialization between processes. Elsewhere TensorStore already
+    batches concurrent commits, and per-chunk commits overlap staging with I/O, which a
+    transaction defers to its commit.
+    """
+    return file_io_locking == "lockfile"
+
+
+def _write_each_chunk(
+    jobs: Sequence[_CheckpointWrite],
+    tspecs: Sequence[dict],
+    config: TensorStoreWriteConfig,
+    context: ts.Context,
+) -> tuple[HostByteBudget, list[ts.Future]]:
+    """Commit every chunk on its own as soon as it is staged."""
+    gate = HostByteBudget(config.max_staged_host_bytes)
+    commit_futures: list[ts.Future] = []
+    tspec_by_path = {tspec["kvstore"].get("path", ""): tspec for tspec in tspecs}
+    stores: dict[str, ts.Future] = {}
+
+    def store_for(path: str) -> ts.Future:
+        store = stores.get(path)
+        if store is None:
+            store = ts.open(ts.Spec(tspec_by_path[path]), create=True, open=True, context=context)
+            # Start I/O without waiting; staging never depends on open completion.
+            store.force()
+            stores[path] = store
+        return store
+
+    async def issue_write(job: _CheckpointWrite):
+        store_future = store_for(job.path)
+        await gate.acquire(job.num_bytes)
+        try:
+            data = await job.stage()
+        except BaseException:
+            gate.release(job.num_bytes)
+            raise
+
+        promise, commit_future = ts.Promise.new()
+        commit_futures.append(commit_future)
+        # Fires on failure as well as success, so a failed commit cannot strand the budget.
+        commit_future.add_done_callback(lambda _: gate.release(job.num_bytes))
+
+        def store_opened(future: ts.Future) -> None:
+            try:
+                store = future.result()
+                target = store if job.region is None else store[job.region.index]
+                # TensorStore's referenced-source fast path can commit only fill values
+                # for large bfloat16 chunks. Let it copy the staged snapshot instead.
+                write = target.write(data)
+                write.commit.add_done_callback(write_finished)
+                write.commit.force()
+            except BaseException as error:
+                promise.set_exception(error)
+
+        def write_finished(future: ts.Future) -> None:
+            error = _future_error(future)
+            if error is None:
+                promise.set_result(None)
+            else:
+                promise.set_exception(error)
+
+        store_future.add_done_callback(store_opened)
+
+    async def write_all():
+        # Open every store before any staging wait, so one array's open never queues behind
+        # another array's budget wait.
+        for job in jobs:
+            store_for(job.path)
+        await asyncio.gather(*(issue_write(job) for job in jobs))
+
+    asyncio.run(write_all())
+    return gate, commit_futures
+
+
+def _write_in_manifest_waves(
+    jobs: Sequence[_CheckpointWrite],
+    tspecs: Sequence[dict],
+    config: TensorStoreWriteConfig,
+    checkpoint_dir: str,
+    context: ts.Context,
+) -> tuple[HostByteBudget, list[ts.Future]]:
+    """Commit the chunks staged together as one atomic manifest commit per wave."""
+    # Assigned before the first acquire. A waiter calls it once the gate exists.
+    waves: _ManifestWaves | None = None
+
+    def close_blocked_wave() -> None:
+        if waves is not None:
+            waves.close_blocked_wave()
+
+    gate = HostByteBudget(config.max_staged_host_bytes, on_blocked=close_blocked_wave)
+
+    async def stage_write(job: _CheckpointWrite, committer: _ManifestWaves):
+        await gate.acquire(job.num_bytes)
+        # Join the wave before the next await. See ``_ManifestWaves.reserve``.
+        wave = committer.reserve(job.num_bytes)
+        try:
+            data = await job.stage()
+        except BaseException as error:
+            committer.cancel(wave, job.num_bytes, error)
+            raise
+        committer.launch(wave, data, job.path, job.metadata, job.region)
+
+    async def open_base() -> ts.KvStore:
+        return await ts.KvStore.open(
+            {"driver": KVSTORE_DRIVER, "base": build_kvstore_spec(checkpoint_dir)},
+            context=context,
+        )
+
+    async def write_all():
+        nonlocal waves
+        # Concurrent transactions that both create an array's metadata fail with ALREADY_EXISTS.
+        # One process publishes it, and the data waves below only write disjoint chunks.
+        share_metadata = jax.process_count() > 1 and bool(tspecs)
+        if share_metadata:
+            if jax.process_index() == 0:
+                _commit_array_metadata(await open_base(), context, tspecs)
+            jax_utils.barrier_sync()
+        if not jobs:
+            return
+        waves = _ManifestWaves(
+            await open_base(),
+            context,
+            gate,
+            len(jobs),
+            create_metadata=not share_metadata,
+        )
+        await asyncio.gather(*(stage_write(job, waves) for job in jobs))
+
+    asyncio.run(write_all())
+    return gate, [] if waves is None else waves.commits
+
+
 def _serialize_arrays(
     arrays: Sequence[Any],
     tspecs: Sequence[dict],
     plans: Sequence[_WritePlan],
     manager: array_ser.GlobalAsyncCheckpointManager,
     config: TensorStoreWriteConfig,
+    checkpoint_dir: str,
     commit_callback: Callable,
     on_local_commit: Optional[Callable[[str], None]],
     on_staged: Optional[Callable[[int], None]],
@@ -704,96 +1179,22 @@ def _serialize_arrays(
     """
     manager.wait_until_finished()
 
+    file_io_locking = _prepare_file_io_locking(config, checkpoint_dir)
+
     # JAX's process-lifetime context accumulates caches across saves, since each save writes a
     # new OCDBT database (#6785). Give each save bounded caches and copy concurrency of its own.
-    context = _tensorstore_write_context(config)
-    gate = HostByteBudget(config.max_staged_host_bytes)
-    commit_futures: list[ts.Future] = []
-
-    async def issue_write(num_bytes: int, stage, store_future, region: _ShardWrite | None):
-        await gate.acquire(num_bytes)
-        try:
-            data = await stage()
-        except BaseException:
-            gate.release(num_bytes)
-            raise
-
-        promise, commit_future = ts.Promise.new()
-        commit_futures.append(commit_future)
-        # Fires on failure as well as success, so a failed commit cannot strand the budget.
-        commit_future.add_done_callback(lambda _: gate.release(num_bytes))
-
-        def store_opened(future: ts.Future) -> None:
-            try:
-                store = future.result()
-                target = store if region is None else store[region.index]
-                # TensorStore's referenced-source fast path can commit only fill values
-                # for large bfloat16 chunks. Let it copy the staged snapshot instead.
-                write = target.write(data)
-                write.commit.add_done_callback(write_finished)
-                write.commit.force()
-            except BaseException as error:
-                promise.set_exception(error)
-
-        def write_finished(future: ts.Future) -> None:
-            try:
-                future.result()
-            except BaseException as error:
-                promise.set_exception(error)
-            else:
-                promise.set_result(None)
-
-        store_future.add_done_callback(store_opened)
-
-    async def write_host_array(store_future, array):
-        async def stage():
-            # The caller owns this buffer and may mutate it after the save returns.
-            return np.array(array, copy=True)
-
-        await issue_write(_estimate_array_nbytes(array), stage, store_future, None)
-
-    async def write_shard(store_future, shard, plan, region: _ShardWrite):
-        async def stage():
-            return await _transfer_shard_to_pageable_host(shard, region.local_slice)
-
-        await issue_write(
-            _estimate_array_nbytes(shard.data) // plan.write_replicas,
-            stage,
-            store_future,
-            region,
-        )
-
-    async def write_one(array, tspec, plan):
-        store_future = ts.open(ts.Spec(tspec), create=True, open=True, context=context)
-
-        if not isinstance(array, jax.Array):
-            # Unsharded and identical everywhere, so process 0 writes all of it.
-            if jax.process_index() != 0:
-                return
-            # Start I/O without waiting; staging below never depends on open completion.
-            store_future.force()
-            await write_host_array(store_future, array)
-            return
-
-        shard_writes = [
-            (shard, region)
-            for shard in array.addressable_shards
-            if (region := _shard_write_region(shard, plan)) is not None
-        ]
-        if not shard_writes:
-            return
-        store_future.force()
-        await asyncio.gather(*(write_shard(store_future, shard, plan, region) for shard, region in shard_writes))
-
-    async def write_all():
-        await asyncio.gather(*(write_one(a, s, p) for a, s, p in zip(arrays, tspecs, plans)))
-
-    asyncio.run(write_all())
+    context = _tensorstore_write_context(config, file_io_locking)
+    jobs = _checkpoint_writes(arrays, tspecs, plans)
+    if _uses_manifest_waves(file_io_locking):
+        gate, commit_futures = _write_in_manifest_waves(jobs, tspecs, config, checkpoint_dir, context)
+    else:
+        gate, commit_futures = _write_each_chunk(jobs, tspecs, config, context)
     logger.info(
         "Checkpoint staged %.2f GiB peak against a %.2f GiB budget across %d writes "
-        "(about %.0f GiB of host memory while in flight)",
+        "in %d manifest commits (about %.0f GiB of host memory while in flight)",
         gate.peak_bytes / 1024**3,
         config.max_staged_host_bytes / 1024**3,
+        len(jobs),
         len(commit_futures),
         _STAGED_BYTE_OVERHEAD * gate.peak_bytes / 1024**3,
     )
