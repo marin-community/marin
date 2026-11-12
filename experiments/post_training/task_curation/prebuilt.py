@@ -14,7 +14,6 @@ source's oversight level and evidence describe the qualification the publish rec
 
 import json
 from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
 
 import pyarrow as pa
@@ -76,7 +75,7 @@ def import_cohort(config: PrebuiltCohort) -> str:
         lowered = LoweredSpec.from_document(envelope)
         if not envelope.get("runtime"):
             raise ValueError(f"{row['path']}: envelope carries no runtime machines")
-        reason = missing_environment(lowered.task.model_dump(mode="json"))
+        reason = missing_environment(lowered.task)
         if reason is not None:
             raise ValueError(f"{row['path']}: {reason}")
     return str(local)
@@ -144,7 +143,7 @@ def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptio
         name=config.name,
         version=config.version,
         artifact_type=CampaignArtifact,
-        run=partial(run),
+        run=run,
         build_config=build_config,
         deps=(),
     )

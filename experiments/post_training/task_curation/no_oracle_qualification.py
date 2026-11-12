@@ -26,9 +26,10 @@ shared environments. Empty-submission grading runs separately through
    verifier exit, a reward below 1.0, and a positive structured executed-test
    count.
 
-The offline report records preservation and setup pass rates by base and
-overall. Verifier results require an explicit ``--liveness`` receipt file. A reward-only
-sample is insufficient to establish ``oracle_validation=verifier_executed``.
+Preservation always runs; setup execution runs with ``--docker`` (locally in Docker or,
+with ``--lowered``, against the lowered specs). The report records pass rates by base
+and overall. Verifier results require an explicit ``--liveness`` receipt file. A
+reward-only sample is insufficient to establish ``oracle_validation=verifier_executed``.
 
 Run the offline phase with::
 

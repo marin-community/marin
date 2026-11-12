@@ -14,6 +14,7 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.curation import CurationMode
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from pydantic import BaseModel, ConfigDict, PositiveInt
@@ -181,7 +182,7 @@ def write_training(config: SelectionConfig, full: tuple[TaskSpec, ...], destinat
         for source in sources:
             root = StoragePath(source.root)
             manifest = json.loads((root / "manifest.json").read_text())
-            if manifest["mode"] not in {"sample", "full"}:
+            if manifest["mode"] not in {CurationMode.SAMPLE, CurationMode.FULL}:
                 raise ValueError(f"Selection requires SAMPLE/FULL curation: {source.source_id}")
             if manifest["intended_use"] != IntendedUse.TRAIN:
                 raise ValueError(f"Selection source is not a training population: {source.source_id}")

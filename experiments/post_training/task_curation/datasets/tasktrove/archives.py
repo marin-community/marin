@@ -55,9 +55,7 @@ class TaskTroveConverter:
         reply_only = (
             task.answer_type in CONVERSATION_ANSWERS and task.environment_requirements == EnvironmentRequirements()
         )
-        substituted = (
-            None if reply_only else environment_unused(task.model_dump(mode="json"), archive_file(row.data, DOCKERFILE))
-        )
+        substituted = None if reply_only else environment_unused(task, archive_file(row.data, DOCKERFILE))
         if substituted is not None:
             return ImportRejection(
                 kind=ImportFailureKind.CONVERTER_ERROR, reason="environment_substituted", detail=substituted

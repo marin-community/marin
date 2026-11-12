@@ -16,7 +16,6 @@ import re
 import shlex
 import tarfile
 from dataclasses import dataclass, replace
-from pathlib import Path, PurePosixPath
 
 from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT
 from experiments.post_training.task_curation.environment_fidelity import (
@@ -28,8 +27,6 @@ from experiments.post_training.task_curation.task_tars import open_task_tar
 
 COPY_SOURCE = re.compile(r"^\s*COPY\s+(?:--\S+\s+)*(?P<sources>.+)$", re.IGNORECASE | re.MULTILINE)
 ADD_SOURCE = re.compile(r"^\s*ADD\s", re.IGNORECASE | re.MULTILINE)
-
-PASSING_VERIFIER_OUTCOMES = ("negative_verdict",)
 
 
 @dataclass(frozen=True)
@@ -257,7 +254,6 @@ def _manifest(stdout: str) -> list[FileExpectation]:
     return [FileExpectation(path, digest, entries[path]) for path, digest in digests.items() if path in entries]
 
 
-
 @dataclass(frozen=True)
 class WorkspaceComparison:
     """A workspace scan against the files the native recipe should have written."""
@@ -287,5 +283,3 @@ def _compare_workspace(expectations: tuple[FileExpectation, ...], stdout: str) -
         if path in observed and observed[path].mode != item.mode
     )
     return WorkspaceComparison(len(observed), missing, altered, extra, remoded)
-
-

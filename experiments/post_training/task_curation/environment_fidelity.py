@@ -15,7 +15,7 @@ import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskSpec
 
 from experiments.post_training.task_curation.environment import dockerfile_lines
 
@@ -36,17 +36,17 @@ def _utf8_dockerfile(dockerfile: bytes) -> str:
         raise UnlowerableRecipe("archive environment/Dockerfile is not UTF-8") from error
 
 
-def environment_unused(spec: Mapping, dockerfile: bytes | None) -> str | None:
+def environment_unused(task: TaskSpec, dockerfile: bytes | None) -> str | None:
     """Why a converted task ignores its archive's environment, if it does.
 
-    ``spec`` is a TaskCompendium task dict. An archive that defines an environment
-    Dockerfile must be declared as a build context or replayed as lowered steps,
-    working directory and variables on the matching digest-pinned base.
+    An archive that defines an environment Dockerfile must be declared as a
+    build context or replayed as lowered steps, working directory and variables
+    on the matching digest-pinned base.
     """
     if dockerfile is None:
         return None
-    requirements = spec.get("environment_requirements") or {}
-    build = requirements.get("docker_build")
+    requirements = task.environment_requirements
+    build = requirements.docker_build
     if build is None:
         # A spec may use the archive's environment by replaying its steps on a pinned
         # base instead of declaring a build context. Anything else replaced it.
@@ -54,37 +54,37 @@ def environment_unused(spec: Mapping, dockerfile: bytes | None) -> str | None:
             lowered = lower_environment(_utf8_dockerfile(dockerfile), PINNED_BASES)
         except UnlowerableRecipe as error:
             return f"archive environment is not lowered: {error}"
-        if requirements.get("docker_image") != lowered.base_ref:
+        if requirements.docker_image != lowered.base_ref:
             return "spec does not use the archive's base image"
-        if tuple(requirements.get("setup_commands") or ()) != lowered.setup_commands:
+        if tuple(requirements.setup_commands or ()) != lowered.setup_commands:
             return "spec does not replay the archive's steps"
-        if requirements.get("working_directory") != lowered.working_directory:
+        if requirements.working_directory != lowered.working_directory:
             return "spec does not use the archive's working directory"
-        if (requirements.get("environment_variables") or {}) != lowered.environment_variables:
+        if (requirements.environment_variables or {}) != lowered.environment_variables:
             return "spec does not retain the archive's environment variables"
         return None
-    paths = {resource["path"] for resource in build.get("files") or ()}
+    paths = {resource.path for resource in build.files or ()}
     if "Dockerfile" not in paths:
         return "build context does not carry the archive's Dockerfile"
     return None
 
 
-def missing_environment(spec: Mapping) -> str | None:
+def missing_environment(task: TaskSpec) -> str | None:
     """Why an agentic task cannot be admitted, if it declares no environment.
 
     A task that declares nothing resolves to the host image at run time, which is
     not the environment the task defines. It is rejected rather than run.
     """
-    requirements = spec.get("environment_requirements") or {}
+    requirements = task.environment_requirements
     declared = (
-        requirements.get("docker_image"),
-        requirements.get("docker_build"),
-        requirements.get("packages_lock"),
-        requirements.get("package_spec"),
+        requirements.docker_image,
+        requirements.docker_build,
+        requirements.packages_lock,
+        requirements.package_spec,
     )
     if any(item is not None for item in declared):
         return None
-    if not any(requirements.get("capabilities") or ()):
+    if not requirements.capabilities:
         return None
     return "agentic task declares no environment"
 

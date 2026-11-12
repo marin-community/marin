@@ -40,6 +40,21 @@ class DeferredEnvironment(ValueError):
     """A native recipe needs a lowering contract not yet qualified."""
 
 
+def fixture_generator(arguments: list[str], copied_files: set[str]) -> bool:
+    """Whether this RUN invokes a staged fixture-generating script (``python3 /app/*.py``).
+
+    Both setup compilers treat such a run as the script's first execution and
+    let it create whatever it writes.
+    """
+    return (
+        len(arguments) == 2
+        and arguments[0] == "python3"
+        and arguments[1].startswith("/app/")
+        and arguments[1].endswith(".py")
+        and arguments[1] in copied_files
+    )
+
+
 def fixture_bundle(context: Path, instructions: list[dict]) -> FixtureBundle:
     """Compile ordered public copies without executing source commands or using private files."""
     if any(SETUP_ROOT in argument for item in instructions for argument in item["args"]):
@@ -75,21 +90,15 @@ def fixture_bundle(context: Path, instructions: list[dict]) -> FixtureBundle:
             if not json_form and "\n" in item["args"][0]:
                 raise DeferredEnvironment("requires_multiline_run_support")
             arguments = item["args"] if json_form else shlex.split(item["args"][0], comments=True)
-            fixture_generator = (
-                len(arguments) == 2
-                and arguments[0] == "python3"
-                and arguments[1].startswith("/app/")
-                and arguments[1].endswith(".py")
-                and arguments[1] in copied_files
-            )
+            generates_fixture = fixture_generator(arguments, copied_files)
             remove_generator = len(arguments) == 3 and arguments[:2] == ["rm", "-f"] and arguments[2] in executed_scripts
             if (
                 not arguments
-                or not (arguments[0] in {"mkdir", "chmod", "touch"} or fixture_generator or remove_generator)
+                or not (arguments[0] in {"mkdir", "chmod", "touch"} or generates_fixture or remove_generator)
                 or any(any(character in argument for character in "$`;&|<>()*?[~") for argument in arguments)
             ):
                 raise DeferredEnvironment("requires_dependency_or_complex_run_support")
-            if fixture_generator:
+            if generates_fixture:
                 executed_scripts.add(arguments[1])
             if remove_generator:
                 executed_scripts.remove(arguments[2])

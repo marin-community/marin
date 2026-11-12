@@ -150,7 +150,7 @@ async def run_one(spec: LoweredSpec, base: str, cgroup_parent: Path | None = Non
             return LivenessResult(
                 task.id,
                 base,
-                "infra_error",
+                LivenessOutcome.INFRA_ERROR,
                 None,
                 None,
                 placement.snapshot,
@@ -187,8 +187,11 @@ def _grader_placement(
 ) -> _GraderPlacement:
     """Resolve the machine factory, machine spec, and snapshot name for the grader."""
     if requirements.packages_lock is not None:
-        # A packaged grader runs in the local bubblewrap runtime; no sandbox backend and
-        # no snapshot identity are involved, so the Daytona pieces are never imported.
+        # A packaged grader runs in the local bubblewrap runtime. This branch builds its
+        # MachineSpec directly instead of through daytona_identity.declared_machine
+        # because that module imports the Daytona backend at module level, which this
+        # lock-based path never uses; its workdir default is the local runtime's
+        # /workspace, not the sandbox's declared-environment default.
         machine = MachineSpec(
             source=HostImage(),
             workdir=requirements.working_directory or "/workspace",

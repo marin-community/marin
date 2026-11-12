@@ -11,7 +11,6 @@ image, then scans the workspace the native recipe's COPY destinations define.
 import base64
 import shlex
 import subprocess
-import tarfile
 import tempfile
 import tomllib
 from collections.abc import Mapping
@@ -20,10 +19,14 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from experiments.post_training.task_curation.calibforge_fixtures import SETUP_ROOT
 from experiments.post_training.task_curation.calibforge_rebuild import LoweredSpec, setup_script_name
 from experiments.post_training.task_curation.environment_fidelity import DEFAULT_WORKDIR
+from experiments.post_training.task_curation.no_oracle_liveness import DETAIL_LIMIT
 from experiments.post_training.task_curation.no_oracle_preservation import (
     FileExpectation,
+    _compare_workspace,
+    _native_dockerfile,
     copied_destinations,
     native_workdir,
     workspace_expectations,
@@ -33,8 +36,6 @@ from experiments.post_training.task_curation.task_tars import open_task_tar
 
 def _docker(*arguments: str, **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(["docker", *arguments], capture_output=True, text=True, **kwargs)
-
-
 
 
 class SetupOutcome(StrEnum):
@@ -103,7 +104,9 @@ def _execute_container_setup(
         for source, destination in copies:
             copied = _docker("cp", str(source), f"{container}:{destination}")
             if copied.returncode:
-                return SetupExecution(task_id=task_id, outcome=SetupOutcome.DOCKER_ERROR, detail=copied.stderr[-DETAIL_LIMIT:])
+                return SetupExecution(
+                    task_id=task_id, outcome=SetupOutcome.DOCKER_ERROR, detail=copied.stderr[-DETAIL_LIMIT:]
+                )
         started = _docker("start", "-a", container, timeout=timeout)
     except subprocess.TimeoutExpired:
         return SetupExecution(task_id=task_id, outcome=SetupOutcome.TIMEOUT, detail=f"{timeout}s")
@@ -289,4 +292,3 @@ def _execute_lowered(
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         return list(pool.map(run, sorted(lowered)))
-

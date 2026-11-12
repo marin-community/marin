@@ -52,10 +52,12 @@ from experiments.post_training.task_curation.calibforge_fixtures import (
     SETUP_ROOT,
     SETUP_SCRIPT,
     SETUP_SCRIPT_PREAMBLE,
+    fixture_generator,
 )
 from experiments.post_training.task_curation.environment import dockerfile_lines
 from experiments.post_training.task_curation.environment_fidelity import (
     DEFAULT_WORKDIR,
+    ENVIRONMENT_DOCKERFILE,
     ENVIRONMENT_PREFIX,
     PINNED_BASES,
 )
@@ -303,14 +305,7 @@ def _run_commands(item: Instruction, workdir: str, copied_files: set[str]) -> li
             inline_env += raw_segment[0] + " "
             raw_segment = raw_segment[1:]
         arguments = raw_segment
-        fixture_generator = (
-            len(arguments) == 2
-            and arguments[0] == "python3"
-            and arguments[1].startswith("/app/")
-            and arguments[1].endswith(".py")
-            and arguments[1] in copied_files
-        )
-        if _dependency_run(arguments) or arguments[0] in _INNOCUOUS_RUN or fixture_generator:
+        if _dependency_run(arguments) or arguments[0] in _INNOCUOUS_RUN or fixture_generator(arguments, copied_files):
             if "`" in " ".join(raw_segment):
                 raise DeferredRebuild("requires_command_substitution_support")
             prefix = inline_env
@@ -325,7 +320,13 @@ def _run_commands(item: Instruction, workdir: str, copied_files: set[str]) -> li
 
 
 def _stage_copy(item: Instruction, workdir: str, files: dict[str, bytes], steps: _RecipeSteps) -> None:
-    """Stage one COPY's sources into the fixture payload and emit its copy commands."""
+    """Stage one COPY's sources into the fixture payload and emit its copy commands.
+
+    This mirrors ``calibforge_fixtures.fixture_bundle``'s COPY staging, but reads
+    the tar's bytes instead of a filesystem context and never defers: the rebuild
+    must faithfully reproduce every COPY the recipe makes, including sources the
+    conservative fixture extractor would refuse.
+    """
     if item.flags:
         raise DeferredRebuild("requires_copy_flags_support")
     *sources, destination = item.args
@@ -380,7 +381,7 @@ def rebuild_task(task_binary: bytes) -> RebuiltTask:
             modes[member.name] = member.mode
             if member.name.startswith(ENVIRONMENT_PREFIX):
                 environment_modes[member.name[len(ENVIRONMENT_PREFIX) :]] = member.mode
-    dockerfile = files.pop("environment/Dockerfile", None)
+    dockerfile = files.pop(ENVIRONMENT_DOCKERFILE, None)
     if dockerfile is None:
         raise DeferredRebuild("missing_environment_dockerfile")
     instructions = parse_instructions(dockerfile.decode(errors="replace"))
@@ -394,7 +395,7 @@ def rebuild_task(task_binary: bytes) -> RebuiltTask:
     setup_script, payload = recipe.setup_script, recipe.payload
     output_files = {name: content for name, content in files.items() if not name.startswith(ENVIRONMENT_PREFIX)}
     output_files["task.toml"] = _rewrite_task_toml(files.get("task.toml"), base_ref, workdir)
-    output_files["environment/Dockerfile"] = f"FROM {base_ref}\nWORKDIR {workdir}\n".encode()
+    output_files[ENVIRONMENT_DOCKERFILE] = f"FROM {base_ref}\nWORKDIR {workdir}\n".encode()
     output_files[f"setup_files/{FIXTURE_ARCHIVE}"] = payload
     output_files[f"setup_files/{SETUP_SCRIPT}"] = setup_script.encode()
     return RebuiltTask(

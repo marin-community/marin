@@ -7,6 +7,16 @@ import os
 import subprocess
 
 import pytest
+from taskcompendium.models import (
+    AnswerType,
+    ConversationInput,
+    EnvironmentRequirements,
+    NoGrader,
+    PlainText,
+    Source,
+    TaskSpec,
+    TextMessage,
+)
 
 from experiments.post_training.task_curation.environment_fidelity import (
     PINNED_BASES,
@@ -19,18 +29,35 @@ from experiments.post_training.task_curation.environment_fidelity import (
 AGENT = "ghcr.io/marin-community/iris-task@sha256:" + "a" * 64
 
 
+def spec(requirements: dict) -> TaskSpec:
+    """A minimal agentic task carrying exactly these environment requirements."""
+    declared = {"docker_image", "docker_build", "packages_lock", "package_spec"}
+    if any(key in requirements for key in declared):
+        # The model requires process semantics whenever a native environment is declared.
+        requirements = {"command_semantics": "linux_process", **requirements}
+    return TaskSpec(
+        id="fixture",
+        context=ConversationInput(events=(TextMessage(role="user", content="do the task"),)),
+        environment_requirements=EnvironmentRequirements.model_validate(requirements),
+        answer_type=AnswerType.TEXT,
+        answer_format=PlainText(),
+        grader=NoGrader(reason="no verifier in this fixture"),
+        source=Source(dataset="fixture", revision="1", row="fixture", importer_revision="1"),
+    )
+
+
 def test_a_spec_that_replaces_its_archive_environment_is_flagged():
     dockerfile = b"FROM ubuntu:24.04\nRUN pip install pandas\n"
-    replaced = {"environment_requirements": {"docker_image": AGENT}}
+    replaced = spec({"docker_image": AGENT})
     # The archive lowers onto ubuntu:24.04, so an iris-task image is not its environment.
     assert "does not use the archive's base image" in environment_unused(replaced, dockerfile)
-    faithful = {"environment_requirements": {"docker_build": {"files": [{"path": "Dockerfile", "source": {}}]}}}
+    faithful = spec({"docker_build": {"files": [{"path": "Dockerfile", "source": {"content_base64": ""}}]}})
     assert environment_unused(faithful, dockerfile) is None
 
 
 def test_an_agentic_task_without_an_environment_is_rejected():
-    assert missing_environment({"environment_requirements": {"capabilities": ["agent:pi"]}})
-    assert missing_environment({"environment_requirements": {"docker_image": AGENT}}) is None
+    assert missing_environment(spec({"capabilities": ["agent:pi"]}))
+    assert missing_environment(spec({"docker_image": AGENT})) is None
 
 
 def test_a_recipe_lowers_onto_its_pinned_base():
@@ -66,15 +93,12 @@ def test_replaying_the_archive_steps_counts_as_using_its_environment():
     dockerfile = b"FROM ubuntu:24.04\nWORKDIR /workspace\nRUN mkdir -p /out\n"
     lowered = lower_environment(dockerfile.decode(), PINNED_BASES)
     faithful = {
-        "environment_requirements": {
-            "docker_image": lowered.base_ref,
-            "working_directory": lowered.working_directory,
-            "setup_commands": list(lowered.setup_commands),
-        }
+        "docker_image": lowered.base_ref,
+        "working_directory": lowered.working_directory,
+        "setup_commands": list(lowered.setup_commands),
     }
-    assert environment_unused(faithful, dockerfile) is None
-    stale = {**faithful, "environment_requirements": {**faithful["environment_requirements"], "setup_commands": []}}
-    assert "does not replay" in environment_unused(stale, dockerfile)
+    assert environment_unused(spec(faithful), dockerfile) is None
+    assert "does not replay" in environment_unused(spec({**faithful, "setup_commands": []}), dockerfile)
 
 
 def test_lowering_retains_runtime_environment_and_working_directory():
@@ -87,11 +111,11 @@ def test_lowering_retains_runtime_environment_and_working_directory():
         "setup_commands": list(lowered.setup_commands),
         "environment_variables": lowered.environment_variables,
     }
-    assert environment_unused({"environment_requirements": requirements}, dockerfile) is None
+    assert environment_unused(spec(requirements), dockerfile) is None
     missing_variables = {**requirements, "environment_variables": {}}
-    assert "environment variables" in environment_unused({"environment_requirements": missing_variables}, dockerfile)
+    assert "environment variables" in environment_unused(spec(missing_variables), dockerfile)
     wrong_directory = {**requirements, "working_directory": "/workspace"}
-    assert "working directory" in environment_unused({"environment_requirements": wrong_directory}, dockerfile)
+    assert "working directory" in environment_unused(spec(wrong_directory), dockerfile)
 
 
 def test_env_applies_to_every_command_in_a_run(tmp_path):
