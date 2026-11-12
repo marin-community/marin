@@ -3,10 +3,11 @@
 
 """The task catalog: training and evaluation dataset declarations, keyed by name."""
 
-from dataclasses import replace
 
 from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 
+
+from experiments.post_training.task_curation.census_binding import bind_actor_census
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
     native_releases,
@@ -14,7 +15,7 @@ from experiments.post_training.task_curation.datasets import (
     thoughtcrime,
 )
 from experiments.post_training.task_curation.datasets.arc import arc
-from experiments.post_training.task_curation.datasets.daytona_measurements import DAYTONA_MEASUREMENTS
+from experiments.post_training.task_curation.datasets.daytona_measurements import ACTOR_CENSUS_RECEIPTS
 from experiments.post_training.task_curation.datasets.evalchemy import code as eval_code
 from experiments.post_training.task_curation.datasets.evalchemy import financebench as eval_financebench
 from experiments.post_training.task_curation.datasets.evalchemy import harness as eval_harness
@@ -86,24 +87,7 @@ def all_sources() -> dict[str, RlDataSource]:
         *campaign_releases.sources(),
         *native_releases.sources(),
     ]
-    measured_sources = []
-    for source in sources:
-        measurement = DAYTONA_MEASUREMENTS.get(source.info.id)
-        if measurement is not None:
-            dataset = source.dataset
-            if dataset is None or (dataset.name, dataset.revision) != (
-                measurement.dataset_id,
-                measurement.dataset_revision,
-            ):
-                raise ValueError(f"Daytona census does not match source input pin: {source.info.id}")
-            fields = measurement.model_dump(
-                exclude={"dataset_id", "dataset_revision", "daytona_unsafe_reasons", "daytona_roles"}
-            )
-            fields["daytona_unsafe_reasons"] = tuple(measurement.daytona_unsafe_reasons)
-            fields["daytona_roles"] = measurement.daytona_roles
-            source = replace(source, info=replace(source.info, **fields))
-        measured_sources.append(source)
-    sources = measured_sources
+    sources = [bind_actor_census(source, ACTOR_CENSUS_RECEIPTS.get(source.info.id)) for source in sources]
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")

@@ -9,12 +9,14 @@ from typing import Protocol
 
 from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
+    ActorCensusInput,
     ConvertedExamples,
     DatasetRelease,
     DaytonaMeasurement,
     DaytonaUnsafeReason,
     GradingEnvironmentEvidence,
     IndependentQC,
+    IntegrityContractSummary,
     LexicalContaminationEvidence,
     OracleValidation,
     OversightEvidence,
@@ -155,6 +157,8 @@ class SourceInfo:
     """The review this source's admission rests on, with its evidence pointers."""
 
     grading_environment: GradingEnvironmentEvidence | None = None
+    integrity_contracts: IntegrityContractSummary | None = None
+    actor_census_input: ActorCensusInput | None = None
     converted_examples: ConvertedExamples | None = None
     lexical_contamination: LexicalContaminationEvidence | None = None
     daytona_machine_slots: int | None = None
@@ -371,6 +375,8 @@ class RlDataSource[ConfigT: CatalogConfig]:
             oversight=info.oversight.level if info.oversight else OversightLevel.NONE,
             oversight_evidence=info.oversight,
             grading_environment=info.grading_environment,
+            integrity_contracts=info.integrity_contracts,
+            actor_census_input=info.actor_census_input,
             converted_examples=info.converted_examples,
             lexical_contamination=info.lexical_contamination,
             daytona_machine_slots=info.daytona_machine_slots,

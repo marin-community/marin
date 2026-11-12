@@ -1,0 +1,211 @@
+{
+  "Task Trove:laion__stackexchange-unix-sandboxes-verified-v2": {
+    "input": {
+      "converter_revision": "63ea5e7fb1450b54379b1479cf5a5b5a61d504a6",
+      "converter_version": "3",
+      "dataset_id": "open-athena/tasktrove-unix-medium-quick-20261112",
+      "dataset_revision": "2287a9698aa508aa6ae442d923d2cd68c2b7075c",
+      "evidence_url": "s3://marin-rno2a/rl-data/atlas/actor-census/0a7f9a881ddd8834fee4/2026.11.12.4/.artifact.json",
+      "measured_tasks": 10000,
+      "task_specs_sha256": "5401965a21b8cf550395b0d8bbde785545b7e23e1c1c778a3e47722659822344"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "open-athena/tasktrove-unix-medium-quick-20261112",
+      "dataset_revision": "2287a9698aa508aa6ae442d923d2cd68c2b7075c",
+      "daytona_count_basis": "Complete 10000-TaskSpec census from open-athena/tasktrove-unix-medium-quick-20261112@2287a9698aa508aa6ae442d923d2cd68c2b7075c; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-rno2a/rl-data/atlas/lexical/text/0a7f9a881ddd8834fee4/2026.11.12.3",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "Task Trove:laion__stackexchange-unix-sandboxes-verified-v2"
+  },
+  "Task Trove:laion__swegym-tasks-patched-validated-v5": {
+    "input": {
+      "converter_revision": "a4a0784a34366cfb396607791e7c7a6b7f00bac85529b7f396ab7782770c666e",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-swegym-tasks-patched-validated-v5-6bceda5a-taskcompendium-20261112",
+      "dataset_revision": "8dbf618490a58626c3829928ed648a2f513ae4e9",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/fbab7945a8925cce024b/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2428,
+      "task_specs_sha256": "cc8c71bb6ac61f84357cffdf1de76463c3f0e6e927b49bf7443ca48c9202a23f"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "open-athena/task-trove-laion-swegym-tasks-patched-validated-v5-6bceda5a-taskcompendium-20261112",
+      "dataset_revision": "8dbf618490a58626c3829928ed648a2f513ae4e9",
+      "daytona_count_basis": "Complete 2428-TaskSpec census from open-athena/task-trove-laion-swegym-tasks-patched-validated-v5-6bceda5a-taskcompendium-20261112@8dbf618490a58626c3829928ed648a2f513ae4e9; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/fbab7945a8925cce024b/2026.11.12.4",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 2428,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {},
+            "machine_slots": 2428
+          }
+        },
+        "grader": {}
+      },
+      "daytona_snapshot_count": 7,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "Task Trove:laion__swegym-tasks-patched-validated-v5"
+  },
+  "Task Trove:laion__swesmith-oracle-filtered-v2": {
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "4",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/437216b25a51b8f4f80d/2026.11.12.4/.artifact.json",
+      "measured_tasks": 12720,
+      "task_specs_sha256": "60a49f86a7a351261f1db6a1c87c9ac31c778cf3e8aa66239418cecc34825c08"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "daytona_count_basis": "Complete 12720-TaskSpec census from open-thoughts/TaskTrove@02923004846e4e73862c20962f823a6d05100e7a; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/437216b25a51b8f4f80d/2026.11.12.2",
+      "daytona_execution_failures": 12720,
+      "daytona_machine_slots": 12720,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: Unresolved Docker build context must be built and pinned before execution": 12720
+            },
+            "machine_slots": 12720
+          }
+        },
+        "grader": {
+          "daytona": {
+            "failures": {
+              "grader: Unresolved Docker build context must be built and pinned before execution": 12720
+            },
+            "machine_slots": 12720
+          }
+        }
+      },
+      "daytona_snapshot_count": 5,
+      "daytona_unsafe_counts": {
+        "unbuilt_image": 12720
+      },
+      "daytona_unsafe_details": {
+        "unbuilt_image": "agent: Unresolved Docker build context must be built and pinned before execution"
+      },
+      "daytona_unsafe_reasons": [
+        "unbuilt_image"
+      ]
+    },
+    "source_id": "Task Trove:laion__swesmith-oracle-filtered-v2"
+  },
+  "Task Trove:laion__toolscale-v4": {
+    "input": {
+      "converter_revision": "438fa72165955472cdcc2a0b8eafc13ace4cc0c84ed3331778b8ab7736bb5dd0",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-toolscale-v4-2d3990a5-taskcompendium-20261112",
+      "dataset_revision": "f7fb60a9d76428a021b1c0e051f7ca71be73ddbd",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/9fd3ea3b156fd1cf8807/2026.11.12.4/.artifact.json",
+      "measured_tasks": 4048,
+      "task_specs_sha256": "3b5fa17b9bf2273dadc9c68b4decd4502744abf57ff59ef78885ff9e13f86e5b"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "open-athena/task-trove-laion-toolscale-v4-2d3990a5-taskcompendium-20261112",
+      "dataset_revision": "f7fb60a9d76428a021b1c0e051f7ca71be73ddbd",
+      "daytona_count_basis": "Complete 4048-TaskSpec census from open-athena/task-trove-laion-toolscale-v4-2d3990a5-taskcompendium-20261112@f7fb60a9d76428a021b1c0e051f7ca71be73ddbd; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/9fd3ea3b156fd1cf8807/2026.11.12.4",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 4048,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {},
+            "machine_slots": 4048
+          }
+        },
+        "grader": {}
+      },
+      "daytona_snapshot_count": 4048,
+      "daytona_unsafe_counts": {
+        "too_many_snapshots": 4048
+      },
+      "daytona_unsafe_details": {
+        "too_many_snapshots": "4048 actor snapshot identities exceed the 10-snapshot budget"
+      },
+      "daytona_unsafe_reasons": [
+        "too_many_snapshots"
+      ]
+    },
+    "source_id": "Task Trove:laion__toolscale-v4"
+  },
+  "Task Trove:laion__tulu3-sft-personas-math-sandboxes-verified-v3": {
+    "input": {
+      "converter_revision": "a47b617ff80a30096606c113a128994bb013e20d65e55e13a016e54f3ee07c81",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-tulu3-sft-personas-math-sandboxes-verified-v3-5de37fd5-taskcompendium-20261112",
+      "dataset_revision": "5bdb54edd8813ad0f3839af7f09c6d252f22bc20",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/54aa232d4c56d35ea839/2026.11.12.4/.artifact.json",
+      "measured_tasks": 9998,
+      "task_specs_sha256": "9968f4be6c9e61eaaab95580a2d953e7547900bad7859c960a06badfda1c1b7e"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "open-athena/task-trove-laion-tulu3-sft-personas-math-sandboxes-verified-v3-5de37fd5-taskcompendium-20261112",
+      "dataset_revision": "5bdb54edd8813ad0f3839af7f09c6d252f22bc20",
+      "daytona_count_basis": "Complete 9998-TaskSpec census from open-athena/task-trove-laion-tulu3-sft-personas-math-sandboxes-verified-v3-5de37fd5-taskcompendium-20261112@5bdb54edd8813ad0f3839af7f09c6d252f22bc20; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/54aa232d4c56d35ea839/2026.11.12.4",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 9998,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {},
+            "machine_slots": 9998
+          }
+        },
+        "grader": {}
+      },
+      "daytona_snapshot_count": 1,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "Task Trove:laion__tulu3-sft-personas-math-sandboxes-verified-v3"
+  },
+  "Task Trove:laion__wizardlm-orca-v4": {
+    "input": {
+      "converter_revision": "63ea5e7fb1450b54379b1479cf5a5b5a61d504a6",
+      "converter_version": "3",
+      "dataset_id": "open-athena/tasktrove-wizard_orca-medium-quick-20261112",
+      "dataset_revision": "04b33f3773ddadb6dd0f35a79d7a56b62dd4068b",
+      "evidence_url": "s3://marin-rno2a/rl-data/atlas/actor-census/d8deaa2424d7ddf7b333/2026.11.12.4/.artifact.json",
+      "measured_tasks": 9999,
+      "task_specs_sha256": "99ff76cb619a5c112833bb9da7c8bd98bca13282f275b2f05649cf5299431992"
+    },
+    "integrity_contracts": null,
+    "measurement": {
+      "dataset_id": "open-athena/tasktrove-wizard_orca-medium-quick-20261112",
+      "dataset_revision": "04b33f3773ddadb6dd0f35a79d7a56b62dd4068b",
+      "daytona_count_basis": "Complete 9999-TaskSpec census from open-athena/tasktrove-wizard_orca-medium-quick-20261112@04b33f3773ddadb6dd0f35a79d7a56b62dd4068b; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-rno2a/rl-data/atlas/lexical/text/d8deaa2424d7ddf7b333/2026.11.12.3",
+      "daytona_execution_failures": 0,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_snapshot_count": 0,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": []
+    },
+    "source_id": "Task Trove:laion__wizardlm-orca-v4"
+  }
+}
