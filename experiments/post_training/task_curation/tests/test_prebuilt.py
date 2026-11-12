@@ -224,7 +224,7 @@ def test_reply_only_rewrite_needs_no_agent_machine(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("change", ["none", "hash", "duplicate", "missing_environment"])
 def test_canonical_judged_release_preserves_tasks_without_a_runtime_envelope(tmp_path, monkeypatch, change):
-    task = TaskSpec.model_validate(json.loads(_task("reply")["lowered_task_spec"])["task"])
+    task = TaskSpec.model_validate(json.loads(prebuilt_task("reply")["lowered_task_spec"])["task"])
     if change != "missing_environment":
         task = task.model_copy(
             update={
@@ -255,6 +255,10 @@ def test_canonical_judged_release_preserves_tasks_without_a_runtime_envelope(tmp
         with pytest.raises(ValueError, match=r"recorded hash|Duplicate published task|grading environment requires"):
             prebuilt.import_taskcompendium_cohort(_cohort(len(rows)))
         return
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
+    source = RlDataSource(
+        config=_cohort(1),
         pipeline=prebuilt.import_taskcompendium_prebuilt,
         info=SourceInfo(id="reply", title="reply", origin="fixture", task_format=TaskFormat.TASKCOMPENDIUM),
     )
@@ -266,6 +270,7 @@ def test_canonical_judged_release_preserves_tasks_without_a_runtime_envelope(tmp
     for view in ("normalize", "final"):
         admitted = pq.read_table(next((destination / view).glob("*.parquet"))).to_pylist()
         assert [r["task_json"] for r in admitted] == [serialized]
+
 
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
 @pytest.mark.parametrize("state", ["missing", "failed", "passed"])
@@ -296,6 +301,10 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
         return str(receipt_path)
 
     monkeypatch.setattr(prebuilt, "hf_hub_download", download)
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
+    source = RlDataSource(
+        config=_cohort(1),
         pipeline=prebuilt.import_prebuilt,
         info=SourceInfo(id="fixture:oracle", title="oracle", origin="fixture", task_format=TaskFormat.TASKCOMPENDIUM),
     )
