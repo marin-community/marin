@@ -9,6 +9,7 @@ from taskcompendium.pipeline.resource_calibration import (
     CALIBRATION_CAP,
     INITIAL_REQUIREMENTS,
     FailureSignal,
+    ResourceDimension,
     ResourceUsage,
     failure_signal,
     next_requirements,
@@ -72,6 +73,20 @@ def test_mixed_failures_reach_caps_without_growing_unrelated_resources():
     assert (
         next_requirements(
             CALIBRATION_CAP, FailureSignal.AGENT_TIMEOUT, ResourceUsage(cpu_seconds=4800, elapsed_seconds=300)
+        )
+        is None
+    )
+
+
+def test_partial_source_declarations_stay_fixed_during_missing_resource_calibration():
+    shape = INITIAL_REQUIREMENTS.model_copy(update={"cpus": 2, "agent_timeout_sec": 900})
+    fixed = frozenset({ResourceDimension.CPUS, ResourceDimension.AGENT_TIMEOUT})
+    assert next_requirements(shape, FailureSignal.OOM, ResourceUsage(), fixed) == shape.model_copy(
+        update={"memory_mb": 4096}
+    )
+    assert (
+        next_requirements(
+            shape, FailureSignal.AGENT_TIMEOUT, ResourceUsage(cpu_seconds=1800, elapsed_seconds=900), fixed
         )
         is None
     )

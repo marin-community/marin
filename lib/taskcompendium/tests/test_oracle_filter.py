@@ -35,6 +35,7 @@ def test_oracle_filter_requires_scored_success_instead_of_reward_only_receipts()
     assert not require_oracle_filter(current, oracle_receipt([current], failed=frozenset({current.id})))
     document = oracle_receipt([current]).model_dump(mode="json")
     document["tasks"][current.id]["trials"][0]["verdict"] = {"status": "infra_error", "reward": 1}
+    document["tasks"][current.id]["calibration"]["attempts"][0]["verdict"] = {"status": "infra_error", "reward": 1}
     document["tasks"][current.id]["exclusion_reason"] = "unscored verifier"
     assert not require_oracle_filter(current, OracleFilterReceipt.model_validate(document))
 
@@ -51,6 +52,14 @@ def test_changed_task_or_incomplete_population_cannot_reuse_an_oracle_receipt():
         OracleFilterReceipt.model_validate(document)
 
 
-def test_non_oracle_tasks_do_not_need_oracle_execution():
+def test_calibration_only_oracle_cannot_supply_admission_evidence():
     current = task().model_copy(update={"resources": ResourceGroups()})
-    assert require_oracle_filter(current, None)
+    with pytest.raises(ValueError, match="full-population Harbor oracle filter"):
+        require_oracle_filter(current, None)
+    receipt = oracle_receipt([current])
+    assert receipt.tasks[current.id].trials == ()
+    assert require_oracle_filter(current, receipt)
+    document = receipt.model_dump(mode="json")
+    document["tasks"][current.id]["calibration"]["oracle_kind"] = "original"
+    with pytest.raises(ValidationError, match=r"calibration-only|Calibration-only"):
+        OracleFilterReceipt.model_validate(document)

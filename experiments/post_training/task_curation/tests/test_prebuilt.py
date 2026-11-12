@@ -39,6 +39,13 @@ def _write(tmp_path, rows: list[dict]):
     path = tmp_path / "tasks.parquet"
     table = pa.Table.from_pylist(rows, schema=pa.schema([("path", pa.string()), ("lowered_task_spec", pa.string())]))
     pq.write_table(table, path)
+    specs = [TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"]) for row in rows]
+    receipt = oracle_receipt(specs)
+    for row, spec in zip(rows, specs, strict=True):
+        receipt.tasks[spec.id] = receipt.tasks[spec.id].model_copy(
+            update={"runtime_sha256": canonical_sha256(json.loads(row["lowered_task_spec"]).get("runtime"))}
+        )
+    (tmp_path / prebuilt.ORACLE_FILTER_FILENAME).write_text(receipt.model_dump_json())
     return path
 
 
@@ -71,7 +78,7 @@ def test_an_envelope_without_machine_shapes_is_refused(tmp_path, monkeypatch):
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
 def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_path, monkeypatch, mode):
     published = _write(tmp_path, [prebuilt_task("a"), prebuilt_task("b")])
-    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(published))
+    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(published.parent / kwargs["filename"]))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
     source = RlDataSource(
@@ -132,6 +139,7 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
     path = tmp_path / "tasks.parquet"
     pq.write_table(pa.Table.from_pylist([{"task_spec": serialized}]), path)
     (tmp_path / "controls.jsonl").write_text(json.dumps(receipt) + "\n")
+    (tmp_path / prebuilt.ORACLE_FILTER_FILENAME).write_text(oracle_receipt([task]).model_dump_json())
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(tmp_path / kwargs["filename"]))
     if change == "none":
         assert prebuilt.import_harbor_cohort(_cohort(1)) == str(path)
@@ -171,7 +179,7 @@ def test_prebuilt_workspace_cohort_rejects_missing_environment_without_capabilit
 @pytest.mark.parametrize("qualified", [False, True])
 def test_direct_prebuilt_admission_requires_oversight_but_allows_unsafe_tasks(tmp_path, monkeypatch, qualified):
     path = _write(tmp_path, [prebuilt_task("a")])
-    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
+    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(path.parent / kwargs["filename"]))
     config = prebuilt.PrebuiltCohort(
         name="unsafe-cohort", version="2026.11.12.1", repo="org/repo", revision="rev", expected_rows=1
     )

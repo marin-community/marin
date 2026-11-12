@@ -61,7 +61,6 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.oracle_filter import (
     OracleFilterReceipt,
-    has_oracle_solution,
     oracle_recipe_identity,
     require_oracle_filter,
 )
@@ -944,16 +943,16 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
         raise ValueError(f"The initial raw task panel is capped at {MAX_SOURCE_QUALITY_SAMPLE_SIZE}")
     panel = _sample_panel(run)
     oracle_filter = config.oracle_filter
-    has_oracles = run.recipe.oracle_solutions or any(
-        has_oracle_solution(row.result.task) for row in panel.converted if not isinstance(row.result, ImportRejection)
-    )
-    if has_oracles and oracle_filter is None:
+    if oracle_filter is None:
         raise ValueError("SAMPLE/FULL admission requires a full-population Harbor oracle filter receipt")
     if oracle_filter is not None and (
         oracle_filter.recipe_identity != oracle_recipe_identity(run.recipe)
         or oracle_filter.input_rows != panel.sample.population_count
     ):
         raise ValueError("Oracle filter receipt belongs to a different recipe or input population")
+    for row in panel.converted:
+        if not isinstance(row.result, ImportRejection):
+            require_oracle_filter(row.result.task, oracle_filter)
     review = config.review if run.recipe.rubric is not None else None
     decision = _gate_quality(run, panel, review)
     expanded = config.mode == SourceProcessingMode.FULL and decision.status in EXPANDED_QUALITY

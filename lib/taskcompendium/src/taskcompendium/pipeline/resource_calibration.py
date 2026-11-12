@@ -15,6 +15,7 @@ INITIAL_REQUIREMENTS = ExecutionRequirements(
 CALIBRATION_CAP = ExecutionRequirements(
     cpus=16, memory_mb=65536, storage_mb=131072, agent_timeout_sec=14400, verifier_timeout_sec=1800
 )
+CPU_BOUND_FRACTION = 0.9
 
 
 class FailureSignal(StrEnum):
@@ -23,6 +24,15 @@ class FailureSignal(StrEnum):
     AGENT_TIMEOUT = "agent_timeout"
     VERIFIER_TIMEOUT = "verifier_timeout"
     NON_RESOURCE = "non_resource"
+    INFRASTRUCTURE = "infrastructure"
+
+
+class ResourceDimension(StrEnum):
+    CPUS = "cpus"
+    MEMORY = "memory_mb"
+    STORAGE = "storage_mb"
+    AGENT_TIMEOUT = "agent_timeout_sec"
+    VERIFIER_TIMEOUT = "verifier_timeout_sec"
 
 
 class ResourceUsage(BaseModel):
@@ -38,7 +48,7 @@ class ResourceUsage(BaseModel):
         return (
             self.cpu_seconds is not None
             and self.elapsed_seconds is not None
-            and self.cpu_seconds / self.elapsed_seconds >= 0.9 * cpus
+            and self.cpu_seconds / self.elapsed_seconds >= CPU_BOUND_FRACTION * cpus
         )
 
 
@@ -61,11 +71,16 @@ def failure_signal(exception: dict | None, log: str, usage: ResourceUsage) -> Fa
         return FailureSignal.AGENT_TIMEOUT
     if kind == "VerifierTimeoutError":
         return FailureSignal.VERIFIER_TIMEOUT
+    if kind in {"EnvironmentStartTimeoutError", "RuntimeServiceError", "RuntimeLogCollectionError", "ConnectionError"}:
+        return FailureSignal.INFRASTRUCTURE
     return FailureSignal.NON_RESOURCE
 
 
 def next_requirements(
-    current: ExecutionRequirements, signal: FailureSignal, usage: ResourceUsage
+    current: ExecutionRequirements,
+    signal: FailureSignal,
+    usage: ResourceUsage,
+    fixed: frozenset[ResourceDimension] = frozenset(),
 ) -> ExecutionRequirements | None:
     """Double only failed dimensions, stopping when none can grow within the cap."""
     fields = {
@@ -74,12 +89,15 @@ def next_requirements(
         FailureSignal.AGENT_TIMEOUT: ["agent_timeout_sec"],
         FailureSignal.VERIFIER_TIMEOUT: ["verifier_timeout_sec"],
         FailureSignal.NON_RESOURCE: [],
+        FailureSignal.INFRASTRUCTURE: [],
     }[signal]
     if signal is FailureSignal.AGENT_TIMEOUT and usage.cpu_bound(current.cpus):
         fields.append("cpus")
     values = current.model_dump()
     limits = CALIBRATION_CAP.model_dump()
     for name in fields:
+        if ResourceDimension(name) in fixed:
+            continue
         values[name] = min(values[name] * 2, limits[name])
     updated = ExecutionRequirements.model_validate(values)
     return updated if updated != current else None

@@ -4,17 +4,26 @@
 """Full Harbor trial receipts preserve oracle exits and filter exact converted bytes."""
 
 import json
+import subprocess
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import ExecutionRequirements, TaskSpec
+from taskcompendium.pipeline.oracle_filter import require_oracle_filter
 from taskcompendium.runtime.resources import inline_resource
 
-from experiments.post_training.task_curation.oracle_filter import filter_cohort
+from experiments.post_training.task_curation.oracle_filter import (
+    calibrate_cohort,
+    filter_cohort,
+    harbor_inspection,
+    native_requirements,
+    write_task_map,
+)
 
 from .prebuilt_fixtures import prebuilt_task
 
@@ -36,8 +45,20 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
         envelope["task"] = task.model_dump(mode="json")
         row["lowered_task_spec"] = json.dumps(envelope)
         rows.append(row)
-        checksum = canonical_sha256({"native": task_id})
+        native = tmp_path / "native" / task_id
+        (native / "environment").mkdir(parents=True)
+        (native / "tests").mkdir(parents=True)
+        (native / "solution").mkdir()
+        (native / "instruction.md").write_text("Run the task.")
+        (native / "tests/test.sh").write_text("true\n")
+        (native / "solution/solve.sh").write_text("true\n")
+        (native / "task.toml").write_text(
+            "[environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n"
+            "[agent]\ntimeout_sec=300\n[verifier]\ntimeout_sec=60\n"
+        )
+        checksum = harbor_inspection("tasks", [str(native)])[str(native)]["task_checksum"]
         mappings[task_id] = {
+            "task_path": str(native),
             "task_name": task_id,
             "task_checksum": checksum,
             "task_sha256": canonical_sha256(task.model_dump(mode="json")),
@@ -59,6 +80,7 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
                     "task": {"path": task_path},
                     "agent": {"name": "oracle"},
                     "environment": {"type": "local"},
+                    "resolved_timeouts": {"agent": 300, "verifier": 60, "agent_setup": 360, "environment_build": 600},
                     "trials_dir": str(tmp_path / "jobs"),
                     "trial_name": root.name,
                 },
@@ -101,3 +123,101 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
     pq.write_table(pa.Table.from_pylist(rows), cohort)
     with pytest.raises(ValueError, match="changed after Harbor export"):
         filter_cohort(cohort, task_map, tmp_path / "jobs", tmp_path / "stale/tasks.parquet")
+
+
+@pytest.mark.parametrize("declared", [False, True])
+def test_population_calibration_doubles_missing_limits_but_preserves_swe_declarations(tmp_path, monkeypatch, declared):
+    row = prebuilt_task("task")
+    envelope = json.loads(row["lowered_task_spec"])
+    task = TaskSpec.model_validate(envelope["task"])
+    swe = ExecutionRequirements(
+        cpus=2, memory_mb=4096, storage_mb=10240, agent_timeout_sec=900, verifier_timeout_sec=600
+    )
+    task = task.model_copy(
+        update={
+            "execution_requirements": swe if declared else None,
+            "resources": task.resources.model_copy(
+                update={"oracle": (inline_resource("solution/solve.sh", b"true\n"),)}
+            ),
+        }
+    )
+    envelope["task"] = task.model_dump(mode="json")
+    row["lowered_task_spec"] = json.dumps(envelope)
+    cohort = tmp_path / "tasks.parquet"
+    pq.write_table(pa.Table.from_pylist([row]), cohort)
+    native = tmp_path / "native" / "task"
+    for folder in ("environment", "tests", "solution"):
+        (native / folder).mkdir(parents=True)
+    (native / "instruction.md").write_text("Solve the task.")
+    (native / "tests/test.sh").write_text("true\n")
+    (native / "solution/solve.sh").write_text("true\n")
+    (native / "task.toml").write_text(
+        "[environment]\ncpus=2\nmemory_mb=4096\nstorage_mb=10240\n"
+        "[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=600\n"
+        if declared
+        else "[environment]\n"
+    )
+    mapping = tmp_path / "map.json"
+    write_task_map(cohort, native.parent, mapping)
+    production_run = subprocess.run
+    shapes = []
+
+    def execute(args, **kwargs):
+        if "harbor" not in args:
+            return production_run(args, **kwargs)
+        config = json.loads(Path(args[-1]).read_text())
+        package = Path(config["task"]["path"])
+        shape = native_requirements(package)
+        shapes.append(shape)
+        config["resolved_timeouts"] = {
+            "agent": shape.agent_timeout_sec,
+            "verifier": shape.verifier_timeout_sec,
+            "agent_setup": 360,
+            "environment_build": 600,
+        }
+        root = Path(config["trials_dir"]) / "oracle"
+        (root / "agent").mkdir(parents=True)
+        (root / "verifier").mkdir()
+        oom = len(shapes) == 1
+        checksum = harbor_inspection("tasks", [str(package)])[str(package)]["task_checksum"]
+        result = {
+            "id": str(uuid4()),
+            "task_name": "task",
+            "trial_name": "oracle",
+            "trial_uri": root.as_uri(),
+            "task_id": {"path": str(package)},
+            "task_checksum": checksum,
+            "config": config,
+            "agent_info": {"name": "oracle", "version": "1"},
+            "verifier_result": {"rewards": {"reward": 1}},
+            "finished_at": datetime(2026, 11, 12, tzinfo=UTC).isoformat(),
+            "completion": {"trajectory_present": False},
+            "exception_info": None,
+        }
+        (root / "result.json").write_text(json.dumps(result))
+        (root / "agent/exit-code.txt").write_text("137" if oom else "0")
+        (root / "agent/resource-usage.json").write_text(json.dumps({"oom_kills": int(oom)}))
+        (root / "verifier/verdict.json").write_text(json.dumps({"status": "scored", "reward": 1}))
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(subprocess, "run", execute)
+    run = tmp_path / "calibrated"
+    calibrate_cohort(cohort, mapping, run, "local", {}, 1)
+    output = tmp_path / "filtered/tasks.parquet"
+    receipt = filter_cohort(cohort, run / "task-map.json", run, output)
+    entry = receipt.tasks[task.id]
+    if declared:
+        assert shapes == [swe]
+        assert not entry.passed
+        assert entry.exclusion_reason == "resource_calibration:oom"
+        assert pq.read_table(output).num_rows == 0
+        assert receipt.uniform_requirements is None
+    else:
+        assert [(shape.cpus, shape.memory_mb, shape.storage_mb) for shape in shapes] == [
+            (1, 2048, 2048),
+            (1, 4096, 2048),
+        ]
+        retained = TaskSpec.model_validate(json.loads(pq.read_table(output).to_pylist()[0]["lowered_task_spec"])["task"])
+        assert retained.execution_requirements.memory_mb == 4096
+        assert require_oracle_filter(retained, receipt, envelope["runtime"])
+        assert len(entry.calibration.attempts) == 2

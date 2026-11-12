@@ -3,6 +3,7 @@ import contextlib
 import hashlib
 import logging
 import math
+import time
 import traceback
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
@@ -42,6 +43,7 @@ from harbor.models.trial.result import (
     TrialCompletion,
 )
 from harbor.models.verifier.result import VerifierResult
+from harbor.resource_usage import resource_counters, write_resource_usage
 from harbor.skills import ResolvedSkill, resolve_skills
 from harbor.tasks.client import TaskClient
 from harbor.trial.artifact_handler import ArtifactHandler
@@ -905,13 +907,20 @@ class Trial(ABC):
                         "Verifier model services failed to close"
                     ) from exc
 
-        return await self._await_phase(
-            verify(),
-            timeout_sec=timeout_sec,
-            timeout_error=VerifierTimeoutError(
-                f"Verifier execution timed out after {timeout_sec} seconds"
-            ),
-        )
+        usage_filename = self.config.agent.kwargs.get("resource_usage_filename")
+        counters = await resource_counters(environment) if usage_filename else {}
+        started = time.monotonic()
+        try:
+            return await self._await_phase(
+                verify(),
+                timeout_sec=timeout_sec,
+                timeout_error=VerifierTimeoutError(
+                    f"Verifier execution timed out after {timeout_sec} seconds"
+                ),
+            )
+        finally:
+            if usage_filename:
+                await write_resource_usage(environment, self.paths.verifier_dir / usage_filename, counters, started)
 
     async def _run_separate_verifier(
         self,

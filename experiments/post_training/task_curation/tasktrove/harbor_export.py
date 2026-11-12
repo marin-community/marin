@@ -544,6 +544,11 @@ def harbor_payload(
         },
         "artifacts": [{"source": path, "destination": path.removeprefix("/")} for path in dict.fromkeys(outputs)],
     }
+    if task.execution_requirements is not None:
+        shape = task.execution_requirements
+        config["environment"].update(cpus=shape.cpus, memory_mb=shape.memory_mb, storage_mb=shape.storage_mb)
+        config["agent"]["timeout_sec"] = shape.agent_timeout_sec
+        config["verifier"]["timeout_sec"] = shape.verifier_timeout_sec
     if environment_mode == VerifierEnvironmentMode.SHARED:
         config["verifier"]["environment_mode"] = "shared"
         config["verifier"].pop("environment")

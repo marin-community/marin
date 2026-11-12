@@ -19,6 +19,7 @@ from taskcompendium.convert.answers import numeric_answer_task, source_defect
 from taskcompendium.models import (
     CommandSemantics,
     EnvironmentRequirements,
+    ExecutionRequirements,
     ExitCodeReward,
     ScriptGrader,
     Source,
@@ -93,6 +94,9 @@ SVAMP_RUBRIC = ReviewRubric(
 )
 GRADER_IMAGE = "fixture@sha256:" + "b" * 64
 GRADER_ENVIRONMENT = EnvironmentRequirements(docker_image=GRADER_IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS)
+EXECUTION_REQUIREMENTS = ExecutionRequirements(
+    cpus=1, memory_mb=2048, storage_mb=2048, agent_timeout_sec=300, verifier_timeout_sec=60
+)
 
 
 def svamp_row_task(row: RawRow) -> TaskSpec | ImportRejection:
@@ -100,8 +104,13 @@ def svamp_row_task(row: RawRow) -> TaskSpec | ImportRejection:
     body, question = row.data.get("Body"), row.data.get("Question")
     if not isinstance(body, str) or not isinstance(question, str):
         return source_defect("missing_prompt", "Body and Question must be strings")
-    return numeric_answer_task(
+    task = numeric_answer_task(
         row, prompt=f"{body.strip()} {question.strip()}", answer=row.data.get("Answer"), tolerance_abs=0, tolerance_rel=0
+    )
+    return (
+        task.model_copy(update={"execution_requirements": EXECUTION_REQUIREMENTS})
+        if isinstance(task, TaskSpec)
+        else task
     )
 
 

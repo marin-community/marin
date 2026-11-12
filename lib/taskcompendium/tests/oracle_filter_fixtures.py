@@ -9,6 +9,7 @@ from taskcompendium.pipeline.oracle_filter import (
     OracleFilterReceipt,
     OracleTaskReceipt,
     OracleTrialReceipt,
+    ResourceCalibrationReceipt,
     has_oracle_solution,
 )
 
@@ -20,7 +21,14 @@ def oracle_receipt(tasks: list[TaskSpec], recipe_identity: str | None = None, *,
         checksum = canonical_sha256({"native_task": task.id})
         result = {
             "agent_info": {"name": "oracle"},
-            "config": {"agent": {"name": "oracle"}, "environment": {"type": "local"}},
+            "config": {
+                "agent": {"name": "oracle"},
+                "environment": {"type": "local"},
+                "resolved_timeouts": {
+                    "agent": task.execution_requirements.agent_timeout_sec,
+                    "verifier": task.execution_requirements.verifier_timeout_sec,
+                },
+            },
             "task_name": task.id,
             "task_checksum": checksum,
             "exception_info": None,
@@ -34,12 +42,18 @@ def oracle_receipt(tasks: list[TaskSpec], recipe_identity: str | None = None, *,
             verdict={"status": "scored", "reward": reward},
             oracle_exit_code=0,
             result_sha256=canonical_sha256(result),
+            execution_requirements=task.execution_requirements,
         )
         entries[task.id] = OracleTaskReceipt(
             task_sha256=canonical_sha256(task.model_dump(mode="json")),
             harbor_task_checksum=checksum,
             has_oracle=has_oracle_solution(task),
             trials=(trial,) if has_oracle_solution(task) else (),
+            calibration=ResourceCalibrationReceipt(
+                declared_requirements=task.execution_requirements,
+                oracle_kind="original" if has_oracle_solution(task) else "calibration_only",
+                attempts=(trial,),
+            ),
             exclusion_reason="oracle_failed" if reward == 0 else None,
         )
     return OracleFilterReceipt(

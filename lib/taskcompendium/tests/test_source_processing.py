@@ -9,6 +9,7 @@ import json
 from collections import Counter
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import cast
 
 import pyarrow as pa
@@ -49,6 +50,7 @@ from taskcompendium.pipeline.source_processing import (
 )
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
+from taskcompendium.pipeline.sources import conversion_context, source_shards, staged_raw_file_rows
 from taskcompendium.pipeline.stages import AuditExecution, prepare_source
 from taskcompendium.runtime.resources import inline_resource
 
@@ -188,11 +190,42 @@ def pipeline_config(
 def run_pipeline(
     recipe: SourceRecipe, source: Path, output: Path, config: SourcePipelineConfig, **options
 ) -> SourcePipelineResult:
+    if config.oracle_filter is None and not recipe.oracle_solutions and recipe.convert is not convert_script_graded:
+        config = calibrated_config(recipe, source, config)
     with ZephyrContext(max_workers=2, chunk_storage_prefix=str(output.parent / "chunks")) as context:
         result = run_source_pipeline(
             recipe, context, str(source), str(output), config, mode=config.mode, canonical_source=recipe.name, **options
         )
     return cast(SourcePipelineResult, result)
+
+
+def calibrated_config(recipe: SourceRecipe, source: Path, config: SourcePipelineConfig, overrides=None):
+    """Prepare independent execution receipts before the pipeline invocation being tested."""
+    with TemporaryDirectory() as directory:
+        converter = recipe.convert
+        if isinstance(converter, (RecordingConverter, MixedPanelConverter)):
+            converter = replace(converter, directory=directory)
+        decoder = recipe.source.decode
+        if isinstance(decoder, RecordingDecoder):
+            decoder = replace(decoder, directory=directory)
+        parts = recipe.source.parts
+        if isinstance(parts, AlternatingParts):
+            parts = replace(parts, produced=directory)
+        fixture_recipe = replace(recipe, convert=converter, source=replace(recipe.source, decode=decoder, parts=parts))
+        tasks = []
+        input_rows = 0
+        for shard in source_shards(str(source), fixture_recipe.source, overrides):
+            for raw in staged_raw_file_rows(
+                str(source), shard, fixture_recipe.source, conversion_context(fixture_recipe)
+            ):
+                input_rows += 1
+                result = convert_source_row(raw, fixture_recipe).result
+                if not isinstance(result, ImportRejection):
+                    tasks.append(result.task)
+        receipt = oracle_receipt(tasks, oracle_recipe_identity(recipe)).model_copy(
+            update={"input_rows": input_rows, "conversion_rejections": input_rows - len(tasks)}
+        )
+        return replace(config, oracle_filter=receipt)
 
 
 def read_json(path) -> dict:
@@ -375,6 +408,7 @@ def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mo
     service = BatchService(quality=quality)
     reviewer = BatchReviewer(service, "fixture", "revision")
     config = pipeline_config(mode, reviewer)
+    config = calibrated_config(recipe, source, config)
     with PanelPlanContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
         result = run_source_pipeline(
             recipe,
@@ -749,6 +783,7 @@ def test_source_failure_retains_nested_preparation_evidence_without_review_reque
         verification=SourceVerificationPolicy(1, 0, 1, 1),
         normalized_shards=1,
     )
+    config = calibrated_config(recipe, source, config)
     with ZephyrContext(max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
         with pytest.raises(ValueError, match="requires a reviewer"):
             run_source_pipeline(
@@ -998,7 +1033,7 @@ def test_reviewed_modes_share_quick_conversion_records_before_admission(tmp_path
             context,
             str(source),
             str(tmp_path / "reviewed"),
-            pipeline_config(mode, reviewer),
+            calibrated_config(recipe, source, pipeline_config(mode, reviewer), overrides),
             mode=mode,
             canonical_source=recipe.name,
             parquet_shard_bytes=1,
