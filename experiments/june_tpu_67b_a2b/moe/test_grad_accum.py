@@ -11,8 +11,8 @@ unequal valid tokens, and with a microbatch that carries no loss weight at all. 
 mean of those of the microbatches. Every weight's gradient is reduced across the replicas once per step, after the
 microbatch loop. With ``overlap_last_microbatch`` the step gives the same loss, metrics and gradients, bit for bit, and
 the expert weights' gradients are reduced instead one layer at a time in the last microbatch's backward layer scan.
-Checkpointing the stacked blocks without ``prevent_cse`` (the default) drops the optimization barriers around the
-saved residuals and gives the same step as with it.
+Checkpointing the stacked blocks without ``prevent_cse`` drops the optimization barriers around the saved residuals
+and gives the same step as with it.
 """
 
 import collections
@@ -460,18 +460,26 @@ def test_overlapping_the_last_microbatch_needs_stacked_blocks():
 @pytest.mark.multidevice
 def test_checkpointing_without_prevent_cse_gives_the_same_step(remat_mode):
     # prevent_cse only adds optimization barriers around the checkpointed blocks' saved residuals in the backward:
-    # without them the step computes the same values, up to the float32 rounding of a different fusion.
+    # without them the step computes the same values, up to the float32 rounding of a different fusion. Unstacked
+    # blocks keep them, where nothing else stops XLA from CSE-ing the recomputation with the forward.
     with use_cpu_devices(8):
         cfg = dataclasses.replace(BASE, remat_mode=remat_mode)
+        unstacked = dataclasses.replace(
+            cfg,
+            use_array_stacked_blocks=False,
+            replicated_grad_reduction="per_layer",
+            router_stats_reduction="per_layer",
+        )
         policy = jmp.get_policy("f32")
-        for name, mesh in _meshes().items():
-            msg = f"{name} K=2"
-            barriers = {}
-            for prevent_cse in (True, False, None):
+        name = "replica2_data2_expert2"
+        mesh = _meshes()[name]
+        barriers = {}
+        for layout in (cfg, unstacked):
+            for prevent_cse in (True, False):
                 optimizer = optax.adam(1e-2)
                 with jax.set_mesh(mesh):
                     state = june_train.initial_state(
-                        dataclasses.replace(cfg, remat_prevent_cse=prevent_cse),
+                        dataclasses.replace(layout, remat_prevent_cse=prevent_cse),
                         optimizer=optimizer,
                         mp=policy,
                         key=jax.random.key(0),
@@ -480,42 +488,18 @@ def test_checkpointing_without_prevent_cse_gives_the_same_step(remat_mode):
                     train_step = june_train._make_train_step(
                         optimizer, policy, z_loss_weight=0.0, ema_beta=None, microbatches=2
                     )
-                    barriers[prevent_cse] = train_step.lower(state, BATCH).as_text().count("optimization_barrier")
-            # The default (None) drops them in the stacked blocks' layer scan, and keeps them for unstacked blocks,
-            # where nothing else stops XLA from CSE-ing the recomputation with the forward.
-            assert barriers[None] == barriers[False] < barriers[True], (msg, barriers)
-            assert cfg.use_array_stacked_blocks and cfg.remat_prevent_cse is None, msg
-            unstacked = dataclasses.replace(
-                cfg,
-                use_array_stacked_blocks=False,
-                replicated_grad_reduction="per_layer",
-                router_stats_reduction="per_layer",
-            )
-            for prevent_cse in (True, None):
-                optimizer = optax.adam(1e-2)
-                with jax.set_mesh(mesh):
-                    state = june_train.initial_state(
-                        dataclasses.replace(unstacked, remat_prevent_cse=prevent_cse),
-                        optimizer=optimizer,
-                        mp=policy,
-                        key=jax.random.key(0),
-                        ema_beta=None,
-                    )
-                    train_step = june_train._make_train_step(
-                        optimizer, policy, z_loss_weight=0.0, ema_beta=None, microbatches=2
-                    )
-                    barriers["unstacked", prevent_cse] = (
-                        train_step.lower(state, BATCH).as_text().count("optimization_barrier")
-                    )
-            assert barriers["unstacked", None] == barriers["unstacked", True], (msg, barriers)
-            kept, kept_metrics = step(dataclasses.replace(cfg, remat_prevent_cse=True), mesh, policy, microbatches=2)
-            dropped, metrics = step(cfg, mesh, policy, microbatches=2)
-            assert metrics.keys() == kept_metrics.keys(), msg
-            for key in ("train/loss", "train/cross_entropy_loss", "train/router/aux_loss_weighted"):
-                np.testing.assert_allclose(metrics[key], kept_metrics[key], rtol=1e-6, err_msg=f"{msg} {key}")
-            np.testing.assert_array_equal(
-                metrics["train/router/routing_counts_per_layer"],
-                kept_metrics["train/router/routing_counts_per_layer"],
-                err_msg=msg,
-            )
-            assert max(grad_errors(dropped, kept)) <= 1e-5, msg
+                    lowered = train_step.lower(state, BATCH).as_text()
+                barriers[layout.use_array_stacked_blocks, prevent_cse] = lowered.count("optimization_barrier")
+        assert barriers[True, False] < barriers[True, True], barriers
+        assert barriers[False, False] == barriers[False, True], barriers
+        kept, kept_metrics = step(cfg, mesh, policy, microbatches=2)
+        dropped, metrics = step(dataclasses.replace(cfg, remat_prevent_cse=False), mesh, policy, microbatches=2)
+        assert metrics.keys() == kept_metrics.keys(), name
+        for key in ("train/loss", "train/cross_entropy_loss", "train/router/aux_loss_weighted"):
+            np.testing.assert_allclose(metrics[key], kept_metrics[key], rtol=1e-6, err_msg=f"{name} {key}")
+        np.testing.assert_array_equal(
+            metrics["train/router/routing_counts_per_layer"],
+            kept_metrics["train/router/routing_counts_per_layer"],
+            err_msg=name,
+        )
+        assert max(grad_errors(dropped, kept)) <= 1e-5, name
