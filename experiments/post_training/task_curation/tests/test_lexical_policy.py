@@ -100,12 +100,11 @@ def test_report_keeps_benchmarks_out_of_the_training_review_table(tmp_path, monk
 
 
 def test_training_use_keeps_benchmark_tagged_sources_in_remediation_review():
-    source = next(
-        source
-        for source in all_sources().values()
-        if isinstance(source.config, CurationRecipe)
-        and source.config.intended_use is IntendedUse.TRAIN
-        and "benchmark" in source.info.tags
+    source = next(source for source in all_sources().values() if isinstance(source.config, CurationRecipe))
+    source = replace(
+        source,
+        config=replace(source.config, intended_use=IntendedUse.TRAIN),
+        info=replace(source.info, tags=("benchmark",)),
     )
     assert source_lexical_use(source) is LexicalUse.TRAIN
     assert measurement_for_use(overlap_measurement(source.dataset.name), source_lexical_use(source)).receipt is None
