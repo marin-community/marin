@@ -9,30 +9,28 @@ from collections import defaultdict
 
 from finestore.eval import EvalSample, EvaluationStore, Grading, SampleKind
 from marin.evaluation.records import EvalRunRecord, TaskCoverage, write_record
-from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.archive import digest, write_once
 
 
 def publish_evaluation(*, source: str, record: EvalRunRecord, records_prefix: str) -> str:
     """Keep every native row, including failed trials; index scores only when verified."""
-    fs, prefix = filesystem_for(source)
-    files = sorted(fs.glob(prefix_join(prefix, "*.jsonl")))
+    files = sorted((StoragePath(source) / "*.jsonl").glob(), key=str)
     if not files:
         raise ValueError("No native evaluation files to archive")
     signature = hashlib.sha256(
         json.dumps(
             {
                 "record": record.model_dump(mode="json", by_alias=True),
-                "sources": [(path, hashlib.sha256(fs.cat_file(path)).hexdigest()) for path in files],
+                "sources": [(str(path), hashlib.sha256(path.read_bytes()).hexdigest()) for path in files],
             },
             sort_keys=True,
         ).encode()
     ).hexdigest()
-    archive_fs, marker_key = filesystem_for(prefix_join(record.results_path, "publication.json"))
-    if archive_fs.exists(marker_key):
-        marker = json.loads(archive_fs.cat_file(marker_key))
+    marker_path = StoragePath(record.results_path) / "publication.json"
+    if marker_path.exists():
+        marker = json.loads(marker_path.read_bytes())
         if marker["signature"] != signature:
             raise ValueError("Evaluation archive inputs changed")
         if digest(marker["record_path"])[1] != marker["record_sha256"]:
@@ -45,8 +43,8 @@ def publish_evaluation(*, source: str, record: EvalRunRecord, records_prefix: st
     store = EvaluationStore.open(record.results_path, writer_id="long-loop-archive")
     try:
         for path in files:
-            raw = fs.cat_file(path)
-            filename = path.rsplit("/", 1)[-1]
+            raw = path.read_bytes()
+            filename = path.name
             store.add_source_artifact(filename, raw, content_type="application/x-ndjson")
             if filename == "aggregated_results.jsonl":
                 continue

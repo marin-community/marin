@@ -24,20 +24,20 @@ class DaytonaSnapshotPool:
     def __init__(self, capacity: int, prefix: str, api_key: str, api_url: str, target: str):
         self.connection = DaytonaConfig(api_key=api_key, api_url=api_url, target=target)
         self.prefix = prefix
-        self.sources: dict[str, tuple[str, dict]] = {}
+        self.sources: dict[str, tuple[str, Resources]] = {}
         self.pool = SnapshotLeasePool(capacity, self.build, self.delete)
 
     async def acquire(self, spec: MachineSpec, token: str) -> str:
         if not isinstance(spec.source, RegistryImage):
             raise ValueError("Snapshot pool accepts registry images only")
-        resources = asdict(Resources(
+        resources = Resources(
             cpu=spec.cpus,
             memory=math.ceil(spec.memory_mb / 1024) if spec.memory_mb is not None else None,
             disk=math.ceil(spec.storage_mb / 1024) if spec.storage_mb is not None else None,
             gpu=spec.gpus or None,
-        ))
+        )
         source = (spec.source.reference, resources)
-        identity = hashlib.sha256(json.dumps(source, sort_keys=True).encode()).hexdigest()
+        identity = hashlib.sha256(json.dumps((spec.source.reference, asdict(resources)), sort_keys=True).encode()).hexdigest()
         self.sources[identity] = source
         started = time.monotonic()
         name = await self.pool.acquire(identity, token)
@@ -58,7 +58,7 @@ class DaytonaSnapshotPool:
         name = self.prefix + identity[:32]
         started = time.monotonic()
         async with AsyncDaytona(self.connection) as client, asyncio.timeout(600):
-            snapshot = await client.snapshot.create(CreateSnapshotParams(name=name, image=image, resources=Resources(**resources)))
+            snapshot = await client.snapshot.create(CreateSnapshotParams(name=name, image=image, resources=resources))
             while snapshot.state != SnapshotState.ACTIVE:
                 if snapshot.state in (SnapshotState.ERROR, SnapshotState.BUILD_FAILED, SnapshotState.INACTIVE):
                     raise RuntimeError(f"Snapshot build failed: {name}, {snapshot.state}")

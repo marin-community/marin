@@ -19,7 +19,7 @@ from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.inference.iris import remote_inference
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from experiments.post_training.long_loop.preflight import EndpointEvidence, check_endpoint
@@ -123,8 +123,7 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str, settings: di
                 response.raise_for_status()
                 receipts[str(token)] = response.json()
                 stops[token] = response.json()["choices"][0]["finish_reason"]
-            fs, path = filesystem_for(prefix_join(model_root, "hf/tokenizer.json"))
-            tokenizer_hash = hashlib.sha256(fs.cat_file(path)).hexdigest()
+            tokenizer_hash = hashlib.sha256((StoragePath(model_root) / "hf/tokenizer.json").read_bytes()).hexdigest()
             check_endpoint(
                 EndpointEvidence(
                     PROBE_MODEL_ALIAS,

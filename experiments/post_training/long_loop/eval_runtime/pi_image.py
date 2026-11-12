@@ -21,7 +21,7 @@ class PiPathScope(StrEnum):
 
 
 def with_pi_runtime(task: TaskSpec, *, path_scope: PiPathScope) -> TaskSpec:
-    """Preserve the task image and files, adding an isolated locked Pi install."""
+    """Derive a task package with locked Pi tooling and the declared BixBench judge policy."""
     files = {resource.path: resource for resource in task.resources.verifier}
     config = tomllib.loads(resource_bytes(files["task.toml"]).decode())
     environment = config.setdefault("environment", {})

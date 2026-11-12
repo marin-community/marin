@@ -44,6 +44,16 @@ def validate_before_allocation(document: str) -> dict:
         return validate_launch(document, Path(directory))
 
 
+def _vllm_cpu_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "VLLM_ALLOW_LONG_MAX_MODEL_LEN"):
+        environment.pop(name, None)
+    environment["UV_PROJECT_ENVIRONMENT"] = str(
+        Path(tempfile.gettempdir()) / f"long-loop-context-{serving_release().source_commit}"
+    )
+    return environment
+
+
 def validate_selected_context(document: str) -> dict:
     """Validate the actual export config on CPU before allocating any judge GPUs."""
     launch = yaml.safe_load(document)
@@ -70,13 +80,7 @@ def validate_selected_context(document: str) -> dict:
         )
         # Isolate GPU-wheel dependencies from the ordinary CPU launcher environment.
         command[command.index("--extra") + 1] = "vllm"
-        environment = dict(os.environ)
-        for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "VLLM_ALLOW_LONG_MAX_MODEL_LEN"):
-            environment.pop(name, None)
-        environment["UV_PROJECT_ENVIRONMENT"] = str(
-            Path(tempfile.gettempdir()) / f"long-loop-context-{serving_release().source_commit}"
-        )
-        result = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=1800)
+        result = subprocess.run(command, env=_vllm_cpu_environment(), capture_output=True, text=True, timeout=1800)
         if result.returncode:
             raise ValueError(f"Selected checkpoint context failed before judge allocation:\n{result.stderr}")
         receipt = json.loads(receipt_path.read_text())
@@ -118,11 +122,7 @@ def tool_preflight(*, output: str, model_uri: str, tokenizer: dict, generator: d
             str(root / "receipt.json"),
         )
         command[command.index("--extra") + 1] = "vllm"
-        environment = dict(os.environ)
-        for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "VLLM_ALLOW_LONG_MAX_MODEL_LEN"):
-            environment.pop(name, None)
-        environment["UV_PROJECT_ENVIRONMENT"] = f"/tmp/long-loop-context-{serving_release().source_commit}"
-        result = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=1800)
+        result = subprocess.run(command, env=_vllm_cpu_environment(), capture_output=True, text=True, timeout=1800)
         (StoragePath(output) / "probe.log").write_text(result.stdout + result.stderr)
         if (root / "receipt.json").exists():
             (StoragePath(output) / "receipt.json").write_text((root / "receipt.json").read_text())
