@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass, field, replace
 from functools import partial
 
+from finestore.rl.curation import DatasetRelease, OracleValidation, SourceQualityResult
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.tasks import conversation_task
@@ -31,6 +32,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import VERIFIER_DATA, archive_file
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
+from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_prebuilt
 from experiments.post_training.task_curation.source import (
     OversightEvidence,
     OversightLevel,
@@ -56,10 +58,113 @@ TIERED_JUDGE_SOURCES = frozenset(
         "tasktrove-wizard_orca",
     }
 )
+MECHANICALLY_RETIRED_JUDGE_SOURCES = frozenset({"tasktrove-glaive_code", "tasktrove-tezos"})
 JUDGE_QUALIFICATION_PENDING = (
     " Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. "
     "Source-level qualification and a private pinned release are required before admission."
 )
+
+QUICK_COHORTS = {
+    "tasktrove-codereview": PrebuiltCohort(
+        name="tasktrove-codereview",
+        version="3",
+        repo="open-athena/tasktrove-codereview-medium-quick-20261112",
+        revision="52c90a79a59262b1a25f76992430a1d81e42f0e4",
+        expected_rows=10000,
+    ),
+    "tasktrove-stack_overflow": PrebuiltCohort(
+        name="tasktrove-stack_overflow",
+        version="3",
+        repo="open-athena/tasktrove-stack_overflow-medium-quick-20261112",
+        revision="07603684451d8db4caef836dbb07c89a4a7e0588",
+        expected_rows=10000,
+    ),
+    "tasktrove-superuser": PrebuiltCohort(
+        name="tasktrove-superuser",
+        version="3",
+        repo="open-athena/tasktrove-superuser-medium-quick-20261112",
+        revision="01237834f87d26f4c26f92d0e876904071dd2dd1",
+        expected_rows=10000,
+    ),
+    "tasktrove-unix": PrebuiltCohort(
+        name="tasktrove-unix",
+        version="3",
+        repo="open-athena/tasktrove-unix-medium-quick-20261112",
+        revision="2287a9698aa508aa6ae442d923d2cd68c2b7075c",
+        expected_rows=10000,
+    ),
+    "tasktrove-wizard_orca": PrebuiltCohort(
+        name="tasktrove-wizard_orca",
+        version="3",
+        repo="open-athena/tasktrove-wizard_orca-medium-quick-20261112",
+        revision="04b33f3773ddadb6dd0f35a79d7a56b62dd4068b",
+        expected_rows=9999,
+    ),
+}
+
+QUALITY_RESULTS = {
+    "tasktrove-codereview": SourceQualityResult(
+        reviewed=8,
+        issue_count=0,
+        uncertain_count=12,
+        unavailable_count=0,
+        issues=[],
+        repair_recommendation=(
+            "Recover missing original inputs and review uncertain cases " "without changing the source question."
+        ),
+    ),
+    "tasktrove-stack_overflow": SourceQualityResult(
+        reviewed=17,
+        issue_count=1,
+        uncertain_count=3,
+        unavailable_count=0,
+        issues=[
+            "tasktrove-stack_overflow-29d641c5f112650cb2e0b221c7f7506f69666fd4597b4a2e031c95c9f6c4507a: "
+            "The critical sed expression is truncated; its pattern, quoting and pipeline tail are missing.",
+        ],
+        repair_recommendation=(
+            "Recover missing original inputs and review uncertain cases " "without changing the source question."
+        ),
+    ),
+    "tasktrove-superuser": SourceQualityResult(
+        reviewed=17,
+        issue_count=0,
+        uncertain_count=3,
+        unavailable_count=0,
+        issues=[],
+        repair_recommendation=(
+            "Recover missing original inputs and review uncertain cases " "without changing the source question."
+        ),
+    ),
+    "tasktrove-unix": SourceQualityResult(
+        reviewed=20,
+        issue_count=0,
+        uncertain_count=0,
+        unavailable_count=0,
+        issues=[],
+        repair_recommendation=(
+            "Validate a sufficient judge completion budget and rerun the frozen unscored control; "
+            "no confirmed task content issue was found."
+        ),
+    ),
+    "tasktrove-wizard_orca": SourceQualityResult(
+        reviewed=19,
+        issue_count=3,
+        uncertain_count=1,
+        unavailable_count=0,
+        issues=[
+            "tasktrove-wizard_orca-d22aa7b5e903f253fb176f733d0a1b160afa886d5de2f366a782fcfefd12bb8b: "
+            "The requested existing Ruby code and reword() implementation are missing.",
+            "tasktrove-wizard_orca-547dae17b2c05be34efc2db58127165cde1210d6a92bacb6450ca40415a10a46: "
+            "The required XML records, region data and lifespan values are missing.",
+            "tasktrove-wizard_orca-6cdc5e58f06dbd27396a74f0dc0bb15db93d38404232932c4a62f8c7c142a1e8: "
+            "The numerical question omits unit prices and discount rules.",
+        ],
+        repair_recommendation=(
+            "Recover missing original inputs and review uncertain cases " "without changing the source question."
+        ),
+    ),
+}
 
 NUMBERED = re.compile(r"^\s*\d+[.)]\s*")
 DOMAIN_TAGS = (
@@ -441,10 +546,10 @@ SOURCES = (
 
 
 def candidate_sources() -> list[RlDataSource[CurationRecipe]]:
-    """Keep unqualified recipes available to explicit QA without registering them."""
+    """Retain raw conversion recipes for explicit QA, including mechanically retired candidates."""
     return [
         RlDataSource(
-            pipeline=None if source.name in TIERED_JUDGE_SOURCES - QA_PINNED_SOURCES else process_rows,
+            pipeline=None if source.name in MECHANICALLY_RETIRED_JUDGE_SOURCES else process_rows,
             info=replace(
                 source.info,
                 task_format=TaskFormat.TASKCOMPENDIUM,
@@ -485,5 +590,56 @@ def candidate_sources() -> list[RlDataSource[CurationRecipe]]:
     ]
 
 
-def sources() -> list[RlDataSource[CurationRecipe]]:
-    return [source for source in candidate_sources() if source.pipeline is not None]
+def published_reply(source: RlDataSource[CurationRecipe]) -> RlDataSource[PrebuiltCohort]:
+    """Consume the private converted population while preserving its upstream identity."""
+    cohort = QUICK_COHORTS[source.name]
+    upstream = source.dataset
+    assert upstream is not None
+    control_coverage = (
+        "Unix has 19/20 parsed manual controls matching both reviewers; ed8810b16c9fb4c6 exhausted "
+        "the 2048-token completion budget without a verdict. Twenty unrelated and twenty empty "
+        "submissions score zero. The unscored completion is an execution issue, not a content defect."
+        if source.name == "tasktrove-unix"
+        else "Ten unique exact-spec manual controls match the blinded verdicts; unrelated and empty controls score zero."
+    )
+    return RlDataSource(
+        config=cohort,
+        pipeline=import_taskcompendium_prebuilt,
+        info=replace(
+            source.info,
+            count=cohort.expected_rows,
+            current_release=DatasetRelease(repo=cohort.repo, revision=cohort.revision, url=cohort.dataset.url),
+            upstream_url=upstream.url,
+            build_path="TaskTrove MEDIUM v3/private QUICK import",
+            quality_result=QUALITY_RESULTS[source.name],
+            tags=(
+                *(tag for tag in source.info.tags if tag not in {"agentic", "multi-turn"}),
+                "single-turn",
+                "reply-only",
+            ),
+            oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+            oversight=OversightEvidence(
+                level=OversightLevel.NONE,
+                campaign="RL Data Atlas",
+                recipe_revision="TaskTrove MEDIUM conversion version 3",
+                verification="Private QUICK import; no SAMPLE/FULL qualification is claimed. "
+                + control_coverage
+                + " Receipts: "
+                + cohort.dataset.url
+                + "/production-controls.json",
+                reviewed=20,
+                admitted=0,
+            ),
+            notes=source.info.notes + " Private QUICK release reuses the complete converted TaskSpecs. "
+            "QC Result is informational; uncertain review coverage and judge execution issues remain explicit. "
+            "Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
+        ),
+    )
+
+
+def sources() -> list[RlDataSource]:
+    return [
+        published_reply(source) if source.name in QUICK_COHORTS else source
+        for source in candidate_sources()
+        if source.pipeline is not None
+    ]

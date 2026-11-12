@@ -5976,45 +5976,6 @@
       }
     },
     {
-      "id": "Task Trove:laion__stackexchange-codereview-sandboxes-verified-v2",
-      "name": "tasktrove-codereview",
-      "display_name": "laion/stackexchange-codereview-sandboxes-verified-v2",
-      "origin": "Task Trove",
-      "family": "llm-judge-freeform",
-      "tags": [
-        "agentic",
-        "multi-turn"
-      ],
-      "task_count": 10000,
-      "notes": "Judge-only code review with a four-criterion rubric and no reference; the rubric ships under tests/, which the agent never sees. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Admission blocked: production snapshot identity measurement is missing. Admission blocked: execution requirement measurement is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing. Candidate converter version 3 remains available for explicit QA; no training source is registered.",
-      "dataset_id": "open-thoughts/TaskTrove",
-      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
-      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
-      "type": "Agentic",
-      "turns": "Multi-turn",
-      "is_benchmark": false,
-      "kind": "Dataset",
-      "status": "Not selectable",
-      "pipeline": null,
-      "independent_qc": {
-        "verdict": "some_issues",
-        "method": "Two blinded reviews of twenty frozen source tasks, plus production judge and coverage controls; source qualification remains incomplete.",
-        "reviewed": 20,
-        "admitted": null,
-        "evidence_url": "https://huggingface.co/datasets/open-athena/atlas-tasktrove-qa-reply-20261112/tree/3693fdf8f3552f6a47f3e19e47dcf1a21a441fae"
-      },
-      "daytona_safety": "unassessed",
-      "daytona_snapshot_count": null,
-      "daytona_snapshot_threshold": null,
-      "daytona_count_basis": null,
-      "oracle_validation": null,
-      "oversight": "none",
-      "oversight_evidence": null,
-      "grading_environment": null,
-      "disposition": "qa_incomplete",
-      "disposition_reason": "Blinded task-contract review found missing code/context and rubric mismatches; no qualified private source release exists."
-    },
-    {
       "id": "Task Trove:laion__glaive-code-assistant-sandboxes-verified-v2",
       "name": "tasktrove-glaive_code",
       "display_name": "laion/glaive-code-assistant-sandboxes-verified-v2",
@@ -6050,86 +6011,9 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "qa_incomplete",
-      "disposition_reason": "Exact converted-task MEDIUM controls rejected a correct authored answer; source-level grading soundness is unresolved."
-    },
-    {
-      "id": "Task Trove:laion__stackexchange-overflow-sandboxes-verified-v2",
-      "name": "tasktrove-stack_overflow",
-      "display_name": "laion/stackexchange-overflow-sandboxes-verified-v2",
-      "origin": "Task Trove",
-      "family": "llm-judge-freeform",
-      "tags": [
-        "agentic",
-        "multi-turn"
-      ],
-      "task_count": 10000,
-      "notes": "Judge-only Stack Overflow answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Admission blocked: production snapshot identity measurement is missing. Admission blocked: execution requirement measurement is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing. Candidate converter version 3 remains available for explicit QA; no training source is registered.",
-      "dataset_id": "open-thoughts/TaskTrove",
-      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
-      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
-      "type": "Agentic",
-      "turns": "Multi-turn",
-      "is_benchmark": false,
-      "kind": "Dataset",
-      "status": "Not selectable",
-      "pipeline": null,
-      "independent_qc": {
-        "verdict": "some_issues",
-        "method": "Two blinded reviews of twenty frozen source tasks, plus production judge and coverage controls; source qualification remains incomplete.",
-        "reviewed": 20,
-        "admitted": null,
-        "evidence_url": "https://huggingface.co/datasets/open-athena/atlas-tasktrove-qa-reply-20261112/tree/3693fdf8f3552f6a47f3e19e47dcf1a21a441fae"
-      },
-      "daytona_safety": "unassessed",
-      "daytona_snapshot_count": null,
-      "daytona_snapshot_threshold": null,
-      "daytona_count_basis": null,
-      "oracle_validation": null,
-      "oversight": "none",
-      "oversight_evidence": null,
-      "grading_environment": null,
-      "disposition": "qa_incomplete",
-      "disposition_reason": "Blinded task-contract review found incomplete requests and rubric constraints unsupported by the public request."
-    },
-    {
-      "id": "Task Trove:laion__stackexchange-superuser-sandboxes-verified-v2",
-      "name": "tasktrove-superuser",
-      "display_name": "laion/stackexchange-superuser-sandboxes-verified-v2",
-      "origin": "Task Trove",
-      "family": "llm-judge-freeform",
-      "tags": [
-        "agentic",
-        "multi-turn"
-      ],
-      "task_count": 10000,
-      "notes": "Judge-only Super User answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Admission blocked: production snapshot identity measurement is missing. Admission blocked: execution requirement measurement is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing. Candidate converter version 3 remains available for explicit QA; no training source is registered.",
-      "dataset_id": "open-thoughts/TaskTrove",
-      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
-      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
-      "type": "Agentic",
-      "turns": "Multi-turn",
-      "is_benchmark": false,
-      "kind": "Dataset",
-      "status": "Not selectable",
-      "pipeline": null,
-      "independent_qc": {
-        "verdict": "some_issues",
-        "method": "Two blinded reviews of twenty frozen source tasks, plus production judge and coverage controls; source qualification remains incomplete.",
-        "reviewed": 20,
-        "admitted": null,
-        "evidence_url": "https://huggingface.co/datasets/open-athena/atlas-tasktrove-qa-reply-20261112/tree/3693fdf8f3552f6a47f3e19e47dcf1a21a441fae"
-      },
-      "daytona_safety": "unassessed",
-      "daytona_snapshot_count": null,
-      "daytona_snapshot_threshold": null,
-      "daytona_count_basis": null,
-      "oracle_validation": null,
-      "oversight": "none",
-      "oversight_evidence": null,
-      "grading_environment": null,
-      "disposition": "qa_incomplete",
-      "disposition_reason": "Blinded task-contract review found defective public requests or criteria; source-level qualification is incomplete."
+      "disposition": "mechanical_grader_defect",
+      "disposition_reason": "Exact version-3 production grader false negative on cb02a85f65b2b7d1: both blinded reviewers label the authored answer correct, reward is 0. This is a mechanical grader defect, separate from informational content QC.",
+      "repair_recommendation": "Repair the judge rubric/harness or select a validated tier; rerun frozen positive/wrong/empty controls through the production grader and independent blinded comparison."
     },
     {
       "id": "Task Trove:laion__stackexchange-tezos-sandboxes-verified-v2",
@@ -6167,86 +6051,9 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "qa_incomplete",
-      "disposition_reason": "Exact converted-task MEDIUM controls accepted a wrong authored answer; a separate historical behavior label remains disputed."
-    },
-    {
-      "id": "Task Trove:laion__stackexchange-unix-sandboxes-verified-v2",
-      "name": "tasktrove-unix",
-      "display_name": "laion/stackexchange-unix-sandboxes-verified-v2",
-      "origin": "Task Trove",
-      "family": "llm-judge-freeform",
-      "tags": [
-        "agentic",
-        "multi-turn"
-      ],
-      "task_count": 10000,
-      "notes": "Judge-only Unix & Linux answers, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Admission blocked: production snapshot identity measurement is missing. Admission blocked: execution requirement measurement is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing. Candidate converter version 3 remains available for explicit QA; no training source is registered.",
-      "dataset_id": "open-thoughts/TaskTrove",
-      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
-      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
-      "type": "Agentic",
-      "turns": "Multi-turn",
-      "is_benchmark": false,
-      "kind": "Dataset",
-      "status": "Not selectable",
-      "pipeline": null,
-      "independent_qc": {
-        "verdict": "some_issues",
-        "method": "Two blinded reviews of twenty frozen source tasks, plus production judge and coverage controls; source qualification remains incomplete.",
-        "reviewed": 20,
-        "admitted": null,
-        "evidence_url": "https://huggingface.co/datasets/open-athena/atlas-tasktrove-qa-reply-20261112/tree/3693fdf8f3552f6a47f3e19e47dcf1a21a441fae"
-      },
-      "daytona_safety": "unassessed",
-      "daytona_snapshot_count": null,
-      "daytona_snapshot_threshold": null,
-      "daytona_count_basis": null,
-      "oracle_validation": null,
-      "oversight": "none",
-      "oversight_evidence": null,
-      "grading_environment": null,
-      "disposition": "qa_incomplete",
-      "disposition_reason": "One of twenty frozen production manual controls exhausted the MEDIUM output budget with no parsed verdict; complete grading coverage is missing."
-    },
-    {
-      "id": "Task Trove:laion__wizardlm-orca-v4",
-      "name": "tasktrove-wizard_orca",
-      "display_name": "laion/wizardlm-orca-v4",
-      "origin": "Task Trove",
-      "family": "llm-judge-freeform",
-      "tags": [
-        "agentic",
-        "multi-turn"
-      ],
-      "task_count": 10000,
-      "notes": "Judge-only over Orca-style instructions, three-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Admission blocked: production snapshot identity measurement is missing. Admission blocked: execution requirement measurement is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing. Candidate converter version 3 remains available for explicit QA; no training source is registered.",
-      "dataset_id": "open-thoughts/TaskTrove",
-      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
-      "url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
-      "type": "Agentic",
-      "turns": "Multi-turn",
-      "is_benchmark": false,
-      "kind": "Dataset",
-      "status": "Not selectable",
-      "pipeline": null,
-      "independent_qc": {
-        "verdict": "some_issues",
-        "method": "Two blinded reviews of twenty frozen source tasks, plus production judge and coverage controls; source qualification remains incomplete.",
-        "reviewed": 20,
-        "admitted": null,
-        "evidence_url": "https://huggingface.co/datasets/open-athena/atlas-tasktrove-qa-reply-20261112/tree/3693fdf8f3552f6a47f3e19e47dcf1a21a441fae"
-      },
-      "daytona_safety": "unassessed",
-      "daytona_snapshot_count": null,
-      "daytona_snapshot_threshold": null,
-      "daytona_count_basis": null,
-      "oracle_validation": null,
-      "oversight": "none",
-      "oversight_evidence": null,
-      "grading_environment": null,
-      "disposition": "qa_incomplete",
-      "disposition_reason": "Blinded task-contract review found source defects and a qualified private source release is missing."
+      "disposition": "mechanical_grader_defect",
+      "disposition_reason": "Exact version-3 production grader false positive on 998117519e9f11ae: both blinded reviewers label the authored answer incorrect, reward is 1. The primary expectation was erroneous. This mechanical failure is separate from historical-version ambiguity.",
+      "repair_recommendation": "Correct the authored expectation and repair the judge configuration; validate wrong-answer rejection and correct-answer acceptance against independent reviewers through the production grader."
     },
     {
       "id": "Task Trove:laion__nemotron-gym-structured-outputs-v4",
@@ -6284,8 +6091,9 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "qa_incomplete",
-      "disposition_reason": "Grounding judges have empty models and the nested ScriptSpec judge connection is not supplied through production grading; full format-plus-grounding qualification is missing."
+      "disposition": "mechanical_grader_defect",
+      "disposition_reason": "All 50,606 retained converted tasks still contain an unspecified nested judge model, and the full ScriptSpec composition does not inject the runtime JudgeConnection. Grounding-only controls do not validate complete positive extraction.",
+      "repair_recommendation": "Pin an instantiable judge and its active settings, supply JudgeConnection through the complete script composition, and validate format plus schema plus grounding with positive/wrong/empty production controls."
     }
   ]
 }
