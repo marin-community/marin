@@ -37,7 +37,7 @@ import logging
 import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import pyarrow as pa
@@ -75,8 +75,17 @@ _ESCAPE = re.compile(r"\\(u[0-9a-fA-F]{4}|[nrt\"'\\/])")
 _SIMPLE_ESCAPES = {"n": "\n", "r": "\r", "t": "\t", '"': '"', "'": "'", "\\": "\\", "/": "/"}
 
 
+_WHITESPACE = re.compile(r"\s+")
+_WORD = re.compile(r"\S+")
+
+
 def normalized(text: str) -> str:
-    return " ".join(text.lower().split())
+    """Lowercase and collapse whitespace runs to one space.
+
+    A regex substitution, not ``" ".join(text.split())``: repository documents reach
+    hundreds of MB, and a list of every word costs several times the text's size.
+    """
+    return _WHITESPACE.sub(" ", text.lower()).strip()
 
 
 def unescaped(text: str) -> str:
@@ -96,16 +105,21 @@ class Target:
     field: str
     text: str
     """The field's normalized text."""
-    anchors: tuple[str, str]
-    """Two words a document must hold for the text to occur in it."""
+    anchor: str
+    """The text's longest inner word. An occurrence of the text keeps its inner words whole,
+    so every occurrence holds this word as a whole word of the document."""
+    anchor_offset: int
+    """Where ``anchor`` starts in ``text``."""
 
 
 def make_target(record_id: str, field: str, value: str) -> Target:
     text = normalized(value)
-    # An occurrence keeps every word but the first and last whole, so a document that
-    # holds the text holds its two longest inner words as whitespace-separated words.
-    inner = sorted(set(text.split()[1:-1]), key=lambda w: (-len(w), w))
-    return Target(record_id, field, text, (inner[0], inner[1] if len(inner) > 1 else inner[0]))
+    words = text.split(" ")
+    starts = [0]
+    for word in words[:-1]:
+        starts.append(starts[-1] + len(word) + 1)
+    index = max(range(1, len(words) - 1), key=lambda i: (len(words[i]), -i))
+    return Target(record_id, field, text, words[index], starts[index])
 
 
 def targets_for(records: Iterable[dict], id_field: str | None, fields: list[str], min_words: int) -> list[Target]:
@@ -136,7 +150,7 @@ class Matcher:
         self.targets = targets
         self.by_anchor: dict[str, list[int]] = defaultdict(list)
         for i, target in enumerate(targets):
-            self.by_anchor[target.anchors[0]].append(i)
+            self.by_anchor[target.anchor].append(i)
 
     def found(self, text: str) -> list[Target]:
         variants = [normalized(text)]
@@ -144,11 +158,20 @@ class Matcher:
             variants.append(normalized(unescaped(text)))
         hits: dict[int, Target] = {}
         for variant in variants:
-            words = set(variant.split())
-            for anchor in words.intersection(self.by_anchor):
+            # Compare each target only where its anchor occurs, so the cost grows with the
+            # document's length, not with its length times the number of targets.
+            anchor_starts: dict[str, list[int]] = defaultdict(list)
+            for match in _WORD.finditer(variant):
+                if match.group() in self.by_anchor:
+                    anchor_starts[match.group()].append(match.start())
+            for anchor, starts in anchor_starts.items():
                 for i in self.by_anchor[anchor]:
                     target = self.targets[i]
-                    if i not in hits and target.anchors[1] in words and target.text in variant:
+                    if i not in hits and any(
+                        variant.startswith(target.text, start - target.anchor_offset)
+                        for start in starts
+                        if start >= target.anchor_offset
+                    ):
                         hits[i] = target
         return list(hits.values())
 
@@ -224,9 +247,12 @@ def file_matches(file: SourceFile, matcher: Matcher) -> list[dict]:
     found: list[tuple[str, Target]] = []
     with StoragePath(file.path).open("rb") as f:
         for batch in pq.ParquetFile(f).iter_batches(batch_size=READ_BATCH_ROWS, columns=["id", "text"]):
-            for doc_id, text in zip(batch.column("id").to_pylist(), batch.column("text").to_pylist(), strict=True):
+            ids, texts = batch.column("id"), batch.column("text")
+            # One document at a time: a batch of large repository documents can hold GBs of text.
+            for row in range(batch.num_rows):
+                text = texts[row].as_py()
                 if text:
-                    found += [(str(doc_id), t) for t in matcher.found(text)]
+                    found += [(str(ids[row].as_py()), t) for t in matcher.found(text)]
     if not found:
         return []
     wanted = {doc_id for doc_id, _ in found}
@@ -260,7 +286,7 @@ def match_path(out_prefix: str, path: str) -> StoragePath:
 def _search_shard(out_prefix: str):
     def run(items: Iterator[dict], shard) -> Iterator[str]:
         with targets_path(out_prefix).open("r") as f:
-            matcher = Matcher([Target(t["record_id"], t["field"], t["text"], tuple(t["anchors"])) for t in json.load(f)])
+            matcher = Matcher([Target(**t) for t in json.load(f)])
         for item in items:
             out = match_path(out_prefix, item["path"])
             # A finished file's output is written whole, so a rerun skips it.
@@ -388,9 +414,7 @@ def main() -> None:
     targets = targets_for(rows, args.id_field, args.fields, args.min_words)
     if not targets:
         raise ValueError(f"no field of any record has {args.min_words} or more words")
-    targets_path(args.out_prefix).write_text(
-        json.dumps([{"record_id": t.record_id, "field": t.field, "text": t.text, "anchors": t.anchors} for t in targets])
-    )
+    targets_path(args.out_prefix).write_text(json.dumps([asdict(t) for t in targets]))
     files = store_files(store_sources(), args.sources, args.every)
     logger.info("%s: %d records, %d targets, %d files", title, len(rows), len(targets), len(files))
 

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import random
 from pathlib import Path
 
 import pyarrow as pa
@@ -11,6 +12,7 @@ from experiments.datakit.decontam.store_copies import (
     Matcher,
     SourceFile,
     file_matches,
+    normalized,
     record_summary,
     targets_for,
 )
@@ -46,6 +48,18 @@ def test_partial_or_reworded_copies_and_short_fields_are_not_found():
     assert _found(reworded) == set()
     # The 1-word label is below the word floor, so it is never searched.
     assert {t.field for t in _targets()} == {"question", "answer"}
+
+
+def test_matcher_finds_exactly_the_targets_a_substring_search_finds():
+    rng = random.Random(0)
+    vocab = ["ab", "abc", "abcd", "bcd", "cd", "x", "the", "of"]
+    records = [{"id": str(i), "text": " ".join(rng.choices(vocab, k=rng.randint(3, 6)))} for i in range(200)]
+    targets = targets_for(records, "id", ["text"], min_words=3)
+    matcher = Matcher(targets)
+    for _ in range(200):
+        doc = " ".join(rng.choices(vocab, k=rng.randint(5, 40)))
+        expected = {t.record_id for t in targets if t.text in normalized(doc)}
+        assert {t.record_id for t in matcher.found(doc)} == expected
 
 
 def _write(path: Path, rows: list[dict]) -> str:
