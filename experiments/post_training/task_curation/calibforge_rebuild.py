@@ -12,7 +12,6 @@ cannot serve is deferred with an explicit reason, never silently altered.
 """
 
 import argparse
-import base64
 import gzip
 import hashlib
 import io
@@ -33,17 +32,16 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     FileReward,
-    InlineFile,
     PlainText,
     ResourceGroups,
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
     Source,
-    TaskResource,
     TaskSpec,
     TextMessage,
 )
+from taskcompendium.runtime.resources import inline_resource
 from tomlkit.items import Table
 
 from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT, SETUP_SCRIPT
@@ -423,13 +421,9 @@ def lowered_task_spec(task_id: str, task_binary: bytes) -> dict:
         raise DeferredRebuild("requires_explicit_output_workspace")
     setup_script = (environment.get("setup") or {}).get("command", "").split()[-1].rsplit("/", 1)[-1]
 
-    def resource(path: str, content: bytes, mode: str | None = None) -> TaskResource:
-        payload = base64.b64encode(content).decode()
-        return TaskResource(path=path, source=InlineFile(content_base64=payload), mode=mode)
-
-    verifier = tuple(resource(path, files[path]) for path in sorted(files) if path.startswith("tests/"))
+    verifier = tuple(inline_resource(path, files[path]) for path in sorted(files) if path.startswith("tests/"))
     setup = tuple(
-        resource(path, files[path], "0755" if files[path].startswith(b"#!") else None)
+        inline_resource(path, files[path]).model_copy(update={"mode": "0755" if files[path].startswith(b"#!") else None})
         for path in sorted(files)
         if path.startswith("setup_files/")
     )
