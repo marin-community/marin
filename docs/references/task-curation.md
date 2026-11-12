@@ -288,13 +288,12 @@ ArtifactSteps.
 
 ## Declarations
 
-An `RlDataSource` has `info`, a typed `config` and an optional `pipeline`.
-`SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
-search tags, notes and an optional input-row count. The `deprecated` tag marks a
-source `Deprecated` in the catalog (overriding `excluded`), and its notes carry
-the deprecation reason. A source without a `pipeline` is `Inventory`: it stays
-visible in the Atlas with its evidence, but it is never admitted to selection and
-its measured Daytona and oracle evidence remains visible even without a pipeline.
+An `RlDataSource` binds source information, a typed configuration and a registered
+conversion pipeline. A declaration without that pipeline is rejected. Every Atlas
+entry enters through QUICK, SAMPLE or FULL; QUICK means converted without review,
+and does not make a source selectable for training. The deprecated tag and its
+reason remain available for registered historical sources. Removed pipeline-less
+entries are tracked in retired-inventory-only.json; their artifacts stay archived.
 
 Every runnable agentic source declares its ingested `task_format`. New agentic
 sources must ingest TaskCompendium or Harbor task directories; selection rejects
@@ -302,20 +301,19 @@ an agentic source that declares no format, and rejects MarinSkyRL's internal
 blend format unless the source appears in `GRANDFATHERED_MARINSKYRL_SOURCES`, the
 frozen list of Nemotron Ultra components admitted before the requirement. A new
 internal-format source therefore fails at selection instead of shipping.
-`independent_qc` records
-quality control a pinned release performed outside curation, so inventory-only
-pointers surface that evidence in the Atlas. The Daytona verdict is derived, never
-declared: `finestore.rl.curation.daytona_verdict` marks a non-agentic source safe,
-an agentic source with no measured count `unassessed`, and a measured source
-unsafe when its unique environment count exceeds `DAYTONA_SAFE_SNAPSHOT_LIMIT`
-(ten) or when the Daytona backend refuses any task's declared execution
-requirements. The inputs are measurements: `daytona_snapshot_count` holds the
-number of distinct environments the source's own task specs require through the
-production path, `daytona_count_basis` names the rule and payload source, and
-`daytona_execution_failures` counts refused tasks. An unsafe label does not
-remove a source from the catalog; it records that a run would exceed the org's
-limits. [Making a dataset Daytona-safe](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#making-a-dataset-daytona-safe)
-covers the faithful ways to bring one inside the budget.
+`independent_qc` records quality checks performed outside curation. Quality Result
+is computed from recorded SAMPLE/FULL issue counts and remains separate from
+mechanical exclusions and spec fidelity. Daytona is a required measured enum:
+SAFE or UNSAFE for an actor, N/A when there is no actor. Grandfathered blend
+entries show a dash. Missing measurements never imply safety.
+
+Production uses a split deployment: the Daytona label counts only actor snapshot
+identities and actor execution refusals. Ten or fewer identities with no refused
+actor requirements is SAFE; otherwise it is UNSAFE. Package-lock graders run on
+LOCAL and record separate per-role compatibility evidence. A LOCAL grader failure
+does not change the actor's Daytona label. Unsafe sources can still be ingested.
+The measured count, refused-task count, actor machine count and provenance remain
+visible beside the label.
 
 **Publishing a conversion.** A curation step that converts data publishes the converted
 artifact to the `open-athena` Hugging Face org as a **private** repository: campaign
@@ -450,6 +448,51 @@ allow_internet: allowed tasks share the backend's network; denied tasks keep
 the isolated network. LOCAL accepts only root commands (None, root, 0
 or 0:0). A task requiring another user needs a supporting environment rather
 than a user override.
+
+### Grading-environment trust model
+
+New SHARED SWE pytest packages use the versioned `SharedIntegrityContract` in
+TaskCompendium. The dependency-state field is explicitly `AGENT_MUTABLE`; it
+has no default. The agent runs as UID 10001 and may change dependencies and
+filesystem state outside the protected harness. Grading uses that same container,
+with its pytest child running as a separate UID, 10002.
+
+Before agent access, the harness captures the task-reference tests and conftests,
+pytest and its declared plugin implementations, the test interpreter and the
+control program. On every grading launch it kills agent-UID processes, overwrites
+the reference tests, removes added conftests, and supplies a protected pytest
+configuration with an explicit root directory. The runner imports protected
+pytest/plugins first, disables plugin autoload, and clears the test environment,
+including PYTHONPATH, PYTEST_ADDOPTS, LD_PRELOAD and user-site loading. Verifyit
+classifies missing candidate modules using its exception-provenance rules.
+
+The root controller owns the structured verdict directory. Test stdout is
+retained as diagnostic output and cannot serve as the verdict. Per-trial
+`site-packages-diff.json` and `startup-hooks-diff.json` compare dependency files
+and startup hooks to the pre-agent baseline. The contract records these audit
+probes and the known open `.pth` and `sitecustomize` hook gaps.
+
+This policy temporarily gives greater weight to avoiding bad RL signal from
+ignoring dependency changes than to preventing sophisticated tampering. It is
+subject to change. Planned LLM tamper audits will examine the dependency/hook
+diffs and the submitted changes; the present harness does not certify those
+open hooks against deliberate manipulation.
+
+Ingestion renders the agent-facing preamble from the same contract and prepends
+it to the task instruction. It explains the restored tests and pinned grading
+infrastructure, permits dependency and other filesystem changes, and takes
+precedence over contradictory later instructions. Auditor-only gaps do not
+appear in the preamble. The published TaskSpec records the contract ID, version
+and full configuration; native task.toml metadata carries the identical record.
+Changing the contract or preamble requires a new dataset version and renewed QA.
+
+The maintained Python SWE lowering is `harbor_payload` or `harbor_record` with
+`shared_policy=SharedGradingPolicy(dependency_state=SharedDependencyState.AGENT_MUTABLE)`.
+It moves the exact initial repository/dependency setup into Harbor's pre-agent
+setup and uses common actor images. Publish the resulting native package, copy
+its metadata integrity contract into the TaskSpec, then run full-population
+Harbor ORACLE filtering and SAMPLE/FULL QA. Legacy non-Python script runners
+remain unsupported until their language-specific contracts are qualified.
 
 An `Environment` declares grader build inputs. The converter records agent and
 grader requirements on each TaskSpec; execution selects suitable Shellbox machines.
@@ -1130,7 +1173,7 @@ mode.
 
 Every source also declares an `OversightLevel` — `none`, `sample` or `full` — with an
 `OversightEvidence` that points at the campaign, the recipe revision and the
-verification summary behind it. `none` means inventory only: the source is listed but
+verification summary behind it. `none` means converted without review: the source is listed but
 not admitted. The level is the weakest review the admission rests on, so a cohort whose
 setup fidelity ran on every task but whose verifier liveness ran on a sample is
 `sample`, not `full`. `independent_qc` stays separate evidence about the upstream

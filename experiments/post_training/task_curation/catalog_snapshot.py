@@ -4,7 +4,7 @@
 """Archive assessment records and select a campaign's catalog snapshot."""
 
 import json
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -204,7 +204,11 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                 for source_id, prior_start in published_source_starts(catalog).items()
                 if source_id in selected and source_id in previous and started < prior_start
             }
-            declarations.extend(row.declaration for source_id, row in previous.items() if source_id not in by_id)
+            declarations.extend(
+                row.declaration
+                for source_id, row in previous.items()
+                if source_id not in by_id and row.declaration.pipeline is not None
+            )
             completed = set(catalog.view.keys(ASSESSMENTS))
             rows = []
             for declaration in declarations:
@@ -217,21 +221,13 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                             part for part in (reason, f"Ignored superseded attempt from campaign {run_id}") if part
                         )
                     update = {"snapshot_id": run_id, "reason": reason}
-                    # No assessment pins an inventory-only declaration, so the code's current one wins.
-                    if attempt is None and declaration.pipeline is None and prior.declaration.pipeline is None:
+                    if (
+                        declaration.id in by_id
+                        and prior.declaration.pipeline == declaration.pipeline
+                        and prior.declaration.dataset_id == declaration.dataset_id
+                        and prior.declaration.dataset_revision == declaration.dataset_revision
+                    ):
                         update["declaration"] = declaration
-                    elif declaration.id in by_id:
-                        # The verdict and its measurement describe runtime cost, not what the pinned
-                        # assessment graded, so an unselected source picks up the current measurement.
-                        update["declaration"] = prior.declaration.model_copy(
-                            update={
-                                "daytona_safety": declaration.daytona_safety,
-                                "daytona_snapshot_count": declaration.daytona_snapshot_count,
-                                "daytona_count_basis": declaration.daytona_count_basis,
-                                "daytona_snapshot_threshold": declaration.daytona_snapshot_threshold,
-                                "oracle_validation": declaration.oracle_validation,
-                            }
-                        )
                     rows.append(prior.model_copy(update=update))
                     continue
                 unchanged = (
@@ -293,3 +289,94 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
             return snapshot
     finally:
         lease.release()
+
+
+def _refresh_snapshot(
+    root: str, snapshot_id: str, transform: Callable[[list[dict[str, Any]]], list[dict[str, Any]]]
+) -> CatalogSnapshot:
+    lease = create_lock(str(StoragePath(root) / "publication.lock"), worker_id=snapshot_id)
+    if not lease.try_acquire():
+        raise RuntimeError("Another writer is publishing the catalog; retry refresh")
+    try:
+        with lease_refresh(lease), DataStore.open(root, writer_id=f"{snapshot_id}-catalog") as store:
+            register_catalog(store)
+            catalog = CurationCatalog(root)
+            pointer = catalog.view.point(CURRENT, name="latest")
+            if pointer is None:
+                raise ValueError("A refresh requires an existing catalog snapshot")
+            if store.read_view().point(SNAPSHOTS, snapshot_id=snapshot_id) is not None:
+                raise FileExistsError(f"Catalog snapshot already exists: {snapshot_id}")
+            prior = list(
+                catalog.view.iter_rows(
+                    INVENTORY,
+                    columns=list(SnapshotSource.model_fields),
+                    where=[("snapshot_id", "==", pointer["snapshot_id"])],
+                )
+            )
+            rows = [{**row, "snapshot_id": snapshot_id} for row in transform(prior)]
+            snapshot = CatalogSnapshot(
+                snapshot_id=snapshot_id, created_at=datetime.now(UTC).isoformat(), source_count=len(rows)
+            )
+            lease.refresh()
+            if store.read_view().point(CURRENT, name="latest") != pointer:
+                raise RuntimeError("Catalog selection changed during refresh; retry publication")
+            with store.transaction() as transaction:
+                transaction.table(INVENTORY).extend(rows)
+                transaction.table(SNAPSHOTS).add(snapshot.model_dump(mode="json"))
+                transaction.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id=snapshot_id).model_dump())
+            return snapshot
+    finally:
+        lease.release()
+
+
+def retire_catalog_sources(root: str, snapshot_id: str, retired_source_ids: frozenset[str]) -> CatalogSnapshot:
+    """Retire selected entries without rewriting declarations, assessments or artifacts."""
+
+    def retired(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        unknown = retired_source_ids - {row["id"] for row in records}
+        if unknown:
+            raise ValueError(f"Retirement IDs are not in the selected catalog: {sorted(unknown)}")
+        return [row for row in records if row["id"] not in retired_source_ids]
+
+    return _refresh_snapshot(root, snapshot_id, retired)
+
+
+def refresh_catalog(
+    root: str, snapshot_id: str, sources: Iterable[RlDataSource], *, retired_source_ids: frozenset[str]
+) -> CatalogSnapshot:
+    """Refresh matching-pin declarations and explicitly retire entries, retaining all evidence.
+
+    This publishes a catalog snapshot, not a curation campaign. It cannot add an
+    unconverted source or reuse an assessment under a changed source pin.
+    """
+    declarations = {source.info.id: source.declaration for source in sources}
+    if retired_source_ids & declarations.keys():
+        raise ValueError("A retired source cannot also be declared in the refreshed catalog")
+
+    def refreshed(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        unknown = retired_source_ids - {row["id"] for row in records}
+        if unknown:
+            raise ValueError(f"Retirement IDs are not in the selected catalog: {sorted(unknown)}")
+        rows = []
+        for record in records:
+            source_id = record["id"]
+            if source_id in retired_source_ids:
+                continue
+            declaration = declarations.get(source_id)
+            if declaration is None:
+                raise ValueError(f"Live catalog source has no registered declaration: {source_id}")
+            previous = record["declaration"]
+            if (
+                previous["pipeline"] != declaration.model_dump(mode="json")["pipeline"]
+                or previous["dataset_revision"] != declaration.dataset_revision
+                or previous["dataset_id"] != declaration.dataset_id
+            ):
+                raise ValueError(f"Source pin changed; run a conversion campaign before refreshing: {source_id}")
+            rows.append(
+                SnapshotSource.model_validate({**record, "declaration": declaration.model_dump(mode="json")}).model_dump(
+                    mode="json"
+                )
+            )
+        return rows
+
+    return _refresh_snapshot(root, snapshot_id, refreshed)

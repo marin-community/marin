@@ -7,7 +7,6 @@ from experiments.post_training.task_curation.datasets import (
     campaign_releases,
     structure_closure,
     thoughtcrime,
-    unconverted,
 )
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.evalchemy import code as eval_code
@@ -79,7 +78,6 @@ def all_sources() -> dict[str, RlDataSource]:
         *structure_closure.sources(),
         *thoughtcrime.sources(),
         *campaign_releases.sources(),
-        *unconverted.sources(),
     ]
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
