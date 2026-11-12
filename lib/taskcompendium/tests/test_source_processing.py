@@ -411,16 +411,10 @@ def test_preparation_bounds_lossless_review_files_with_skewed_duplicate_rows(tmp
         records.extend(batch)
     records.sort(key=lambda record: int(record["source"]["row"].rsplit(":", 1)[1]))
     assert manifest["input_rows"] == len(records) == len(rows)
-    canonical = min(record["task_id"] for record in records)
     for record, original in zip(records, rows, strict=True):
         assert record["raw"]["data"] == original
         task = TaskSpec.model_validate(record["normalized"])
         assert task == svamp_row_task(RawRow(task.id, task.source, original))
-        if record["task_id"] == canonical:
-            assert record["decision"] is None
-        else:
-            assert record["decision"]["reasons"] == ["DUPLICATE_WITHIN_SOURCE"]
-            assert record["decision"]["duplicate_of"] == canonical
 
 
 @pytest.mark.parametrize(

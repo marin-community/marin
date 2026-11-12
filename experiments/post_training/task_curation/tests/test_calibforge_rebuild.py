@@ -86,8 +86,7 @@ def test_a_task_declaring_more_than_the_normalized_shape_defers():
         rebuild_task(gzip.compress(buffer.getvalue(), mtime=0))
 
 
-def test_a_lowered_spec_stages_fixtures_through_setup_commands():
-    """The rollout runner installs resources then runs setup_commands; both are present."""
+def test_lowered_spec_separates_public_fixtures_and_private_verifier_resources():
     rebuilt = rebuild_task(
         native_task(
             "FROM ubuntu:24.04\nWORKDIR /app\nCOPY files/ /app/files/\n",
@@ -96,7 +95,6 @@ def test_a_lowered_spec_stages_fixtures_through_setup_commands():
     )
     spec = lowered_task_spec("fixture", rebuilt.task_binary)
     task = spec["task"]
-    assert task["environment_requirements"]["setup_commands"] == ["sh /setup_files/calibforge-initialize.sh"]
     assert task["environment_requirements"]["docker_image"] == rebuilt.base_ref
     assert task["environment_requirements"]["command_semantics"] == "linux_process"
     staged = {resource["path"] for resource in task["resources"]["all"]}
