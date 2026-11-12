@@ -20,8 +20,8 @@ from experiments.post_training.long_loop.pi_rl_data import SOURCE, image_context
 from experiments.post_training.long_loop.rl_dataset_admission import file_digest
 from experiments.post_training.long_loop.swe_verified_data import (
     RECIPE_VERSION,
-    RUNTIME,
     VERIFYIT_REVISION,
+    load_grader_profiles,
     prepare_task,
 )
 
@@ -45,8 +45,9 @@ def load_admission(prefix: str, workers: int) -> tuple[dict[str, dict], dict]:
     root = StoragePath(prefix)
     plan_text = (root / "index.json").read_text()
     plan = json.loads(plan_text)
-    if not plan["complete"] or plan["runtime_sha256"] != file_digest(RUNTIME):
+    if not plan["complete"]:
         raise ValueError("Admission is incomplete or was run with a different grader")
+    load_grader_profiles(plan["runtime_profiles"])
 
     def read_receipt(entry):
         task_root = StoragePath(entry["uri"])
@@ -89,6 +90,7 @@ def seal(
     """Preserve the source split, replacing rejected SWE validation rows deterministically."""
     manifest = json.loads((source / "manifest.json").read_text())
     receipts, admission = load_admission(admission_prefix, workers)
+    profiles = load_grader_profiles(admission["plan"]["runtime_profiles"])
     if file_digest(source / "manifest.json") != admission["plan"]["manifest_sha256"]:
         raise ValueError("The admission and release source manifests differ")
     rows_by_split = {}
@@ -136,6 +138,7 @@ def seal(
                 verifier_timeout=pins["verifier_timeout"],
                 harbor_verifier_timeout=harbor_timeout,
                 dependency_constraints="",
+                profile=profiles[evidence["runtime_sha256"]],
             )
             serialized = prepared.task.model_dump_json()
             output_sha256 = hashlib.sha256(serialized.encode()).hexdigest()
@@ -194,6 +197,7 @@ def seal(
         "marin_revision": marin_revision,
         "execution_overlay_version": RECIPE_VERSION,
         "verifyit_revision": VERIFYIT_REVISION,
+        "grader_profiles": admission["plan"]["runtime_profiles"],
         "upstream_manifest_sha256": file_digest(source / "manifest.json"),
         "admission": {key: value for key, value in admission.items() if key != "plan"},
         "controls": {"attempted": len(receipts), "kept": len(accepted), "dropped": len(excluded)},

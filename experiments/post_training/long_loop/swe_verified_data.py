@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import tomli_w
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
@@ -21,7 +22,7 @@ from experiments.post_training.long_loop.swe_grading import TaskPins
 
 RUNTIME = Path(__file__).with_name("swe_grading.py")
 GUEST_RUNTIME = "/opt/long-loop-swe/grading.py"
-RECIPE_VERSION = "swe-trusted-worktree-v4"
+RECIPE_VERSION = "swe-trusted-worktree-v5"
 VERIFYIT_REVISION = "04cee3398e60b9d879396b9bd10be089d56c6f10"
 SETUP_BLOCK = re.compile(r"\A## Environment Setup[^\n]*\n\s*```bash\n(?P<setup>.*?)\n```\s*\n---\s*\n", re.DOTALL)
 CLONE = re.compile(r"\Agit clone (?P<repository>https://github.com/swesmith/[^\s]+) \.\Z")
@@ -43,6 +44,26 @@ RUN useradd --create-home --user-group --uid 10002 --shell /bin/bash longloop-gr
 RUN UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --python ">=3.11" \
     "marin-verifyit @ git+https://github.com/marin-community/marin@{VERIFYIT_REVISION}#subdirectory=lib/verifyit"
 """
+
+
+@dataclass(frozen=True)
+class GraderProfile:
+    runtime: bytes
+    version: str
+
+
+def load_grader_profiles(pins: dict[str, dict]) -> dict[str, GraderProfile]:
+    """Load explicitly pinned grader artifacts, including preserved admitted versions."""
+    profiles = {}
+    for checksum, pin in pins.items():
+        runtime = StoragePath(pin["uri"]).read_bytes()
+        if hashlib.sha256(runtime).hexdigest() != checksum:
+            raise ValueError("Pinned grading runtime changed")
+        profiles[checksum] = GraderProfile(runtime, pin["version"])
+    return profiles
+
+
+CURRENT_GRADER = GraderProfile(RUNTIME.read_bytes(), RECIPE_VERSION)
 
 
 @dataclass(frozen=True)
@@ -93,6 +114,7 @@ def prepare_task(
     verifier_timeout: int,
     harbor_verifier_timeout: int,
     dependency_constraints: str,
+    profile: GraderProfile,
 ) -> PreparedTask:
     """Build one versioned package; acceptance still requires bug=0/reference=1."""
     if task.source.dataset != SOURCE:
@@ -131,7 +153,7 @@ def prepare_task(
             ).encode()
         ),
         "environment/Dockerfile": files["environment/Dockerfile"] + IMAGE_LAYER.encode(),
-        "environment/long-loop-swe/grading.py": RUNTIME.read_bytes(),
+        "environment/long-loop-swe/grading.py": profile.runtime,
     }
     events = tuple(
         (
@@ -152,7 +174,7 @@ def prepare_task(
         update={
             "context": task.context.model_copy(update={"events": events}),
             "resources": task.resources.model_copy(update={"verifier": resources}),
-            "source": task.source.model_copy(update={"importer_revision": RECIPE_VERSION}),
+            "source": task.source.model_copy(update={"importer_revision": profile.version}),
         }
     )
     return PreparedTask(

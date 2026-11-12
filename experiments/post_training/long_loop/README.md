@@ -244,7 +244,7 @@ Final evaluation, HF export and archive use that same selected best checkpoint.
 # SWE task admission
 
 The repaired SWE release is derived from the pinned source packages rather than
-substituting a shared environment. Its five image contexts add a harness bootstrap
+substituting a shared environment. Its five upstream image contexts add a harness bootstrap
 and an isolated grading runtime. Bootstrap checks out the exact bug commit, runs
 the upstream dependency setup, then freezes trusted grading dependencies before
 the agent starts. Grading first checks HEAD ancestry, reconstructs a fresh source
@@ -252,6 +252,11 @@ worktree, restores tests and pytest configuration, and runs the task tests with
 plugin autoload disabled. Agent package installations do not enter that interpreter.
 Root control commands use immutable bindings captured before agent access;
 grading console scripts use the frozen task interpreter rather than agent packages.
+Setup-generated files are preserved when constructing the grading worktree.
+Grading directories allow scratch creation with sticky permissions; existing
+root-owned files remain protected. Import checks cover installed project modules,
+excluding build helpers and dependency namespaces. An outer finish margin lets
+pytest write its normal timeout verdict before the wrapper deadline.
 Each grade preserves HEAD, candidate patch, import origins, package inventory and
 the verifier report. Candidate failures score zero; infrastructure failures remain
 unscored.
@@ -269,6 +274,13 @@ allocation or model requests.
 task across original and recovery shard plans. It rejects missing or duplicate
 commits and references existing evidence without copying it. Interrupted,
 uncommitted task outputs remain preserved but cannot certify admission.
+Its required `--profiles` JSON maps each runtime SHA256 to a pinned artifact URI
+and recipe version. Previously admitted packages keep their exact runtime bytes.
+Use `--replacement-source` only for a deliberately repaired subset: it may replace
+an excluded task with a changed package, preserving the superseded receipt; it
+cannot replace an admitted task or replay an identical package. Ordinary recovery
+duplicates still fail. The release records every grader profile and the actual
+number of derived image contexts.
 
 `seal_swe_admission` requires this complete index and exactly one receipt per
 original SWE task. Only a scored unfixed-bug zero and scored reference one admit a

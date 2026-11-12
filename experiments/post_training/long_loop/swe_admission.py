@@ -29,7 +29,14 @@ from experiments.post_training.long_loop.admission_network import private_networ
 from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.pi_rl_data import SOURCE, image_context_digest
 from experiments.post_training.long_loop.rl_dataset_admission import file_digest
-from experiments.post_training.long_loop.swe_verified_data import GUEST_RUNTIME, RUNTIME, PreparedTask, prepare_task
+from experiments.post_training.long_loop.swe_grading import VERIFIER_FINISH_MARGIN
+from experiments.post_training.long_loop.swe_verified_data import (
+    CURRENT_GRADER,
+    GUEST_RUNTIME,
+    RUNTIME,
+    PreparedTask,
+    prepare_task,
+)
 from experiments.post_training.task_curation.swesmith_staged import DockerPilot, write_json
 
 REFERENCE_PROGRAM = """
@@ -163,7 +170,7 @@ def run_controls(prepared: PreparedTask, image: str, directory: Path, *, network
                         "--logs",
                         f"/logs/{name}",
                     ],
-                    timeout=prepared.pins.verifier_timeout + 120,
+                    timeout=prepared.pins.verifier_timeout + 2 * VERIFIER_FINISH_MARGIN,
                 )
                 local = directory / name
                 pilot.command(["docker", "cp", f"{container}:/logs/{name}", str(local)])
@@ -249,6 +256,7 @@ def main() -> None:
                         verifier_timeout=args.verifier_timeout,
                         harbor_verifier_timeout=args.harbor_verifier_timeout,
                         dependency_constraints="",
+                        profile=CURRENT_GRADER,
                     )
                 except ValueError as error:
                     exclusions.append({"task_id": task.id, "status": "excluded", "reason": str(error)})
