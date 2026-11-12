@@ -4,6 +4,8 @@
 """The task catalog: training and evaluation dataset declarations, keyed by name."""
 
 
+from pathlib import Path
+
 from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 
 from experiments.post_training.task_curation.census_binding import bind_actor_census
@@ -46,6 +48,9 @@ from experiments.post_training.task_curation.datasets.tasktrove import qa as tas
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
 from experiments.post_training.task_curation.source import RlDataSource, TaskFormat
+from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
+
+WITHIN_SOURCE_DEDUP_RECEIPTS = read_dedup_receipts(Path(__file__).with_name("datasets") / "within_source_dedup.json")
 
 
 def all_sources() -> dict[str, RlDataSource]:
@@ -87,6 +92,7 @@ def all_sources() -> dict[str, RlDataSource]:
         *native_releases.sources(),
     ]
     sources = [bind_actor_census(source, ACTOR_CENSUS_RECEIPTS.get(source.info.id)) for source in sources]
+    sources = [bind_within_source_dedup(source, WITHIN_SOURCE_DEDUP_RECEIPTS[source.info.id]) for source in sources]
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")

@@ -8,6 +8,8 @@ from contextlib import ExitStack
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
+from finestore.rl.curation import LexicalUse
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from marin.datakit.decon import AllSourceDropSets, NGramConfig, build_eval_bloom, decon_to_parquet
@@ -37,6 +39,7 @@ from experiments.post_training.task_curation.lexical_scan import ReportConfig, m
 from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.published_census import CensusConfig, ContractCensus, measure_population
 from experiments.post_training.task_curation.published_integrity import measure_integrity
+from experiments.post_training.task_curation.within_source_census import census_source
 
 
 def lexical_task(identifier: str, public: str, private: str) -> dict:
@@ -50,6 +53,60 @@ def lexical_task(identifier: str, public: str, private: str) -> dict:
         grader=NoGrader(reason="The fixture has no executable grader"),
         resources=ResourceGroups(oracle=(inline_resource("private.txt", private.encode()),)),
     ).model_dump(mode="json")
+
+
+@pytest.mark.parametrize("lexical_use", [LexicalUse.TRAIN, LexicalUse.BENCHMARK])
+def test_frozen_census_unions_duplicate_and_lexical_drops_across_partitions(tmp_path, lexical_use):
+    specs = tmp_path / "frozen/specs"
+    specs.mkdir(parents=True)
+    documents = [
+        lexical_task("z", "same", "private"),
+        lexical_task("a", "same", "private"),
+        lexical_task("other", "other", "private"),
+    ]
+    for index, document in enumerate(documents):
+        pq.write_table(
+            pa.Table.from_pylist([{"id": document["id"], "task_spec": json.dumps(document)}]), specs / f"{index}.parquet"
+        )
+    lexical = tmp_path / "lexical"
+    lexical.mkdir()
+    pq.write_table(pa.table({"id": ["z"]}), lexical / "drop_manifest.parquet")
+    population = SourceTextPopulation(
+        path=str(specs.parent),
+        source_id="fixture",
+        dataset_id="fixture",
+        dataset_revision="pin",
+        source_version="1",
+        converter_revision="converter",
+        text_renderer_version="1",
+        task_count=3,
+        text_sha256="text",
+        task_specs_sha256="specs",
+        main_output_dir="unused",
+        specs_output_dir=str(specs),
+        converter_rejections={},
+        admission_rejections={},
+    )
+    result = census_source(
+        population,
+        {"contaminated_tasks": 1, "measured_tasks": 3, "evidence_url": str(lexical / "measurement.json")},
+        str(tmp_path / "census"),
+        lexical_use=lexical_use,
+    )
+    assert (result["raw_count"], result["unique_count"], result["within_source_duplicates"]) == (3, 2, 1)
+    assert result["unique_lexical_count"] == 1
+    assert result["retained_count"] == (1 if lexical_use is LexicalUse.TRAIN else 2)
+    assert pq.read_table(result["drop_manifest_uri"]).to_pylist() == [
+        {"task_id": "z", "kept_id": "a", "reasons": ["DUPLICATE_WITHIN_SOURCE"]}
+    ]
+    expected = [
+        {"task_id": "a", "kept_id": "a", "reasons": ["LEXICAL_CONTAMINATION"]},
+        {"task_id": "z", "kept_id": "a", "reasons": ["DUPLICATE_WITHIN_SOURCE", "LEXICAL_CONTAMINATION"]},
+    ]
+
+    if lexical_use is not LexicalUse.TRAIN:
+        expected = [{"task_id": "z", "kept_id": "a", "reasons": ["DUPLICATE_WITHIN_SOURCE"]}]
+    assert pq.read_table(result["combined_drop_manifest_uri"]).to_pylist() == expected
 
 
 def test_full_task_text_marks_public_eval_copy_and_excludes_private_reference(tmp_path):
@@ -168,7 +225,7 @@ def test_full_task_text_marks_public_eval_copy_and_excludes_private_reference(tm
 
 def test_census_reads_every_partition_and_measures_empty_actor_environments(tmp_path):
     files = write_text_population(
-        ((lexical_task(str(index), "A text-only task", "private"), {}) for index in range(1001)),
+        ((lexical_task(str(index), f"A text-only task {index}", "private"), {}) for index in range(1001)),
         str(tmp_path / "population"),
     )
     population = SourceTextPopulation(

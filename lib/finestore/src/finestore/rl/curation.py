@@ -538,6 +538,26 @@ class ActorCensusInput(CatalogRecord):
     evidence_url: str
 
 
+class WithinSourceDedupEvidence(CatalogRecord):
+    """Exact converted-population census and its mechanical exclusion ledger."""
+
+    raw_count: int = Field(ge=0)
+    unique_count: int = Field(ge=0)
+    within_source_duplicates: int = Field(ge=0)
+    source_dataset_id: str
+    source_revision: str
+    converter_revision: str
+    converter_version: str
+    drop_manifest_uri: str
+    evidence_url: str
+
+    @model_validator(mode="after")
+    def _population_ledger(self) -> "WithinSourceDedupEvidence":
+        if self.raw_count != self.unique_count + self.within_source_duplicates:
+            raise ValueError("Raw task count must equal unique tasks plus within-source duplicates")
+        return self
+
+
 class SourceDeclaration(CatalogRecord):
     id: SourceId
     name: str
@@ -552,6 +572,7 @@ class SourceDeclaration(CatalogRecord):
     family: str
     tags: list[str]
     task_count: int | None
+    within_source_dedup: WithinSourceDedupEvidence
     notes: str
     dataset_id: str | None
     dataset_revision: str | None
@@ -586,6 +607,15 @@ class SourceDeclaration(CatalogRecord):
 
     @model_validator(mode="after")
     def _canonical_identity(self) -> "SourceDeclaration":
+        dedup = self.within_source_dedup
+        if self.pipeline is None or (dedup.source_dataset_id, dedup.source_revision, dedup.converter_version) != (
+            self.dataset_id,
+            self.dataset_revision,
+            self.pipeline.version,
+        ):
+            raise ValueError("Within-source deduplication belongs to another dataset pin or converter version")
+        if self.task_count != dedup.unique_count:
+            raise ValueError("Atlas task count must equal the post-deduplication unique count")
         census = self.actor_census_input
         if census is not None and (
             self.pipeline is None

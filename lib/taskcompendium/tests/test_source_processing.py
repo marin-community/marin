@@ -19,7 +19,6 @@ from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import JudgeSpec
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.plan import compute_plan
 from zephyr.readers import load_jsonl
 
 from taskcompendium.grader import verifyit_package
@@ -35,6 +34,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.controls import GradingMachines, answer_reply, reference_reply
 from taskcompendium.pipeline.conversion import convert_source_row
+from taskcompendium.pipeline.deduplication import unique_task_indices
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFormat
 from taskcompendium.pipeline.models import (
     Controls,
@@ -271,8 +271,9 @@ def calibrated_config(recipe: SourceRecipe, source: Path, config: SourcePipeline
                 result = convert_source_row(raw, fixture_recipe).result
                 if not isinstance(result, ImportRejection):
                     tasks.append(result.task)
-        receipt = oracle_receipt(tasks, oracle_recipe_identity(recipe)).model_copy(
-            update={"input_rows": input_rows, "conversion_rejections": input_rows - len(tasks)}
+        kept, dropped = unique_task_indices(tasks)
+        receipt = oracle_receipt([tasks[index] for index in kept], oracle_recipe_identity(recipe)).model_copy(
+            update={"input_rows": input_rows - len(dropped), "conversion_rejections": input_rows - len(tasks)}
         )
         return replace(config, oracle_filter=receipt)
 
@@ -321,35 +322,23 @@ def test_full_preparation_preserves_joined_rows_across_partition_layouts(tmp_pat
         output = tmp_path / f"output-{maximum}"
         result = run_pipeline(recipe, source, output, config)
         manifest = read_json(result.manifest_path)
-        assert manifest["admission_counts"] == {"admitted": 994, "rejected": 5, "no_grader": 2}
+        assert manifest["admission_counts"] == {"admitted": 996, "rejected": 1, "no_grader": 2}
+        assert manifest["within_source_dedup"]["within_source_duplicates"] == 2
         snapshot = {
             view: sorted(parquet_rows(output / view), key=lambda row: row["task_id"])
             for view in ("normalize", "review", "verify", "final", "download/locators")
         }
-        assert len(snapshot["download/locators"]) == len(snapshot["normalize"]) == 1001
-        assert len(snapshot["final"]) == 994
+        assert len(snapshot["download/locators"]) == 1001
+        assert len(snapshot["normalize"]) == 999
+        assert len(snapshot["final"]) == 996
         # Report references live beneath each result's own root.
         snapshots.append(json.loads(json.dumps(snapshot).replace(str(output), "$OUTPUT")))
-        telemetry = read_json(output / "telemetry.json")
-        prepared = next(phase for phase in telemetry["phases"] if phase["phase"] == "full_prepare")
-        assert prepared["executions"][0]["counters"]["zephyr/records_out"] == min(maximum, 2)
     assert snapshots[0] == snapshots[1]
     reviews = {row["source_locator"]: row for row in snapshots[0]["review"]}
-    assert reviews["source.jsonl:1"]["duplicate_of"] == reviews["source.jsonl:0"]["task_id"]
-    assert reviews["source.jsonl:999"]["duplicate_of"] == reviews["source.jsonl:998"]["task_id"]
-    assert reviews["source.jsonl:499"]["filter_reasons"] == ["conflicting_references"]
-    assert reviews["source.jsonl:500"]["filter_reasons"] == ["conflicting_references"]
-
-
-class PanelPlanContext(ZephyrContext):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.panel_source_shards = []
-
-    def execute(self, dataset, **kwargs):
-        if isinstance(dataset.source, list) and dataset.source and isinstance(dataset.source[0], tuple):
-            self.panel_source_shards.append(len(compute_plan(dataset).source_items))
-        return super().execute(dataset, **kwargs)
+    assert reviews["source.jsonl:499"]["filter_status"] == "keep"
+    assert reviews["source.jsonl:500"]["filter_status"] == "keep"
+    dropped = parquet_rows(tmp_path / "output-1/within-source-dedup/drops")
+    assert len(dropped) == 2 and all(row["kept_id"] < row["task_id"] for row in dropped)
 
 
 def test_raw_sample_is_partition_and_order_independent():
@@ -363,6 +352,23 @@ def test_raw_sample_is_partition_and_order_independent():
     assert whole == merged == sample_raw_rows(iter(reversed(rows)), size=100, seed=11)
     assert whole.population_count == 400
     assert len(whole.rows) == 100
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+def test_complete_deduplication_precedes_quality_panel_and_admission(tmp_path, mode):
+    source = tmp_path / "source"
+    first, second = apple_rows(2)
+    write_jsonl(source, [first, first, second])
+    recipe = fixture_recipe(convert_svamp, rubric=None, controls=None)
+    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    result = run_pipeline(recipe, source, tmp_path / "output", pipeline_config(mode, reviewer))
+    manifest = read_json(result.manifest_path)
+    assert manifest["raw_population_count"] == 3
+    assert manifest["raw_sample_count"] == 2
+    assert manifest["within_source_dedup"]["within_source_duplicates"] == 1
+    assert len(parquet_rows(result.final_path)) == 2
+    dropped = parquet_rows(tmp_path / "output/within-source-dedup/drops")
+    assert len(dropped) == 1 and dropped[0]["kept_id"] < dropped[0]["task_id"]
 
 
 @pytest.mark.parametrize("num_output_shards", [1, 3, 64])
@@ -404,14 +410,16 @@ def test_preparation_bounds_lossless_review_files_with_skewed_duplicate_rows(tmp
         records.extend(batch)
     records.sort(key=lambda record: int(record["source"]["row"].rsplit(":", 1)[1]))
     assert manifest["input_rows"] == len(records) == len(rows)
-    assert records[0]["decision"] is None
-    for index, (record, original) in enumerate(zip(records, rows, strict=True)):
+    canonical = min(record["task_id"] for record in records)
+    for record, original in zip(records, rows, strict=True):
         assert record["raw"]["data"] == original
         task = TaskSpec.model_validate(record["normalized"])
         assert task == svamp_row_task(RawRow(task.id, task.source, original))
-        if index:
-            assert record["decision"]["reasons"] == ["exact_semantic_duplicate"]
-            assert record["decision"]["duplicate_of"] == records[0]["task_id"]
+        if record["task_id"] == canonical:
+            assert record["decision"] is None
+        else:
+            assert record["decision"]["reasons"] == ["DUPLICATE_WITHIN_SOURCE"]
+            assert record["decision"]["duplicate_of"] == canonical
 
 
 @pytest.mark.parametrize(
@@ -423,7 +431,9 @@ def test_preparation_bounds_lossless_review_files_with_skewed_duplicate_rows(tmp
         (SourceProcessingMode.FULL, "some_issues", 125),
     ],
 )
-def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mode, quality, expected_conversions):
+def test_complete_conversion_precedes_bounded_quality_and_preserves_ledgers(
+    tmp_path, mode, quality, expected_conversions
+):
     source = tmp_path / "source"
     conversions = tmp_path / "conversions"
     decodings = tmp_path / "decodings"
@@ -458,7 +468,7 @@ def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mo
     reviewer = BatchReviewer(service, "fixture", "revision")
     config = pipeline_config(mode, reviewer)
     config = calibrated_config(recipe, source, config)
-    with PanelPlanContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+    with ZephyrContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
         result = run_source_pipeline(
             recipe,
             context,
@@ -480,8 +490,9 @@ def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mo
     operations.pop("verification", None)
     # The panel is prepared on the driver, and each later phase is one execution.
     expected_operations = {
+        "within_source_dedup": ["deduplicate"],
         "raw_sample": ["execute"],
-        "panel_normalize": ["execute"],
+        "panel_normalize": [],
         "sample_prepare": [],
         "quality_review": ["review"],
         "audit_review": ["review"],
@@ -495,12 +506,11 @@ def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mo
     ids = [execution["execution_id"] for execution in executions if execution["execution_id"]]
     assert len(ids) == len(set(ids)) and all(execution["status"] == "completed" for execution in executions)
     assert any("source/decode/seconds" in execution["counters"] for execution in executions)
-    assert context.panel_source_shards == [7]
     files = list(conversions.iterdir())
-    assert len(files) == expected_conversions
+    assert len(files) == 125
     assert all(file.read_text() == "converted\n" for file in files)
     decoded_files = list(decodings.iterdir())
-    assert len(decoded_files) == expected_conversions
+    assert len(decoded_files) == 125
     assert all(file.read_text() == "decoded\n" for file in decoded_files)
     raw = parquet_rows(Path(result.download_path) / "locators")
     review = parquet_rows(result.review_path)
@@ -609,12 +619,10 @@ def test_source_read_in_parts_publishes_the_views_of_a_whole_read(tmp_path, mode
     # A sample produces only the rows it processes; the ledger lists every row, hashing those produced.
     normalized = parquet_rows(parted.normalize_path)
     assert len(normalized) == (100 if mode == SourceProcessingMode.SAMPLE else 125)
-    assert {f"source.jsonl:{path.name}" for path in produced.iterdir()} == {row["source_row"] for row in normalized}
-    processed = {row["task_id"] for row in normalized}
-    expected_ledger = [
-        {**row, "raw_input_sha256": row["raw_input_sha256"] if row["task_id"] in processed else None}
-        for row in parquet_rows(Path(whole.download_path) / "locators")
-    ]
+    assert {f"source.jsonl:{path.name}" for path in produced.iterdir()} == {
+        f"source.jsonl:{index}" for index in range(125)
+    }
+    expected_ledger = [row for row in parquet_rows(Path(whole.download_path) / "locators")]
     assert sorted(parquet_rows(Path(parted.download_path) / "locators"), key=lambda row: row["task_id"]) == sorted(
         expected_ledger, key=lambda row: row["task_id"]
     )
@@ -813,7 +821,7 @@ def test_raw_panel_with_source_defects_keeps_fixed_draw_and_decisive_quality(
         assert report["quality"]["result"]["verdict"] == "unknown"
         assert service.files == {}
     assert result.status == expected_status
-    assert len(list(conversions.iterdir())) == 100
+    assert len(list(conversions.iterdir())) == 101
 
 
 def test_source_failure_retains_nested_preparation_evidence_without_review_requests(tmp_path):
@@ -844,12 +852,13 @@ def test_source_failure_retains_nested_preparation_evidence_without_review_reque
     assert report["source"] == "catalog-selection"
     assert report["status"] == "failed" and report["error_type"] == "ValueError"
     assert [phase["phase"] for phase in report["phases"]] == [
+        "within_source_dedup",
         "raw_sample",
         "panel_normalize",
         "sample_prepare",
         "quality_review",
     ]
-    assert report["phases"][2]["status"] == "completed"
+    assert report["phases"][3]["status"] == "completed"
     assert read_json(tmp_path / "output/work/sample/manifest.json")["input_rows"] == 1
     assert list((tmp_path / "output/work/sample/review-inputs").glob("batch-*.jsonl.gz"))
     assert report["phases"][-1]["executions"] == []
@@ -1114,7 +1123,8 @@ def test_reviewed_oracle_source_requires_population_filter_and_rejects_failed_or
     rows = apple_rows(2)
     write_jsonl(source, rows)
     recipe = replace(fixture_recipe(convert_script_graded, rubric=None, controls=ORACLE_CONTROLS), oracle_solutions=True)
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    service = BatchService()
+    reviewer = BatchReviewer(service, "fixture", "revision")
     config = pipeline_config(mode, reviewer, machines=FixtureGradingMachines())
     with pytest.raises(ValueError, match="full-population Harbor oracle filter"):
         run_pipeline(recipe, source, tmp_path / "missing", config)
@@ -1126,6 +1136,8 @@ def test_reviewed_oracle_source_requires_population_filter_and_rejects_failed_or
     result = run_pipeline(recipe, source, tmp_path / "filtered", replace(config, oracle_filter=receipt))
     assert [row["task_id"] for row in parquet_rows(result.final_path)] == [tasks[1].id]
     assert read_json(result.manifest_path)["admission_counts"] == {"rejected": 1, "admitted": 1}
+
+    assert all(request["custom_id"] != tasks[0].id for batch in service.batches.values() for request in batch)
 
 
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])

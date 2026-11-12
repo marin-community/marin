@@ -26,6 +26,7 @@ from finestore.rl.curation import (
     SourceDeclaration,
     SourceOrigin,
     SourceQualityResult,
+    WithinSourceDedupEvidence,
     source_identifier,
     source_title,
 )
@@ -160,6 +161,7 @@ class SourceInfo:
     integrity_contracts: IntegrityContractSummary | None = None
     actor_census_input: ActorCensusInput | None = None
     converted_examples: ConvertedExamples | None = None
+    within_source_dedup: WithinSourceDedupEvidence | None = None
     lexical_contamination: LexicalContaminationEvidence | None = None
     daytona_machine_slots: int | None = None
     daytona_roles: dict[str, dict[str, RoleExecutionEvidence]] | None = None
@@ -292,6 +294,9 @@ class RlDataSource[ConfigT: CatalogConfig]:
             raise ValueError(f"Source {info.id} has no registered conversion pipeline")
         dataset = self.dataset
         invocation = self.pipeline_reference
+        dedup = info.within_source_dedup
+        if dedup is None:
+            raise ValueError(f"Source {info.id} requires a complete within-source deduplication census")
         tags = info.tags
         if info.id in GRANDFATHERED_MARINSKYRL_SOURCES:
             safety = None
@@ -332,7 +337,8 @@ class RlDataSource[ConfigT: CatalogConfig]:
             quality_result=info.quality_result,
             family=info.family,
             tags=list(tags),
-            task_count=info.count,
+            task_count=dedup.unique_count,
+            within_source_dedup=dedup,
             notes=" ".join(
                 (info.notes, *(f"Admission blocked: {reason}." for reason in self.admission_blockers))
             ).strip(),

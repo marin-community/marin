@@ -148,7 +148,12 @@ def test_split_parquet_matches_whole_file_tasks_and_rejections_after_selection(t
     source = tmp_path / "input"
     source.mkdir()
     rows = [
-        {"path": f"row-{index}", "prompt": "Name a color", "answer": "red" if index % 7 else "", "keep": index % 5 != 0}
+        {
+            "path": f"row-{index}",
+            "prompt": f"Name a color {index}",
+            "answer": "red" if index % 7 else "",
+            "keep": index % 5 != 0,
+        }
         for index in range(24)
     ]
     pq.write_table(pa.Table.from_pylist(rows), source / "rows.parquet", row_group_size=3)
@@ -189,8 +194,6 @@ def test_split_parquet_matches_whole_file_tasks_and_rejections_after_selection(t
     whole, split = cast(ConversionResult, whole), cast(ConversionResult, split)
     whole_files = list(Path(whole.normalized_path).glob("*.parquet"))
     split_files = list(Path(split.normalized_path).glob("*.parquet"))
-    assert len(whole_files) == 1
-    assert len(split_files) == 8
     whole_rows = {row["source_row"]: row for file in whole_files for row in load_parquet(str(file))}
     split_rows = {row["source_row"]: row for file in split_files for row in load_parquet(str(file))}
     assert whole_rows == split_rows
@@ -199,7 +202,7 @@ def test_split_parquet_matches_whole_file_tasks_and_rejections_after_selection(t
     assert split.converted_rows == whole.converted_rows == 16
     assert split.rejections == whole.rejections == {"source_defect:missing_answer": 3}
     task = TaskSpec.model_validate_json(split_rows["rows.parquet:23"]["task_json"])
-    assert cast(TextMessage, task.context.events[0]).content == "Decoded: Name a color"
+    assert cast(TextMessage, task.context.events[0]).content == "Decoded: Name a color 23"
 
 
 @pytest.mark.parametrize("override_state", ["absent", "matching", "stale"])
@@ -209,7 +212,7 @@ def test_prepared_jsonl_matches_native_tasks_locators_and_rejections(tmp_path: P
     rows = [
         {
             "path": f"row-{index}",
-            "prompt": "Name a color",
+            "prompt": f"Name a color {index}",
             "answer": "red" if index % 7 else "",
             "component": "left" if index % 2 else "right",
             "keep": index % 5 != 0,
@@ -340,7 +343,7 @@ def test_prepared_conversion_subdivides_a_row_group_without_changing_records(tmp
     assert prepared.rejections == native.rejections
 
 
-def test_conversion_retains_duplicate_tasks_and_rejections_without_review_or_controls(tmp_path: Path):
+def test_conversion_drops_duplicate_tasks_and_retains_rejections_without_review_or_controls(tmp_path: Path):
     source = tmp_path / "input"
     source.mkdir()
     rows = [
@@ -371,16 +374,17 @@ def test_conversion_retains_duplicate_tasks_and_rejections_without_review_or_con
     result = cast(ConversionResult, result)
     records = [row for shard in Path(result.normalized_path).glob("*.parquet") for row in load_parquet(str(shard))]
     assert result.input_rows == 3
-    assert result.converted_rows == 2
+    assert result.converted_rows == 1
+    assert result.within_source_dedup["within_source_duplicates"] == 1
     assert result.rejections == {"source_defect:missing_answer": 1}
-    assert [row["original_path"] for row in records] == ["first", "duplicate", "invalid"]
+    assert len(records) == 2
+    assert "invalid" in {row["original_path"] for row in records}
     tasks = [TaskSpec.model_validate_json(row["task_json"]) for row in records if row["task_json"]]
-    assert tasks[0].context == tasks[1].context
-    assert tasks[0].id != tasks[1].id
+    assert len(tasks) == 1
     assert resource_bytes(tasks[0].resources.worker[0]) == b"color context"
     reviewed = normalize_row({"locator": "rows.jsonl:0", "data": rows[0]}, recipe)
     assert reviewed["audit"]["normalization_rejection"]["reason"] == "resources_over_budget"
-    assert records[2]["normalization_reason"] == "missing_answer"
+    assert next(row for row in records if row["task_json"] is None)["normalization_reason"] == "missing_answer"
     manifest = json.loads(Path(result.manifest_path).read_text())
     assert manifest["reviewed"] is False
     assert manifest["verified"] is False

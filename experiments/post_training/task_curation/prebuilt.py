@@ -43,6 +43,7 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import NoGrader, TaskSpec
 from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
 from taskcompendium.pipeline.conversion import normalization_columns
+from taskcompendium.pipeline.deduplication import DROP_SCHEMA, unique_task_indices
 from taskcompendium.pipeline.models import SourceStatus
 from taskcompendium.pipeline.oracle_filter import load_oracle_filter, require_oracle_filter
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
@@ -54,7 +55,7 @@ from experiments.post_training.task_curation.decontamination import require_priv
 from experiments.post_training.task_curation.environment_fidelity import missing_environment
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference, TaskFormat
 
-PREBUILT_ADMISSION_VERSION = "2026.11.12.2"
+PREBUILT_ADMISSION_VERSION = "2026.11.12.3"
 TASKS_FILENAME = "tasks.parquet"
 CONTROLS_FILENAME = "controls.jsonl"
 ORACLE_FILTER_FILENAME = "oracle-filter.json"
@@ -255,28 +256,51 @@ def import_oracle_harbor_prebuilt(
     )
 
 
-QUICK_VIEW_VERSION = "2026.11.12"
+QUICK_VIEW_VERSION = "2026.11.12.1"
 """Format version of the converted view a QUICK pass writes; the cohort revision is in the step identity."""
 COHORT_INTENDED_USE = "train"
 """Published campaign cohorts are RL training populations."""
 
 
-def cohort_task_json(tasks: Path) -> list[str]:
-    """Each row's TaskSpec as canonical JSON, from a lowered envelope or a native Harbor package."""
-    columns = pq.ParquetFile(tasks).schema_arrow.names
-    rows = pq.read_table(tasks).to_pylist()
-    if "lowered_task_spec" in columns:
-        return [TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"]).model_dump_json() for row in rows]
-    return [TaskSpec.model_validate_json(row["task_spec"]).model_dump_json() for row in rows]
+def deduplicate_cohort(tasks: Path, destination: StoragePath) -> tuple[pa.Table, dict]:
+    table = pq.read_table(tasks)
+    lowered = "lowered_task_spec" in table.column_names
+    specs = [
+        (
+            TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"])
+            if lowered
+            else TaskSpec.model_validate_json(row["task_spec"])
+        )
+        for row in table.to_pylist()
+    ]
+    kept, dropped = unique_task_indices(specs)
+    manifest = destination / "within-source-dedup/drops/part-00000.parquet"
+    with manifest.open("wb", auto_mkdir=True) as stream:
+        pq.write_table(pa.Table.from_pylist(dropped, schema=DROP_SCHEMA), stream, compression="zstd")
+    return table.take(pa.array(kept, type=pa.int64())), {
+        "raw_count": len(specs),
+        "unique_count": len(kept),
+        "within_source_duplicates": len(dropped),
+        "drop_manifest_uri": str(manifest),
+    }
 
 
 def _quick_view(config: PrebuiltCohort, tasks: Path, destination: str) -> CampaignArtifact:
     """Write the validated cohort as the converted view that QUICK consumers, such as embedding, read.
 
-    QUICK admits nothing. Every published row is a converted task, so there are no rejections.
+    Exact duplicate contracts are excluded before the converted view is written.
     """
-    task_json = cohort_task_json(tasks)
     root = StoragePath(destination)
+    table, dedup = deduplicate_cohort(tasks, root)
+    lowered = "lowered_task_spec" in table.column_names
+    task_json = [
+        (
+            TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"]).model_dump_json()
+            if lowered
+            else TaskSpec.model_validate_json(row["task_spec"]).model_dump_json()
+        )
+        for row in table.to_pylist()
+    ]
     normalize = root / "normalize"
     with (normalize / "part-00000.parquet").open("wb") as handle:
         pq.write_table(pa.table({"task_json": task_json}), handle)
@@ -286,7 +310,8 @@ def _quick_view(config: PrebuiltCohort, tasks: Path, destination: str) -> Campai
         "repo": config.repo,
         "revision": config.revision,
         "intended_use": COHORT_INTENDED_USE,
-        "input_rows": len(task_json),
+        "input_rows": dedup["raw_count"],
+        "within_source_dedup": dedup,
         "converted_rows": len(task_json),
         "rejections": {},
     }
@@ -335,12 +360,13 @@ def prebuilt_artifact(
             return _quick_view(config, local, invocation.output_path)
         assert invocation.lexical_contamination is not None
         destination = StoragePath(invocation.output_path)
-        with local.open("rb") as source_file, (destination / TASKS_FILENAME).open("wb") as output_file:
-            shutil.copyfileobj(source_file, output_file)
+        table, dedup = deduplicate_cohort(local, destination)
+        with (destination / TASKS_FILENAME).open("wb") as output_file:
+            pq.write_table(table, output_file, compression="zstd")
         tasks = []
         grading: Counter[str] = Counter()
         oracle_filter = None
-        for row in pq.read_table(local).to_pylist():
+        for row in table.to_pylist():
             if invocation.encoding is PrebuiltEncoding.CANONICAL:
                 serialized = row["task_spec"]
                 task = TaskSpec.model_validate_json(serialized)
@@ -397,7 +423,8 @@ def prebuilt_artifact(
             "mode": invocation.mode.value,
             "task_format": invocation.task_format.value,
             "intended_use": "train",
-            "input_rows": len(tasks),
+            "input_rows": dedup["raw_count"],
+            "within_source_dedup": dedup,
             "converted_rows": len(tasks),
             "admitted_rows": len(tasks),
             "rejections": {},

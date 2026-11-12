@@ -63,7 +63,7 @@ def published_documents(config: PublishedTextConfig) -> Iterable[tuple[dict, dic
 def normalize_published(config: PublishedTextConfig) -> SourceTextPopulation:
     files = write_text_population(published_documents(config), config.output_path)
     metadata = config.population
-    if files.task_count != metadata.task_count or files.task_count == 0:
+    if files.raw_task_count != metadata.task_count or files.task_count == 0:
         raise ValueError(f"{metadata.source_id}: emitted {files.task_count}, expected {metadata.task_count} TaskSpecs")
     return SourceTextPopulation(
         path=config.output_path,
@@ -74,6 +74,12 @@ def normalize_published(config: PublishedTextConfig) -> SourceTextPopulation:
         converter_revision=metadata.converter_revision,
         text_renderer_version=RENDERER_VERSION,
         task_count=files.task_count,
+        within_source_dedup={
+            "raw_count": files.raw_task_count,
+            "unique_count": files.task_count,
+            "within_source_duplicates": files.within_source_duplicates,
+            "drop_manifest_uri": files.drop_manifest_uri,
+        },
         text_sha256=files.text_sha256,
         task_specs_sha256=files.task_specs_sha256,
         main_output_dir=files.main_output_dir,
