@@ -46,12 +46,10 @@ from taskcompendium.models import (
 )
 from tomlkit.items import Table
 
+from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT, SETUP_SCRIPT
 from experiments.post_training.task_curation.environment import dockerfile_lines
 from experiments.post_training.task_curation.environment_fidelity import PINNED_BASES
 
-FIXTURE_ARCHIVE = "calibforge-fixtures.tar.gz"
-SETUP_SCRIPT = "calibforge-initialize.sh"
-SETUP_ROOT = "/setup_files"
 ENVIRONMENT_PREFIX = "environment/"
 REBUILT = "rebuilt_pending_oracle_and_admission"
 

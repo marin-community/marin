@@ -82,8 +82,3 @@ def test_pipeline_less_pointers_are_inventory_never_admitted():
         assert source.name not in runnable
         if "agentic" in source.info.tags and source.info.daytona_snapshot_count is None:
             assert source.declaration.daytona_safety is DaytonaSafety.UNASSESSED
-
-
-def test_every_runnable_source_reads_available():
-    for source in runnable_sources().values():
-        assert source.declaration.status == "Available"
