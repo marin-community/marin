@@ -45,7 +45,7 @@ from taskcompendium.pipeline.models import IntendedUse
 from experiments.post_training.task_curation.datasets.evalchemy.environments import BASIC_GRADER
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 MRCR_REVISION = "f4c69fae7cf81f7ca26b9fee34b392a50f6b8a1d"
 LONG_CONTEXT_RESOURCE_BYTES = 64 * 1024 * 1024
@@ -92,8 +92,11 @@ def mrcr_source(name: str, max_context: int) -> RlDataSource[EvalDataset]:
     return RlDataSource(
         info=SourceInfo(
             id="Evalchemy:" + name.lower(),
-            title=name,
-            origin="Evalchemy",
+            upstream_dataset=name.lower(),
+            upstream_name=name.lower(),
+            subset=None,
+            build_path="Evalchemy",
+            origin=SourceOrigin.EVALCHEMY,
             family="long-context",
             tags=("eval", "source:evalchemy", "benchmark", "long-context", "retrieval"),
             count=MRCR_SOURCE_POPULATION,
@@ -145,8 +148,11 @@ def sources() -> list[RlDataSource[EvalDataset]]:
         RlDataSource(
             info=SourceInfo(
                 id="Evalchemy:graphwalks",
-                title="GraphWalks",
-                origin="Evalchemy",
+                upstream_dataset="graphwalks",
+                upstream_name="graphwalks",
+                subset=None,
+                build_path="Evalchemy",
+                origin=SourceOrigin.EVALCHEMY,
                 family="long-context",
                 tags=("eval", "source:evalchemy", "benchmark", "long-context", "graph"),
                 count=1150,

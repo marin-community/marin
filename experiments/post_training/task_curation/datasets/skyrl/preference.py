@@ -28,7 +28,7 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, IntendedUse, RawRow
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 HH_REPO = "Anthropic/hh-rlhf"
 HH_REVISION = "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa"
@@ -46,8 +46,11 @@ KTO_COMPONENTS = {
         "argilla/distilabel-capybara-dpo-7k-binarized",
         SourceInfo(
             id="MarinSkyRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized",
-            title="argilla/distilabel-capybara-dpo-7k-binarized · KTO",
-            origin="MarinSkyRL",
+            upstream_dataset="kto_mix",
+            upstream_name="kto_mix",
+            subset="argilla/distilabel-capybara-dpo-7k-binarized",
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.TRL,
             family="preference",
             tags=("alignment", "multi-turn", "gym/preference"),
             notes=(
@@ -60,8 +63,11 @@ KTO_COMPONENTS = {
         "argilla/distilabel-intel-orca-dpo-pairs",
         SourceInfo(
             id="MarinSkyRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs",
-            title="argilla/distilabel-intel-orca-dpo-pairs · KTO",
-            origin="MarinSkyRL",
+            upstream_dataset="kto_mix",
+            upstream_name="kto_mix",
+            subset="argilla/distilabel-intel-orca-dpo-pairs",
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.TRL,
             family="preference",
             tags=("alignment", "single-turn", "gym/preference"),
             notes=(
@@ -74,8 +80,11 @@ KTO_COMPONENTS = {
         "argilla/ultrafeedback-binarized-preferences-cleaned",
         SourceInfo(
             id="MarinSkyRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned",
-            title="argilla/ultrafeedback-binarized-preferences-cleaned · KTO",
-            origin="MarinSkyRL",
+            upstream_dataset="kto_mix",
+            upstream_name="kto_mix",
+            subset="argilla/ultrafeedback-binarized-preferences-cleaned",
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.TRL,
             family="preference",
             tags=("alignment", "single-turn", "gym/preference"),
             notes=(
@@ -150,8 +159,11 @@ HH_SUBSETS = (
         HH_HARMLESS_BASE_RUBRIC,
         info=SourceInfo(
             id="MarinSkyRL:hh_rlhf/harmless-base",
-            title="Anthropic/hh-rlhf · harmless-base",
-            origin="MarinSkyRL",
+            upstream_dataset="hh_rlhf",
+            upstream_name="hh_rlhf",
+            subset="harmless-base",
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.ANTHROPIC,
             family="preference",
             tags=("alignment", "multi-turn", "license:mit", "gym/preference"),
             notes=(
@@ -166,8 +178,11 @@ HH_SUBSETS = (
         HH_HELPFUL_BASE_RUBRIC,
         info=SourceInfo(
             id="MarinSkyRL:hh_rlhf/helpful-base",
-            title="Anthropic/hh-rlhf · helpful-base",
-            origin="MarinSkyRL",
+            upstream_dataset="hh_rlhf",
+            upstream_name="hh_rlhf",
+            subset="helpful-base",
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.ANTHROPIC,
             family="preference",
             tags=("alignment", "multi-turn", "license:mit", "gym/preference"),
             notes=(
@@ -182,8 +197,11 @@ HH_SUBSETS = (
         HH_HELPFUL_ONLINE_RUBRIC,
         info=SourceInfo(
             id="MarinSkyRL:hh_rlhf/helpful-online",
-            title="Anthropic/hh-rlhf · helpful-online",
-            origin="MarinSkyRL",
+            upstream_dataset="hh_rlhf",
+            upstream_name="hh_rlhf",
+            subset="helpful-online",
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.ANTHROPIC,
             family="preference",
             tags=("alignment", "multi-turn", "license:mit", "gym/preference"),
             notes=(
@@ -198,8 +216,11 @@ HH_SUBSETS = (
         HH_HELPFUL_REJECTION_SAMPLED_RUBRIC,
         info=SourceInfo(
             id="MarinSkyRL:hh_rlhf/helpful-rejection-sampled",
-            title="Anthropic/hh-rlhf · helpful-rejection-sampled",
-            origin="MarinSkyRL",
+            upstream_dataset="hh_rlhf",
+            upstream_name="hh_rlhf",
+            subset="helpful-rejection-sampled",
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.ANTHROPIC,
             family="preference",
             tags=("alignment", "multi-turn", "license:mit", "gym/preference"),
             notes=(

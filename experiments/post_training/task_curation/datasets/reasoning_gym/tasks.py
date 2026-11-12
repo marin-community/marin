@@ -62,7 +62,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
     tasktrove_source,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, UrlSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 HERE = Path(__file__).parent
 GENERATE = HERE / "generate.py"
@@ -349,8 +349,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:reasoning_gym",
-                title="open-thought/reasoning-gym",
-                origin="MarinSkyRL",
+                upstream_dataset="reasoning_gym",
+                upstream_name="reasoning_gym",
+                subset=None,
+                build_path="MarinSkyRL",
+                origin=SourceOrigin.REASONING_GYM,
                 family="reasoning-gym",
                 tags=("rlvr", "single-turn", "generator", "gym/reasoning_gym"),
             ),
@@ -375,8 +378,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-reasoning-gym-v2",
-                title="laion/nemotron-gym-reasoning-gym-v2",
-                origin="Task Trove",
+                upstream_dataset="laion__nemotron-gym-reasoning-gym-v2",
+                upstream_name="laion__nemotron-gym-reasoning-gym-v2",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="reasoning-gym",
                 tags=("agentic", "multi-turn"),
                 count=14259,

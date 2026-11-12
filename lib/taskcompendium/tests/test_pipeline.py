@@ -415,7 +415,7 @@ def test_audit_restart_reuses_completed_shards_when_worker_count_changes(tmp_pat
     assert all(hashlib.sha256(path.read_bytes()).hexdigest() == digest for path, digest in preserved.items())
     manifest = filter_source(str(tmp_path / "audited"), str(tmp_path / "filtered"), FilterPolicy(), max_workers=1)
     assert manifest["input_rows"] == len(rows)
-    assert manifest["dispositions"] == {"keep": len(rows) - len(missing_ids), "reject": len(missing_ids)}
+    assert manifest["dispositions"] == {"keep": len(rows)}
 
 
 @dataclass
@@ -468,7 +468,7 @@ def test_pipeline_refilters_completed_shards_without_new_requests(tmp_path, appl
         reviewer=reviewer,
         policy=strict_policy,
     )
-    assert resumed["dispositions"] == {"reject": 1}
+    assert resumed["dispositions"] == {"keep": 1}
     pending_audit = stage_table(tmp_path).to_pylist()[0]
     accepted = run_stages(
         svamp_recipe,
@@ -483,7 +483,7 @@ def test_pipeline_refilters_completed_shards_without_new_requests(tmp_path, appl
     assert stage_table(tmp_path, "accepted").num_rows == 1
     accepted_audit = stage_table(tmp_path).to_pylist()[0]
     assert accepted_audit["filter_status"] == "keep"
-    assert pending_audit["filter_status"] == "reject"
+    assert pending_audit["filter_status"] == "keep"
     assert accepted_audit["raw_json"] == pending_audit["raw_json"]
     assert accepted_audit["review_evidence"] == pending_audit["review_evidence"]
 
@@ -515,7 +515,7 @@ def test_review_accepts_glm_completed_tool_call_with_stop_finish_reason():
     assert records[0].verdict.task_id == "task-0"
 
 
-def test_conflicting_review_is_rejected_even_at_high_confidence(apple_row):
+def test_conflicting_review_is_informational_even_at_high_confidence(apple_row):
     task = svamp_task("task-0", apple_row)
     row = response(task.id, confidence="high")
     function = row["response"]["body"]["choices"][0]["message"]["tool_calls"][0]["function"]
@@ -523,9 +523,10 @@ def test_conflicting_review_is_rejected_even_at_high_confidence(apple_row):
     verdict.update(quality="bad", reference_status="conflict", defects=["wrong_reference"])
     function["arguments"] = json.dumps(verdict)
     review = review_records(json.dumps(row), [task.id])[0]
-    decision = task_decision(task.id, verify_task(task), review, FilterPolicy())
-    assert decision.disposition == Disposition.REJECT
-    assert decision.reasons == ["defect:wrong_reference"]
+    assert review.verdict.quality == "bad"
+    decision = task_decision(task.id, verify_task(task))
+    assert decision.disposition == Disposition.KEEP
+    assert decision.reasons == []
 
 
 @pytest.mark.parametrize(
@@ -541,7 +542,7 @@ def test_conflicting_review_is_rejected_even_at_high_confidence(apple_row):
         "duplicate_argument",
     ],
 )
-def test_review_faults_never_admit_tasks(apple_row, fault):
+def test_review_faults_remain_recorded_without_rejecting_tasks(apple_row, fault):
     task = svamp_task("task-0", apple_row)
     row = response(task.id)
     if fault == "wrong_id":
@@ -569,7 +570,7 @@ def test_review_faults_never_admit_tasks(apple_row, fault):
     records = review_records(text, [task.id])
     assert records[0].status in {ReviewStatus.UNAVAILABLE, ReviewStatus.INVALID}
     assert records[0].verdict is None
-    assert task_decision(task.id, verify_task(task), records[0], FilterPolicy()).disposition == Disposition.DEFER
+    assert task_decision(task.id, verify_task(task)).disposition == Disposition.KEEP
 
 
 @pytest.mark.parametrize(
@@ -617,7 +618,7 @@ def convert_instruction(row: RawRow, _context: ConversionContext) -> TaskSpec | 
     return ifeval_task(row, prompt=row.data["instruction"], constraints=constraints)
 
 
-@pytest.mark.parametrize("quality,disposition", [("bad", "reject"), ("good", "keep")])
+@pytest.mark.parametrize("quality,disposition", [("bad", "keep"), ("good", "keep")])
 def test_unsupported_verification_is_annotated_separately_from_quality(tmp_path, quality, disposition):
     row = {
         "instruction": "请解释什么是抽象思维。使用两个项目符号。",
@@ -1131,10 +1132,10 @@ def test_trusted_panel_with_defects_infers_unsampled_rows_without_reviewing_them
     records = [row for path in (filtered / "audit").glob("*.parquet") for row in pq.read_table(path).to_pylist()]
     requests = {request["custom_id"] for batch in service.batches.values() for request in batch}
     assert requests == set(report.population.task_ids) and len(requests) == 100
-    assert manifest["dispositions"] == {"keep": 100, "reject": 19, "defer": 1}
+    assert manifest["dispositions"] == {"keep": 120}
     missing = [row for row in records if row["review_status"] == "unavailable"]
     assert len(missing) == 1
-    assert missing[0]["filter_status"] == "defer"
+    assert missing[0]["filter_status"] == "keep"
     assert missing[0]["review_quality"] is None
     unsampled = [row for row in records if row["task_id"] not in requests]
     assert len(unsampled) == 20
@@ -1148,9 +1149,9 @@ def test_trusted_panel_with_defects_infers_unsampled_rows_without_reviewing_them
     [
         (BatchService, "trust", {"reviewed"}),
         (OneMissingResponseService, "trust", {"reviewed", "unavailable"}),
-        (MixedQualityBatchService, "reject", {"reviewed"}),
+        (MixedQualityBatchService, "trust", {"reviewed"}),
         (UnavailableBatchService, "incomplete", {"unavailable"}),
-        (FirstBatchUnavailableService, "incomplete", {"unavailable", "reviewed"}),
+        (FirstBatchUnavailableService, "trust", {"unavailable", "reviewed"}),
     ],
 )
 def test_source_quality_gate_reuses_reviews_and_preserves_all_rows(
@@ -1181,7 +1182,7 @@ def test_source_quality_gate_reuses_reviews_and_preserves_all_rows(
         str(quality),
         svamp_recipe,
         config,
-        SourceQualityPolicy(sample_size=30, reject_above=0.20),
+        SourceQualityPolicy(sample_size=30),
         execution,
     )
     assert report.status == status
@@ -1200,28 +1201,18 @@ def test_source_quality_gate_reuses_reviews_and_preserves_all_rows(
     assert len(requests) == len(set(requests)) == 30
     sample_rows = [record for record in records if record["task_id"] in sampled_ids]
     assert {record["review_status"] for record in sample_rows} == sample_review_statuses
-    if status == "trust":
-        unavailable = int("unavailable" in sample_review_statuses)
-        expected = {"keep": 100 - unavailable, "reject": 2}
-        if unavailable:
-            expected["defer"] = unavailable
-        assert manifest["dispositions"] == expected
-        inferred = [record for record in records if record["quality_basis"] == "inferred_from_source"]
-        assert len(inferred) == 70
-        assert all(record["review_status"] is None and record["review_quality"] is None for record in inferred)
-        assert sum(record["review_quality"] == "good" for record in sample_rows) == 30 - unavailable
-        assert all(
-            record["filter_status"] == "defer" for record in sample_rows if record["review_status"] == "unavailable"
-        )
-        strict = filter_source(
-            str(audited), str(tmp_path / "strict"), FilterPolicy(minimum_confidence=Confidence.HIGH), 2
-        )
-        assert strict["dispositions"] == {"keep": 30 - unavailable, "defer": 70 + unavailable, "reject": 2}
-    elif status == "reject":
-        assert manifest["dispositions"] == {"reject": 102}
-        assert {record["review_quality"] for record in sample_rows} == {"good", "bad"}
-    else:
+    if status == "incomplete":
+        assert report.result.unavailable_count == 30
+        assert report.result.verdict == "unknown"
         assert manifest["dispositions"] == {"defer": 100, "reject": 2}
+        return
+    assert manifest["dispositions"] == {"keep": 100, "reject": 2}
+    inferred = [record for record in records if record["quality_basis"] == "inferred_from_source"]
+    assert len(inferred) == 70
+    assert all(record["review_status"] is None for record in inferred)
+    assert all(record["filter_status"] == "keep" for record in sample_rows)
+    strict = filter_source(str(audited), str(tmp_path / "strict"), FilterPolicy(minimum_confidence=Confidence.HIGH), 2)
+    assert strict["dispositions"] == {"keep": 100, "reject": 2}
 
 
 def test_source_quality_without_eligible_tasks_retains_import_failures(tmp_path, apple_row, svamp_recipe):
@@ -1235,8 +1226,9 @@ def test_source_quality_without_eligible_tasks_retains_import_failures(tmp_path,
     prepared, quality, audited = (str(tmp_path / name) for name in ("prepared", "quality", "audited"))
     prepare_source(str(staged), prepared, svamp_recipe, None, execution, num_output_shards=1)
     report = assess_source_quality(prepared, quality, svamp_recipe, config, SourceQualityPolicy(), execution)
-    assert report.status == "reject" and report.population.eligible_count == 0
-    assert report.population.input_count == 1 and report.defect_fraction == 1.0
+    assert report.status == "census" and report.population.eligible_count == 0
+    assert report.population.input_count == 1 and report.defect_fraction is None
+    assert report.result.reviewed == 0
     manifest = audit_prepared_source(prepared, quality, audited, svamp_recipe, config, execution).manifest
     assert not service.batches
     assert manifest["input_rows"] == 1 and manifest["dispositions"] == {"reject": 1}

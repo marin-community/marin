@@ -30,7 +30,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.struc
     convert_nemotron_structured_outputs,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
 FILE_DELIVERY = (
@@ -116,8 +116,11 @@ def candidate_sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=None,
             info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-structured-outputs-v4",
-                title="laion/nemotron-gym-structured-outputs-v4",
-                origin="Task Trove",
+                upstream_dataset="laion__nemotron-gym-structured-outputs-v4",
+                upstream_name="laion__nemotron-gym-structured-outputs-v4",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
                 tags=("agentic", "multi-turn"),
                 count=53870,

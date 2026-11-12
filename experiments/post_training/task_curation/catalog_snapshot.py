@@ -34,9 +34,10 @@ from finestore.rl.curation import (
     CurationSummary,
     CurrentCatalog,
     DaytonaMeasurement,
-    DaytonaSafety,
     JudgmentStatus,
     SnapshotSource,
+    SourceQualityResult,
+    Verdict,
     register_catalog,
     validate_items,
 )
@@ -49,6 +50,32 @@ from zephyr.readers import load_parquet
 from experiments.post_training.task_curation.campaign import CampaignStatus
 from experiments.post_training.task_curation.curation_catalog import RUNS
 from experiments.post_training.task_curation.source import GRANDFATHERED_MARINSKYRL_SOURCES, RlDataSource
+
+
+def assessment_quality_result(items: Iterable[AssessmentItem]) -> SourceQualityResult:
+    """Compute retained-sample quality independently of mechanical exclusions."""
+    sample_items = [item for item in items if item.cohort == "admitted"]
+    reviewed_items = [
+        item
+        for item in sample_items
+        if item.status == JudgmentStatus.REVIEWED and item.has_task and item.verdict != Verdict.UNKNOWN
+    ]
+    issues = [item for item in reviewed_items if item.verdict != Verdict.GOOD]
+    return SourceQualityResult(
+        reviewed=len(reviewed_items),
+        issue_count=len(issues),
+        unavailable_count=sum(item.status != JudgmentStatus.REVIEWED for item in sample_items),
+        uncertain_count=sum(
+            item.status == JudgmentStatus.REVIEWED and (not item.has_task or item.verdict == Verdict.UNKNOWN)
+            for item in sample_items
+        ),
+        issues=[f"{item.task_id}: {item.explanation}" for item in issues],
+        repair_recommendation=(
+            "Review the recorded issues and qualify a repaired release with SAMPLE or FULL QA."
+            if issues
+            else "No repair indicated by the reviewed sample."
+        ),
+    )
 
 
 def curation_summary(manifest: dict[str, Any]) -> CurationSummary:
@@ -77,6 +104,11 @@ def curation_summary(manifest: dict[str, Any]) -> CurationSummary:
         },
         admission_counts=AdmissionCounts.model_validate(manifest.get("admission_counts") or {}),
         verification=controls,
+        quality_result=(
+            SourceQualityResult.model_validate(manifest["source_quality"]["result"])
+            if manifest.get("source_quality", {}).get("result") is not None
+            else None
+        ),
     )
 
 
@@ -231,7 +263,15 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                         and prior.declaration.dataset_id == declaration.dataset_id
                         and prior.declaration.dataset_revision == declaration.dataset_revision
                     ):
-                        update["declaration"] = declaration
+                        update["declaration"] = declaration.model_copy(
+                            update={
+                                "quality_result": (
+                                    assessment_quality_result(catalog.items(prior.assessment_key))
+                                    if prior.assessment_key
+                                    else declaration.quality_result
+                                )
+                            }
+                        )
                     rows.append(prior.model_copy(update=update))
                     continue
                 unchanged = (
@@ -267,6 +307,10 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                                 f"attempts/{run_id}/{attempt.name}",
                                 ("grades/*.parquet", "requests/*.jsonl", "responses/*.jsonl"),
                             )
+                if key is not None:
+                    declaration = declaration.model_copy(
+                        update={"quality_result": assessment_quality_result(catalog.items(key))}
+                    )
                 rows.append(
                     SnapshotSource(
                         snapshot_id=run_id,
@@ -357,6 +401,7 @@ def refresh_catalog(
     unconverted source or reuse an assessment under a changed source pin.
     """
     declarations = {source.info.id: source.declaration for source in sources}
+    catalog = CurationCatalog(root)
     if retired_source_ids & declarations.keys():
         raise ValueError("A retired source cannot also be declared in the refreshed catalog")
 
@@ -372,6 +417,10 @@ def refresh_catalog(
             declaration = declarations.get(source_id)
             if declaration is None:
                 raise ValueError(f"Live catalog source has no registered declaration: {source_id}")
+            if record["assessment_key"] is not None:
+                declaration = declaration.model_copy(
+                    update={"quality_result": assessment_quality_result(catalog.items(record["assessment_key"]))}
+                )
             previous = record["declaration"]
             if (
                 previous["pipeline"] != declaration.model_dump(mode="json")["pipeline"]
@@ -422,18 +471,6 @@ def refresh_daytona_measurements(
                 declaration["daytona_snapshot_threshold"] = DAYTONA_SAFE_SNAPSHOT_LIMIT
             elif source_id in GRANDFATHERED_MARINSKYRL_SOURCES:
                 declaration["daytona_safety"] = None
-            elif "agentic" not in declaration["tags"]:
-                declaration.update(
-                    {
-                        "daytona_safety": DaytonaSafety.NOT_APPLICABLE.value,
-                        "daytona_machine_slots": 0,
-                        "daytona_snapshot_count": 0,
-                        "daytona_execution_failures": 0,
-                        "daytona_count_basis": "Non-agentic source: no actor machine",
-                        "daytona_unsafe_reasons": [],
-                        "daytona_unsafe_details": {},
-                    }
-                )
             else:
                 raise ValueError(f"Actor measurement is missing for live source: {source_id}")
             examples = (converted_examples or {}).get(source_id)

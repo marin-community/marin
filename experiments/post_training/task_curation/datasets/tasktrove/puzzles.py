@@ -24,7 +24,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_file
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 PUZZLES_CONFIG = "laion__all-puzzles-v2"
 
@@ -80,8 +80,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 id=f"Task Trove:{PUZZLES_CONFIG}",
-                title="laion/all-puzzles-v2",
-                origin="Task Trove",
+                upstream_dataset=PUZZLES_CONFIG,
+                upstream_name=PUZZLES_CONFIG,
+                subset=None,
+                build_path="TaskTrove",
+                origin=SourceOrigin.TASKTROVE,
                 family="math-answer",
                 tags=("agentic", "multi-turn"),
                 count=6926,

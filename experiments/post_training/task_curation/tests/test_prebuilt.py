@@ -11,7 +11,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import DaytonaSafety, OversightEvidence, OversightLevel
+from finestore.rl.curation import DaytonaSafety, DaytonaUnsafeReason, OversightEvidence, OversightLevel
 from marin.execution.lazy import StepContext, run
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grader import verifyit_package
@@ -31,7 +31,7 @@ from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.driver import _write_corpus
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 from lib.taskcompendium.tests.oracle_filter_fixtures import oracle_receipt
 
@@ -86,9 +86,18 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
         config=_cohort(2),
         pipeline=prebuilt.import_prebuilt,
         info=SourceInfo(
-            id="fixture",
-            title="fixture",
-            origin="fixture",
+            id="Marin:fixture",
+            upstream_dataset="fixture",
+            upstream_name="fixture",
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+            daytona_snapshot_count=0,
+            daytona_machine_slots=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture TaskSpec uses the declared grader without an actor.",
+            oversight=OversightEvidence(
+                level=OversightLevel.FULL, verification="Fixture grader behavior is checked locally."
+            ),
             lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 2),
         ),
     )
@@ -160,9 +169,18 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
             config=_cohort(1),
             pipeline=prebuilt.import_harbor_prebuilt,
             info=SourceInfo(
-                id="native",
-                title="native",
-                origin="fixture",
+                id="Marin:native",
+                upstream_dataset="native",
+                upstream_name="native",
+                build_path="test",
+                origin=SourceOrigin.MARIN,
+                daytona_snapshot_count=0,
+                daytona_machine_slots=0,
+                daytona_execution_failures=0,
+                daytona_count_basis="Fixture TaskSpec uses the declared grader without an actor.",
+                oversight=OversightEvidence(
+                    level=OversightLevel.FULL, verification="Fixture grader behavior is checked locally."
+                ),
                 lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
                 task_format=TaskFormat.HARBOR,
             ),
@@ -204,13 +222,19 @@ def test_direct_prebuilt_admission_requires_oversight_but_allows_unsafe_tasks(tm
         config=config,
         pipeline=prebuilt.import_prebuilt,
         info=SourceInfo(
+            id="Marin:unsafe",
+            upstream_dataset=("Marin:unsafe").partition(":")[2],
+            upstream_name=("Marin:unsafe").partition(":")[2],
+            build_path="test",
+            origin=SourceOrigin.MARIN,
             lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
-            id="fixture:unsafe",
-            title="Unsafe",
-            origin="fixture",
             tags=("agentic",),
             task_format=TaskFormat.TASKCOMPENDIUM,
             daytona_snapshot_count=11,
+            daytona_machine_slots=11,
+            daytona_unsafe_reasons=(DaytonaUnsafeReason.TOO_MANY_SNAPSHOTS,),
+            daytona_unsafe_details={"too_many_snapshots": "11 identities"},
+            daytona_unsafe_counts={"too_many_snapshots": 11},
             daytona_count_basis="fixture production identity census",
             daytona_execution_failures=0,
             oversight=(
@@ -284,9 +308,18 @@ def test_canonical_judged_release_preserves_tasks_without_a_runtime_envelope(tmp
         config=_cohort(1),
         pipeline=prebuilt.import_taskcompendium_prebuilt,
         info=SourceInfo(
-            id="reply",
-            title="reply",
-            origin="fixture",
+            id="Marin:reply",
+            upstream_dataset="reply",
+            upstream_name="reply",
+            origin=SourceOrigin.MARIN,
+            build_path="test",
+            daytona_snapshot_count=0,
+            daytona_machine_slots=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture reply grader has no actor.",
+            oversight=OversightEvidence(
+                level=OversightLevel.SAMPLE, verification="Fixture rubric grading is checked locally."
+            ),
             lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
@@ -354,9 +387,18 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
         config=_cohort(1),
         pipeline=pipeline,
         info=SourceInfo(
-            id="fixture:oracle",
-            title="oracle",
-            origin="fixture",
+            id="Marin:oracle",
+            upstream_dataset=("Marin:oracle").partition(":")[2],
+            upstream_name=("Marin:oracle").partition(":")[2],
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+            daytona_snapshot_count=0,
+            daytona_machine_slots=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture TaskSpec uses the declared grader without an actor.",
+            oversight=OversightEvidence(
+                level=OversightLevel.FULL, verification="Fixture grader behavior is checked locally."
+            ),
             lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
@@ -394,7 +436,21 @@ def test_atlas_private_release_policy_blocks_prebuilt_download(tmp_path, monkeyp
     source = RlDataSource(
         config=config,
         pipeline=prebuilt.import_prebuilt,
-        info=SourceInfo(id="fixture:policy", title="policy", origin="fixture", lexical_contamination=evidence),
+        info=SourceInfo(
+            id="Marin:policy",
+            upstream_dataset="policy",
+            upstream_name="policy",
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+            daytona_snapshot_count=0,
+            daytona_machine_slots=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture TaskSpec uses the declared grader without an actor.",
+            oversight=OversightEvidence(
+                level=OversightLevel.FULL, verification="Fixture grader behavior is checked locally."
+            ),
+            lexical_contamination=evidence,
+        ),
     )
     downloaded = []
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: downloaded.append(kwargs))
@@ -410,7 +466,13 @@ def test_quick_pass_writes_the_validated_cohort_as_converted_tasks(tmp_path, mon
     source = RlDataSource(
         config=_cohort(2),
         pipeline=prebuilt.import_prebuilt,
-        info=SourceInfo(id="fixture:quick", title="quick", origin="fixture"),
+        info=SourceInfo(
+            id="Marin:quick",
+            upstream_dataset="quick",
+            upstream_name="quick",
+            origin=SourceOrigin.MARIN,
+            build_path="test",
+        ),
     )
     step = prebuilt.import_prebuilt(source, PipelineOptions(SourceProcessingMode.QUICK, CampaignRuntime()))
     artifact = step.run(step.build_config(StepContext.for_run(str(output), str(tmp_path))))

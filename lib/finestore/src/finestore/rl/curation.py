@@ -4,15 +4,18 @@
 """Typed curation catalog records shared by campaign writers and Atlas readers."""
 
 import json
+import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, get_args, get_origin
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from finestore.layout import BlobTables, OnConflict, parse_uri
 from finestore.reader import ReadView
+from finestore.rl.source_identity import PENDING_SOURCE_ID_RETIREMENTS
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 
@@ -96,6 +99,102 @@ class CatalogRecord(BaseModel):
         return result
 
 
+class SourceOrigin(StrEnum):
+    """Upstream provider; internal campaigns belong in build_path."""
+
+    AI_MO = "AI-MO"
+    ASDIV = "ASDiv"
+    ALLENAI = "AllenAI"
+    ANTHROPIC = "Anthropic"
+    BYTEDTSINGHUA_SIA = "BytedTsinghua-SIA"
+    CHILLED = "ChilleD"
+    CODEPARROT = "CodeParrot"
+    ELEUTHERAI = "EleutherAI"
+    EVALCHEMY = "Evalchemy"
+    GPQA = "GPQA"
+    GRETEL = "Gretel"
+    HARBOR_HUB = "Harbor Hub"
+    HUGGINGFACEH4 = "HuggingFaceH4"
+    MARIN = "Marin"
+    NEMOTRON = "Nemotron"
+    OPEN_R1 = "Open-R1"
+    OPENAI = "OpenAI"
+    OPENATHENA = "OpenAthena"
+    PRIME_RL = "PRIME-RL"
+    REASONING_GYM = "Reasoning Gym"
+    TRL = "TRL"
+    TASKTROVE = "TaskTrove"
+    AGENTICA_ORG = "agentica-org"
+    DI_ZHANG_FDU = "di-zhang-fdu"
+    PAFITIS = "pafitis"
+
+
+class DatasetRelease(CatalogRecord):
+    """Exact dataset used for training, independently of upstream provenance."""
+
+    repo: str = Field(min_length=1)
+    revision: str = Field(min_length=1)
+    url: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _immutable_hugging_face_pin(self) -> "DatasetRelease":
+        host = urlsplit(self.url).hostname
+        if host == "huggingface.co" or self.repo.startswith("open-athena/"):
+            if re.fullmatch(r"[0-9a-f]{40}", self.revision) is None:
+                raise ValueError("Hugging Face current_release requires an immutable commit")
+            if self.url != f"https://huggingface.co/datasets/{self.repo}/tree/{self.revision}":
+                raise ValueError("Hugging Face current_release URL must match its repository and revision")
+        return self
+
+
+def source_identifier(origin: SourceOrigin, dataset: str, subset: str | None, variant: str | None) -> str:
+    return f"{origin}:{dataset}" + (f"/{subset}" if subset else "") + (f"@{variant}" if variant else "")
+
+
+def source_title(name: str, subset: str | None, variant: str | None) -> str:
+    return " · ".join(part for part in (name, subset, variant) if part)
+
+
+class SourceQualityResult(CatalogRecord):
+    """Informational Result over conclusive reviewed tasks; exclusions are separate."""
+
+    reviewed: int = Field(ge=0)
+    issue_count: int = Field(ge=0)
+    issues: list[str]
+    repair_recommendation: str
+    unavailable_count: int = Field(default=0, ge=0)
+    uncertain_count: int = Field(default=0, ge=0)
+    sample_count: int | None = None
+    issue_rate: float | None = None
+    verdict: Verdict = Verdict.UNKNOWN
+
+    @model_validator(mode="before")
+    @classmethod
+    def _computed_result(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        result = dict(value)
+        reviewed, issues = result["reviewed"], result["issue_count"]
+        if issues > reviewed:
+            raise ValueError("Issue count exceeds reviewed tasks")
+        rate = issues / reviewed if reviewed else None
+        verdict = (
+            Verdict.UNKNOWN
+            if not reviewed
+            else (
+                Verdict.BAD
+                if 2 * issues >= reviewed
+                else Verdict.GOOD if 10 * issues <= reviewed else Verdict.SOME_ISSUES
+            )
+        )
+        sample_count = reviewed + result.get("unavailable_count", 0) + result.get("uncertain_count", 0)
+        for name, expected in (("issue_rate", rate), ("verdict", verdict), ("sample_count", sample_count)):
+            if name in result and result[name] != expected:
+                raise ValueError(f"{name} must be computed from reviewed issue counts")
+            result[name] = expected
+        return result
+
+
 class IndependentQC(CatalogRecord):
     """Quality checks reported by a pinned source release."""
 
@@ -127,30 +226,10 @@ class DaytonaSafety(StrEnum):
     SAFE = "safe"
     UNSAFE = "unsafe"
     NOT_APPLICABLE = "not_applicable"
-    UNASSESSED = "unassessed"
 
 
 DAYTONA_SAFE_SNAPSHOT_LIMIT = 10
 """The unique-snapshot budget a source must fit to count as Daytona-safe."""
-
-
-def daytona_verdict(*, snapshot_count: int | None, execution_failures: int | None, agentic: bool) -> DaytonaSafety:
-    """Derive a source's Daytona verdict from its measurement.
-
-    Sources that provision no sandbox are safe regardless of any count. An agentic
-    source without a measured count is unassessed: a count that was never taken
-    cannot establish safety, and a declared value must not stand in for one.
-    Otherwise the source is unsafe when its unique environment count exceeds
-    ``DAYTONA_SAFE_SNAPSHOT_LIMIT`` or when the Daytona backend refuses a task's
-    declared execution requirements.
-    """
-    if not agentic:
-        return DaytonaSafety.SAFE
-    if snapshot_count is None:
-        return DaytonaSafety.UNASSESSED
-    if snapshot_count > DAYTONA_SAFE_SNAPSHOT_LIMIT or execution_failures:
-        return DaytonaSafety.UNSAFE
-    return DaytonaSafety.SAFE
 
 
 class CurationMode(StrEnum):
@@ -235,6 +314,7 @@ class DaytonaMeasurement(CatalogRecord):
     daytona_count_basis: str = Field(min_length=1)
     daytona_unsafe_reasons: list[DaytonaUnsafeReason]
     daytona_unsafe_details: dict[str, str]
+    daytona_unsafe_counts: dict[str, int] = Field(default_factory=dict)
     daytona_roles: dict[str, dict[str, RoleExecutionEvidence]] | None = None
 
     @property
@@ -260,6 +340,10 @@ class DaytonaMeasurement(CatalogRecord):
             raise ValueError("Every unsafe reason requires its measured detail")
         if any(not detail.strip() for detail in self.daytona_unsafe_details.values()):
             raise ValueError("Unsafe details must describe the measured failure")
+        if set(self.daytona_unsafe_counts) != {reason.value for reason in reasons}:
+            raise ValueError("Every unsafe reason requires its affected actor-task count")
+        if any(count <= 0 or count > self.daytona_machine_slots for count in self.daytona_unsafe_counts.values()):
+            raise ValueError("Unsafe counts must describe affected actor task slots")
         return self
 
 
@@ -385,7 +469,13 @@ class SourceDeclaration(CatalogRecord):
     id: str
     name: str
     display_name: str
-    origin: str
+    origin: SourceOrigin
+    build_path: str
+    upstream_dataset: str
+    upstream_name: str
+    subset: str | None = None
+    variant: str | None = None
+    current_release: DatasetRelease
     family: str
     tags: list[str]
     task_count: int | None
@@ -400,11 +490,7 @@ class SourceDeclaration(CatalogRecord):
     status: str
     pipeline: PipelineReference | None
     independent_qc: IndependentQC | None = None
-    # Non-agentic sources never provision Daytona sandboxes; an agentic source stays
-    # UNASSESSED until its unique snapshot count is assessed against DAYTONA_SAFE_SNAPSHOT_LIMIT.
-    daytona_safety: DaytonaSafety | None = DaytonaSafety.UNASSESSED
-    # Measured distinct snapshot identities and the rule applied, required for any agentic
-    # SAFE/UNSAFE verdict. A verdict without these stays UNASSESSED; counts are never inferred.
+    daytona_safety: DaytonaSafety | None
     daytona_snapshot_count: int | None = None
     daytona_snapshot_threshold: int | None = None
     daytona_count_basis: str | None = None
@@ -421,6 +507,37 @@ class SourceDeclaration(CatalogRecord):
     daytona_execution_failures: int | None = None
     daytona_unsafe_reasons: list[DaytonaUnsafeReason] = Field(default_factory=list)
     daytona_unsafe_details: dict[str, str] = Field(default_factory=dict)
+    daytona_unsafe_counts: dict[str, int] = Field(default_factory=dict)
+    quality_result: SourceQualityResult | None = None
+
+    @model_validator(mode="after")
+    def _canonical_identity(self) -> "SourceDeclaration":
+        if PENDING_SOURCE_ID_RETIREMENTS.get(self.id, self.id) != source_identifier(
+            self.origin, self.upstream_dataset, self.subset, self.variant
+        ):
+            raise ValueError("Source ID differs from generated identity")
+        if self.display_name != source_title(self.upstream_name, self.subset, self.variant):
+            raise ValueError("Source title differs from generated title")
+        if self.daytona_safety is not None:
+            measurement = DaytonaMeasurement.model_validate(
+                {
+                    "dataset_id": self.dataset_id,
+                    "dataset_revision": self.dataset_revision,
+                    "daytona_snapshot_count": self.daytona_snapshot_count,
+                    "daytona_machine_slots": self.daytona_machine_slots,
+                    "daytona_execution_failures": self.daytona_execution_failures,
+                    "daytona_count_basis": self.daytona_count_basis,
+                    "daytona_unsafe_reasons": self.daytona_unsafe_reasons,
+                    "daytona_unsafe_details": self.daytona_unsafe_details,
+                    "daytona_unsafe_counts": self.daytona_unsafe_counts,
+                    "daytona_roles": self.daytona_roles,
+                }
+            )
+            if measurement.safety is not self.daytona_safety:
+                raise ValueError("Daytona safety must match the actor census")
+        if self.origin is SourceOrigin.EVALCHEMY and "eval" not in self.tags:
+            raise ValueError("Evalchemy benchmarks must be marked for evaluation")
+        return self
 
 
 class AdmissionCounts(CatalogRecord):
@@ -459,6 +576,7 @@ class CurationSummary(CatalogRecord):
     unprocessed_rows: int | None
     admission_counts: AdmissionCounts
     verification: ControlSummary | None
+    quality_result: SourceQualityResult | None = None
 
     @model_validator(mode="after")
     def _quick_curation_admits_nothing(self) -> "CurationSummary":

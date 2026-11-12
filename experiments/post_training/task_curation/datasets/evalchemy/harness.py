@@ -38,7 +38,7 @@ from experiments.post_training.task_curation.datasets.evalchemy.environments imp
 from experiments.post_training.task_curation.datasets.evalchemy.likelihood import choice_source
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 
 def sources() -> list[RlDataSource[EvalDataset]]:
@@ -136,8 +136,11 @@ def sources() -> list[RlDataSource[EvalDataset]]:
         RlDataSource(
             info=SourceInfo(
                 id="Evalchemy:lambada_openai",
-                title="lambada_openai",
-                origin="Evalchemy",
+                upstream_dataset="lambada_openai",
+                upstream_name="lambada_openai",
+                subset=None,
+                build_path="Evalchemy",
+                origin=SourceOrigin.EVALCHEMY,
                 family="likelihood-continuation",
                 tags=("eval", "source:evalchemy", "benchmark"),
                 count=5153,
@@ -252,8 +255,11 @@ def generation_sources() -> list[RlDataSource[EvalDataset]]:
             RlDataSource(
                 info=SourceInfo(
                     id="Evalchemy:" + name,
-                    title=name,
-                    origin="Evalchemy",
+                    upstream_dataset=name,
+                    upstream_name=name,
+                    subset=None,
+                    build_path="Evalchemy",
+                    origin=SourceOrigin.EVALCHEMY,
                     family="short-answer",
                     tags=("eval", "source:evalchemy", "benchmark", "family:short-answer", "task:" + profile),
                     count=population,
