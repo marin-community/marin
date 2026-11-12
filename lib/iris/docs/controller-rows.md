@@ -34,7 +34,8 @@ registry auth comes from the node's credential helper. The
 free-text `error` and `status_message` columns, below, and job tags are the
 exceptions. Job tags (`job_config.tags_json`, copied to
 `iris.controller_db__jobs.tags`) are user-written but exist for reporting, so
-they are copied with token-like strings in each value redacted, like `error`.
+they are copied with token-like strings in each value redacted, best-effort
+like `error` (see **Free text** below).
 Rows are kept forever, so any other column that fails the rule is left out, not
 redacted and kept.
 
@@ -143,7 +144,7 @@ ORDER BY accelerator_hours DESC;
 
 `iris.controller_db__jobs.tags` holds the job's tags as a JSON object
 (`json_get(tags, 'category')`), with token-like strings in each value
-redacted, or NULL for an untagged job; jobs submitted before tags existed are
+redacted (best-effort, see **Free text** above), or NULL for an untagged job; jobs submitted before tags existed are
 untagged.
 
 `error` is not truncated, but token-like strings in it are redacted (see
