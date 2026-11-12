@@ -1000,15 +1000,17 @@ the rebuilt setup no longer installs task dependencies and the base image owns
 provisioning.
 
 **Empty-submission grading (sandbox).** `no_oracle_liveness` samples tasks by
-base and calls `grade_empty_in_sandbox` on a fresh grading machine. The task
+base image and calls `grade_empty_in_sandbox` on a fresh grading machine. The task
 machine's setup commands do not run in this path; the grader's declared setup
 commands do. A `negative_verdict` requires exit code zero, a reward below one,
 and a positive structured executed-test count (`detail.total`). Numeric reward
 files without execution evidence report `unverified_execution`. Crashes and
 missing exit diagnostics report `verifier_error`, even when a reward is zero.
-Liveness qualification enforces the published runtime's startup and cleanup
-deadlines. Failed or expired machine cleanup reports `infra_error` and cannot
-qualify a task.
+A sampled task passes verifier liveness only with `negative_verdict`.
+`verifier_machine.startup_timeout` bounds machine preparation, and
+`verifier_machine.cleanup_timeout` bounds teardown. Without a per-machine cleanup
+deadline, qualification uses 120 seconds. Failed or expired machine cleanup
+reports `infra_error` and cannot qualify a task.
 
 The offline report records payload preservation and setup execution rates. Its
 verifier results are populated only from an explicit `--liveness` JSONL file. `skipped` is the default
