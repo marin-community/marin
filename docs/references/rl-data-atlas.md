@@ -131,8 +131,8 @@ s3://marin-us-east-02a/marin/rl-data/catalog/production` to the
 [campaign command](task-curation.md#run-a-campaign) with assessment enabled.
 `--cache-dir` selects local execution and a local artifact root, so production
 publication rejects it. Production uses the shared artifact cache under
-`--artifact-root` (default `s3://marin-us-east-02a/marin`) and an explicit
-`--review-cache` for model requests. Reuse the existing cache locations, pinned
+`--artifact-root` (default `s3://marin-us-east-02a/marin`) and `--review-cache`
+(default `<artifact-root>/rl-data/review-cache`) for model requests. Reuse the existing cache locations, pinned
 inputs, recipe versions, rubric and model revisions to reuse completed work.
 Assessment can use cached results; enabling it does not force regrading.
 A new report directory does not invalidate the caches. Switching a local or GCP

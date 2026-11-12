@@ -5,6 +5,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import tomllib
 from dataclasses import replace
@@ -68,6 +69,29 @@ STRUCTURED_PROMPT = (
     "Extract the person's name from the note below as JSON.\n\nNote: Ada wrote this.\n\n"
     "Write your final JSON to `/app/answer.txt`."
 )
+
+
+TIMEOUT_SHIM = """#!/usr/bin/env python3
+import subprocess
+import sys
+
+try:
+    sys.exit(subprocess.run(sys.argv[2:], timeout=float(sys.argv[1])).returncode)
+except subprocess.TimeoutExpired:
+    sys.exit(124)
+"""
+"""GNU ``timeout`` semantics for hosts without coreutils: exit status of the command, or 124 on expiry."""
+
+
+def source_runner_env(tmp_path: Path) -> dict[str, str]:
+    """Host environment for an archived runner, which calls coreutils ``timeout`` as its container provides."""
+    if shutil.which("timeout") is not None:
+        return dict(os.environ)
+    shim = tmp_path / "bin/timeout"
+    shim.parent.mkdir(parents=True)
+    shim.write_text(TIMEOUT_SHIM)
+    shim.chmod(0o755)
+    return {**os.environ, "PATH": f"{shim.parent}{os.pathsep}{os.environ['PATH']}"}
 
 
 def archive(instruction: str, files: dict[str, bytes]) -> dict:
@@ -293,7 +317,7 @@ def test_codeforces_source_runner_and_converted_grader_agree_on_exit_status(tmp_
         ("/app", str(workspace)),
     ):
         runner = runner.replace(old, new)
-    subprocess.run(["bash", "-c", runner], check=False, capture_output=True)
+    subprocess.run(["bash", "-c", runner], check=False, capture_output=True, env=source_runner_env(tmp_path))
     assert float((tmp_path / "logs/reward.txt").read_text()) == expected_reward
     assert grade(local_stdio(task, workspace), tests, workspace).reward == expected_reward
 
