@@ -136,6 +136,13 @@ trials:
     cplm_plus: 'true'
   commit: 172f9e44d2
   priority: batch
+  loss:
+  - 2.2647
+  delta:
+  - -0.0059
+  steps: 20023
+  baseline: s7n-d1280L16 2.2706 (same commit, seed 0)
+  step_time_change: +9%
 potential:
   score: 7
   rationale: -0.0148 at speedrun equal time, 0% step; -0.0578 equal data at +31%; seed 1 under a dropped protocol; ladder,
