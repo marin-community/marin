@@ -4,43 +4,18 @@ Named results use eval/<name>/ metrics and <trainer.export_path>/<name>/ outputs
 """
 
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, fields, replace
-from typing import Any, Literal, get_args
+import json
+from typing import Any
 
 from marinskyrl.resource_locator import join_resource_path
 from omegaconf import DictConfig, OmegaConf
-from skyrl_train.inference_engines.sampling import SAMPLING_PARAMETER_KEYS
-
-
-EvaluationSchedule = Literal["every_evaluation", "final"]
-
-
-@dataclass(frozen=True)
-class EvaluationProfile:
-    sampling_params: dict[str, Any] | None = None
-    n_samples_per_prompt: int | None = None
-    data_files: list[str] | None = None
-    schedule: EvaluationSchedule = "every_evaluation"
-
-    def __post_init__(self):
-        if self.schedule not in get_args(EvaluationSchedule):
-            raise ValueError(f"unknown evaluation schedule: {self.schedule}")
-        if self.n_samples_per_prompt is not None and (
-            type(self.n_samples_per_prompt) is not int or self.n_samples_per_prompt <= 0
-        ):
-            raise ValueError("n_samples_per_prompt must be a positive integer")
-        if self.data_files is not None and (
-            not isinstance(self.data_files, Sequence)
-            or isinstance(self.data_files, str)
-            or not self.data_files
-            or not all(isinstance(path, str) and path for path in self.data_files)
-        ):
-            raise ValueError("data_files must be nonempty file-path strings in a sequence")
+from skyrlrecipe.declared import EvaluationSampling as EvaluationProfile
+from skyrlrecipe.sampling import EvalSamplingParams
 
 
 def _declared_profiles(config: Mapping[str, Any]) -> dict[str, EvaluationProfile]:
     profiles = {}
-    allowed = {field.name for field in fields(EvaluationProfile)}
+    allowed = EvaluationProfile.model_fields.keys()
     callbacks = config.get("trainer", {}).get("callbacks")
     if callbacks is None:
         callbacks = ()
@@ -68,13 +43,14 @@ def _declared_profiles(config: Mapping[str, Any]) -> dict[str, EvaluationProfile
             unknown = set(parameters) - allowed
             if unknown:
                 raise ValueError(f"evaluation profile {name} has unknown fields: {sorted(unknown, key=str)}")
-            try:
-                profile = EvaluationProfile(**parameters)
-            except (TypeError, ValueError) as error:
-                raise ValueError(f"evaluation profile {name}: {error}") from error
-            unknown_sampling = set(profile.sampling_params or {}) - SAMPLING_PARAMETER_KEYS
+            unknown_sampling = set(parameters.get("sampling_params") or {}) - EvalSamplingParams.model_fields.keys()
             if unknown_sampling:
                 raise ValueError(f"evaluation profile {name} has unknown sampling keys: {sorted(unknown_sampling, key=str)}")
+            try:
+                document = OmegaConf.to_container(parameters, resolve=True) if OmegaConf.is_config(parameters) else parameters
+                profile = EvaluationProfile.model_validate_json(json.dumps(document))
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"evaluation profile {name}: {error}") from error
             profiles[name] = profile
     return profiles
 
@@ -95,20 +71,26 @@ def evaluation_profiles(
     """Resolve and record named requests in one complete native SkyRL configuration."""
     profiles = _declared_profiles(config)
     for name, paths in evaluation_data:
-        profiles[name] = replace(profiles[name], data_files=list(paths))
+        profiles[name] = EvaluationProfile.model_validate_json(
+            json.dumps(profiles[name].to_skyrl() | {"data_files": paths})
+        )
     resolved = {}
     for name, profile in profiles.items():
         merged = evaluation_profile_config(config, profile, name)
-        resolved[name] = EvaluationProfile(
-            sampling_params=OmegaConf.to_container(merged.generator.eval_sampling_params, resolve=True),
-            n_samples_per_prompt=int(merged.generator.eval_n_samples_per_prompt),
-            data_files=profile.data_files,
-            schedule=profile.schedule,
+        resolved[name] = EvaluationProfile.model_validate_json(
+            json.dumps(
+                {
+                    "sampling_params": OmegaConf.to_container(merged.generator.eval_sampling_params, resolve=True),
+                    "n_samples_per_prompt": int(merged.generator.eval_n_samples_per_prompt),
+                    "data_files": profile.data_files,
+                    "schedule": profile.schedule,
+                }
+            )
         )
     for callback in config.get("trainer", {}).get("callbacks") or []:
         if callback.get("type") == "evaluation":
             for name in callback.get("additional_evaluations") or {}:
-                callback.additional_evaluations[name] = asdict(resolved[name])
+                callback.additional_evaluations[name] = resolved[name].to_skyrl()
     return resolved
 
 
@@ -130,6 +112,6 @@ def evaluation_profile_config(cfg: DictConfig, profile: EvaluationProfile, name:
     if profile.data_files is not None:
         overrides["data"] = {"val_data": profile.data_files}
     merged = OmegaConf.merge(cfg, overrides)
-    for key, value in (profile.sampling_params or {}).items():
+    for key, value in (profile.sampling_params.to_skyrl() if profile.sampling_params is not None else {}).items():
         OmegaConf.update(merged, f"generator.eval_sampling_params.{key}", value, force_add=True)
     return merged
