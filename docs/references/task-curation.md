@@ -1543,6 +1543,30 @@ remain absent until private clean/remediated TaskCompendium publication and
 readback. A training release receipt stores its output pin and archive lineage
 under `receipt.release`; benchmark measurement receipts set that field to null.
 
+Completed measurements are registered separately from dataset releases. The
+registry resolves frozen source IDs through the permanent alias table and joins
+each measurement to the exact normalization and actor-census input, including the
+converter version/revision, TaskSpec digest, task count and declared Use.
+`SourceInfo.lexical_contamination` receives matching metrics. Stale input or Use
+changes clear raw metrics; an existing valid current release proof is preserved.
+Training measurements alone do not supply private-release admission proof.
+
+```bash
+uv run python -m experiments.post_training.task_curation.lexical_registration \
+  --outcomes lexical-outcomes.json --populations normalized-populations.json \
+  --source-uses measured-source-uses.json \
+  --actor-receipts-dir experiments/post_training/task_curation/datasets/daytona_census_receipts \
+  --output-dir /tmp/atlas-lexical-measurements-YYYYMMDD
+```
+
+This command updates metadata only. It does not publish dataset versions or
+change admitted selection. Training release publication combines within-source
+exact deduplication and lexical decontamination after approval of the retained
+population.
+The output directory must be new; an existing directory is never replaced.
+Review the staged shards before updating the checked-in
+`datasets/lexical_measurement_receipts` registry.
+
 ### Package-lock graders use the worker's local runtime
 
 A grader that declares `packages_lock` runs in the worker's local bubblewrap
