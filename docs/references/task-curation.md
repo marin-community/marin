@@ -671,6 +671,22 @@ question and rubric by replacing fields on its `.spec`; keep the accompanying
 `context_window_tokens`, model identity and revision in the qualification evidence.
 The presets do not certify endpoint availability or source admission.
 
+Choose a `JudgeEndpoint` at run time and use its `connect()` context to obtain
+the grader's `JudgeConnection`. `HostedJudgeEndpoint` accepts a provider URL
+and credentials; `RelayJudgeEndpoint` discovers an existing Iris GLM relay;
+`LocalJudgeEndpoint` owns `marin.inference.iris.remote_inference` inside an
+Iris job. Every implementation checks that `/models` advertises the tier's
+exact served model name. This check does not establish a hosted alias's
+underlying weight revision.
+
+Local hosting additionally requires a model YAML matching the tier's immutable
+revision and context window, and confirms the running server's context window.
+For MEDIUM, use
+`experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/olympiadbench_judge/MiniMaxAI-MiniMax-M3-MXFP8-262k.yaml`:
+it pins 262,144 tokens and eight H100s. The 32k judge YAML does not satisfy this
+tier. Exit the endpoint context as soon as validation finishes to release its
+workers. Keep endpoint URLs and credentials out of task specifications.
+
 | Tier | Model requested | Completion budget | Request timeout | Transport attempts | Parse attempts |
 |---|---|---:|---:|---:|---:|
 | LIGHT | `openai/gpt-oss-120b` | 8,192 | 120 seconds | 3 | 2 |

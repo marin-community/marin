@@ -8,12 +8,26 @@ not provider request parameters. Qualification must check the endpoint's model
 identity and actual prompt-token usage against them before admitting a source.
 """
 
-from collections.abc import Mapping
-from dataclasses import dataclass, replace
+import logging
+from collections.abc import Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from pathlib import Path
 from types import MappingProxyType
+from typing import Protocol
 
+import httpx
+from marin.evaluation.hardware import AcceleratorChoice
+from marin.evaluation.model_config import load_model_config
+from marin.evaluation.serving_config import inference_config_for_model
+from marin.inference.iris import remote_inference
+from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import RUBRIC_LABELS, JudgeCompletionPolicy, JudgeSpec
+
+from experiments.post_training.glm import resolve_glm_base_url
+
+logger = logging.getLogger(__name__)
 
 
 class JudgeTier(StrEnum):
@@ -120,3 +134,100 @@ JUDGE_TIERS: Mapping[JudgeTier, JudgeTierDefinition] = MappingProxyType(
         ),
     }
 )
+
+
+class JudgeEndpoint(Protocol):
+    """Bind a tier to a checked connection for the lifetime of a grading run."""
+
+    def connect(self) -> AbstractContextManager[JudgeConnection]: ...
+
+
+def _validate_model(connection: JudgeConnection, tier: JudgeTier) -> None:
+    response = httpx.get(
+        f"{connection.base_url.rstrip('/')}/models",
+        headers={"Authorization": f"Bearer {connection.api_key}"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    # Together lists models directly; OpenAI-compatible servers wrap them in data.
+    models = payload if isinstance(payload, list) else payload["data"]
+    expected = JUDGE_TIERS[tier].spec.model
+    if expected not in {model["id"] for model in models}:
+        raise ValueError(f"Judge endpoint does not advertise the pinned {tier} model {expected!r}")
+
+
+@dataclass(frozen=True)
+class HostedJudgeEndpoint:
+    """Connect to an existing provider using credentials supplied by the caller."""
+
+    tier: JudgeTier
+    base_url: str
+    api_key: str = field(repr=False)
+
+    @contextmanager
+    def connect(self) -> Iterator[JudgeConnection]:
+        connection = JudgeConnection(self.base_url, self.api_key, default_model=JUDGE_TIERS[self.tier].spec.model)
+        _validate_model(connection, self.tier)
+        yield connection
+
+
+@dataclass(frozen=True)
+class RelayJudgeEndpoint:
+    """Discover an existing GLM relay through its Iris job registration."""
+
+    relay_job: str
+    api_key: str = field(repr=False)
+
+    @contextmanager
+    def connect(self) -> Iterator[JudgeConnection]:
+        with HostedJudgeEndpoint(
+            JudgeTier.HEAVY, resolve_glm_base_url(self.relay_job), self.api_key
+        ).connect() as connection:
+            yield connection
+
+
+@dataclass(frozen=True)
+class LocalJudgeEndpoint:
+    """Own maintained Iris inference from a model YAML matching the tier's pin.
+
+    Run inside an Iris job. Exiting the context releases its serving workers,
+    including when readiness, identity checks or grading fail.
+    """
+
+    tier: JudgeTier
+    model_config: Path
+    accelerator: AcceleratorChoice
+    priority: int
+    env_vars: Mapping[str, str] = field(default_factory=dict)
+
+    @contextmanager
+    def connect(self) -> Iterator[JudgeConnection]:
+        definition = JUDGE_TIERS[self.tier]
+        model = load_model_config(self.model_config)
+        if definition.model_revision is None:
+            raise ValueError(f"The {self.tier} tier has no immutable checkpoint pin for local hosting")
+        if (model.location, model.revision, model.serve.max_model_len) != (
+            definition.model_identity,
+            definition.model_revision,
+            definition.context_window_tokens,
+        ):
+            raise ValueError(f"Model YAML must match the {self.tier} model, revision and context window")
+        config = inference_config_for_model(
+            model, self.accelerator, env_vars=self.env_vars, priority=self.priority, api_model=definition.spec.model
+        )
+        if config.model.max_model_len != definition.context_window_tokens:
+            raise ValueError("Resolved serving configuration changed the tier's context window")
+        with remote_inference(config) as session:
+            logger.info("Judge serving jobs: %s", [str(job.job_id) for job in session.jobs])
+            session.wait_until_ready()
+            if (
+                session.effective_serving is None
+                or session.effective_serving.max_model_len != definition.context_window_tokens
+            ):
+                raise ValueError("Running inference does not confirm the tier's context window")
+            endpoint = session.model.endpoint
+            if endpoint.model != definition.spec.model:
+                raise ValueError(f"Serving endpoint returned an unexpected model {endpoint.model!r}")
+            with HostedJudgeEndpoint(self.tier, endpoint.base_url, endpoint.api_key or "unused").connect() as connection:
+                yield connection
