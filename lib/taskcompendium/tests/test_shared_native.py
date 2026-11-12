@@ -107,7 +107,7 @@ def native_verdict(contract: SharedIntegrityContract) -> dict:
     "attack", ["config", "tests", "wrapper", "runner", "toolchain", "environment", "background", "verdict"]
 )
 def test_native_tampering_cannot_fake_a_pass(native_runtime, monkeypatch, attack):
-    contract, _, project = native_runtime
+    contract, dependencies, project = native_runtime
     workspace, root = Path(contract.workspace), Path(contract.protected_root)
     process = None
     if attack == "config":
@@ -161,6 +161,10 @@ def test_native_tampering_cannot_fake_a_pass(native_runtime, monkeypatch, attack
     try:
         verdict = native_verdict(contract)
         assert (verdict["status"], verdict["reward"]) == ("scored", 0)
+        if attack == "config":
+            assert (workspace / project.config).read_text() == project.files[project.config].replace(
+                "{dependency}", str(dependencies)
+            )
         assert (Path(contract.report_directory) / "verdict.json").stat().st_uid == 0
         if process is not None:
             assert process.wait(timeout=5) != 0
