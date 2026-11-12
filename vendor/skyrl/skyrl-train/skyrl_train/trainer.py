@@ -576,7 +576,7 @@ class RayPPOTrainer:
         """Kill all managed Ray actors (models + inference engines).
 
         Terminates policy, critic, and ref-model actor groups as well as
-        inference engine actors (vLLM / SGLang workers) that would otherwise
+        inference engine actors (vLLM workers) that would otherwise
         keep running until the node dies.
         """
         for model_name, model in [

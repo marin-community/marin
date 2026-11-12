@@ -60,3 +60,92 @@ async def test_remote_completion_keeps_sampled_ids_and_aligned_behavior_logprobs
     assert requests[0]["return_token_ids"] is True
     assert requests[0]["logprobs"] == 0
     assert requests[1]["prompt"] == [[0, 1, 3], [0, 2, 2]]
+
+
+@pytest.mark.asyncio
+async def test_remote_weight_publication_and_lifecycle_use_vllm_wire_protocol():
+    requests = []
+
+    async def receive(request):
+        body = await request.json() if request.can_read_body else None
+        requests.append((request.path, body))
+        if request.path == "/reset_prefix_cache":
+            return web.Response(text="cache cleared")
+        return web.json_response({"accepted": request.path})
+
+    app = web.Application()
+    for path in (
+        "init_weight_update_communicator",
+        "update_weights",
+        "wake_up",
+        "sleep",
+        "reset_prefix_cache",
+        "destroy_weights_update_group",
+    ):
+        app.router.add_post(f"/{path}", receive)
+    async with TestServer(app) as server:
+        engine = RemoteInferenceEngine(
+            str(server.make_url("")).removeprefix("http://").rstrip("/"), "test", "vllm", AliasingTokenizer()
+        )
+        await engine.init_weight_update_communicator("trainer", 29500, 1, 3, "policy", "nccl", True)
+        result = await engine.update_named_weights(
+            {"names": ["model.norm.weight"], "dtypes": ["bfloat16"], "shapes": [[128]], "extras": None}
+        )
+        await engine.sleep(level=2)
+        await engine.wake_up(tags=["weights", "kv_cache"])
+        cache_result = await engine.reset_prefix_cache()
+        await engine.teardown()
+    assert result == {"accepted": "/update_weights"}
+    assert cache_result == {"status": 200, "body": "cache cleared"}
+    assert requests == [
+        (
+            "/init_weight_update_communicator",
+            {
+                "master_address": "trainer",
+                "master_port": 29500,
+                "rank_offset": 1,
+                "world_size": 3,
+                "group_name": "policy",
+                "backend": "nccl",
+                "override_existing": True,
+            },
+        ),
+        ("/update_weights", {"name": "model.norm.weight", "dtype": "bfloat16", "shape": [128]}),
+        ("/sleep", {"level": 2}),
+        ("/wake_up", {"tags": ["weights", "kv_cache"]}),
+        ("/reset_prefix_cache", None),
+        ("/destroy_weights_update_group", None),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["/v1/completions", "/v1/chat/completions"])
+@pytest.mark.parametrize(
+    "error",
+    [
+        {"error": {"message": "invalid request", "code": 400}},
+        {"object": "error", "message": "invalid request", "code": 400},
+    ],
+)
+async def test_openai_compatible_requests_and_errors_pass_through(endpoint, error):
+    received = []
+
+    async def complete(request):
+        received.append(await request.json())
+        return web.json_response(error, status=400)
+
+    app = web.Application()
+    app.router.add_post(endpoint, complete)
+    body = {"model": "external-model", "temperature": 0.3, "provider_option": {"keep": True}}
+    if endpoint == "/v1/completions":
+        body["prompt"] = [1, 2, 3]
+    else:
+        body["messages"] = [{"role": "user", "content": "hello"}]
+    async with TestServer(app) as server:
+        engine = RemoteInferenceEngine(
+            str(server.make_url("")).removeprefix("http://").rstrip("/"), "external-model", "vllm", AliasingTokenizer()
+        )
+        method = engine.completion if endpoint == "/v1/completions" else engine.chat_completion
+        result = await method({"json": body})
+    assert result == error
+    assert received == [body]
