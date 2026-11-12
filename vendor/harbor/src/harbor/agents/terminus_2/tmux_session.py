@@ -11,6 +11,7 @@ from shellbox.process_session import (
     PROCESS_GROUP_ABSENT_EXIT_CODE,
     PROBE_PROCESS_GROUP_COMMAND,
 )
+from shellbox.process import PROCESS_SCOPE_POLL_INTERVAL, PROCESS_SCOPE_START_ATTEMPTS
 
 from harbor.agents.base import encode_model_output
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
@@ -510,9 +511,10 @@ class TmuxSession:
         )
         start_session_result = await self._exec(
             command=(
-                f"for attempt in $(seq 1 1000); do "
+                f"for attempt in $(seq 1 {PROCESS_SCOPE_START_ATTEMPTS}); do "
                 f"[ ! -S {shlex.quote(self._socket_dir)}/tmux-$(id -u)/default ] || break; "
-                f"sleep 0.01; done; [ -S {shlex.quote(self._socket_dir)}/tmux-$(id -u)/default ] || exit 1; "
+                f"sleep {PROCESS_SCOPE_POLL_INTERVAL}; done; "
+                f"[ -S {shlex.quote(self._socket_dir)}/tmux-$(id -u)/default ] || exit 1; "
                 + self._tmux_start_session
             ),
             user=self._user,
