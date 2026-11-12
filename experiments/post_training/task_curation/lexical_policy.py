@@ -38,9 +38,9 @@ def source_lexical_use(source: RlDataSource) -> LexicalUse:
         intended = IntendedUse(COHORT_INTENDED_USE)
     else:
         raise ValueError(f"No registered conversion Use: {source.info.id}")
-    if "benchmark" in source.info.tags:
-        return LexicalUse.BENCHMARK
-    return LexicalUse.EVAL if intended is IntendedUse.EVAL else LexicalUse.TRAIN
+    if intended is IntendedUse.TRAIN:
+        return LexicalUse.TRAIN
+    return LexicalUse.BENCHMARK if "benchmark" in source.info.tags else LexicalUse.EVAL
 
 
 def measurement_for_use(evidence: LexicalContaminationEvidence, use: LexicalUse) -> LexicalContaminationEvidence:
