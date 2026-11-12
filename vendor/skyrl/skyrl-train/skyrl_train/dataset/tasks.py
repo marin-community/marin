@@ -23,6 +23,7 @@ from taskcompendium.models import (
     ScriptGrader,
     Source,
     TaskSpec,
+    TextMessage,
     VerifyitGrader,
     grades_with_judge,
 )
@@ -186,7 +187,10 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     """Bind runtime settings when a canonical TaskSpec enters the trainer."""
     task = TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])
     config = environment_configs["task_spec"]
-    harness = config["harness_by_dataset"].get(task.source.dataset, config["default_harness"])
+    final_event = task.context.events[-1]
+    # Only the assistant-prefix harness keeps an unfinished assistant message last.
+    continues_assistant = isinstance(final_event, TextMessage) and final_event.role == "assistant"
+    harness = ASSISTANT_PREFIX_HARNESS if continues_assistant else config["default_harness"]
     session = {**config["session"], "task_session": harness}
     verifier = None
     grader = task.grader
