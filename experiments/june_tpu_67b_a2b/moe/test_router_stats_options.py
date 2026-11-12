@@ -1,11 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Options that cut the June model's per-layer routing statistics, on four devices (data=2 x expert=2), ring_filtered.
-
-- ``qb_threshold_impl="radix_select"``: the QB thresholds come from an exact radix select instead of a top_k sort.
-- ``router_diagnostics=False`` and ``skip_zero_router_z_loss``: no diagnostic statistics, no z-loss term at 0.
-"""
+"""Training parity for June's QB threshold and router statistics options."""
 
 import dataclasses
 import re

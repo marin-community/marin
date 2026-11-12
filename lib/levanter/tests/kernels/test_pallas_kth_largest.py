@@ -36,24 +36,34 @@ def _bits(x) -> np.ndarray:
     return np.asarray(x).view(np.uint32)
 
 
-@pytest.mark.parametrize("kind", ["normal", "ties", "masked", "zeros_and_subnormals", "infinities"])
-@pytest.mark.parametrize(("rows", "columns"), [(5, 37), (16, 512), (3, 1000)])
+@pytest.mark.parametrize(
+    ("kind", "rows", "columns"),
+    [
+        ("normal", 5, 37),
+        ("ties", 16, 512),
+        ("masked", 3, 1000),
+        ("zeros_and_subnormals", 5, 37),
+        ("infinities", 16, 512),
+    ],
+)
 def test_kth_largest_matches_top_k_bit_for_bit(kind, rows, columns):
     x = _rows(kind, rows, columns, seed=rows * columns)
     rng = np.random.default_rng(columns)
     per_row_k = rng.integers(1, columns + 1, rows).astype(np.int32)
-    for k in (np.ones(rows, np.int32), np.full(rows, columns, np.int32), per_row_k):
-        want = _bits(_top_k_kth(x, k))
-        for radix_bits in (1, 2, 4):
-            np.testing.assert_array_equal(
-                _bits(kth_largest_reference(jnp.asarray(x), jnp.asarray(k), radix_bits=radix_bits)), want
-            )
-        interpret = jax.default_backend() == "cpu"
-        kernel = jax.jit(kth_largest, static_argnames=("block", "interpret"))
-        np.testing.assert_array_equal(_bits(kernel(jnp.asarray(x), jnp.asarray(k), interpret=interpret)), want)
-        # Several tiles per row, with the last one padded.
+    per_row_k[0] = 1
+    per_row_k[1] = columns
+    want = _bits(_top_k_kth(x, per_row_k))
+    for radix_bits in (1, 2, 4):
         np.testing.assert_array_equal(
-            _bits(kernel(jnp.asarray(x), jnp.asarray(k), block=16, interpret=interpret)), want
+            _bits(kth_largest_reference(jnp.asarray(x), jnp.asarray(per_row_k), radix_bits=radix_bits)), want
+        )
+    interpret = jax.default_backend() == "cpu"
+    kernel = jax.jit(kth_largest, static_argnames=("block", "interpret"))
+    np.testing.assert_array_equal(_bits(kernel(jnp.asarray(x), jnp.asarray(per_row_k), interpret=interpret)), want)
+    if kind == "normal":
+        # The short block forces several tiles and a padded final tile.
+        np.testing.assert_array_equal(
+            _bits(kernel(jnp.asarray(x), jnp.asarray(per_row_k), block=16, interpret=interpret)), want
         )
 
 

@@ -71,8 +71,6 @@ def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple
 
 
 LONG_ATTENTION_INTERVAL = 4
-# The per-layer router statistics the model returns as ``<name>_per_layer`` (those the layers computed, see
-# ``GrugModelConfig.router_stats``).
 _ROUTER_METRICS = (
     "routing_entropy",
     "routing_counts",
@@ -157,17 +155,11 @@ class GrugModelConfig:
     scan body so XLA only plans HBM for one iteration's intermediates — needed
     at scale where the unrolled program OOMs at compile time."""
     qb_threshold_impl: QbThresholdImpl = "top_k"
-    """How each shard selects its QB thresholds, the k-th largest score of each expert: ``jax.lax.top_k``, which GPUs
-    lower to a full sort of every expert's scores ("top_k"), or an exact radix select in one Pallas-Triton kernel
-    ("radix_select", GPU only). Same thresholds."""
+    """Select per-shard QB thresholds with top-k or GPU radix select."""
     router_diagnostics: bool = True
-    """Compute the diagnostic routing statistics in every layer: expert counts, router probability sums, routing
-    entropy, load-balancing loss and router z-loss. False skips them (and their metrics); the router z-loss is still
-    computed when ``router_z_loss_coef`` is not 0, and the QB thresholds and capacity counts always are."""
+    """Compute per-layer routing diagnostics; a weighted z-loss remains enabled when false."""
     skip_zero_router_z_loss: bool = False
-    """With ``router_z_loss_coef == 0``, leave the router z-loss out of the loss instead of adding 0 times it, so its
-    backward does not run. Same loss and gradients (unless the z-loss is not finite, where 0 times it is NaN). Always
-    the case without ``router_diagnostics``."""
+    """Omit the zero-weight z-loss and its backward pass; nonfinite z-loss then cannot make the loss NaN."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     @property
@@ -474,7 +466,7 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         out["train/router/router_z_loss"] = jnp.mean(router_z_loss)
         for i in range(int(router_z_loss.shape[0])):
             out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
-    if "routing_counts_per_layer" not in router_metrics:  # router_diagnostics off
+    if "routing_counts_per_layer" not in router_metrics:
         return out
     routing_entropy = router_metrics["routing_entropy_per_layer"]
     routing_counts = router_metrics["routing_counts_per_layer"]

@@ -225,13 +225,10 @@ def qb_beta_topk_shard(
     num_experts: int,
     threshold_impl: QbThresholdImpl = "top_k",
 ) -> tuple[Float[Array, "E"], Int[Array, ""]]:
-    """Per-shard QB threshold over valid tokens plus the valid count that weights it.
+    """Return per-expert QB thresholds and the shard's valid-token count.
 
-    Each expert's threshold is the ``logical_count``-th largest of its valid scores. ``threshold_impl="top_k"`` takes
-    it from ``jax.lax.top_k`` over ``physical_count`` values, which GPUs lower to a full sort of every row;
-    ``"radix_select"`` selects it with counting passes in one Pallas-Triton kernel (:func:`kth_largest`, GPU only),
-    the same float32 value (the sort orders -0.0 and +0.0 as equal, so where both occur at that rank it may return
-    either zero).
+    Each threshold is the ``logical_count``-th largest valid score. At a signed-zero tie, top-k and radix select may
+    return different zero bit patterns.
     """
     valid_count = jnp.sum(valid_local, dtype=jnp.int32)
     scores = jnp.where(valid_local[None, :], s_local.T, -jnp.inf)

@@ -1,20 +1,10 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exact k-th largest value of each row without sorting: a radix select on the float32 bit pattern.
+"""Select each row's k-th largest float32 value by counting radix-key prefixes.
 
-``jax.lax.top_k`` with a large ``k`` lowers to a full sort on GPUs (a segmented cub radix sort of every row). When only
-the k-th largest value is needed, a most-significant-digit radix select finds it with a few counting passes instead.
-Each float maps to an unsigned key that orders like the float (IEEE 754 totalOrder). Pass by pass, the select fixes the
-next ``radix_bits`` bits of the answer: it counts, per row, the elements at or above each candidate digit given the
-bits already fixed, and keeps the largest digit whose count still reaches ``k``. After ``32 / radix_bits`` passes the
-prefix is the largest key with at least ``k`` elements at or above it, which is the k-th largest key, and its float is
-returned bit for bit. Nothing is sorted, gathered or scattered.
-
-``kth_largest_reference`` is the plain JAX version (XLA reductions, a few kernels per pass). ``kth_largest`` runs every
-pass of a row in one Pallas-Triton program, so the whole selection is one kernel. On an MI355X, for 256 rows of 32768
-float32 and k <= 512, that kernel takes 116 us against 237 us for the sort, and it stays ahead when the GPU is shared
-with other work, where the reference's many small kernels fall far behind.
+The JAX reference and Pallas-Triton kernel use ordered float bit patterns. The GPU kernel runs all counting passes in
+one program per row.
 """
 
 import functools
