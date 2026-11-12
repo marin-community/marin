@@ -105,6 +105,7 @@ def elixir_source() -> dict[str, bytes]:
         ("rust", "cargo test --all", "rust"),
         ("java", "mvn test --settings ci/settings.xml", "jvm"),
         ("kotlin", "./gradlew test --no-daemon", "jvm"),
+        ("scala", "sbt test", "jvm"),
         ("julia", "julia --project -e 'using Pkg; Pkg.test()'", "julia"),
         ("swift", "swift test", "swift"),
         ("cpp", "cmake --build build && ctest --test-dir build", "cpp"),

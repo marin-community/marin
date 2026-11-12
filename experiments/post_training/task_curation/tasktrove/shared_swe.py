@@ -103,9 +103,12 @@ def harden_shared_swe(
     dockerfile = files["environment/Dockerfile"].decode()
     dockerfile += (
         "\nUSER 0:0\n"
-        "RUN getent passwd 10001 >/dev/null || useradd --create-home --uid 10001 --user-group taskcompendium-agent\n"
-        "RUN getent passwd 10002 >/dev/null || useradd --create-home --uid 10002 --user-group taskcompendium-grade\n"
-        "RUN mkdir -p /home/taskcompendium-agent && chown 10001:10001 /home/taskcompendium-agent\n"
+        f"RUN getent passwd {contract.agent_uid} >/dev/null || "
+        f"useradd --create-home --uid {contract.agent_uid} --user-group taskcompendium-agent\n"
+        f"RUN getent passwd {contract.grader_uid} >/dev/null || "
+        f"useradd --create-home --uid {contract.grader_uid} --user-group taskcompendium-grade\n"
+        f"RUN mkdir -p /home/taskcompendium-agent && "
+        f"chown {contract.agent_uid}:{contract.agent_uid} /home/taskcompendium-agent\n"
         f"COPY taskcompendium-shared/control.py {BOOTSTRAP}\n"
         + (
             "COPY taskcompendium-shared/shared_pytest.py /opt/taskcompendium-shared-bootstrap/shared_pytest.py\n"

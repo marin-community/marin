@@ -21,6 +21,51 @@ class NativeProject:
 
 
 PROJECTS = {
+    "sbt": NativeProject(
+        SharedTestFamily.JVM,
+        ("java", "javac", "sbt"),
+        "sbt test",
+        "build.sbt",
+        {
+            "build.sbt": (
+                'scalaVersion := "2.12.20"\nCompile / unmanagedSourceDirectories += file("{dependency}")\n'
+                'Test / test := { (Test / runner).value.run("ValueTest", '
+                "(Test / fullClasspath).value.files, Seq.empty, streams.value.log).get }\n"
+            ),
+            "project/build.properties": "sbt.version=1.10.2\n",
+            "src/test/scala/ValueTest.scala": "object ValueTest extends App { assert(Dependency.value == 1) }\n",
+        },
+        {"Dependency.scala": "object Dependency { def value: Int = 0 }\n"},
+        "Dependency.scala",
+        "object Dependency { def value: Int = 1 }\n",
+    ),
+    "rake": NativeProject(
+        SharedTestFamily.CPP,
+        ("ruby", "rake"),
+        "rake test",
+        "Rakefile",
+        {
+            "Rakefile": 'task :test do\n ruby "tests/value_test.rb"\nend\n',
+            "tests/value_test.rb": 'require "{dependency}/value"\nraise "broken" unless value == 1\n',
+        },
+        {"value.rb": "def value; 0; end\n"},
+        "value.rb",
+        "def value; 1; end\n",
+    ),
+    "nvim": NativeProject(
+        SharedTestFamily.LUA,
+        ("nvim",),
+        'nvim --headless --clean -u NONE -c \'lua local ok = pcall(dofile, "tests/value.lua"); '
+        'if ok then vim.cmd("qa!") else vim.cmd("cquit 1") end\'',
+        "init.lua",
+        {
+            "init.lua": "-- baseline configuration\n",
+            "tests/value.lua": 'package.path = "{dependency}/?.lua;" .. package.path\nassert(require("value") == 1)\n',
+        },
+        {"value.lua": "return 0\n"},
+        "value.lua",
+        "return 1\n",
+    ),
     "go": NativeProject(
         SharedTestFamily.GO,
         ("go",),

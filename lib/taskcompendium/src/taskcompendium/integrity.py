@@ -34,6 +34,7 @@ class NativeSharedRunner(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     family: SharedTestFamily
     command: str
+    command_files: tuple[str, ...]
     toolchain_commands: tuple[str, ...]
     config_patterns: tuple[str, ...]
     dependency_paths: tuple[str, ...]

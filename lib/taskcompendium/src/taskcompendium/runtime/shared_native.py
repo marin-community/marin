@@ -68,14 +68,6 @@ def protect_tree(path: Path, group: int) -> None:
         item.chmod(0o755 if item.is_dir() or os.access(item, os.X_OK) else 0o644)
 
 
-def protect_parents(path: Path) -> None:
-    for parent in path.parents:
-        if parent == Path("/tmp"):
-            break
-        os.chown(parent, 0, 0)
-        parent.chmod(parent.stat().st_mode & ~0o022 | 0o755)
-
-
 def bootstrap(input_path: Path) -> None:
     common = shared_controller()
     payload = json.loads(input_path.read_text())
@@ -113,7 +105,13 @@ def bootstrap(input_path: Path) -> None:
         if key in os.environ:
             environment[key] = os.environ[key]
     patterns = [*contract["protected_test_patterns"], *native["config_patterns"], *native["startup_patterns"]]
-    original = {name: (workspace / name).read_bytes() for name in paths_matching(workspace, patterns)}
+    command_files = [
+        name.removeprefix("./")
+        for name in native["command_files"]
+        if not Path(name).is_absolute() and ".." not in Path(name).parts
+    ]
+    initial = set(paths_matching(workspace, patterns)) | {name for name in command_files if (workspace / name).is_file()}
+    original = {name: (workspace / name).read_bytes() for name in initial}
     # Source restoration happens once, before the agent. Subsequent grades restore
     # these bytes without trusting agent-editable Git objects, index or hooks.
     for script, arguments in (
@@ -130,7 +128,9 @@ def bootstrap(input_path: Path) -> None:
             timeout=payload["spec"]["timeout"],
             env=environment,
         )
-    selected = set(paths_matching(workspace, patterns))
+    selected = set(paths_matching(workspace, patterns)) | {
+        name for name in command_files if (workspace / name).is_file()
+    }
     for manifest in ("trusted_test_paths.txt", "trusted_patch_paths.txt"):
         for name in (tests / manifest).read_text().splitlines():
             if Path(name).is_absolute() or ".." in Path(name).parts:
@@ -143,12 +143,50 @@ def bootstrap(input_path: Path) -> None:
     reference = Path(contract["reference_directory"])
     reference.mkdir()
     for name in sorted(selected):
-        common.restore_file(reference, name, workspace / name)
+        common.restore_path(reference, name, workspace / name)
         common.remove_path(workspace / name)
         if name in original:
-            common.restore_file(workspace, name, reference / name)
+            common.restore_path(workspace, name, reference / name)
             (workspace / name).write_bytes(original[name])
     common.write_json(root / "reference-paths.json", sorted(selected))
+
+    dependencies = [
+        str(Path(value.replace("~", home, 1).replace("{workspace}", str(workspace))))
+        for value in native["dependency_paths"]
+    ]
+    for directory in [*dependencies, str(Path(home) / ".cache")]:
+        Path(directory).mkdir(parents=True, exist_ok=True)
+    for directory in [*dependencies, str(Path(home) / ".cache")]:
+        common.checked(["chgrp", "-R", str(contract["agent_uid"]), directory], cwd=root, timeout=120)
+        common.checked(["chmod", "-R", "g+rwX", directory], cwd=root, timeout=120)
+    common.checked(["chgrp", "-R", str(contract["grader_uid"]), str(workspace)], cwd=root, timeout=120)
+    common.checked(["chmod", "-R", "g+rwX", str(workspace)], cwd=root, timeout=120)
+
+    # Install source-declared wrapper distributions before the agent can seed
+    # their caches. Version probes do not execute the source test command.
+    if native["family"] == "jvm":
+        probes = []
+        wrapper_environment = {**environment, "PATH": os.environ["PATH"]}
+        for wrapper in ("gradlew", "mvnw"):
+            if wrapper not in native["command"]:
+                continue
+            for path in workspace.rglob(wrapper):
+                if path.is_file():
+                    probes.append((["/bin/bash", str(path), "--version"], path.parent))
+        if "sbt" in native["toolchain_commands"]:
+            probes.append((["sbt", "about"], workspace))
+        for arguments, directory in probes:
+            subprocess.run(
+                arguments,
+                cwd=directory,
+                env=wrapper_environment,
+                capture_output=True,
+                timeout=300,
+                check=True,
+                user=contract["grader_uid"],
+                group=contract["grader_uid"],
+                extra_groups=(contract["agent_uid"],),
+            )
 
     pins = root / "pins"
     pins.mkdir()
@@ -182,17 +220,19 @@ def bootstrap(input_path: Path) -> None:
         expanded = pattern.replace("~", home, 1).replace("{workspace}", str(workspace))
         for path in Path("/").glob(expanded.removeprefix("/")):
             freeze_path(path, pins, entries)
+    for name in native["command_files"]:
+        path = Path(name)
+        if path.is_absolute() and path.is_file() and os.access(path, os.X_OK):
+            freeze_path(toolchain_root(path), pins, entries)
+    if native["family"] == "rust":
+        rustup = Path(environment.get("RUSTUP_HOME", str(Path(home) / ".rustup")))
+        if rustup.exists():
+            freeze_path(rustup, pins, entries)
     # Pin executable startup selectors outside the workspace as well.
     startup_roots = [Path(home), *[Path(value) for key, value in environment.items() if key.endswith("_HOME")]]
     for directory in startup_roots:
         for name in paths_matching(directory, native["startup_patterns"]):
             freeze_path(directory / name, pins, entries)
-    dependencies = [
-        str(Path(value.replace("~", home, 1).replace("{workspace}", str(workspace))))
-        for value in native["dependency_paths"]
-    ]
-    for directory in [*dependencies, str(Path(home) / ".cache")]:
-        Path(directory).mkdir(parents=True, exist_ok=True)
     common.write_json(
         root / "runtime.json",
         {
@@ -217,7 +257,6 @@ def bootstrap(input_path: Path) -> None:
             common.checked(["chgrp", "-R", str(contract["agent_uid"]), directory], cwd=root, timeout=120)
             common.checked(["chmod", "-R", "g+rwX", directory], cwd=root, timeout=120)
     for entry in entries:
-        protect_parents(Path(entry["source"]))
         protect_tree(Path(entry["source"]), 0)
 
 
@@ -261,21 +300,29 @@ def prepare_grading(contract: dict) -> dict:
         if name not in paths:
             common.remove_path(workspace / name)
     for name in paths:
-        common.restore_file(workspace, name, Path(contract["reference_directory"]) / name)
+        common.restore_path(workspace, name, Path(contract["reference_directory"]) / name)
     for entry in runtime["pins"]:
         target, reference = Path(entry["source"]), Path(entry["reference"])
-        common.remove_path(target)
-        if reference.is_dir():
-            shutil.copytree(reference, target, symlinks=True)
-        else:
-            shutil.copy2(reference, target)
+        common.restore_path(Path("/"), target.relative_to("/").as_posix(), reference)
         protect_tree(target, 0)
+        if target.is_dir():
+            for lock in target.rglob("*"):
+                if (
+                    not lock.is_symlink()
+                    and lock.is_file()
+                    and (lock.name.endswith(".lck") or lock.name == "sbt.boot.lock")
+                ):
+                    os.chown(lock, 0, contract["grader_uid"])
+                    lock.chmod(0o660)
     for directory in runtime["startup_roots"]:
         for name in paths_matching(Path(directory), native["startup_patterns"]):
             path = (Path(directory) / name).resolve()
             if not any(path == Path(p["source"]) for p in runtime["pins"]):
                 common.remove_path(path)
-    common.checked(["chgrp", "-R", str(contract["grader_uid"]), str(workspace)], cwd=root, timeout=120)
+    # Build caches may require explicit timestamp updates, which group write alone cannot grant.
+    common.checked(
+        ["chown", "-R", f"{contract['grader_uid']}:{contract['agent_uid']}", str(workspace)], cwd=root, timeout=120
+    )
     common.checked(["chmod", "-R", "g+rwX", str(workspace)], cwd=root, timeout=120)
     return runtime
 

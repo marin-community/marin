@@ -35,6 +35,7 @@ from taskcompendium.grading_environment import (
     assess_grading_environment,
     count_grading_environment,
     grading_environment_census,
+    shared_integrity_issue,
 )
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
@@ -49,6 +50,7 @@ from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.environment_fidelity import missing_environment
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference, TaskFormat
 
+PREBUILT_ADMISSION_VERSION = "2026.11.12.2"
 TASKS_FILENAME = "tasks.parquet"
 CONTROLS_FILENAME = "controls.jsonl"
 ORACLE_FILTER_FILENAME = "oracle-filter.json"
@@ -215,6 +217,8 @@ def prebuilt_artifact(
             count_grading_environment(grading, assessment.model_dump(mode="json"))
             if assessment.status is GradingEnvironmentStatus.MISMATCH:
                 raise ValueError(f"grading_environment_mismatch: {task.id}: {assessment.model_dump_json()}")
+            if issue := shared_integrity_issue(task):
+                raise ValueError(f"{issue}: {task.id}")
             if has_oracle_solution(task):
                 if oracle_filter is None:
                     receipt_path = hf_hub_download(
@@ -274,7 +278,7 @@ def prebuilt_artifact(
 
     return ArtifactStep(
         name=config.name,
-        version=config.version,
+        version=PREBUILT_ADMISSION_VERSION,
         artifact_type=CampaignArtifact,
         run=partial(run),
         build_config=build_config,

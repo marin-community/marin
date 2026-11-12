@@ -13,6 +13,7 @@ import pytest
 from finestore.rl.curation import DaytonaSafety, OversightEvidence, OversightLevel
 from marin.execution.lazy import StepContext, run
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.integrity import SharedDependencyState, SharedIntegrityContract
 from taskcompendium.models import (
     AnswerType,
     EnvironmentRequirements,
@@ -94,7 +95,7 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
 
 
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
-@pytest.mark.parametrize("change", ["none", "package", "infrastructure_zero"])
+@pytest.mark.parametrize("change", ["none", "package", "infrastructure_zero", "missing_contract"])
 def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch, change, mode):
     task = TaskSpec.model_validate(json.loads(prebuilt_task("native")["lowered_task_spec"])["task"])
     task = task.model_copy(
@@ -103,6 +104,15 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
             "answer_type": AnswerType.WORKSPACE_STATE,
             "environment_requirements": EnvironmentRequirements(),
             "grader": NoGrader(reason="Harbor grades the completed trial"),
+            "integrity_contract": (
+                None
+                if change == "missing_contract"
+                else SharedIntegrityContract(
+                    dependency_state=SharedDependencyState.AGENT_MUTABLE,
+                    reference_sha256="0" * 64,
+                    harness_sha256="1" * 64,
+                )
+            ),
             "resources": ResourceGroups(
                 verifier=tuple(
                     inline_resource(path, content)
@@ -133,7 +143,7 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
     pq.write_table(pa.Table.from_pylist([{"task_spec": serialized}]), path)
     (tmp_path / "controls.jsonl").write_text(json.dumps(receipt) + "\n")
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(tmp_path / kwargs["filename"]))
-    if change == "none":
+    if change in {"none", "missing_contract"}:
         assert prebuilt.import_harbor_cohort(_cohort(1)) == str(path)
         monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
         monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
@@ -142,7 +152,13 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
             pipeline=prebuilt.import_harbor_prebuilt,
             info=SourceInfo(id="native", title="native", origin="fixture", task_format=TaskFormat.HARBOR),
         )
-        artifact = run(prebuilt.import_harbor_prebuilt(source, PipelineOptions(mode, CampaignRuntime())))[0]
+        step = prebuilt.import_harbor_prebuilt(source, PipelineOptions(mode, CampaignRuntime()))
+        if change == "missing_contract":
+            with pytest.raises(RuntimeError) as failure:
+                run(step)
+            assert "shared_integrity_contract_missing" in str(failure.value.__cause__.__cause__)
+            return
+        artifact = run(step)[0]
         destination = Path(artifact.path)
         assert (destination / "tasks.parquet").read_bytes() == path.read_bytes()
         for view in ("normalize", "final"):

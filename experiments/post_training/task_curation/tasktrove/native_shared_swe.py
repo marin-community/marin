@@ -6,6 +6,7 @@
 import hashlib
 import json
 import re
+import shlex
 from pathlib import Path
 
 from taskcompendium.integrity import NativeSharedRunner
@@ -22,6 +23,12 @@ def native_runner(files: dict[str, bytes]) -> NativeSharedRunner:
     if isinstance(install, str):
         install = json.loads(install)
     command = install["test_cmd"]
+    command_files = {
+        token.rstrip(";&|)")
+        for token in shlex.split(command)
+        if token.startswith(("./", "/")) and not token.startswith("//")
+    }
+    command_files.update(re.findall(r"[\w./-]+\.(?:sh|py|rb|pl|vim|lua|cmake|mk)\b", command))
     # Require the exact command boundary used by the source's normalized script.
     source = files["tests/legacy_test.sh"].decode()
     if f"{command} > /logs/verifier/test_output.log 2>&1" not in source:
@@ -32,8 +39,9 @@ def native_runner(files: dict[str, bytes]) -> NativeSharedRunner:
     return NativeSharedRunner(
         family=family,
         command=command,
-        toolchain_commands=profile.tools,
-        config_patterns=profile.configs,
+        command_files=tuple(sorted(command_files)),
+        toolchain_commands=tuple(tool for tool in profile.tools if tool != "sbt" or config["language"] == "scala"),
+        config_patterns=(*profile.configs, "**/Makefile*", "**/*.mk", "**/Taskfile.*"),
         dependency_paths=profile.dependencies,
         startup_patterns=profile.hooks,
         environment_keys=profile.environment,

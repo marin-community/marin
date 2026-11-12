@@ -126,7 +126,7 @@ def remove_path(path: Path) -> None:
         shutil.rmtree(path)
 
 
-def restore_file(workspace: Path, relative: str, reference: Path) -> None:
+def restore_path(workspace: Path, relative: str, reference: Path) -> None:
     target = workspace / relative
     for parent in reversed(target.parents):
         if parent == workspace or not parent.is_relative_to(workspace):
@@ -135,7 +135,10 @@ def restore_file(workspace: Path, relative: str, reference: Path) -> None:
             remove_path(parent)
         parent.mkdir(exist_ok=True)
     remove_path(target)
-    shutil.copy2(reference, target)
+    if reference.is_dir():
+        shutil.copytree(reference, target, symlinks=True)
+    else:
+        shutil.copy2(reference, target)
 
 
 def stop_agent_processes(uid: int) -> None:
@@ -318,7 +321,7 @@ def prepare_grading(contract: dict) -> None:
         if path.relative_to(workspace).as_posix() not in paths:
             remove_path(path)
     for name in paths:
-        restore_file(workspace, name, Path(contract["reference_directory"]) / name)
+        restore_path(workspace, name, Path(contract["reference_directory"]) / name)
     checked(["chgrp", "-R", str(contract["grader_uid"]), str(workspace)], cwd=root, timeout=120)
     checked(["chmod", "-R", "g+rwX", str(workspace)], cwd=root, timeout=120)
 

@@ -48,6 +48,7 @@ def native_runtime(request):
                 target.write_text(content.replace("{dependency}", str(dependencies)))
         (workspace / "tests").mkdir(exist_ok=True)
         (workspace / "tests/run.sh").write_text("set -euo pipefail\n" + project.command + "\necho TASK_PASSED\n")
+        (workspace / "runner.sh").write_text("exec /bin/bash tests/run.sh\n")
         tests = {
             "config.json": json.dumps({"marker": "TASK_PASSED"}),
             "test_state.py": (
@@ -77,7 +78,8 @@ def native_runtime(request):
             audit_probes=("dependencies-diff.json", "startup-hooks-diff.json"),
             native=NativeSharedRunner(
                 family=project.family,
-                command="/bin/bash tests/run.sh",
+                command="/bin/bash runner.sh",
+                command_files=("runner.sh",),
                 toolchain_commands=project.tools,
                 config_patterns=profile.configs,
                 dependency_paths=(str(dependencies), *profile.dependencies),
@@ -101,7 +103,9 @@ def native_verdict(contract: SharedIntegrityContract) -> dict:
     return json.loads((Path(contract.report_directory) / "verdict.json").read_text())
 
 
-@pytest.mark.parametrize("attack", ["config", "tests", "runner", "toolchain", "environment", "background", "verdict"])
+@pytest.mark.parametrize(
+    "attack", ["config", "tests", "wrapper", "runner", "toolchain", "environment", "background", "verdict"]
+)
 def test_native_tampering_cannot_fake_a_pass(native_runtime, monkeypatch, attack):
     contract, _, project = native_runtime
     workspace, root = Path(contract.workspace), Path(contract.protected_root)
@@ -110,6 +114,8 @@ def test_native_tampering_cannot_fake_a_pass(native_runtime, monkeypatch, attack
         (workspace / project.config).write_text("fake configuration")
     elif attack == "tests":
         (workspace / "tests/run.sh").write_text("echo TASK_PASSED\n")
+    elif attack == "wrapper":
+        (workspace / "runner.sh").write_text("echo TASK_PASSED\n")
     elif attack == "toolchain":
         binary = Path(shutil.which(project.tools[0])).resolve()
         binary.write_text("#!/bin/sh\necho 'TASK_PASSED'\n")
@@ -180,6 +186,8 @@ def test_native_grading_uses_live_dependencies_and_audits_changes(native_runtime
         check=True,
     )
     verdict = native_verdict(contract)
-    assert (verdict["status"], verdict["reward"]) == ("scored", 1)
+    assert (verdict["status"], verdict["reward"]) == ("scored", 1), (
+        Path(contract.report_directory) / "test_output.log"
+    ).read_text()[-4000:]
     diff = json.loads((Path(contract.report_directory) / "dependencies-diff.json").read_text())
     assert str(dependencies / project.mutation_file) in diff

@@ -17,7 +17,7 @@ from taskcompendium.models import SCHEMA_VERSION, NoGrader, ScriptGrader, TaskSp
 from taskcompendium.pipeline.models import SourceRecipe
 
 NORMALIZATION_STAGE_REVISION = "13"
-VERIFICATION_STAGE_REVISION = "5"
+VERIFICATION_STAGE_REVISION = "6"
 REVIEW_STAGE_REVISION = "4"
 
 
