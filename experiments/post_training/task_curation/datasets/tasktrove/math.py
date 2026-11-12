@@ -48,7 +48,13 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     archive_files,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import OversightEvidence, OversightLevel, RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import (
+    OversightEvidence,
+    OversightLevel,
+    RlDataSource,
+    SourceInfo,
+    TaskFormat,
+)
 
 SCORER_RUNNERS = {
     "be1931919ee22ef704f565126353e7edec7b864dbd4a36590ab34593dd2004c7": (
@@ -356,7 +362,7 @@ SOURCES = (
                 "Symbolic exact compare, hidden gold. Add a numeric tolerance path at conversion. "
                 "QA (RL Data Atlas): every row re-converted with zero fidelity discrepancies; 2 "
                 "unparsable-reference rows rejected at conversion and 181 exact-duplicate rows "
-                "collapse under the pipeline dedup key (2,223 published). Contained grader controls "
+                "collapse under the pipeline dedup key (2,221 published). Contained grader controls "
                 "72/72. Blinded review found 1 provably wrong reference among 20 sampled rows "
                 "(unicyclic-graph spanning-tree bound exceeded by the recorded answer) and 1 "
                 "statement-ambiguity mismatch: the source's reference data is noisy."
@@ -367,7 +373,7 @@ SOURCES = (
                 verification=(
                     "All 2,404 rows re-converted through the production recipe and compared against the "
                     "archive row-by-row with zero discrepancies; 2 unparsable-reference rows rejected at "
-                    "conversion; 181 exact duplicates collapse under the pipeline dedup key, 2,223 retained. "
+                    "conversion; 181 exact duplicates collapse under the pipeline dedup key, 2,221 retained. "
                     "Contained grader controls on the 24-task seeded sample: golden 24/24, empty 24/24, "
                     "wrong 24/24. Blinded review of 20 seeded cases: 5 agree, 1 solver error admitted "
                     "(reference verified correct), 1 reference answer proven impossible for the stated "
@@ -377,7 +383,7 @@ SOURCES = (
                 ),
                 level=OversightLevel.SAMPLE,
                 reviewed=2404,
-                admitted=2223,
+                admitted=2221,
             ),
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),

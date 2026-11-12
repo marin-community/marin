@@ -31,7 +31,13 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import VERIFIER_DATA, archive_file
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import (
+    OversightEvidence,
+    OversightLevel,
+    RlDataSource,
+    SourceInfo,
+    TaskFormat,
+)
 
 REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
 QA_PINNED_SOURCES = frozenset({"tasktrove-safety"})
@@ -289,7 +295,29 @@ SOURCES = (
             notes=(
                 "Judge-only against a two-line safety principle, no reference. Kept as rubric-only "
                 "(tag no-reference): the principle is specific to each prompt (refuse the harmful "
-                "ones, help with the benign ones)."
+                "ones, help with the benign ones). QA (RL Data Atlas): every row re-converted with "
+                "zero fidelity discrepancies; 44,127 exact duplicates collapse under the pipeline "
+                "dedup key (44,939 published); MEDIUM judge e2e on the seeded sample through the "
+                "production grading path, agreement 59/60 across the MEDIUM pair (one conservative "
+                "0.5 disagreement on this source)."
+            ),
+            oversight=OversightEvidence(
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/judged.py version 3 "
+                "(QA_PINNED_SOURCES: MEDIUM tier settings under RUBRIC_CHECKLIST); "
+                "archive open-thoughts/TaskTrove @ 02923004846e",
+                verification=(
+                    "All 89,066 rows re-converted through the production recipe and compared against the "
+                    "archive row-by-row with zero discrepancies; 44,127 exact duplicates collapse under "
+                    "the pipeline dedup key, 44,939 retained. MEDIUM-tier checklist judge e2e on the "
+                    "10-task seeded sample through the production grading boundary at temperature 0.7: "
+                    "this source graded 29/30 as expected (the one disagreement is a conservative 0.5 on "
+                    "a wrong submission judged against the expected 0.0). Self-judged verdicts recorded "
+                    "before any judge run. Evidence: atlas-env-audit qa-knowledge/"
+                ),
+                level=OversightLevel.SAMPLE,
+                reviewed=89066,
+                admitted=44939,
             ),
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
