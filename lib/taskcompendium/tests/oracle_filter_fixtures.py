@@ -8,6 +8,7 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import (
     NoOracleLivenessReceipt,
+    OracleExclusionReason,
     OracleFilterReceipt,
     OracleTaskReceipt,
     OracleTrialReceipt,
@@ -79,10 +80,10 @@ def oracle_receipt(
                 else None
             ),
             exclusion_reason=(
-                "oracle_failed"
+                OracleExclusionReason.ORACLE_FAILED
                 if reward == 0
                 else (
-                    "no_oracle_liveness_missing_or_failed"
+                    OracleExclusionReason.NO_ORACLE_LIVENESS
                     if not has_oracle_solution(task) and not no_oracle_liveness
                     else None
                 )

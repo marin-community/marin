@@ -157,7 +157,7 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
     assert [row["path"] for row in pq.read_table(output).to_pylist()] == ["pass", "live"]
     assert receipt.input_rows == 8
     incompatible = receipt.tasks["source-env"]
-    assert incompatible.exclusion_reason is OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE
+    assert incompatible.exclusion_reason is OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER
     assert (
         incompatible.source_environment_incompatibility.source_setup_sha256
         == hashlib.sha256(b"pip install -q pytest==6.2.5").hexdigest()

@@ -24,6 +24,7 @@ from taskcompendium.models import (
     ResourceGroups,
     TaskSpec,
 )
+from taskcompendium.pipeline.oracle_filter import OracleExclusionReason
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.runtime.resources import inline_resource
 
@@ -373,7 +374,7 @@ def test_prebuilt_rejects_calibration_only_success_without_no_oracle_liveness(tm
     document = json.loads(receipt_path.read_text())
     entry = document["tasks"]["calibration-only"]
     entry["no_oracle_liveness"] = None
-    entry["exclusion_reason"] = "no_oracle_liveness_missing_or_failed"
+    entry["exclusion_reason"] = OracleExclusionReason.NO_ORACLE_LIVENESS.value
     receipt_path.write_text(json.dumps(document))
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(published.parent / kwargs["filename"]))
     source = RlDataSource(

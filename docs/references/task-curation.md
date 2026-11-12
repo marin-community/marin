@@ -1124,7 +1124,7 @@ Receipts retain actor and verifier measurements separately. A separate grader's
 failure at its declared memory or disk limit stops calibration without increasing
 the actor's allocation; a shared grader uses the task's container budget.
 
-`SOURCE_ENV_INCOMPATIBLE` identifies a measured source-environment defect.
+`SOURCE_ENV_INCOMPATIBLE_WITH_GRADER` identifies a measured source-environment defect.
 The current signature requires a source setup explicitly installing
 `pytest==6.2.5`, an oracle `solve.sh` exit of zero, and a verifier startup
 failure in `pytest_metadata/plugin.py` because `pytest.StashKey` is absent.

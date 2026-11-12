@@ -230,7 +230,7 @@ class OracleExclusionReason(StrEnum):
     NON_RESOURCE = "resource_calibration:non_resource"
     INFRASTRUCTURE = "resource_calibration:infrastructure"
     NO_ORACLE_LIVENESS = "no_oracle_liveness_missing_or_failed"
-    SOURCE_ENV_INCOMPATIBLE = "SOURCE_ENV_INCOMPATIBLE"
+    SOURCE_ENV_INCOMPATIBLE_WITH_GRADER = "SOURCE_ENV_INCOMPATIBLE_WITH_GRADER"
 
 
 class SourceEnvironmentIncompatibility(BaseModel):
@@ -276,7 +276,9 @@ class OracleTaskReceipt(BaseModel):
     @model_validator(mode="after")
     def validate_source_environment_exclusion(self):
         evidence = self.source_environment_incompatibility
-        if (self.exclusion_reason is OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE) != (evidence is not None):
+        if (self.exclusion_reason is OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER) != (
+            evidence is not None
+        ):
             raise ValueError("Source environment exclusions require their measured incompatibility evidence")
         if evidence is not None and evidence.verdict_sha256 != canonical_sha256(self.calibration.attempts[-1].verdict):
             raise ValueError("Source environment evidence belongs to another verdict")

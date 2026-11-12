@@ -305,7 +305,7 @@ def filter_cohort(
                     None
                     if calibration.passed
                     else (
-                        OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE
+                        OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER
                         if incompatibility is not None
                         else OracleExclusionReason(
                             f"resource_calibration:{calibration.attempts[-1].failure_signal.value}"
