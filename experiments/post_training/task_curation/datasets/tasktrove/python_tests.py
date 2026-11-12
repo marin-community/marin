@@ -26,19 +26,9 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.execu
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.python_unit_tests import (
     convert as convert_unit_tests,
 )
-from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.pipeline import CurationRecipe, environment_requirements, process_rows
+from experiments.post_training.task_curation.environment_fidelity import archive_environment
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
-
-AGENT_IMAGE = Environment(
-    image="ghcr.io/marin-community/iris-task@sha256:d15747080ff81dbbec4a1dcbc7cd651d3b935054d4b67e4b55dc517e1b2cfc56"
-)
-"""The Python image the agent writes its implementation in."""
-STACK_PYTEST_AGENT_IMAGE = Environment(
-    image="ghcr.io/marin-community/iris-task@sha256:97528e23c249c993641b0b5c6e7d05a978588f4be276f0fe61b1f3c3bcc6c622"
-)
-"""The Python image with the Stack Overflow tasks' dependencies that their agent works in."""
-
 
 PYTHON_TESTS_CONTROLS = Controls(golden=solve_script)
 
@@ -177,7 +167,7 @@ def convert_python_tests(row: RawRow, context: ConversionContext) -> NormalizedT
     return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=environment_requirements(AGENT_IMAGE),
+        environment=archive_environment(row.data["files"]),
         grader_environment=required_grader_environment(context),
         output_paths=("/app",),
     )
@@ -188,7 +178,7 @@ def convert_stack_pytest(row: RawRow, context: ConversionContext) -> NormalizedT
     return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=environment_requirements(STACK_PYTEST_AGENT_IMAGE),
+        environment=archive_environment(row.data["files"]),
         grader_environment=required_grader_environment(context),
         output_paths=("/app",),
     )
@@ -199,7 +189,7 @@ def convert_unitsyn(row: RawRow, context: ConversionContext) -> NormalizedTask |
     return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=environment_requirements(AGENT_IMAGE),
+        environment=archive_environment(row.data["files"]),
         grader_environment=required_grader_environment(context),
         output_paths=SOLUTION_PATHS,
     )
