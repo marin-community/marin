@@ -467,7 +467,9 @@ def validate_cfg(cfg: DictConfig):
     )
     runtime_values = {
         "trainer.distributed.placement_group_timeout_seconds": cfg.trainer.distributed.placement_group_timeout_seconds,
-        "trainer.distributed.worker_collective_timeout_seconds": cfg.trainer.distributed.worker_collective_timeout_seconds,
+        "trainer.distributed.worker_collective_timeout_seconds": (
+            cfg.trainer.distributed.worker_collective_timeout_seconds
+        ),
         "trainer.policy.host_memory_monitor.interval_seconds": cfg.trainer.policy.host_memory_monitor.interval_seconds,
         "trainer.model_load_retry.backoff_base_seconds": cfg.trainer.model_load_retry.backoff_base_seconds,
         "trainer.model_load_retry.backoff_cap_seconds": cfg.trainer.model_load_retry.backoff_cap_seconds,
@@ -683,7 +685,7 @@ def validate_generator_cfg(cfg: DictConfig):
         )
 
     # TODO(tgriggs): use a more modular config validation
-    if "wandb" in ([cfg.trainer.logger] if isinstance(cfg.trainer.logger, str) else cfg.trainer.logger):
+    if "wandb" in cfg.trainer.logger:
         require_secret("WANDB_API_KEY")
 
     if cfg.generator.override_existing_update_group == "auto":

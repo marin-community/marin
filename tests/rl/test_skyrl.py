@@ -795,45 +795,45 @@ def history_config(attempt_id, export_root):
         "runtime": {"run_id": "history", "attempt_id": attempt_id}})
 
 ancestor_root = root / "ancestor-exports"
-original = Tracking("tests-project", "history", "records", history_config("original", ancestor_root))
+original = Tracking("tests-project", "history", ("records",), history_config("original", ancestor_root))
 original.start(resumed_step=None)
 for step in (0, 1, 2, 3, 8):
     original.log({"loss": step / 10}, step=step)
 original.log({"ancestor_only": 77}, step=0)
 assert read_attempt_metrics(str(ancestor_root), "original")[8]["loss"] == 0.8
 parent = CheckpointReference(export_root=str(ancestor_root), attempt_id="original", step=3)
-with Tracking("tests-project", "history", "records", history_config("middle", root / "exports")) as middle:
+with Tracking("tests-project", "history", ("records",), history_config("middle", root / "exports")) as middle:
     middle.start(resumed_step=3, checkpoint=parent)
     for step in (4, 5, 9):
         middle.log({"loss": step / 10}, step=step)
     middle.log({"eval/all/avg_score": 0.4}, step=5)
-with Tracking("tests-project", "history", "records", history_config("sibling", root / "exports")) as sibling:
+with Tracking("tests-project", "history", ("records",), history_config("sibling", root / "exports")) as sibling:
     sibling.start(resumed_step=3, checkpoint=parent)
     sibling.log({"loss": 9.9}, step=4)
 try:
-    with Tracking("tests-project", "history", "records", history_config("middle", root / "exports")) as replay:
+    with Tracking("tests-project", "history", ("records",), history_config("middle", root / "exports")) as replay:
         replay.start(resumed_step=3, checkpoint=parent)
 except ValueError as error:
     assert "fresh attempt_id" in str(error), error
 else:
     raise AssertionError("replayed execution reused its old metric rows")
-with Tracking("tests-project", "history", "records", history_config("rewind", root / "exports")) as rewind:
+with Tracking("tests-project", "history", ("records",), history_config("rewind", root / "exports")) as rewind:
     rewind.start(resumed_step=1, checkpoint=parent.model_copy(update={"step": 1}))
     rewind.log({"loss": 2.5}, step=2)
-with Tracking("tests-project", "history", "records", history_config("rewind-middle", root / "exports")) as rewind:
+with Tracking("tests-project", "history", ("records",), history_config("rewind-middle", root / "exports")) as rewind:
     rewind.start(resumed_step=2,
         checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=2))
     rewind.log({"loss": 9.3}, step=4)
-with Tracking("tests-project", "history", "records", history_config("stage", root / "exports")) as stage:
+with Tracking("tests-project", "history", ("records",), history_config("stage", root / "exports")) as stage:
     stage.start(resumed_step=0,
         checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=5))
     stage.log({"loss": 9}, step=0)
     stage.log({"loss": 8}, step=1)
-with Tracking("tests-project", "history", "records", history_config("missing-parent", root / "exports")) as missing:
+with Tracking("tests-project", "history", ("records",), history_config("missing-parent", root / "exports")) as missing:
     missing.start(resumed_step=2,
         checkpoint=CheckpointReference(export_root=str(ancestor_root), attempt_id="unrecorded", step=2))
     missing.log({"loss": 3}, step=3)
-with Tracking("tests-project", "history", "records", history_config("main-resume", root / "exports")) as main:
+with Tracking("tests-project", "history", ("records",), history_config("main-resume", root / "exports")) as main:
     main.start(resumed_step=8)
     assert read_attempt(str(root / "exports"), "main-resume").metrics_started_at is not None
     for invalid in ({"step": 8}, {"attempt_id": "foreign"}, {"metric_attempt_ids": {}}, {"label": "text"}):
@@ -845,10 +845,10 @@ with Tracking("tests-project", "history", "records", history_config("main-resume
             raise AssertionError(f"Invalid numeric metric was accepted: {invalid}")
     main.log({"loss": 0.9}, step=9)
 unknown = CheckpointReference(export_root=str(root / "absent-exports"), attempt_id="unknown", step=2)
-with Tracking("tests-project", "history", "records", history_config("missing-store", root / "exports")) as child:
+with Tracking("tests-project", "history", ("records",), history_config("missing-store", root / "exports")) as child:
     child.start(resumed_step=2, checkpoint=unknown)
     child.log({"loss": 0.3}, step=3)
-with Tracking("tests-project", "history", "records", history_config("grandchild", root / "exports")) as child:
+with Tracking("tests-project", "history", ("records",), history_config("grandchild", root / "exports")) as child:
     child.start(resumed_step=3,
         checkpoint=CheckpointReference(export_root=str(root / "exports") + "/", attempt_id="missing-store", step=3))
     child.log({"loss": 0.4}, step=4)
@@ -887,7 +887,7 @@ except ValueError as error:
 else:
     raise AssertionError("Checkpoint alias cycle was accepted")
 try:
-    with Tracking("tests-project", "history", "records", history_config("failed-direct", root / "exports")) as failed:
+    with Tracking("tests-project", "history", ("records",), history_config("failed-direct", root / "exports")) as failed:
         failed.start(resumed_step=None)
         failed.log({"loss": 0.9}, step=1)
         raise RuntimeError("fixture workload failed")
@@ -927,7 +927,7 @@ class LocalBackend:
             startup = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
             assert startup is not None and startup.vllm_version == "fixture-vllm"
             (root / "startup-observation.json").write_text(startup.model_dump_json())
-            with Tracking("tests-project", "record-boundary", "records", config.skyrl) as tracker:
+            with Tracking("tests-project", "record-boundary", ("records",), config.skyrl) as tracker:
                 tracker.start(resumed_step=5,
                     checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=5))
                 immediate = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
