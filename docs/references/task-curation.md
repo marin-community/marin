@@ -1162,7 +1162,7 @@ uv run --package marin-core --extra dedup python -m \
 ```
 
 Both input arguments accept local paths or object-storage URLs. Omit `--run`
-to inspect the artifact graph. Run preparation on CPU workers in the data's
+to inspect the planned artifact paths. Run preparation on CPU workers in the data's
 cluster, with an explicit target cluster, authorized priority and a three-day
 timeout. Completed source indexes are reused; interrupted attempts retain their
 partial files under distinct attempt directories.

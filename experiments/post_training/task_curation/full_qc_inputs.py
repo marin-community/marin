@@ -4,7 +4,6 @@
 """Freeze retained Atlas task contracts before a full quality review."""
 
 import argparse
-import hashlib
 import json
 import logging
 from collections import Counter
@@ -24,6 +23,7 @@ from marin.execution.lazy import ArtifactStep, StepContext, run
 from pydantic import BaseModel, Field
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.grading_environment import assess_grading_environment
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
@@ -34,9 +34,7 @@ from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.published_census import population_documents
 
 logger = logging.getLogger(__name__)
-INDEX_SCHEMA = pa.schema(
-    [("task_id", pa.string()), ("task_sha256", pa.string()), ("runtime_sha256", pa.string())]
-)
+INDEX_SCHEMA = pa.schema([("task_id", pa.string()), ("task_sha256", pa.string()), ("runtime_sha256", pa.string())])
 INDEX_BATCH_SIZE = 1000
 
 
@@ -77,11 +75,6 @@ class InputConfig:
     output_path: str
 
 
-def storage_sha256(path: str) -> str:
-    with StoragePath(path).open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
 def prepare_inputs(config: InputConfig) -> FullQCInputs:
     """Index the complete remainder, preserving separate execution diagnostics."""
     plan = config.retention
@@ -106,7 +99,7 @@ def prepare_inputs(config: InputConfig) -> FullQCInputs:
         raise ValueError(f"Retention plan differs from frozen population: {plan.source_id}")
     if plan.lexical_use != "train" or plan.raw_count != plan.retained_count + plan.combined_drop_count:
         raise ValueError(f"Incomplete training retention accounting: {plan.source_id}")
-    if storage_sha256(plan.combined_drop_manifest_uri) != config.drop_manifest_sha256:
+    if file_sha256(StoragePath(plan.combined_drop_manifest_uri)) != config.drop_manifest_sha256:
         raise ValueError(f"Drop manifest changed after planning: {plan.source_id}")
     with StoragePath(plan.combined_drop_manifest_uri).open("rb") as stream:
         dropped = pq.read_table(stream, columns=["task_id"]).column(0).to_pylist()
@@ -157,7 +150,7 @@ def prepare_inputs(config: InputConfig) -> FullQCInputs:
         retention=plan,
         drop_manifest_sha256=config.drop_manifest_sha256,
         index_path=index_path,
-        index_sha256=storage_sha256(index_path),
+        index_sha256=file_sha256(StoragePath(index_path)),
         retained_count=count,
         task_bytes=task_bytes,
         oracle_tasks=oracle_tasks,
@@ -185,7 +178,7 @@ def input_steps(plans: list[RetentionPlan], version: str) -> list[ArtifactStep]:
                 deps=[population],
                 run=prepare_inputs,
                 build_config=partial(
-                    input_config, population, plan, storage_sha256(plan.combined_drop_manifest_uri)
+                    input_config, population, plan, file_sha256(StoragePath(plan.combined_drop_manifest_uri))
                 ),
             )
         )
