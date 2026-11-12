@@ -46,6 +46,8 @@ from marinskyrl.resource_locator import RolloutModelLoading
 from skyrl_train.dataset.preference_pairs import PreferencePairFormat
 
 if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizerBase
+
     from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
     from skyrl_train.trajectory_runners.base import TrajectoryRunner
 
@@ -123,11 +125,12 @@ class EntrypointSupervisor:
 def create_ray_wrapped_inference_engines_from_config(
     cfg: DictConfig,
     colocate_pg,
+    tokenizer: PreTrainedTokenizerBase | None = None,
     *,
     entrypoint: str = STANDARD_TRAINING_ENTRYPOINT,
     operation: EntrypointOperation = EntrypointOperation.TRAIN,
 ):
-    """Create rollout engines from config; tokenizer is unused."""
+    """Create rollout engines from config; the tokenizer argument is unused."""
     from skyrl_train.inference_engines.configuration import (
         InferenceEngineRoleConfig,
         inference_engine_kwargs_from_config,
