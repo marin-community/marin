@@ -447,7 +447,7 @@ def test_inherited_recipe_round_trips_as_a_self_contained_launch(tmp_path: Path,
 
 
 def test_literal_source_ids_survive_launch_composition(tmp_path: Path) -> None:
-    raw = _raw_config()
+    raw = raw_launch_config()
     routes = {
         "https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl": "nonagentic",
         "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": "nonagentic",
