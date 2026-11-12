@@ -371,7 +371,7 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
     [
         (("skyrl", "generator", "enable_prefix_caching"), False, ("generator.enable_prefix_caching=false",), "pass"),
         (("skyrl", "generator", "enable_prefix_caching"), False, (), "invalid"),
-        (("runtime", "task_env", "VLLM_PROBE"), "1", ('+extra_env.VLLM_PROBE="1"',), "pass"),
+        (("runtime", "task_env", "VLLM_PROBE"), "1", ('extra_env.VLLM_PROBE="1"',), "pass"),
         (("skyrl", "generator", "eval_sampling_params", "temperature"), 0.5, (), "invalid"),
         (("skyrl", "generator", "chat_template"), "different", (), "invalid"),
         (("runtime", "task_env", "TASK_PROBE"), "1", (), "invalid"),
@@ -513,7 +513,17 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
         snowball.build_run(presets.PRESETS["speed-medium"], control=True)
 
 
-@pytest.mark.parametrize("arguments", [("--wait",), ("--replicates", "0"), ("--set", "trainer.resume_mode=latest")])
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("--wait",),
+        ("--replicates", "0"),
+        ("--set", "trainer.resume_mode=latest"),
+        ("--set", "generator.unrecognised_knob=1"),
+        ("--set", "trainer.policy.optimizer_config.lr=wrong"),
+        ("--set", "+generator.engine_init_kwargs.probe={}"),
+    ],
+)
 def test_refusals_use_exit_four(selection, arguments):
     result = CliRunner().invoke(
         snowball.main, ["--preset", "speed-medium", "--version", presets.PRESETS["speed-medium"].revision, *arguments]
@@ -667,7 +677,7 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
         inputs = gate.GateInputs(preset_name=preset.name, init=f"{name}@{version}")
     if case in ("stale-default", "explicit-equal", "untouched-sibling"):
         control_roots = controls(recorded_runs, preset.name)
-        promoted = replace(preset, settings=(*preset.settings, setting))
+        promoted = replace(preset, patch=preset.patch.with_settings((setting,)))
         monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset.name: promoted})
         if case == "stale-default":
             inputs = gate.GateInputs(preset_name=preset.name)
@@ -758,7 +768,9 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
     if case in ("cached-default", "cached-execution", "cached-source"):
         assert report["verdict"] == "pass", report
         if case == "cached-default":
-            promoted = replace(preset, settings=(*preset.settings, "trainer.policy.optimizer_config.weight_decay=0.1"))
+            promoted = replace(
+                preset, patch=preset.patch.with_settings(("trainer.policy.optimizer_config.weight_decay=0.1",))
+            )
             changed_key = "skyrl.trainer.policy.optimizer_config.weight_decay"
         elif case == "cached-execution":
             promoted = replace(
@@ -867,8 +879,8 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
     monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset_name: preset})
     controls(recorded_runs, preset_name)
     tasks = selection if preset_name == "data-medium" else None
-    setting_text = ("trainer.policy.optimizer_config.lr=2.0e-6", '+extra_env.VLLM_PROBE="1"') if tasks is None else ()
-    settings = tuple(map(presets.parse_setting, setting_text))
+    setting_text = ("trainer.policy.optimizer_config.lr=2.0e-6", 'extra_env.VLLM_PROBE="1"') if tasks is None else ()
+    settings = setting_text
     built = snowball.build_run(preset, settings=settings, tasks=tasks, requirements=("policy/raw_grad_norm<=10",))
     task_name = "fixture-selection@2026.11.10" if tasks else None
     source = recorded_runs(
@@ -894,7 +906,7 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
     assert recorded.preset_name == preset_name and recorded.requirements == ("policy/raw_grad_norm<=10",)
     decoded = dict(item.split("=", 1) for item in recorded.settings)
     assert {key: json.loads(value) for key, value in decoded.items()} == (
-        {} if tasks else {"trainer.policy.optimizer_config.lr": 2e-6, "+extra_env.VLLM_PROBE": "1"}
+        {} if tasks else {"trainer": {"policy": {"optimizer_config": {"lr": 2e-6}}}, "extra_env": {"VLLM_PROBE": "1"}}
     )
     assert recorded.tasks == task_name
     before = {path: path.read_bytes() for path in source.rglob("*") if path.is_file()}

@@ -114,14 +114,13 @@ def build_run(
     *,
     tasks: ArtifactStep | None = None,
     init: ArtifactStep | None = None,
-    settings: tuple[presets.Setting, ...] = (),
+    settings: tuple[str, ...] = (),
     replicates: int = 1,
     control: bool = False,
     requirements: tuple[str, ...] = (),
 ) -> SnowballRun:
     """Construct a Snowball experiment: one run step per replicate and, for a gated preset, its gate step."""
     wandb_entity = os.environ.get(_WANDB_ENTITY_ENV)
-    settings = tuple(leaf for setting in settings for leaf in presets.setting_leaves(setting))
     if not 1 <= replicates <= 5:
         raise click.BadParameter("replicates must be between 1 and 5")
     if preset.focus == presets.Focus.DATA:
@@ -164,7 +163,7 @@ def build_run(
         "tasks": (selection.name, selection.version),
         "init": None if init is None else (init.name, init.version),
         "layout": preset.recipe.layout.name,
-        "settings": sorted({setting.key: setting.value for setting in settings}.items()),
+        "settings": sorted(presets.override_document(settings).items()),
         "evaluations": sorted(evaluation_inputs),
     }
     snowball_rl_gate.validate_requirements(preset, requirements, control=control)
@@ -484,8 +483,8 @@ def _run_command(function: Callable) -> click.Command:
     "settings",
     multiple=True,
     metavar="KEY=VALUE",
-    help="Change one key of the composed SkyRL config: a dotted key and a YAML value, for example "
-    "trainer.algorithm.advantage_estimator=grpo. Use +KEY=VALUE for a key the base config lacks. "
+    help="Change one typed SkyRL setting: a dotted key and a JSON value, for example "
+    "trainer.algorithm.advantage_estimator=grpo. Text values may be bare. "
     "Repeatable. Keys the preset owns (placement, data, evaluation, measurement) are refused with the "
     "reason; data presets accept none. Code changes need no flag: the run name includes the source "
     "tree hash.",
@@ -545,7 +544,7 @@ def main(
     preset = presets.PRESETS[preset_name]
     run = build_run(
         preset,
-        settings=tuple(presets.parse_setting(setting) for setting in settings),
+        settings=settings,
         tasks=presets.selection_artifact(tasks_name) if tasks_name else None,
         init=presets.published_artifact(init_name, revision=preset.revision) if init_name else None,
         replicates=replicates,

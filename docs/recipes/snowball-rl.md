@@ -58,7 +58,9 @@ uv run python -m experiments.post_training.snowball_rl --preset train-long \
   --set trainer.max_steps=100 --version dev
 ```
 
-`--set` takes a dotted SkyRL key and YAML value. Unknown keys require `+KEY=VALUE`.
+`--set` takes a typed dotted SkyRL key and a JSON value; text values may be bare.
+JSON objects update nested settings. Unknown keys, wrong value types and `+` prefixes
+are refused locally.
 Placement, data bindings, retention, evaluation and measurement settings belong to the preset.
 Learning and train-long can change task sampling, optimizer, schedule and batch shape.
 Data presets require `--tasks` and refuse `--set`.

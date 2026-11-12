@@ -214,7 +214,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request, native_json):
                 name="fixture",
                 tasks=presets.selection_artifact(inputs.tasks) if inputs.tasks else None,
                 init=presets.published_artifact(inputs.init, revision=preset.revision) if inputs.init else None,
-                settings=tuple(map(presets.parse_setting, inputs.settings)),
+                settings=inputs.settings,
             )
             step = recipe.run_step(preset, spec)
             context = StepContext.for_run(

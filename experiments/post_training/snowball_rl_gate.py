@@ -53,6 +53,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
 from scipy.stats import t
+from skyrlrecipe.documents import MISSING, get_path
 from tabulate import tabulate
 from taskcompendium.grading_result import Outcome
 
@@ -160,18 +161,15 @@ def validate_candidate(preset: presets.Preset) -> None:
 
 def gate_inputs(
     preset_name: str,
-    settings: Sequence[presets.Setting] = (),
+    settings: Sequence[str] = (),
     tasks: str | None = None,
     init: str | None = None,
     requirements: Sequence[str] = (),
 ) -> GateInputs:
-    values = {setting.key: setting for setting in settings}
+    values = presets.override_document(tuple(settings))
     return GateInputs(
         preset_name=preset_name,
-        settings=tuple(
-            f"{'+' if setting.allows_new_key else ''}{key}={json.dumps(setting.value, default=str)}"
-            for key, setting in sorted(values.items())
-        ),
+        settings=tuple(f"{key}={json.dumps(value, sort_keys=True)}" for key, value in sorted(values.items())),
         tasks=tasks.removeprefix(presets.SELECTION_PREFIX + "/") if tasks else None,
         init=init,
         requirements=tuple(dict.fromkeys(requirements)),
@@ -924,7 +922,7 @@ def _current_configs(preset: presets.Preset, inputs: GateInputs) -> tuple[dict, 
                     init=(
                         presets.published_artifact(candidate.init, revision=preset.revision) if candidate.init else None
                     ),
-                    settings=tuple(map(presets.parse_setting, candidate.settings)),
+                    settings=candidate.settings,
                 )
                 step = recipe.run_step(preset, spec)
                 context = StepContext.for_run(
@@ -968,14 +966,22 @@ def _changed_config_keys(left: dict[str, object], right: dict[str, object]) -> s
 
 
 def _setting_keys(inputs: GateInputs, keys: set[str]) -> set[str]:
-    prefixes = []
-    for text in inputs.settings:
-        for setting in presets.setting_leaves(presets.parse_setting(text)):
-            prefix = "skyrl." + setting.key
-            if setting.key.startswith("extra_env."):
-                prefix = "runtime.task_env." + setting.key.removeprefix("extra_env.")
-            prefixes.append(prefix)
-    allowed = {key for key in keys if any(key == prefix or key.startswith(prefix + ".") for prefix in prefixes)}
+    values = presets.override_document(inputs.settings)
+    allowed = set()
+    for key in keys:
+        if key.startswith("skyrl."):
+            path = key.removeprefix("skyrl.")
+        elif key.startswith("runtime.task_env."):
+            path = "extra_env." + key.removeprefix("runtime.task_env.")
+        else:
+            continue
+        parts = path.split(".")
+        if any(
+            (value := get_path(values, ".".join(parts[:index]))) is not MISSING
+            and (index == len(parts) or isinstance(value, list))
+            for index in range(1, len(parts) + 1)
+        ):
+            allowed.add(key)
     return allowed
 
 
