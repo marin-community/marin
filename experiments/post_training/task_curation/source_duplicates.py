@@ -14,6 +14,7 @@ from pathlib import Path
 
 from finestore.rl.source_identity import canonical_source_id, canonical_source_map
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.pipeline.reviewer_spec import JudgeEndpoint
 from taskcompendium.source_fingerprints import DuplicateJudgeRun, DuplicateLabel, SourceFingerprint, SourceIdentitySurvey
 
 from experiments.post_training.task_curation.backend_capabilities import converted_specs
@@ -27,7 +28,7 @@ from experiments.post_training.task_curation.duplicate_review import (
     LocalDuplicateEndpoint,
     review_pairs,
 )
-from experiments.post_training.task_curation.judges import HostedJudgeEndpoint, JudgeEndpoint
+from experiments.post_training.task_curation.judges import HostedJudgeEndpoint
 from experiments.post_training.task_curation.source_fingerprints import (
     candidate_pairs,
     duplicate_groups,

@@ -9,6 +9,7 @@ import pytest
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.inference.config import EffectiveServing
 from marin.inference.types import OpenAIEndpoint, RunningModel
+from taskcompendium.pipeline.reviewer_spec import JudgeEndpoint
 from verifyit.grade import Status
 from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate
 from verifyit.spec import parse_spec, render_spec
@@ -17,7 +18,6 @@ from experiments.post_training.task_curation import judges
 from experiments.post_training.task_curation.judges import (
     JUDGE_TIERS,
     HostedJudgeEndpoint,
-    JudgeEndpoint,
     JudgeTier,
     LocalJudgeEndpoint,
     RelayJudgeEndpoint,

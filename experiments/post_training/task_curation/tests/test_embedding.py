@@ -293,9 +293,9 @@ def test_driver_converts_embeds_and_resumes_without_rereading_raw_inputs(
         "1",
         "--catalog-root",
         str(curriculum),
-        "--model-revision",
+        "--description-model-revision",
         "fixture",
-        "--base-url",
+        "--description-base-url",
         f"http://127.0.0.1:{description_server.server_port}/v1",
     ]
     runner = CliRunner()
@@ -458,9 +458,9 @@ def test_corpus_resume_refreshes_registered_source_metadata(tmp_path, monkeypatc
         "1",
         "--catalog-root",
         str(curriculum),
-        "--model-revision",
+        "--description-model-revision",
         "fixture",
-        "--base-url",
+        "--description-base-url",
         f"http://127.0.0.1:{description_server.server_port}/v1",
     ]
     runner = CliRunner()

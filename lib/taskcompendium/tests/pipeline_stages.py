@@ -157,17 +157,7 @@ def fixture_recipe(
 
 
 def review_config(reviewer: BatchReviewer) -> ReviewConfig:
-    return ReviewConfig(
-        reviewer.model,
-        reviewer.model_revision,
-        reviewer.max_prompt_characters,
-        reviewer.max_tokens,
-        reviewer.max_attempts,
-        reviewer.retry_max_tokens,
-        reviewer.retry_max_prompt_characters,
-        max_batch_bytes=reviewer.max_batch_bytes,
-        mode=ReviewMode.BATCH,
-    )
+    return ReviewConfig(reviewer.spec, max_batch_bytes=reviewer.max_batch_bytes, mode=ReviewMode.BATCH)
 
 
 def review_source(

@@ -15,7 +15,7 @@ import json
 import re
 import subprocess
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from functools import cached_property, partial
 from pathlib import Path
@@ -76,12 +76,11 @@ from taskcompendium.pipeline.source_verification import SOURCE_VERIFICATION_REVI
 from taskcompendium.pipeline.sources import conversion_shards, source_files_identity, staged_files
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
 from taskcompendium.runtime.local import LOCK_FILE, LocalGraderMachines
-from verifyit.modes.grade_judge import JudgeConnection
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.runners import SubprocessRunner
 
-from experiments.post_training.glm import GLM_REQUEST_ATTEMPTS, GLM_REQUEST_TIMEOUT, resolve_glm_base_url
+from experiments.post_training.glm import GLM_REQUEST_ATTEMPTS, GLM_REQUEST_TIMEOUT
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.decontamination import require_private_release
@@ -346,16 +345,14 @@ def _reviewer(
     if review.mode == ReviewMode.CHAT:
         return ChatReviewer(
             OpenAIChatClient(base_url, api_key, timeout=GLM_REQUEST_TIMEOUT),
-            review.model,
-            review.model_revision,
+            review.spec,
             query_cache_root=review_cache,
             max_concurrent=review_concurrency,
             max_batch_bytes=review.max_batch_bytes,
         )
     return BatchReviewer(
         OpenAIBatchClient(base_url, api_key, timeout=GLM_REQUEST_TIMEOUT, request_attempts=GLM_REQUEST_ATTEMPTS),
-        review.model,
-        review.model_revision,
+        review.spec,
         query_cache_root=review_cache,
         max_batch_bytes=review.max_batch_bytes,
     )
@@ -402,8 +399,8 @@ def _source_config(
         if settings.decontamination_receipt
         else settings.config.lexical_contamination if settings.config else None
     )
-    if rubric is not None and review is None:
-        raise click.UsageError("Recipe review configuration requires --model-revision and --review-mode")
+    if mode != SourceProcessingMode.QUICK and review is None:
+        raise click.UsageError("SAMPLE/FULL require a ReviewerSpec from --reviewer-tier")
     if settings.config is not None:
         return replace(
             settings.config,
@@ -439,7 +436,11 @@ def _source_config(
 
 
 def _execution_config(
-    settings: RecipeSettings, config: SourcePipelineConfig, rubric: str | None, controls: Controls | None
+    settings: RecipeSettings,
+    config: SourcePipelineConfig,
+    rubric: str | None,
+    controls: Controls | None,
+    scope: ExitStack,
 ) -> SourcePipelineConfig:
     needs_reviewer = rubric is not None and config.execution.reviewer is None
     needs_judge = controls is not None and settings.api_key is not None and config.judge_connection is None
@@ -447,20 +448,22 @@ def _execution_config(
         return config
     if settings.api_key is None:
         raise click.UsageError("Recipe review and judge controls require an API key")
-    base_url = settings.base_url if settings.base_url is not None else resolve_glm_base_url(settings.relay_job)
+    assert config.review is not None
+    connection = scope.enter_context(config.review.spec.endpoint.connect(settings.api_key))
+    base_url = connection.base_url
     if needs_reviewer:
         if settings.review_cache is None:
             raise click.UsageError("Recipe review requires --review-cache")
         reviewer = _reviewer(
             cast(ReviewConfig, config.review),
             base_url,
-            settings.api_key,
+            connection.api_key,
             review_cache=settings.review_cache,
             review_concurrency=settings.review_concurrency,
         )
         config = replace(config, execution=replace(config.execution, reviewer=reviewer))
     if needs_judge:
-        config = replace(config, judge_connection=JudgeConnection(base_url, settings.api_key))
+        config = replace(config, judge_connection=connection)
     return config
 
 
@@ -658,7 +661,7 @@ def pipeline_identity(
         "grader": environment_record(pipeline.grader, grader) if pipeline.grader is not None else None,
         "resource_budget_bytes": pipeline.resource_budget_bytes,
         "rubric": pipeline.rubric,
-        "review": asdict(config.review) if pipeline.rubric is not None else None,
+        "review": config.review.identity if config.review is not None else None,
         "controls": controls_identity(pipeline.controls) if pipeline.controls is not None else None,
         "machines": (
             config.machines.identity() if pipeline.controls is not None and config.machines is not None else None
@@ -850,27 +853,28 @@ def _run_source(
         built = EnvironmentArtifact.raw_load(run.grader_artifact) if run.grader_artifact is not None else None
         grader_environment = environment_requirements(pipeline.grader, built)
     assert options.recipe_settings is not None
-    config = _execution_config(options.recipe_settings, config, pipeline.rubric, pipeline.controls)
-    validate_input_identity(pipeline, options.inputs, run.identity)
-    file_overrides = (
-        {name: SourceFileOverride(**file) for name, file in run.identity["input_overrides"]["files"].items()}
-        if options.inputs.files
-        else {}
-    )
-    if options.inputs.root is not None and not options.inputs.files:
-        file_overrides = _staged_file_overrides(run.source_input, run.identity["input_overrides"]["root"]["files"])
-    result = _run_curation(
-        pipeline,
-        mode=options.mode,
-        context=options.runtime.context,
-        source_input=run.source_input,
-        output_path=run.output_path,
-        inputs=run.inputs,
-        config=config,
-        grader_environment=grader_environment,
-        source_overrides=file_overrides,
-    )
-    validate_input_identity(pipeline, options.inputs, run.identity)
+    with ExitStack() as scope:
+        config = _execution_config(options.recipe_settings, config, pipeline.rubric, pipeline.controls, scope)
+        validate_input_identity(pipeline, options.inputs, run.identity)
+        file_overrides = (
+            {name: SourceFileOverride(**file) for name, file in run.identity["input_overrides"]["files"].items()}
+            if options.inputs.files
+            else {}
+        )
+        if options.inputs.root is not None and not options.inputs.files:
+            file_overrides = _staged_file_overrides(run.source_input, run.identity["input_overrides"]["root"]["files"])
+        result = _run_curation(
+            pipeline,
+            mode=options.mode,
+            context=options.runtime.context,
+            source_input=run.source_input,
+            output_path=run.output_path,
+            inputs=run.inputs,
+            config=config,
+            grader_environment=grader_environment,
+            source_overrides=file_overrides,
+        )
+        validate_input_identity(pipeline, options.inputs, run.identity)
     envelope = _pipeline_result(result)
     return RlDataArtifact(path=run.output_path, status=envelope.status, manifest=asdict(result), result=envelope)
 

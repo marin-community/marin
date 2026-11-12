@@ -1235,6 +1235,36 @@ configured cap in `normalized_shard_limit`. Full preparation uses the same
 population rule with a cap of 64 deduplication partitions; persisted review files
 retain their independent record and byte limits.
 
+### QA reviewer
+
+SAMPLE and FULL curation require an immutable `ReviewerSpec`. `--reviewer-tier HEAVY`
+selects `JUDGE_TIERS[HEAVY].qa_reviewer`: `glm-5.3` through the
+`/muchanem/glm53-relay` OpenAI-compatible relay, temperature 0.7, reasoning
+effort low, 4096 completion tokens and three total attempts. Invalid responses
+retry with an 8192-token budget.
+The deployment revision is recorded as `unverified:ortet-glm-5.3-fp8`;
+the relay does not attest an immutable checkpoint. Connection fails if its model
+list does not advertise `glm-5.3`. A provider that cannot accept temperature may use
+`temperature=None` to retain its API default; zero is disallowed.
+
+The spec pins base rubric `task-quality-v1`, its SHA-256 content hash, and review
+payload revision `3`. To change the base rubric, edit `BASE_RUBRIC` and bump
+`BASE_RUBRIC_VERSION` in `taskcompendium.pipeline.reviewer_spec`; the content
+hash is computed from that text. Bump `REVIEW_PAYLOAD_REVISION` when changing the
+task evidence projected into the request. Quality review appends per-source
+`ReviewRubric` criteria to the base rubric and includes its ID and version in the
+request and quality manifest. Assessments use and retain their separate full
+assessment rubric text.
+
+Quality manifests and assessment model metadata record the complete spec identity.
+The request-cache namespace includes every spec field, including deployment and
+payload revisions. Changing a base or per-source rubric version,
+endpoint, model or sampling setting misses the cache. Existing caches and artifacts
+remain archived. `--review-concurrency` (at most 64 per worker) and `--max-workers`
+are runtime capacity settings and leave reviewer identity and request caches
+unchanged. Programmatic callers bind an existing `JudgeEndpoint` in the spec;
+credentials are supplied at connection time and excluded from identity.
+
 ## Run a campaign
 
 Run the driver inside an Iris job whose `EnvironmentSpec` includes
@@ -1243,7 +1273,7 @@ Run the driver inside an Iris job whose `EnvironmentSpec` includes
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   experiments.post_training.task_curation.driver \
-  --review-mode chat --model-revision YOUR_GLM_REVISION \
+  --reviewer-tier HEAVY \
   --review-cache CACHE_PREFIX --mode sample \
   --max-workers 64 --coordinator-memory 16g --concurrent-sources 10 \
   --normalized-shards 32 \
@@ -1294,8 +1324,7 @@ Neither path requires a Docker daemon in the Zephyr worker. Without an image bac
 controls can still use package locks through Local or explicit simulator requirements
 through ShellSim. Programmatic callers pass grading machines through `RecipeSettings.machines`.
 Grading machines never have network access. Add `--run` to execute, with `GLM_BULK_TOKEN` in the driver environment;
-the review endpoint is resolved from the Iris GLM relay job (`--relay-job`) unless
-`--base-url` overrides it. `--mode sample` is a test run that
+the reviewer endpoint is pinned by `--reviewer-tier HEAVY`. `--mode sample` is a test run that
 converts and gates only each source's panel. `--mode full` runs each source on
 its own: it records its panel quality Result, converts every row, draws its
 control sample from all kept rows, and validates every kept task when the control
@@ -1317,8 +1346,7 @@ Incomplete curation produces retained artifacts and downstream assessment, then
 the campaign reports failure. `--curation-attempt N` selects a new curation key
 when controls need a retry; successful exact review requests and pinned downloads
 remain cached. Rerun the same campaign to reuse completed dependencies.
-`--assessment-model-revision` changes the grading model revision separately from
-the curation review revision.
+Assessment uses the same pinned reviewer spec as curation.
 
 Use `--cache-dir PATH` to run SAMPLE/FULL locally against small pinned sources
 and retain downloads, source artifacts, assessment artifacts and GLM query

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from dataclasses import replace
 
 import pytest
 from finestore.cache import PersistentKvCache
@@ -13,6 +14,7 @@ from taskcompendium.pipeline.review import BatchReviewer, ChatReviewer, valid_re
 from taskcompendium.pipeline.review_requests import RequestObservation, RequestOutput
 
 from .pipeline_stages import response, svamp_row_task
+from .reviewer_specs import reviewer_spec
 
 
 class UnusedBatchClient:
@@ -81,10 +83,10 @@ def test_direct_review_reuses_exact_cache_across_modes_and_source_ids(tmp_path):
     abandoned.parent.mkdir(parents=True)
     abandoned.write_text('{"state": "reserved", "attempts": ["missing.json"]}')
     original = abandoned.read_bytes()
-    direct = ChatReviewer(chat, "fixture", "deployment", query_cache_root=cache)
+    direct = ChatReviewer(chat, reviewer_spec("fixture", "deployment"), query_cache_root=cache)
     first = direct.review([task], rubric).reviews
     second = direct.review([task.model_copy(update={"id": "source-b"})], rubric).reviews
-    batch = BatchReviewer(batches, "fixture", "deployment", query_cache_root=cache)
+    batch = BatchReviewer(batches, reviewer_spec("fixture", "deployment"), query_cache_root=cache)
     third = batch.review([task.model_copy(update={"id": "source-c"})], rubric).reviews
     assert [row.status for row in first + second + third] == [ReviewStatus.REVIEWED] * 3
     assert [row.task_id for row in first + second + third] == ["source-a", "source-b", "source-c"]
@@ -185,7 +187,7 @@ def test_direct_provider_failures_have_finite_neutral_retries(tmp_path, recover)
             return super().complete(body)
 
     chat = TransientChat()
-    reviewer = ChatReviewer(chat, "fixture", "deployment", query_cache_root=str(tmp_path / "cache"))
+    reviewer = ChatReviewer(chat, reviewer_spec("fixture", "deployment"), query_cache_root=str(tmp_path / "cache"))
     result = reviewer.review([task], rubric)
     record = result.reviews[0]
     assert chat.attempts == 3
@@ -224,3 +226,31 @@ def test_cache_storage_failure_does_not_discard_provider_response(tmp_path, monk
     assert result.output == raw
     assert submitted == requests
     assert result.observations[0].output == raw
+
+
+def test_review_cache_tracks_spec_but_reuses_capacity_changes(tmp_path):
+    task = svamp_row_task(
+        RawRow(
+            "task",
+            Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
+            {"Body": "Ada has two apples.", "Question": "How many apples?", "Answer": "2"},
+        )
+    )
+    assert isinstance(task, TaskSpec)
+    rubric = ReviewRubric("fixture", "1", ("Check the count.",))
+    chat = ReviewChat()
+    reviewer = ChatReviewer(chat, reviewer_spec(), query_cache_root=str(tmp_path / "cache"), max_concurrent=1)
+    reviewer.review([task], rubric)
+    more_capacity = replace(reviewer, max_concurrent=64)
+    assert more_capacity.identity == reviewer.identity
+    more_capacity.review([task], rubric)
+    assert len(chat.requests) == 1
+    for settings in ({"base_rubric_version": "task-quality-v2"}, {"temperature": 0.8}, {"reasoning_effort": "medium"}):
+        changed = replace(reviewer, spec=replace(reviewer.spec, **settings))
+        assert changed.identity != reviewer.identity
+        changed.review([task], rubric)
+    reviewer.review([task], replace(rubric, version="2"))
+    assert len(chat.requests) == 5
+    assert chat.requests[0]["temperature"] == 0.7
+    assert chat.requests[-2]["chat_template_kwargs"] == {"reasoning_effort": "medium"}
+    assert [record.status for record in more_capacity.review([task], rubric).reviews] == [ReviewStatus.REVIEWED]
