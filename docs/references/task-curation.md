@@ -1103,6 +1103,33 @@ Oracle filtering is never sampled, even when the other checks use SAMPLE.
    stale or incomplete receipt blocks admission. Admit the remaining rows and write
    the outputs.
 
+### Prepare retained contracts for a complete quality review
+
+Before reviewing a proposed remediated population, freeze its combined
+within-source duplicate and lexical drop plan. The preparation command indexes
+every retained TaskSpec and deployment runtime by separate SHA-256 values,
+checks the complete population against its pinned conversion and drop manifest,
+and records oracle, resource-declaration and grading-boundary diagnostics:
+
+```bash
+uv run --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.full_qc_inputs \
+  --retention-plans IMMUTABLE_COMBINED_PLANS.json --source-ids SOURCE_IDS.json \
+  --artifact-root s3://marin-us-east-02a/marin \
+  --artifact-version YYYY.MM.DD.N --output inputs.json --run
+```
+
+Both input arguments accept local paths or object-storage URLs. Omit `--run`
+to inspect the artifact graph. Run preparation on CPU workers in the data's
+cluster, with an explicit target cluster, authorized priority and a three-day
+timeout. Completed source indexes are reused; interrupted attempts retain their
+partial files under distinct attempt directories.
+
+An index establishes the proposed review population. It supplies no model
+judgments, execution qualification, admission or publication receipt. Reuse QA
+evidence only for identical task and runtime hashes after calibration or repair.
+Hugging Face publication and Atlas loading remain separate operations.
+
 ### Full-population oracle filter
 
 Every admitted TaskSpec must declare `execution_requirements`: `cpus`,
