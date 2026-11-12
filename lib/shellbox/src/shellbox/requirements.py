@@ -135,6 +135,14 @@ RUNTIME_FIELDS = {
     "cleanup_timeout": (Requirement.CLEANUP_TIMEOUT,),
 }
 
+EXECUTION_FIELDS = {
+    "cpus": (Requirement.CPUS,),
+    "memory_mb": (Requirement.MEMORY,),
+    "storage_mb": (Requirement.STORAGE,),
+    "agent_timeout_sec": (Requirement.COMMAND_TIMEOUT,),
+    "verifier_timeout_sec": (Requirement.COMMAND_TIMEOUT,),
+}
+
 HARBOR_ENVIRONMENT_FIELDS = {
     "build_timeout_sec": (Requirement.STARTUP_TIMEOUT,),
     "docker_image": (Requirement.DOCKER_IMAGE,),
@@ -160,6 +168,7 @@ TASK_FIELDS = {
     "id": (),
     "context": (),
     "environment_requirements": tuple(Requirement),
+    "execution_requirements": tuple(sorted({need for needs in EXECUTION_FIELDS.values() for need in needs})),
     "final_tools": (),
     "interaction_tools": (),
     "tool_bindings": (Requirement.TOOL_PROVIDERS,),

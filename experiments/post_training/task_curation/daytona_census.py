@@ -27,6 +27,7 @@ from rolloutengine.machines import _machine_spec
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.machine import check_local_environment
 from shellbox.machine import UnsupportedMachineSpec
+from taskcompendium.backend_requirements import execution_resource_shape
 from taskcompendium.grading_environment import GradingEnvironmentStatus, assess_grading_environment
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskSpec, missing_environment
@@ -34,7 +35,11 @@ from taskcompendium.pipeline.conversion import ConvertedRow, convert_source_row
 from taskcompendium.pipeline.models import ImportRejection, NormalizedTask, SourceRecipe
 from taskcompendium.pipeline.sources import conversion_context, source_shards, staged_raw_file_rows
 
-from experiments.post_training.task_curation.daytona_identity import count_lowered_spec_identities
+from experiments.post_training.task_curation.daytona_identity import (
+    count_lowered_spec_identities,
+    count_native_spec_identities,
+    native_task_toml,
+)
 from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
@@ -126,7 +131,11 @@ def declared_shapes(converted: ConvertedRow) -> dict:
     files = raw.get("files") or {}
     if "task.toml" not in files:
         return {}
-    document = tomllib.loads(base64.b64decode(files["task.toml"]).decode())
+    return native_shapes(base64.b64decode(files["task.toml"]))
+
+
+def native_shapes(task_toml: bytes) -> dict:
+    document = tomllib.loads(task_toml.decode())
     actor = EnvironmentConfig.model_validate(document.get("environment") or {})
     verifier = EnvironmentConfig.model_validate(
         (document.get("verifier") or {}).get("environment") or actor.model_dump()
@@ -210,13 +219,21 @@ def measure_envelopes(documents: Iterable[tuple[dict, dict]]) -> EnvelopeCensus:
         converted += 1
         if converted % 10000 == 0:
             logger.info("Census streamed %d converted tasks", converted)
+        native = "harbor" in task.get("tags", ())
+        if native:
+            shapes = native_shapes(native_task_toml(task))
         runtime = {}
         for role, slot, declared, network in (
             ("agent", "task_machine", task["environment_requirements"], "allow"),
             ("grader", "verifier_machine", task["grader"].get("environment"), "deny"),
         ):
-            needs_machine = declared is not None and any(declared.values())
-            shape = {**PROFILE, "backend": "daytona", "network": network, **(shapes.get(slot) or {})}
+            needs_machine = (native and role == "agent") or (declared is not None and any(declared.values()))
+            shape = {
+                **PROFILE,
+                "backend": "daytona",
+                "network": network,
+                **(execution_resource_shape(task, shapes.get(slot)) if role == "agent" else (shapes.get(slot) or {})),
+            }
             if role == "grader" and declared and declared.get("packages_lock"):
                 shape["backend"] = "local"
             runtime[slot] = shape if needs_machine else None
@@ -255,9 +272,22 @@ def measure_envelopes(documents: Iterable[tuple[dict, dict]]) -> EnvelopeCensus:
                 if task["environment_requirements"].get(name) is not None
             )
         envelope = {"task": task, "runtime": actor_runtime}
-        key = canonical_sha256([task["environment_requirements"], actor_runtime])
+        identity_inputs = (
+            [
+                row
+                for row in task["resources"]["verifier"]
+                if row["path"] == "task.toml" or row["path"].startswith("environment/")
+            ]
+            if native
+            else task["environment_requirements"]
+        )
+        key = canonical_sha256([identity_inputs, actor_runtime])
         if key not in identities:
-            identities[key] = count_lowered_spec_identities([(task["id"], envelope)])
+            identities[key] = (
+                count_native_spec_identities([(task["id"], task)])
+                if native
+                else count_lowered_spec_identities([(task["id"], envelope)])
+            )
         measurement = identities[key]
         unsafe_task_counts.update(
             {

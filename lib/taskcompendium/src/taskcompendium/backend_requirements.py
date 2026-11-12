@@ -11,6 +11,7 @@ from shellbox.machine import Backend, NetworkPolicy
 from shellbox.requirements import (
     COMMAND_FIELDS,
     ENVIRONMENT_FIELDS,
+    EXECUTION_FIELDS,
     HARBOR_ENVIRONMENT_FIELDS,
     MACHINE_FIELDS,
     RESOURCE_FIELDS,
@@ -24,7 +25,7 @@ from shellbox.requirements import (
 from shellbox.survey import CapabilityCell
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.models import EnvironmentRequirements, ExecutionRequirements
 
 
 class RuntimeProfile(BaseModel):
@@ -47,11 +48,13 @@ def backend_schema_sha256() -> str:
     return canonical_sha256(
         {
             "environment": EnvironmentRequirements.model_json_schema(),
+            "execution": ExecutionRequirements.model_json_schema(),
             "runtime_profile": RuntimeProfile.model_json_schema(),
             "requirements": [requirement.value for requirement in Requirement],
             "classifications": [
                 COMMAND_FIELDS,
                 ENVIRONMENT_FIELDS,
+                EXECUTION_FIELDS,
                 HARBOR_ENVIRONMENT_FIELDS,
                 MACHINE_FIELDS,
                 RESOURCE_FIELDS,
@@ -88,6 +91,8 @@ class BackendSourceMap(BaseModel):
     """Daytona deployment: agent on Daytona, package-lock grader on LOCAL."""
     grading_environment: dict | None
     """The published grading-boundary census, carried through without re-assessment."""
+    integrity_contracts: dict | None = None
+    """Optional contract census bound to the same published input population."""
 
 
 class BackendSurvey(BaseModel):
@@ -150,6 +155,21 @@ def environment_demands(environment: EnvironmentRequirements) -> set[Requirement
     return demands
 
 
+def execution_resource_shape(task: Mapping, shape: Mapping | None) -> dict:
+    """Apply task capacity, rejecting conflicting published allocations."""
+    values = dict(shape or {})
+    declared = task.get("execution_requirements")
+    if declared is None:
+        return values
+    requirements = ExecutionRequirements.model_validate(declared)
+    for name in ("cpus", "memory_mb", "storage_mb"):
+        requested = getattr(requirements, name)
+        if values.get(name) is not None and values[name] != requested:
+            raise ValueError(f"{task.get('id')}: {name} conflicts with task execution requirements")
+        values[name] = requested
+    return values
+
+
 def task_demands(document: Mapping) -> dict[str, set[Requirement]]:
     """Extract independent agent/grader demands, including published runtime budgets.
 
@@ -196,6 +216,10 @@ def task_demands(document: Mapping) -> dict[str, set[Requirement]]:
             demands.add(Requirement.FILE_MTIME)
         if not demands:
             continue
+        if role == "agent":
+            shape = execution_resource_shape(task, shape)
+        if task.get("execution_requirements") is not None:
+            demands.add(Requirement.COMMAND_TIMEOUT)
         if shape is not None:
             if "network" in shape:
                 demands.add(Requirement("network_" + shape["network"]))

@@ -129,11 +129,15 @@ Before selecting a new catalog load:
 2. Survey the production backends at Marin latest for their current capabilities
    with the [survey procedure](#backend-survey), and publish the matrix beside the deployment record.
    Execute this survey at each deployment; do not reuse an older deployment's matrix.
-3. Validate and release the app against the inspected package version, then load
+3. Verify measured Examples counts and version-bound lexical evidence for the retained sources.
+   New or changed admissions require a private TaskCompendium clean/remediated
+   receipt after [lexical decontamination](task-curation.md#lexical-decontamination-before-publication);
+   preserve grandfathered selection until explicitly approved.
+4. Validate and release the app against the inspected package version, then load
    the catalog with that survey's `--backend-map` artifact and the selected
    snapshot's `--source-identities` artifact. Fingerprint changed sources and
    resolve or acknowledge their shortlisted source-overlap flags before admission.
-4. Check `/backends`, `/source-duplicates`, `/sources`, an assessment and its evidence. Confirm the
+5. Check `/backends`, `/source-duplicates`, `/sources`, an assessment and its evidence. Confirm the
    selected snapshot and survey revision agree with the deployment record.
 
 ### Backend survey
