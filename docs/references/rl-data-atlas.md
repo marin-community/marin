@@ -86,16 +86,18 @@ not declared*. Edit the rules in the reference first, then the page text in
 training/evaluation use, Quality, Result, Daytona label, the curriculum subject
 with the most converted tasks, the selected catalog snapshot’s load time
 (**Last updated**, UTC) and a link to its evidence page. Origin
-tabs show provider counts and combine Task Trove and TaskTrove. Search names, datasets or tags, filter by use,
+tabs use one TaskTrove label for both spellings; their counts collapse duplicate
+groups and follow the QUICK/BAD visibility toggle. Search names, datasets or tags, filter by use,
 Quality or Result, and select a column heading to sort. The default view hides
 QUICK-quality and BAD-result sources; **Show QUICK-quality and BAD-result
 sources** turns that off. Filters and sorting are included in the URL. CSV export
-includes the filtered rows in the displayed order. The summary shows total/displayed
-sources and examples, displayed QUICK/SAMPLE/FULL counts, and the selected
-catalog's load date. Total counts collapse each likely-duplicate group to its
-canonical source; expanding a group adds its matching members to displayed counts.
-Contamination stays `-` until a lexical decontamination receipt exists. Unsafe
-Daytona labels show the measured reason, with the census refusal in Evidence.
+includes filtered source rows, including folded duplicate members. The summary
+compares totals with the source rows currently displayed under the active filters.
+Totals count each duplicate group once, using its canonical source's example count;
+expansion adds members matching the active filters to displayed counts. DATE is
+the selected catalog's server load date in UTC. Contamination stays `-` until a
+lexical decontamination receipt exists. Unsafe Daytona labels identify the
+snapshot-budget or execution-requirement failure, with the recorded refusal in Evidence.
 
 
 [Quality and result](task-curation.md#quality-and-result) defines both labels.
