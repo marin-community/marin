@@ -18,13 +18,14 @@ function scoreCell(cell) {
     if (cell.missing) td.title = cell.missing;
     return td;
   }
-  const tooltip = [LINK_TEXT[cell.link.kind]];
+  const tooltip = [`${LABEL_TEXT[cell.label]}. ${LINK_TEXT[cell.link.kind]}`];
   if (cell.run_id) tooltip.push(cell.run_id);
   if (cell.note) tooltip.push(cell.note);
   const link = element("a", { href: cell.link.url, title: tooltip.join("\n"), target: "_blank", rel: "noopener" });
   link.append(element("span", { class: "score" }, cell.score.toFixed(2)));
   if (cell.note) link.append(element("span", { class: "note-mark" }, "*"));
-  td.append(link, element("span", { class: `chip ${cell.label}` }, LABEL_TEXT[cell.label]));
+  td.className = cell.label;
+  td.append(link);
   return td;
 }
 
@@ -33,7 +34,7 @@ function render(data) {
   const head = element("tr");
   head.append(element("th", { class: "model" }, "Model"));
   for (const name of data.evals) head.append(element("th", {}, name));
-  table.append(element("thead")).append(head);
+  table.appendChild(element("thead")).append(head);
 
   const body = table.appendChild(element("tbody"));
   for (const model of data.models) {

@@ -43,13 +43,16 @@ table {
 
 th,
 td {
-  padding: 6px 10px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--border);
   text-align: right;
   white-space: nowrap;
 }
 
 thead th {
+  white-space: normal;
+  vertical-align: bottom;
+  font-size: 13px;
   position: sticky;
   top: 0;
   background: var(--header);
@@ -57,6 +60,8 @@ thead th {
 }
 
 th.model {
+  max-width: 180px;
+  white-space: normal;
   position: sticky;
   left: 0;
   z-index: 1;
@@ -66,6 +71,19 @@ th.model {
 
 td .score {
   font-variant-numeric: tabular-nums;
+}
+
+td.official {
+  background: #dafbe1;
+}
+
+td.unofficial {
+  background: #fff8c5;
+}
+
+td.unofficial .score {
+  text-decoration: underline dotted var(--unofficial);
+  text-underline-offset: 3px;
 }
 
 td.missing,
@@ -79,23 +97,21 @@ td.missing,
   font-weight: 600;
 }
 
-.chip {
+.swatch {
   display: inline-block;
-  margin-left: 6px;
-  padding: 0 5px;
-  border: 1px solid currentColor;
-  border-radius: 8px;
-  font-size: 10px;
-  line-height: 15px;
-  vertical-align: middle;
+  width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  border: 1px solid var(--border);
+  vertical-align: -2px;
 }
 
-.chip.official {
-  color: var(--official);
+.swatch.official {
+  background: #dafbe1;
 }
 
-.chip.unofficial {
-  color: var(--unofficial);
+.swatch.unofficial {
+  background: #fff8c5;
 }
 
 .legend {
