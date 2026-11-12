@@ -178,7 +178,7 @@ def write_task_map(cohort: Path, tasks_dir: Path, output: Path) -> None:
     """Bind each oracle TaskSpec to its already-exported native Harbor task."""
     root = tasks_dir.resolve()
     mappings = {}
-    native = harbor_inspection("tasks", [str(path.resolve()) for path in root.iterdir() if path.is_dir()])
+    native = harbor_inspection("tasks", [str(path.parent.resolve()) for path in root.rglob("task.toml")])
     paths = sorted(cohort.glob("*.parquet")) if cohort.is_dir() else [cohort]
     for path in paths:
         for batch in pq.ParquetFile(path).iter_batches(batch_size=32):

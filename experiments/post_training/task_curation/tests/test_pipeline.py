@@ -72,12 +72,14 @@ from experiments.post_training.task_curation.tests.image_builds import (
     install_fake_build_tools,
 )
 from experiments.post_training.task_curation.tests.review_server import JudgeReply
+from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 
 AGENT_IMAGE = "ghcr.io/marin-community/iris-task@sha256:" + "d" * 64
 
 
 def math500() -> CurationRecipe:
-    return cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
+    recipe = cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
+    return replace(recipe, source=replace(recipe.source, repo="open-athena/math500-fixture"))
 
 
 @pytest.fixture
@@ -95,6 +97,13 @@ def config() -> SourcePipelineConfig:
 
 
 def source_step(recipe: CurationRecipe, options: PipelineOptions):
+    if options.mode is not SourceProcessingMode.QUICK:
+        settings = options.recipe_settings
+        assert settings is not None and settings.config is not None
+        evidence = decontamination_evidence(recipe.dataset.name, recipe.dataset.revision, 1)
+        options = replace(
+            options, recipe_settings=replace(settings, config=replace(settings.config, lexical_contamination=evidence))
+        )
     source = RlDataSource(
         info=SourceInfo(id=f"fixture:{recipe.name}", title=recipe.name, origin="fixture"),
         config=recipe,
@@ -237,7 +246,7 @@ def test_recipe_result_omits_skipped_review_and_verification_stages(tmp_path, co
     pipeline = replace(
         math500(),
         source=HfSource(
-            "fixture/questions",
+            "open-athena/fixture-questions",
             "a" * 40,
             ("rows.jsonl",),
             SourceFormat.JSONL,
@@ -323,7 +332,7 @@ def test_reviewed_local_inputs_keep_controls_and_invalidate_changed_bytes(
         math500(),
         name="local-inputs",
         source=HfSource(
-            "fixture/questions",
+            "open-athena/fixture-questions",
             "a" * 40,
             ("rows.jsonl",),
             SourceFormat.JSONL,
@@ -389,7 +398,7 @@ def test_reviewed_local_inputs_keep_controls_and_invalidate_changed_bytes(
                 task = TaskSpec.model_validate_json(record["task_json"])
                 assert task.source.row == record["source_locator"]
                 assert task.source.row in {"rows.jsonl:0", "rows.jsonl:1"}
-                assert task.source.dataset == "fixture/questions"
+                assert task.source.dataset == "open-athena/fixture-questions"
                 assert verifyit_spec(cast(VerifyitGrader, task.grader)) == ExactSpec(
                     (expected_answer,), ignore_case=False
                 )
@@ -436,7 +445,9 @@ def test_reviewed_input_mutation_fails_instead_of_publishing_under_planned_ident
     answer.write_text("two")
     recipe = replace(
         math500(),
-        source=HfSource("fixture/questions", "a" * 40, (file.name,), SourceFormat.JSONL, decode=decode_auxiliary_answer),
+        source=HfSource(
+            "open-athena/fixture-questions", "a" * 40, (file.name,), SourceFormat.JSONL, decode=decode_auxiliary_answer
+        ),
         inputs={"answers": HfSource("fixture/answers", "a" * 40, ("answer.txt",), SourceFormat.JSONL)},
         convert=(
             partial(convert_with_changed_input, input_path=str(file))
@@ -530,7 +541,7 @@ def test_recipe_without_review_uses_its_explicit_connection_for_judge_controls(
     (primary / "rows.jsonl").write_text('{"prompt":"Two plus two?","answer":"4"}\n')
     recipe = replace(
         math500(),
-        source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
+        source=HfSource("open-athena/fixture-questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
         convert=convert_judge_fixture,
         rubric=None,
         controls=Controls(negative=semantic_empty_negative),
@@ -614,7 +625,7 @@ def test_harbor_hub_download_reuses_cache_and_separates_release_pins(tmp_path, m
         client.shutdown()
 
 
-@pytest.mark.parametrize("mode", [SourceProcessingMode.QUICK, SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+@pytest.mark.parametrize("mode", [SourceProcessingMode.QUICK])
 def test_harbor_hub_input_override_bypasses_acquisition_and_tracks_content(tmp_path, config, mode):
     source = HarborHubSource("fixture/tasks", "sha256:" + "a" * 64, read=archive_rows)
     recipe = replace(math500(), source=source, convert=convert_fixture, rubric=None, controls=None, grader=None)

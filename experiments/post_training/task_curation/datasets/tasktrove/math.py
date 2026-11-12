@@ -291,7 +291,7 @@ SOURCES = (
                 "controls 72/72; blinded review 16/16 attempted agree. 2 of 20 sampled rows are "
                 "underdetermined; both verified against the raw archive where the converted statements "
                 "match the upstream instructions verbatim, so the defects are in the source data, not "
-                "the conversion. Kept at Result = SOME_ISSUES with that caveat."
+                "the conversion (2 of the 20-case blinded panel; exactly the inclusive 10% boundary)."
             ),
             oversight=OversightEvidence(
                 campaign="RL Data Atlas",
@@ -382,7 +382,7 @@ SOURCES = (
                     "wrong 24/24. Blinded review of 20 seeded cases: 8 solvable blind; after adjudication "
                     "all 8 references verified correct (3 solver errors on the reviewer's side, each "
                     "confirmed by independent recomputation), 12 cases unsolved blind so their references "
-                    "remain unverified by this method - the review-coverage caveat behind SOME_ISSUES. "
+                    "remain unverified by this method (review-coverage caveat). "
                     "Evidence accompanies tasks.parquet at the pinned private revision"
                 ),
                 level=OversightLevel.SAMPLE,

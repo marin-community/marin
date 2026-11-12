@@ -1019,7 +1019,7 @@ def sources() -> list[RlDataSource]:
                 "are excluded at admission. QA (RL Data Atlas): blinded review flagged 2 sampled rows "
                 "as underdetermined; both were compared against the raw archive and the converted "
                 "statements match the upstream instructions verbatim, so the defects are in the source "
-                "data, not the conversion. Admitted at SAMPLE with Result = SOME_ISSUES and that caveat. "
+                "data, not the conversion. 2 of the 20-case blinded panel; exactly the inclusive 10% boundary. "
                 "Private release; conversation-only tasks import canonical task specs. The pinned cohort "
                 "revision was downloaded back and every task hash re-validated."
             ),
@@ -1078,15 +1078,14 @@ def sources() -> list[RlDataSource]:
                 ),
             ),
             notes=(
-                "Symbolic exact compare with hidden gold references. Admitted at SAMPLE with "
-                "Result = SOME_ISSUES on a review-coverage caveat: 8 of 20 sampled references verified "
-                "correct after adjudication (3 solver errors on the reviewer's side, independently "
-                "reconfirmed), 12 remain unverified by blind solve; no confirmed reference defects. An "
-                "earlier impossible-reference finding was retracted after independent Matrix-Tree "
-                "verification (the recorded 147 is attainable and maximal for a bicyclic "
-                "20-vertex/21-edge graph). Private release; conversation-only tasks import canonical "
-                "task specs. The pinned cohort revision was downloaded back and every task hash "
-                "re-validated."
+                "Symbolic exact compare with hidden gold references. Measured QC: blinded panel of 20 "
+                "seeded cases, 8 solvable blind; after adjudication all 8 references verified correct "
+                "(3 solver errors on the reviewer's side, each independently reconfirmed), 12 references "
+                "unverified for lack of a blind solve (coverage caveat). An earlier impossible-reference "
+                "finding was retracted after independent Matrix-Tree verification (the recorded 147 is "
+                "attainable and maximal for a bicyclic 20-vertex/21-edge graph). No confirmed reference "
+                "defects. Private release; conversation-only tasks import canonical task specs. The "
+                "pinned cohort revision was downloaded back and every task hash re-validated."
             ),
         ),
         _tasktrove_qa_release(

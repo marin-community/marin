@@ -23,6 +23,7 @@ from typing import Any, cast
 
 import click
 import requests
+from finestore.rl.curation import LexicalContaminationEvidence, require_decontamination
 from fray.types import ResourceConfig
 from marin.datakit.download.huggingface import (
     DownloadConfig,
@@ -396,12 +397,18 @@ def _source_config(
     settings: RecipeSettings, mode: SourceProcessingMode, controls: Controls | None, rubric: str | None
 ) -> SourcePipelineConfig:
     review = settings.config.review if settings.config is not None else settings.review
+    decontamination = (
+        LexicalContaminationEvidence.model_validate_json(StoragePath(settings.decontamination_receipt).read_text())
+        if settings.decontamination_receipt
+        else settings.config.lexical_contamination if settings.config else None
+    )
     if rubric is not None and review is None:
         raise click.UsageError("Recipe review configuration requires --model-revision and --review-mode")
     if settings.config is not None:
         return replace(
             settings.config,
             mode=mode,
+            lexical_contamination=decontamination,
             oracle_filter=(
                 load_oracle_filter(settings.oracle_filter_receipt)
                 if settings.oracle_filter_receipt
@@ -426,6 +433,7 @@ def _source_config(
     )
     return replace(
         config,
+        lexical_contamination=decontamination,
         oracle_filter=load_oracle_filter(settings.oracle_filter_receipt) if settings.oracle_filter_receipt else None,
     )
 
@@ -465,6 +473,11 @@ def process_rows(source: RlDataSource[CurationRecipe], options: PipelineOptions)
     if options.recipe_settings is None:
         raise ValueError(f"Source processing requires recipe settings: {source.name}")
     config = _source_config(options.recipe_settings, options.mode, recipe.controls, recipe.rubric)
+    if config.lexical_contamination is None:
+        config = replace(config, lexical_contamination=source.info.lexical_contamination)
+    dataset = source.dataset
+    assert dataset is not None
+    require_decontamination(config.lexical_contamination, dataset.name, dataset.revision)
     if recipe.controls is None:
         config = replace(config, machines=None)
     return cast(ArtifactStep[CampaignArtifact], _reviewed_step(recipe, config, options))
@@ -654,6 +667,9 @@ def pipeline_identity(
         "quality_policy": asdict(config.quality_policy),
         "verification_policy": asdict(config.verification_policy),
         "filter_policy": asdict(config.filter_policy),
+        "lexical_contamination": (
+            config.lexical_contamination.model_dump(mode="json") if config.lexical_contamination else None
+        ),
         "revisions": {
             "procedure": SOURCE_PIPELINE_REVISION,
             "quality": SOURCE_QUALITY_REVISION,
