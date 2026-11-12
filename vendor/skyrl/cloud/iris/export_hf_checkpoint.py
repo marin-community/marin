@@ -204,10 +204,6 @@ def checkpoint_export_launch_config(
         "step": request.step,
         "checkpoint_path": request.checkpoint_path,
         "export_root": request.export_path,
-        "hf_hub_repo_id": request.hf_hub_repo_id,
-        "hf_hub_private": request.hf_hub_private,
-        "hf_hub_revision": request.hf_hub_revision,
-        "hf_upload_mode": request.hf_upload_mode.value,
     }
     return config
 
