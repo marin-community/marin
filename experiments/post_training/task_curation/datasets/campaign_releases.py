@@ -69,8 +69,14 @@ def _tasktrove_qa_release(
     notes: str,
     tags: tuple[str, ...] = ("rlvr", "single-turn", "campaign-release", "converted"),
     qc: IndependentQC | None = None,
+    reviewed: int = 24,
 ) -> RlDataSource[PrebuiltCohort]:
-    """A privately published, QA-qualified TaskTrove cohort pending release."""
+    """A privately published, QA-qualified TaskTrove cohort pending release.
+
+    ``reviewed`` is the QA sample denominator (the 24-task grader-control panel for
+    math sources, the 10-task judge e2e panels elsewhere), not the converted row
+    count: the full-population conversion census is recorded in the evidence text.
+    """
     config = PrebuiltCohort(
         name=f"{name}-qa",
         version="2026.11.12.1",
@@ -93,7 +99,7 @@ def _tasktrove_qa_release(
                 recipe_revision=recipe_revision,
                 verification=evidence,
                 level=OversightLevel.SAMPLE,
-                reviewed=expected_rows,
+                reviewed=reviewed,
                 admitted=expected_rows,
             ),
             notes=notes,
@@ -1050,17 +1056,19 @@ def sources() -> list[RlDataSource]:
                 "All 2,404 rows re-converted and compared row-by-row against the archive with zero "
                 "discrepancies; 2 unparsable-reference rows rejected at conversion; 181 exact duplicates "
                 "collapse under the pipeline dedup key, 2,221 retained. Contained grader controls on the "
-                "24-task seeded sample: 72/72. Blinded review of 20 seeded cases: 5 agree, 1 solver error "
-                "admitted after the reference was verified correct, 1 reference answer proven impossible "
-                "for the stated graph (spanning trees of a unicyclic 20-vertex graph cannot exceed the "
-                "cycle length of 20; the row records 147), 1 statement-ambiguity mismatch (transport-mode "
-                "connectivity: natural reading 12, recorded 18)."
+                "24-task seeded sample: 72/72. Blinded review of 20 seeded cases: 8 solvable blind; after "
+                "adjudication all 8 references verified correct (3 solver errors on the reviewer's side, "
+                "each confirmed by independent recomputation), 12 cases unsolved blind so their references "
+                "remain unverified by this method. An earlier provisional impossible-reference claim was "
+                "retracted: the connected 20-vertex/21-edge graph is bicyclic and theta(7,7,7) attains the "
+                "recorded 147 spanning trees, confirmed by two independent Matrix-Tree determinant checks."
             ),
             qc=IndependentQC(
                 verdict=Verdict.SOME_ISSUES,
                 method=(
-                    "Blind solve of the 20-case seeded sample with post-unsealing adjudication; "
-                    "1 confirmed impossible reference and 1 ambiguous statement in the sample"
+                    "Blind solve of the 20-case seeded sample with post-unsealing adjudication; 8 of 20 "
+                    "cases solvable blind (all 8 references verified correct after adjudication), 12 "
+                    "references unverified for lack of a blind solve"
                 ),
                 reviewed=20,
                 admitted=20,
@@ -1071,11 +1079,14 @@ def sources() -> list[RlDataSource]:
             ),
             notes=(
                 "Symbolic exact compare with hidden gold references. Admitted at SAMPLE with "
-                "Result = SOME_ISSUES: blinded review confirmed a provably impossible reference in 1 of "
-                "20 sampled rows and one ambiguous statement whose natural reading differs from the "
-                "recorded answer; the source's reference data is noisy even though its grader mechanics "
-                "are sound. Private release; conversation-only tasks import canonical task specs. The "
-                "pinned cohort revision was downloaded back and every task hash re-validated."
+                "Result = SOME_ISSUES on a review-coverage caveat: 8 of 20 sampled references verified "
+                "correct after adjudication (3 solver errors on the reviewer's side, independently "
+                "reconfirmed), 12 remain unverified by blind solve; no confirmed reference defects. An "
+                "earlier impossible-reference finding was retracted after independent Matrix-Tree "
+                "verification (the recorded 147 is attainable and maximal for a bicyclic "
+                "20-vertex/21-edge graph). Private release; conversation-only tasks import canonical "
+                "task specs. The pinned cohort revision was downloaded back and every task hash "
+                "re-validated."
             ),
         ),
         _tasktrove_qa_release(
@@ -1084,6 +1095,7 @@ def sources() -> list[RlDataSource]:
             "llm-judge-freeform",
             revision="b4f15e07796b5bea1f311892583ecce129efe0fa",
             expected_rows=44939,
+            reviewed=10,
             recipe_revision="datasets/tasktrove/judged.py v3; MEDIUM tier under RUBRIC_CHECKLIST",
             evidence=(
                 "All 89,066 rows re-converted and compared row-by-row against the archive with zero "
@@ -1106,6 +1118,7 @@ def sources() -> list[RlDataSource]:
             "qa-short-answer",
             revision="f8f83ffcc9779f8314f381a095de2d29525e48dc",
             expected_rows=122314,
+            reviewed=10,
             recipe_revision="datasets/tasktrove/qa.py v5; MEDIUM JUDGE_TIERS pin; TaskTrove @ 02923004846e",
             evidence=(
                 "All 122,357 rows re-converted and compared row-by-row against the archive with zero "
@@ -1126,6 +1139,7 @@ def sources() -> list[RlDataSource]:
             "llm-judge-freeform",
             revision="e3b624988578da13c523fcc3e39e65f752a781ff",
             expected_rows=150644,
+            reviewed=10,
             recipe_revision="datasets/tasktrove/qa.py v5; HEAVY JUDGE_TIERS pin; TaskTrove @ 02923004846e",
             evidence=(
                 "All 150,644 rows re-converted and compared row-by-row against the archive with zero "

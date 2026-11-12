@@ -278,7 +278,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                         "atlas-env-audit qa-knowledge/ (fidelity, judge-packets, medium-batch)"
                     ),
                     level=OversightLevel.SAMPLE,
-                    reviewed=122357,
+                    reviewed=10,
                     admitted=122314,
                 ),
             ),
@@ -312,7 +312,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                         "expected. Evidence: atlas-env-audit qa-knowledge/ (fidelity, judge-packets, heavy-batch)"
                     ),
                     level=OversightLevel.SAMPLE,
-                    reviewed=150644,
+                    reviewed=10,
                     admitted=150644,
                 ),
             ),

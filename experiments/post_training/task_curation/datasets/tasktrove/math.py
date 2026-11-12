@@ -266,7 +266,7 @@ SOURCES = (
                     "Evidence: atlas-env-audit qa-knowledge/ (fidelity, controls, blinded)"
                 ),
                 level=OversightLevel.SAMPLE,
-                reviewed=4096,
+                reviewed=24,
                 admitted=3941,
             ),
             task_format=TaskFormat.TASKCOMPENDIUM,
@@ -291,7 +291,7 @@ SOURCES = (
                 "controls 72/72; blinded review 16/16 attempted agree. 2 of 20 sampled rows are "
                 "underdetermined; both verified against the raw archive where the converted statements "
                 "match the upstream instructions verbatim, so the defects are in the source data, not "
-                "the conversion. Admitted at SAMPLE with Result = SOME_ISSUES for that caveat."
+                "the conversion. Kept at Result = SOME_ISSUES with that caveat."
             ),
             oversight=OversightEvidence(
                 campaign="RL Data Atlas",
@@ -305,7 +305,7 @@ SOURCES = (
                     "2 competition-difficulty cases excluded with reasons. Evidence: atlas-env-audit qa-knowledge/"
                 ),
                 level=OversightLevel.SAMPLE,
-                reviewed=42636,
+                reviewed=24,
                 admitted=42621,
             ),
             task_format=TaskFormat.TASKCOMPENDIUM,
@@ -342,7 +342,7 @@ SOURCES = (
                     "(1 figure-dependent case excluded). Evidence: atlas-env-audit qa-knowledge/"
                 ),
                 level=OversightLevel.SAMPLE,
-                reviewed=57777,
+                reviewed=24,
                 admitted=57424,
             ),
             task_format=TaskFormat.TASKCOMPENDIUM,
@@ -365,11 +365,11 @@ SOURCES = (
                 "QA (RL Data Atlas): every row re-converted with zero fidelity discrepancies; 2 "
                 "unparsable-reference rows rejected at conversion and 181 exact-duplicate rows "
                 "collapse under the pipeline dedup key (2,221 published). Contained grader controls "
-                "72/72. Admitted at SAMPLE with Result = SOME_ISSUES: blinded review confirmed a "
-                "provably impossible reference in 1 of 20 sampled rows (a connected 20-vertex/21-edge "
-                "graph is unicyclic, so its spanning-tree count cannot exceed the 20-cycle length; the "
-                "row records 147) and one ambiguous statement (a transport-mode connectivity case whose "
-                "natural reading gives 12 against the recorded 18). The source's reference data is noisy."
+                "72/72 on the 24-task sample. Blinded review: 8 of 20 sampled cases solvable blind; "
+                "after adjudication all 8 references verified correct (3 solver errors on my side, "
+                "each confirmed by independent recomputation), leaving 12 sampled references "
+                "unverified by blind solve - the review-coverage caveat behind the SOME_ISSUES "
+                "disposition. Admitted at SAMPLE."
             ),
             oversight=OversightEvidence(
                 campaign="RL Data Atlas",
@@ -379,14 +379,14 @@ SOURCES = (
                     "archive row-by-row with zero discrepancies; 2 unparsable-reference rows rejected at "
                     "conversion; 181 exact duplicates collapse under the pipeline dedup key, 2,221 retained. "
                     "Contained grader controls on the 24-task seeded sample: golden 24/24, empty 24/24, "
-                    "wrong 24/24. Blinded review of 20 seeded cases: 5 agree, 1 solver error admitted "
-                    "(reference verified correct), 1 reference answer proven impossible for the stated "
-                    "graph, 1 statement-ambiguity mismatch; 12 competition-difficulty cases excluded. "
-                    "Admitted at SAMPLE with Result = SOME_ISSUES for the two named caveats. "
+                    "wrong 24/24. Blinded review of 20 seeded cases: 8 solvable blind; after adjudication "
+                    "all 8 references verified correct (3 solver errors on the reviewer's side, each "
+                    "confirmed by independent recomputation), 12 cases unsolved blind so their references "
+                    "remain unverified by this method - the review-coverage caveat behind SOME_ISSUES. "
                     "Evidence accompanies tasks.parquet at the pinned private revision"
                 ),
                 level=OversightLevel.SAMPLE,
-                reviewed=2404,
+                reviewed=24,
                 admitted=2221,
             ),
             task_format=TaskFormat.TASKCOMPENDIUM,
@@ -421,7 +421,7 @@ SOURCES = (
                     "seeded cases: 20 solved blind, all 20 agree. Evidence: atlas-env-audit qa-knowledge/"
                 ),
                 level=OversightLevel.SAMPLE,
-                reviewed=110730,
+                reviewed=24,
                 admitted=110604,
             ),
             task_format=TaskFormat.TASKCOMPENDIUM,

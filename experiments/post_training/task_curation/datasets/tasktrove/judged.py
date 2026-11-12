@@ -316,7 +316,7 @@ SOURCES = (
                     "before any judge run. Evidence: atlas-env-audit qa-knowledge/"
                 ),
                 level=OversightLevel.SAMPLE,
-                reviewed=89066,
+                reviewed=10,
                 admitted=44939,
             ),
             task_format=TaskFormat.TASKCOMPENDIUM,
