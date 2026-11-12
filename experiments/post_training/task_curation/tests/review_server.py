@@ -19,10 +19,17 @@ class ReviewHTTPServer(ThreadingHTTPServer):
         self.review_available = True
         self.assessment_available = True
         self.judge_replies: list[JudgeReply] = []
+        self.model_ids: list[str] = []
+        self.bare_model_list = False
         super().__init__(("127.0.0.1", 0), ReviewHandler)
 
 
 class ReviewHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        server = cast(ReviewHTTPServer, self.server)
+        models = [{"id": model} for model in server.model_ids]
+        self.respond(models if server.bare_model_list else {"data": models})
+
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         cast(ReviewHTTPServer, self.server).requests.append(body)
@@ -92,7 +99,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
         }
         self.respond(result)
 
-    def respond(self, result: dict) -> None:
+    def respond(self, result: dict | list) -> None:
         payload = json.dumps(result).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
