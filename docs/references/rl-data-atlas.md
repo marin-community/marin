@@ -467,7 +467,8 @@ source shape requires every task to have passed at that shape.
 Every source declaration must contain a complete `within_source_dedup` receipt for the configured
 dataset pin and converter version, including QUICK sources. The receipt records raw converted
 TaskSpecs, unique contracts, duplicates dropped, and the duplicate-to-kept manifest. Atlas Examples
-uses the unique count; source details retain the raw count and duplicate count.
+uses the unique count; source details retain the raw count, duplicate count and exclusion manifest URI,
+with a Filer link beside S3 URIs.
 
 Ingest in this order: conversion → exact within-source deduplication → lexical decontamination →
 resource calibration and full-population oracle filtering → SAMPLE/FULL QA. Keep the lowest task
