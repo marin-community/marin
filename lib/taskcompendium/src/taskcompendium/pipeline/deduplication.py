@@ -50,6 +50,11 @@ class DeduplicationEvidence(TypedDict):
     drop_manifest_uri: str
 
 
+class DeduplicationRecord(TypedDict):
+    row: ConvertedRow
+    duplicate_of: str | None
+
+
 def unique_task_indices(tasks: Sequence[TaskSpec]) -> tuple[list[int], list[dict[str, str]]]:
     """Select exact contracts by lowest task ID and return every dropped-to-kept mapping."""
     seen: dict[str, str] = {}
@@ -105,7 +110,7 @@ def converted_order(row: ConvertedRow) -> str:
     return row.raw.id
 
 
-def duplicate_group(_key: str, rows: Iterator[ConvertedRow]) -> Iterator[dict[str, Any]]:
+def duplicate_group(_key: str, rows: Iterator[ConvertedRow]) -> Iterator[DeduplicationRecord]:
     kept = None
     for row in rows:
         duplicate = kept if isinstance(row.result, NormalizedTask) else None
@@ -114,7 +119,7 @@ def duplicate_group(_key: str, rows: Iterator[ConvertedRow]) -> Iterator[dict[st
         yield {"row": row, "duplicate_of": duplicate}
 
 
-def retained_row(record: dict[str, Any]) -> dict[str, Any] | None:
+def retained_row(record: DeduplicationRecord) -> dict[str, Any] | None:
     if record["duplicate_of"] is not None:
         return None
     row = record["row"]
@@ -126,16 +131,16 @@ def retained_row(record: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def dropped_row(record: dict[str, Any]) -> dict[str, Any] | None:
+def dropped_row(record: DeduplicationRecord) -> dict[str, Any] | None:
     if record["duplicate_of"] is None:
         return None
     return {"task_id": record["row"].raw.id, "kept_id": record["duplicate_of"], "reason": DUPLICATE_WITHIN_SOURCE}
 
 
-def write_deduplicated(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, path: str) -> Iterator[Counter]:
+def write_deduplicated(rows: Iterator[DeduplicationRecord], shard: ShardInfo, *, path: str) -> Iterator[Counter]:
     counts = Counter()
 
-    def counted() -> Iterator[dict[str, Any]]:
+    def counted() -> Iterator[DeduplicationRecord]:
         for record in rows:
             counts["input_rows"] += 1
             counts["raw_count"] += isinstance(record["row"].result, NormalizedTask)
