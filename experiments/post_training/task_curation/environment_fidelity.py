@@ -91,6 +91,10 @@ def environment_unused(
             return "spec does not use the archive's base image"
         if tuple(requirements.get("setup_commands") or ()) != lowered.setup_commands:
             return "spec does not replay the archive's steps"
+        if requirements.get("working_directory") != lowered.working_directory:
+            return "spec does not use the archive's working directory"
+        if (requirements.get("environment_variables") or {}) != lowered.environment_variables:
+            return "spec does not retain the archive's environment variables"
         return None
     paths = {resource["path"] for resource in build.get("files") or ()}
     if "Dockerfile" not in paths:
@@ -125,6 +129,7 @@ class LoweredEnvironment:
     base_ref: str
     working_directory: str
     setup_commands: tuple[str, ...]
+    environment_variables: dict[str, str]
 
 
 class UnlowerableRecipe(ValueError):
@@ -200,6 +205,7 @@ def lower_environment(dockerfile: str, bases: Mapping[str, str]) -> LoweredEnvir
 
     workdir = "/"
     environment: list[str] = []
+    variables: dict[str, str] = {}
     commands: list[str] = []
     for line in _logical_lines(dockerfile):
         directive, _, body = line.partition(" ")
@@ -214,18 +220,24 @@ def lower_environment(dockerfile: str, bases: Mapping[str, str]) -> LoweredEnvir
             continue
         if directive == "ENV":
             # One ENV line may set several variables: ENV A=1 B=2.
-            for assignment in body.split():
+            for assignment in shlex.split(body):
                 key, separator, value = assignment.partition("=")
                 if not separator or not key:
                     raise UnlowerableRecipe(f"unsupported ENV form: {body!r}")
                 environment.append(f"{key}={shlex.quote(value)}")
+                variables[key] = value
             continue
         if directive == "RUN":
             prefix = f"{' '.join(environment)} " if environment else ""
             commands.append(f"(cd {shlex.quote(workdir)} && {prefix}{body.strip()})")
             continue
         raise UnlowerableRecipe(f"unknown step: {directive}")
-    return LoweredEnvironment(base_ref=base_ref, working_directory=workdir, setup_commands=tuple(commands))
+    return LoweredEnvironment(
+        base_ref=base_ref,
+        working_directory=workdir,
+        setup_commands=tuple(commands),
+        environment_variables=variables,
+    )
 
 
 def archive_environment(files: Mapping[str, bytes | str], bases: Mapping[str, str] | None = None):
@@ -244,4 +256,5 @@ def archive_environment(files: Mapping[str, bytes | str], bases: Mapping[str, st
         docker_image=lowered.base_ref,
         working_directory=lowered.working_directory,
         setup_commands=lowered.setup_commands,
+        environment_variables=lowered.environment_variables,
     )

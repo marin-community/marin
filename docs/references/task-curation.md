@@ -314,7 +314,7 @@ number of distinct environments the source's own task specs require through the
 production path, `daytona_count_basis` names the rule and payload source, and
 `daytona_execution_failures` counts refused tasks. An unsafe label does not
 remove a source from the catalog; it records that a run would exceed the org's
-limits. [Making a dataset Daytona-safe](../../.agents/ops/daytona.md#making-a-dataset-daytona-safe)
+limits. [Making a dataset Daytona-safe](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#making-a-dataset-daytona-safe)
 covers the faithful ways to bring one inside the budget.
 
 **Publishing a conversion.** A curation step that converts data publishes the converted
@@ -412,6 +412,13 @@ uv run --isolated --project vendor/harbor --extra runtime --no-default-groups --
 
 An `Environment` declares grader build inputs. The converter records agent and
 grader requirements on each TaskSpec; execution selects suitable Shellbox machines.
+
+TaskTrove's Python-test sources lower each archived `environment/Dockerfile` onto
+its digest-pinned base. `RUN` steps become setup commands, `WORKDIR` sets the
+working directory, and `ENV` assignments remain in `environment_variables` for
+both setup and later agent commands. An unsupported recipe is refused. Agent
+snapshot counts exclude the separate package-lock grader, which requires the
+local runtime unless its lock is built into an image.
 
 | Field | Meaning |
 |---|---|

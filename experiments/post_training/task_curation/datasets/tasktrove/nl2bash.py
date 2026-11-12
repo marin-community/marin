@@ -11,7 +11,6 @@ source's ``solution/solve.sh``.
 
 from dataclasses import replace
 
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
@@ -23,33 +22,9 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.execu
     tasktrove_archive_task,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import OUTPUT_PATH, convert_nl2bash
-from experiments.post_training.task_curation.environment_fidelity import (
-    PINNED_BASES,
-    dockerfile_of,
-    lower_environment,
-)
+from experiments.post_training.task_curation.environment_fidelity import archive_environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
-
-
-def nl2bash_environment(files: dict) -> EnvironmentRequirements:
-    """The task's own environment: its archived recipe on a pinned base.
-
-    Every task in this family ships a Dockerfile that installs the shell tooling it
-    needs. Lowering it keeps the task in that environment instead of substituting a
-    shared image, and the recipe refuses any step a command cannot reproduce.
-    """
-    dockerfile = dockerfile_of(files)
-    if dockerfile is None:
-        raise ValueError("nl2bash task has no environment/Dockerfile")
-    lowered = lower_environment(dockerfile, PINNED_BASES)
-    return EnvironmentRequirements(
-        command_semantics=CommandSemantics.LINUX_PROCESS,
-        docker_image=lowered.base_ref,
-        working_directory=lowered.working_directory,
-        setup_commands=lowered.setup_commands,
-    )
-
 
 CONFIG = "DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
 
@@ -72,7 +47,7 @@ def convert_nl2bash_task(row: RawRow, context: ConversionContext) -> NormalizedT
     return tasktrove_archive_task(
         row,
         convert=convert_nl2bash,
-        environment=nl2bash_environment(row.data["files"]),
+        environment=archive_environment(row.data["files"]),
         grader_environment=required_grader_environment(context),
         output_paths=(OUTPUT_PATH,),
     )
@@ -98,7 +73,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name="tasktrove-nl2bash",
                 source=tasktrove_source(CONFIG),
                 convert=TaskTroveConverter(CONFIG, convert_nl2bash_task),
-                version="2",
+                version="3",
                 intended_use=IntendedUse.TRAIN,
                 rubric=NL2BASH_RUBRIC,
                 controls=Controls(golden=solve_script),
