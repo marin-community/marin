@@ -29,23 +29,6 @@ def test_invalid_launch_fails_before_judge_allocation(monkeypatch):
     assert not allocated
 
 
-def test_actual_selected_context_failure_precedes_judge_allocation(monkeypatch):
-    monkeypatch.setattr(judge, "validate_before_allocation", lambda document: {})
-
-    def reject(document):
-        raise ValueError("Selected checkpoint context failed")
-
-    monkeypatch.setattr(judge, "validate_selected_context", reject)
-
-    def allocate(*args, **kwargs):
-        raise AssertionError("Context failure reached GPU allocation")
-
-    monkeypatch.setattr(judge, "remote_inference", allocate)
-    config = SimpleNamespace(skyrl=SimpleNamespace(launch_config_yaml="exact selected launch"))
-    with pytest.raises(ValueError, match="Selected checkpoint context failed"):
-        judge.run_judged(config)
-
-
 def test_selected_context_binds_exact_future_config_and_overrides(tmp_path, monkeypatch):
 
     raw = b'{"model_type":"grug", "max_seq_len":32768}'

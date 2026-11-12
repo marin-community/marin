@@ -91,7 +91,15 @@ def load_admission(prefix: str, workers: int) -> tuple[dict[str, dict], dict]:
     return receipts, {"plan_sha256": hashlib.sha256(plan_text.encode()).hexdigest(), "prefix": prefix, "plan": plan}
 
 
-def seal(source: Path, output: Path, admission_prefix: str, workers: int, seed: int, harbor_timeout: int) -> dict:
+def seal(
+    source: Path,
+    output: Path,
+    admission_prefix: str,
+    workers: int,
+    seed: int,
+    harbor_timeout: int,
+    marin_revision: str,
+) -> dict:
     """Preserve the source split, replacing rejected SWE validation rows deterministically."""
     manifest = json.loads((source / "manifest.json").read_text())
     receipts, admission = load_admission(admission_prefix, workers)
@@ -201,6 +209,8 @@ def seal(source: Path, output: Path, admission_prefix: str, workers: int, seed: 
         files[name] = {"sha256": file_digest(output / name)}
     result = {
         **manifest,
+        "upstream_marin_revision": manifest["marin_revision"],
+        "marin_revision": marin_revision,
         "execution_overlay_version": RECIPE_VERSION,
         "verifyit_revision": VERIFYIT_REVISION,
         "upstream_manifest_sha256": file_digest(source / "manifest.json"),
@@ -233,12 +243,19 @@ def main() -> None:
     parser.add_argument("--workers", type=int, required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--harbor-verifier-timeout", type=int, required=True)
+    parser.add_argument("--marin-revision", required=True)
     args = parser.parse_args()
     print(
         json.dumps(
-            seal(args.input, args.output, args.admission_prefix, args.workers, args.seed, args.harbor_verifier_timeout)[
-                "controls"
-            ]
+            seal(
+                args.input,
+                args.output,
+                args.admission_prefix,
+                args.workers,
+                args.seed,
+                args.harbor_verifier_timeout,
+                args.marin_revision,
+            )["controls"]
         )
     )
 

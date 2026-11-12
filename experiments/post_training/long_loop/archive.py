@@ -33,10 +33,9 @@ class ArchivedObject:
 
 
 def digest(uri: str) -> tuple[int, str]:
-    fs, key = filesystem_for(uri)
     hashed = hashlib.sha256()
     size = 0
-    with fs.open(key, "rb") as stream:
+    with StoragePath(uri).open("rb") as stream:
         while chunk := stream.read(8 * 1024 * 1024):
             hashed.update(chunk)
             size += len(chunk)
@@ -44,14 +43,13 @@ def digest(uri: str) -> tuple[int, str]:
 
 
 def write_once(uri: str, content: bytes) -> None:
-    fs, key = filesystem_for(uri)
-    if fs.exists(key):
-        if fs.cat_file(key) != content:
+    path = StoragePath(uri)
+    if path.exists():
+        if path.read_bytes() != content:
             raise ValueError(f"Immutable archive collision: {uri}")
         return
-    parent = str(StoragePath(key).parent)
-    fs.makedirs(parent, exist_ok=True)
-    fs.pipe_file(key, content)
+    path.parent.mkdirs(exist_ok=True)
+    path.write_bytes(content)
 
 
 def archive_object(item: ArchiveInput, root: str) -> ArchivedObject:

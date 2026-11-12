@@ -17,6 +17,7 @@ import time
 import tomllib
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
 
@@ -24,6 +25,7 @@ import pyarrow.parquet as pq
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
+from experiments.post_training.long_loop.admission_network import private_network
 from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.pi_rl_data import SOURCE, image_context_digest
 from experiments.post_training.long_loop.rl_dataset_admission import file_digest
@@ -107,7 +109,7 @@ def run_controls(prepared: PreparedTask, image: str, directory: Path, *, network
     }
     container = None
     try:
-        with tempfile.TemporaryDirectory() as scratch:
+        with tempfile.TemporaryDirectory() as scratch, ExitStack() as lifecycle:
             package = Path(scratch)
             materialize(prepared.task, package)
             config = tomllib.loads((package / "task.toml").read_text())
@@ -119,7 +121,7 @@ def run_controls(prepared: PreparedTask, image: str, directory: Path, *, network
                 "--platform",
                 "linux/amd64",
                 "--network",
-                network,
+                "none" if network == "slirp4netns" else network,
                 "--cpus",
                 str(resources.get("cpus", 1)),
                 "--memory",
@@ -128,6 +130,8 @@ def run_controls(prepared: PreparedTask, image: str, directory: Path, *, network
             for key, value in resources.get("env", {}).items():
                 args += ["-e", f"{key}={value}"]
             container = pilot.command([*args, "--entrypoint", "sleep", image, "infinity"]).stdout.decode().strip()
+            if network == "slirp4netns":
+                lifecycle.enter_context(private_network(container, directory / "network.log"))
             pilot.command(["docker", "cp", str(package / "tests"), f"{container}:/tests"])
             payload = base64.b64encode(json.dumps(asdict(prepared.pins)).encode()).decode()
             pilot.command(
@@ -203,7 +207,7 @@ def main() -> None:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--workers", type=int, required=True)
-    parser.add_argument("--network", required=True, choices=("host", "bridge"))
+    parser.add_argument("--network", required=True, choices=("host", "bridge", "slirp4netns"))
     parser.add_argument("--setup-timeout", type=int, required=True)
     parser.add_argument("--verifier-timeout", type=int, required=True)
     parser.add_argument("--harbor-verifier-timeout", type=int, required=True)

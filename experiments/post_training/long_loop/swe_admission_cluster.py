@@ -66,7 +66,7 @@ def run_shard(
                 timeout=DEFAULT_TASK_TIMEOUT_SECONDS,
             )
             subprocess.run(
-                ["apt-get", "install", "-y", "docker.io"],
+                ["apt-get", "install", "-y", "docker.io", "slirp4netns"],
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 check=True,
@@ -78,6 +78,10 @@ def run_shard(
             daemon = subprocess.Popen(
                 [
                     "dockerd",
+                    "--bridge=none",
+                    "--iptables=false",
+                    "--ip-forward=false",
+                    "--ip-masq=false",
                     "--host",
                     os.environ["DOCKER_HOST"],
                     "--data-root",
@@ -113,8 +117,8 @@ def run_shard(
                 image = build_image(prepared[0], root, network="host")
                 (StoragePath(output) / "build-ready.json").write_text(json.dumps({"image": image, "at": time.time()}))
                 results = []
-                # Share this pod's network, never the node namespace. One task
-                # at a time prevents fixed-port test servers colliding.
+                # Iris may give the worker its node's network namespace. Task
+                # containers use isolated namespaces with userspace forwarding.
                 with ThreadPoolExecutor(max_workers=1) as pool:
                     futures = {
                         pool.submit(
@@ -122,7 +126,7 @@ def run_shard(
                             item,
                             image,
                             root / "tasks" / hashlib.sha256(item.task.id.encode()).hexdigest(),
-                            network="host",
+                            network="slirp4netns",
                         ): item
                         for item in prepared
                     }
