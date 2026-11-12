@@ -285,7 +285,7 @@ print(json.dumps({'distributions':sorted(seen),'files':files,'plugins':plugins})
     write_json(root / "site-packages-baseline.json", inventory(info["sites"]))
     spec.update({"setup": "", "python": str(root / "pytest-python")})
     write_json(root / "spec.json", spec)
-    (root / "verifier.toml").write_text(payload["verifier_spec"])
+    (tests / "verifier.toml").write_text(payload["verifier_spec"])
     wrapper = root / "pytest-python"
     wrapper.write_text(
         f"#!/bin/sh\nexec {sys.executable} -I -S {contract['harness']} pytest "
@@ -399,7 +399,7 @@ def grade(contract_path: Path, verifyit: str) -> None:
     root = Path(contract["protected_root"])
     # The Verifyit controller is protected and runs as root; only its pytest child drops UID.
     result = subprocess.run(
-        [verifyit, str(root / "verifier.toml"), "--logs-dir", contract["report_directory"]],
+        [verifyit, str(root / "tests/verifier.toml"), "--logs-dir", contract["report_directory"]],
         cwd=Path("/"),
         env=clean_environment(),
         capture_output=True,

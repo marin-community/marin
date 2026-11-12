@@ -31,6 +31,14 @@ def harden_shared_swe(
     The caller must publish this package under a new dataset version and qualify
     it; this function never changes an already-published task at runtime.
     """
+    if isinstance(spec, PytestSpec):
+        spec = replace(
+            spec,
+            protected_paths_files=tuple(
+                Path(path).relative_to("/tests").as_posix() if Path(path).is_absolute() else path
+                for path in spec.protected_paths_files
+            ),
+        )
     native = native_runner(files) if isinstance(spec, ScriptSpec) else None
     source = Path(shared_native.__file__ if native else shared_pytest.__file__).read_bytes()
     test_files = {name.removeprefix("tests/"): data.hex() for name, data in files.items() if name.startswith("tests/")}
