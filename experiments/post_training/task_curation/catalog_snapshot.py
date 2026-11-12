@@ -4,7 +4,7 @@
 """Archive assessment records and select a campaign's catalog snapshot."""
 
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -12,6 +12,7 @@ from finestore.rl.curation import (
     ASSESSMENTS,
     ATTEMPTS,
     CURRENT,
+    DAYTONA_SAFE_SNAPSHOT_LIMIT,
     INVENTORY,
     ITEMS,
     MAX_UNAVAILABLE_JUDGMENT_SHARE,
@@ -27,10 +28,13 @@ from finestore.rl.curation import (
     CatalogSnapshot,
     ControlCounts,
     ControlSummary,
+    ConvertedExamples,
     CurationCatalog,
     CurationMode,
     CurationSummary,
     CurrentCatalog,
+    DaytonaMeasurement,
+    DaytonaSafety,
     JudgmentStatus,
     SnapshotSource,
     register_catalog,
@@ -44,7 +48,7 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.campaign import CampaignStatus
 from experiments.post_training.task_curation.curation_catalog import RUNS
-from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.source import GRANDFATHERED_MARINSKYRL_SOURCES, RlDataSource
 
 
 def curation_summary(manifest: dict[str, Any]) -> CurationSummary:
@@ -313,7 +317,10 @@ def _refresh_snapshot(
                     where=[("snapshot_id", "==", pointer["snapshot_id"])],
                 )
             )
-            rows = [{**row, "snapshot_id": snapshot_id} for row in transform(prior)]
+            rows = [
+                SnapshotSource.model_validate({**row, "snapshot_id": snapshot_id}).model_dump(mode="json")
+                for row in transform(prior)
+            ]
             snapshot = CatalogSnapshot(
                 snapshot_id=snapshot_id, created_at=datetime.now(UTC).isoformat(), source_count=len(rows)
             )
@@ -380,3 +387,64 @@ def refresh_catalog(
         return rows
 
     return _refresh_snapshot(root, snapshot_id, refreshed)
+
+
+def refresh_daytona_measurements(
+    root: str,
+    snapshot_id: str,
+    measurements: Mapping[str, DaytonaMeasurement],
+    *,
+    retired_source_ids: frozenset[str],
+    converted_examples: Mapping[str, ConvertedExamples] | None = None,
+) -> CatalogSnapshot:
+    """Apply measured actor fields to exact input pins, preserving other metadata and assessments."""
+
+    def measured(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        prior_ids = {row["id"] for row in records}
+        unknown = (measurements.keys() | retired_source_ids | (converted_examples or {}).keys()) - prior_ids
+        if unknown:
+            raise ValueError(f"Measurements or retirements are not in the selected catalog: {sorted(unknown)}")
+        rows = []
+        for record in records:
+            source_id = record["id"]
+            if source_id in retired_source_ids:
+                continue
+            declaration = dict(record["declaration"])
+            measurement = measurements.get(source_id)
+            if measurement is not None:
+                if (declaration["dataset_id"], declaration["dataset_revision"]) != (
+                    measurement.dataset_id,
+                    measurement.dataset_revision,
+                ):
+                    raise ValueError(f"Daytona measurement belongs to a different dataset pin: {source_id}")
+                declaration.update(measurement.model_dump(mode="json", exclude={"dataset_id", "dataset_revision"}))
+                declaration["daytona_safety"] = measurement.safety.value
+                declaration["daytona_snapshot_threshold"] = DAYTONA_SAFE_SNAPSHOT_LIMIT
+            elif source_id in GRANDFATHERED_MARINSKYRL_SOURCES:
+                declaration["daytona_safety"] = None
+            elif "agentic" not in declaration["tags"]:
+                declaration.update(
+                    {
+                        "daytona_safety": DaytonaSafety.NOT_APPLICABLE.value,
+                        "daytona_machine_slots": 0,
+                        "daytona_snapshot_count": 0,
+                        "daytona_execution_failures": 0,
+                        "daytona_count_basis": "Non-agentic source: no actor machine",
+                        "daytona_unsafe_reasons": [],
+                        "daytona_unsafe_details": {},
+                    }
+                )
+            else:
+                raise ValueError(f"Actor measurement is missing for live source: {source_id}")
+            examples = (converted_examples or {}).get(source_id)
+            if examples is not None:
+                if (examples.source_dataset_id, examples.source_revision) != (
+                    declaration["dataset_id"],
+                    declaration["dataset_revision"],
+                ):
+                    raise ValueError(f"Converted examples belong to a different dataset pin: {source_id}")
+                declaration["converted_examples"] = examples.model_dump(mode="json")
+            rows.append({**record, "declaration": declaration})
+        return rows
+
+    return _refresh_snapshot(root, snapshot_id, measured)

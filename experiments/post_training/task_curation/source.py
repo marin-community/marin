@@ -9,12 +9,16 @@ from typing import Protocol
 
 from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
+    ConvertedExamples,
+    DaytonaUnsafeReason,
     GradingEnvironmentEvidence,
     IndependentQC,
+    LexicalContaminationEvidence,
     OracleValidation,
     OversightEvidence,
     OversightLevel,
     PipelineReference,
+    RoleExecutionEvidence,
     SourceDeclaration,
     daytona_verdict,
 )
@@ -168,6 +172,12 @@ class SourceInfo:
     """The review this source's admission rests on, with its evidence pointers."""
 
     grading_environment: GradingEnvironmentEvidence | None = None
+    converted_examples: ConvertedExamples | None = None
+    lexical_contamination: LexicalContaminationEvidence | None = None
+    daytona_machine_slots: int | None = None
+    daytona_roles: dict[str, dict[str, RoleExecutionEvidence]] | None = None
+    daytona_unsafe_reasons: tuple[DaytonaUnsafeReason, ...] = ()
+    daytona_unsafe_details: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -290,6 +300,13 @@ class RlDataSource[ConfigT: CatalogConfig]:
             oversight=info.oversight.level if info.oversight else OversightLevel.NONE,
             oversight_evidence=info.oversight,
             grading_environment=info.grading_environment,
+            converted_examples=info.converted_examples,
+            lexical_contamination=info.lexical_contamination,
+            daytona_machine_slots=info.daytona_machine_slots,
+            daytona_roles=info.daytona_roles,
+            daytona_execution_failures=info.daytona_execution_failures,
+            daytona_unsafe_reasons=list(info.daytona_unsafe_reasons),
+            daytona_unsafe_details=info.daytona_unsafe_details or {},
             daytona_snapshot_threshold=(
                 DAYTONA_SAFE_SNAPSHOT_LIMIT if info.daytona_snapshot_count is not None else None
             ),

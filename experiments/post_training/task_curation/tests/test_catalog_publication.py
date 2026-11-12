@@ -8,18 +8,24 @@ import pytest
 from finestore.rl.curation import (
     ASSESSMENTS,
     ATTEMPTS,
+    CURRENT,
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
+    INVENTORY,
     ITEMS,
     POPULATIONS,
+    SNAPSHOTS,
     Assessment,
     AssessmentAttempt,
     AssessmentItem,
     AssessmentPopulation,
     AssessmentStatus,
+    ConvertedExamples,
     CurationCatalog,
     CurationSummary,
+    DaytonaMeasurement,
     DaytonaSafety,
     OracleValidation,
+    SnapshotSource,
     register_catalog,
 )
 from finestore.store import DataStore
@@ -28,6 +34,7 @@ from rigging.filesystem.distributed_lock import LeaseLostError, LocalFileLease
 from experiments.post_training.task_curation.catalog_snapshot import (
     publish_catalog,
     refresh_catalog,
+    refresh_daytona_measurements,
     retire_catalog_sources,
 )
 from experiments.post_training.task_curation.curation_catalog import RUNS
@@ -302,3 +309,89 @@ def test_publication_rejects_a_source_without_a_registered_converter(tmp_path):
     with pytest.raises(ValueError, match="no registered conversion pipeline"):
         publish_catalog(root, "invalid-source", [pointer])
     assert not (tmp_path / "production").exists()
+
+
+def test_retirement_materializes_legacy_missing_defaults_without_changing_archived_rows(tmp_path):
+    root = str(tmp_path / "production")
+    kept = number_source(tmp_path / "input", "kept")
+    retired = number_source(tmp_path / "input", "retired")
+    record_attempt(root, kept, "first", "2026-10-16T10:00:00Z", "kept-key", source_count=2)
+    record_attempt(root, retired, "first", "2026-10-16T10:00:00Z", "retired-key")
+    publish_catalog(root, "first", [kept, retired])
+    with DataStore.open(root) as store:
+        register_catalog(store)
+        records = [
+            {
+                key: value
+                for key, value in store.read_view().point(INVENTORY, snapshot_id="first", id=source.info.id).items()
+                if key in SnapshotSource.model_fields
+            }
+            for source in (kept, retired)
+        ]
+        records[0]["declaration"]["daytona_safety"] = None
+        records[0]["declaration"]["oversight"] = None
+        with store.transaction() as transaction:
+            transaction.table(INVENTORY).extend({**row, "snapshot_id": "legacy"} for row in records)
+            transaction.table(SNAPSHOTS).add(
+                {"snapshot_id": "legacy", "created_at": "2026-10-16T10:30:00Z", "source_count": 2}
+            )
+            transaction.table(CURRENT).add({"name": "latest", "snapshot_id": "legacy"})
+    retire_catalog_sources(root, "retired", frozenset({retired.info.id}))
+    (current,) = CurationCatalog(root).sources("retired")
+    assert current.declaration.daytona_safety is DaytonaSafety.UNASSESSED
+    assert current.declaration.oversight.value == "none"
+    assert current.declaration.daytona_snapshot_count is None
+    original = CurationCatalog(root).view.point(INVENTORY, snapshot_id="legacy", id=kept.info.id)
+    assert original["declaration"]["daytona_safety"] is None
+    assert original["declaration"]["oversight"] is None
+
+
+def test_measured_refresh_preserves_assessments_and_roundtrips_arrow_maps(tmp_path):
+    root = str(tmp_path / "production")
+    source = number_source(tmp_path / "input")
+    record_attempt(root, source, "first", "2026-10-16T10:00:00Z", "reviewed")
+    publish_catalog(root, "first", [source])
+    measurement = DaytonaMeasurement(
+        dataset_id=source.dataset.name,
+        dataset_revision=source.dataset.revision,
+        daytona_snapshot_count=14,
+        daytona_machine_slots=20,
+        daytona_execution_failures=3,
+        daytona_count_basis="Complete production identity census",
+        daytona_unsafe_reasons=["too_many_snapshots", "unbuilt_image"],
+        daytona_unsafe_details={"too_many_snapshots": "14 distinct identities", "unbuilt_image": "3 unbuilt actors"},
+        daytona_roles={"agent": {"daytona": {"machine_slots": 20, "failures": {"unbuilt_image": 3}}}},
+    )
+    counts = ConvertedExamples(
+        count=18,
+        input_rows=20,
+        rejections={"missing_environment": 2},
+        admission_rejections={},
+        source_dataset_id=source.dataset.name,
+        source_revision=source.dataset.revision,
+        converter_revision="converter-pin",
+        converter_version="2",
+        evidence_url="s3://test/converted.json",
+    )
+    refresh_daytona_measurements(
+        root,
+        "measured",
+        {source.info.id: measurement},
+        retired_source_ids=frozenset(),
+        converted_examples={source.info.id: counts},
+    )
+    (row,) = CurationCatalog(root).sources("measured")
+    assert row.assessment_key == "reviewed"
+    assert row.declaration.pipeline == source.declaration.pipeline
+    assert row.declaration.daytona_safety is DaytonaSafety.UNSAFE
+    assert row.declaration.daytona_roles["agent"]["daytona"].failures == {"unbuilt_image": 3}
+    assert row.declaration.daytona_unsafe_details == measurement.daytona_unsafe_details
+    assert row.declaration.converted_examples == counts
+    with pytest.raises(ValueError, match="different dataset pin"):
+        refresh_daytona_measurements(
+            root,
+            "wrong-pin",
+            {source.info.id: measurement.model_copy(update={"dataset_revision": "wrong"})},
+            retired_source_ids=frozenset(),
+        )
+    assert CurationCatalog(root).current().snapshot_id == "measured"
