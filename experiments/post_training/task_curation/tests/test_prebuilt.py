@@ -360,4 +360,3 @@ def test_quick_pass_writes_the_validated_cohort_as_converted_tasks(tmp_path, mon
     assert [task.id for task in tasks] == ["a", "b"]
     assert manifest["input_rows"] == manifest["converted_rows"] == 2
     assert manifest["rejections"] == {} and manifest["intended_use"] == "train"
-
