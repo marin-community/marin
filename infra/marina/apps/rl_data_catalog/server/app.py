@@ -111,11 +111,16 @@ def declared_coverage(declaration: dict[str, Any]) -> dict[str, Any] | None:
     coverage = declaration.get("coverage")
     if coverage is None:
         return None
+    measurement = declaration.get("converted_examples")
     area = coverage["top_area"]
     return {
-        "example_count": coverage["example_count"],
+        "example_count": measurement["count"] if measurement else coverage["example_count"],
         "intended_use": coverage["intended_use"],
-        "basis": coverage["basis"],
+        "basis": (
+            f"Converted TaskSpec census: {measurement['converter_revision']}; {measurement['evidence_url']}"
+            if measurement
+            else coverage["basis"]
+        ),
         "unavailable_reason": coverage["unavailable_reason"],
         "top_area": {**area, "node_id": f"subject:{area['subject_id']}"} if area else None,
     }

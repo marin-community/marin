@@ -59,7 +59,10 @@ def test_daytona_is_not_applicable_without_a_sandbox_and_measured_otherwise():
         "daytona_safety": "unsafe",
         "daytona_snapshot_threshold": 10,
     }
-    assert daytona(measured, 10) == {"state": "unsafe", "snapshots": 15, "limit": 10, "basis": None}
+    label = daytona(measured, 10)
+    assert label["state"] == "unsafe"
+    assert label["snapshots"] == 15
+    assert label["reason_code"] == "too_many_snapshots"
 
 
 def test_grader_only_host_image_execution_failure_is_unsafe_with_zero_snapshots():
@@ -72,3 +75,38 @@ def test_grader_only_host_image_execution_failure_is_unsafe_with_zero_snapshots(
     label = daytona(declaration, 10)
     assert label["state"] == "unsafe"
     assert label["snapshots"] == 0
+
+
+def test_measured_machine_slots_distinguish_no_machine_from_grader_only_failure():
+    no_machine = {"tags": ["agentic"], "daytona_snapshot_count": 0, "daytona_machine_slots": 0, "daytona_safety": "safe"}
+    grader_only = {**no_machine, "daytona_machine_slots": 12, "daytona_safety": "unsafe"}
+    assert daytona(no_machine, 10)["state"] == "na"
+    assert daytona(grader_only, 10)["state"] == "unsafe"
+
+
+@pytest.mark.parametrize("reason", ["UNBUILT_IMAGE", "HOST_IMAGE_REQUIRED", "EXECUTION_REQUIREMENT"])
+def test_daytona_exposes_measured_unsafe_reason_with_zero_snapshots(reason):
+    label = daytona(
+        {
+            "tags": ["agentic"],
+            "daytona_safety": "unsafe",
+            "daytona_snapshot_count": 0,
+            "daytona_unsafe_reason": reason,
+        },
+        10,
+    )
+    assert label["state"] == "unsafe"
+    assert label["reason_code"] == reason
+
+
+def test_daytona_without_typed_reason_preserves_census_refusal():
+    label = daytona(
+        {
+            "tags": ["agentic"],
+            "daytona_safety": "unsafe",
+            "daytona_snapshot_count": 0,
+            "daytona_roles": {"agent": {"daytona": {"failures": {"registry image required": 20}}}},
+        },
+        10,
+    )
+    assert label["reason"] == "registry image required"

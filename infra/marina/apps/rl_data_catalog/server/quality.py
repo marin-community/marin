@@ -69,9 +69,25 @@ def daytona(declaration: dict[str, Any], limit: int) -> dict[str, Any]:
     count = declaration.get("daytona_snapshot_count")
     if count is None:
         return {"state": "unmeasured", "reason": "No production snapshot-identity measurement is recorded"}
-    return {
+    measured_limit = declaration.get("daytona_snapshot_threshold") or limit
+    label = {
         "state": declaration["daytona_safety"],
         "snapshots": count,
-        "limit": declaration.get("daytona_snapshot_threshold") or limit,
+        "limit": measured_limit,
         "basis": declaration.get("daytona_count_basis"),
     }
+    if label["state"] == "unsafe":
+        failures = [
+            reason
+            for backends in (declaration.get("daytona_roles") or {}).values()
+            for reason in (backends.get("daytona") or {}).get("failures", {})
+        ]
+        label["reason_code"] = declaration.get("daytona_unsafe_reason") or (
+            "too_many_snapshots" if count > measured_limit else None
+        )
+        label["reason"] = (
+            "; ".join(dict.fromkeys(failures))
+            or declaration.get("daytona_count_basis")
+            or ("Execution requirements were refused")
+        )
+    return label

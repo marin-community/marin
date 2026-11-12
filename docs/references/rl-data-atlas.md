@@ -85,12 +85,17 @@ not declared*. Edit the rules in the reference first, then the page text in
 **By source** lists individual sources with their converted example count,
 training/evaluation use, Quality, Result, Daytona label, the curriculum subject
 with the most converted tasks, the selected catalog snapshot’s load time
-(**Last updated**, UTC) and a link to its evidence page. Catalog
-tabs show per-catalog counts. Search names, datasets or tags, filter by use,
+(**Last updated**, UTC) and a link to its evidence page. Origin
+tabs show provider counts and combine Task Trove and TaskTrove. Search names, datasets or tags, filter by use,
 Quality or Result, and select a column heading to sort. The default view hides
 QUICK-quality and BAD-result sources; **Show QUICK-quality and BAD-result
 sources** turns that off. Filters and sorting are included in the URL. CSV export
-includes the filtered rows in the displayed order.
+includes the filtered rows in the displayed order. The summary shows total/displayed
+sources and examples, displayed QUICK/SAMPLE/FULL counts, and the selected
+catalog's load date. Total counts collapse each likely-duplicate group to its
+canonical source; expanding a group adds its matching members to displayed counts.
+Contamination stays `-` until a lexical decontamination receipt exists. Unsafe
+Daytona labels show the measured reason, with the census refusal in Evidence.
 
 [Quality and result](task-curation.md#quality-and-result) defines both labels.
 Examples, Use and Top curriculum area come from the declaration's measured
