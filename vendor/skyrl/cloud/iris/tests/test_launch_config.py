@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
@@ -28,6 +28,8 @@ from skyrl_train.dataset.tasks import source_row_task
 from marinskyrl.runtime_options import reference_model_required
 from marinskyrl.inference_placement import validate_expert_block_transport
 from skyrl_train.config.utils import get_default_config
+from skyrl_train.config.rollout_validation import EntrypointOperation, validate_rollout_launch
+from skyrl_train.inference_engines import placement as inference_placement
 
 
 def test_training_channels_require_compatible_weight_transport() -> None:
@@ -43,6 +45,106 @@ def test_training_channels_require_compatible_weight_transport() -> None:
         validate_expert_block_transport(config)
     config.generator.weight_sync_transport = "broadcast"
     validate_expert_block_transport(config)
+
+
+def test_colocated_expert_block_accepts_only_the_four_gpu_verified_layout() -> None:
+    config = get_default_config()
+    config.trainer.strategy = "megatron"
+    config.trainer.placement.colocate_all = True
+    config.trainer.placement.policy_num_nodes = 1
+    config.trainer.placement.policy_num_gpus_per_node = 4
+    config.trainer.policy.megatron_config.tensor_model_parallel_size = 1
+    config.trainer.policy.megatron_config.pipeline_model_parallel_size = 1
+    config.trainer.policy.megatron_config.expert_tensor_parallel_size = 1
+    config.trainer.policy.megatron_config.expert_model_parallel_size = 4
+    config.generator.weight_sync_transport = "expert_block"
+    config.generator.weight_sync_backend = "nccl"
+    config.generator.backend = "vllm"
+    config.generator.run_engines_locally = True
+    config.generator.num_inference_engines = 1
+    config.generator.inference_engine_tensor_parallel_size = 1
+    config.generator.inference_engine_pipeline_parallel_size = 1
+    config.generator.inference_engine_data_parallel_size = 4
+    config.generator.inference_engine_expert_parallel_size = 4
+    config.generator.expert_block_sync.verify = True
+    with open_dict(config.generator.engine_init_kwargs):
+        config.generator.engine_init_kwargs.kernel_config = {"moe_backend": "triton"}
+
+    validate_expert_block_transport(config)
+
+    config.generator.inference_engine_data_parallel_size = 2
+    with pytest.raises(ValueError, match="colocation requires"):
+        validate_expert_block_transport(config)
+
+
+def test_colocated_expert_block_rejects_generation_before_ray_starts() -> None:
+    config = get_default_config()
+    config.trainer.placement.colocate_all = True
+    config.generator.weight_sync_transport = "expert_block"
+
+    with pytest.raises(ValueError, match="requires a training entrypoint"):
+        validate_rollout_launch(config, EntrypointOperation.GENERATE)
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    ["skyrl_train.entrypoints.main_generate", "skyrl_train.entrypoints.taskcompendium"],
+)
+def test_colocated_expert_block_rejects_unverified_launch_entrypoint(tmp_path: Path, entrypoint: str) -> None:
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw_launch_config()))
+    config = load_launch_config(path)
+    config.skyrl.generator.weight_sync_transport = "expert_block"
+    config.runtime.entrypoint = entrypoint
+
+    with pytest.raises(ValueError, match="requires the standard training entrypoint"):
+        validate_launch_config(config)
+
+
+def test_shared_bundle_reports_reject_duplicate_or_misrouted_receivers(monkeypatch) -> None:
+    shared_group = object()
+    bundle_nodes = {0: "node-a", 1: "node-b", 2: "node-a", 3: "node-b"}
+    monkeypatch.setattr(
+        inference_placement,
+        "placement_group_table",
+        lambda group: {"bundles_to_node_id": bundle_nodes},
+    )
+    nodes = inference_placement.colocated_inference_bundle_nodes(
+        shared_group, [[2], [0], [3], [1]], num_inference_engines=1, data_parallel_size=4, pipeline_parallel_size=1
+    )
+    assert nodes == [["node-a", "node-a", "node-b", "node-b"]]
+    reports = [
+        [
+            {
+                "host": "host-a" if rank < 2 else "host-b",
+                "gpu_uuid": f"gpu-{rank}",
+                "dp_rank": rank,
+                "dp_world_size": 4,
+                "ep_rank": rank,
+                "ep_world_size": 4,
+                "torch_rank": rank,
+                "torch_world_size": 4,
+            }
+        ]
+        for rank in range(4)
+    ]
+    kwargs = dict(
+        bundle_nodes=nodes,
+        node_hosts={"node-a": "host-a", "node-b": "host-b"},
+        relative_rank_offsets=[0] * 4,
+        data_parallel_size=4,
+        expert_parallel_size=4,
+    )
+    placements = inference_placement.verified_inference_replica_placements(reports, **kwargs)
+    assert [row.worker.gpu_uuid for row in placements] == [f"gpu-{rank}" for rank in range(4)]
+
+    reports[3][0]["gpu_uuid"] = "gpu-0"
+    with pytest.raises(ValueError, match="distinct"):
+        inference_placement.verified_inference_replica_placements(reports, **kwargs)
+    reports[3][0]["gpu_uuid"] = "gpu-3"
+    reports[3][0]["ep_rank"] = 2
+    with pytest.raises(ValueError, match="EP rank"):
+        inference_placement.verified_inference_replica_placements(reports, **kwargs)
 
 
 def test_launch_preserves_harbor_dataset_relative_paths(tmp_path):

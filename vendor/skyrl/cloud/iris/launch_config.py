@@ -35,6 +35,7 @@ from marinskyrl.distillation import (
 )
 from marinskyrl.hf_model import HuggingFaceModelCache
 from marinskyrl.resource_locator import is_cloud_uri, is_hugging_face_repo_id, join_resource_path
+from marinskyrl.runtime_options import WeightSyncTransport
 from marinskyrl.task_sources import data_source
 
 
@@ -350,6 +351,12 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     runtime = raw["runtime"]
     entrypoint = runtime["entrypoint"]
     registered_rl_entrypoint_module(entrypoint)
+    if (
+        skyrl.get("generator", {}).get("weight_sync_transport") == WeightSyncTransport.EXPERT_BLOCK
+        and skyrl.get("trainer", {}).get("placement", {}).get("colocate_all")
+        and entrypoint != RL_ENTRYPOINTS[RLEntrypoint.STANDARD]
+    ):
+        raise ValueError("colocated expert_block requires the standard training entrypoint")
     validate_generation_logprobs(config.skyrl)
     validate_mismatch_probe_config(
         skyrl,
