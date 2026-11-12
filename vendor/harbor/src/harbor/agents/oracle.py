@@ -121,9 +121,8 @@ class OracleAgent(BaseAgent):
                     target_path=str(host_oracle_path),
                 )
 
-            if result.return_code != 0:
-                exit_code_path = self._trial_paths.agent_dir / "exit-code.txt"
-                exit_code_path.write_text(str(result.return_code))
+            exit_code_path = self._trial_paths.agent_dir / "exit-code.txt"
+            exit_code_path.write_text(str(result.return_code))
         finally:
             if self._task.has_steps:
                 self._step_index += 1
