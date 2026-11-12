@@ -22,6 +22,7 @@ from levanter.optim.util import matrix_optimizer_mask, map_flattened_matrix_laye
 class RMNPHConfig(OptimizerConfig):
     """Row-normalized momentum with norm-preserving hidden matrices and AdamH head."""
 
+    weight_decay: float = 0.0
     embedding_lr: float = 0.012
     vector_lr: float = 0.060
     matrix_lr: float = 0.015
@@ -52,7 +53,7 @@ class RMNPHConfig(OptimizerConfig):
 
             embedding = [scale_with_rmnp(self.momentum, self.nesterov, self.rmnp_epsilon)]
             if self.weight_decay > 0:
-                embedding.append(optax.add_decayed_weights(self.weight_decay, self.build_weight_decay_mask()))
+                embedding.append(optax.add_decayed_weights(self.weight_decay))
             embedding.append(optax.scale(-embedding_lr))
             return optax.multi_transform(
                 {

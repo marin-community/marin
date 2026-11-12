@@ -79,3 +79,14 @@ def test_radius_scales_only_hyperball_groups():
         return label
 
     jax.tree.map(check, labels, original, scaled)
+
+
+@pytest.mark.parametrize("weight_decay", [0.0, 0.1])
+def test_embedding_decay_uses_selected_group(weight_decay):
+    params = {"embedding": hax.nn.Embedding.init(hax.Axis("vocab", 7), hax.Axis("in", 5), key=jax.random.PRNGKey(5))}
+    gradients = jax.tree.map(jnp.zeros_like, params)
+    optimizer = RMNPHConfig(embedding_lr=0.01, weight_decay=weight_decay, warmup=0).build(10)
+    updates, _ = jax.jit(optimizer.update)(gradients, optimizer.init(params), params)
+    result = optax.apply_updates(params, updates)
+    expected = params["embedding"].weight.array * (1 - 0.01 * weight_decay)
+    np.testing.assert_allclose(result["embedding"].weight.array, expected, rtol=1e-5, atol=1e-6)

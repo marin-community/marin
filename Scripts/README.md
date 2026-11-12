@@ -16,7 +16,7 @@ Run pure RMNPH on FineWeb-Edu with Paloma C4 validation. Hidden matrices use row
 | Momentum / Nesterov | 0.95 / enabled |
 | Adam beta1 / beta2 / epsilon | 0.8 / 0.98 / 1e-15 |
 | Row normalization epsilon | 1e-10 |
-| Weight decay setting / gradient clipping setting | 0.1 / 1.0; hidden/head/vector groups are clipped separately; embedding is not clipped; decay uses the embedding mask only |
+| Weight decay setting / gradient clipping setting | 0.0 / 1.0; hidden/head/vector groups are clipped separately; embedding is not clipped |
 | Seed / data seed | 0 / 42 |
 | Precision | FP32 parameters, BF16 computation |
 | Per-device microbatch | 8 by default; total batch remains 128 |
@@ -24,6 +24,10 @@ Run pure RMNPH on FineWeb-Edu with Paloma C4 validation. Hidden matrices use row
 The radius is applied once to fresh hidden matrices and the output head. Full-state checkpoint restoration retains saved weights and optimizer state. Embeddings keep their original initialization scale. The head and embeddings are untied; `hybrid_norm=true` and gradient checkpointing are enabled; the normalization layout is defined in `lib/levanter/src/levanter/models/qwen.py`.
 
 The earlier three-seed search recorded final C4 BPB values 1.175585, 1.177649, and 1.174204 (mean 1.175813). These are historical experiment records, not a completed validation of this upstream port. Hardware, code revision, data cache, and seed must accompany new results. See the [recorded search](https://github.com/Dominator-Index/Marin-RMNP/blob/3ea5c9d4a/Scripts/SWEEP_4LR_ADAPTIVE.md).
+
+The research runs recorded `weight_decay=0.1`, but the default decay mask excluded embeddings and the other groups had no decay transform, so their effective decay was zero. This recipe states that behavior explicitly as `weight_decay=0.0`. Setting a nonzero weight decay now applies it to the already-selected embedding group; the hidden, head, and vector groups remain unchanged.
+
+A separate eight-A100 seed-0 run of the research checkout completed with final C4 BPB **1.178139** (global step 4958, microbatch 8). It is not included in the earlier H100 three-seed mean and does not validate this upstream port. See the [A100 run](https://app.bandw.top/bxl307-university-of-birmingham/Marin-RMNP/runs/rmnph-best-r08-seed0).
 
 ## Data and environment
 

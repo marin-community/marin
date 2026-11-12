@@ -36,7 +36,6 @@ model:
   num_heads: 8
   num_kv_heads: 8
   num_layers: 6
-  reference_checkpoint: NousResearch/Llama-2-7b-hf
   rope:
     type: default
     factor: 1.0
@@ -77,7 +76,7 @@ optimizer:
   beta1: 0.8
   beta2: 0.98
   epsilon: 1.0e-15
-  weight_decay: 0.1
+  weight_decay: 0.0
   max_grad_norm: 1
   warmup: 1000
   decay: 1.0
