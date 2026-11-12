@@ -33,6 +33,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
 from taskcompendium.pipeline.conversion import normalization_columns
 from taskcompendium.pipeline.models import SourceStatus
+from taskcompendium.pipeline.oracle_filter import has_oracle_solution, load_oracle_filter, require_oracle_filter
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -43,6 +44,7 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceR
 
 TASKS_FILENAME = "tasks.parquet"
 CONTROLS_FILENAME = "controls.jsonl"
+ORACLE_FILTER_FILENAME = "oracle-filter.json"
 
 
 @dataclass(frozen=True)
@@ -191,6 +193,7 @@ def prebuilt_artifact(
         destination.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(local, destination / TASKS_FILENAME)
         tasks = []
+        oracle_filter = None
         for row in pq.read_table(local).to_pylist():
             if invocation.task_format is TaskFormat.HARBOR:
                 serialized = row["task_spec"]
@@ -200,6 +203,26 @@ def prebuilt_artifact(
                 task = TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"])
                 serialized = task.model_dump_json()
                 original_path = row["path"]
+            if has_oracle_solution(task):
+                if oracle_filter is None:
+                    receipt_path = hf_hub_download(
+                        repo_id=invocation.cohort.repo,
+                        repo_type=invocation.cohort.repo_type,
+                        revision=invocation.cohort.revision,
+                        filename=ORACLE_FILTER_FILENAME,
+                    )
+                    oracle_filter = load_oracle_filter(receipt_path)
+                    shutil.copyfile(receipt_path, destination / ORACLE_FILTER_FILENAME)
+                if not require_oracle_filter(
+                    task,
+                    oracle_filter,
+                    (
+                        json.loads(row["lowered_task_spec"])["runtime"]
+                        if invocation.task_format is TaskFormat.TASKCOMPENDIUM
+                        else None
+                    ),
+                ):
+                    raise ValueError(f"Published cohort includes a failed oracle task: {task.id}")
             tasks.append(
                 {
                     **normalization_columns(task.id, task.source, task, None, (), original_path),
@@ -222,6 +245,7 @@ def prebuilt_artifact(
             "repo": config.repo,
             "revision": config.revision,
             "row_count": config.expected_rows,
+            "oracle_filter": oracle_filter.model_dump(mode="json") if oracle_filter else None,
             "tasks_sha256": file_sha256(StoragePath(str(destination / TASKS_FILENAME))),
         }
         (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

@@ -60,6 +60,7 @@ from taskcompendium.pipeline.models import (
     SourceRecipe,
     SourceStatus,
 )
+from taskcompendium.pipeline.oracle_filter import load_oracle_filter
 from taskcompendium.pipeline.review import BatchReviewer, ChatReviewer, Reviewer
 from taskcompendium.pipeline.source_processing import (
     SOURCE_PIPELINE_REVISION,
@@ -258,6 +259,7 @@ class CurationRecipe:
     inputs: Mapping[str, RecipeSource] = field(default_factory=dict)
     grader: Environment | None = None
     resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
+    oracle_solutions: bool = False
 
     @property
     def dataset(self) -> RecipeSource:
@@ -397,12 +399,20 @@ def _source_config(
     if rubric is not None and review is None:
         raise click.UsageError("Recipe review configuration requires --model-revision and --review-mode")
     if settings.config is not None:
-        return replace(settings.config, mode=mode)
+        return replace(
+            settings.config,
+            mode=mode,
+            oracle_filter=(
+                load_oracle_filter(settings.oracle_filter_receipt)
+                if settings.oracle_filter_receipt
+                else settings.config.oracle_filter
+            ),
+        )
     if settings.normalized_shards is None:
         raise click.UsageError("Recipe conversion requires --normalized-shards")
     if settings.execution.worker_resources is None:
         raise ValueError("Recipe execution requires worker resources")
-    return _pipeline_config(
+    config = _pipeline_config(
         mode,
         review,
         None,
@@ -413,6 +423,10 @@ def _source_config(
         max_workers=settings.execution.max_workers,
         worker_resources=settings.execution.worker_resources,
         normalized_shards=settings.normalized_shards,
+    )
+    return replace(
+        config,
+        oracle_filter=load_oracle_filter(settings.oracle_filter_receipt) if settings.oracle_filter_receipt else None,
     )
 
 
@@ -541,6 +555,7 @@ def source_recipe(
         inputs=dict(inputs),
         grader_environment=grader_environment,
         resource_budget_bytes=pipeline.resource_budget_bytes,
+        oracle_solutions=pipeline.oracle_solutions,
     )
 
 

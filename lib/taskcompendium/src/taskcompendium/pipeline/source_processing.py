@@ -54,8 +54,15 @@ from taskcompendium.pipeline.models import (
     Disposition,
     FilterPolicy,
     GraderReadiness,
+    ImportRejection,
     SourceRecipe,
     SourceStatus,
+)
+from taskcompendium.pipeline.oracle_filter import (
+    OracleFilterReceipt,
+    has_oracle_solution,
+    oracle_recipe_identity,
+    require_oracle_filter,
 )
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.pipeline.shard_outputs import ShardOutput, write_shard_outputs
@@ -104,7 +111,7 @@ from taskcompendium.pipeline.stages import (
 )
 from taskcompendium.pipeline.transforms import admit_converted_row
 
-SOURCE_PIPELINE_REVISION = "14"
+SOURCE_PIPELINE_REVISION = "15"
 PANEL_ROWS_PER_SHARD = 16
 ROWS_PER_SHARD = 1000
 MAX_PREPARATION_SHARDS = 64
@@ -144,6 +151,7 @@ class SourcePipelineConfig:
     normalized_shards: int
     machines: GradingMachines | None
     judge_connection: JudgeConnection | None = None
+    oracle_filter: OracleFilterReceipt | None = None
 
 
 @dataclass(frozen=True)
@@ -345,7 +353,19 @@ def row_admission(row: dict[str, Any], verification: SourceVerificationStatus) -
     return Admission.UNVERIFIED
 
 
-def _admit(row: dict[str, Any], *, verification: SourceVerificationStatus) -> dict[str, Any]:
+def _admit(
+    row: dict[str, Any], *, verification: SourceVerificationStatus, oracle_filter: OracleFilterReceipt | None = None
+) -> dict[str, Any]:
+    if row["task_json"] is not None:
+        task = TaskSpec.model_validate_json(row["task_json"])
+        if not require_oracle_filter(task, oracle_filter):
+            assert oracle_filter is not None
+            entry = oracle_filter.tasks[task.id]
+            row = {
+                **row,
+                "filter_status": Disposition.REJECT.value,
+                "filter_reasons": [*(row["filter_reasons"] or []), f"oracle_filter: {entry.exclusion_reason}"],
+            }
     admission = row_admission(row, verification)
     counters.current_stage().update_counter(f"source/admission/{admission.value}", 1)
     return {**row, "admission": admission.value}
@@ -663,9 +683,11 @@ def _write_download_manifest(run: _SourceRun, population_count: int) -> None:
     )
 
 
-def _export_row(row: dict[str, Any], *, verification: SourceVerificationStatus) -> dict[str, Any]:
+def _export_row(
+    row: dict[str, Any], *, verification: SourceVerificationStatus, oracle_filter: OracleFilterReceipt | None = None
+) -> dict[str, Any]:
     """Admit one checked audit row and carry its raw identity in place of the raw payload no view publishes."""
-    admitted = _admit(row, verification=verification)
+    admitted = _admit(row, verification=verification, oracle_filter=oracle_filter)
     raw = json.loads(admitted.pop("raw_json"))
     return {**admitted, **{name: raw[name] for name, _ in IDENTITY_FIELDS[1:]}}
 
@@ -676,10 +698,11 @@ class _CheckedAudit:
 
     path: str
     verification: SourceVerificationStatus
+    oracle_filter: OracleFilterReceipt | None
 
     def export_rows(self) -> Iterator[dict[str, Any]]:
         for row in load_parquet(self.path):
-            yield _export_row(row, verification=self.verification)
+            yield _export_row(row, verification=self.verification, oracle_filter=self.oracle_filter)
 
 
 @dataclass(frozen=True)
@@ -749,7 +772,9 @@ def _export_sidecars(
         if previous_output.exists():
             previous_output.rmtree()
     audits = sorted(str(path) for path in (checked / AUDIT_INPUT_PATTERN).glob())
-    inputs: list[_CheckedAudit | _UnprocessedLocators] = [_CheckedAudit(path, verification) for path in audits]
+    inputs: list[_CheckedAudit | _UnprocessedLocators] = [
+        _CheckedAudit(path, verification, run.config.oracle_filter) for path in audits
+    ]
     if not expanded and not panel.census:
         locators = sorted(str(path) for path in (output / "download/locators/*.parquet").glob())
         unprocessed = partial(
@@ -830,6 +855,7 @@ def _write_manifest(
         "mode": config.mode.value,
         "source": recipe.name,
         "intended_use": recipe.intended_use.value,
+        "oracle_filter": config.oracle_filter.model_dump(mode="json") if config.oracle_filter else None,
         "raw_population_count": panel.sample.population_count,
         "raw_sample_count": len(panel.sample.rows),
         "raw_population_census": panel.census,
@@ -901,6 +927,17 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
     if config.quality_policy.sample_size > MAX_SOURCE_QUALITY_SAMPLE_SIZE:
         raise ValueError(f"The initial raw task panel is capped at {MAX_SOURCE_QUALITY_SAMPLE_SIZE}")
     panel = _sample_panel(run)
+    oracle_filter = config.oracle_filter
+    has_oracles = run.recipe.oracle_solutions or any(
+        has_oracle_solution(row.result.task) for row in panel.converted if not isinstance(row.result, ImportRejection)
+    )
+    if has_oracles and oracle_filter is None:
+        raise ValueError("SAMPLE/FULL admission requires a full-population Harbor oracle filter receipt")
+    if oracle_filter is not None and (
+        oracle_filter.recipe_identity != oracle_recipe_identity(run.recipe)
+        or oracle_filter.input_rows != panel.sample.population_count
+    ):
+        raise ValueError("Oracle filter receipt belongs to a different recipe or input population")
     review = config.review if run.recipe.rubric is not None else None
     decision = _gate_quality(run, panel, review)
     expanded = config.mode == SourceProcessingMode.FULL and decision.status in EXPANDED_QUALITY
@@ -1062,6 +1099,7 @@ def _run_quick(
                 "source_dataset": recipe.source.dataset,
                 "source_revision": recipe.source.revision,
                 "recipe_revision": recipe.version,
+                "oracle_recipe_identity": oracle_recipe_identity(recipe),
                 "intended_use": recipe.intended_use.value,
                 "source_input": source_input,
                 "source_file_overrides": {name: asdict(file) for name, file in (source_overrides or {}).items()},

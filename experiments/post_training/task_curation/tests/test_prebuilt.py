@@ -11,7 +11,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import DaytonaSafety, OversightEvidence, OversightLevel
-from marin.execution.lazy import run
+from marin.execution.lazy import StepContext, run
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -36,6 +37,7 @@ from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.driver import _write_corpus
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from lib.taskcompendium.tests.oracle_filter_fixtures import oracle_receipt
 
 IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
 
@@ -251,3 +253,56 @@ def test_reply_only_rewrite_needs_no_agent_machine(tmp_path, monkeypatch):
     path = _write(tmp_path, [row])
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
     assert prebuilt.import_cohort(_cohort(1)) == str(path)
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+@pytest.mark.parametrize("state", ["missing", "failed", "passed"])
+def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, monkeypatch, mode, state):
+    row = _task("oracle")
+    envelope = json.loads(row["lowered_task_spec"])
+    spec = TaskSpec.model_validate(envelope["task"])
+    spec = spec.model_copy(
+        update={
+            "resources": spec.resources.model_copy(update={"oracle": (inline_resource("solution/solve.sh", b"true\n"),)})
+        }
+    )
+    envelope["task"] = spec.model_dump(mode="json")
+    row["lowered_task_spec"] = json.dumps(envelope)
+    cohort = _write(tmp_path, [row])
+    receipt = oracle_receipt([spec], failed=frozenset({spec.id}) if state == "failed" else frozenset())
+    receipt.tasks[spec.id] = receipt.tasks[spec.id].model_copy(
+        update={"runtime_sha256": canonical_sha256(envelope["runtime"])}
+    )
+    receipt_path = tmp_path / prebuilt.ORACLE_FILTER_FILENAME
+    receipt_path.write_text(receipt.model_dump_json())
+
+    def download(**kwargs):
+        if kwargs["filename"] == prebuilt.TASKS_FILENAME:
+            return str(cohort)
+        if state == "missing":
+            raise FileNotFoundError("oracle-filter.json")
+        return str(receipt_path)
+
+    monkeypatch.setattr(prebuilt, "hf_hub_download", download)
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
+    source = RlDataSource(
+        config=_cohort(1),
+        pipeline=prebuilt.import_prebuilt,
+        info=SourceInfo(id="fixture:oracle", title="oracle", origin="fixture", task_format=TaskFormat.TASKCOMPENDIUM),
+    )
+    step = prebuilt.import_prebuilt(source, PipelineOptions(mode, CampaignRuntime()))
+    destination = tmp_path / "admitted"
+    invocation = step.build_config(StepContext.for_run(str(destination), str(tmp_path)))
+    if state == "missing":
+        with pytest.raises(FileNotFoundError, match=r"oracle-filter\.json"):
+            step.run(invocation)
+    elif state == "failed":
+        with pytest.raises(ValueError, match="failed oracle task"):
+            step.run(invocation)
+    else:
+        artifact = step.run(invocation)
+        assert artifact.status == "completed"
+        manifest = json.loads((destination / "manifest.json").read_text())
+        assert manifest["admitted_rows"] == 1
+        assert (destination / prebuilt.ORACLE_FILTER_FILENAME).exists()

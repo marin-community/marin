@@ -815,7 +815,9 @@ for local overrides, Harbor export and pinned content comparison commands.
 
 ## Source procedure
 
-Sample and full modes run the reviewed procedure below.
+Sample and full modes run the reviewed procedure below. A source shipping oracle
+solutions must first run the full-population oracle filter described below.
+Oracle filtering is never sampled, even when the other checks use SAMPLE.
 
 1. Download the pinned files once per distinct pin
    (`task-curation/download/<hash>`).
@@ -837,7 +839,71 @@ Sample and full modes run the reviewed procedure below.
    the network-denied grader sandbox; credentials stay out of task specifications
    and persisted campaign evidence. This threshold is independent of sampled
    GLM quality grades.
-7. Admit rows and write the outputs.
+7. Join the full-population oracle-filter receipt by task ID and exact TaskSpec hash.
+   Exclude failed oracle tasks and unresolved infrastructure failures; a missing,
+   stale or incomplete receipt blocks admission. Admit the remaining rows and write
+   the outputs.
+
+### Full-population oracle filter
+
+For both SAMPLE and FULL, run the production Harbor Trial with the restored
+ORACLE agent on every task that ships a solution. The filter retains exactly
+the tasks with a completed trial, solution exit zero, and structured scored
+reward one. Numeric reward files alone are insufficient. Retain failed oracles
+and unresolved infrastructure errors as exclusions with reasons and counts.
+Retry infrastructure failures up to two times before excluding them.
+
+Keep the task's environment, network permission, setup and solution scripts.
+Export or acquire the cohort's faithful Harbor packages first; do not prebake
+network-dependent solution scripts or replace task images. Freeze the task map
+before launching. The map binds TaskSpec content hashes to native Harbor task
+names and complete directory checksums. If package directories use other names,
+write the same three map fields explicitly for each oracle TaskSpec:
+task_name, task_checksum and task_sha256. Lowered envelopes also include
+runtime_sha256, binding the deployment shape and settings.
+
+~~~bash
+uv run python -m experiments.post_training.task_curation.oracle_filter map \
+  --cohort /path/to/converted/tasks.parquet \
+  --tasks-dir /path/to/faithful-harbor-tasks --output /path/to/task-map.json
+
+# DAYTONA: use the RL organization credential and verify the snapshot cap first.
+uv run --isolated --project vendor/harbor --frozen --extra runtime harbor run \
+  --agent oracle --path /path/to/faithful-harbor-tasks --env daytona \
+  --n-concurrent 128 --max-retries 2 --jobs-dir /path/to/oracle-jobs
+
+# LOCAL: prepared digest-pinned images via umoci and shellbox-images.json,
+# on Iris CPU workers. This route supports only root commands.
+uv run --isolated --project vendor/harbor --frozen --extra runtime harbor run \
+  --agent oracle --path /path/to/faithful-harbor-tasks --env local \
+  --n-concurrent 4 --max-retries 2 --jobs-dir /path/to/oracle-jobs \
+  --environment-kwarg image_cache=/cache/shellbox-images \
+  --environment-kwarg cgroup_parent=/sys/fs/cgroup/marin-liveness
+
+uv run python -m experiments.post_training.task_curation.oracle_filter collect \
+  --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
+  --jobs-dir /path/to/oracle-jobs --output /path/to/filtered/tasks.parquet \
+  --conversion-manifest /path/to/quick/manifest.json
+~~~
+
+DAYTONA normally runs about 128 concurrent sandboxes in the RL organization
+when the cohort's snapshot identities fit the cap. Otherwise use LOCAL on Iris
+CPU workers, with the task's own prepared images. Concurrency does not waive
+snapshot or CPU capacity limits. LOCAL honors allow_internet and cannot run
+nonroot task commands; choose a supporting route when the task requires them.
+
+The collector requires every oracle task's trial, preserves its independent
+solution exit code and structured verifier verdict, and emits oracle-filter.json
+plus oracle-filter-summary.json. It filters converted rows without rewriting
+their TaskSpecs. Publish the filtered tasks and receipt together at one private
+immutable revision. Prebuilt admission checks every retained oracle TaskSpec
+against the receipt.
+
+For a recipe pass, supply --oracle-filter-receipt /path/to/oracle-filter.json
+to the driver. The QUICK manifest supplies the recipe identity and full input
+accounting; pass it to the collector. Recipes that can ship solutions declare
+oracle_solutions=True so an oracle-free sample cannot bypass the population
+requirement. The row gate also detects solution resources independently.
 
 For a standalone task batch, call
 `review_tasks(tasks, rubric, reviewer, cached=None)` from
@@ -1032,6 +1098,11 @@ examined: `QUICK` (inventory or a spot check), `SAMPLE` (a documented sample exe
 end to end, verifiers included) or `FULL` (every task executed end to end). Only
 `SAMPLE` and `FULL` admit tasks; a `QUICK` summary cannot record admitted counts
 (`CurationSummary` rejects it) and its corpus is not selectable for training.
+
+Oracle filtering covers the full population in both SAMPLE and FULL whenever
+solutions are supplied. Oversight still differs in its other quality checks,
+blinded review and negative controls. A sampled oracle run cannot qualify either
+mode.
 
 Every source also declares an `OversightLevel` — `none`, `sample` or `full` — with an
 `OversightEvidence` that points at the campaign, the recipe revision and the
