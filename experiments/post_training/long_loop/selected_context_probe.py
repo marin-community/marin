@@ -13,12 +13,10 @@ from pathlib import Path
 import vllm
 from vllm.config import ModelConfig
 
-from experiments.post_training.long_loop.serving import serving_release
-
 
 def main(root: Path, overrides_path: Path, requested: int, destination: Path) -> None:
-    release = serving_release()
-    if version("vllm") != release.version:
+    release = json.loads(Path(__file__).with_name("vllm-release.json").read_text())
+    if version("vllm") != release["distribution"]["version"]:
         raise ValueError(f"Context resolver has wrong vLLM version: {vllm.__version__}")
     if os.environ.get("VLLM_ALLOW_LONG_MAX_MODEL_LEN"):
         raise ValueError("Long-context validation cannot use VLLM_ALLOW_LONG_MAX_MODEL_LEN")
@@ -37,7 +35,7 @@ def main(root: Path, overrides_path: Path, requested: int, destination: Path) ->
     destination.write_text(
         json.dumps(
             {
-                "vllm_commit": release.source_commit,
+                "vllm_commit": release["source"]["fork_commit"],
                 "vllm_version": version("vllm"),
                 "vllm_source_version": vllm.__version__,
                 "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
