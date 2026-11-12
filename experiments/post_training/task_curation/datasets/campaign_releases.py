@@ -157,6 +157,63 @@ def sources() -> list[RlDataSource]:
             ),
         ),
         RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="nl2bash-v1-rebuilt",
+                version="1",
+                repo="open-athena/nl2bash-v1-rebuilt-taskcompendium-20261111",
+                revision="6c3a45faee37588a877d86c808828fd8377673f8",
+                expected_rows=1498,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:tasktrove-nl2bash-rebuilt-v1",
+                title="TaskTrove nl2bash rebuilt cohort (TaskCompendium)",
+                origin="TaskTrove",
+                family="terminal-agent",
+                tags=("agentic", "multi-turn", "language:bash", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=1498,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the lowered task specs at the pinned revision: "
+                    "1,498 specs, one distinct agent identity (each task's archived ubuntu:24.04 recipe "
+                    "lowered onto the pinned base), zero execution-requirement failures. Graders are "
+                    "lock-placed and grade in the worker's local runtime, contributing no Daytona identity"
+                ),
+                daytona_execution_failures=0,
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/nl2bash.py @ 3687e77944",
+                    verification=(
+                        "setup fidelity executed on all 1,498 converted specs (all reproduce their archive's "
+                        "lowered base, working directory and steps) and verifier liveness on 20 sampled tasks "
+                        "drawn across the cohort's single environment (20 negative verdicts, reward 0.0, no "
+                        "infrastructure errors)"
+                    ),
+                    reviewed=1498,
+                    admitted=1498,
+                    level=OversightLevel.SAMPLE,
+                ),
+                notes=(
+                    "1,498 nl2bash tasks converted to run in the environment their archives specify: the "
+                    "ubuntu:24.04 recipe each task ships is lowered onto the digest-pinned base and its RUN "
+                    "steps replay as setup commands, one distinct environment across the cohort. Measured "
+                    "at the pinned upstream revision "
+                    "DCAgent2__nl2bash-tasks-cleaned-oracle-v2 @ 02923004846e4e73862c20962f823a6d05100e7a: "
+                    "zero refusals, zero substitutions. Qualified without oracles: setup fidelity matches on "
+                    "all 1,498 rows and 20 of 20 sampled verifiers return a negative verdict on an empty "
+                    "submission. The repository is private pending release."
+                ),
+                dataset=SourceReference(
+                    "open-athena/nl2bash-v1-rebuilt-taskcompendium-20261111",
+                    "6c3a45faee37588a877d86c808828fd8377673f8",
+                    "https://huggingface.co/datasets/open-athena/nl2bash-v1-rebuilt-taskcompendium-20261111"
+                    "/tree/6c3a45faee37588a877d86c808828fd8377673f8",
+                ),
+            ),
+        ),
+        RlDataSource(
             info=SourceInfo(
                 id="Campaign Release:smartie-calibforge-shared-v2",
                 title="Snowball Smartie repaired CalibForge shared environment v2",

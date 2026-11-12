@@ -49,10 +49,19 @@ identity, with no build or execution-requirement failures.
 
 ## Qualification
 
-Not yet run for this cohort. Conversion accepts every row, and the environment is
-measured, but setup fidelity and verifier liveness have not been executed against these
-converted specs. Until they are, the cohort's `oracle_validation` is `skipped` and its
-oversight level is `none`; it is not admissible for training.
+Setup fidelity and verifier liveness ran against these converted specs before publication:
+
+- **Setup fidelity:** 1,498 of 1,498 specs reproduce their archive's lowered environment exactly —
+  same pinned base, working directory and setup-command sequence — and every spec carries its
+  verifier resources.
+- **Verifier liveness:** 20 tasks sampled across the cohort's single environment. Every sampled
+  grader grades an empty submission through the production grading path and returns a **negative
+  verdict (reward 0.0)**, with no infrastructure errors or timeouts.
+
+The cohort's `oracle_validation` is `verifier_executed` (the grader runs, and correctly rejects an
+empty submission) and its oversight level is `sample` — liveness is sampled per environment, not
+exhaustive. Graders are lock-placed and grade in the worker's local bubblewrap runtime; they add no
+Daytona identity.
 
 ## License
 
