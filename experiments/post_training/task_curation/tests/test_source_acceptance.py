@@ -7,13 +7,9 @@ from dataclasses import replace
 
 import pytest
 from finestore.rl.curation import DaytonaSafety, OversightEvidence, OversightLevel
+from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 
-from experiments.post_training.task_curation.source import (
-    GRANDFATHERED_MARINSKYRL_SOURCES,
-    RlDataSource,
-    SourceInfo,
-    TaskFormat,
-)
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 from experiments.post_training.task_curation.sources import all_sources, require_accepted_task_format, runnable_sources
 
 

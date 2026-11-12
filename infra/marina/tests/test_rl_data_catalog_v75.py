@@ -13,9 +13,11 @@ def test_v75_api_marks_zero_actor_and_grandfathered_sources_without_false_unsafe
         "daytona_safety": "not_applicable",
         "daytona_machine_slots": 0,
         "daytona_snapshot_count": 0,
+        "daytona_execution_failures": 0,
+        "daytona_count_basis": "Complete TaskSpec census",
     }
     grandfathered = {
-        "id": "MarinSkyRL:nemotron_ultra_mopd/safety_en",
+        "id": "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_lean",
         "tags": ["agentic"],
         "daytona_safety": "unassessed",
         "daytona_snapshot_count": None,
@@ -38,3 +40,12 @@ def test_v75_api_marks_zero_actor_and_grandfathered_sources_without_false_unsafe
     assert refusal["state"] == "unsafe" and refusal["snapshots"] == 0
     assert refusal["unsafe_reasons"] == ["host_image_required"]
     assert refusal["unsafe_counts"] == {"host_image_required": 100}
+
+
+def test_v75_api_requires_census_evidence_and_exact_frozen_exemption():
+    for declaration in (
+        {"id": "conversation", "tags": []},
+        {"id": "missing-proof", "daytona_safety": "not_applicable", "daytona_machine_slots": 0},
+        {"id": "MarinSkyRL:new-agentic-blend", "tags": ["agentic"]},
+    ):
+        assert daytona(declaration, 10)["state"] == "unmeasured"

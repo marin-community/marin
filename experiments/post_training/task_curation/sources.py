@@ -3,6 +3,8 @@
 
 """The task catalog: training and evaluation dataset declarations, keyed by name."""
 
+from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
+
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
     structure_closure,
@@ -39,7 +41,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import python_te
 from experiments.post_training.task_curation.datasets.tasktrove import qa as tasktrove_qa
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
-from experiments.post_training.task_curation.source import GRANDFATHERED_MARINSKYRL_SOURCES, RlDataSource, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, TaskFormat
 
 
 def all_sources() -> dict[str, RlDataSource]:

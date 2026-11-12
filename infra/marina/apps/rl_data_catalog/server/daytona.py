@@ -5,24 +5,29 @@
 
 from typing import Any
 
+from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
+
 
 def daytona(declaration: dict[str, Any], limit: int) -> dict[str, Any]:
     """Return the v75 rendering vocabulary while retaining typed measurement evidence."""
-    tags = declaration.get("tags", [])
     safety = declaration.get("daytona_safety")
-    if declaration.get("id", "").startswith("MarinSkyRL:") and "agentic" in tags:
+    if declaration.get("id") in GRANDFATHERED_MARINSKYRL_SOURCES:
         return {
             "state": "na",
             "exempt": True,
             "reason": "Grandfathered blend; Daytona safety is exempt and no verdict is asserted",
         }
     slots = declaration.get("daytona_machine_slots")
-    if safety == "not_applicable" or (slots == 0 and safety != "unsafe"):
+    if (
+        slots == 0
+        and declaration.get("daytona_snapshot_count") == 0
+        and declaration.get("daytona_execution_failures") == 0
+        and (declaration.get("daytona_count_basis") or "").strip()
+        and safety != "unsafe"
+    ):
         return {"state": "na", "reason": "A complete census measured no actor machine"}
-    if "agentic" not in tags and slots is None and safety != "unsafe":
-        return {"state": "na", "reason": "Non-agentic tasks provision no sandbox"}
     count = declaration.get("daytona_snapshot_count")
-    if count is None:
+    if count is None or safety not in {"safe", "unsafe"}:
         return {"state": "unmeasured", "reason": "No production snapshot-identity measurement is recorded"}
     label = {
         "state": safety,

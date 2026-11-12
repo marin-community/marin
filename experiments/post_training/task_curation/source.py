@@ -22,6 +22,7 @@ from finestore.rl.curation import (
     SourceDeclaration,
     daytona_verdict,
 )
+from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from marin.execution.lazy import ArtifactStep
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
@@ -70,39 +71,6 @@ class TaskFormat(StrEnum):
     TASKCOMPENDIUM = "taskcompendium"
     HARBOR = "harbor"
     MARINSKYRL = "marinskyrl"
-
-
-GRANDFATHERED_MARINSKYRL_SOURCES: frozenset[str] = frozenset(
-    {
-        # Nemotron Ultra mix components: JSONL rows produced by Marin's own RL
-        # pipeline, predating the task-directory format.
-        "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym",
-        "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2",
-        "MarinSkyRL:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
-        "MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
-        "MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
-        "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_lean",
-        "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_tir",
-        "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
-        "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema",
-        "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
-        "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
-        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
-        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir",
-        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot",
-        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema",
-        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
-        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir",
-        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot",
-        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema",
-        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
-    }
-)
-"""Marin-internal blend sources admitted before the task-directory requirement."""
 
 
 @dataclass(frozen=True)
