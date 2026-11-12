@@ -9,9 +9,11 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT
+from finestore.rl.source_identity import canonical_source_id, original_source_id
 from marina.applets import AppletServices
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
+from taskcompendium.source_fingerprints import DuplicateGroup, DuplicateReview
 
 from .curriculum import register_curriculum_routes, source_coverage
 from .daytona import daytona
@@ -63,23 +65,37 @@ def loaded_catalog(connection: Connection) -> dict[str, Any]:
     return dict(row)
 
 
+def canonical_source_record(row: dict[str, Any]) -> dict[str, Any]:
+    """Project retained catalog metadata without rewriting its evidence or keys."""
+    result = {**row, "id": canonical_source_id(row["id"])}
+    result["declaration"] = {**row["declaration"], "id": canonical_source_id(row["declaration"]["id"])}
+    if row.get("backend_capabilities") is not None:
+        result["backend_capabilities"] = {
+            **row["backend_capabilities"],
+            "source_id": canonical_source_id(row["backend_capabilities"]["source_id"]),
+        }
+    if row.get("duplicate_group") is not None:
+        result["duplicate_group"] = DuplicateGroup.model_validate(row["duplicate_group"]).model_dump(mode="json")
+    return result
+
+
 def source_record(connection: Connection, source_id: str) -> dict[str, Any]:
     row = (
         connection.execute(
             text(
                 """
         SELECT s.* FROM atlas_sources s JOIN atlas_current c USING (load_id)
-        WHERE c.name = 'latest' AND s.id = :source_id
+        WHERE c.name = 'latest' AND s.id IN (:source_id, :original_source_id)
     """
             ),
-            {"source_id": source_id},
+            {"source_id": canonical_source_id(source_id), "original_source_id": original_source_id(source_id)},
         )
         .mappings()
         .one_or_none()
     )
     if row is None:
         raise HTTPException(404, "Source not found")
-    return dict(row)
+    return canonical_source_record(dict(row))
 
 
 def cohort_summaries(connection: Connection, load_id: str, pipeline_key: str) -> dict[str, Any]:
@@ -137,7 +153,8 @@ def create_api(services: AppletServices) -> FastAPI:
                 {"load_id": metadata["load_id"]},
             ).mappings()
             inventory = []
-            for row in rows:
+            for retained_row in rows:
+                row = canonical_source_record(dict(retained_row))
                 inventory.append(
                     {
                         **row["declaration"],
@@ -212,7 +229,7 @@ def create_api(services: AppletServices) -> FastAPI:
     def source_fingerprint(source_id: str) -> dict[str, Any]:
         with engine.connect() as connection:
             source = source_record(connection, source_id)
-            return {"source_id": source_id, "fingerprint": source["source_fingerprint"]}
+            return {"source_id": canonical_source_id(source_id), "fingerprint": source["source_fingerprint"]}
 
     @api.get("/source-duplicates")
     def source_duplicates() -> dict[str, Any]:
@@ -250,7 +267,12 @@ def create_api(services: AppletServices) -> FastAPI:
                 .scalars()
                 .all()
             )
-            return {"survey_id": survey["survey_id"], **survey["metadata"], "reviews": reviews, "groups": groups}
+            return {
+                "survey_id": survey["survey_id"],
+                **survey["metadata"],
+                "reviews": [DuplicateReview.model_validate(row).model_dump(mode="json") for row in reviews],
+                "groups": [DuplicateGroup.model_validate(row).model_dump(mode="json") for row in groups],
+            }
 
     @api.get("/assessment")
     def assessment(source_id: str) -> dict[str, Any]:
@@ -290,6 +312,7 @@ def create_api(services: AppletServices) -> FastAPI:
             "source": source["declaration"]["display_name"],
             "report": {
                 **row,
+                "source_id": canonical_source_id(row["source_id"]),
                 "assessment": summaries,
                 "evidence": {"samples": samples},
             },
@@ -308,10 +331,14 @@ def create_api(services: AppletServices) -> FastAPI:
                 JOIN atlas_items i ON i.load_id = s.load_id AND i.pipeline_key = s.assessment_key
                 JOIN atlas_packets p ON p.load_id = i.load_id
                     AND p.pipeline_key = i.pipeline_key AND p.task_id = i.task_id
-                WHERE c.name = 'latest' AND s.id = :source_id AND i.task_id = :task_id
+                WHERE c.name = 'latest' AND s.id IN (:source_id, :original_source_id) AND i.task_id = :task_id
             """
                     ),
-                    {"source_id": source_id, "task_id": task_id},
+                    {
+                        "source_id": canonical_source_id(source_id),
+                        "original_source_id": original_source_id(source_id),
+                        "task_id": task_id,
+                    },
                 )
                 .mappings()
                 .one_or_none()
@@ -340,7 +367,7 @@ def create_api(services: AppletServices) -> FastAPI:
                     )
                 ).mappings()
             )
-        return {"reviews": [dict(row) for row in rows]}
+        return {"reviews": [{**row, "source_id": canonical_source_id(row["source_id"])} for row in rows]}
 
     @api.get("/archive/reviews/{review_id}")
     def archived_review(review_id: str) -> dict[str, Any]:
@@ -363,7 +390,7 @@ def create_api(services: AppletServices) -> FastAPI:
             raise HTTPException(404, "Archived review not found")
         return {
             "id": record["id"],
-            "source_id": record["source_id"],
+            "source_id": canonical_source_id(record["source_id"]),
             "collection": record["collection"],
             "updated_at": record["updated_at"],
             "artifacts": [dict(row) for row in files],

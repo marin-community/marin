@@ -29,6 +29,7 @@ from finestore.rl.curation import (
     SnapshotSource,
     register_catalog,
 )
+from finestore.rl.source_identity import canonical_source_id
 from finestore.store import DataStore
 from rigging.filesystem.distributed_lock import LeaseLostError, LocalFileLease
 
@@ -454,3 +455,48 @@ def test_measured_refresh_preserves_assessments_and_roundtrips_arrow_maps(tmp_pa
             converted_examples={source.info.id: counts.model_copy(update={"converter_version": "stale"})},
         )
     assert CurationCatalog(root).current().snapshot_id == "measured"
+
+
+def test_alias_metadata_refresh_keeps_archived_rows_and_packet_bytes(tmp_path):
+    old = "MarinSkyRL:aime24"
+    current = canonical_source_id(old)
+    root = str(tmp_path / "production")
+    fixture = number_source(tmp_path / "input")
+    source = replace(
+        fixture, info=replace(fixture.info, id=current, origin=SourceOrigin.HUGGINGFACEH4, upstream_dataset="aime24")
+    )
+    record_attempt(root, source, "first", "2026-10-16T10:00:00Z", "opaque-assessment-key")
+    publish_catalog(root, "first", [source])
+    with DataStore.open(root) as store:
+        register_catalog(store)
+        record = {
+            key: value
+            for key, value in store.read_view().point(INVENTORY, snapshot_id="first", id=current).items()
+            if key in SnapshotSource.model_fields
+        }
+        record.update(snapshot_id="legacy", id=old, declaration={**record["declaration"], "id": old})
+        assessment = {
+            key: value
+            for key, value in store.read_view().point(ASSESSMENTS, pipeline_key="opaque-assessment-key").items()
+            if key in Assessment.model_fields
+        }
+        assessment["source_id"] = old
+        with store.transaction() as transaction:
+            transaction.table(INVENTORY).add(record)
+            transaction.table(ASSESSMENTS).add(assessment)
+            transaction.table(SNAPSHOTS).add(
+                {"snapshot_id": "legacy", "created_at": "2026-10-16T10:30:00Z", "source_count": 1}
+            )
+            transaction.table(CURRENT).add({"name": "latest", "snapshot_id": "legacy"})
+    catalog = CurationCatalog(root)
+    before = {table: list(catalog.view.iter_rows(table)) for table in (ASSESSMENTS, POPULATIONS, ITEMS)}
+    packet = catalog.packet("opaque-assessment-key", "opaque-assessment-key")
+    refreshed = refresh_catalog(root, "canonical", [source], retired_source_ids=frozenset())
+    assert refreshed.source_count == 1
+    catalog = CurationCatalog(root)
+    (selected,) = catalog.sources("canonical")
+    assert selected.id == current and selected.assessment_key == "opaque-assessment-key"
+    assert catalog.assessment("opaque-assessment-key").source_id == current
+    assert catalog.view.point(INVENTORY, snapshot_id="legacy", id=old)["declaration"]["id"] == old
+    assert {table: list(catalog.view.iter_rows(table)) for table in before} == before
+    assert catalog.packet("opaque-assessment-key", "opaque-assessment-key") == packet

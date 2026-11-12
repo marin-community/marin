@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from finestore.layout import BlobTables, OnConflict, parse_uri
 from finestore.reader import ReadView
-from finestore.rl.source_identity import PENDING_SOURCE_ID_RETIREMENTS
+from finestore.rl.source_identity import SourceId
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 
@@ -539,7 +539,7 @@ class ActorCensusInput(CatalogRecord):
 
 
 class SourceDeclaration(CatalogRecord):
-    id: str
+    id: SourceId
     name: str
     display_name: str
     origin: SourceOrigin
@@ -593,9 +593,7 @@ class SourceDeclaration(CatalogRecord):
             != (self.dataset_id, self.dataset_revision, self.pipeline.version)
         ):
             raise ValueError("Actor census input or converter version differs from the declaration")
-        if PENDING_SOURCE_ID_RETIREMENTS.get(self.id, self.id) != source_identifier(
-            self.origin, self.upstream_dataset, self.subset, self.variant
-        ):
+        if self.id != source_identifier(self.origin, self.upstream_dataset, self.subset, self.variant):
             raise ValueError("Source ID differs from generated identity")
         if self.display_name != source_title(self.upstream_name, self.subset, self.variant):
             raise ValueError("Source title differs from generated title")
@@ -683,7 +681,7 @@ class ArchivedFile(CatalogRecord):
 class AssessmentAttempt(CatalogRecord):
     run_id: str
     name: str
-    source_id: str | None
+    source_id: SourceId | None
     pipeline_key: str | None
     status: AssessmentStatus
     reason: str | None
@@ -693,7 +691,7 @@ class AssessmentAttempt(CatalogRecord):
 
 class Assessment(CatalogRecord):
     pipeline_key: str
-    source_id: str
+    source_id: SourceId
     scope: str
     model: ModelReference
     rubric: str
@@ -725,7 +723,7 @@ class AssessmentItem(CatalogRecord):
 
 class SnapshotSource(CatalogRecord):
     snapshot_id: str
-    id: str
+    id: SourceId
     declaration: SourceDeclaration
     assessment_key: str | None
     latest_attempt_key: str | None

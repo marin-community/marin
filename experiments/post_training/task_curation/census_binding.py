@@ -10,7 +10,9 @@ from dataclasses import replace
 from pathlib import Path
 
 from finestore.rl.curation import ActorCensusInput, DaytonaMeasurement, IntegrityContractSummary
+from finestore.rl.source_identity import SourceId, canonical_source_id
 from pydantic import BaseModel, ConfigDict, model_validator
+from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training.task_curation.source import RlDataSource
 
@@ -18,7 +20,7 @@ from experiments.post_training.task_curation.source import RlDataSource
 class ActorCensusReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    source_id: str
+    source_id: SourceId
     input: ActorCensusInput
     measurement: DaytonaMeasurement
     integrity_contracts: IntegrityContractSummary | None
@@ -112,10 +114,57 @@ def receipt_from_census(census: Mapping, summary: IntegrityContractSummary | Non
     )
 
 
+def integrity_summary_for_actor(actor: Mapping, integrity: Mapping) -> IntegrityContractSummary:
+    """Join refreshed contract evidence only when it measured the actor census's exact input."""
+    fields = ("input_artifact", "converter_version", "converter_revision", "task_count")
+    if canonical_source_id(actor["source_id"]) != canonical_source_id(integrity["source_id"]) or any(
+        actor[name] != integrity[name] for name in fields
+    ):
+        raise ValueError(f"Integrity census input differs from actor census: {actor['source_id']}")
+    raw = integrity["summary"]
+    if raw["schema_version"] != 2:
+        raise ValueError("Integrity census requires corrected family and SHARED-missing metadata")
+    groups = [
+        {
+            **{
+                name: group.get(name)
+                for name in ("id", "version", "dependency_state", "native_family", "present", "count")
+            },
+            "harness_policy_sha256": canonical_sha256(group["harness_policy"]) if group["present"] else None,
+        }
+        for group in raw["groups"]
+    ]
+    example = raw["example"]
+    return IntegrityContractSummary.model_validate(
+        {
+            **{
+                name: raw[name]
+                for name in (
+                    "distinct_groups",
+                    "absent_contract_tasks",
+                    "required_shared_tasks",
+                    "shared_missing_contract_tasks",
+                    "evidence_url",
+                    "dataset_id",
+                    "dataset_revision",
+                    "task_specs_sha256",
+                )
+            },
+            "groups": groups,
+            "example": (
+                None
+                if example is None
+                else {"task_id": example["task_id"], "contract_json": json.dumps(example["contract"], sort_keys=True)}
+            ),
+        }
+    )
+
+
 def read_census_receipts(directory: Path) -> dict[str, ActorCensusReceipt]:
     receipts = {}
     for path in sorted(directory.glob("part-*.json")):
         for source_id, record in json.loads(path.read_text()).items():
+            source_id = canonical_source_id(source_id)
             receipt = ActorCensusReceipt.model_validate(record)
             if source_id != receipt.source_id or source_id in receipts:
                 raise ValueError(f"Duplicate or mismatched census source identity: {source_id}")
@@ -127,14 +176,26 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--censuses", type=Path, nargs="+", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--integrity-censuses", type=Path, nargs="*", default=[])
     args = parser.parse_args()
+    integrities = {}
+    for path in args.integrity_censuses:
+        for record in json.loads(path.read_text()):
+            source_id = canonical_source_id(record["source_id"])
+            if source_id in integrities:
+                raise ValueError(f"Duplicate integrity census: {source_id}")
+            integrities[source_id] = record
     receipts = {}
     for path in args.censuses:
         for record in json.loads(path.read_text()):
-            receipt = receipt_from_census(record, None)
+            integrity = integrities.get(canonical_source_id(record["source_id"]))
+            summary = None if integrity is None else integrity_summary_for_actor(record, integrity)
+            receipt = receipt_from_census(record, summary)
             if receipt.source_id in receipts:
                 raise ValueError(f"Duplicate actor census: {receipt.source_id}")
             receipts[receipt.source_id] = receipt.model_dump(mode="json")
+    if unknown := set(integrities) - set(receipts):
+        raise ValueError(f"Integrity censuses have no actor receipt: {sorted(unknown)}")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     entries = sorted(receipts.items())
     for old in args.output_dir.glob("part-*.json"):

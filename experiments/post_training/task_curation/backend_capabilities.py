@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 from finestore.rl.curation import CurationCatalog
+from finestore.rl.source_identity import canonical_source_id, canonical_source_map
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rolloutengine.machines import _machine_spec
 from rolloutengine.models import MachineRuntimeSpec
@@ -186,12 +187,17 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
     runtime_defaults = {
         role: RuntimeProfile.model_validate(manifest["runtime_defaults"][role]) for role in ("agent", "grader")
     }
-    source_ids = manifest["source_ids"]
+    source_ids = [canonical_source_id(value) for value in manifest["source_ids"]]
+    manifest = {
+        **manifest,
+        "grading_environments": canonical_source_map(manifest.get("grading_environments", {})),
+        "integrity_contracts": canonical_source_map(manifest.get("integrity_contracts", {})),
+    }
     if len(set(source_ids)) != len(source_ids):
         raise ValueError("Duplicate inventory source IDs")
     selected = {}
     for entry in manifest["inputs"]:
-        source_id = entry["source_id"]
+        source_id = canonical_source_id(entry["source_id"])
         if source_id not in source_ids or source_id in selected:
             raise ValueError(f"Unknown or duplicate input source: {source_id}")
         paths = [Path(path) for path in entry["paths"]]

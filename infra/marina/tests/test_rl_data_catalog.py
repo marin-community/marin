@@ -34,6 +34,7 @@ from finestore.rl.curation import (
     SourceOrigin,
     register_catalog,
 )
+from finestore.rl.source_identity import canonical_source_id
 from finestore.store import DataStore
 from marina.applets import AppletServices, validate_query
 from marina.client import AppletQuery
@@ -43,6 +44,7 @@ from shellbox.survey import CapabilityCell
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from taskcompendium.backend_requirements import BackendSourceMap, BackendSurvey, backend_schema_sha256
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
 
@@ -108,7 +110,7 @@ def catalog_identity_map(catalog: CurationCatalog) -> SourceIdentitySurvey:
 
 def test_backend_survey_refresh_and_failed_staging_preserve_selected_map(catalog_database, catalog_query, tmp_path):
     root = str(tmp_path / "catalog")
-    publish_sample(root, "graded", source_id="a")
+    publish_sample(root, "graded", source_id="Marin:a")
     catalog = CurationCatalog(root)
     first = catalog_backend_map(catalog)
     identities = catalog_identity_map(catalog)
@@ -136,13 +138,13 @@ def test_source_fingerprint_is_stored_separately_and_failed_refresh_keeps_previo
     catalog_database, catalog_query, tmp_path
 ):
     root = str(tmp_path / "catalog")
-    publish_sample(root, "graded", source_id="a")
+    publish_sample(root, "graded", source_id="Marin:a")
     catalog = CurationCatalog(root)
     fixture = Path(__file__).resolve().parents[3] / (
         "experiments/post_training/task_curation/tests/fixtures/source-overlap-fingerprints.json"
     )
     fingerprint = SourceFingerprint.model_validate(next(iter(json.loads(fixture.read_text()).values())))
-    identities = catalog_identity_map(catalog).model_copy(update={"fingerprints": {"a": fingerprint}})
+    identities = catalog_identity_map(catalog).model_copy(update={"fingerprints": {"Marin:a": fingerprint}})
     backends = catalog_backend_map(catalog)
     load_surveyed_catalog(catalog, catalog_query, backends, identities)
     newer = identities.model_copy(update={"generated_at": "2026-11-12T02:00:00+00:00"})
@@ -157,7 +159,7 @@ def test_source_fingerprint_is_stored_separately_and_failed_refresh_keeps_previo
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         summary = client.get("/sources").json()["sources"][0]["source_fingerprint"]
         assert summary["sample_sha256"] == fingerprint.sample_sha256 and "sample" not in summary
-        assert client.get("/source-fingerprint", params={"source_id": "a"}).json()["fingerprint"]["sample"] == [
+        assert client.get("/source-fingerprint", params={"source_id": "Marin:a"}).json()["fingerprint"]["sample"] == [
             sample.model_dump(mode="json") for sample in fingerprint.sample
         ]
         assert client.get("/source-duplicates").json()["generated_at"] == identities.generated_at
@@ -201,12 +203,19 @@ def catalog_query(catalog_database: Engine) -> AppletQuery:
     return query
 
 
-def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False, source_id: str = "Marin:math") -> None:
+def publish_sample(
+    root: str,
+    snapshot_id: str,
+    *,
+    missing_packet: bool = False,
+    source_id: str = "Marin:math",
+    origin: SourceOrigin = SourceOrigin.MARIN,
+) -> None:
     declaration = SourceDeclaration(
         id=source_id,
         name="Marin:math",
         display_name="Math",
-        origin=SourceOrigin.MARIN,
+        origin=origin,
         build_path="test",
         upstream_dataset=source_id.partition(":")[2],
         upstream_name="Math",
@@ -812,3 +821,140 @@ def test_source_grade_uses_sample_fractions_and_zero_output(catalog_database, ve
     assert row["result_reviewed"] == sum(v not in {"unknown", "missing_task"} for v in verdicts)
     if verdicts == ["good"] * 99 + ["bad"]:
         assert row["good_fraction"] == 0.99
+
+
+def test_historical_alias_urls_keep_assessments_packets_and_sql_counts(catalog_database, catalog_query, tmp_path):
+    old = "MarinSkyRL:aime24"
+    current = canonical_source_id(old)
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "frozen", source_id=current, origin=SourceOrigin.HUGGINGFACEH4)
+    with DataStore.open(root) as store:
+        register_catalog(store)
+        record = {
+            key: value
+            for key, value in store.read_view().point(INVENTORY, snapshot_id="frozen", id=current).items()
+            if key in SnapshotSource.model_fields
+        }
+        record.update(snapshot_id="legacy", id=old, declaration={**record["declaration"], "id": old})
+        assessment = {
+            key: value
+            for key, value in store.read_view().point(ASSESSMENTS, pipeline_key="frozen").items()
+            if key in Assessment.model_fields
+        }
+        assessment["source_id"] = old
+        with store.transaction() as transaction:
+            transaction.table(INVENTORY).add(record)
+            transaction.table(ASSESSMENTS).add(assessment)
+            transaction.table(SNAPSHOTS).add(
+                {"snapshot_id": "legacy", "created_at": "2026-11-12T00:00:00Z", "source_count": 1}
+            )
+            transaction.table(CURRENT).add({"name": "latest", "snapshot_id": "legacy"})
+    catalog = CurationCatalog(root)
+    original_packet = catalog.packet("frozen", "one")
+    loaded = load_catalog(catalog, catalog_query)
+    assert {key: loaded["counts"][key] for key in ("sources", "assessments", "populations", "items", "packets")} == {
+        "sources": 1,
+        "assessments": 1,
+        "populations": 2,
+        "items": 3,
+        "packets": 3,
+    }
+    # Exercise a retained SQL load too: its physical keys still use the historical ID.
+    with catalog_database.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE atlas_sources SET id=:old, declaration=jsonb_set(declaration, '{id}', "
+                "to_jsonb(CAST(:old AS text)))"
+            ),
+            {"old": old},
+        )
+        connection.execute(
+            text(
+                "UPDATE atlas_backend_sources SET source_id=:old, "
+                "capabilities=jsonb_set(capabilities, '{source_id}', to_jsonb(CAST(:old AS text)))"
+            ),
+            {"old": old},
+        )
+        connection.execute(text("UPDATE atlas_assessments SET source_id=:old"), {"old": old})
+    shutil.rmtree(root)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        source = client.get("/sources").json()["sources"][0]
+        assert source["id"] == source["backend_capabilities"]["source_id"] == current
+        for identifier in (old, current):
+            report = client.get("/assessment", params={"source_id": identifier}).json()["report"]
+            assert report["source_id"] == current and report["pipeline_key"] == "frozen"
+            assert len(report["evidence"]["samples"]) == 3
+            packet = client.get("/evidence", params={"source_id": identifier, "task_id": "one"}).json()["packet"]
+            assert packet == original_packet
+            assert client.get("/source-fingerprint", params={"source_id": identifier}).json()["source_id"] == current
+
+
+def test_historical_curriculum_alias_keeps_counts_samples_and_pagination(catalog_database, catalog_query, tmp_path):
+    old = "MarinSkyRL:aime24"
+    current = canonical_source_id(old)
+    path = curriculum_release(tmp_path)
+    load_curriculum(str(path), str(tmp_path / "coverage.json"), catalog_query)
+    with catalog_database.begin() as connection:
+        # Seed a retained historical population without changing its foreign-key contract.
+        connection.execute(
+            text(
+                "INSERT INTO curriculum_sources SELECT load_id, :old, declaration, family, alignment "
+                "FROM curriculum_sources WHERE source_id='Marin:a'"
+            ),
+            {"old": old},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO curriculum_tasks SELECT load_id, :old, task_id, content_hash, "
+                "description_status, description, detail FROM curriculum_tasks WHERE source_id='Marin:a'"
+            ),
+            {"old": old},
+        )
+        connection.execute(text("UPDATE curriculum_matches SET source_id=:old WHERE source_id='Marin:a'"), {"old": old})
+        connection.execute(
+            text("UPDATE curriculum_statistics SET source_id=:old WHERE source_id='Marin:a'"), {"old": old}
+        )
+        connection.execute(text("DELETE FROM curriculum_tasks WHERE source_id='Marin:a'"))
+        connection.execute(text("DELETE FROM curriculum_sources WHERE source_id='Marin:a'"))
+        connection.execute(
+            text(
+                "UPDATE curriculum_sources SET alignment=jsonb_set(alignment, '{source_id}', "
+                "to_jsonb(CAST(:old AS text))) WHERE source_id=:old"
+            ),
+            {"old": old},
+        )
+        connection.execute(
+            text(
+                "UPDATE curriculum_tasks SET detail=jsonb_set(detail, '{source_id}', "
+                "to_jsonb(CAST(:old AS text))) WHERE source_id=:old"
+            ),
+            {"old": old},
+        )
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        for identifier in (old, current):
+            coverage = client.get("/curriculum", params={"source_id": identifier}).json()
+            assert coverage["totals"]["denominator"] == 300
+            source = next(row for row in coverage["sources"] if row["source_id"] == current)
+            assert source["alignment"]["source_id"] == current
+            first = client.get("/curriculum/tasks", params={"source_id": identifier, "limit": 1}).json()
+            second = client.get(
+                "/curriculum/tasks", params={"source_id": identifier, "limit": 2, "cursor": first["next_cursor"]}
+            ).json()
+            assert [(row["source_id"], row["task_id"]) for row in first["tasks"] + second["tasks"]] == [
+                (current, "one"),
+                (current, "three"),
+                (current, "two"),
+            ]
+            assert not second["next_cursor"]
+            detail = client.get("/curriculum/task", params={"source_id": identifier, "task_id": "one"}).json()["task"]
+            assert detail["source_id"] == current and detail["task_preview"]
+
+
+def test_frozen_backend_survey_digest_survives_canonical_source_projection(tmp_path):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "frozen", source_id="HuggingFaceH4:aime24", origin=SourceOrigin.HUGGINGFACEH4)
+    raw = catalog_backend_map(CurationCatalog(root)).model_dump(mode="json")
+    raw["sources"][0]["source_id"] = "MarinSkyRL:aime24"
+    survey = BackendSurvey.model_validate(raw)
+    assert survey.sources[0].source_id == "HuggingFaceH4:aime24"
+    assert canonical_sha256(survey.identity_payload()) == canonical_sha256(raw)

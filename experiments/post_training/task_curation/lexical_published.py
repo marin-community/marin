@@ -9,11 +9,12 @@ import json
 import logging
 from collections.abc import Iterable
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 
 import pyarrow.parquet as pq
+from finestore.rl.source_identity import canonical_source_id, original_source_id
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import ArtifactStep, StepContext, run
@@ -85,13 +86,17 @@ def normalize_published(config: PublishedTextConfig) -> SourceTextPopulation:
 def published_text_config(
     population: PublishedPopulation, source: ArtifactStep, ctx: StepContext
 ) -> PublishedTextConfig:
-    return PublishedTextConfig(population, ctx.artifact_path(source), ctx.output_path)
+    return PublishedTextConfig(
+        replace(population, source_id=original_source_id(population.source_id)),
+        ctx.artifact_path(source),
+        ctx.output_path,
+    )
 
 
 def published_text_steps(populations: list[PublishedPopulation], version: str) -> list[ArtifactStep]:
     steps = []
     for population in populations:
-        key = canonical_sha256(population.source_id)[:20]
+        key = canonical_sha256(original_source_id(population.source_id))[:20]
         source = ArtifactStep.adopt(f"rl-data/atlas/lexical/published/{key}", version, population.tasks_parquet_uri)
         steps.append(
             ArtifactStep(
@@ -116,7 +121,10 @@ def main() -> None:
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     configure_coreweave_s3()
-    populations = [PublishedPopulation(**row) for row in json.loads(args.manifest.read_text())]
+    populations = [
+        PublishedPopulation(**{**row, "source_id": canonical_source_id(row["source_id"])})
+        for row in json.loads(args.manifest.read_text())
+    ]
     if len({p.source_id for p in populations}) != len(populations):
         raise ValueError("Each published source must occur once")
     with artifact_prefix(args.artifact_root):

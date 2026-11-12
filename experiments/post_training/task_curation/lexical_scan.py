@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.source_identity import canonical_source_id, original_source_id
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -86,7 +87,7 @@ class ReportConfig:
 
 
 def population_key(source_id: str) -> str:
-    return canonical_sha256(source_id)[:20]
+    return canonical_sha256(original_source_id(source_id))[:20]
 
 
 def build_drop_sets(config: DropConfig, *, campaign: CampaignRuntime) -> LexicalDropSets:
@@ -269,7 +270,10 @@ def scan_steps(
     ]
     bloom = ArtifactStep.adopt("rl-data/atlas/lexical/eval-bloom", version, bloom_path)
     cohort = canonical_sha256(
-        sorted((p.source_id, p.dataset_revision, p.converter_revision, p.text_sha256) for p in populations)
+        sorted(
+            (original_source_id(p.source_id), p.dataset_revision, p.converter_revision, p.text_sha256)
+            for p in populations
+        )
     )[:20]
     root = f"rl-data/atlas/lexical/scan/{cohort}"
     drops = ArtifactStep(
@@ -342,7 +346,7 @@ def main() -> None:
     args = parser.parse_args()
     configure_coreweave_s3()
     populations = [SourceTextPopulation.model_validate(row) for row in json.loads(args.populations.read_text())]
-    expected = json.loads(args.source_ids.read_text())
+    expected = [canonical_source_id(value) for value in json.loads(args.source_ids.read_text())]
     if sorted(expected) != sorted(p.source_id for p in populations) or len(expected) != len(set(expected)):
         raise ValueError("Normalized populations must cover every requested source exactly once")
     runtime = CampaignRuntime()

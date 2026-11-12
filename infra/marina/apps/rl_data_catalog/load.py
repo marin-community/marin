@@ -92,8 +92,8 @@ def load_catalog(
         raise ValueError("Backend map uses another requirement schema; rerun the survey")
     if (identities.catalog_root, identities.snapshot_id) != (catalog.root, snapshot.snapshot_id):
         raise ValueError("Source identity map belongs to another catalog snapshot")
-    identity_id = canonical_sha256(identities.model_dump(mode="json"))
-    survey_id = canonical_sha256(backend_map.model_dump(mode="json"))
+    identity_id = canonical_sha256(identities.identity_payload())
+    survey_id = canonical_sha256(backend_map.identity_payload())
     current = query(
         """
         SELECT c.load_id, l.catalog_root, l.snapshot_id, b.survey_id, i.survey_id AS identity_id FROM atlas_current c

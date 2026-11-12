@@ -6,24 +6,27 @@
 from collections.abc import Mapping
 from typing import Literal
 
+from finestore.rl.source_identity import SourceId, original_source_id
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from shellbox.machine import Backend, NetworkPolicy
 from shellbox.requirements import (
     COMMAND_FIELDS,
-    ENVIRONMENT_FIELDS,
-    EXECUTION_FIELDS,
-    HARBOR_ENVIRONMENT_FIELDS,
     MACHINE_FIELDS,
-    RESOURCE_FIELDS,
-    RUNTIME_FIELDS,
-    SCRIPT_GRADER_FIELDS,
     SOURCE_FIELDS,
-    TASK_FIELDS,
     Requirement,
     Support,
 )
 from shellbox.survey import CapabilityCell
 
+from taskcompendium.backend_fields import (
+    ENVIRONMENT_FIELDS,
+    EXECUTION_FIELDS,
+    HARBOR_ENVIRONMENT_FIELDS,
+    RESOURCE_FIELDS,
+    RUNTIME_FIELDS,
+    SCRIPT_GRADER_FIELDS,
+    TASK_FIELDS,
+)
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import EnvironmentRequirements, ExecutionRequirements
 
@@ -80,7 +83,7 @@ class BackendFit(BaseModel):
 class BackendSourceMap(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    source_id: str
+    source_id: SourceId
     basis: Literal["converted_spec_census", "unassessed"]
     task_count: int
     inputs: dict[str, str]
@@ -110,6 +113,13 @@ class BackendSurvey(BaseModel):
     matrix: list[CapabilityCell]
     deployment_limits: dict[str, dict]
     sources: list[BackendSourceMap]
+
+    def identity_payload(self) -> dict:
+        """Preserve the published survey identity while source labels resolve canonically."""
+        document = self.model_dump(mode="json")
+        for source in document["sources"]:
+            source["source_id"] = original_source_id(source["source_id"])
+        return document
 
     @model_validator(mode="after")
     def validate_coverage(self) -> "BackendSurvey":

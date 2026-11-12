@@ -63,7 +63,7 @@
       }
     },
     {
-      "id": "Campaign Release:smartie-calibforge-shared-v2",
+      "id": "TaskTrove:smartie-calibforge-shared-v2",
       "name": "smartie-calibforge-shared-v2",
       "display_name": "Snowball Smartie repaired CalibForge shared environment v2",
       "origin": "Snowball Smartie RL",
@@ -170,7 +170,7 @@
       }
     },
     {
-      "id": "Campaign Release:smartie-swesmith-admitted",
+      "id": "TaskTrove:smartie-swesmith-admitted",
       "name": "smartie-swesmith-admitted",
       "display_name": "Snowball Smartie SWE-Smith admitted cohort",
       "origin": "Snowball Smartie RL",
@@ -366,7 +366,7 @@
       }
     },
     {
-      "id": "Harbor Hub:skill2env",
+      "id": "Harbor Hub:skill2env/skill2env",
       "name": "skill2env",
       "display_name": "skill2env/skill2env",
       "origin": "Harbor Hub",
@@ -505,7 +505,7 @@
       "disposition_reason": "User explicitly excluded the raw CalibForge source from further work."
     },
     {
-      "id": "Task Trove:DCAgent__exp_rle_adversarial-v6",
+      "id": "TaskTrove:DCAgent__exp_rle_adversarial-v6",
       "name": "DCAgent__exp_rle_adversarial-v6",
       "display_name": "DCAgent/exp_rle_adversarial-v6",
       "origin": "Task Trove",
@@ -598,7 +598,7 @@
       }
     },
     {
-      "id": "Task Trove:DCAgent__exp_rpt_nemotron-cpp",
+      "id": "TaskTrove:DCAgent__exp_rpt_nemotron-cpp",
       "name": "DCAgent__exp_rpt_nemotron-cpp",
       "display_name": "DCAgent/exp_rpt_nemotron-cpp",
       "origin": "Task Trove",
@@ -691,7 +691,7 @@
       }
     },
     {
-      "id": "Task Trove:DCAgent__inferredbugs-sandboxes-verifier",
+      "id": "TaskTrove:DCAgent__inferredbugs-sandboxes-verifier",
       "name": "DCAgent__inferredbugs-sandboxes-verifier",
       "display_name": "DCAgent/inferredbugs-sandboxes-verifier",
       "origin": "Task Trove",
@@ -784,7 +784,7 @@
       }
     },
     {
-      "id": "Task Trove:DCAgent__mix_h4_binary_easy",
+      "id": "TaskTrove:DCAgent__mix_h4_binary_easy",
       "name": "DCAgent__mix_h4_binary_easy",
       "display_name": "DCAgent/mix_h4_binary_easy",
       "origin": "Task Trove",
@@ -877,7 +877,7 @@
       }
     },
     {
-      "id": "Task Trove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3",
+      "id": "TaskTrove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3",
       "name": "DCAgent__selfinstruct-naive-sandboxes-2-verified-v3",
       "display_name": "DCAgent/selfinstruct-naive-sandboxes-2-verified-v3",
       "origin": "Task Trove",
@@ -970,7 +970,7 @@
       }
     },
     {
-      "id": "Task Trove:GAIR__OpenSWE__openswe_oss",
+      "id": "TaskTrove:GAIR__OpenSWE__openswe_oss",
       "name": "GAIR__OpenSWE__openswe_oss",
       "display_name": "GAIR/OpenSWE__openswe_oss",
       "origin": "Task Trove",
@@ -1070,7 +1070,7 @@
       }
     },
     {
-      "id": "Task Trove:GAIR__OpenSWE__openswe_other",
+      "id": "TaskTrove:GAIR__OpenSWE__openswe_other",
       "name": "GAIR__OpenSWE__openswe_other",
       "display_name": "GAIR/OpenSWE__openswe_other",
       "origin": "Task Trove",
@@ -1170,7 +1170,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__codeelo-v2",
+      "id": "TaskTrove:laion__codeelo-v2",
       "name": "laion__codeelo-v2",
       "display_name": "laion/codeelo-v2",
       "origin": "Task Trove",
@@ -1263,7 +1263,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_bugsinpy-v4",
+      "id": "TaskTrove:laion__exp_rpt_bugsinpy-v4",
       "name": "laion__exp_rpt_bugsinpy-v4",
       "display_name": "laion/exp_rpt_bugsinpy-v4",
       "origin": "Task Trove",
@@ -1356,7 +1356,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_codenet-python-v4",
+      "id": "TaskTrove:laion__exp_rpt_codenet-python-v4",
       "name": "laion__exp_rpt_codenet-python-v4",
       "display_name": "laion/exp_rpt_codenet-python-v4",
       "origin": "Task Trove",
@@ -1449,7 +1449,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_crosscodeeval-csharp-v4",
+      "id": "TaskTrove:laion__exp_rpt_crosscodeeval-csharp-v4",
       "name": "laion__exp_rpt_crosscodeeval-csharp-v4",
       "display_name": "laion/exp_rpt_crosscodeeval-csharp-v4",
       "origin": "Task Trove",
@@ -1542,7 +1542,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_crosscodeeval-java-v3",
+      "id": "TaskTrove:laion__exp_rpt_crosscodeeval-java-v3",
       "name": "laion__exp_rpt_crosscodeeval-java-v3",
       "display_name": "laion/exp_rpt_crosscodeeval-java-v3",
       "origin": "Task Trove",
@@ -1635,7 +1635,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_crosscodeeval-python-v2",
+      "id": "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2",
       "name": "laion__exp_rpt_crosscodeeval-python-v2",
       "display_name": "laion/exp_rpt_crosscodeeval-python-v2",
       "origin": "Task Trove",
@@ -1728,7 +1728,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_crosscodeeval-typescript-v2",
+      "id": "TaskTrove:laion__exp_rpt_crosscodeeval-typescript-v2",
       "name": "laion__exp_rpt_crosscodeeval-typescript-v2",
       "display_name": "laion/exp_rpt_crosscodeeval-typescript-v2",
       "origin": "Task Trove",
@@ -1821,7 +1821,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_ghactions-v3",
+      "id": "TaskTrove:laion__exp_rpt_ghactions-v3",
       "name": "laion__exp_rpt_ghactions-v3",
       "display_name": "laion/exp_rpt_ghactions-v3",
       "origin": "Task Trove",
@@ -1914,7 +1914,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_methods2test-large-v4",
+      "id": "TaskTrove:laion__exp_rpt_methods2test-large-v4",
       "name": "laion__exp_rpt_methods2test-large-v4",
       "display_name": "laion/exp_rpt_methods2test-large-v4",
       "origin": "Task Trove",
@@ -2007,7 +2007,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_nemotron-junit-v6",
+      "id": "TaskTrove:laion__exp_rpt_nemotron-junit-v6",
       "name": "laion__exp_rpt_nemotron-junit-v6",
       "display_name": "laion/exp_rpt_nemotron-junit-v6",
       "origin": "Task Trove",
@@ -2100,7 +2100,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_scaffold-v3",
+      "id": "TaskTrove:laion__exp_rpt_scaffold-v3",
       "name": "laion__exp_rpt_scaffold-v3",
       "display_name": "laion/exp_rpt_scaffold-v3",
       "origin": "Task Trove",
@@ -2193,7 +2193,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_stack-cpp-v4",
+      "id": "TaskTrove:laion__exp_rpt_stack-cpp-v4",
       "name": "laion__exp_rpt_stack-cpp-v4",
       "display_name": "laion/exp_rpt_stack-cpp-v4",
       "origin": "Task Trove",
@@ -2286,7 +2286,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_stack-dockerfile-gpt5mini-v7",
+      "id": "TaskTrove:laion__exp_rpt_stack-dockerfile-gpt5mini-v7",
       "name": "laion__exp_rpt_stack-dockerfile-gpt5mini-v7",
       "display_name": "laion/exp_rpt_stack-dockerfile-gpt5mini-v7",
       "origin": "Task Trove",
@@ -2379,7 +2379,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_stack-go-v5",
+      "id": "TaskTrove:laion__exp_rpt_stack-go-v5",
       "name": "laion__exp_rpt_stack-go-v5",
       "display_name": "laion/exp_rpt_stack-go-v5",
       "origin": "Task Trove",
@@ -2472,7 +2472,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_stack-jest-v5",
+      "id": "TaskTrove:laion__exp_rpt_stack-jest-v5",
       "name": "laion__exp_rpt_stack-jest-v5",
       "display_name": "laion/exp_rpt_stack-jest-v5",
       "origin": "Task Trove",
@@ -2565,7 +2565,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_stack-junit-v6",
+      "id": "TaskTrove:laion__exp_rpt_stack-junit-v6",
       "name": "laion__exp_rpt_stack-junit-v6",
       "display_name": "laion/exp_rpt_stack-junit-v6",
       "origin": "Task Trove",
@@ -2658,7 +2658,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_stack-php-large-v9",
+      "id": "TaskTrove:laion__exp_rpt_stack-php-large-v9",
       "name": "laion__exp_rpt_stack-php-large-v9",
       "display_name": "laion/exp_rpt_stack-php-large-v9",
       "origin": "Task Trove",
@@ -2751,7 +2751,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_stack-pytest-large-v3",
+      "id": "TaskTrove:laion__exp_rpt_stack-pytest-large-v3",
       "name": "laion__exp_rpt_stack-pytest-large-v3",
       "display_name": "laion/exp_rpt_stack-pytest-large-v3",
       "origin": "Task Trove",
@@ -2844,7 +2844,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__exp_rpt_stack-rspec-v4",
+      "id": "TaskTrove:laion__exp_rpt_stack-rspec-v4",
       "name": "laion__exp_rpt_stack-rspec-v4",
       "display_name": "laion/exp_rpt_stack-rspec-v4",
       "origin": "Task Trove",
@@ -2937,7 +2937,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__magicoder-v4",
+      "id": "TaskTrove:laion__magicoder-v4",
       "name": "laion__magicoder-v4",
       "display_name": "laion/magicoder-v4",
       "origin": "Task Trove",
@@ -3030,7 +3030,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__mix_h10_reward_proportional-v2",
+      "id": "TaskTrove:laion__mix_h10_reward_proportional-v2",
       "name": "laion__mix_h10_reward_proportional-v2",
       "display_name": "laion/mix_h10_reward_proportional-v2",
       "origin": "Task Trove",
@@ -3123,7 +3123,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__mix_h11_single_skill_only-v2",
+      "id": "TaskTrove:laion__mix_h11_single_skill_only-v2",
       "name": "laion__mix_h11_single_skill_only-v2",
       "display_name": "laion/mix_h11_single_skill_only-v2",
       "origin": "Task Trove",
@@ -3216,7 +3216,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__mix_h8_original_tests-v2",
+      "id": "TaskTrove:laion__mix_h8_original_tests-v2",
       "name": "laion__mix_h8_original_tests-v2",
       "display_name": "laion/mix_h8_original_tests-v2",
       "origin": "Task Trove",
@@ -3309,7 +3309,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__nemotron-gym-agentic-function-calling-pivot-v3",
+      "id": "TaskTrove:laion__nemotron-gym-agentic-function-calling-pivot-v3",
       "name": "laion__nemotron-gym-agentic-function-calling-pivot-v3",
       "display_name": "laion/nemotron-gym-agentic-function-calling-pivot-v3",
       "origin": "Task Trove",
@@ -3402,7 +3402,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__nemotron-gym-agentic-indirect-prompt-injection-v3",
+      "id": "TaskTrove:laion__nemotron-gym-agentic-indirect-prompt-injection-v3",
       "name": "laion__nemotron-gym-agentic-indirect-prompt-injection-v3",
       "display_name": "laion/nemotron-gym-agentic-indirect-prompt-injection-v3",
       "origin": "Task Trove",
@@ -3497,7 +3497,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__nemotron-gym-agentic-swe-pivot-v4",
+      "id": "TaskTrove:laion__nemotron-gym-agentic-swe-pivot-v4",
       "name": "laion__nemotron-gym-agentic-swe-pivot-v4",
       "display_name": "laion/nemotron-gym-agentic-swe-pivot-v4",
       "origin": "Task Trove",
@@ -3592,7 +3592,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__nemotron-gym-cfbench-v4",
+      "id": "TaskTrove:laion__nemotron-gym-cfbench-v4",
       "name": "laion__nemotron-gym-cfbench-v4",
       "display_name": "laion/nemotron-gym-cfbench-v4",
       "origin": "Task Trove",
@@ -3687,7 +3687,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__nemotron-gym-identity-following-v4",
+      "id": "TaskTrove:laion__nemotron-gym-identity-following-v4",
       "name": "laion__nemotron-gym-identity-following-v4",
       "display_name": "laion/nemotron-gym-identity-following-v4",
       "origin": "Task Trove",
@@ -3782,7 +3782,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__nemotron-gym-instruction-following-adversarial-v5",
+      "id": "TaskTrove:laion__nemotron-gym-instruction-following-adversarial-v5",
       "name": "laion__nemotron-gym-instruction-following-adversarial-v5",
       "display_name": "laion/nemotron-gym-instruction-following-adversarial-v5",
       "origin": "Task Trove",
@@ -3877,7 +3877,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__nemotron-gym-instruction-following-citation-v2",
+      "id": "TaskTrove:laion__nemotron-gym-instruction-following-citation-v2",
       "name": "laion__nemotron-gym-instruction-following-citation-v2",
       "display_name": "laion/nemotron-gym-instruction-following-citation-v2",
       "origin": "Task Trove",
@@ -3972,7 +3972,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__nemotron-gym-instruction-following-freeform-v2",
+      "id": "TaskTrove:laion__nemotron-gym-instruction-following-freeform-v2",
       "name": "laion__nemotron-gym-instruction-following-freeform-v2",
       "display_name": "laion/nemotron-gym-instruction-following-freeform-v2",
       "origin": "Task Trove",
@@ -4067,7 +4067,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__nemotron-gym-instruction-following-multiturnchat-v4",
+      "id": "TaskTrove:laion__nemotron-gym-instruction-following-multiturnchat-v4",
       "name": "laion__nemotron-gym-instruction-following-multiturnchat-v4",
       "display_name": "laion/nemotron-gym-instruction-following-multiturnchat-v4",
       "origin": "Task Trove",
@@ -4162,7 +4162,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__nemotron-gym-inverse-ifeval-v4",
+      "id": "TaskTrove:laion__nemotron-gym-inverse-ifeval-v4",
       "name": "laion__nemotron-gym-inverse-ifeval-v4",
       "display_name": "laion/nemotron-gym-inverse-ifeval-v4",
       "origin": "Task Trove",
@@ -4257,7 +4257,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__nemotron-gym-knowledge-web-search-mcqa-v2",
+      "id": "TaskTrove:laion__nemotron-gym-knowledge-web-search-mcqa-v2",
       "name": "laion__nemotron-gym-knowledge-web-search-mcqa-v2",
       "display_name": "laion/nemotron-gym-knowledge-web-search-mcqa-v2",
       "origin": "Task Trove",
@@ -4352,7 +4352,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__nemotron-gym-litmus-bench-v2",
+      "id": "TaskTrove:laion__nemotron-gym-litmus-bench-v2",
       "name": "laion__nemotron-gym-litmus-bench-v2",
       "display_name": "laion/nemotron-gym-litmus-bench-v2",
       "origin": "Task Trove",
@@ -4447,7 +4447,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__nemotron-gym-math-advanced-calculations-v4",
+      "id": "TaskTrove:laion__nemotron-gym-math-advanced-calculations-v4",
       "name": "laion__nemotron-gym-math-advanced-calculations-v4",
       "display_name": "laion/nemotron-gym-math-advanced-calculations-v4",
       "origin": "Task Trove",
@@ -4542,7 +4542,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__nemotron-gym-multichallenge-vanilla-v3",
+      "id": "TaskTrove:laion__nemotron-gym-multichallenge-vanilla-v3",
       "name": "laion__nemotron-gym-multichallenge-vanilla-v3",
       "display_name": "laion/nemotron-gym-multichallenge-vanilla-v3",
       "origin": "Task Trove",
@@ -4637,7 +4637,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__nemotron-gym-qa-abstention-v4",
+      "id": "TaskTrove:laion__nemotron-gym-qa-abstention-v4",
       "name": "laion__nemotron-gym-qa-abstention-v4",
       "display_name": "laion/nemotron-gym-qa-abstention-v4",
       "origin": "Task Trove",
@@ -4732,7 +4732,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__nemotron-gym-sysbench-v4",
+      "id": "TaskTrove:laion__nemotron-gym-sysbench-v4",
       "name": "laion__nemotron-gym-sysbench-v4",
       "display_name": "laion/nemotron-gym-sysbench-v4",
       "origin": "Task Trove",
@@ -4827,7 +4827,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__openswe-tasks-patched-v7-oracle-success",
+      "id": "TaskTrove:laion__openswe-tasks-patched-v7-oracle-success",
       "name": "laion__openswe-tasks-patched-v7-oracle-success",
       "display_name": "laion/openswe-tasks-patched-v7-oracle-success",
       "origin": "Task Trove",
@@ -4922,7 +4922,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__r2egym-patched-full-oracle-v3",
+      "id": "TaskTrove:laion__r2egym-patched-full-oracle-v3",
       "name": "laion__r2egym-patched-full-oracle-v3",
       "display_name": "laion/r2egym-patched-full-oracle-v3",
       "origin": "Task Trove",
@@ -5017,7 +5017,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__swegym-tasks-patched-validated-v5",
+      "id": "TaskTrove:laion__swegym-tasks-patched-validated-v5",
       "name": "laion__swegym-tasks-patched-validated-v5",
       "display_name": "laion/swegym-tasks-patched-validated-v5",
       "origin": "Task Trove",
@@ -5112,7 +5112,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__toolscale-v4",
+      "id": "TaskTrove:laion__toolscale-v4",
       "name": "laion__toolscale-v4",
       "display_name": "laion/toolscale-v4",
       "origin": "Task Trove",
@@ -5213,7 +5213,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__tulu3-sft-personas-math-sandboxes-verified-v3",
+      "id": "TaskTrove:laion__tulu3-sft-personas-math-sandboxes-verified-v3",
       "name": "laion__tulu3-sft-personas-math-sandboxes-verified-v3",
       "display_name": "laion/tulu3-sft-personas-math-sandboxes-verified-v3",
       "origin": "Task Trove",
@@ -5308,7 +5308,7 @@
       }
     },
     {
-      "id": "Task Trove:R2E-Gym__R2E-Gym-V1",
+      "id": "TaskTrove:R2E-Gym__R2E-Gym-V1",
       "name": "R2E-Gym__R2E-Gym-V1",
       "display_name": "R2E-Gym/R2E-Gym-V1",
       "origin": "Task Trove",
@@ -5410,7 +5410,7 @@
       }
     },
     {
-      "id": "Task Trove:SankalpKJ__nemotron-code-oracle-filtered",
+      "id": "TaskTrove:SankalpKJ__nemotron-code-oracle-filtered",
       "name": "SankalpKJ__nemotron-code-oracle-filtered",
       "display_name": "SankalpKJ/nemotron-code-oracle-filtered",
       "origin": "Task Trove",
@@ -5505,7 +5505,7 @@
       }
     },
     {
-      "id": "Task Trove:SWE-Gym__SWE-Gym",
+      "id": "TaskTrove:SWE-Gym__SWE-Gym",
       "name": "SWE-Gym__SWE-Gym",
       "display_name": "SWE-Gym/SWE-Gym",
       "origin": "Task Trove",
@@ -5715,7 +5715,7 @@
       }
     },
     {
-      "id": "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__general",
+      "id": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__general",
       "name": "XiaomiMiMo__MiMo-V2.6-RL-oss__general",
       "display_name": "XiaomiMiMo/MiMo-V2.6-RL-oss__general",
       "origin": "Task Trove",
@@ -5819,7 +5819,7 @@
       }
     },
     {
-      "id": "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__music",
+      "id": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__music",
       "name": "XiaomiMiMo__MiMo-V2.6-RL-oss__music",
       "display_name": "XiaomiMiMo/MiMo-V2.6-RL-oss__music",
       "origin": "Task Trove",
@@ -5976,7 +5976,7 @@
       }
     },
     {
-      "id": "Task Trove:laion__glaive-code-assistant-sandboxes-verified-v2",
+      "id": "TaskTrove:laion__glaive-code-assistant-sandboxes-verified-v2",
       "name": "tasktrove-glaive_code",
       "display_name": "laion/glaive-code-assistant-sandboxes-verified-v2",
       "origin": "Task Trove",
@@ -6016,7 +6016,7 @@
       "repair_recommendation": "Repair the judge rubric/harness or select a validated tier; rerun frozen positive/wrong/empty controls through the production grader and independent blinded comparison."
     },
     {
-      "id": "Task Trove:laion__stackexchange-tezos-sandboxes-verified-v2",
+      "id": "TaskTrove:laion__stackexchange-tezos-sandboxes-verified-v2",
       "name": "tasktrove-tezos",
       "display_name": "laion/stackexchange-tezos-sandboxes-verified-v2",
       "origin": "Task Trove",
@@ -6056,7 +6056,7 @@
       "repair_recommendation": "Correct the authored expectation and repair the judge configuration; validate wrong-answer rejection and correct-answer acceptance against independent reviewers through the production grader."
     },
     {
-      "id": "Task Trove:laion__nemotron-gym-structured-outputs-v4",
+      "id": "TaskTrove:laion__nemotron-gym-structured-outputs-v4",
       "name": "tasktrove-structured_outputs",
       "display_name": "laion/nemotron-gym-structured-outputs-v4",
       "origin": "Task Trove",

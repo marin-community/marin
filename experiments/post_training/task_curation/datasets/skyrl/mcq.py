@@ -85,7 +85,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="MarinSkyRL:gpqa",
+                id="GPQA:gpqa",
                 upstream_dataset="gpqa",
                 upstream_name="gpqa",
                 subset=None,
@@ -111,7 +111,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="MarinSkyRL:openscience",
+                id="Nemotron:openscience",
                 upstream_dataset="openscience",
                 upstream_name="openscience",
                 subset=None,

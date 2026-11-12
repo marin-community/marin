@@ -1,13 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Published source IDs held immutable pending explicit retirement approval.
+"""Permanent aliases for published source identities and their immutable artifacts."""
 
-Each target is the canonical generated identity. This frozen map is only for
-existing publications; new sources must use their generated ID immediately.
-"""
+from collections.abc import Mapping
+from typing import Annotated
 
-PENDING_SOURCE_ID_RETIREMENTS: dict[str, str] = {
+from pydantic import BeforeValidator
+
+SOURCE_ID_ALIASES: dict[str, str] = {
     "MarinSkyRL:aime24": "HuggingFaceH4:aime24",
     "MarinSkyRL:aime_1983_2024": "di-zhang-fdu:aime_1983_2024",
     "MarinSkyRL:asdiv": "ASDiv:asdiv",
@@ -430,3 +431,30 @@ PENDING_SOURCE_ID_RETIREMENTS: dict[str, str] = {
     "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__general": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__general",
     "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__music": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__music",
 }
+
+
+_ORIGINAL_SOURCE_IDS = {new: old for old, new in SOURCE_ID_ALIASES.items()}
+
+
+def canonical_source_id(source_id: str) -> str:
+    """Resolve a published historical ID to its generated catalog identity."""
+    return SOURCE_ID_ALIASES.get(source_id, source_id)
+
+
+def original_source_id(source_id: str) -> str:
+    """Keep artifact identities, sampling seeds and ordering tied to the original ID."""
+    return _ORIGINAL_SOURCE_IDS.get(source_id, source_id)
+
+
+SourceId = Annotated[str, BeforeValidator(canonical_source_id)]
+
+
+def canonical_source_map[T](records: Mapping[str, T]) -> dict[str, T]:
+    """Resolve source-keyed records without silently collapsing two historical entries."""
+    result = {}
+    for source_id, record in records.items():
+        key = canonical_source_id(source_id)
+        if key in result:
+            raise ValueError(f"Duplicate aliased source identity: {key}")
+        result[key] = record
+    return result

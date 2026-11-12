@@ -128,7 +128,6 @@ def test_preflight_reports_rejected_legacy_environment_field(tmp_path, prepared_
     ("unsafe_configuration", "diagnostic"),
     [
         ('docker_image = "example.test/task:latest"\nallow_internet = false\n', "pinned with @sha256"),
-        (f'docker_image = "example.test/task@sha256:{"a" * 64}"\nallow_internet = true\n', "allow_internet=false"),
         (
             f'docker_image = "example.test/task@sha256:{"a" * 64}"\nallow_internet = false\n'
             '[environment.env]\nSTOLEN = "${AWS_SECRET_ACCESS_KEY}"\n',
@@ -156,6 +155,14 @@ def test_preflight_checks_each_resolved_task_before_submission(
     assert completed.returncode == 2
     assert completed.stdout == ""
     assert diagnostic in completed.stderr
+
+
+def test_preflight_accepts_task_declared_internet_access(tmp_path, prepared_policy):
+    task_config = tmp_path / "dataset/task/task.toml"
+    task_config.write_text(task_config.read_text().replace("allow_internet = false", "allow_internet = true"))
+    completed = preflight(tmp_path, [(prepared_policy, {})])
+    assert completed.returncode == 0
+    assert json.loads(completed.stdout)[0]["benchmark_metadata"]["n_benchmark"] == 1
 
 
 @pytest.mark.parametrize("other_role", ["REFUSAL_JUDGE_MODEL", "EXPANSION_MODEL"])

@@ -348,7 +348,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="MarinSkyRL:reasoning_gym",
+                id="Reasoning Gym:reasoning_gym",
                 upstream_dataset="reasoning_gym",
                 upstream_name="reasoning_gym",
                 subset=None,
@@ -377,7 +377,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="Task Trove:laion__nemotron-gym-reasoning-gym-v2",
+                id="TaskTrove:laion__nemotron-gym-reasoning-gym-v2",
                 upstream_dataset="laion__nemotron-gym-reasoning-gym-v2",
                 upstream_name="laion__nemotron-gym-reasoning-gym-v2",
                 subset=None,

@@ -18,7 +18,7 @@ from __future__ import annotations
 import dataclasses
 import enum
 import types
-from typing import Union, get_args, get_origin, get_type_hints
+from typing import Annotated, Union, get_args, get_origin, get_type_hints
 
 import pyarrow as pa
 from pydantic import BaseModel
@@ -53,6 +53,8 @@ def _fields(model: object) -> dict[str, object]:
 def _arrow_type(annotation: object) -> pa.DataType:
     origin = get_origin(annotation)
     args = get_args(annotation)
+    if origin is Annotated:
+        return _arrow_type(args[0])
     if origin is Union or origin is types.UnionType:
         non_none = [arg for arg in args if arg is not type(None)]
         if len(non_none) != 1:

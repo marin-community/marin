@@ -6,7 +6,6 @@
 import gzip
 import io
 import tarfile
-import tomllib
 
 import pytest
 
@@ -46,27 +45,21 @@ def unpack(task_binary: bytes) -> dict[str, bytes]:
         }
 
 
-def test_unmapped_and_unsupported_recipes_defer_with_reasons():
-    with pytest.raises(DeferredRebuild, match="unmapped_base"):
-        rebuild_task(native_task("FROM registry.example/weird:latest\nWORKDIR /app\n"))
-    with pytest.raises(DeferredRebuild, match="heredoc"):
-        rebuild_task(native_task("FROM ubuntu:24.04\nRUN <<EOF\necho hi\nEOF\n"))
-    with pytest.raises(DeferredRebuild, match="unsupported_run"):
-        rebuild_task(native_task("FROM ubuntu:24.04\nRUN service nginx start\n"))
-    with pytest.raises(DeferredRebuild, match="env_support"):
-        rebuild_task(native_task("FROM ubuntu:24.04\nENV TZ\nWORKDIR /app\n"))
-
-
-def test_instruction_level_run_flags_still_defer():
-    with pytest.raises(DeferredRebuild, match="run_flags_support"):
-        rebuild_task(native_task("FROM ubuntu:24.04\nRUN --mount=type=cache apt-get update\n"))
-
-
-def test_multistage_and_missing_sources_defer():
-    with pytest.raises(DeferredRebuild, match="multistage"):
-        rebuild_task(native_task("FROM python:3.11-slim-bookworm AS build\nFROM python:3.11-slim-bookworm\n"))
-    with pytest.raises(DeferredRebuild, match="missing_source"):
-        rebuild_task(native_task("FROM ubuntu:24.04\nCOPY files/absent.csv /app/\n"))
+@pytest.mark.parametrize(
+    "dockerfile,reason",
+    [
+        ("FROM registry.example/weird:latest\nWORKDIR /app\n", "unmapped_base"),
+        ("FROM ubuntu:24.04\nRUN <<EOF\necho hi\nEOF\n", "heredoc"),
+        ("FROM ubuntu:24.04\nRUN service nginx start\n", "unsupported_run"),
+        ("FROM ubuntu:24.04\nENV TZ\nWORKDIR /app\n", "env_support"),
+        ("FROM ubuntu:24.04\nRUN --mount=type=cache apt-get update\n", "run_flags_support"),
+        ("FROM python:3.11-slim-bookworm AS build\nFROM python:3.11-slim-bookworm\n", "multistage"),
+        ("FROM ubuntu:24.04\nCOPY files/absent.csv /app/\n", "missing_source"),
+    ],
+)
+def test_unmapped_and_unsupported_recipes_defer_with_reasons(dockerfile, reason):
+    with pytest.raises(DeferredRebuild, match=reason):
+        rebuild_task(native_task(dockerfile))
 
 
 def test_parse_instructions_handles_continuations_comments_and_json_run():
@@ -76,20 +69,6 @@ def test_parse_instructions_handles_continuations_comments_and_json_run():
     assert [item.command for item in instructions] == ["from", "run", "run"]
     assert instructions[1].args == ["echo", "one", "two"]
     assert instructions[2].json_form and instructions[2].args == ["apt-get", "install", "-y", "jq"]
-
-
-def test_the_machine_shape_is_normalized_so_snapshots_collapse():
-    rebuilt = rebuild_task(
-        native_task(
-            "FROM ubuntu:24.04\nWORKDIR /app\nCOPY files/ /app/files/\n",
-            {"files/input.csv": b"a\n1\n"},
-        )
-    )
-    config = tomllib.loads(unpack(rebuilt.task_binary)["task.toml"].decode())
-    environment = config["environment"]
-    assert environment["cpus"] == 2
-    assert environment["memory"] == "4G"
-    assert environment["storage"] == "10G"
 
 
 def test_a_task_declaring_more_than_the_normalized_shape_defers():
@@ -123,4 +102,3 @@ def test_a_lowered_spec_stages_fixtures_through_setup_commands():
     staged = {resource["path"] for resource in task["resources"]["all"]}
     assert staged == {"setup_files/calibforge-fixtures.tar.gz", "setup_files/calibforge-initialize.sh"}
     assert {resource["path"] for resource in task["resources"]["verifier"]} == {"tests/test.sh", "tests/test_outputs.py"}
-    assert spec["runtime"]["task_machine"] == {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240}

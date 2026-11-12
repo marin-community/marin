@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import Literal
 
 from finestore.rl.curation import SourceDeclaration
+from finestore.rl.source_identity import SourceId
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -34,7 +35,7 @@ class AlignmentSource(_Record):
     Declared sources have no placement statistics or intended use.
     """
 
-    source_id: str
+    source_id: SourceId
     source_key: str
     population: Literal["converted", "admitted"]
     intended_use: str | None
@@ -86,7 +87,7 @@ class CoverageMetric(StrEnum):
 
 
 class CurriculumStatistic(_Record):
-    source_id: str
+    source_id: SourceId
     metric: CoverageMetric
     subject_id: str
     node_id: str

@@ -13,6 +13,7 @@ from typing import cast
 
 import click
 from finestore.rl.curation import LexicalContaminationEvidence, SourceDeclaration
+from finestore.rl.source_identity import canonical_source_id, original_source_id
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -256,9 +257,10 @@ def _corpus_sources(corpus: str) -> _CorpusSources:
         manifest = json.loads((StoragePath(row["root"]) / "manifest.json").read_text())
         if canonical_sha256(manifest) != row["source_key"]:
             raise ValueError(f"Corpus source manifest changed: {row['source_id']}")
-        if row["source_id"] in roots:
-            raise ValueError(f"Duplicate corpus source: {row['source_id']}")
-        roots[row["source_id"]] = row["root"]
+        source_id = canonical_source_id(row["source_id"])
+        if source_id in roots:
+            raise ValueError(f"Duplicate corpus source: {source_id}")
+        roots[source_id] = row["root"]
     return _CorpusSources(roots, inventory, document["population"])
 
 
@@ -267,7 +269,9 @@ def _selection_pass(corpus: _CorpusSources, recipe: SelectionRecipe, *, cache_di
         raise click.UsageError("Task selection requires an admitted corpus from SAMPLE or FULL curation")
     curated = {
         source_id: ArtifactStep.adopt(f"rl-data/selection-inputs/{recipe.name}/source-{index}", recipe.version, root)
-        for index, (source_id, root) in enumerate(sorted(corpus.roots.items()))
+        for index, (source_id, root) in enumerate(
+            sorted(corpus.roots.items(), key=lambda item: original_source_id(item[0]))
+        )
     }
     with ExitStack() as scope:
         if cache_dir is not None:

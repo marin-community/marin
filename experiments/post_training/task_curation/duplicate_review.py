@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import openai
+from finestore.rl.source_identity import canonical_source_map, original_source_id
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import load_model_config
@@ -84,12 +85,15 @@ class LocalDuplicateEndpoint:
 
 
 def pair_prompt(pair: PairSimilarity, fingerprints: dict[str, SourceFingerprint]) -> str:
+    fingerprints = canonical_source_map(fingerprints)
+    similarity = pair.model_dump(mode="json")
+    similarity.update(left=original_source_id(pair.left), right=original_source_id(pair.right))
     return json.dumps(
         {
             "prompt_version": DUPLICATE_PROMPT_VERSION,
-            "similarity": pair.model_dump(mode="json"),
+            "similarity": similarity,
             "sources": {
-                source_id: {
+                original_source_id(source_id): {
                     "task_count": fingerprints[source_id].task_count,
                     "within_source_duplicates": fingerprints[source_id].within_source_duplicates,
                     "lineage": [lineage.model_dump(mode="json") for lineage in fingerprints[source_id].lineage],

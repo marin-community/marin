@@ -5,13 +5,14 @@
 
 from typing import Any
 
+from finestore.rl.source_identity import canonical_source_id
 from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 
 
 def daytona(declaration: dict[str, Any], limit: int) -> dict[str, Any]:
     """Return the v75 rendering vocabulary while retaining typed measurement evidence."""
     safety = declaration.get("daytona_safety")
-    if declaration.get("id") in GRANDFATHERED_MARINSKYRL_SOURCES:
+    if canonical_source_id(declaration.get("id", "")) in GRANDFATHERED_MARINSKYRL_SOURCES:
         return {
             "state": "na",
             "exempt": True,

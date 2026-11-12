@@ -181,7 +181,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="MarinSkyRL:nemotron_if",
+                id="Nemotron:nemotron_if",
                 upstream_dataset="nemotron_if",
                 upstream_name="nemotron_if",
                 subset=None,
@@ -209,7 +209,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="MarinSkyRL:rlvr_ifeval",
+                id="AllenAI:rlvr_ifeval",
                 upstream_dataset="rlvr_ifeval",
                 upstream_name="rlvr_ifeval",
                 subset=None,

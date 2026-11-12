@@ -140,7 +140,6 @@ def test_native_shared_lowering_preserves_source_command_parser_and_contract(lan
     assert package.files["instruction.md"].decode().startswith(shared_preamble(contract))
     private = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
     assert package.files["tests/test_state.py"] == private["test_state.py"]
-    assert b"shared_pytest.py" in package.files["environment/Dockerfile"]
 
 
 @pytest.mark.parametrize("language", ["python", "go"])

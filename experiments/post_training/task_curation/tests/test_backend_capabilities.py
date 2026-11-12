@@ -15,21 +15,23 @@ from shellbox.backends.local.machine import check_local_environment
 from shellbox.machine import Command, MachineSpec, Mount
 from shellbox.requirements import (
     COMMAND_FIELDS,
+    MACHINE_FIELDS,
+    SOURCE_FIELDS,
+    Requirement,
+    Support,
+)
+from shellbox.survey import capability_matrix
+from taskcompendium.backend_fields import (
     ENVIRONMENT_FIELDS,
     EXECUTION_FIELDS,
     HARBOR_AGENT_FIELDS,
     HARBOR_ENVIRONMENT_FIELDS,
     HARBOR_VERIFIER_FIELDS,
-    MACHINE_FIELDS,
     RESOURCE_FIELDS,
     RUNTIME_FIELDS,
     SCRIPT_GRADER_FIELDS,
-    SOURCE_FIELDS,
     TASK_FIELDS,
-    Requirement,
-    Support,
 )
-from shellbox.survey import capability_matrix
 from taskcompendium.backend_requirements import RuntimeProfile
 from taskcompendium.models import EnvironmentRequirements, ExecutionRequirements, ScriptGrader, TaskResource, TaskSpec
 
