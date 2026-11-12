@@ -157,6 +157,7 @@ def measure_marks(config: ReportConfig) -> LexicalMeasurements:
     hash_evals = _hash_to_evals(index_path, needed_hashes) if needed_hashes else {}
     drops = read_artifact(config.drop_path, LexicalDropSets).attributes
     measurements = {}
+    drop_manifests = {}
     for mark in marks:
         population = SourceTextPopulation.raw_load(mark.population_path)
         output = prefix_join(config.output_path, population_key(mark.source_id))
@@ -234,10 +235,10 @@ def measure_marks(config: ReportConfig) -> LexicalMeasurements:
                 str(drops.global_output_dir),
             ],
             task_flags_uri=flags_uri,
-            drop_manifest_uri=drop_uri,
             evidence_url=prefix_join(output, "measurement.json"),
             receipt=None,
         )
+        drop_manifests[mark.source_id] = drop_uri
         with StoragePath(prefix_join(output, "measurement.json")).open("w", auto_mkdir=True) as stream:
             json.dump(measurements[mark.source_id], stream, indent=2, sort_keys=True)
         logger.info("%s: %d/%d contaminated", mark.source_id, contaminated, population.task_count)
@@ -246,6 +247,7 @@ def measure_marks(config: ReportConfig) -> LexicalMeasurements:
         population_set=config.population_set,
         source_ids=[mark.source_id for mark in marks],
         measurements=measurements,
+        drop_manifests=drop_manifests,
     )
 
 
