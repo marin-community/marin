@@ -20,6 +20,7 @@ from verifyit.spec import PytestSpec, ScriptSpec, render_spec
 from experiments.post_training.task_curation.tasktrove.native_shared_swe import native_runner
 
 BOOTSTRAP = "/opt/taskcompendium-shared-bootstrap/control.py"
+BOOTSTRAP_INPUT = "/tmp/taskcompendium-shared-input.json"
 SETUP_PREFIX = "## Environment Setup (complete these steps first)\n\n```bash\n"
 
 
@@ -80,7 +81,7 @@ def harden_shared_swe(
     # image context: distinct task setup does not produce thousands of snapshots.
     unpack = (
         "import base64,pathlib,zlib; "
-        f"pathlib.Path('/tmp/taskcompendium-shared-input.json').write_bytes(zlib.decompress(base64.b64decode({packed!r})))"
+        f"pathlib.Path({BOOTSTRAP_INPUT!r}).write_bytes(zlib.decompress(base64.b64decode({packed!r})))"
     )
     control_python = "/opt/taskcompendium-shared-bootstrap/python"
     bootstrap_command = (
@@ -89,8 +90,8 @@ def harden_shared_swe(
         + "\n"
         + f'control_python="{control_python}"\n'
         + f'"$control_python" -I -S -c {shlex.quote(unpack)}\n'
-        + f'"$control_python" -I -S {BOOTSTRAP} bootstrap /tmp/taskcompendium-shared-input.json\n'
-        + "rm /tmp/taskcompendium-shared-input.json\n"
+        + f'"$control_python" -I -S {BOOTSTRAP} bootstrap {BOOTSTRAP_INPUT}\n'
+        + f"rm {BOOTSTRAP_INPUT}\n"
     )
     config["environment"]["setup"] = {"command": bootstrap_command, "timeout_sec": 1800.0}
     config["environment"]["env"] = {**dict(config["environment"].get("env", {})), "HOME": "/home/taskcompendium-agent"}

@@ -13,7 +13,8 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from finestore.rl.source_identity import canonical_source_id, canonical_source_map, original_source_id
+from finestore.rl.curation import ActorCensusInput, PipelineReference
+from finestore.rl.source_identity import canonical_source_id, canonical_source_map
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -32,7 +33,33 @@ class FingerprintReference(BaseModel):
 
     uri: str
     sha256: str
-    declaration_sha256: str
+    input_sha256: str
+
+
+class FingerprintInput(BaseModel):
+    """Task-producing inputs, independent of catalog display and assessment metadata."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    dataset_id: str | None
+    dataset_revision: str | None
+    pipeline: PipelineReference | None
+    converter_revision: str | None
+    task_specs_sha256: str | None
+
+
+def fingerprint_input(declaration: dict) -> FingerprintInput:
+    census_record = declaration.get("actor_census_input")
+    census = ActorCensusInput.model_validate(census_record) if census_record is not None else None
+    return FingerprintInput(
+        dataset_id=declaration["dataset_id"],
+        dataset_revision=declaration["dataset_revision"],
+        pipeline=(
+            PipelineReference.model_validate(declaration["pipeline"]) if declaration["pipeline"] is not None else None
+        ),
+        converter_revision=census.converter_revision if census is not None else None,
+        task_specs_sha256=census.task_specs_sha256 if census is not None else None,
+    )
 
 
 def source_declarations(checkout: Path) -> dict:
@@ -49,7 +76,11 @@ def source_declarations(checkout: Path) -> dict:
 def changed_source_declarations(before: dict, after: dict) -> set[str]:
     before = canonical_source_map({key: {**row, "id": canonical_source_id(row["id"])} for key, row in before.items()})
     after = canonical_source_map({key: {**row, "id": canonical_source_id(row["id"])} for key, row in after.items()})
-    return {source_id for source_id in after if before.get(source_id) != after[source_id]}
+    return {
+        source_id
+        for source_id in after
+        if source_id not in before or fingerprint_input(before[source_id]) != fingerprint_input(after[source_id])
+    }
 
 
 def prepare_review(base_ref: str, index: Path, output: Path, changed_output: Path) -> set[str]:
@@ -74,8 +105,8 @@ def prepare_review(base_ref: str, index: Path, output: Path, changed_output: Pat
     for source_id, reference in references.items():
         if source_id not in current:
             continue
-        if reference.declaration_sha256 != canonical_sha256({**current[source_id], "id": original_source_id(source_id)}):
-            raise ValueError(f"Fingerprint declaration is stale: {source_id}")
+        if reference.input_sha256 != canonical_sha256(fingerprint_input(current[source_id]).model_dump(mode="json")):
+            raise ValueError(f"Fingerprint task input is stale: {source_id}")
         if reference.uri not in artifacts:
             payload = StoragePath(reference.uri).read_bytes()
             if hashlib.sha256(payload).hexdigest() != reference.sha256:

@@ -6,6 +6,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from finestore.rl.source_identity import canonical_source_id
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
@@ -42,6 +43,24 @@ def task_document(identifier: str, instruction: str) -> dict:
         grader=NoGrader(reason="Fixture has no executable reference", contract={}),
     )
     return task.model_dump(mode="json")
+
+
+def source_input_declaration(identifier: str, revision: str = "pin") -> dict:
+    return {
+        "id": identifier,
+        "dataset_id": "fixture/tasks",
+        "dataset_revision": revision,
+        "pipeline": {"name": "fixture", "version": "1", "source": "fixture/tasks", "revision": revision, "files": []},
+        "actor_census_input": {
+            "dataset_id": "fixture/tasks",
+            "dataset_revision": revision,
+            "converter_version": "1",
+            "converter_revision": "converter-v1",
+            "measured_tasks": 10,
+            "task_specs_sha256": "a" * 64,
+            "evidence_url": "s3://fixture/actor-census.json",
+        },
+    }
 
 
 def test_source_fingerprint_census_is_order_independent_and_counts_duplicate_contracts():
@@ -99,16 +118,27 @@ def test_top_candidate_review_is_cached_and_acknowledgement_is_bound_to_request(
 
 def test_source_change_detection_includes_added_and_modified_declarations():
     before = {
-        "same": {"id": "same", "pin": "a"},
-        "changed": {"id": "changed", "pin": "old"},
-        "removed": {"id": "removed", "pin": "a"},
+        "same": source_input_declaration("same", "a"),
+        "changed": source_input_declaration("changed", "old"),
+        "removed": source_input_declaration("removed", "a"),
     }
     after = {
-        "same": {"id": "same", "pin": "a"},
-        "changed": {"id": "changed", "pin": "new"},
-        "added": {"id": "added", "pin": "b"},
+        "same": source_input_declaration("same", "a"),
+        "changed": source_input_declaration("changed", "new"),
+        "added": source_input_declaration("added", "b"),
     }
     assert changed_source_declarations(before, after) == {"changed", "added"}
+
+
+@pytest.mark.parametrize("field", ["converter_revision", "task_specs_sha256"])
+def test_source_content_changes_require_fingerprints_while_measurement_metadata_reuses_them(field):
+    before = {"fixture": source_input_declaration("fixture")}
+    after = {"fixture": source_input_declaration("fixture")}
+    after["fixture"].update(notes="New display notes", task_count=8, lexical_contamination={"measured_tasks": 10})
+    after["fixture"]["actor_census_input"]["evidence_url"] = "s3://fixture/copied-census.json"
+    assert changed_source_declarations(before, after) == set()
+    after["fixture"]["actor_census_input"][field] = "changed"
+    assert changed_source_declarations(before, after) == {"fixture"}
 
 
 def test_known_codeforces_rebuild_ranks_before_distinct_nl2bash():
@@ -125,8 +155,8 @@ def test_known_codeforces_rebuild_ranks_before_distinct_nl2bash():
 def test_alias_only_declaration_change_reuses_published_fingerprints():
     old = "Campaign Release:tasktrove-codeforces-rebuilt-v1"
     current = canonical_source_id(old)
-    before = {old: {"id": old, "pipeline": {"version": "frozen"}}}
-    after = {current: {"id": current, "pipeline": {"version": "frozen"}}}
+    before = {old: source_input_declaration(old)}
+    after = {current: source_input_declaration(current)}
     assert changed_source_declarations(before, after) == set()
     after[current]["pipeline"]["version"] = "changed"
     assert changed_source_declarations(before, after) == {current}
