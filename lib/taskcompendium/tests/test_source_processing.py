@@ -25,6 +25,7 @@ from taskcompendium.grader import verifyit_package
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import NoGrader, ResourceGroups, Source, TaskSpec
 from taskcompendium.pipeline.controls import GradingMachines, answer_reply, reference_reply
+from taskcompendium.pipeline.conversion import convert_source_row
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFormat
 from taskcompendium.pipeline.models import (
     Controls,
@@ -35,6 +36,7 @@ from taskcompendium.pipeline.models import (
     RawRow,
     SourceRecipe,
 )
+from taskcompendium.pipeline.oracle_filter import oracle_recipe_identity
 from taskcompendium.pipeline.review import BatchReviewer, completion_body
 from taskcompendium.pipeline.source_processing import (
     ConversionResult,
@@ -50,6 +52,7 @@ from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
 from taskcompendium.pipeline.stages import AuditExecution, prepare_source
 from taskcompendium.runtime.resources import inline_resource
 
+from .oracle_filter_fixtures import oracle_receipt
 from .pipeline_stages import (
     GRADER_ENVIRONMENT,
     SOURCE_FILES,
@@ -575,6 +578,12 @@ def test_source_retry_reuses_successful_reviews_after_unavailable_evidence(tmp_p
     service = BatchService(interrupted=failure == "quality_panel")
     reviewer = BatchReviewer(service, "fixture", "revision", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
     config = pipeline_config(SourceProcessingMode.FULL, reviewer, machines=unavailable)
+    if failure == "verification":
+        tasks = [
+            convert_source_row({"locator": f"source.jsonl:{i}", "data": data}, recipe).result.task
+            for i, data in enumerate(apple_rows(population))
+        ]
+        config = replace(config, oracle_filter=oracle_receipt(tasks, oracle_recipe_identity(recipe)))
     first = run_pipeline(recipe, source, tmp_path / "output", config)
     assert first.status == "incomplete"
     assert Path(first.manifest_path).exists()
@@ -804,11 +813,19 @@ def test_admission_admits_only_rows_with_a_ready_grader_and_names_each_output_vi
     ]
     write_jsonl(source, rows)
     reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    recipe = fixture_recipe(convert_mixed_graders, rubric=None)
+    converted = [
+        convert_source_row({"locator": f"source.jsonl:{i}", "data": row}, recipe).result for i, row in enumerate(rows)
+    ]
+    tasks = [row.task for row in converted if not isinstance(row, ImportRejection)]
+    receipt = oracle_receipt(tasks, oracle_recipe_identity(recipe)).model_copy(
+        update={"input_rows": len(rows), "conversion_rejections": len(rows) - len(tasks)}
+    )
     result = run_pipeline(
-        fixture_recipe(convert_mixed_graders, rubric=None),
+        recipe,
         source,
         tmp_path / "output",
-        pipeline_config(SourceProcessingMode.FULL, reviewer),
+        replace(pipeline_config(SourceProcessingMode.FULL, reviewer), oracle_filter=receipt),
     )
     output = tmp_path / "output"
     manifest = read_json(result.manifest_path)
@@ -908,11 +925,20 @@ def test_sandbox_rows_reach_final_only_after_controls_pass(tmp_path, machines, a
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(3))
     reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    recipe = fixture_recipe(convert_script_graded, rubric=None, controls=ORACLE_CONTROLS)
+    tasks = [
+        convert_source_row({"locator": f"source.jsonl:{i}", "data": data}, recipe).result.task
+        for i, data in enumerate(apple_rows(3))
+    ]
+    config = replace(
+        pipeline_config(SourceProcessingMode.FULL, reviewer, machines=machines),
+        oracle_filter=oracle_receipt(tasks, oracle_recipe_identity(recipe)),
+    )
     result = run_pipeline(
-        fixture_recipe(convert_script_graded, rubric=None, controls=ORACLE_CONTROLS),
+        recipe,
         source,
         tmp_path / "output",
-        pipeline_config(SourceProcessingMode.FULL, reviewer, machines=machines),
+        config,
     )
     manifest = read_json(result.manifest_path)
     assert result.status == status
@@ -1000,3 +1026,23 @@ def mechanical_records(records):
         row["source_row"]: {key: value for key, value in row.items() if key not in {"raw_sha256", "raw_input_sha256"}}
         for row in records
     }
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+def test_reviewed_oracle_source_requires_population_filter_and_rejects_failed_oracles(tmp_path, mode):
+    source = tmp_path / "source"
+    rows = apple_rows(2)
+    write_jsonl(source, rows)
+    recipe = replace(fixture_recipe(convert_script_graded, rubric=None, controls=ORACLE_CONTROLS), oracle_solutions=True)
+    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    config = pipeline_config(mode, reviewer, machines=FixtureGradingMachines())
+    with pytest.raises(ValueError, match="full-population Harbor oracle filter"):
+        run_pipeline(recipe, source, tmp_path / "missing", config)
+    tasks = [
+        convert_source_row({"locator": f"source.jsonl:{i}", "data": row}, recipe).result.task
+        for i, row in enumerate(rows)
+    ]
+    receipt = oracle_receipt(tasks, oracle_recipe_identity(recipe), failed=frozenset({tasks[0].id}))
+    result = run_pipeline(recipe, source, tmp_path / "filtered", replace(config, oracle_filter=receipt))
+    assert [row["task_id"] for row in parquet_rows(result.final_path)] == [tasks[1].id]
+    assert read_json(result.manifest_path)["admission_counts"] == {"rejected": 1, "admitted": 1}
