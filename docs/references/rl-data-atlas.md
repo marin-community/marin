@@ -102,6 +102,14 @@ An agentic source shows Safe or Unsafe with its measured unique snapshot count
 against the limit of ten, or *Not measured* when its declaration records no
 production snapshot-identity measurement.
 
+**Likely duplicates** fold into one entry. A `/sources` row may carry
+`duplicate_group`, an object with `id` (the group), `canonical_id` (the source
+shown for the group) and `overlap` (the fraction, 0 to 1, of this source's tasks
+that also occur in the canonical member; 1 for the canonical). The view shows the
+canonical member with an expandable list of the others and their overlap. Rows
+without the field, or with `null`, stay ungrouped. Source details also show a
+row's `backend_capabilities` map when the row carries one.
+
 **Evidence** (`source.html`) collects one source's quality evidence on one page:
 declared oversight pointers, grader controls and admission counts, the sampled
 LLM-judge review with its frozen sample, rubric, judge model and archived traces,
