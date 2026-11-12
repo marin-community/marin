@@ -60,6 +60,7 @@ logger = logging.getLogger(__name__)
 CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 CONTROL_CWD = "/"
 COUNT_PREFIX = "SHELLBOX_COUNT="
+PROVIDER_DIAGNOSTIC_CHAR_LIMIT = 4096
 RUN_COMMAND = (
     'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; trap \': > "$completed"; rm -f "$pidfile"\' EXIT; "$@"'
 )
@@ -397,8 +398,22 @@ class DaytonaMachine:
                 )
             async with asyncio.timeout(INTERRUPT_TIMEOUT):
                 limit = command.output_limit_bytes
-                stdout, stdout_truncated = await self._read_output(stdout_path, limit)
-                stderr, stderr_truncated = await self._read_output(stderr_path, limit)
+                try:
+                    stdout, stdout_truncated = await self._read_output(stdout_path, limit)
+                    stderr, stderr_truncated = await self._read_output(stderr_path, limit)
+                except Exception as error:
+                    diagnostic = response.result or ""
+                    error.add_note(
+                        "Daytona exec response: "
+                        + json.dumps(
+                            {
+                                "exit_code": response.exit_code,
+                                "diagnostic": diagnostic[:PROVIDER_DIAGNOSTIC_CHAR_LIMIT],
+                                "diagnostic_truncated": len(diagnostic) > PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
+                            }
+                        )
+                    )
+                    raise
             return Result(
                 response.exit_code,
                 stdout,
