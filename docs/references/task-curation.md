@@ -928,4 +928,21 @@ task whose grader declares a lock cannot grade there — its snapshot count is i
 Two honest options for such a cohort: resolve the lock into a digest-pinned grader image
 during the pipeline build (one identity per distinct grader environment) and declare that
 image, or record the cohort as inadmissible on Daytona. CalibForge is unaffected because
-its grader names an image; the TaskTrove families are all lock-graded.
+its grader names an image. TaskTrove CodeContests and TACO declare registry images
+built from their own archived contexts for both actor and grader; the rebuilt
+Python-test cohorts use explicit grader locks.
+
+### Archived CodeContests and TACO image pins
+
+`datasets/tasktrove/built_images.py` maps each archived context to its built GHCR
+image. The key covers the source files, permission bits and verifier-install
+recipe. The image freezes its bundled VerifyIT revision; changing the checkout's
+VerifyIT does not change the installed grader in that pin. Unrecognized contexts
+retain explicit build declarations. The archive admission guard reconstructs the
+context before accepting a known image pin.
+
+The images live in the non-public `marin-community/task-curation-tasktrove` GHCR
+package. Daytona needs an organization registry credential for `ghcr.io` before
+it can import them. Keep that credential in Daytona's registry settings, outside
+the TaskSpecs and qualification evidence. Image identity measurement alone does
+not establish pull access or grading liveness.

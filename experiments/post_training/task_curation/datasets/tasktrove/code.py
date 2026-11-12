@@ -3,7 +3,7 @@
 
 """TaskTrove competitive-programming sources: stdin/stdout programs graded by verifyit ``stdio``.
 
-Code Contests and TACO retain their source image recipes for the actor and its independent grader.
+Code Contests and TACO use digest-pinned builds of their archived actor and grader environments.
 The remaining sources use the campaign executable image and compiler grader packages. Controls run
 an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an empty submission.
 """
@@ -11,19 +11,18 @@ an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an
 import json
 from dataclasses import replace
 
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 from verifyit.spec import Compare, StdioSpec
 
-from experiments.post_training.task_curation.datasets.environments import COMPILER_GRADER_PACKAGES, VERIFYIT_PACKAGE
+from experiments.post_training.task_curation.datasets.environments import COMPILER_GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.built_images import archive_build_environment
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
     DOCKERFILE,
     INSTRUCTION,
     VERIFIER_DATA,
     TaskFiles,
-    archive_resources,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.code_contests import convert_code_contests
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.codeforces import convert_codeforces
@@ -46,7 +45,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.stdio
     hidden_case_rejection,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.taco import convert_taco
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.environment_fidelity import archive_environment
 from experiments.post_training.task_curation.pipeline import (
@@ -127,8 +125,7 @@ def source_stdio_task(row: RawRow, convert: ConvertFn) -> NormalizedTask | Impor
     converted = archive_conversion(row.data, convert)
     if isinstance(converted, ImportRejection):
         return converted
-    build = verifyit_build_context(converted.dockerfile, archive_resources(row.data).oracle, package=VERIFYIT_PACKAGE)
-    environment = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_build=build)
+    environment = archive_build_environment(row.data)
     task = converted_workspace_task(
         row,
         converted,
@@ -218,7 +215,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "DCAgent__code-contests-noblock",
             convert_code_contests_task,
             CODE_CONTESTS_RUBRIC,
-            version="2",
+            version="3",
             grader=None,
             info=replace(
                 SourceInfo(
@@ -278,7 +275,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "laion__exp_rpt_taco-v2",
             convert_taco_task,
             TACO_RUBRIC,
-            version="2",
+            version="3",
             grader=None,
             info=replace(
                 SourceInfo(

@@ -13,7 +13,7 @@ from typing import cast
 
 import pytest
 from taskcompendium.models import TaskSpec, VerifyitGrader, verifyit_spec
-from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask
+from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, RawRow
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.grade import Status, grade
 from verifyit.spec import ScriptSpec, StdioSpec
@@ -444,3 +444,53 @@ def test_source_stdio_keeps_shared_recipe_and_grades_single_hidden_case(name, tm
     assert grade(spec, tests, workspace).reward == 1.0
     (workspace / "solution.py").write_text("print('wrong')\n")
     assert grade(spec, tests, workspace).reward == 0.0
+
+
+@pytest.mark.parametrize(
+    "name, dockerfile",
+    [
+        (
+            "code_contests",
+            b"FROM ubuntu:24.04\n\nWORKDIR /app\nRUN mkdir -p /output && chmod 777 /output\n\n"
+            b"RUN apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/apt/lists/*\n\n"
+            b"# Pre-install test deps so the verifier works fully offline\n"
+            b"RUN pip3 install --break-system-packages pytest==8.4.1 pytest-json-ctrf==0.3.5\n",
+        ),
+        ("taco", b"FROM python:3.10-slim\nWORKDIR /app\nRUN pip install --no-cache-dir pytest\n"),
+    ],
+)
+def test_archived_build_pin_requires_matching_recipe_and_permissions(name, dockerfile):
+    row = archive(
+        SUM_PROMPT,
+        {
+            "environment/Dockerfile": dockerfile,
+            "tests/test_data.json": json.dumps(SUM_CASES).encode(),
+            **stdio_dirs(SUM_CASES["inputs"], SUM_CASES["outputs"]),
+            "solution/solution.py": SUM_SOLUTION,
+        },
+    )
+    recipe = RECIPES[f"tasktrove-{name}"]
+    task = converted_task(recipe, row)
+    assert task.environment_requirements.docker_image is not None
+    assert task.environment_requirements.docker_build is None
+    assert task.grader.environment.docker_image == task.environment_requirements.docker_image
+
+    changed = archive(
+        SUM_PROMPT,
+        {
+            **archive_files(unpack_task_binary(row, fixture_context(recipe))).files,
+            "environment/Dockerfile": dockerfile + b"RUN mkdir /additional-source-dependency\n",
+        },
+    )
+    rebuilt = converted_task(recipe, changed)
+    assert rebuilt.environment_requirements.docker_image is None
+    assert rebuilt.environment_requirements.docker_build is not None
+    assert rebuilt.grader.environment.docker_build == rebuilt.environment_requirements.docker_build
+
+    # The bytes are unchanged, but archived permissions are also part of the build.
+    decoded = unpack_task_binary(row, fixture_context(recipe))
+    decoded["file_metadata"]["environment/Dockerfile"]["mode"] = "0600"
+    result = recipe.convert(RawRow(task.id, task.source, decoded), fixture_context(recipe))
+    assert isinstance(result, NormalizedTask)
+    assert result.task.environment_requirements.docker_image is None
+    assert result.task.environment_requirements.docker_build is not None

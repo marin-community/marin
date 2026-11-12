@@ -5,10 +5,15 @@
 
 from dataclasses import dataclass, replace
 
+from taskcompendium.convert.tasks import shell_environment
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Converter, ImportFailureKind, ImportRejection, NormalizedTask, RawRow
 
+from experiments.post_training.task_curation.datasets.tasktrove.built_images import (
+    BUILT_IMAGES,
+    archive_build_environment,
+)
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
     TASKS_FILE,
     TASKTROVE_REPO,
@@ -43,10 +48,18 @@ class TaskTroveConverter:
         if isinstance(converted, ImportRejection):
             return converted
         task = converted.task if isinstance(converted, NormalizedTask) else converted
-        # The archive's environment is part of the task. A conversion that declares an
-        # image while the archive defines environment/Dockerfile has replaced it, so the
-        # row is rejected until it is reconverted faithfully.
-        reused = environment_unused(task.model_dump(mode="json"), row.data["files"])
+        # An archived build may name its verified registry output. Reconstruct the
+        # archived context before accepting the pin, including file modes and the
+        # verifier-install recipe. The pin retains its frozen bundled verifier.
+        if task.environment_requirements.docker_image in BUILT_IMAGES.values():
+            expected = archive_build_environment(row.data)
+            reused = (
+                None
+                if task.environment_requirements == shell_environment(expected)
+                else "spec does not use its archived build"
+            )
+        else:
+            reused = environment_unused(task.model_dump(mode="json"), row.data["files"])
         if reused is not None:
             return ImportRejection(
                 kind=ImportFailureKind.CONVERTER_ERROR, reason="environment_substituted", detail=reused
