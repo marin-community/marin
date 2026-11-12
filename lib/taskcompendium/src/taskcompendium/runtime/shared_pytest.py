@@ -8,6 +8,7 @@ configures paths, identities, plugins, test selection and audit evidence.
 """
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -53,7 +54,7 @@ def inventory(roots: list[str]) -> dict[str, str]:
         for path in sorted(Path(root).rglob("*")):
             if path.is_symlink():
                 result[str(path)] = "symlink:" + os.readlink(path)
-            elif path.is_file() and "__pycache__" not in path.parts:
+            elif path.is_file():
                 result[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
     return result
 
@@ -93,6 +94,27 @@ def selected_tests(workspace: Path, contract: dict, tests: Path, spec: dict) -> 
             elif target.is_file():
                 selected.add(name)
     return sorted(selected)
+
+
+def declared_plugins(reference: Path) -> list[str]:
+    plugins = set()
+    for conftest in reference.rglob("conftest.py"):
+        for statement in ast.walk(ast.parse(conftest.read_text())):
+            if isinstance(statement, ast.Assign):
+                targets = statement.targets
+            elif isinstance(statement, ast.AnnAssign):
+                targets = [statement.target]
+            else:
+                continue
+            if not any(isinstance(target, ast.Name) and target.id == "pytest_plugins" for target in targets):
+                continue
+            values = ast.literal_eval(statement.value)
+            if isinstance(values, str):
+                values = (values,)
+            if not isinstance(values, (list, tuple)) or not all(isinstance(value, str) for value in values):
+                raise ValueError("Reference pytest_plugins must be a literal string or sequence")
+            plugins.update(values)
+    return sorted(plugins)
 
 
 def remove_path(path: Path) -> None:
@@ -180,6 +202,15 @@ def bootstrap(input_path: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(workspace / name, target)
     write_json(root / "reference-paths.json", paths)
+    plugins = sorted(set(contract["pinned_plugins"]) | set(declared_plugins(reference)))
+    plugin_files = {}
+    for plugin in plugins:
+        module = workspace.joinpath(*plugin.split("."))
+        selected = list(module.rglob("*")) if module.is_dir() else [module.with_suffix(".py")]
+        selected.extend(parent / "__init__.py" for parent in module.parents if parent.is_relative_to(workspace))
+        for source in selected:
+            if source.is_file():
+                plugin_files[source.relative_to(workspace).as_posix()] = source.read_bytes()
     for name in paths:
         target = workspace / name
         remove_path(target)
@@ -203,8 +234,11 @@ def bootstrap(input_path: Path) -> None:
     # Freeze pytest, explicitly allowed plugins and their implementation dependencies only.
     # Candidate dependencies remain in the live site directories recorded below.
     package_probe = """import importlib.metadata as m,json,pathlib,packaging.requirements
-plugins=__import__('sys').argv[1:]
+plugins=sorted(set(__import__('sys').argv[1:]) | {e.value for e in m.entry_points(group='pytest11')})
+if any(':' in plugin for plugin in plugins): raise ValueError('Function-valued pytest plugins need explicit lowering')
 roots={'pytest','pytest-json-report'}
+mapping=m.packages_distributions()
+for plugin in plugins: roots.update(mapping.get(plugin.split('.')[0], []))
 for d in m.distributions():
  if any(e.group=='pytest11' and e.value.split(':')[0] in plugins for e in d.entry_points): roots.add(d.metadata['Name'])
 seen=set(); files=[]
@@ -218,18 +252,25 @@ while roots:
  for f in d.files or []:
   p=pathlib.Path(d.locate_file(f)).resolve()
   if not str(f).startswith('..') and p.is_file(): files.append([str(f),str(p)])
-print(json.dumps({'distributions':sorted(seen),'files':files}))"""
-    packages = json.loads(
-        checked([python, "-I", "-c", package_probe, *contract["pinned_plugins"]], cwd=root, timeout=60)
-    )
+print(json.dumps({'distributions':sorted(seen),'files':files,'plugins':plugins}))"""
+    if contract["plugin_discovery"] != "pre_agent_entrypoints_and_conftests":
+        raise ValueError("Unsupported plugin-discovery contract")
+    packages = json.loads(checked([python, "-I", "-c", package_probe, *plugins], cwd=root, timeout=60))
     runner = Path(contract["runner_directory"])
     runner.mkdir()
     for relative, source in packages["files"]:
         destination = runner / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
+    for relative, content in plugin_files.items():
+        destination = runner / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
     Path(contract["pytest_config"]).write_text("[pytest]\naddopts =\n")
-    write_json(root / "runtime.json", {"sites": info["sites"], "pinned_distributions": packages["distributions"]})
+    write_json(
+        root / "runtime.json",
+        {"sites": info["sites"], "pinned_distributions": packages["distributions"], "plugins": packages["plugins"]},
+    )
     write_json(root / "site-packages-baseline.json", inventory(info["sites"]))
     spec.update({"setup": "", "python": str(root / "pytest-python")})
     write_json(root / "spec.json", spec)
@@ -300,17 +341,24 @@ def pytest_process(contract: dict, arguments: list[str]) -> None:
         "-o",
         "addopts=",
     ]
-    for plugin in contract["pinned_plugins"]:
+    for plugin in runtime["plugins"]:
         pinned.extend(["-p", plugin])
     arguments.extend(pinned)
     launch = """import sys,site,runpy
-runner,workspace,sites,arguments=__import__('json').loads(sys.argv[1])
+runner,workspace,sites,arguments,plugins=__import__('json').loads(sys.argv[1])
 sys.path[:0]=[runner,workspace]
 for directory in sites: site.addsitedir(directory)
 try: __import__('sitecustomize')
 except ModuleNotFoundError as error:
  if error.name!='sitecustomize': raise
 sys.path.remove(runner);sys.path.insert(0,runner)
+import _pytest.config
+original_import = _pytest.config.PytestPluginManager.import_plugin
+allowed = set(plugins) | set(_pytest.config.builtin_plugins)
+def import_pinned_plugin(self, modname, consider_entry_points=False):
+ if modname not in allowed: raise ImportError('Plugin is outside the pinned pre-agent baseline: '+modname)
+ return original_import(self,modname,consider_entry_points=False)
+_pytest.config.PytestPluginManager.import_plugin=import_pinned_plugin
 sys.argv=['-c',*arguments[2:]]
 if arguments[:1]==['-c']: exec(compile(arguments[1],'<string>','exec'))
 else: raise ValueError('Verifyit must invoke the structured pytest runner with -c')
@@ -326,7 +374,7 @@ else: raise ValueError('Verifyit must invoke the structured pytest runner with -
             "-S",
             "-c",
             launch,
-            json.dumps([contract["runner_directory"], str(workspace), runtime["sites"], arguments]),
+            json.dumps([contract["runner_directory"], str(workspace), runtime["sites"], arguments, runtime["plugins"]]),
         ],
         clean_environment(),
     )
