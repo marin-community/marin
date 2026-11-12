@@ -26,6 +26,7 @@ from daytona import (
     CreateSandboxFromSnapshotParams,
     DaytonaConfig,
     DaytonaNotFoundError,
+    Resources,
 )
 from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.machine import (
@@ -34,6 +35,7 @@ from shellbox.backends.daytona.machine import (
     DaytonaNetworkMode,
     DaytonaNetworkPolicy,
     _create_sandbox,
+    snapshot_identity,
 )
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.image import DockerfileSource, RegistryImage
@@ -320,6 +322,63 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
             await machine.close()
         assert client.deleted
         assert client.closed
+
+    asyncio.run(scenario())
+
+
+def test_daytona_recreated_workdir_preserves_command_output(tmp_path: Path) -> None:
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    original_inode = workdir.stat().st_ino
+
+    class StaleWorkdirProcess(LocalProcess):
+        def __init__(self):
+            super().__init__()
+            self.workdir_replaced = False
+
+        async def exec(self, command, cwd=None, env=None, timeout=None):
+            if self.workdir_replaced and cwd is None:
+                raise OSError("Provider process retained the deleted working directory")
+            result = await super().exec(command, cwd=cwd, env=env, timeout=timeout)
+            self.workdir_replaced = workdir.stat().st_ino != original_inode
+            return result
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = StaleWorkdirProcess()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(workdir))
+        )
+        try:
+            replaced = await machine.run(Command(("sh", "-c", 'rm -rf "$PWD" && mkdir -p "$PWD" && printf recreated')))
+            assert (replaced.exit_code, replaced.stdout) == (0, b"recreated")
+            following = await machine.run(Command(("printf", "ready")))
+            assert (following.exit_code, following.stdout) == (0, b"ready")
+            assert workdir.stat().st_ino != original_inode
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+def test_daytona_output_count_ignores_provider_diagnostics(tmp_path: Path) -> None:
+    class NoisyCountProcess(LocalProcess):
+        async def exec(self, command, **kwargs):
+            result = await super().exec(command, **kwargs)
+            result.result = "shell-init: getcwd failed\n" + result.result
+            return result
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = NoisyCountProcess()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            result = await machine.run(Command(("printf", "output"), output_limit_bytes=3))
+            assert (result.exit_code, result.stdout, result.stdout_truncated) == (0, b"out", True)
+        finally:
+            await machine.close()
 
     asyncio.run(scenario())
 
@@ -980,3 +1039,33 @@ def test_daytona_failed_snapshot_closes_client_without_starting_sandbox() -> Non
         asyncio.run(DaytonaMachineFactory(lambda: client).create(MachineSpec(source=RegistryImage("ubuntu:24.04"))))
     assert client.params is None
     assert client.closed
+
+
+def test_snapshot_identity_names_the_snapshot_production_would_create(tmp_path: Path) -> None:
+    context = tmp_path / "context"
+    (context / "files").mkdir(parents=True)
+    (context / "Dockerfile").write_text("FROM ubuntu:24.04\nCOPY files/ /app/files\n")
+    (context / "files" / "data.csv").write_bytes(b"a,b\n1,2\n")
+    source = DockerfileSource(context, context / "Dockerfile")
+
+    name = snapshot_identity(source, Resources())
+
+    assert name.startswith("shellbox-") and len(name) == len("shellbox-") + 40
+    assert name == snapshot_identity(DockerfileSource(context, context / "Dockerfile"), Resources())
+
+
+def test_snapshot_identity_rejects_add_and_misplaced_dockerfiles(tmp_path: Path) -> None:
+    context = tmp_path / "context"
+    context.mkdir()
+    (context / "Dockerfile").write_text("FROM ubuntu:24.04\nADD files/ /app/files\n")
+    source = DockerfileSource(context, context / "Dockerfile")
+    with pytest.raises(UnsupportedMachineSpec, match="ADD"):
+        snapshot_identity(source, Resources())
+
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / "sub").mkdir()
+    (nested / "Dockerfile").write_text("FROM ubuntu:24.04\n")
+    misplaced = DockerfileSource(nested, nested / "sub" / "Dockerfile")
+    with pytest.raises(UnsupportedMachineSpec, match="context root"):
+        snapshot_identity(misplaced, Resources())

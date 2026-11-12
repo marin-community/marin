@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import click
+import yaml
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
@@ -38,6 +39,7 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
+from skyrlrecipe import SkyRLRecipe
 
 from experiments.post_training.curriculum_rl.pool import (
     TRAIN_FILENAME,
@@ -141,7 +143,9 @@ def online_eagle_step(preset: _OnlineEaglePreset) -> ArtifactStep[SkyRLRun]:
         SkyRLSpec(
             name=name,
             version=version,
-            config_yaml=plan.config_yaml,
+            config_yaml=yaml.safe_dump(
+                SkyRLRecipe.from_document(yaml.safe_load(plan.config_yaml)).to_skyrl(), sort_keys=False
+            ),
             model=ArtifactHfModel(
                 step=TARGET_MODEL,
                 tokenizer_uri=TARGET_TOKENIZER,

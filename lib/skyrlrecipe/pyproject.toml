@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-skyrlrecipe"
+version = "0.1.0"
+description = "Typed authored SkyRL recipes"
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2.13,<3"]
+
+[dependency-groups]
+test = ["pytest>=8.4", "pytest-timeout", "pytest-xdist"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/skyrlrecipe"]
+
+[tool.pytest.ini_options]
+timeout = 60
