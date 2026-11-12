@@ -37,3 +37,4 @@ class LexicalMeasurements(Artifact):
     population_set: str
     source_ids: list[str]
     measurements: dict[str, dict]
+    drop_manifests: dict[str, str]
