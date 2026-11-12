@@ -523,40 +523,41 @@ def _commit_each_array(checkpoint_dir, arrays: dict[str, np.ndarray]) -> None:
         store.write(value).result()
 
 
-@pytest.mark.parametrize(
-    "arrays_per_wave, expected_versions",
-    [
-        # The empty database, then one version for the wave.
-        (6, 2),
-        # Three waves. A non-atomic transaction would add two versions per wave.
-        (2, 4),
-    ],
-)
-def test_a_lock_file_save_publishes_one_manifest_version_per_wave(tmp_path, arrays_per_wave, expected_versions):
-    """Under lock files each manifest version is a lock acquisition every other writer waits on."""
+def test_a_lock_file_save_publishes_one_manifest_version_per_wave(tmp_path):
+    """A save that spills the budget commits once per wave.
+
+    Three waves are four generations: the empty database, then one per wave. A non-atomic
+    transaction would add two generations per wave. A save that fits the budget still restores.
+    """
     arrays = {f"w{i}": np.full(1024, i, dtype=np.float32) for i in range(6)}
     one_array = next(iter(arrays.values())).nbytes
     separate = tmp_path / "separate"
     batched = tmp_path / "batched"
+    fitting = tmp_path / "fitting"
     separate.mkdir()
     batched.mkdir()
+    fitting.mkdir()
     _commit_each_array(separate, arrays)
 
     tree_serialize_leaves_tensorstore(
         str(batched),
         arrays,
-        write_config=TensorStoreWriteConfig(
-            max_staged_host_bytes=one_array * arrays_per_wave, file_io_locking="lockfile"
-        ),
+        write_config=TensorStoreWriteConfig(max_staged_host_bytes=one_array * 2, file_io_locking="lockfile"),
+    )
+    tree_serialize_leaves_tensorstore(
+        str(fitting),
+        arrays,
+        write_config=TensorStoreWriteConfig(max_staged_host_bytes=one_array * len(arrays), file_io_locking="lockfile"),
     )
 
-    assert _ocdbt_version_count(batched) == expected_versions
-    assert _ocdbt_version_count(separate) > expected_versions
-    restored = tree_deserialize_leaves_tensorstore(
-        str(batched), {name: jnp.zeros_like(value) for name, value in arrays.items()}
-    )
-    for name, value in arrays.items():
-        np.testing.assert_array_equal(np.asarray(restored[name]), value)
+    assert _ocdbt_version_count(batched) == 4
+    assert _ocdbt_version_count(separate) > 4
+    for path in (batched, fitting):
+        restored = tree_deserialize_leaves_tensorstore(
+            str(path), {name: jnp.zeros_like(value) for name, value in arrays.items()}
+        )
+        for name, value in arrays.items():
+            np.testing.assert_array_equal(np.asarray(restored[name]), value)
 
 
 def test_a_save_larger_than_the_staging_budget_rolls_through_it():

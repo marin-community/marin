@@ -221,8 +221,8 @@ class TensorStoreWriteConfig:
     """Host memory this process may hold in staged snapshots at once.
 
     A save whose share fits returns while the commits drain. A larger save rolls through.
-    Under ``lockfile`` locking, the arrays staged together are one OCDBT manifest commit, so a
-    share that fits is a single commit and a larger save commits once per wave of this budget.
+    Under ``lockfile`` locking, a share that does not fit is one OCDBT manifest commit per wave
+    of this budget. A share that fits commits each chunk as it is staged.
     """
 
     cache_pool_bytes: int = 1024**3
@@ -1022,15 +1022,22 @@ def _future_error(fut: ts.Future) -> BaseException | None:
     return None
 
 
-def _uses_manifest_waves(file_io_locking: FileIoLocking | None) -> bool:
-    """Whether a save batches its chunks into one manifest commit per staging wave.
+def _uses_manifest_waves(
+    file_io_locking: FileIoLocking | None,
+    jobs: Sequence[_CheckpointWrite],
+    config: TensorStoreWriteConfig,
+) -> bool:
+    """Whether this save commits one manifest version per staging wave.
 
-    Under lock files every manifest commit takes a lock the NFS server enforces across clients,
-    so fewer commits means less serialization between processes. Elsewhere TensorStore already
-    batches concurrent commits, and per-chunk commits overlap staging with I/O, which a
-    transaction defers to its commit.
+    Lock-file commits are serialized across NFS clients, so a save that spills into several
+    waves commits once per wave. A save that fits in the budget commits each chunk as it is
+    staged: one transaction would defer all of its I/O to the commit. Other locking modes
+    always commit per chunk, because TensorStore already batches those commits.
     """
-    return file_io_locking == "lockfile"
+    if file_io_locking != "lockfile":
+        return False
+    staged = sum(job.num_bytes for job in jobs)
+    return staged > config.max_staged_host_bytes
 
 
 def _write_each_chunk(
@@ -1185,7 +1192,7 @@ def _serialize_arrays(
     # new OCDBT database (#6785). Give each save bounded caches and copy concurrency of its own.
     context = _tensorstore_write_context(config, file_io_locking)
     jobs = _checkpoint_writes(arrays, tspecs, plans)
-    if _uses_manifest_waves(file_io_locking):
+    if _uses_manifest_waves(file_io_locking, jobs, config):
         gate, commit_futures = _write_in_manifest_waves(jobs, tspecs, config, checkpoint_dir, context)
     else:
         gate, commit_futures = _write_each_chunk(jobs, tspecs, config, context)
