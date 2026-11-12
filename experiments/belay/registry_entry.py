@@ -38,6 +38,37 @@ def require_registry_checkout() -> None:
     git(CONFIG.registry_checkout, "pull", "--ff-only", "--quiet", "origin", CONFIG.registry_branch)
 
 
+def reset_checkout(checkout: Path, branch: str) -> list[str]:
+    """Put ``checkout`` exactly at ``origin/<branch>``, keeping anything in the way: uncommitted edits go to a named
+    stash and local commits not on origin to a backup branch. Returns a note for each thing kept."""
+    stamp = f"{datetime.datetime.now(datetime.UTC):%Y%m%d-%H%M%S}"
+    notes = []
+    git(checkout, "fetch", "--quiet", "origin", branch)
+    dirty = git(checkout, "status", "--porcelain")
+    if dirty:
+        git(checkout, "stash", "push", "--include-untracked", "--quiet", "-m", f"belay sync {stamp}: stray edits")
+        files = ", ".join(line[3:] for line in dirty.splitlines())
+        notes.append(f"stashed stray edits in {checkout} as 'belay sync {stamp}: stray edits': {files}")
+    if git(checkout, "rev-list", "--count", f"origin/{branch}..HEAD") != "0":
+        backup = f"belay-sync-backup-{stamp}"
+        git(checkout, "branch", backup)
+        notes.append(f"kept local commits of {checkout} not on origin/{branch} as branch {backup}")
+    git(checkout, "reset", "--hard", "--quiet", f"origin/{branch}")
+    return notes
+
+
+def reset_registry_checkout() -> list[str]:
+    """The watch pass's registry refresh (``reset_checkout``): its checkout only ever mirrors origin, and Loom
+    sessions share one home directory, so another session's stray edits there must not block the watch."""
+    if not CONFIG.registry_checkout.exists():
+        require_registry_checkout()
+        return []
+    branch = current_branch(CONFIG.registry_checkout)
+    if branch != CONFIG.registry_branch:
+        raise SystemExit(f"refusing: {CONFIG.registry_checkout} is on {branch}, not {CONFIG.registry_branch}")
+    return reset_checkout(CONFIG.registry_checkout, CONFIG.registry_branch)
+
+
 def entry_path(registry_id: str) -> Path:
     paths = list((CONFIG.registry_checkout / ENTRIES).glob(f"{registry_id}-*.yaml"))
     if len(paths) != 1:

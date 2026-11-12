@@ -76,7 +76,7 @@ from experiments.belay.posts import (
     title,
     updated,
 )
-from experiments.belay.registry_entry import potential_of, with_step_time
+from experiments.belay.registry_entry import potential_of, reset_checkout, with_step_time
 from experiments.belay.results import Verdict, after_equal_data, change, overall_verdict, verdict, wall_step_time
 from experiments.belay.submit import (
     LADDER_RUNGS,
@@ -934,3 +934,32 @@ def test_a_trial_with_no_recorded_result_does_not_hold_a_rerun() -> None:
     assert prior_trials_hold(crashed, None, rungs) is None
     measured = {"trials": [{"id": "t017", "rung": "competitive-d512", "delta": [-0.004]}]}
     assert prior_trials_hold(measured, None, rungs) is not None
+
+
+def test_the_watch_resets_its_registry_checkout_keeping_whatever_was_in_the_way(tmp_path: Path) -> None:
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--quiet", "--bare", str(origin)], check=True)
+    checkout = tmp_path / "checkout"
+    subprocess.run(["git", "clone", "--quiet", str(origin), str(checkout)], check=True)
+    git(checkout, "config", "user.email", "test@example.com")
+    git(checkout, "config", "user.name", "test")
+    git(checkout, "checkout", "--quiet", "-b", "registry")
+    commit_file(checkout, "X0001.yaml", "v1\n")
+    git(checkout, "push", "--quiet", "origin", "registry")
+    other = tmp_path / "other"  # someone else moves origin on
+    subprocess.run(["git", "clone", "--quiet", "--branch", "registry", str(origin), str(other)], check=True)
+    git(other, "config", "user.email", "test@example.com")
+    git(other, "config", "user.name", "test")
+    commit_file(other, "X0001.yaml", "v2\n")
+    git(other, "push", "--quiet", "origin", "registry")
+    commit_file(checkout, "local.txt", "a local commit\n")  # diverged
+    (checkout / "X0001.yaml").write_text("a stray edit\n")  # and dirty
+
+    notes = reset_checkout(checkout, "registry")
+
+    assert (checkout / "X0001.yaml").read_text() == "v2\n"
+    assert git(checkout, "rev-parse", "HEAD") == git(checkout, "rev-parse", "origin/registry")
+    assert "stray edits" in git(checkout, "stash", "list")
+    assert any(b.strip().startswith("belay-sync-backup-") for b in git(checkout, "branch").splitlines())
+    assert len(notes) == 2
+    assert reset_checkout(checkout, "registry") == []  # clean and current: nothing kept
