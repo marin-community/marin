@@ -314,7 +314,7 @@ number of distinct environments the source's own task specs require through the
 production path, `daytona_count_basis` names the rule and payload source, and
 `daytona_execution_failures` counts refused tasks. An unsafe label does not
 remove a source from the catalog; it records that a run would exceed the org's
-limits. [Making a dataset Daytona-safe](../../.agents/ops/daytona.md#making-a-dataset-daytona-safe)
+limits. [Making a dataset Daytona-safe](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#making-a-dataset-daytona-safe)
 covers the faithful ways to bring one inside the budget.
 
 **Publishing a conversion.** A curation step that converts data publishes the converted
