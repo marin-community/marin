@@ -6,10 +6,20 @@
 import pytest
 from pydantic import ValidationError
 
+from taskcompendium.grading_environment import GradingEnvironmentMode
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ResourceGroups, Source
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
-from taskcompendium.pipeline.oracle_filter import OracleFilterReceipt, require_oracle_filter
+from taskcompendium.pipeline.oracle_filter import (
+    OracleFilterReceipt,
+    OracleTrialReceipt,
+    ResourceCalibrationReceipt,
+    VerifierResourceProfile,
+    next_trial_requirements,
+    require_oracle_filter,
+)
+from taskcompendium.pipeline.resource_calibration import ResourceDimension
 
 from .oracle_filter_fixtures import oracle_receipt
 from .pipeline_stages import SOURCE_FILES
@@ -50,6 +60,35 @@ def test_changed_task_or_incomplete_population_cannot_reuse_an_oracle_receipt():
     document["input_rows"] += 1
     with pytest.raises(ValidationError, match="full input population"):
         OracleFilterReceipt.model_validate(document)
+
+
+@pytest.mark.parametrize(
+    "dimension,log,oom_kills,expected",
+    [
+        (ResourceDimension.MEMORY, "", 1, {"memory_mb": 4096}),
+        (ResourceDimension.STORAGE, "ENOSPC", 0, {"storage_mb": 4096}),
+    ],
+)
+def test_fixed_separate_grader_failures_do_not_increase_actor_resources(dimension, log, oom_kills, expected):
+    current = task()
+    document = oracle_receipt([current]).tasks[current.id].calibration.attempts[0].model_dump(mode="json")
+    document["result"]["exception_info"] = {"exception_type": "VerifierRuntimeError"}
+    document["result"]["verifier_execution"] = {"started_at": "2026-11-12T13:00:00Z"}
+    document["result_sha256"] = canonical_sha256(document["result"])
+    document["failure_log"] = log
+    document["verifier_resource_usage"] = {"oom_kills": oom_kills}
+    trial = OracleTrialReceipt.model_validate(document)
+    separate = VerifierResourceProfile(mode=GradingEnvironmentMode.SEPARATE, fixed={dimension: 2048})
+    assert next_trial_requirements(trial, {}, separate) is None
+    calibration = ResourceCalibrationReceipt(
+        declared_requirements=None,
+        verifier=separate,
+        oracle_kind="original",
+        attempts=(trial,),
+    )
+    assert not calibration.passed
+    shared = VerifierResourceProfile(mode=GradingEnvironmentMode.SHARED, fixed={dimension: 2048})
+    assert next_trial_requirements(trial, {}, shared) == current.execution_requirements.model_copy(update=expected)
 
 
 def test_calibration_only_oracle_cannot_supply_admission_evidence():

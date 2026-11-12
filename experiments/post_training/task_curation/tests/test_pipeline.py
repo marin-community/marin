@@ -28,7 +28,7 @@ from taskcompendium.models import (
     verifyit_spec,
 )
 from taskcompendium.pipeline.controls import reference_reply
-from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFormat
 from taskcompendium.pipeline.models import Controls, FilterPolicy, ReviewRubric
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
@@ -71,6 +71,11 @@ from experiments.post_training.task_curation.tests.image_builds import (
     REQUIREMENTS,
     install_fake_build_tools,
 )
+from experiments.post_training.task_curation.tests.resource_receipts import (
+    ResourceConverter,
+    fixture_receipt,
+    resource_recipe,
+)
 from experiments.post_training.task_curation.tests.review_server import JudgeReply
 
 AGENT_IMAGE = "ghcr.io/marin-community/iris-task@sha256:" + "d" * 64
@@ -94,7 +99,26 @@ def config() -> SourcePipelineConfig:
     )
 
 
-def source_step(recipe: CurationRecipe, options: PipelineOptions):
+def source_step(recipe: CurationRecipe, options: PipelineOptions, receipt_root: Path | None = None):
+    recipe = resource_recipe(recipe)
+    root = receipt_root or (Path(options.inputs.root) if options.inputs.root else None)
+    overrides = {
+        name: SourceFileOverride(str(path), hashlib.sha256(path.read_bytes()).hexdigest())
+        for name, path in options.inputs.files.items()
+    }
+    if root is None and overrides:
+        root = next(iter(options.inputs.files.values())).parent
+    if root is not None and options.mode is not SourceProcessingMode.QUICK:
+        settings = options.recipe_settings
+        assert settings is not None and settings.config is not None
+        converter = recipe.convert
+        if isinstance(converter, ResourceConverter) and isinstance(converter.convert, partial):
+            if converter.convert.func is convert_with_changed_input:
+                converter = ResourceConverter(convert_fixture)
+        receipt = fixture_receipt(recipe, root, options.inputs.auxiliary, overrides, converter)
+        options = replace(
+            options, recipe_settings=replace(settings, config=replace(settings.config, oracle_filter=receipt))
+        )
     source = RlDataSource(
         info=SourceInfo(id=f"fixture:{recipe.name}", title=recipe.name, origin="fixture"),
         config=recipe,
@@ -255,7 +279,7 @@ def test_recipe_result_omits_skipped_review_and_verification_stages(tmp_path, co
         runtime,
         recipe_settings=RecipeSettings(config=replace(config, review=None, execution=AuditExecution(), machines=None)),
     )
-    step = source_step(pipeline, options)
+    step = source_step(pipeline, options, receipt_root=primary)
     # Substitute only the HF transfer boundary; materialize the real declared dependency.
     original_plan = pipeline_module.plan_download
 

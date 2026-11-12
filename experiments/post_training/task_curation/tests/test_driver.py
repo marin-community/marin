@@ -47,10 +47,13 @@ from experiments.post_training.task_curation.tests.image_builds import (
     install_fake_build_tools,
 )
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
+from experiments.post_training.task_curation.tests.resource_receipts import resource_recipe, write_fixture_receipt
 
 
 def math500() -> CurationRecipe:
-    return cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
+    return resource_recipe(
+        cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
+    )
 
 
 @pytest.fixture
@@ -331,6 +334,7 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
         str(tmp_path / "artifacts"),
     ]
     runner = CliRunner()
+    options += write_fixture_receipt(source.config, remote, tmp_path / "resource-receipt.json")
     planned = runner.invoke(main, options)
     assert planned.exit_code == (2 if rubric is not None else 0), planned.output
     assert not (tmp_path / "artifacts").exists()
@@ -413,6 +417,7 @@ def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, 
         "--run",
     ]
     runner = CliRunner()
+    args += write_fixture_receipt(source.config, staged, tmp_path / "resource-receipt.json")
     first = runner.invoke(main, [*args, "--normalized-shards", "1"])
     assert first.exit_code == 0, first.output
     outcome = json.loads((cache / "campaigns/campaign.json").read_text())["sources"][0]
@@ -461,6 +466,7 @@ def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, r
         f"http://127.0.0.1:{review_server.server_address[1]}/v1",
         "--run",
     ]
+    args += write_fixture_receipt(source.config, staged, tmp_path / "resource-receipt.json")
     result = CliRunner().invoke(main, args)
     assert result.exit_code == 0, result.output
     catalog = CurationCatalog(str(cache / "campaigns/catalog"))
@@ -516,6 +522,7 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
         f"http://127.0.0.1:{review_server.server_address[1]}/v1",
         "--run",
     ]
+    args += write_fixture_receipt(source.config, staged, tmp_path / "resource-receipt.json")
     result = CliRunner().invoke(main, args)
     assert result.exit_code != 0
     campaign = json.loads((cache / "campaigns/campaign.json").read_text())

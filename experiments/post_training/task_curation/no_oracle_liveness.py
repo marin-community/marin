@@ -39,11 +39,10 @@ from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import HostImage, MachineSpec, NetworkPolicy
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import ConversationTrace, GradingAttempt, TaskSpec, TextMessage
+from taskcompendium.models import ConversationTrace, GradingAttempt, NoGrader, TaskSpec, TextMessage
 from taskcompendium.runtime.grading import grade_empty_in_sandbox, grade_in_sandbox
 
 VERIFIER_COMMAND = "bash /tests/test.sh"
-VERIFIER_TIMEOUT = 900.0
 REWARD_PATH = "/logs/verifier/reward.txt"
 
 
@@ -93,6 +92,9 @@ async def run_one(
     """Grade captured candidate files or an empty submission in the declared grader environment."""
     with tempfile.TemporaryDirectory(prefix="liveness-build-") as context:
         task = TaskSpec.model_validate(spec["task"])
+        if task.execution_requirements is None:
+            raise ValueError(f"Verifier qualification requires explicit execution requirements: {task.id}")
+        verifier_timeout = task.execution_requirements.verifier_timeout_sec
         runtime = MachineRuntimeSpec.model_validate(
             {
                 "backend": "daytona",
@@ -104,7 +106,7 @@ async def run_one(
                 **(spec["runtime"].get("verifier_machine") or {}),
             }
         )
-        requirements = getattr(task.grader, "environment", None)
+        requirements = None if isinstance(task.grader, NoGrader) else task.grader.environment
         if requirements is None:
             return LivenessResult(task.id, base, "infra_error", None, None, "", "Grader declares no sandbox environment")
         if runtime.gpus:
@@ -171,13 +173,13 @@ async def run_one(
         spec_machine = replace(spec_machine, startup_timeout=runtime.startup_timeout)
         try:
             if submission_files is None:
-                result = await grade_empty_in_sandbox(task, grading_factory, spec_machine, timeout=VERIFIER_TIMEOUT)
+                result = await grade_empty_in_sandbox(task, grading_factory, spec_machine, timeout=verifier_timeout)
             else:
                 attempt = GradingAttempt(
                     ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))),
                     files=submission_files,
                 )
-                result = await grade_in_sandbox(task, attempt, grading_factory, spec_machine, timeout=VERIFIER_TIMEOUT)
+                result = await grade_in_sandbox(task, attempt, grading_factory, spec_machine, timeout=verifier_timeout)
         except TimeoutError as error:
             return LivenessResult(task.id, base, "timeout", None, None, snapshot, str(error))
         except Exception as error:

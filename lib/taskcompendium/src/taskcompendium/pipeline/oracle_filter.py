@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.storage_path import StoragePath
 
+from taskcompendium.grading_environment import GradingEnvironmentMode
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
 from taskcompendium.pipeline.fingerprints import recipe_code_identity
@@ -109,12 +110,39 @@ class OracleTrialReceipt(BaseModel):
         )
 
 
+class VerifierResourceProfile(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    mode: GradingEnvironmentMode
+    fixed: dict[ResourceDimension, float] = Field(default_factory=dict)
+
+
+def next_trial_requirements(
+    trial: OracleTrialReceipt, preserved: dict[ResourceDimension, float], verifier: VerifierResourceProfile
+) -> ExecutionRequirements | None:
+    """Stop at a separate grader's declared limit without increasing the actor's allocation."""
+    signal = trial.failure_signal
+    verifier_failed = (
+        not trial.resource_usage.oom_kills
+        and signal is not FailureSignal.AGENT_TIMEOUT
+        and (
+            trial.verifier_resource_usage.oom_kills
+            or signal is FailureSignal.VERIFIER_TIMEOUT
+            or (trial.result.get("verifier_execution") or {}).get("started_at") is not None
+        )
+    )
+    fixed = frozenset(preserved)
+    if verifier.mode is GradingEnvironmentMode.SEPARATE and verifier_failed:
+        fixed |= frozenset(verifier.fixed)
+    return next_requirements(trial.execution_requirements, signal, trial.resource_usage, fixed)
+
+
 class ResourceCalibrationReceipt(BaseModel):
     """Every production attempt, including calibration-only solutions kept out of admission proof."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     declared_requirements: ExecutionRequirements | None
     preserved_requirements: dict[ResourceDimension, float] = Field(default_factory=dict)
+    verifier: VerifierResourceProfile
     oracle_kind: Literal["original", "calibration_only"]
     attempts: tuple[OracleTrialReceipt, ...] = Field(min_length=1)
 
@@ -142,22 +170,12 @@ class ResourceCalibrationReceipt(BaseModel):
                 continue
             infrastructure_retries = 0
             if self.declared_requirements is None and index != len(self.attempts) - 1:
-                expected = next_requirements(
-                    expected, trial.failure_signal, trial.resource_usage, frozenset(self.preserved_requirements)
-                )
+                expected = next_trial_requirements(trial, self.preserved_requirements, self.verifier)
                 if expected is None:
                     raise ValueError("Calibration continued after a non-resource failure or exhausted cap")
         final = self.attempts[-1]
         if self.declared_requirements is None and not final.passed(final.result["task_checksum"]):
-            if (
-                next_requirements(
-                    final.execution_requirements,
-                    final.failure_signal,
-                    final.resource_usage,
-                    frozenset(self.preserved_requirements),
-                )
-                is not None
-            ):
+            if next_trial_requirements(final, self.preserved_requirements, self.verifier) is not None:
                 raise ValueError("Resource calibration stopped before a pass or the applicable cap")
         return self
 

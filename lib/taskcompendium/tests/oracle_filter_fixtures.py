@@ -3,6 +3,7 @@
 
 """External Harbor receipt fixtures for curation admission tests."""
 
+from taskcompendium.grading_environment import GradingEnvironmentMode
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import (
@@ -10,6 +11,7 @@ from taskcompendium.pipeline.oracle_filter import (
     OracleTaskReceipt,
     OracleTrialReceipt,
     ResourceCalibrationReceipt,
+    VerifierResourceProfile,
     has_oracle_solution,
 )
 
@@ -51,6 +53,7 @@ def oracle_receipt(tasks: list[TaskSpec], recipe_identity: str | None = None, *,
             trials=(trial,) if has_oracle_solution(task) else (),
             calibration=ResourceCalibrationReceipt(
                 declared_requirements=task.execution_requirements,
+                verifier=VerifierResourceProfile(mode=GradingEnvironmentMode.SHARED),
                 oracle_kind="original" if has_oracle_solution(task) else "calibration_only",
                 attempts=(trial,),
             ),

@@ -24,13 +24,16 @@ from taskcompendium.pipeline.assessment_review import (
     IncompleteAssessment,
     grade_assessment,
 )
-from taskcompendium.pipeline.models import FilterPolicy
+from taskcompendium.pipeline.conversion import convert_source_row
+from taskcompendium.pipeline.models import FilterPolicy, ImportRejection
+from taskcompendium.pipeline.oracle_filter import oracle_recipe_identity
 from taskcompendium.pipeline.review_requests import RequestObservation, RequestOutput
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode, run_source_pipeline
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
 from taskcompendium.pipeline.stages import AuditExecution
 
+from .oracle_filter_fixtures import oracle_receipt
 from .pipeline_stages import convert_svamp, fixture_recipe
 
 
@@ -45,8 +48,17 @@ def curated_source(context, root, rows):
     source.mkdir()
     (source / "source.jsonl").write_text("\n".join(json.dumps(row) for row in rows))
     output = root / "curated"
+    recipe = fixture_recipe(convert_svamp, rubric=None)
+    tasks = []
+    for index, row in enumerate(rows):
+        converted = convert_source_row({"locator": f"source.jsonl:{index}", "data": row}, recipe).result
+        if not isinstance(converted, ImportRejection):
+            tasks.append(converted.task)
+    receipt = oracle_receipt(tasks, oracle_recipe_identity(recipe)).model_copy(
+        update={"input_rows": len(rows), "conversion_rejections": len(rows) - len(tasks)}
+    )
     run_source_pipeline(
-        fixture_recipe(convert_svamp, rubric=None),
+        recipe,
         context,
         str(source),
         str(output),
@@ -59,6 +71,7 @@ def curated_source(context, root, rows):
             FilterPolicy(),
             2,
             None,
+            oracle_filter=receipt,
         ),
         mode=SourceProcessingMode.FULL,
         canonical_source="fixture",

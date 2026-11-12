@@ -16,6 +16,7 @@ import pyarrow.parquet as pq
 import tomlkit
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
+from taskcompendium.grading_environment import GradingEnvironmentMode
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
 from taskcompendium.pipeline.oracle_filter import (
@@ -23,14 +24,15 @@ from taskcompendium.pipeline.oracle_filter import (
     OracleTaskReceipt,
     OracleTrialReceipt,
     ResourceCalibrationReceipt,
+    VerifierResourceProfile,
     has_oracle_solution,
+    next_trial_requirements,
 )
 from taskcompendium.pipeline.resource_calibration import (
     INITIAL_REQUIREMENTS,
     FailureSignal,
     ResourceDimension,
     ResourceUsage,
-    next_requirements,
 )
 from taskcompendium.runtime.resources import inline_resource
 
@@ -54,6 +56,20 @@ def native_requirements(path: Path) -> ExecutionRequirements:
         **{name: environment[name] for name in ("cpus", "memory_mb", "storage_mb")},
         agent_timeout_sec=document["agent"]["timeout_sec"],
         verifier_timeout_sec=document["verifier"]["timeout_sec"],
+    )
+
+
+def native_verifier_profile(path: Path) -> VerifierResourceProfile:
+    verifier = tomllib.loads((path / "task.toml").read_text()).get("verifier", {})
+    mode = verifier.get("environment_mode") or ("separate" if "environment" in verifier else "shared")
+    environment = verifier.get("environment", {})
+    return VerifierResourceProfile(
+        mode=GradingEnvironmentMode(mode),
+        fixed={
+            ResourceDimension(name): environment[name]
+            for name in ("cpus", "memory_mb", "storage_mb")
+            if environment.get(name) is not None
+        },
     )
 
 
@@ -216,6 +232,7 @@ def filter_cohort(
                     else ResourceCalibrationReceipt(
                         declared_requirements=task.execution_requirements,
                         preserved_requirements=declared_native_requirements(Path(mapping["task_path"])),
+                        verifier=native_verifier_profile(Path(mapping["task_path"])),
                         oracle_kind="original" if oracle else "calibration_only",
                         attempts=tuple(task_trials),
                     )
@@ -225,6 +242,8 @@ def filter_cohort(
                     raise ValueError(f"Source package changed after Harbor export: {task.id}")
                 if calibration.preserved_requirements != declared_native_requirements(original):
                     raise ValueError(f"Calibration changed source-declared limits: {task.id}")
+                if calibration.verifier != native_verifier_profile(original):
+                    raise ValueError(f"Calibration changed the declared verifier resource profile: {task.id}")
                 package_identity = calibration_package_identity(original, calibration.oracle_kind)
                 for attempt in calibration.attempts:
                     key = (attempt.result["task_name"], attempt.result["task_checksum"])
@@ -369,6 +388,7 @@ def calibrated_task(
         raise ValueError(f"Task changed after Harbor export: {task.id}")
     declared = task.execution_requirements
     preserved = declared_native_requirements(original)
+    verifier = native_verifier_profile(original)
     shape = declared or ExecutionRequirements.model_validate({**INITIAL_REQUIREMENTS.model_dump(), **preserved})
     if declared is not None and native_requirements(original) != declared:
         raise ValueError(f"Harbor package differs from declared execution requirements: {task.id}")
@@ -435,13 +455,14 @@ def calibrated_task(
         infrastructure_attempts = 0
         if trial.passed(trial.result["task_checksum"]) or declared is not None:
             break
-        updated = next_requirements(shape, trial.failure_signal, trial.resource_usage, frozenset(preserved))
+        updated = next_trial_requirements(trial, preserved, verifier)
         if updated is None:
             break
         shape = updated
     calibration = ResourceCalibrationReceipt(
         declared_requirements=declared,
         preserved_requirements=preserved,
+        verifier=verifier,
         oracle_kind="original" if has_oracle_solution(task) else "calibration_only",
         attempts=tuple(attempts),
     )

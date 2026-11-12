@@ -929,6 +929,9 @@ non-resource failure, becomes an exclusion with its signal and trial evidence.
 The receipt retains every attempt and the final per-task shape. It reports a
 uniform source shape only when every task passed at that shape. A failure in an
 explicitly fixed dimension is excluded at its declared limit.
+Receipts retain actor and verifier measurements separately. A separate grader's
+failure at its declared memory or disk limit stops calibration without increasing
+the actor's allocation; a shared grader uses the task's container budget.
 
 For tasks without original solutions, write calibration-only `solve.sh` scripts
 under `CALIBRATION_SOLUTIONS/TASK_ID/` and supply `--calibration-solutions`.
