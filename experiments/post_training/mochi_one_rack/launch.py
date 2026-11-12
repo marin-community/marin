@@ -267,7 +267,8 @@ def build_context_trial(
             if latest_step != resume_step:
                 raise ValueError(f"Requested checkpoint {resume_step}, but the completed artifact records {latest_step}")
         launch = yaml.safe_load(config.launch_config_yaml)
-        launch["skyrl"]["trainer"]["max_epochs"] = resume_step + updates + 1
+        trainer = launch["skyrl"]["trainer"]
+        trainer["epochs"] = max(trainer["epochs"], resume_step + updates + 1)
         return replace(config, launch_config_yaml=yaml.safe_dump(launch, sort_keys=False))
 
     return replace(step, build_config=completed_resume_config)
