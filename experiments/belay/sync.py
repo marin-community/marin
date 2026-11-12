@@ -24,7 +24,7 @@ import wandb
 from experiments.belay.branch import git
 from experiments.belay.config import CONFIG, COREWEAVE_S3_ENDPOINT
 from experiments.belay.page import call, mark_reviewed, page_state, session_credentials
-from experiments.belay.registry_entry import require_registry_checkout
+from experiments.belay.registry_entry import reset_registry_checkout
 from experiments.belay.submit import iris_jobs
 
 logger = logging.getLogger("belay.sync")
@@ -162,10 +162,13 @@ class Watcher:
         call("agent/registry", {"revision": revision, "data": data}, token=self.token)
         logger.info("uploaded registry results at %s (%d ideas)", revision[:10], len(data["ideas"]))
 
-    def tick(self) -> None:
-        error = None
+    def tick(self, upload_registry: bool = True, note: str | None = None) -> None:
+        """Report runs, registry results (unless ``upload_registry`` is off: the checkout could not be refreshed) and
+        storage to the page; ``note`` is recorded as the watcher's error, for the page to show."""
+        error = note
         try:
-            self.upload_registry()
+            if upload_registry:
+                self.upload_registry()
         except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
             error = f"registry: {e}"
         reports = self.runs()
@@ -187,10 +190,16 @@ def sync() -> None:
     """One watch pass against the configured page: reap sessions earlier passes left running, then report runs,
     results and storage (measured only when the page's last measurement is an hour old)."""
     reap_sessions()
-    require_registry_checkout()
+    refreshed = True
+    try:
+        notes = reset_registry_checkout()  # stray edits it kept are worth a look, so the page shows them
+    except (subprocess.CalledProcessError, SystemExit) as failure:
+        refreshed, notes = False, [f"registry checkout: {failure}; runs and storage are still reported"]
+    for note in notes:
+        print(note)
     measured = call("agent/state")["watcher"]["storage_at"]
     storage_at = None if measured is None else datetime.datetime.fromisoformat(measured)
-    Watcher(CONFIG.registry_checkout, token=None, storage_at=storage_at).tick()
+    Watcher(CONFIG.registry_checkout, token=None, storage_at=storage_at).tick(refreshed, "; ".join(notes) or None)
     react_to_reviewed()
 
 
