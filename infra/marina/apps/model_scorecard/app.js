@@ -10,6 +10,11 @@ function element(tag, attributes = {}, text) {
   return node;
 }
 
+// Let long benchmark names wrap between words in the fixed-width columns: humaneval|plus, olympiad|bench.
+function headerText(name) {
+  return name.replace(/(bench|plus)$/, "\u200b$1");
+}
+
 function scoreCell(cell, column) {
   const td = element("td", { "data-col": column });
   if ("missing" in cell) {
@@ -18,7 +23,6 @@ function scoreCell(cell, column) {
     return td;
   }
   td.className = `scored ${cell.label}`;
-  td.style.setProperty("--heat", String(cell.score / 100));
   const link = element("a", { href: cell.link.url, target: "_blank", rel: "noopener" });
   link.append(element("span", { class: "score" }, cell.score.toFixed(2)));
   if (cell.note) link.append(element("span", { class: "note-mark" }, "*"));
@@ -44,7 +48,12 @@ function render(data) {
   const table = document.getElementById("scorecard");
   const head = element("tr");
   head.append(element("th", { class: "model", scope: "col" }, "Model"));
-  data.evals.forEach((name, column) => head.append(element("th", { scope: "col", "data-col": column }, name)));
+  data.evals.forEach((name, column) =>
+    head.append(element("th", { scope: "col", "data-col": column, title: name }, headerText(name))),
+  );
+  const columns = table.appendChild(element("colgroup"));
+  columns.append(element("col", { class: "model-col" }));
+  for (const _ of data.evals) columns.append(element("col"));
   table.appendChild(element("thead")).append(head);
 
   const body = table.appendChild(element("tbody"));

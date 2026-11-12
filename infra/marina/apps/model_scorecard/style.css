@@ -8,9 +8,6 @@
   --text-secondary: #c3c2b7;
   --text-muted: #8b8a80;
   --link: #7cb4f5;
-  /* Sequential blue from the reference palette; cell depth = score on a fixed 0-100 scale. */
-  --seq: #2a78d6;
-  --seq-max: 62%;
   font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
   color: var(--text-primary);
   background: var(--surface-0);
@@ -60,18 +57,26 @@ a:focus-visible {
   box-shadow: 0 1px 0 rgb(255 255 255 / 3%) inset, 0 8px 24px rgb(0 0 0 / 35%);
 }
 
+/* Fixed layout: the model column has a set width and the score columns share the rest equally. */
 table {
+  width: 100%;
+  min-width: 1500px;
+  table-layout: fixed;
   border-collapse: separate;
   border-spacing: 2px;
   padding: 6px;
   font-size: 14px;
 }
 
+col.model-col {
+  width: 170px;
+}
+
 th,
 td {
-  padding: 9px 7px;
+  padding: 9px 4px;
   border-radius: 4px;
-  text-align: right;
+  text-align: center;
   white-space: nowrap;
 }
 
@@ -82,9 +87,8 @@ thead th {
   padding-bottom: 10px;
   background: var(--surface-1);
   color: var(--text-secondary);
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.01em;
   white-space: normal;
   vertical-align: bottom;
 }
@@ -93,8 +97,6 @@ th.model {
   position: sticky;
   left: 0;
   z-index: 1;
-  min-width: 140px;
-  max-width: 170px;
   background: var(--surface-1);
   font-size: 14px;
   font-weight: 600;
@@ -114,8 +116,9 @@ tbody th.model a:hover {
   color: var(--link);
 }
 
-td.scored {
-  background: color-mix(in oklab, var(--seq) calc(var(--heat) * var(--seq-max)), var(--surface-1));
+td.scored,
+td.missing {
+  background: var(--surface-2);
 }
 
 td.scored a {
@@ -131,9 +134,7 @@ td.unofficial .score {
 }
 
 td.missing {
-  background: var(--surface-2);
   color: var(--text-muted);
-  text-align: center;
 }
 
 .note-mark {
@@ -163,24 +164,6 @@ td:focus-within {
   margin: 16px 0 10px;
   color: var(--text-secondary);
   font-size: 13px;
-}
-
-.scale {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.scale-bar {
-  width: 140px;
-  height: 10px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: linear-gradient(
-    to right,
-    var(--surface-1),
-    color-mix(in oklab, var(--seq) var(--seq-max), var(--surface-1))
-  );
 }
 
 .sample-unofficial {
