@@ -119,6 +119,11 @@ class SourceDeclaration(CatalogRecord):
     # Non-agentic sources never provision Daytona sandboxes; an agentic source stays
     # UNASSESSED until its unique snapshot count is assessed against DAYTONA_SAFE_SNAPSHOT_LIMIT.
     daytona_safety: DaytonaSafety = DaytonaSafety.UNASSESSED
+    # Measured distinct snapshot identities and the rule applied, required for any agentic
+    # SAFE/UNSAFE verdict. A verdict without these stays UNASSESSED; counts are never inferred.
+    daytona_snapshot_count: int | None = None
+    daytona_snapshot_threshold: int | None = None
+    daytona_count_basis: str | None = None
 
 
 class AdmissionCounts(CatalogRecord):

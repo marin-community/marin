@@ -61,6 +61,8 @@ SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 GENERATE_ENTRYPOINT = "generate"
 BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
 SKYRL_PROJECT = Path("vendor/skyrl")
+# The SkyRL runtime is packaged separately, so its matching limit is checked there too.
+_COLOCATED_EXPERT_BLOCK_GPU_COUNT = 4
 
 
 def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
@@ -673,15 +675,45 @@ def _validate_skyrl_recipe(
     _validate_role_plan_config(config, topology.role_plan)
     entrypoint = declared_config_value(config, "entrypoint")
     generate_only = topology.role_plan.generate_only
-    if generate_only and entrypoint is not MISSING_CONFIG_VALUE:
-        raise ValueError("SkyRL generation entrypoint is derived from the role plan")
-    if entrypoint is not MISSING_CONFIG_VALUE and (entrypoint == GENERATE_ENTRYPOINT) != generate_only:
-        raise ValueError("SkyRL entrypoint must agree with the role plan's generate_only setting")
     if (
         declared_config_value(config, "generator.weight_sync_transport") == "expert_block"
         and topology.role_plan.colocate_all
     ):
-        raise ValueError("SkyRL expert_block requires non-colocated inference workers")
+        plan = topology.role_plan
+        supported = (
+            not generate_only
+            and declared_config_value(config, "entrypoint") in ("standard", MISSING_CONFIG_VALUE)
+            and plan.policy_num_nodes == 1
+            and plan.policy_num_gpus_per_node == _COLOCATED_EXPERT_BLOCK_GPU_COUNT
+            and plan.num_inference_engines == 1
+            and plan.inference_engine_tensor_parallel_size == 1
+            and plan.inference_engine_pipeline_parallel_size == 1
+            and plan.inference_engine_data_parallel_size == plan.policy_num_gpus_per_node
+            and plan.inference_engine_expert_parallel_size == plan.policy_num_gpus_per_node
+            and declared_config_value(config, "trainer.policy.megatron_config.tensor_model_parallel_size") == 1
+            and declared_config_value(config, "trainer.policy.megatron_config.pipeline_model_parallel_size") == 1
+            and declared_config_value(config, "trainer.policy.megatron_config.expert_tensor_parallel_size") in (1, None)
+            and declared_config_value(config, "trainer.policy.megatron_config.expert_model_parallel_size")
+            == plan.policy_num_gpus_per_node
+            and declared_config_value(config, "trainer.policy.megatron_config.nccl_max_channels")
+            in (None, 1, MISSING_CONFIG_VALUE)
+            and declared_config_value(config, "generator.backend") == "vllm"
+            and declared_config_value(config, "generator.run_engines_locally") is True
+            and declared_config_value(config, "generator.weight_sync_backend") == "nccl"
+            and declared_config_value(config, "generator.expert_block_sync.verify") is True
+            and declared_config_value(config, "generator.engine_init_kwargs.kernel_config.moe_backend") == "triton"
+            and declared_config_value(config, "trainer.policy.model.lora.rank") in (0, MISSING_CONFIG_VALUE)
+            and declared_config_value(config, "generator.enforce_eager") in (False, MISSING_CONFIG_VALUE)
+        )
+        if not supported:
+            raise ValueError(
+                "SkyRL colocated expert_block requires entrypoint=standard, one four-GPU node, policy TP=PP=ETP=1 EP=4, "
+                "one local vLLM TP=PP=1 DP=EP=4 TRITON engine, NCCL, verification, and no LoRA or eager mode"
+            )
+    if generate_only and entrypoint is not MISSING_CONFIG_VALUE:
+        raise ValueError("SkyRL generation entrypoint is derived from the role plan")
+    if entrypoint is not MISSING_CONFIG_VALUE and (entrypoint == GENERATE_ENTRYPOINT) != generate_only:
+        raise ValueError("SkyRL entrypoint must agree with the role plan's generate_only setting")
     if generate_only:
         _validate_skyrl_backend_constraints(config, topology)
         return

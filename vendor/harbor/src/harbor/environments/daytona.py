@@ -50,6 +50,29 @@ from shellbox.process_session import (
 )
 
 
+def machine_spec(task_env_config, environment_dir: Path, env: dict[str, str], *, cpus: int | None, memory_mb: int | None, storage_mb: int | None) -> MachineSpec:
+    """The shellbox spec for one task environment.
+
+    Pure mapping from the task's environment config to the spec the Daytona
+    factory prepares, so measurement code can derive snapshot identities from
+    the same inputs production uses.
+    """
+    source = (
+        RegistryImage(task_env_config.docker_image)
+        if task_env_config.docker_image
+        else DockerfileSource(environment_dir, environment_dir / "Dockerfile")
+    )
+    return MachineSpec(
+        source=source,
+        workdir=task_env_config.workdir or "",
+        env=env or {},
+        network=NetworkPolicy.ALLOW if task_env_config.allow_internet else NetworkPolicy.DENY,
+        cpus=cpus,
+        memory_mb=memory_mb,
+        storage_mb=storage_mb,
+    )
+
+
 class DaytonaEnvironment(BaseEnvironment):
     """Allocate, execute and transfer exclusively through Shellbox's Daytona backend."""
 
@@ -158,22 +181,10 @@ class DaytonaEnvironment(BaseEnvironment):
             raise ValueError(
                 "Shellbox snapshots are immutable; change the prepared image or build inputs"
             )
-        source = (
-            RegistryImage(self.task_env_config.docker_image)
-            if self.task_env_config.docker_image
-            else DockerfileSource(
-                self.environment_dir, self.environment_dir / "Dockerfile"
-            )
-        )
-        spec = MachineSpec(
-            source=source,
-            workdir=self.task_env_config.workdir or "",
-            env=self._merge_env(None) or {},
-            network=(
-                NetworkPolicy.ALLOW
-                if self.task_env_config.allow_internet
-                else NetworkPolicy.DENY
-            ),
+        spec = machine_spec(
+            self.task_env_config,
+            self.environment_dir,
+            self._merge_env(None),
             cpus=self._effective_cpus,
             memory_mb=self._effective_memory_mb,
             storage_mb=self._effective_storage_mb,

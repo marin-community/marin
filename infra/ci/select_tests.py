@@ -44,6 +44,7 @@ SCOPES: tuple[str, ...] = (
     "finelog",
     "finestore",
     "ducky",
+    "skyrlrecipe",
     "verifyit",
     "deploy",
     "iac",
@@ -122,6 +123,7 @@ UV_PACKAGE: dict[str, str] = {
     "finelog": "marin-finelog",
     "finestore": "marin-finestore",
     "ducky": "marin-ducky",
+    "skyrlrecipe": "marin-skyrlrecipe",
     "verifyit": "marin-verifyit",
     "deploy": "marin-deploy",
     "iac": "marin-iac",
@@ -213,6 +215,7 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         *DEPENDENCY_MANIFESTS,
     ),
     "skyrl-wheel": (
+        "lib/skyrlrecipe/",
         "vendor/skyrl/",
         "vendor/harbor/",
         "lib/finelog/",
@@ -792,6 +795,12 @@ def classify(
     forced: set[str] = set()
     native_changed: set[str] = set()
     experiment_asset_areas: set[str] = set()
+
+    launch_census = "tests/rl/test_rl_launch_documents.py"
+    if (repo_root / launch_census).is_file() and any(
+        path.startswith(("vendor/skyrl/", "lib/skyrlrecipe/")) for path in changed_files
+    ):
+        direct_tests["marin"].append(launch_census)
 
     for filepath in changed_files:
         if filepath in broad_triggers:

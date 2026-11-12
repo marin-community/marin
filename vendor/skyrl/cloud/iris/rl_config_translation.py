@@ -44,6 +44,7 @@ TRAINER_NON_PATH_KEYS = frozenset(
     {
         "policy.model.path",
         "callbacks.metric_groups",
+        "callbacks.selection_metric",
         "callbacks.additional_evaluations",
         # Harbor resolves task paths against the pinned dataset repository, not the launcher installation.
         "callbacks.cohorts.job.tasks.path",
@@ -355,20 +356,8 @@ SKYRL_INTERNAL_ENGINE_KWARGS = frozenset(
         "bundle_indices",  # Calculated from parallelism config
         "num_gpus",  # Ray resource allocation
         "noset_visible_devices",  # Ray CUDA_VISIBLE_DEVICES handling
-        # SGLang-specific (if using SGLang backend)
-        "model_path",  # Set from trainer.policy.model.path
-        "tp_size",  # Alias for tensor_parallel_size
-        "mem_fraction_static",  # Alias for gpu_memory_utilization
-        "random_seed",  # Alias for seed
-        "disable_radix_cache",  # Inverse of enable_prefix_caching
-        "max_prefill_tokens",  # Alias for max_num_batched_tokens
-        "max_running_requests",  # Alias for max_num_seqs
-        "mm_attention_backend",  # Hardcoded "fa3"
-        "attention_backend",  # Hardcoded "fa3"
-        "enable_memory_saver",  # Set from inference_engine_enable_sleep
-        "tokenizer",  # Passed from external tokenizer
-        "custom_weight_loader",  # Hardcoded SkyRL path
-        "skip_tokenizer_init",  # Hardcoded True for SGLang
+        "attention_backend",  # Set from generator.vllm_attention_backend
+        "tokenizer",  # Set from trainer.policy.model.tokenizer_path
         "speculative_config",  # Derived from generator.speculative_decoding
     }
 )
@@ -380,7 +369,7 @@ def validate_engine_init_kwargs(
 ) -> None:
     """Fail fast if ``engine_init_kwargs`` contains SkyRL-internal keys.
 
-    SkyRL sets certain vLLM/SGLang engine kwargs internally; specifying them in
+    SkyRL sets certain vLLM engine kwargs internally; specifying them in
     the YAML config causes "duplicate keyword argument" errors at runtime.
 
     Raises:

@@ -34,8 +34,15 @@ from cloud.iris.rl_config_translation import (
     validate_tp_divides_heads,
 )
 from cloud.iris.runtime_environment import RuntimeMode, runtime_profile_for_strategy
-from marinskyrl.distillation import validate_generation_logprobs
-from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
+from marinskyrl.distillation import (
+    TeacherModelSpec,
+    TeacherSource,
+    compile_distillation_plan_from_config,
+    validate_generation_logprobs,
+)
+from marinskyrl.hf_model import HuggingFaceModelCache
+from marinskyrl.resource_locator import is_cloud_uri, is_hugging_face_repo_id, join_resource_path
+from marinskyrl.runtime_options import WeightSyncTransport
 from marinskyrl.task_sources import data_source
 
 DEFAULT_DRAFT_MODEL_CACHE_TTL_DAYS = 14
@@ -157,6 +164,7 @@ class InputsConfig:
     """Immutable model and data locators resolved by Marin."""
 
     model: LaunchModelLocator = field(default_factory=LaunchModelLocator)
+    hugging_face_models: list[HuggingFaceModelCache] = field(default_factory=list)
     data_kind: str = "tasks"
     train_data: list[dict[str, Any]] = field(default_factory=list)
     validation_data: list[dict[str, Any]] = field(default_factory=list)
@@ -252,6 +260,21 @@ def load_launch_config(path: Path) -> DictConfig:
     validate_launch_config(config)
     evaluation_profiles(config.skyrl)
     return config
+
+
+def hugging_face_models(config: DictConfig) -> tuple[TeacherModelSpec, ...]:
+    """Select Hub policy and local-inference teachers before GPU allocation."""
+    policy = config.skyrl.get("trainer", {}).get("policy", {}).get("model", {})
+    models = [TeacherModelSpec(str(config.inputs.model.uri), str(policy.get("revision") or "main"))]
+    if config.run.mode != RunMode.CHECKPOINT_EXPORT:
+        plan = compile_distillation_plan_from_config(config.skyrl)
+        if plan is not None:
+            models.extend(teacher.model for teacher in plan.teachers if teacher.source is TeacherSource.LOCAL_INFERENCE)
+    return tuple(
+        dict.fromkeys(
+            model for model in models if is_hugging_face_repo_id(model.path) and not Path(model.path).is_dir()
+        )
+    )
 
 
 def _resolved_config(config: DictConfig) -> dict[str, Any]:
@@ -351,6 +374,12 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     runtime = raw["runtime"]
     entrypoint = runtime["entrypoint"]
     registered_rl_entrypoint_module(entrypoint)
+    if (
+        skyrl.get("generator", {}).get("weight_sync_transport") == WeightSyncTransport.EXPERT_BLOCK
+        and skyrl.get("trainer", {}).get("placement", {}).get("colocate_all")
+        and entrypoint != RL_ENTRYPOINTS[RLEntrypoint.STANDARD]
+    ):
+        raise ValueError("colocated expert_block requires the standard training entrypoint")
     validate_generation_logprobs(config.skyrl)
     validate_mismatch_probe_config(
         skyrl,
