@@ -155,6 +155,7 @@ def test_native_registration_requires_actor_receipt_for_its_private_pin(source_i
         entry for entry in json.loads(native_releases.LEDGER.read_text())["entries"] if entry["id"] == source_id
     )
     release = entry["disposition_release"]
+    release.pop("daytona_measurement", None)
     ledger = tmp_path / "ledger.json"
     monkeypatch.setattr(native_releases, "LEDGER", ledger)
     ledger.write_text(json.dumps({"entries": [entry]}))
