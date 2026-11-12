@@ -10,6 +10,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, computed_field
 
+from taskcompendium.integrity import SharedDependencyState as SharedDependencyState
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
@@ -30,10 +31,6 @@ class GradingEnvironmentStatus(StrEnum):
     MATCHED = "matched"
     MISMATCH = "mismatch"
     UNAVAILABLE = "unavailable"
-
-
-class SharedDependencyState(StrEnum):
-    AGENT_MUTABLE = "agent_mutable"
 
 
 class SharedGradingPolicy(BaseModel):
