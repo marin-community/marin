@@ -4,7 +4,10 @@ source: gs://marin-us-central2/users/held/grug_sft/grug-67b-sft-20260929-special
 hf_release:
   repository: open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05
   revision: ac60d9401820953943f5a56e06f36e13c86b12d6
-files: []
-admission_pending:
-- copy not run; pin copy-receipt/receipt.json, metadata.json and manifest.json in
-  files
+files:
+- uri: s3://marin-rno2a/tmp/ttl=14d/long-loop-436/native-1005/copy-receipt/receipt.json
+  sha256: a68824fc4256521fddedd969a3ff5f984a58670104a71124f1ff00997757e8cf
+- uri: s3://marin-rno2a/tmp/ttl=14d/long-loop-436/native-1005/native/step-0/metadata.json
+  sha256: c462604c60c17c30dba5e71c107a9b8e644b91f4026b0459b91ab3386db6f697
+- uri: s3://marin-rno2a/tmp/ttl=14d/long-loop-436/native-1005/native/step-0/manifest.json
+  sha256: cbe1fb6b4f524d9f27544273c4981f3f286fff58063bc65a12811235cd90017d

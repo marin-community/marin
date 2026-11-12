@@ -16,6 +16,16 @@ from pathlib import Path
 
 import yaml
 
+# Measured 2026-11-12 after /karan/build-contrib-packed262k-t436 and /karan/copy-native-1005-t436 succeeded.
+SCRATCH = "s3://marin-rno2a/tmp/ttl=14d/long-loop-436"
+LEDGER_SHA256 = "232477641413cd7858417e7b575fe97e3b1d00aa6845cb4913b68a267b0be63a"
+SUMMARY_SHA256 = "2d848c515a37d007832c3509c6e95631a72daab080f6ef0f67b0ba11b1a67209"
+COPY_SHA256 = {
+    "copy-receipt/receipt.json": "a68824fc4256521fddedd969a3ff5f984a58670104a71124f1ff00997757e8cf",
+    "native/step-0/metadata.json": "c462604c60c17c30dba5e71c107a9b8e644b91f4026b0459b91ab3386db6f697",
+    "native/step-0/manifest.json": "cbe1fb6b4f524d9f27544273c4981f3f286fff58063bc65a12811235cd90017d",
+}
+
 source, d, revision = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 d.mkdir(parents=True, exist_ok=True)
 for path in source.glob("*.yaml"):
@@ -94,7 +104,14 @@ dump(
     "sft-contrib-data.yaml",
     {
         "data": data,
-        "files": [],
+        # The three ledgers are identical (row counts, not data); summary.json pins per-update supervised counts.
+        "files": (
+            [
+                {"uri": f"{SCRATCH}/contrib-v01-packed262k/epoch-{e}/train/shard_ledger.json", "sha256": LEDGER_SHA256}
+                for e in range(3)
+            ]
+            + [{"uri": f"{SCRATCH}/contrib-v01-packed262k/summary.json", "sha256": SUMMARY_SHA256}]
+        ),
         "provenance": {
             "source": "s3://marin-us-east-02a/marin/experiments/sft-shootout/rows/t202-contrib-v01-20261022/plain",
             "manifest_sha256_prefix": "507e73f0",
@@ -105,7 +122,6 @@ dump(
             "supervised_tokens_per_epoch": 16137263,
         },
         "sections": {},
-        "admission_pending": ["packed caches not built; pin each epoch's shard_ledger.json in files"],
     },
 )
 
@@ -122,8 +138,7 @@ dump(
             "repository": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
             "revision": "ac60d9401820953943f5a56e06f36e13c86b12d6",
         },
-        "files": [],
-        "admission_pending": ["copy not run; pin copy-receipt/receipt.json, metadata.json and manifest.json in files"],
+        "files": [{"uri": f"{SCRATCH}/native-1005/{path}", "sha256": sha} for path, sha in COPY_SHA256.items()],
     },
 )
 

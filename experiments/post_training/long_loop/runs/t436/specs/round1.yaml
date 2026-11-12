@@ -3,7 +3,7 @@ marin_revision: 1c44197581677cdb910903b974bb95e1fd645eb4
 datasets:
   sft:
     path: sft-contrib-data.yaml
-    sha256: e397d786bbc9df424337b50aaa4494d8bdf81d9ed1dc7cbd7171a477225bc00e
+    sha256: b655f8e8e263ca29f24f6cdd76648aa55732e963a09d0329e3bc19900c83a4ae
   nonagentic:
     path: nonagentic.yaml
     sha256: c0ed43ff6f46efb553a7fdccba9a574880d545978899d2c0cd84bbfca717b08c
@@ -24,7 +24,7 @@ sft:
   sha256: fc0a190ce3999831f6ee1825dba37b1ea09e09fc716fe2c7a23f5ea57dce29d1
 initializer:
   path: initializer-1005.yaml
-  sha256: 16ea9aa27cd65be12cc8f795901af39a4a9d51e217984ec13dd055356f1d577a
+  sha256: a82aea18830b0346df9977fd6c66034660994f91a7428c7b43aa2961383544a6
 tokenizer:
   path: tokenizer.yaml
   sha256: cb277633176646056eb4dcf43e9d5bb88cfe321597cf3e704340335176a15bf1

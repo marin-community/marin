@@ -400,9 +400,7 @@ def test_contributor_spec_builds_a_fresh_sft_from_the_copied_native_start(monkey
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-08a/marin/users/karan/long-loop-t436")
     spec = SPEC.parents[1] / "runs/t436/specs/round1.yaml"
     resolved = resolve_spec(spec, smoke=True)
-    assert all(reason.startswith(("sft:", "initializer:")) for reason in stage_blockers(resolved, "export"))
-    resolved["datasets"]["sft"]["admission_pending"] = []
-    resolved["initializer"]["admission_pending"] = []
+    assert stage_blockers(resolved, "export") == []
     terminal = build_spec_graph(resolved, "2026.11.12.4", through="export")
     assert any(step.name.endswith("/sft") for step in graph_handles([terminal]))
     config = spec_pipeline.fresh_sft_config(
