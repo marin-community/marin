@@ -4,20 +4,31 @@
 """Frozen lexical metrics follow their measured inputs without granting admission."""
 
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from finestore.rl.curation import ActorCensusInput, LexicalContaminationEvidence, LexicalUse, SourceDeclaration
+from finestore.rl.curation import (
+    ActorCensusInput,
+    DaytonaMeasurement,
+    LexicalContaminationEvidence,
+    LexicalUse,
+    SourceDeclaration,
+)
 from finestore.rl.source_identity import canonical_source_id
 from finestore.schema import arrow_schema
 
+from experiments.post_training.task_curation.census_binding import ActorCensusReceipt
+from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_binding import (
     LexicalMeasurementReceipt,
     bind_lexical_measurement,
     read_lexical_measurements,
 )
+from experiments.post_training.task_curation.lexical_policy import LexicalInputUse
+from experiments.post_training.task_curation.lexical_registration import main as register_measurements
 from experiments.post_training.task_curation.source import RlDataSource, SourceOrigin
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
@@ -115,3 +126,73 @@ def test_measurement_registration_preserves_current_release_proof(tmp_path):
     assert bound.info.lexical_contamination is not None
     assert bound.info.lexical_contamination == proof
     assert bound.info.lexical_contamination.admission_blocker(dataset.name, dataset.revision) is None
+
+
+def test_registration_writes_fresh_shards_and_preserves_occupied_directory(tmp_path, monkeypatch):
+    source, receipt = measured_source(tmp_path / "input")
+    population = SourceTextPopulation(
+        path="s3://fixture/normalization",
+        source_id=source.info.id,
+        dataset_id=receipt.input.dataset_id,
+        dataset_revision=receipt.input.dataset_revision,
+        source_version=receipt.input.converter_version,
+        converter_revision=receipt.input.converter_revision,
+        text_renderer_version=receipt.measurement.text_renderer_version,
+        task_count=receipt.input.measured_tasks,
+        text_sha256="a" * 64,
+        task_specs_sha256=receipt.input.task_specs_sha256,
+        main_output_dir="s3://fixture/text",
+        specs_output_dir="s3://fixture/specs",
+        converter_rejections={},
+        admission_rejections={},
+    )
+    actor = ActorCensusReceipt(
+        source_id=source.info.id,
+        input=receipt.input,
+        measurement=DaytonaMeasurement(
+            dataset_id=receipt.input.dataset_id,
+            dataset_revision=receipt.input.dataset_revision,
+            daytona_snapshot_count=0,
+            daytona_machine_slots=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Full fixture census",
+            daytona_unsafe_reasons=[],
+            daytona_unsafe_details={},
+            daytona_unsafe_counts={},
+        ),
+        integrity_contracts=None,
+    )
+    use = LexicalInputUse(
+        source_id=source.info.id,
+        dataset_id=receipt.input.dataset_id,
+        dataset_revision=receipt.input.dataset_revision,
+        converter_revision=receipt.input.converter_revision,
+        use=receipt.use,
+    )
+    actor_dir = tmp_path / "actor"
+    actor_dir.mkdir()
+    (actor_dir / "part-000.json").write_text(json.dumps({source.info.id: actor.model_dump(mode="json")}))
+    inputs = {
+        "outcomes": {"measurements": {source.info.id: receipt.measurement.model_dump(mode="json")}},
+        "populations": [population.model_dump(mode="json")],
+        "source-uses": [use.model_dump(mode="json")],
+    }
+    arguments = ["lexical-registration"]
+    for name, value in inputs.items():
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps(value))
+        arguments.extend((f"--{name}", str(path)))
+    output = tmp_path / "fresh"
+    monkeypatch.setattr(sys, "argv", [*arguments, "--actor-receipts-dir", str(actor_dir), "--output-dir", str(output)])
+    register_measurements()
+    written = read_lexical_measurements(output)[source.info.id]
+    assert written.measurement.contaminated_tasks == 1 and written.measurement.receipt is None
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    previous = occupied / "part-000.json"
+    previous.write_bytes(b'{"older": "immutable receipt"}\n')
+    before = previous.read_bytes()
+    monkeypatch.setattr(sys, "argv", [*arguments, "--actor-receipts-dir", str(actor_dir), "--output-dir", str(occupied)])
+    with pytest.raises(FileExistsError):
+        register_measurements()
+    assert previous.read_bytes() == before

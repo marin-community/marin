@@ -1509,13 +1509,16 @@ uv run python -m experiments.post_training.task_curation.lexical_registration \
   --outcomes lexical-outcomes.json --populations normalized-populations.json \
   --source-uses measured-source-uses.json \
   --actor-receipts-dir experiments/post_training/task_curation/datasets/daytona_census_receipts \
-  --output-dir experiments/post_training/task_curation/datasets/lexical_measurement_receipts
+  --output-dir /tmp/atlas-lexical-measurements-YYYYMMDD
 ```
 
 This command updates metadata only. It does not publish dataset versions or
 change admitted selection. Training release publication combines within-source
 exact deduplication and lexical decontamination after approval of the retained
 population.
+The output directory must be new; an existing directory is never replaced.
+Review the staged shards before updating the checked-in
+`datasets/lexical_measurement_receipts` registry.
 
 ### Package-lock graders use the worker's local runtime
 

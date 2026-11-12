@@ -76,9 +76,7 @@ def main() -> None:
         [LexicalInputUse.model_validate(row) for row in json.loads(args.source_uses.read_text())],
         read_census_receipts(args.actor_receipts_dir),
     )
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    for old in args.output_dir.glob("part-*.json"):
-        old.unlink()
+    args.output_dir.mkdir(parents=True, exist_ok=False)
     entries = sorted((key, receipt.model_dump(mode="json")) for key, receipt in receipts.items())
     for part, offset in enumerate(range(0, len(entries), 64)):
         (args.output_dir / f"part-{part:03d}.json").write_text(
