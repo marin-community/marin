@@ -220,63 +220,9 @@ def stop_agent_processes(uid: int) -> None:
         time.sleep(0.01)
 
 
-def bootstrap(input_path: Path) -> None:
-    payload = json.loads(input_path.read_text())
-    contract, spec = payload["contract"], payload["spec"]
-    root, workspace = Path(contract["protected_root"]), Path(contract["workspace"])
-    if root.exists():
-        raise FileExistsError(f"Shared controller already bootstrapped: {root}")
-    root.mkdir(mode=0o750, parents=True)
-    tests = root / "tests"
-    tests.mkdir()
-    for name, content in payload["test_files"].items():
-        target = tests / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(bytes.fromhex(content))
-    write_json(root / "contract.json", contract)
-    shutil.copy2(__file__, contract["harness"])
-    if hashlib.sha256(Path(contract["harness"]).read_bytes()).hexdigest() != contract["harness_sha256"]:
-        raise ValueError("Published harness hash differs from installed controller")
-    reference_digest = hashlib.sha256(json.dumps(payload["test_files"], sort_keys=True).encode()).hexdigest()
-    if reference_digest != contract["reference_sha256"]:
-        raise ValueError("Published test reference differs from bootstrap payload")
-
-    python = shutil.which(spec["python"])
-    if python is None:
-        raise FileNotFoundError(f"Task interpreter is missing: {spec['python']}")
-    source_config = source_pytest_config(python, workspace, spec)
-    original_paths = set(selected_tests(workspace, contract, tests, spec))
-    original_paths.update(local_plugin_paths(workspace, declared_plugins(workspace)))
-    if source_config["path"] is not None:
-        original_paths.add(source_config["path"])
-    # Capture the agent-visible tree before applying the source's trusted test patch.
-    original = {name: (workspace / name).read_bytes() for name in original_paths}
-    if spec.get("setup"):
-        environment = {**clean_environment(), "VERIFYIT_WORKSPACE": str(workspace), "VERIFYIT_TESTS_DIR": str(tests)}
-        checked(
-            ["bash", "-euo", "pipefail", "-c", spec["setup"]], cwd=workspace, timeout=spec["timeout"], env=environment
-        )
-    reference = Path(contract["reference_directory"])
-    reference.mkdir()
-    source_config = source_pytest_config(python, workspace, spec)
-    plugins = sorted(set(contract["pinned_plugins"]) | set(declared_plugins(workspace)))
-    paths = set(selected_tests(workspace, contract, tests, spec))
-    paths.update(local_plugin_paths(workspace, plugins))
-    if source_config["path"] is not None:
-        paths.add(source_config["path"])
-    paths = sorted(paths)
-    for name in paths:
-        target = reference / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(workspace / name, target)
-    write_json(root / "reference-paths.json", paths)
-    for name in paths:
-        target = workspace / name
-        remove_path(target)
-        if name in original:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(original[name])
-
+def freeze_runner(contract: dict, python: str, plugins: list[str], source_config: dict) -> list[str]:
+    """Freeze the test interpreter and plugin dependencies; return the live dependency roots."""
+    root = Path(contract["protected_root"])
     probe = (
         "import json,sys,sysconfig;print(json.dumps({'sites':"
         "list({sysconfig.get_path('purelib'),sysconfig.get_path('platlib')}),'executable':sys.executable}))"
@@ -344,6 +290,67 @@ print(json.dumps({'distributions':sorted(seen),'files':files,'plugins':plugins,'
         },
     )
     write_json(root / "site-packages-baseline.json", inventory(info["sites"]))
+    return info["sites"]
+
+
+def bootstrap(input_path: Path) -> None:
+    payload = json.loads(input_path.read_text())
+    contract, spec = payload["contract"], payload["spec"]
+    root, workspace = Path(contract["protected_root"]), Path(contract["workspace"])
+    if root.exists():
+        raise FileExistsError(f"Shared controller already bootstrapped: {root}")
+    root.mkdir(mode=0o750, parents=True)
+    tests = root / "tests"
+    tests.mkdir()
+    for name, content in payload["test_files"].items():
+        target = tests / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(bytes.fromhex(content))
+    write_json(root / "contract.json", contract)
+    shutil.copy2(__file__, contract["harness"])
+    if hashlib.sha256(Path(contract["harness"]).read_bytes()).hexdigest() != contract["harness_sha256"]:
+        raise ValueError("Published harness hash differs from installed controller")
+    reference_digest = hashlib.sha256(json.dumps(payload["test_files"], sort_keys=True).encode()).hexdigest()
+    if reference_digest != contract["reference_sha256"]:
+        raise ValueError("Published test reference differs from bootstrap payload")
+
+    python = shutil.which(spec["python"])
+    if python is None:
+        raise FileNotFoundError(f"Task interpreter is missing: {spec['python']}")
+    source_config = source_pytest_config(python, workspace, spec)
+    original_paths = set(selected_tests(workspace, contract, tests, spec))
+    original_paths.update(local_plugin_paths(workspace, declared_plugins(workspace)))
+    if source_config["path"] is not None:
+        original_paths.add(source_config["path"])
+    # Capture the agent-visible tree before applying the source's trusted test patch.
+    original = {name: (workspace / name).read_bytes() for name in original_paths}
+    if spec.get("setup"):
+        environment = {**clean_environment(), "VERIFYIT_WORKSPACE": str(workspace), "VERIFYIT_TESTS_DIR": str(tests)}
+        checked(
+            ["bash", "-euo", "pipefail", "-c", spec["setup"]], cwd=workspace, timeout=spec["timeout"], env=environment
+        )
+    reference = Path(contract["reference_directory"])
+    reference.mkdir()
+    source_config = source_pytest_config(python, workspace, spec)
+    plugins = sorted(set(contract["pinned_plugins"]) | set(declared_plugins(workspace)))
+    paths = set(selected_tests(workspace, contract, tests, spec))
+    paths.update(local_plugin_paths(workspace, plugins))
+    if source_config["path"] is not None:
+        paths.add(source_config["path"])
+    paths = sorted(paths)
+    for name in paths:
+        target = reference / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(workspace / name, target)
+    write_json(root / "reference-paths.json", paths)
+    for name in paths:
+        target = workspace / name
+        remove_path(target)
+        if name in original:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(original[name])
+
+    sites = freeze_runner(contract, python, plugins, source_config)
     spec.update({"setup": "", "python": str(root / "pytest-python")})
     write_json(root / "spec.json", spec)
     (tests / "verifier.toml").write_text(payload["verifier_spec"])
@@ -358,7 +365,7 @@ print(json.dumps({'distributions':sorted(seen),'files':files,'plugins':plugins,'
         os.chown(directory, 0, contract["grader_uid"])
         directory.chmod(0o750 if directory.is_dir() or os.access(directory, os.X_OK) else 0o640)
     checked(["chown", "-R", f"{contract['agent_uid']}:{contract['agent_uid']}", str(workspace)], cwd=root, timeout=120)
-    for site in info["sites"]:
+    for site in sites:
         checked(["chgrp", "-R", str(contract["agent_uid"]), site], cwd=root, timeout=120)
         checked(["chmod", "-R", "g+rwX", site], cwd=root, timeout=120)
 
