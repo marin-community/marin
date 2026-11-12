@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from scripts import generate_recipe_schema as generator
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
@@ -44,9 +45,16 @@ def context_config_path(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "config_path", sorted((_REPO_ROOT / "cloud/iris/configs").glob("*.yaml")), ids=lambda p: p.name
+    "document",
+    generator.recipe_documents(
+        _REPO_ROOT / "cloud/iris/configs", generator.CONFIG_DIR,
+        generator.source_documents(generator.CONFIG_DIR).groups,
+    ),
+    ids=[path.name for path in sorted((_REPO_ROOT / "cloud/iris/configs").glob("*.yaml"))],
 )
-def test_iris_config_materializes_one_coherent_context_budget(config_path):
+def test_iris_config_materializes_one_coherent_context_budget(document, tmp_path):
+    config_path = tmp_path / "recipe.yaml"
+    config_path.write_text(yaml.safe_dump(document))
     parsed = parse_rl_config(str(config_path))
     budget = parsed.recipe.context_budget
     window = budget.request_window_tokens
