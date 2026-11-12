@@ -221,8 +221,8 @@ def wait_for_child_job(
     If no child task reaches RUNNING within ``child_wait_timeout``, the escalate policy
     raises ``TimeoutError`` — this catches a parent stuck in the queue before it ever launches work —
     and the shutdown policy cancels the parent and reports the wait as resource exhaustion.
-    Once a child has started, its queue timeout is dropped. A later selected child gets a fresh
-    queue deadline. Total runtime remains bounded by the caller's wall clock.
+    The queue deadline is suppressed only while a task is running. A later selected child gets a fresh
+    queue deadline. A child that stays running remains bounded by the caller's wall clock.
     """
     prefix = _job_id_prefix(job_id)
     deadline = time.monotonic() + child_wait_timeout
@@ -250,10 +250,20 @@ def wait_for_child_job(
                     deadline = time.monotonic() + child_wait_timeout
                     child_running = False
                 selected_child_id = child.job_id
-            if not child_running and child is not None and _child_started(child):
+            # Suppress the deadline only while _child_started is still true. A gang preempted
+            # back to admission consults the original deadline on that same poll.
+            if child is not None and _child_started(child):
+                if not child_running:
+                    click.echo(
+                        f"Child {child.job_id} has a running task; dropping queue timeout.",
+                        err=True,
+                    )
                 child_running = True
+            elif child_running:
+                child_running = False
+                watched = child.job_id if child is not None else selected_child_id
                 click.echo(
-                    f"Child {child.job_id} has a running task; dropping queue timeout.",
+                    f"Child {watched} lost its running task; consulting queue deadline.",
                     err=True,
                 )
 
@@ -721,7 +731,8 @@ def status(job_id: str, iris_config: Path | None, controller_url: str | None) ->
     type=float,
     help=(
         "Fail fast if no child task reaches RUNNING within this many seconds. Mutually exclusive with --timeout; "
-        "once a child runs, total runtime is bounded by the caller's wall clock."
+        "the deadline is suppressed only while a task is running. A child that stays running is bounded by "
+        "the caller's wall clock."
     ),
 )
 @click.option(
