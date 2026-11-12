@@ -10,13 +10,22 @@ reviewed SAMPLE/FULL campaigns and artifact outputs.
 Pass `--selection RECIPE.json` to a FULL campaign to append a
 `rl-data/task-selection/<name>/<version>` artifact after source admission.
 The recipe names the source IDs, assigns them to selection families, sets
-family quotas and pins the complete heldout source in retained storage.
+family quotas and pins the complete heldout inputs in retained storage.
 The step filters heldout overlap and cross-source duplicates before sampling,
 then writes canonical `task_spec` Parquet for training and evaluation.
 See the [quick RL loop](../../../docs/recipes/quick-rl-loop.md) for the current
 selection recipe and the training/evaluation handoff.
 See [task selection](../../../docs/references/task-curation.md#final-task-selection)
 for the recipe and resume commands.
+
+## EvalLite
+
+`--corpus <converted-corpus.json> --eval-lite
+experiments/post_training/task_curation/recipes/eval-lite.json`
+builds the EvalLite: 1,500 evaluation-only benchmark tasks that RL
+runs grade without containers or judges, and a 100-task fast subset. The
+[panel reference](../../../docs/references/task-curation.md#evallite)
+lists its parts and how to change them.
 
 ## Local conversion loop
 
