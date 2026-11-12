@@ -408,9 +408,16 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     partial(
                         convert_judged,
                         judge=(
-                            JUDGE_TIERS[JudgeTier.MEDIUM].spec
-                            if source.name in TIERED_JUDGE_SOURCES
-                            else JudgeSpec(rubric=RUBRIC_CHECKLIST)
+                            # Safety grades a source-principle checklist, so it takes the tier's
+                            # model and completion settings under the checklist rubric; the
+                            # reference-label sources keep the tier's own rubric.
+                            replace(JUDGE_TIERS[JudgeTier.MEDIUM].spec, rubric=RUBRIC_CHECKLIST)
+                            if source.name in QA_PINNED_SOURCES
+                            else (
+                                JUDGE_TIERS[JudgeTier.MEDIUM].spec
+                                if source.name in TIERED_JUDGE_SOURCES
+                                else JudgeSpec(rubric=RUBRIC_CHECKLIST)
+                            )
                         ),
                     ),
                 ),

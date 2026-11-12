@@ -48,7 +48,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     archive_files,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import OversightEvidence, OversightLevel, RlDataSource, SourceInfo, TaskFormat
 
 SCORER_RUNNERS = {
     "be1931919ee22ef704f565126353e7edec7b864dbd4a36590ab34593dd2004c7": (
@@ -243,7 +243,25 @@ SOURCES = (
             tags=("agentic", "multi-turn"),
             count=4096,
             notes=(
-                "Strict trailing boxed compare. No oracle to validate against, so run a no-op gate at " "conversion."
+                "Strict trailing boxed compare. No oracle to validate against, so run a no-op gate at "
+                "conversion. QA (RL Data Atlas): every row re-converted with zero fidelity discrepancies; "
+                "155 references the production math-verify parser rejects are rejected at conversion; "
+                "contained grader controls 72/72 on the seeded sample; blinded review 7/7 attempted agree."
+            ),
+            oversight=OversightEvidence(
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/math.py version 3; archive open-thoughts/TaskTrove @ 02923004846e",
+                verification=(
+                    "All 4,096 rows re-converted through the production recipe and compared against the "
+                    "archive row-by-row with zero discrepancies; 155 unparsable-reference rows rejected at "
+                    "conversion. Contained grader controls on the 24-task seeded sample: golden 24/24, "
+                    "empty 24/24, wrong 24/24. Blinded review of 20 seeded cases: 7 solved blind, all 7 "
+                    "agree with the reference (13 excluded as competition-difficulty, coverage reported). "
+                    "Evidence: atlas-env-audit qa-knowledge/ (fidelity, controls, blinded)"
+                ),
+                level=OversightLevel.SAMPLE,
+                reviewed=4096,
+                admitted=3941,
             ),
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
@@ -260,7 +278,28 @@ SOURCES = (
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=42636,
-            notes=("Most rigorous math verifier in the corpus (scalar/interval/set/tuple/equation), " "oracle present."),
+            notes=(
+                "Most rigorous math verifier in the corpus (scalar/interval/set/tuple/equation), "
+                "oracle present. QA (RL Data Atlas): every row re-converted with zero fidelity "
+                "discrepancies; 15 unparsable-reference rows rejected at conversion; contained grader "
+                "controls 72/72; blinded review 16/16 attempted agree, 2 of 20 sampled rows carry "
+                "suspected conversion defects (statements unanswerable as converted; see qa-knowledge/blinded)."
+            ),
+            oversight=OversightEvidence(
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/math.py version 3; archive open-thoughts/TaskTrove @ 02923004846e",
+                verification=(
+                    "All 42,636 rows re-converted through the production recipe and compared against the "
+                    "archive row-by-row with zero discrepancies; 15 unparsable-reference rows rejected at "
+                    "conversion. Contained grader controls on the 24-task seeded sample: golden 24/24, "
+                    "empty 24/24, wrong 24/24. Blinded review of 20 seeded cases: 16 addressed, all 16 "
+                    "agree; 2 rows flagged as suspected conversion defects (underdetermined statements), "
+                    "2 competition-difficulty cases excluded with reasons. Evidence: atlas-env-audit qa-knowledge/"
+                ),
+                level=OversightLevel.SAMPLE,
+                reviewed=42636,
+                admitted=42621,
+            ),
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
@@ -276,7 +315,28 @@ SOURCES = (
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=57777,
-            notes=("Scalar sympy compare, hidden gold. Overlaps the other Nemotron math sources; " "subsample."),
+            notes=(
+                "Scalar sympy compare, hidden gold. Overlaps the other Nemotron math sources; "
+                "subsample. QA (RL Data Atlas): every row re-converted with zero fidelity discrepancies; "
+                "353 unparsable-reference rows rejected at conversion; contained grader controls "
+                "golden 23/24 (the failing task is the one unparseable-reference row, now rejected), "
+                "empty 24/24, wrong 24/24; blinded review 19/19 attempted agree."
+            ),
+            oversight=OversightEvidence(
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/math.py version 3; archive open-thoughts/TaskTrove @ 02923004846e",
+                verification=(
+                    "All 57,777 rows re-converted through the production recipe and compared against the "
+                    "archive row-by-row with zero discrepancies; 353 unparsable-reference rows rejected at "
+                    "conversion. Contained grader controls on the 24-task seeded sample: golden 23/24 (the "
+                    "one failing task is the unparseable-reference row, now rejected at conversion), empty "
+                    "24/24, wrong 24/24. Blinded review of 20 seeded cases: 19 solved blind, all 19 agree "
+                    "(1 figure-dependent case excluded). Evidence: atlas-env-audit qa-knowledge/"
+                ),
+                level=OversightLevel.SAMPLE,
+                reviewed=57777,
+                admitted=57424,
+            ),
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
@@ -292,7 +352,33 @@ SOURCES = (
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=2404,
-            notes="Symbolic exact compare, hidden gold. Add a numeric tolerance path at conversion.",
+            notes=(
+                "Symbolic exact compare, hidden gold. Add a numeric tolerance path at conversion. "
+                "QA (RL Data Atlas): every row re-converted with zero fidelity discrepancies; 2 "
+                "unparsable-reference rows rejected at conversion and 181 exact-duplicate rows "
+                "collapse under the pipeline dedup key (2,223 published). Contained grader controls "
+                "72/72. Blinded review found 1 provably wrong reference among 20 sampled rows "
+                "(unicyclic-graph spanning-tree bound exceeded by the recorded answer) and 1 "
+                "statement-ambiguity mismatch: the source's reference data is noisy."
+            ),
+            oversight=OversightEvidence(
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/math.py version 3; archive open-thoughts/TaskTrove @ 02923004846e",
+                verification=(
+                    "All 2,404 rows re-converted through the production recipe and compared against the "
+                    "archive row-by-row with zero discrepancies; 2 unparsable-reference rows rejected at "
+                    "conversion; 181 exact duplicates collapse under the pipeline dedup key, 2,223 retained. "
+                    "Contained grader controls on the 24-task seeded sample: golden 24/24, empty 24/24, "
+                    "wrong 24/24. Blinded review of 20 seeded cases: 5 agree, 1 solver error admitted "
+                    "(reference verified correct), 1 reference answer proven impossible for the stated "
+                    "graph, 1 statement-ambiguity mismatch; 12 competition-difficulty cases excluded. "
+                    "Data-quality caveat: the source demonstrably contains wrong reference answers. "
+                    "Evidence: atlas-env-audit qa-knowledge/"
+                ),
+                level=OversightLevel.SAMPLE,
+                reviewed=2404,
+                admitted=2223,
+            ),
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
@@ -308,7 +394,26 @@ SOURCES = (
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=110730,
-            notes=("Typed sympy comparison with oracle per task. Remove the non-boxed fallback " "extraction."),
+            notes=(
+                "Typed sympy comparison with oracle per task. Remove the non-boxed fallback "
+                "extraction. QA (RL Data Atlas): every row re-converted (the single pre-existing "
+                "reviewed defect unchanged); 125 unparsable-reference rows rejected at conversion; "
+                "contained grader controls 72/72; blinded review 20/20 attempted agree."
+            ),
+            oversight=OversightEvidence(
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/math.py version 3; archive open-thoughts/TaskTrove @ 02923004846e",
+                verification=(
+                    "All 110,730 rows re-converted through the production recipe and compared against the "
+                    "archive row-by-row (the single pre-existing reviewed defect unchanged); 125 "
+                    "unparsable-reference rows rejected at conversion. Contained grader controls on the "
+                    "24-task seeded sample: golden 24/24, empty 24/24, wrong 24/24. Blinded review of 20 "
+                    "seeded cases: 20 solved blind, all 20 agree. Evidence: atlas-env-audit qa-knowledge/"
+                ),
+                level=OversightLevel.SAMPLE,
+                reviewed=110730,
+                admitted=110604,
+            ),
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
