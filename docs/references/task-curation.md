@@ -211,7 +211,7 @@ private grader resources and command stay attached to each task. The historical
 structural heldout tasks use the shared closure converter. SkyRL chooses rollout
 limits, harnesses and verifier backends when it loads these canonical tasks.
 
-### EvalLite { #eval-lite }
+### EvalLite
 
 EvalLite is a fixed sample of 1,500 public benchmark tasks that RL runs
 grade on the training job's own machines, with no container image or judge
