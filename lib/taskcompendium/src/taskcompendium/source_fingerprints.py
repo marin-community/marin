@@ -125,7 +125,7 @@ class DuplicateJudgeRun(BaseModel):
     revision: str
     prompt_version: str
     prompt_sha256: str
-    temperature: Literal[0.7]
+    temperature: float = Field(ge=0.7, le=0.7, strict=True)
     top_k: int
     labelled_controls: int
     labelled_controls_passed: int
