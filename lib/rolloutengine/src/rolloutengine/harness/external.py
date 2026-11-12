@@ -130,12 +130,10 @@ class _Completions:
                 return last.turn
             history = () if last is None else (*last.prompt.messages, last.turn.message)
             try:
-                if (
-                    last is not None
-                    and prompt.options == last.prompt.options
-                    and messages_equal(prompt.messages[: len(history)], history)
-                ):
-                    turn = await self.session.reply(prompt.messages[len(history) :], token_ids=prompt.token_ids)
+                if last is not None and messages_equal(prompt.messages[: len(history)], history):
+                    turn = await self.session.reply(
+                        prompt.messages[len(history) :], token_ids=prompt.token_ids, options=prompt.options
+                    )
                 else:
                     turn = await self.session.start(prompt)
             except RolloutEnded:
