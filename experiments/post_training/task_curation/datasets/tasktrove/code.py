@@ -9,11 +9,14 @@ an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an
 """
 
 import json
+import shlex
 from dataclasses import replace
 
+from taskcompendium.models import ScriptGrader
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
-from verifyit.spec import Compare, StdioSpec
+from taskcompendium.runtime.resources import inline_resource
+from verifyit.spec import Compare, StdioSpec, render_spec
 
 from experiments.post_training.task_curation.datasets.environments import COMPILER_GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
@@ -21,6 +24,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.built_images imp
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
     DOCKERFILE,
     INSTRUCTION,
+    TEST_SH_REWARD,
     VERIFIER_DATA,
     TaskFiles,
 )
@@ -54,6 +58,8 @@ from experiments.post_training.task_curation.pipeline import (
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 EXECUTABLE_CONTROLS = Controls(golden=solve_script)
+SOURCE_VERIFIER_CONFIG = "taskcompendium-verifier.toml"
+SOURCE_GRADER_TIMEOUT = 600.0
 
 ANSWERABILITY_CRITERIA = """
 Judge whether the underlying request is comprehensible and answerable using the public inputs.
@@ -133,6 +139,28 @@ def source_stdio_task(row: RawRow, convert: ConvertFn) -> NormalizedTask | Impor
         environment=environment,
         grader_environment=environment,
         output_paths=SOLUTION_PATHS,
+    )
+    assert isinstance(converted.spec, StdioSpec)
+    # The archived build installs Verifyit as a uv tool, outside system Python.
+    # Declare its installed command so candidate programs keep the source interpreter.
+    command = ("/usr/local/bin/verifyit", f"/tests/{SOURCE_VERIFIER_CONFIG}")
+    verifier = (
+        *task.resources.verifier,
+        inline_resource(SOURCE_VERIFIER_CONFIG, render_spec(converted.spec).encode()),
+        inline_resource("test.sh", f"#!/bin/sh\nexec {shlex.join(command)}\n".encode()),
+    )
+    task = task.model_copy(
+        update={
+            "grader": ScriptGrader(
+                argv=("bash", "/tests/test.sh"),
+                cwd=converted.spec.workspace,
+                environment=environment,
+                answer_path=None,
+                reward=TEST_SH_REWARD,
+                timeout=SOURCE_GRADER_TIMEOUT,
+            ),
+            "resources": task.resources.model_copy(update={"verifier": verifier}),
+        }
     )
     return NormalizedTask(task, ())
 

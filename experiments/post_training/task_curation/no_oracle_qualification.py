@@ -5,7 +5,7 @@
 
 A source whose tasks carry no oracle solution (``has_solution`` false, or an
 empty ``solution_binary``) cannot be qualified by executing its oracle. This
-module runs the two checks that replace it when a cohort has been rebuilt onto
+module supports the checks that replace it when a cohort has been rebuilt onto
 shared environments:
 
 1. **Payload preservation** (offline). Every file the native recipe copies into
@@ -15,8 +15,8 @@ shared environments:
 2. **Setup execution** (local Docker). Run the rebuilt setup script in the task's
    own base image and compare the files it writes against the same expectation
    set. Preservation proves the bytes travel; this proves the script lands them.
-   Package installation is stubbed because the rebuilt setup no longer installs
-   task dependencies, and the base image owns provisioning.
+   Package installation runs normally; ``--stub-apt`` explicitly opts into a
+   structural check that cannot establish package provisioning.
 3. **Verifier liveness** (sandbox). The task's own verifier must execute and
    return a well-formed negative verdict on the untouched workspace. A crash, a
    timeout or unparsable output is an infrastructure error, not a pass.
@@ -28,15 +28,16 @@ is not evidence that execution works.
 
 Run the offline phase with::
 
-    uv run python -m experiments.post_training.task_curation.no_oracle_qc \
+    uv run python -m experiments.post_training.task_curation.no_oracle_qualification \
         --cohort /path/to/native-tasks.parquet \
         --rebuild-out /path/to/rebuild-output \
         --output /path/to/qc-report.json
 
-Add ``--sandbox`` to include the verifier-liveness phase; it needs a Daytona
-credential and creates one sandbox per sampled task. Snapshot deletion has no
-code path in this repository (see ``.agents/ops/daytona.md``); hand the created
-snapshot names to an operator for cleanup.
+Run ``experiments.post_training.task_curation.no_oracle_liveness`` separately
+for the verifier-liveness phase. It needs the placement's credentials and creates
+one grading machine per sampled task. This module's ``--sandbox`` option refuses
+execution. Retain Daytona snapshots and hand their names to the operator as
+described in ``.agents/ops/daytona.md``.
 """
 
 import argparse

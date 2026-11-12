@@ -163,8 +163,9 @@ class SourceInfo:
     """How execution was qualified when the source ships no oracle solutions.
 
     ``executed`` runs the shipped oracle solutions; ``verifier_executed`` runs the
-    grader against a solved and an empty submission when no oracle exists; ``skipped``
-    certifies nothing. The Atlas shows the value beside the catalog.
+    grader against an untouched workspace when no oracle exists; ``skipped``
+    certifies nothing. A negative verifier verdict establishes liveness, not correctness.
+    The Atlas shows the value beside the catalog.
     """
 
 

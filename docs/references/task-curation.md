@@ -938,7 +938,9 @@ Python-test cohorts use explicit grader locks.
 image. The key covers the source files, permission bits and verifier-install
 recipe. The image freezes its bundled VerifyIT revision; changing the checkout's
 VerifyIT does not change the installed grader in that pin. Unrecognized contexts
-retain explicit build declarations. The archive admission guard reconstructs the
+retain explicit build declarations. Both sources declare a script grader that
+invokes the image-installed `verifyit` tool with the preserved stdio configuration.
+System Python remains the candidate program interpreter. The archive admission guard reconstructs the
 context before accepting a known image pin.
 
 The images live in the non-public `marin-community/task-curation-tasktrove` GHCR

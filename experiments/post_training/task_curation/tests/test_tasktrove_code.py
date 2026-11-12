@@ -12,11 +12,11 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from taskcompendium.models import TaskSpec, VerifyitGrader, verifyit_spec
+from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, RawRow
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.grade import Status, grade
-from verifyit.spec import ScriptSpec, StdioSpec
+from verifyit.spec import ScriptSpec, StdioSpec, parse_spec
 
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove import (
@@ -252,8 +252,11 @@ def test_python_directory_source_exports_shared_without_capture_and_isolated_wit
 
 
 def local_stdio(task: TaskSpec, workspace: Path) -> StdioSpec:
-    assert isinstance(task.grader, VerifyitGrader)
-    spec = verifyit_spec(task.grader)
+    if isinstance(task.grader, ScriptGrader):
+        spec = parse_spec(resource_map(task.resources.verifier)[code.SOURCE_VERIFIER_CONFIG].decode())
+    else:
+        assert isinstance(task.grader, VerifyitGrader)
+        spec = verifyit_spec(task.grader)
     assert isinstance(spec, StdioSpec)
     return replace(spec, workspace=str(workspace))
 
@@ -474,6 +477,16 @@ def test_archived_build_pin_requires_matching_recipe_and_permissions(name, docke
     assert task.environment_requirements.docker_image is not None
     assert task.environment_requirements.docker_build is None
     assert task.grader.environment.docker_image == task.environment_requirements.docker_image
+    record = harbor_record(
+        {"task_json": task.model_dump_json(), "original_path": "fixture", "source_row": f"{name}/tasks.parquet:0"},
+        grader_image=None,
+        fallback_actor_image=BASE_IMAGE,
+        family="competitive-programming",
+    )
+    exported = archive_files(
+        unpack_task_binary({"path": "fixture", "task_binary": record.task_binary}, fixture_context(recipe))
+    ).files
+    assert exported["environment/Dockerfile"] == f"FROM {task.environment_requirements.docker_image}\n".encode()
 
     changed = archive(
         SUM_PROMPT,

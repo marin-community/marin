@@ -59,6 +59,7 @@ from verifyit.spec import (
     render_spec,
 )
 
+from experiments.post_training.task_curation.datasets.tasktrove.built_images import BUILT_IMAGES
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
     DOCKERFILE,
     TASKTROVE_REPO,
@@ -423,7 +424,7 @@ def harbor_payload(
     public = () if environment.docker_build is not None else (*task.resources.all, *task.resources.worker)
     source = row["source_row"].split("/", 1)[0]
     actor_build = environment.docker_build
-    if actor_build is None:
+    if actor_build is None and environment.docker_image not in BUILT_IMAGES.values():
         actor_build = source_actor_build(task, source=source, mode=verifier.mode, package=verifyit_package_root)
     # ARC's Harbor compatibility recipe supplies scorer imports independently of its native package lock.
     if environment.packages_lock is not None and (actor_build is None or source not in ARC_SOURCES):
