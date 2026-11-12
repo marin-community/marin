@@ -35,6 +35,7 @@ from levanter.grug._moe.common import (
 )
 from levanter.grug._moe.ep_common import _assignment_sources, _combine_gather_sum_impl
 from levanter.grug._moe.ep_ring import _combine_rows, _dispatch_rows, _select_local_assignments
+from levanter.grug._moe.pallas_gather_sum import MoeGatherSum
 
 
 def destination_hit_fraction(*, num_experts: int, local_experts: int, topk: int) -> float:
@@ -140,6 +141,7 @@ def _moe_mlp_ep_ring_filtered_local(
     capacity_factor: float,
     transport_capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
+    gather_sum: MoeGatherSum = "xla",
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Filtered all-to-all dispatch, ring's grouped expert MLP, expert-side combine.
 
@@ -153,6 +155,9 @@ def _moe_mlp_ep_ring_filtered_local(
     can drop on another. ``capacity_factor`` keeps ring's meaning: each expert shard
     runs at most ``capacity_factor * Tlocal * K`` assignments, allocated in local-expert order
     (receiver drops).
+
+    ``gather_sum`` selects the expert-side dispatch and sender-side combine backward gathers. Token-side gathers
+    remain XLA fusions.
     """
     tokens, topk = selected_experts_local.shape
     hidden_dim = x_local.shape[1]
@@ -212,7 +217,7 @@ def _moe_mlp_ep_ring_filtered_local(
         received_metadata = jax.lax.all_to_all(metadata, "expert", split_axis=0, concat_axis=0, tiled=True)
         received_metadata = tree_checkpoint_name(received_metadata, _CHECKPOINT_DISPATCH_INPUT)
 
-        send_x = _dispatch_rows(x_local, safe_source, slot_valid, slot)
+        send_x = _dispatch_rows(x_local, safe_source, slot_valid, slot, "xla")
         received_x = jax.lax.all_to_all(
             send_x.reshape(ep_size, pair_capacity, hidden_dim), "expert", split_axis=0, concat_axis=0, tiled=True
         ).reshape(send_rows, hidden_dim)
@@ -243,7 +248,9 @@ def _moe_mlp_ep_ring_filtered_local(
         # position[r, j]: the dispatch row of received row r's j-th assignment, or the sentinel.
         position = _assignment_sources(picked, send_size=received_assignments).reshape(send_rows, topk)
 
-        x_dispatch = _dispatch_rows(received_x, jnp.minimum(dispatch_row, send_rows - 1), dispatch_valid, position)
+        x_dispatch = _dispatch_rows(
+            received_x, jnp.minimum(dispatch_row, send_rows - 1), dispatch_valid, position, gather_sum
+        )
         x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
 
     with jax.named_scope("moe_up_down"):
@@ -262,6 +269,6 @@ def _moe_mlp_ep_ring_filtered_local(
             concat_axis=0,
             tiled=True,
         ).reshape(send_rows, hidden_dim)
-        out_local = _combine_rows(returned, safe_source, slot_valid, slot).astype(x_local.dtype)
+        out_local = _combine_rows(returned, safe_source, slot_valid, slot, gather_sum).astype(x_local.dtype)
         drops = jax.lax.psum(jnp.stack([sender_dropped, receiver_dropped]), token_sharding_axes)
     return out_local, CapacityDrops(sender_dropped=drops[0], receiver_dropped=drops[1])
