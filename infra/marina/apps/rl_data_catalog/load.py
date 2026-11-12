@@ -17,10 +17,12 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
 DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
+LOADER_VERSION = 2
+"""Bump when loaded rows change shape; a load from an older loader is restaged even for the same snapshot."""
 TABLE_COLUMNS = {
     "sources": (
         "id TEXT, declaration JSONB, assessment_key TEXT, latest_attempt_key TEXT, "
-        "latest_attempt_status TEXT, reason TEXT, curation JSONB, diagnostics JSONB"
+        "latest_attempt_status TEXT, reason TEXT, curation JSONB, diagnostics JSONB, updated_at TIMESTAMPTZ"
     ),
     "assessments": (
         "pipeline_key TEXT, source_id TEXT, scope TEXT, model JSONB, rubric TEXT, "
@@ -74,12 +76,16 @@ def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]
     snapshot = catalog.current()
     current = query(
         """
-        SELECT c.load_id, l.catalog_root, l.snapshot_id FROM atlas_current c
+        SELECT c.load_id, l.catalog_root, l.snapshot_id, l.loader_version FROM atlas_current c
         JOIN atlas_loads l USING (load_id) WHERE c.name = 'latest'
     """,
         {},
     )["rows"]
-    if current and (current[0]["catalog_root"], current[0]["snapshot_id"]) == (catalog.root, snapshot.snapshot_id):
+    if current and (current[0]["catalog_root"], current[0]["snapshot_id"], current[0]["loader_version"]) == (
+        catalog.root,
+        snapshot.snapshot_id,
+        LOADER_VERSION,
+    ):
         return {"changed": False, "snapshot_id": snapshot.snapshot_id}
     expected_load_id = current[0]["load_id"] if current else None
     obsolete_load_ids = json.dumps([row["load_id"] for row in query("SELECT load_id FROM atlas_loads", {})["rows"]])
@@ -96,21 +102,29 @@ def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]
 
     execute(
         """
-        INSERT INTO atlas_loads (load_id, catalog_root, snapshot_id, created_at)
-        VALUES (:load_id, :catalog_root, :snapshot_id, :created_at)
+        INSERT INTO atlas_loads (load_id, catalog_root, snapshot_id, created_at, loader_version)
+        VALUES (:load_id, :catalog_root, :snapshot_id, :created_at, :loader_version)
     """,
         {
             "load_id": load_id,
             "catalog_root": catalog.root,
             "snapshot_id": snapshot.snapshot_id,
             "created_at": snapshot.created_at,
+            "loader_version": LOADER_VERSION,
         },
     )
     sources = list(catalog.sources(snapshot.snapshot_id))
     if len(sources) != snapshot.source_count:
         raise ValueError("Catalog inventory does not cover its declared source count")
+    starts = catalog.source_starts()
     metadata: dict[str, list[dict[str, Any]]] = {
-        "sources": [row.model_dump(mode="json", exclude={"snapshot_id"}) for row in sources],
+        "sources": [
+            {
+                **row.model_dump(mode="json", exclude={"snapshot_id"}),
+                "updated_at": starts[row.id].isoformat() if row.id in starts else None,
+            }
+            for row in sources
+        ],
         "assessments": [],
         "populations": [],
         "items": [],

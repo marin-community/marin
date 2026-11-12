@@ -1,0 +1,2884 @@
+{
+ "Campaign Release:smartie-calibforge-admitted": {
+  "intended_use": "train",
+  "example_count": 2205,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 1272
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-42b2fd1e/2026.10.15.2/release.json: admitted population of 2205 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Campaign Release:smartie-calibforge-rebuilt-v1": {
+  "intended_use": "train",
+  "example_count": 1357,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:smartie-calibforge-shared-v2": {
+  "intended_use": "train",
+  "example_count": 324,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 189
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-42b2fd1e/2026.10.15.2/release.json: admitted population of 324 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Campaign Release:smartie-swesmith-admitted": {
+  "intended_use": "train",
+  "example_count": 8045,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 1420
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-42b2fd1e/2026.10.15.2/release.json: admitted population of 8045 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Campaign Release:smartie-swesmith-staged-v1": {
+  "intended_use": "train",
+  "example_count": 1699,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 1688
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-42b2fd1e/2026.10.15.2/release.json: admitted population of 1699 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Campaign Release:smartie-swesmith-staged-v2": {
+  "intended_use": "train",
+  "example_count": 778,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 367
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-42b2fd1e/2026.10.15.2/release.json: admitted population of 778 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Campaign Release:swesmith-verifier-repaired-v5": {
+  "intended_use": "train",
+  "example_count": 7016,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-codeforces-rebuilt-v1": {
+  "intended_use": "train",
+  "example_count": 9745,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-competitive-coding-rebuilt-v1": {
+  "intended_use": "train",
+  "example_count": 13973,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-curriculum-easy-rebuilt-v1": {
+  "intended_use": "train",
+  "example_count": 505,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-curriculum-medium-rebuilt-v1": {
+  "intended_use": "train",
+  "example_count": 488,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-e2egit-large-rebuilt-v1": {
+  "intended_use": "train",
+  "example_count": 4993,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-e2egit-v2-rebuilt": {
+  "intended_use": "train",
+  "example_count": 477,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-multifile-rebuilt-v1": {
+  "intended_use": "train",
+  "example_count": 4842,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-nl2bash-rebuilt-v1": {
+  "intended_use": "train",
+  "example_count": 1498,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-pymethods2test-large-rebuilt-v1": {
+  "intended_use": "train",
+  "example_count": 4990,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-pymethods2test-rebuilt-v1": {
+  "intended_use": "train",
+  "example_count": 500,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-stack-pytest-rebuilt-v1": {
+  "intended_use": "train",
+  "example_count": 492,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-unitsyn-python-large-rebuilt-v1": {
+  "intended_use": "train",
+  "example_count": 4991,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-unitsyn-python-rebuilt-v1": {
+  "intended_use": "train",
+  "example_count": 4991,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:JEEBench": {
+  "intended_use": "eval",
+  "example_count": 515,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:NUPA-Loose": {
+  "intended_use": "eval",
+  "example_count": 238926,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:NUPA5K-Loose": {
+  "intended_use": "eval",
+  "example_count": 5000,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:aime24": {
+  "intended_use": "eval",
+  "example_count": 30,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:aime25": {
+  "intended_use": "eval",
+  "example_count": 30,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:amc23": {
+  "intended_use": "eval",
+  "example_count": 40,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:arc_challenge": {
+  "intended_use": "eval",
+  "example_count": 1172,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:arc_easy": {
+  "intended_use": "eval",
+  "example_count": 2376,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:boolq": {
+  "intended_use": "eval",
+  "example_count": 3270,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:cruxeval": {
+  "intended_use": "eval",
+  "example_count": 1600,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:drop": {
+  "intended_use": "eval",
+  "example_count": 9536,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:financebench": {
+  "intended_use": "eval",
+  "example_count": 50,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:gpqa-diamond": {
+  "intended_use": "eval",
+  "example_count": 198,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:graphwalks": {
+  "intended_use": "eval",
+  "example_count": 1150,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:gsm8k": {
+  "intended_use": "eval",
+  "example_count": 1319,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:gsm8k-0shot": {
+  "intended_use": "eval",
+  "example_count": 1319,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:hellaswag": {
+  "intended_use": "eval",
+  "example_count": 10042,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:humaneval": {
+  "intended_use": "eval",
+  "example_count": 164,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:humanevalplus": {
+  "intended_use": "eval",
+  "example_count": 164,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:ifbench": {
+  "intended_use": "eval",
+  "example_count": 300,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:ifeval": {
+  "intended_use": "eval",
+  "example_count": 541,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:lambada_openai": {
+  "intended_use": "eval",
+  "example_count": 5153,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:math500": {
+  "intended_use": "eval",
+  "example_count": 500,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mbppplus": {
+  "intended_use": "eval",
+  "example_count": 378,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-abstract_algebra": {
+  "intended_use": "eval",
+  "example_count": 100,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-anatomy": {
+  "intended_use": "eval",
+  "example_count": 135,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-astronomy": {
+  "intended_use": "eval",
+  "example_count": 152,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-business_ethics": {
+  "intended_use": "eval",
+  "example_count": 100,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-clinical_knowledge": {
+  "intended_use": "eval",
+  "example_count": 265,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-college_biology": {
+  "intended_use": "eval",
+  "example_count": 144,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-college_chemistry": {
+  "intended_use": "eval",
+  "example_count": 100,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-college_computer_science": {
+  "intended_use": "eval",
+  "example_count": 100,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-college_mathematics": {
+  "intended_use": "eval",
+  "example_count": 100,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-college_medicine": {
+  "intended_use": "eval",
+  "example_count": 173,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-college_physics": {
+  "intended_use": "eval",
+  "example_count": 102,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-computer_security": {
+  "intended_use": "eval",
+  "example_count": 100,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-conceptual_physics": {
+  "intended_use": "eval",
+  "example_count": 235,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-econometrics": {
+  "intended_use": "eval",
+  "example_count": 114,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-electrical_engineering": {
+  "intended_use": "eval",
+  "example_count": 145,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-elementary_mathematics": {
+  "intended_use": "eval",
+  "example_count": 378,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-formal_logic": {
+  "intended_use": "eval",
+  "example_count": 126,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-global_facts": {
+  "intended_use": "eval",
+  "example_count": 100,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-high_school_biology": {
+  "intended_use": "eval",
+  "example_count": 310,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-high_school_chemistry": {
+  "intended_use": "eval",
+  "example_count": 203,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-high_school_computer_science": {
+  "intended_use": "eval",
+  "example_count": 100,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-high_school_european_history": {
+  "intended_use": "eval",
+  "example_count": 165,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-high_school_geography": {
+  "intended_use": "eval",
+  "example_count": 198,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-high_school_government_and_politics": {
+  "intended_use": "eval",
+  "example_count": 193,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-high_school_macroeconomics": {
+  "intended_use": "eval",
+  "example_count": 390,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-high_school_mathematics": {
+  "intended_use": "eval",
+  "example_count": 270,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-high_school_microeconomics": {
+  "intended_use": "eval",
+  "example_count": 238,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-high_school_physics": {
+  "intended_use": "eval",
+  "example_count": 151,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-high_school_psychology": {
+  "intended_use": "eval",
+  "example_count": 545,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-high_school_statistics": {
+  "intended_use": "eval",
+  "example_count": 216,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-high_school_us_history": {
+  "intended_use": "eval",
+  "example_count": 204,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-high_school_world_history": {
+  "intended_use": "eval",
+  "example_count": 237,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-human_aging": {
+  "intended_use": "eval",
+  "example_count": 223,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-human_sexuality": {
+  "intended_use": "eval",
+  "example_count": 131,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-international_law": {
+  "intended_use": "eval",
+  "example_count": 121,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-jurisprudence": {
+  "intended_use": "eval",
+  "example_count": 108,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-logical_fallacies": {
+  "intended_use": "eval",
+  "example_count": 163,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-machine_learning": {
+  "intended_use": "eval",
+  "example_count": 112,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-management": {
+  "intended_use": "eval",
+  "example_count": 103,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-marketing": {
+  "intended_use": "eval",
+  "example_count": 234,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-medical_genetics": {
+  "intended_use": "eval",
+  "example_count": 100,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-miscellaneous": {
+  "intended_use": "eval",
+  "example_count": 783,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-moral_disputes": {
+  "intended_use": "eval",
+  "example_count": 346,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-moral_scenarios": {
+  "intended_use": "eval",
+  "example_count": 895,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-nutrition": {
+  "intended_use": "eval",
+  "example_count": 306,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-philosophy": {
+  "intended_use": "eval",
+  "example_count": 311,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-prehistory": {
+  "intended_use": "eval",
+  "example_count": 324,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-pro": {
+  "intended_use": "eval",
+  "example_count": 12032,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-professional_accounting": {
+  "intended_use": "eval",
+  "example_count": 282,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-professional_law": {
+  "intended_use": "eval",
+  "example_count": 1534,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-professional_medicine": {
+  "intended_use": "eval",
+  "example_count": 272,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-professional_psychology": {
+  "intended_use": "eval",
+  "example_count": 612,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-public_relations": {
+  "intended_use": "eval",
+  "example_count": 110,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-security_studies": {
+  "intended_use": "eval",
+  "example_count": 245,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-smoke": {
+  "intended_use": "eval",
+  "example_count": 100,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-sociology": {
+  "intended_use": "eval",
+  "example_count": 201,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-us_foreign_policy": {
+  "intended_use": "eval",
+  "example_count": 100,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-virology": {
+  "intended_use": "eval",
+  "example_count": 166,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mmlu-world_religions": {
+  "intended_use": "eval",
+  "example_count": 171,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mrcr": {
+  "intended_use": "eval",
+  "example_count": 2400,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mrcr-32k": {
+  "intended_use": "eval",
+  "example_count": 2400,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:mrcr-65k": {
+  "intended_use": "eval",
+  "example_count": 2400,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:nq_open": {
+  "intended_use": "eval",
+  "example_count": 3610,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:olympiadbench": {
+  "intended_use": "eval",
+  "example_count": 30,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:olympiadbenchdeterministic": {
+  "intended_use": "eval",
+  "example_count": 30,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:openbookqa": {
+  "intended_use": "eval",
+  "example_count": 500,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:piqa": {
+  "intended_use": "eval",
+  "example_count": 1838,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:simpleqa": {
+  "intended_use": "eval",
+  "example_count": 4326,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:simpleqa-mini": {
+  "intended_use": "eval",
+  "example_count": 500,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:triviaqa": {
+  "intended_use": "eval",
+  "example_count": 17944,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:truthfulqa_mc2": {
+  "intended_use": "eval",
+  "example_count": 817,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Evalchemy:winogrande": {
+  "intended_use": "eval",
+  "example_count": 1267,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Harbor Hub:skill2env": {
+  "intended_use": "train",
+  "example_count": 7496,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Marin:thoughtcrime": {
+  "intended_use": "eval",
+  "example_count": 328,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "MarinSkyRL:aime24": {
+  "intended_use": "eval",
+  "example_count": 30,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 29
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 30 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:aime_1983_2024": {
+  "intended_use": "eval",
+  "example_count": 933,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 908
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 933 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:apps": {
+  "intended_use": "train",
+  "example_count": 4447,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 513
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4447 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:asdiv": {
+  "intended_use": "train",
+  "example_count": 2305,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 1104
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2305 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:dapo_math": {
+  "intended_use": "train",
+  "example_count": 1791700,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 1100
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 1791700 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:deepscaler": {
+  "intended_use": "train",
+  "example_count": 40309,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 36798
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 40309 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:eurus2_code": {
+  "intended_use": "train",
+  "example_count": 24608,
+  "top_area": {
+   "subject_id": "D42",
+   "name": "Transportation, Logistics & Navigation",
+   "instances": 20
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 24608 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:gpqa": {
+  "intended_use": "eval",
+  "example_count": 196,
+  "top_area": {
+   "subject_id": "D04",
+   "name": "Chemistry",
+   "instances": 89
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 196 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:gretel_text_to_sql": {
+  "intended_use": "train",
+  "example_count": 55316,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 561
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 55316 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:gsm8k": {
+  "intended_use": "train",
+  "example_count": 7473,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 3503
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 7473 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:hardmath": {
+  "intended_use": "train",
+  "example_count": 702,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 702
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 702 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:hendrycks_math": {
+  "intended_use": "train",
+  "example_count": 1744,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 1616
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 1744 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:hh_rlhf/harmless-base": {
+  "intended_use": "train",
+  "example_count": 42378,
+  "top_area": {
+   "subject_id": "D44",
+   "name": "Public Safety, Emergency Management & Defense",
+   "instances": 5311
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 42378 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:hh_rlhf/helpful-base": {
+  "intended_use": "train",
+  "example_count": 43699,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 8165
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 43699 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:hh_rlhf/helpful-online": {
+  "intended_use": "train",
+  "example_count": 21989,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 2568
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 21989 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:hh_rlhf/helpful-rejection-sampled": {
+  "intended_use": "train",
+  "example_count": 52382,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 8509
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 52382 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized": {
+  "intended_use": "train",
+  "example_count": 4502,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 706
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4502 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs": {
+  "intended_use": "train",
+  "example_count": 4544,
+  "top_area": {
+   "subject_id": "D28",
+   "name": "Law, Regulation & Criminology",
+   "instances": 724
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4544 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned": {
+  "intended_use": "train",
+  "example_count": 4454,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 374
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4454 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:math500": {
+  "intended_use": "eval",
+  "example_count": 500,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 466
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 500 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_if": {
+  "intended_use": "train",
+  "example_count": 54954,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 724
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 54954 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym": {
+  "intended_use": "train",
+  "example_count": 1884,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 1462
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 1884 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2": {
+  "intended_use": "train",
+  "example_count": 5307,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 3888
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 5307 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/hs3_en": {
+  "intended_use": "train",
+  "example_count": 1281,
+  "top_area": {
+   "subject_id": "D40",
+   "name": "Music, Theatre, Film & Media Arts",
+   "instances": 123
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 1281 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/hs3_multi": {
+  "intended_use": "train",
+  "example_count": 962,
+  "top_area": {
+   "subject_id": "D34",
+   "name": "Marketing, Commerce & Consumer Studies",
+   "instances": 61
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 962 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/hs3_multiturn": {
+  "intended_use": "train",
+  "example_count": 1243,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 65
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 1243 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train": {
+  "intended_use": "train",
+  "example_count": 2000,
+  "top_area": {
+   "subject_id": "D17",
+   "name": "Medicine & Clinical Care",
+   "instances": 545
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2000 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/safety_en": {
+  "intended_use": "train",
+  "example_count": 629,
+  "top_area": {
+   "subject_id": "D44",
+   "name": "Public Safety, Emergency Management & Defense",
+   "instances": 117
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 629 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym": {
+  "intended_use": "train",
+  "example_count": 860,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 664
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 860 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2": {
+  "intended_use": "train",
+  "example_count": 3903,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 2892
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 3903 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_abstention": {
+  "intended_use": "train",
+  "example_count": 4025,
+  "top_area": {
+   "subject_id": "D28",
+   "name": "Law, Regulation & Criminology",
+   "instances": 510
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4025 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_calendar_v2": {
+  "intended_use": "train",
+  "example_count": 910,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 902
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 910 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_comp_coding": {
+  "intended_use": "train",
+  "example_count": 7929,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 28
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 7929 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following": {
+  "intended_use": "train",
+  "example_count": 10409,
+  "top_area": {
+   "subject_id": "D28",
+   "name": "Law, Regulation & Criminology",
+   "instances": 509
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 10409 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak": {
+  "intended_use": "train",
+  "example_count": 2861,
+  "top_area": {
+   "subject_id": "D45",
+   "name": "Skilled Trades, Fabrication, Maintenance & Repair",
+   "instances": 563
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2861 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_lean": {
+  "intended_use": "train",
+  "example_count": 902,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 408
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 902 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_cot": {
+  "intended_use": "train",
+  "example_count": 4397,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 3638
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4397 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_tir": {
+  "intended_use": "train",
+  "example_count": 5796,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 3031
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 5796 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k": {
+  "intended_use": "train",
+  "example_count": 4028,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 791
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4028 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_inductive": {
+  "intended_use": "train",
+  "example_count": 2097,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 221
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2097 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive": {
+  "intended_use": "train",
+  "example_count": 2069,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 3
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2069 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_rdkit": {
+  "intended_use": "train",
+  "example_count": 1403,
+  "top_area": {
+   "subject_id": "D04",
+   "name": "Chemistry",
+   "instances": 946
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 1403 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_reasoning_gym": {
+  "intended_use": "train",
+  "example_count": 1385,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 533
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 1385 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa": {
+  "intended_use": "train",
+  "example_count": 2097,
+  "top_area": {
+   "subject_id": "D28",
+   "name": "Law, Regulation & Criminology",
+   "instances": 615
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2097 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa_cot_rima_new": {
+  "intended_use": "train",
+  "example_count": 2077,
+  "top_area": {
+   "subject_id": "D03",
+   "name": "Physics & Astronomy",
+   "instances": 634
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2077 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_structured_outputs_v2": {
+  "intended_use": "train",
+  "example_count": 682,
+  "top_area": {
+   "subject_id": "D17",
+   "name": "Medicine & Clinical Care",
+   "instances": 71
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 682 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema": {
+  "intended_use": "train",
+  "example_count": 2663,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 491
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2663 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_citation_format_v2": {
+  "intended_use": "train",
+  "example_count": 250,
+  "top_area": {
+   "subject_id": "D35",
+   "name": "History & Archaeology",
+   "instances": 12
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 250 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_freeform_text_v2": {
+  "intended_use": "train",
+  "example_count": 250,
+  "top_area": {
+   "subject_id": "D38",
+   "name": "Literature, Rhetoric & Cultural Studies",
+   "instances": 6
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 250 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_structured_outputs_v2": {
+  "intended_use": "train",
+  "example_count": 7143,
+  "top_area": {
+   "subject_id": "D37",
+   "name": "Language, Linguistics & Translation",
+   "instances": 911
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 7143 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": {
+  "intended_use": "train",
+  "example_count": 246,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 197
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 246 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": {
+  "intended_use": "train",
+  "example_count": 932,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 716
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 932 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt": {
+  "intended_use": "train",
+  "example_count": 4795,
+  "top_area": {
+   "subject_id": "D34",
+   "name": "Marketing, Commerce & Consumer Studies",
+   "instances": 327
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4795 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_abstention": {
+  "intended_use": "train",
+  "example_count": 4025,
+  "top_area": {
+   "subject_id": "D28",
+   "name": "Law, Regulation & Criminology",
+   "instances": 510
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4025 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2": {
+  "intended_use": "train",
+  "example_count": 910,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 902
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 910 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding": {
+  "intended_use": "train",
+  "example_count": 7928,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 28
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 7928 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following": {
+  "intended_use": "train",
+  "example_count": 11828,
+  "top_area": {
+   "subject_id": "D28",
+   "name": "Law, Regulation & Criminology",
+   "instances": 573
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 11828 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak": {
+  "intended_use": "train",
+  "example_count": 2861,
+  "top_area": {
+   "subject_id": "D45",
+   "name": "Skilled Trades, Fabrication, Maintenance & Repair",
+   "instances": 563
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2861 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_lean": {
+  "intended_use": "train",
+  "example_count": 902,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 408
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 902 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot": {
+  "intended_use": "train",
+  "example_count": 4397,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 3638
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4397 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir": {
+  "intended_use": "train",
+  "example_count": 5796,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 3031
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 5796 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k": {
+  "intended_use": "train",
+  "example_count": 4028,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 791
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4028 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_inductive": {
+  "intended_use": "train",
+  "example_count": 2097,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 221
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2097 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_transductive": {
+  "intended_use": "train",
+  "example_count": 2069,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 3
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2069 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym": {
+  "intended_use": "train",
+  "example_count": 2088,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 821
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2088 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa": {
+  "intended_use": "train",
+  "example_count": 2097,
+  "top_area": {
+   "subject_id": "D28",
+   "name": "Law, Regulation & Criminology",
+   "instances": 615
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2097 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa_cot_rima_new": {
+  "intended_use": "train",
+  "example_count": 2077,
+  "top_area": {
+   "subject_id": "D03",
+   "name": "Physics & Astronomy",
+   "instances": 634
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2077 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2": {
+  "intended_use": "train",
+  "example_count": 2080,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 236
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2080 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": {
+  "intended_use": "train",
+  "example_count": 2838,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 2153
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2838 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": {
+  "intended_use": "train",
+  "example_count": 11060,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 7898
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 11060 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot": {
+  "intended_use": "train",
+  "example_count": 20035,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 10763
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 20035 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema": {
+  "intended_use": "train",
+  "example_count": 4008,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 738
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4008 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/language_mixing_hs3_ultra_genrm_fmt": {
+  "intended_use": "train",
+  "example_count": 4757,
+  "top_area": {
+   "subject_id": "D34",
+   "name": "Marketing, Commerce & Consumer Studies",
+   "instances": 324
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4757 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_abstention": {
+  "intended_use": "train",
+  "example_count": 4025,
+  "top_area": {
+   "subject_id": "D28",
+   "name": "Law, Regulation & Criminology",
+   "instances": 510
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4025 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_calendar_v2": {
+  "intended_use": "train",
+  "example_count": 910,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 902
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 910 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_comp_coding": {
+  "intended_use": "train",
+  "example_count": 7929,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 28
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 7929 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_ds2_freeform": {
+  "intended_use": "train",
+  "example_count": 1392,
+  "top_area": {
+   "subject_id": "D40",
+   "name": "Music, Theatre, Film & Media Arts",
+   "instances": 29
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 1392 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_ds3_citation": {
+  "intended_use": "train",
+  "example_count": 1403,
+  "top_area": {
+   "subject_id": "D40",
+   "name": "Music, Theatre, Film & Media Arts",
+   "instances": 77
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 1403 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_instruction_following": {
+  "intended_use": "train",
+  "example_count": 10409,
+  "top_area": {
+   "subject_id": "D28",
+   "name": "Law, Regulation & Criminology",
+   "instances": 509
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 10409 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_jailbreak": {
+  "intended_use": "train",
+  "example_count": 2861,
+  "top_area": {
+   "subject_id": "D45",
+   "name": "Skilled Trades, Fabrication, Maintenance & Repair",
+   "instances": 563
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2861 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_lean": {
+  "intended_use": "train",
+  "example_count": 902,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 408
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 902 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_math_cot": {
+  "intended_use": "train",
+  "example_count": 4397,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 3638
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4397 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir": {
+  "intended_use": "train",
+  "example_count": 5796,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 3031
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 5796 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k": {
+  "intended_use": "train",
+  "example_count": 4028,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 791
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4028 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_inductive": {
+  "intended_use": "train",
+  "example_count": 2097,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 221
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2097 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_transductive": {
+  "intended_use": "train",
+  "example_count": 2069,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 3
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2069 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit": {
+  "intended_use": "train",
+  "example_count": 1403,
+  "top_area": {
+   "subject_id": "D04",
+   "name": "Chemistry",
+   "instances": 946
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 1403 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_reasoning_gym": {
+  "intended_use": "train",
+  "example_count": 1385,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 533
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 1385 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa": {
+  "intended_use": "train",
+  "example_count": 2097,
+  "top_area": {
+   "subject_id": "D28",
+   "name": "Law, Regulation & Criminology",
+   "instances": 615
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2097 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa_cot_rima_new": {
+  "intended_use": "train",
+  "example_count": 2077,
+  "top_area": {
+   "subject_id": "D03",
+   "name": "Physics & Astronomy",
+   "instances": 634
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2077 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v2": {
+  "intended_use": "train",
+  "example_count": 682,
+  "top_area": {
+   "subject_id": "D17",
+   "name": "Medicine & Clinical Care",
+   "instances": 71
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 682 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v3": {
+  "intended_use": "train",
+  "example_count": 1216,
+  "top_area": {
+   "subject_id": "D37",
+   "name": "Language, Linguistics & Translation",
+   "instances": 127
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 1216 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": {
+  "intended_use": "train",
+  "example_count": 2838,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 2153
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2838 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": {
+  "intended_use": "train",
+  "example_count": 11060,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 7898
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 11060 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot": {
+  "intended_use": "train",
+  "example_count": 20035,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 10763
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 20035 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema": {
+  "intended_use": "train",
+  "example_count": 2663,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 491
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2663 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:numina_math": {
+  "intended_use": "train",
+  "example_count": 818271,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 689003
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 818271 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:openscience": {
+  "intended_use": "train",
+  "example_count": 75607,
+  "top_area": {
+   "subject_id": "D03",
+   "name": "Physics & Astronomy",
+   "instances": 35441
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 75607 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:reasoning_gym": {
+  "intended_use": "train",
+  "example_count": 103869,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 44167
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 103869 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:rlvr_ifeval": {
+  "intended_use": "train",
+  "example_count": 14973,
+  "top_area": {
+   "subject_id": "D28",
+   "name": "Law, Regulation & Criminology",
+   "instances": 796
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 14973 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:rlvr_math": {
+  "intended_use": "train",
+  "example_count": 7498,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 7492
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 7498 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:svamp": {
+  "intended_use": "train",
+  "example_count": 700,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 564
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 700 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "MarinSkyRL:verifiable_code": {
+  "intended_use": "train",
+  "example_count": 33065,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 223
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 33065 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "SnowballV01:structure-closure": {
+  "intended_use": "train",
+  "example_count": 57364,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "SnowballV01:structure-closure/validation": {
+  "intended_use": "train",
+  "example_count": 243,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Task Trove:AweAI-Team__CalibForge": {
+  "intended_use": "train",
+  "example_count": null,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "the pinned payload has no established row count"
+ },
+ "Task Trove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2": {
+  "intended_use": "train",
+  "example_count": 1494,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 1494
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 1494 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:DCAgent__code-contests-noblock": {
+  "intended_use": "train",
+  "example_count": 8222,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 23
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 8222 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:DCAgent__exp_rle_adversarial-v6": {
+  "intended_use": "train",
+  "example_count": 2726,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:DCAgent__exp_rpt_curriculum-easy": {
+  "intended_use": "train",
+  "example_count": 505,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 227
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 505 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:DCAgent__exp_rpt_curriculum-medium-v2": {
+  "intended_use": "train",
+  "example_count": 488,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 255
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 488 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:DCAgent__exp_rpt_e2egit-large": {
+  "intended_use": "train",
+  "example_count": 4993,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 2366
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4993 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:DCAgent__exp_rpt_e2egit-v2": {
+  "intended_use": "train",
+  "example_count": 477,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 293
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 477 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:DCAgent__exp_rpt_multifile-v3": {
+  "intended_use": "train",
+  "example_count": 4842,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 2929
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4842 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:DCAgent__exp_rpt_nemotron-cpp": {
+  "intended_use": "train",
+  "example_count": 4196,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:DCAgent__exp_rpt_pymethods2test-large-v2": {
+  "intended_use": "train",
+  "example_count": 4990,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 1241
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4990 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:DCAgent__exp_rpt_pymethods2test-v3": {
+  "intended_use": "train",
+  "example_count": 500,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 124
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 500 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:DCAgent__exp_rpt_stack-pytest-v2": {
+  "intended_use": "train",
+  "example_count": 492,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 268
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 492 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:DCAgent__exp_rpt_unitsyn-python-large-v2": {
+  "intended_use": "train",
+  "example_count": 4991,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 1241
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4991 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:DCAgent__exp_rpt_unitsyn-python-v4": {
+  "intended_use": "train",
+  "example_count": 491,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 153
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 491 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:DCAgent__inferredbugs-sandboxes-verifier": {
+  "intended_use": "train",
+  "example_count": 9659,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:DCAgent__mix_h4_binary_easy": {
+  "intended_use": "train",
+  "example_count": 1996,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3": {
+  "intended_use": "train",
+  "example_count": 6665,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:DCAgent__swe_rebench_v2_patched_oracle-v2": {
+  "intended_use": "train",
+  "example_count": 13562,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 10061
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 13562 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:GAIR__OpenSWE__openswe_oss": {
+  "intended_use": "train",
+  "example_count": null,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "the pinned payload has no established row count"
+ },
+ "Task Trove:GAIR__OpenSWE__openswe_other": {
+  "intended_use": "train",
+  "example_count": null,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "the pinned payload has no established row count"
+ },
+ "Task Trove:R2E-Gym__R2E-Gym-V1": {
+  "intended_use": "train",
+  "example_count": null,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "the pinned payload has no established row count"
+ },
+ "Task Trove:SWE-Gym__SWE-Gym": {
+  "intended_use": "train",
+  "example_count": null,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "the pinned payload has no established row count"
+ },
+ "Task Trove:SankalpKJ__nemotron-code-oracle-filtered": {
+  "intended_use": "train",
+  "example_count": 15165,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:SankalpKJ__nemotron-math-oracle-filtered-v2": {
+  "intended_use": "train",
+  "example_count": 57777,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 44545
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 57777 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__code": {
+  "intended_use": "train",
+  "example_count": null,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "the pinned payload has no established row count"
+ },
+ "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__cyber": {
+  "intended_use": "train",
+  "example_count": null,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "the pinned payload has no established row count"
+ },
+ "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__general": {
+  "intended_use": "train",
+  "example_count": null,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "the pinned payload has no established row count"
+ },
+ "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__music": {
+  "intended_use": "train",
+  "example_count": null,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "the pinned payload has no established row count"
+ },
+ "Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__webdev": {
+  "intended_use": "train",
+  "example_count": null,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "the pinned payload has no established row count"
+ },
+ "Task Trove:laion__all-puzzles-v2": {
+  "intended_use": "train",
+  "example_count": 6926,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 2529
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 6926 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__codeelo-v2": {
+  "intended_use": "train",
+  "example_count": 500,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__codeforces-v3": {
+  "intended_use": "train",
+  "example_count": 9745,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 116
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 9745 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__exp_rpt_bugsinpy-v4": {
+  "intended_use": "train",
+  "example_count": 479,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_codenet-python-v4": {
+  "intended_use": "train",
+  "example_count": 6975,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_crosscodeeval-csharp-v4": {
+  "intended_use": "train",
+  "example_count": 1768,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_crosscodeeval-java-v3": {
+  "intended_use": "train",
+  "example_count": 2139,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_crosscodeeval-python-v2": {
+  "intended_use": "train",
+  "example_count": 500,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_crosscodeeval-typescript-v2": {
+  "intended_use": "train",
+  "example_count": 3356,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_ghactions-v3": {
+  "intended_use": "train",
+  "example_count": 9930,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_methods2test-large-v4": {
+  "intended_use": "train",
+  "example_count": 1194,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_nemotron-junit-v6": {
+  "intended_use": "train",
+  "example_count": 447,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_scaffold-v3": {
+  "intended_use": "train",
+  "example_count": 3121,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_stack-cpp-v4": {
+  "intended_use": "train",
+  "example_count": 7878,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_stack-dockerfile-gpt5mini-v7": {
+  "intended_use": "train",
+  "example_count": 587,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_stack-go-v5": {
+  "intended_use": "train",
+  "example_count": 2275,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_stack-jest-v5": {
+  "intended_use": "train",
+  "example_count": 424,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_stack-junit-v6": {
+  "intended_use": "train",
+  "example_count": 843,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_stack-php-large-v9": {
+  "intended_use": "train",
+  "example_count": 462,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_stack-pytest-large-v3": {
+  "intended_use": "train",
+  "example_count": 1782,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_stack-rspec-v4": {
+  "intended_use": "train",
+  "example_count": 8860,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__exp_rpt_taco-v2": {
+  "intended_use": "train",
+  "example_count": 5116,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 631
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 5116 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__glaive-code-assistant-sandboxes-verified-v2": {
+  "intended_use": "train",
+  "example_count": 10000,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 950
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 10000 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__magicoder-v4": {
+  "intended_use": "train",
+  "example_count": 4096,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__mix_h10_reward_proportional-v2": {
+  "intended_use": "train",
+  "example_count": 2858,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__mix_h11_single_skill_only-v2": {
+  "intended_use": "train",
+  "example_count": 2859,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__mix_h8_original_tests-v2": {
+  "intended_use": "train",
+  "example_count": 2848,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__nemo-prism-math-v3": {
+  "intended_use": "train",
+  "example_count": 2404,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 1844
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2404 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__nemotron-gym-agent-calendar-v2": {
+  "intended_use": "train",
+  "example_count": 2699,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 2695
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 2699 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__nemotron-gym-agentic-function-calling-pivot-v3": {
+  "intended_use": "train",
+  "example_count": 9579,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__nemotron-gym-agentic-indirect-prompt-injection-v3": {
+  "intended_use": "train",
+  "example_count": 1272,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__nemotron-gym-agentic-swe-pivot-v4": {
+  "intended_use": "train",
+  "example_count": 1541,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__nemotron-gym-arc-agi-python-inductive-v2": {
+  "intended_use": "train",
+  "example_count": 10000,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 124
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 10000 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__nemotron-gym-arc-agi-transductive-v3": {
+  "intended_use": "train",
+  "example_count": 10000,
+  "top_area": null,
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 10000 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": "no converted task matched a curriculum subject within the subject cutoff"
+ },
+ "Task Trove:laion__nemotron-gym-cfbench-v4": {
+  "intended_use": "train",
+  "example_count": 468,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__nemotron-gym-competitive-coding-v2": {
+  "intended_use": "train",
+  "example_count": 13973,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 27
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 13973 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__nemotron-gym-identity-following-v4": {
+  "intended_use": "train",
+  "example_count": 21660,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__nemotron-gym-instruction-following-adversarial-v5": {
+  "intended_use": "train",
+  "example_count": 1000,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": {
+  "intended_use": "train",
+  "example_count": 5673,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 5661
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 5673 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__nemotron-gym-instruction-following-citation-v2": {
+  "intended_use": "train",
+  "example_count": 9033,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__nemotron-gym-instruction-following-freeform-v2": {
+  "intended_use": "train",
+  "example_count": 8869,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__nemotron-gym-instruction-following-multiturnchat-v4": {
+  "intended_use": "train",
+  "example_count": 1982,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": {
+  "intended_use": "train",
+  "example_count": 9008,
+  "top_area": {
+   "subject_id": "D28",
+   "name": "Law, Regulation & Criminology",
+   "instances": 1321
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 9008 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__nemotron-gym-instruction-following-v3": {
+  "intended_use": "train",
+  "example_count": 46242,
+  "top_area": {
+   "subject_id": "D28",
+   "name": "Law, Regulation & Criminology",
+   "instances": 2357
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 46242 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__nemotron-gym-inverse-ifeval-v4": {
+  "intended_use": "train",
+  "example_count": 1000,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__nemotron-gym-knowledge-mcqa-v2": {
+  "intended_use": "train",
+  "example_count": 613002,
+  "top_area": {
+   "subject_id": "D03",
+   "name": "Physics & Astronomy",
+   "instances": 92699
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 613002 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__nemotron-gym-knowledge-openqa-v4": {
+  "intended_use": "train",
+  "example_count": 122357,
+  "top_area": {
+   "subject_id": "D28",
+   "name": "Law, Regulation & Criminology",
+   "instances": 54802
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 122357 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__nemotron-gym-knowledge-web-search-mcqa-v2": {
+  "intended_use": "train",
+  "example_count": 2915,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__nemotron-gym-litmus-bench-v2": {
+  "intended_use": "train",
+  "example_count": 5232,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__nemotron-gym-math-advanced-calculations-v4": {
+  "intended_use": "train",
+  "example_count": 5291,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__nemotron-gym-math-openmathreasoning-v2": {
+  "intended_use": "train",
+  "example_count": 42636,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 10138
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 42636 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__nemotron-gym-math-stack-overflow-v3": {
+  "intended_use": "train",
+  "example_count": 110729,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 37143
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 110729 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__nemotron-gym-math-v5": {
+  "intended_use": "train",
+  "example_count": 4096,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 705
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 4096 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__nemotron-gym-multichallenge-advanced-v4": {
+  "intended_use": "train",
+  "example_count": 1068,
+  "top_area": {
+   "subject_id": "D43",
+   "name": "Hospitality, Tourism & Culinary Arts",
+   "instances": 155
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 1068 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__nemotron-gym-multichallenge-vanilla-v3": {
+  "intended_use": "train",
+  "example_count": 1050,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__nemotron-gym-qa-abstention-v4": {
+  "intended_use": "train",
+  "example_count": 3150,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__nemotron-gym-reasoning-gym-v2": {
+  "intended_use": "train",
+  "example_count": 14259,
+  "top_area": {
+   "subject_id": "D01",
+   "name": "Mathematics & Statistics",
+   "instances": 5134
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 14259 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__nemotron-gym-safety-v3": {
+  "intended_use": "train",
+  "example_count": 89066,
+  "top_area": {
+   "subject_id": "D44",
+   "name": "Public Safety, Emergency Management & Defense",
+   "instances": 29097
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 89066 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__nemotron-gym-science-so-openq-v3": {
+  "intended_use": "train",
+  "example_count": 150644,
+  "top_area": {
+   "subject_id": "D03",
+   "name": "Physics & Astronomy",
+   "instances": 38222
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 150644 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__nemotron-gym-structured-outputs-v4": {
+  "intended_use": "train",
+  "example_count": 50606,
+  "top_area": {
+   "subject_id": "D17",
+   "name": "Medicine & Clinical Care",
+   "instances": 6470
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 50606 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__nemotron-gym-sysbench-v4": {
+  "intended_use": "train",
+  "example_count": 1010,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__openswe-tasks-patched-v7-oracle-success": {
+  "intended_use": "train",
+  "example_count": 11730,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__r2egym-patched-full-oracle-v3": {
+  "intended_use": "train",
+  "example_count": 2574,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__stackexchange-codereview-sandboxes-verified-v2": {
+  "intended_use": "train",
+  "example_count": 10000,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 2517
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 10000 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__stackexchange-overflow-sandboxes-verified-v2": {
+  "intended_use": "train",
+  "example_count": 10000,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 1520
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 10000 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__stackexchange-superuser-sandboxes-verified-v2": {
+  "intended_use": "train",
+  "example_count": 10000,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 3581
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 10000 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__stackexchange-tezos-sandboxes-verified-v2": {
+  "intended_use": "train",
+  "example_count": 10000,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 2168
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 10000 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__stackexchange-unix-sandboxes-verified-v2": {
+  "intended_use": "train",
+  "example_count": 10000,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 5132
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 10000 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__swegym-tasks-patched-validated-v5": {
+  "intended_use": "train",
+  "example_count": 2428,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__swesmith-oracle-filtered-v2": {
+  "intended_use": "train",
+  "example_count": 12720,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 3621
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 12720 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ },
+ "Task Trove:laion__toolscale-v4": {
+  "intended_use": "train",
+  "example_count": 4048,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__tulu3-sft-personas-math-sandboxes-verified-v3": {
+  "intended_use": "train",
+  "example_count": 9998,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "no conversion pipeline, so no converted tasks exist to count or place"
+ },
+ "Task Trove:laion__wizardlm-orca-v4": {
+  "intended_use": "train",
+  "example_count": 9999,
+  "top_area": {
+   "subject_id": "D02",
+   "name": "Computer & Information Sciences",
+   "instances": 452
+  },
+  "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 9999 tasks, every task embedded; leading subject by placed-task count",
+  "unavailable_reason": null
+ }
+}

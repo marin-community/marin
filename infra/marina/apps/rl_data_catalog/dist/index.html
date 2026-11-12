@@ -7,28 +7,44 @@
   <script src="common.js" defer></script><script src="app.js" defer></script>
 </head>
 <body>
+<header class="masthead"><a class="brand" href="./"><span class="brandmark">a<span>•</span></span><span>open athena <b>/</b> research tools</span></a><span class="private-label">MARINA APP <span class="live-dot"></span> CURATED CATALOG</span></header>
 <main>
-  <header class="atlas-header"><a class="atlas-name" href="./">RL Data Atlas</a><a href="archive.html">Review archive</a></header>
-  <nav class="atlas-tabs" aria-label="Atlas views"><a href="./" aria-current="page">By source</a><a href="curriculum.html">By curriculum</a><a href="guide.html">Getting started</a></nav>
-  <section class="page-heading">
-    <div><h1>Sources</h1><p id="message" role="status" aria-live="polite">Loading sources…</p></div>
-    <button id="export" class="secondary">Export CSV</button>
+  <section class="hero">
+    <div><p class="eyebrow">POST-TRAINING / DATA INVENTORY</p><h1 class="hero-title">RL Data Atlas<span>.</span></h1>
+      <p class="intro">Find the right tasks for your next run.<br>Task-curation sources, counts, quality and evidence in one place.</p></div>
+    <div class="hero-actions"><a class="secondary" href="guide.html">Getting started</a><button id="export" class="secondary">Export CSV</button></div>
   </section>
-  <form id="filters" class="browse-controls" role="search">
-    <label class="search-control"><span>Find a source</span><input id="search" type="search" placeholder="Search names, datasets, or tags…" aria-label="Search sources"></label>
-    <label><span>Catalog</span><select id="origin"><option value="all">All catalogs</option></select></label>
-    <label><span>Use</span><select id="use"><option value="all">All uses</option><option value="train">Training</option><option value="eval">Evaluation</option><option value="unprocessed">Not processed</option></select></label>
-    <label><span>Quality</span><select id="quality"><option value="all">All quality</option><option value="good">Good</option><option value="some_issues">Some issues</option><option value="bad">Bad</option><option value="unknown">Unknown</option><option value="unassessed">Not assessed</option></select></label>
-    <button id="clear-filters" class="text-button" type="button">Clear filters</button>
-  </form>
+  <nav class="atlas-tabs" aria-label="Atlas views"><a href="./" aria-current="page">By source</a><a href="curriculum.html">By curriculum</a><a href="guide.html">Getting started</a><a href="archive.html">Review archive</a></nav>
+  <section class="metrics" aria-label="Catalog totals">
+    <div><span class="metric-label">SOURCES</span><strong id="metric-sources">—</strong><small id="metric-sources-note">In the loaded catalog</small></div>
+    <div><span class="metric-label">CONVERTED EXAMPLES</span><strong id="metric-examples">—</strong><small id="metric-examples-note">Measured from converted tasks</small></div>
+    <div><span class="metric-label">SAMPLE / FULL QUALITY</span><strong id="metric-admitted">—</strong><small id="metric-admitted-note">Sources with executed QA</small></div>
+    <div class="freshness"><span class="metric-label">CATALOG SNAPSHOT</span><strong id="metric-snapshot">—<span class="live-dot"></span></strong><small id="metric-snapshot-note">Loading…</small></div>
+  </section>
+  <p id="message" class="sync-banner" role="status" aria-live="polite">Loading sources…</p>
   <section class="catalog">
-    <div class="table-scroller" tabindex="0" aria-label="Source inventory">
-      <table class="source-table"><caption class="sr-only">Individual sources, example counts, quality, and curriculum coverage</caption><thead><tr id="headers"></tr></thead><tbody id="rows"></tbody></table>
-      <div id="empty" class="empty" hidden><h2>No matching sources</h2><p>Try another search or clear the filters.</p></div>
+    <div class="catalog-top">
+      <div id="origin-tabs" class="tabs" role="group" aria-label="Catalog"></div>
+      <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search names, datasets, or tags…" aria-label="Search sources"></label>
     </div>
-    <footer class="table-footer"><span id="visible-count"></span><span>Open a source for details and evidence.</span></footer>
+    <form id="filters" class="filters" role="search">
+      <label>Use<select id="use"><option value="all">All uses</option><option value="train">Training</option><option value="eval">Evaluation</option><option value="unknown">Not measured</option></select></label>
+      <label>Quality<select id="quality"><option value="all">All quality</option><option value="FULL">FULL</option><option value="SAMPLE">SAMPLE</option><option value="QUICK">QUICK</option></select></label>
+      <label>Result<select id="result"><option value="all">All results</option><option value="GOOD">Good</option><option value="SOME_ISSUES">Some issues</option><option value="BAD">Bad</option><option value="none">Not assessed</option></select></label>
+      <label class="checkbox"><input id="show-all" type="checkbox"> Show QUICK-quality and BAD-result sources</label>
+      <button id="clear-filters" class="text-button" type="button">Reset</button>
+    </form>
+    <div class="table-scroller" tabindex="0" aria-label="Source inventory">
+      <table class="source-table"><caption class="sr-only">Sources with examples, use, quality, result, Daytona safety, curriculum area, last update and evidence</caption><thead><tr id="headers"></tr></thead><tbody id="rows"></tbody></table>
+      <div id="empty" class="empty" hidden><h2>No matching sources</h2><p>Try another search, reset the filters, or show QUICK and BAD sources.</p></div>
+    </div>
+    <footer class="table-footer"><span id="visible-count"></span><span>Select a column title to sort · Open Evidence for everything behind a label</span></footer>
   </section>
-  <details class="data-notes"><summary>About examples and quality</summary><p>Examples are successfully converted tasks before curation admission. A dash means the source has no processed examples in this release. Quality is the current sampled assessment of retained tasks; older reviews are in the archive.</p><p id="snapshot-info"></p></details>
+  <section class="notes">
+    <div><span class="note-number">01</span><p><b>Quality is how much QA ran; Result is what it found.</b> QUICK means no executed QA (inventory, conversion only, or upstream QC alone). SAMPLE and FULL mean executed controls or declared oversight on a sample or on every task. The colour of Result follows its value. The default view hides QUICK and BAD sources.</p></div>
+    <div><span class="note-number">02</span><p><b>Counts and areas are measured.</b> Examples is the converted task count and Top curriculum area the subject most converted tasks match, both from a curriculum release named in the source's evidence. Daytona shows N/A when the tasks provision no sandbox.</p></div>
+  </section>
+  <footer class="page-footer"><span>OPEN ATHENA / RL DATA ATLAS</span><span id="snapshot-info"></span></footer>
 </main>
 <dialog id="details" aria-labelledby="detail-name">
   <div class="drawer-header"><span>Source details</span><button id="close-details" class="close" aria-label="Close source details">×</button></div>

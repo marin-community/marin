@@ -993,6 +993,67 @@ setup fidelity ran on every task but whose verifier liveness ran on a sample is
 `sample`, not `full`. `independent_qc` stays separate evidence about the upstream
 release and does not raise the level.
 
+### Quality and result
+
+The Atlas labels every source with a **Quality** level and a **Result**. Quality
+says how much executed QA examined the source. Result says what that QA found.
+The rules live in `infra/marina/apps/rl_data_catalog/server/quality.py` and read
+only loaded catalog records.
+
+Quality is the stronger of two measurements:
+
+| Quality | Declared oversight | Executed grader controls in a SAMPLE or FULL pass |
+|---|---|---|
+| `FULL` | `full` | `validated`: every eligible task was validated individually |
+| `SAMPLE` | `sample` | `passed`: the control sample passed, so unsampled tasks skipped validation |
+| `QUICK` | `none` | none, `skipped` or `inconclusive` |
+
+Inventory pointers, QUICK conversions and independent QC by an upstream release
+are all `QUICK`: none of them executed this repository's QA.
+
+Result applies the first matching rule:
+
+1. `BAD` when the source is Excluded, its grader controls were `rejected`, or the
+   sampled assessment of its admitted cohort is Bad.
+2. The sampled assessment grade when it is Good or Some issues.
+3. For `SAMPLE` or `FULL` Quality, `SOME_ISSUES` when the sampled assessment is
+   Unknown, and `GOOD` otherwise: the executed controls or declared oversight
+   passed and no review found a defect.
+4. For `QUICK` Quality, the independent QC verdict when one exists.
+5. Otherwise no Result: no QA evidence exists.
+
+The Atlas colours the Result. By default it hides `QUICK` sources and `BAD`
+results; viewers can show them.
+
+### Coverage
+
+Every declaration carries a `SourceCoverage` record: its intended use
+(`train` or `eval`), its converted example count and the curriculum subject that
+the most of its converted tasks match. The values are measured and live in the
+generated table `experiments/post_training/task_curation/source_coverage.json`.
+`all_sources()` attaches each entry to its declaration and fails when a source
+has no entry. A runnable source fails unless its example count is measured and it
+has a leading subject or the measured outcome that none of its tasks placed.
+Other sources may record a typed gap (`CoverageGap`): no conversion pipeline, not
+yet embedded, or no pinned row count. In that case the example count comes from
+the pinned declaration.
+
+`regenerate_coverage` writes the table from curriculum releases built by
+`--embed coverage`. The example count is the release's converted row count. The
+leading subject is the subject with the most placed tasks, ties broken by subject
+ID. The basis string names the release. After adding a source, run QUICK with
+`--embed coverage` on it, then regenerate the table with that release last:
+
+```bash
+uv run python -m experiments.post_training.task_curation.regenerate_coverage \
+  --release OLDER/release.json --coverage OLDER/coverage.json \
+  --release NEW/release.json --coverage NEW/coverage.json
+```
+
+A QUICK pass over a published cohort (`import_prebuilt` or
+`import_harbor_prebuilt`) validates the pinned cohort and writes its tasks as the
+converted view, so cohorts are embedded the same way.
+
 ### Graders that declare a package lock cannot run on a sandbox backend
 
 An environment that declares `packages_lock` resolves to a local runtime

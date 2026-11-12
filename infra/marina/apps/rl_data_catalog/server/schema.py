@@ -86,6 +86,8 @@ CREATE TABLE IF NOT EXISTS atlas_packets (
     packet TEXT NOT NULL,
     PRIMARY KEY (load_id, pipeline_key, task_id)
 );
+ALTER TABLE atlas_sources ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+ALTER TABLE atlas_loads ADD COLUMN IF NOT EXISTS loader_version INTEGER;
 CREATE OR REPLACE VIEW atlas_cohort_summary AS
 WITH counts AS (
 SELECT p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count,

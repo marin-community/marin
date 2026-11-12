@@ -1,30 +1,41 @@
 /* Copyright The Marin Authors. SPDX-License-Identifier: Apache-2.0 */
 const number = new Intl.NumberFormat('en-US');
-const labels = {good: 'Good', some_issues: 'Some issues', bad: 'Bad', unknown: 'Unknown', unassessed: 'Not assessed'};
-const daytonaLabels = {safe: 'Safe', unsafe: 'Unsafe'};
-const useLabels = {train: 'Training', eval: 'Evaluation', unprocessed: 'Not processed'};
+const resultLabels = {GOOD: 'Good', SOME_ISSUES: 'Some issues', BAD: 'Bad', none: 'Not assessed'};
+const resultClasses = {GOOD: 'good', SOME_ISSUES: 'some_issues', BAD: 'bad', none: 'unassessed'};
+const useLabels = {train: 'Training', eval: 'Evaluation', unknown: 'Not measured'};
 const oracleValidationLabels = {executed: 'Oracle executed', verifier_executed: 'Verifier executed', skipped: 'Skipped'};
-const columns = [['display_name', 'Source'], ['examples', 'Examples'], ['use', 'Use'], ['quality', 'Quality'], ['independent', 'Independent QC'], ['daytona', 'Daytona safe'], ['area', 'Top curriculum area']];
-const state = {sources: [], sort: 'examples', direction: -1, daytonaSnapshotLimit: null};
+const columns = [
+  ['display_name', 'Source'], ['examples', 'Examples'], ['use', 'Use'], ['quality', 'Quality'], ['result', 'Result'],
+  ['daytona', 'Daytona'], ['area', 'Top curriculum area'], ['updated', 'Last updated'], ['evidence', 'Evidence'],
+];
+const qualityOrder = {QUICK: 0, SAMPLE: 1, FULL: 2};
+const state = {sources: [], sort: 'examples', direction: -1, origin: 'all'};
+const day = value => value ? new Date(value).toLocaleDateString('en-US', {month: 'short', day: '2-digit', year: 'numeric', timeZone: 'UTC'}) : '—';
 
-function grade(row) {
-  return row.assessment.status === 'complete' ? row.assessment.admitted.grade : 'unassessed';
-}
+function resultKey(row) { return row.result || 'none'; }
 function value(row, key) {
   if (key === 'examples') return row.coverage?.example_count;
-  if (key === 'use') return row.coverage?.intended_use || 'unprocessed';
-  if (key === 'quality') return grade(row);
-  if (key === 'independent') return row.independent_qc?.verdict;
-  if (key === 'daytona') return row.daytona_safety;
+  if (key === 'use') return row.coverage?.intended_use || 'unknown';
+  if (key === 'quality') return qualityOrder[row.quality];
+  if (key === 'result') return resultKey(row);
+  if (key === 'daytona') return row.daytona.state;
   if (key === 'area') return row.coverage?.top_area?.name;
+  if (key === 'updated') return row.updated_at;
   return row[key];
 }
+// The default view keeps sources whose QA executed and did not find them defective.
+function shownByDefault(row) { return row.quality !== 'QUICK' && row.result !== 'BAD'; }
 function filtered() {
   const search = $('search').value.trim().toLowerCase();
+  const showAll = $('show-all').checked;
   return state.sources.filter(row => {
-    const matches = ['origin', 'quality', 'use'].every(key => $(key).value === 'all' || $(key).value === value(row, key));
+    if (!showAll && !shownByDefault(row)) return false;
+    if (state.origin !== 'all' && row.origin !== state.origin) return false;
+    if ($('use').value !== 'all' && value(row, 'use') !== $('use').value) return false;
+    if ($('quality').value !== 'all' && row.quality !== $('quality').value) return false;
+    if ($('result').value !== 'all' && resultKey(row) !== $('result').value) return false;
     const text = [row.display_name, row.name, row.dataset_id, row.family, ...(row.tags || [])].join(' ').toLowerCase();
-    return matches && (!search || text.includes(search));
+    return !search || text.includes(search);
   }).sort((a, b) => {
     const x = value(a, state.sort), y = value(b, state.sort);
     if (x === null || x === undefined) return y === null || y === undefined ? a.id.localeCompare(b.id) : 1;
@@ -38,86 +49,90 @@ function curriculumLink(row, area) {
   if (area) { params.set('subject_id', area.subject_id); params.set('parent_id', area.node_id); }
   return `curriculum.html#${params}`;
 }
+function evidenceLink(row) { return `source.html#${new URLSearchParams({source_id: row.id})}`; }
+function daytonaCell(row) {
+  const cell = node('td'), daytona = row.daytona;
+  if (daytona.state === 'na') { const chip = node('span', 'N/A', 'chip quality-unassessed'); chip.title = daytona.reason; cell.append(chip); return cell; }
+  if (daytona.state === 'unmeasured') { const chip = node('span', 'Not measured', 'chip quality-some_issues'); chip.title = daytona.reason; cell.append(chip); return cell; }
+  const safe = daytona.state === 'safe';
+  const chip = node('span', safe ? 'Safe' : 'Unsafe', `chip quality-${safe ? 'good' : 'bad'}`);
+  chip.title = `${number.format(daytona.snapshots)} unique snapshots, limit ${number.format(daytona.limit)}`;
+  cell.append(chip, node('span', `${number.format(daytona.snapshots)} snapshots`, 'source-subtitle'));
+  return cell;
+}
+function renderTabs() {
+  const counts = {all: state.sources.filter(row => $('show-all').checked || shownByDefault(row)).length};
+  for (const row of state.sources) if ($('show-all').checked || shownByDefault(row)) counts[row.origin] = (counts[row.origin] || 0) + 1;
+  const origins = ['all', ...[...new Set(state.sources.map(row => row.origin))].sort()];
+  $('origin-tabs').replaceChildren(...origins.map(origin => {
+    const tab = node('button', origin === 'all' ? 'All catalogs' : origin, `tab${state.origin === origin ? ' selected' : ''}`);
+    tab.type = 'button'; tab.setAttribute('aria-pressed', String(state.origin === origin));
+    tab.append(node('span', number.format(counts[origin] || 0)));
+    tab.addEventListener('click', () => { state.origin = origin; update(); });
+    return tab;
+  }));
+}
 function render() {
-  const headings = columns.map(([key, title]) => {
-    const th = node('th'), button = node('button', title);
-    th.scope = 'col';
-    th.setAttribute('aria-sort', state.sort === key ? state.direction === 1 ? 'ascending' : 'descending' : 'none');
+  renderTabs();
+  $('headers').replaceChildren(...columns.map(([key, title]) => {
+    const th = node('th'); th.scope = 'col';
     if (key === 'examples') th.className = 'num';
+    if (key === 'evidence') { th.append(node('span', title, 'header-label')); return th; }
+    const button = node('button', title);
+    th.setAttribute('aria-sort', state.sort === key ? state.direction === 1 ? 'ascending' : 'descending' : 'none');
     if (state.sort === key) button.append(node('span', state.direction === 1 ? '↑' : '↓', 'sort-indicator'));
     button.addEventListener('click', () => {
-      state.direction = state.sort === key ? -state.direction : key === 'examples' ? -1 : 1;
+      state.direction = state.sort === key ? -state.direction : ['examples', 'quality', 'updated'].includes(key) ? -1 : 1;
       state.sort = key; update();
     });
     th.append(button); return th;
-  });
-  $('headers').replaceChildren(...headings);
+  }));
   const rows = filtered();
   $('rows').replaceChildren(...rows.map(row => {
     const tr = node('tr'); tr.dataset.sourceId = row.id;
-    const name = node('td');
-    const open = node('button', row.display_name, 'source-name');
+    const name = node('td'), open = node('button', row.display_name, 'source-name');
     open.title = row.display_name; open.addEventListener('click', () => details(row));
     name.append(open, node('span', row.origin, 'source-subtitle'));
-    const examples = node('td', row.coverage ? number.format(row.coverage.example_count) : '—', 'num');
-    if (row.coverage && row.coverage.basis === 'declared') {
-      examples.title = 'Declared examples in the pinned release; no curriculum placement';
-    } else {
-      examples.title = row.coverage ? 'Converted examples before curation admission' : 'No processed examples in this release';
-    }
-    const use = node('td', row.coverage && useLabels[row.coverage.intended_use] ? useLabels[row.coverage.intended_use] : '—', 'use-cell');
-    const quality = node('td');
-    const badge = node('span', labels[grade(row)], `chip quality-${grade(row)}`);
+    const examples = node('td', row.coverage?.example_count != null ? number.format(row.coverage.example_count) : '—', 'num');
+    examples.title = row.coverage?.basis || 'No coverage measurement in this catalog';
+    const use = node('td', useLabels[value(row, 'use')], 'use-cell');
+    const quality = node('td'); quality.append(node('span', row.quality, `chip level level-${row.quality.toLowerCase()}`));
+    const result = node('td'), key = resultKey(row);
+    const badge = node('span', resultLabels[key], `chip quality-${resultClasses[key]}`);
     if (row.assessment.status === 'complete') {
-      const anchor = node('a'); anchor.href = `assessment.html?source=${encodeURIComponent(row.id)}`;
-      anchor.title = row.assessment.admitted.grade_reason; anchor.append(badge);
-      quality.append(anchor, node('span', `${number.format(row.assessment.admitted.reviewed)} reviewed`, 'source-subtitle'));
-    } else quality.append(badge);
-    const independent = node('td');
-    if (row.independent_qc) {
-      const qc = row.independent_qc;
-      const chip = node('span', labels[qc.verdict], `chip quality-${qc.verdict}`);
-      chip.title = qc.method;
-      const subtitle = qc.admitted === null
-        ? `${number.format(qc.reviewed)} reviewed`
-        : `${number.format(qc.admitted)} of ${number.format(qc.reviewed)} reviewed`;
-      independent.append(chip, node('span', subtitle, 'source-subtitle'));
-    } else independent.append(node('span', '—', 'muted'));
-    const daytona = node('td');
-    const daytonaState = row.daytona_safety;
-    if (!daytonaState || daytonaState === 'unassessed') {
-      daytona.append(node('span', '—', 'muted'));
-    } else {
-      const safe = daytonaState === 'safe';
-      const chip = node('span', daytonaLabels[daytonaState], `chip quality-${safe ? 'good' : 'bad'}`);
-      const budget = `at most ${number.format(state.daytonaSnapshotLimit)} unique Daytona snapshots`;
-      chip.title = safe ? `Running this source needs ${budget}` : `Running this source needs more than ${budget}`;
-      daytona.append(chip);
-    }
+      const anchor = node('a'); anchor.href = `assessment.html?source=${encodeURIComponent(row.id)}`; anchor.append(badge);
+      result.append(anchor, node('span', `${number.format(row.assessment.admitted.reviewed)} reviewed`, 'source-subtitle'));
+    } else result.append(badge);
     const area = node('td');
     if (row.coverage?.top_area) {
       const anchor = node('a', row.coverage.top_area.name, 'area-link');
       anchor.href = curriculumLink(row, row.coverage.top_area);
-      anchor.title = `${number.format(row.coverage.top_area.instances)} examples in this area`;
+      anchor.title = `${number.format(row.coverage.top_area.instances)} placed examples in this subject`;
       area.append(anchor);
-    } else area.append(node('span', '—', 'muted'));
-    tr.append(name, examples, use, quality, independent, daytona, area); return tr;
+    } else {
+      const gap = node('span', '—', 'muted'); gap.title = row.coverage?.unavailable_reason || 'No curriculum release covers this source'; area.append(gap);
+    }
+    const updated = node('td', day(row.updated_at), 'date-cell');
+    updated.title = row.updated_at ? 'Start of the latest published campaign that processed this source' : 'No published campaign has processed this source';
+    const evidence = node('td'), link = node('a', 'Evidence →', 'evidence-link'); link.href = evidenceLink(row); evidence.append(link);
+    tr.append(name, examples, use, quality, result, daytonaCell(row), area, updated, evidence); return tr;
   }));
   $('empty').hidden = rows.length > 0;
-  $('visible-count').textContent = `${number.format(rows.length)} of ${number.format(state.sources.length)} sources`;
+  const hidden = state.sources.length - state.sources.filter(row => $('show-all').checked || shownByDefault(row)).length;
+  $('visible-count').textContent = `${number.format(rows.length)} of ${number.format(state.sources.length)} sources` +
+    (hidden ? ` · ${number.format(hidden)} QUICK or BAD hidden` : '');
 }
 function details(row) {
   $('detail-name').textContent = row.display_name; $('detail-notes').textContent = row.notes;
   const controls = row.curation?.verification;
   const fields = [
-    ['Catalog', row.origin], ['Status', row.status], ['Oracle validation', row.oracle_validation && (oracleValidationLabels[row.oracle_validation] ?? row.oracle_validation)], ['Converted examples', row.coverage?.example_count],
-    ['Use', useLabels[row.coverage?.intended_use]], ['Quality', labels[grade(row)]],
-    ['Independent QC', row.independent_qc ? `${labels[row.independent_qc.verdict]}: ${row.independent_qc.admitted === null ? `${row.independent_qc.reviewed} reviewed` : `${row.independent_qc.admitted} of ${row.independent_qc.reviewed} reviewed`} — ${row.independent_qc.method}` : null],
-    ['Daytona safe', daytonaLabels[row.daytona_safety]],
-    ['Top curriculum area', row.coverage?.top_area?.name],
-    ['Input rows', row.task_count], ['Source ID', row.id], ['Dataset revision', row.dataset_revision],
-    ['Pipeline', row.pipeline?.name], ['Curation', row.curation?.status],
-    ['Assessment model', row.assessment.model?.model], ['Assessment note', row.assessment.reason],
+    ['Catalog', row.origin], ['Status', row.status], ['Quality', row.quality], ['Result', resultLabels[resultKey(row)]],
+    ['Converted examples', row.coverage?.example_count], ['Use', useLabels[value(row, 'use')]],
+    ['Coverage basis', row.coverage?.basis], ['Coverage gap', row.coverage?.unavailable_reason],
+    ['Oracle validation', row.oracle_validation && (oracleValidationLabels[row.oracle_validation] ?? row.oracle_validation)],
+    ['Daytona', row.daytona.state === 'na' ? `N/A: ${row.daytona.reason}` : row.daytona.state === 'unmeasured' ? row.daytona.reason : `${row.daytona.state}, ${row.daytona.snapshots} snapshots`],
+    ['Last updated', row.updated_at ? day(row.updated_at) : null], ['Input rows', row.task_count], ['Source ID', row.id],
+    ['Dataset revision', row.dataset_revision], ['Pipeline', row.pipeline?.name], ['Curation', row.curation?.status],
     ['Admission counts', row.curation?.admission_counts], ['Control status', controls?.status], ['Control counts', controls?.counts],
   ];
   $('detail-fields').replaceChildren(...fields.filter(([, item]) => item !== null && item !== undefined).map(([title, item]) => {
@@ -126,47 +141,52 @@ function details(row) {
     return field;
   }));
   const links = [];
-  if (row.coverage && row.coverage.basis !== 'declared') { const anchor = node('a', 'Curriculum coverage'); anchor.href = curriculumLink(row); links.push(anchor); }
-  if (row.independent_qc) {
-    const anchor = node('a', 'Independent QC evidence ↗'); anchor.href = row.independent_qc.evidence_url;
-    anchor.rel = 'noopener'; anchor.target = '_blank'; links.push(anchor);
-  }
-  if (row.assessment.status === 'complete') {
-    const anchor = node('a', 'Quality assessment'); anchor.href = `assessment.html?source=${encodeURIComponent(row.id)}`; links.push(anchor);
-  }
-  if (row.url?.startsWith('https://')) {
-    const anchor = node('a', 'Original dataset ↗'); anchor.href = row.url; anchor.rel = 'noopener'; anchor.target = '_blank'; links.push(anchor);
-  }
+  const evidence = node('a', 'All quality evidence'); evidence.href = evidenceLink(row); links.push(evidence);
+  if (row.coverage?.top_area) { const anchor = node('a', 'Curriculum coverage'); anchor.href = curriculumLink(row); links.push(anchor); }
+  if (row.assessment.status === 'complete') { const anchor = node('a', 'Sampled review'); anchor.href = `assessment.html?source=${encodeURIComponent(row.id)}`; links.push(anchor); }
+  if (row.url?.startsWith('https://')) { const anchor = node('a', 'Original dataset ↗'); anchor.href = row.url; anchor.rel = 'noopener'; anchor.target = '_blank'; links.push(anchor); }
   $('detail-links').replaceChildren(...links); $('details').showModal();
+}
+function metrics(data) {
+  const measured = data.sources.filter(row => row.coverage?.example_count != null && row.coverage.basis && !row.coverage.basis.startsWith('declaration'));
+  const examples = measured.reduce((total, row) => total + row.coverage.example_count, 0);
+  const levels = data.sources.filter(row => row.quality !== 'QUICK');
+  $('metric-sources').textContent = number.format(data.sources.length);
+  $('metric-sources-note').textContent = `${number.format(data.sources.filter(shownByDefault).length)} shown by default`;
+  $('metric-examples').textContent = number.format(examples);
+  $('metric-examples-note').textContent = `Measured for ${number.format(measured.length)} sources`;
+  $('metric-admitted').textContent = number.format(levels.length);
+  $('metric-admitted-note').textContent = `${number.format(levels.filter(row => row.quality === 'FULL').length)} FULL · ${number.format(levels.filter(row => row.quality === 'SAMPLE').length)} SAMPLE`;
+  $('metric-snapshot').firstChild.textContent = day(data.created_at);
+  $('metric-snapshot-note').textContent = `Loaded ${day(data.synced_at)} · ${data.snapshot_id.slice(0, 12)}`;
 }
 async function load() {
   const data = await json('api/sources');
   state.sources = data.sources;
-  state.daytonaSnapshotLimit = data.daytona_snapshot_limit;
-  const processed = data.sources.filter(row => row.coverage && row.coverage.basis !== 'declared');
-  const examples = processed.reduce((total, row) => total + row.coverage.example_count, 0);
-  $('message').textContent = `${number.format(data.sources.length)} sources · ${number.format(examples)} examples · ${processed.length} sources processed`;
-  $('snapshot-info').textContent = `Curation inventory dated ${new Date(data.created_at).toLocaleDateString()}.`;
-  for (const origin of [...new Set(data.sources.map(row => row.origin))].sort()) {
-    const option = node('option', origin); option.value = origin; $('origin').append(option);
-  }
+  metrics(data);
+  $('message').textContent = `Showing catalog snapshot ${data.snapshot_id}.`;
+  $('snapshot-info').textContent = `Snapshot created ${new Date(data.created_at).toLocaleString()}`;
   readLocation();
   render();
 }
 function viewUrl() {
   const params = new URLSearchParams();
-  for (const id of ['search', 'origin', 'quality', 'use']) {
+  for (const id of ['search', 'use', 'quality', 'result']) {
     const item = $(id).value.trim();
     if (item && item !== 'all') params.set(id, item);
   }
+  if (state.origin !== 'all') params.set('origin', state.origin);
+  if ($('show-all').checked) params.set('all', '1');
   if (state.sort !== 'examples') params.set('sort', state.sort);
   if (state.direction !== -1) params.set('direction', state.direction);
   return location.pathname + (params.size ? `#${params}` : '');
 }
 function readLocation() {
   const params = new URLSearchParams(location.hash.slice(1));
-  $('filters').reset();
-  for (const id of ['search', 'origin', 'quality', 'use']) if (params.has(id)) $(id).value = params.get(id);
+  $('filters').reset(); $('search').value = params.get('search') || '';
+  for (const id of ['use', 'quality', 'result']) if (params.has(id)) $(id).value = params.get(id);
+  $('show-all').checked = params.get('all') === '1';
+  state.origin = params.get('origin') || 'all';
   state.sort = params.get('sort') || 'examples';
   state.direction = params.get('direction') === '1' ? 1 : -1;
 }
@@ -174,15 +194,17 @@ function update(replace = false) {
   history[replace ? 'replaceState' : 'pushState'](null, '', viewUrl());
   render();
 }
-for (const id of ['origin', 'quality', 'use']) $(id).addEventListener('change', () => update());
+for (const id of ['use', 'quality', 'result', 'show-all']) $(id).addEventListener('change', () => update());
 $('filters').addEventListener('submit', event => event.preventDefault());
 $('search').addEventListener('input', () => update(true));
 $('close-details').addEventListener('click', () => $('details').close());
-$('clear-filters').addEventListener('click', () => { $('filters').reset(); update(); });
+$('clear-filters').addEventListener('click', () => { $('filters').reset(); $('search').value = ''; state.origin = 'all'; update(); });
 window.addEventListener('popstate', () => { readLocation(); render(); });
 $('export').addEventListener('click', () => {
   const quote = item => `"${String(item ?? '').replaceAll('"', '""')}"`;
-  const csv = [columns.map(([, title]) => quote(title)).join(','), ...filtered().map(row => columns.map(([key]) => quote(value(row, key))).join(','))].join('\r\n');
+  const fields = columns.filter(([key]) => key !== 'evidence');
+  const cell = (row, key) => key === 'quality' ? row.quality : key === 'daytona' ? row.daytona.state : value(row, key);
+  const csv = [fields.map(([, title]) => quote(title)).join(','), ...filtered().map(row => fields.map(([key]) => quote(cell(row, key))).join(','))].join('\r\n');
   const url = URL.createObjectURL(new Blob([csv], {type: 'text/csv;charset=utf-8'}));
   const anchor = node('a'); anchor.href = url; anchor.download = 'rl-data-atlas.csv'; anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
