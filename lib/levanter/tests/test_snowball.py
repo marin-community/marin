@@ -65,6 +65,7 @@ from levanter.testing.devices import use_test_devices
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import TrainerConfig
 from levanter.trainer_state import TrainerState
+from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.utils.mesh import MeshConfig
 
 
@@ -774,7 +775,8 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
                 assert moment_specs and all(
                     "expert" in spec and ("data", "context") in spec for spec in moment_specs
                 ), moment_specs
-            examples = [GrugLmExample.causal(jnp.arange(8, dtype=jnp.int32) + 2) for _ in range(16)]
+            with local_cpu_mesh():
+                examples = [GrugLmExample.causal(jnp.arange(8, dtype=jnp.int32) + 2) for _ in range(16)]
             data = LmDataConfig(
                 components={
                     "direct": DirectDatasetComponent(
@@ -868,7 +870,8 @@ def test_hf_config_reload_keeps_fp32_router_settings(tmp_path):
                 save_tokenizer=False,
                 save_reference_code=False,
             )
-        examples = [GrugLmExample.causal(jnp.arange(128, dtype=jnp.int32) % 62 + 2) for _ in range(16)]
+        with local_cpu_mesh():
+            examples = [GrugLmExample.causal(jnp.arange(128, dtype=jnp.int32) % 62 + 2) for _ in range(16)]
         main(
             TrainLmConfig(
                 data=LmDataConfig(
