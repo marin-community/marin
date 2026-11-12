@@ -164,12 +164,12 @@ class QualificationReport:
             for base, results in sorted(grouped.items())
         }
 
-    def verdict(self, *, minimum_rate: float = 1.0) -> str:
+    def verdict(self) -> str:
         """``verifier_executed`` only when every check ran and every sample passed."""
         rates = [self.preservation_rate, self.execution_rate, self.verifier_rate]
         if any(rate is None for rate in rates):
             return "skipped"
-        if any(rate < minimum_rate for rate in rates):
+        if any(rate != 1.0 for rate in rates):
             return "skipped"
         return "verifier_executed"
 
@@ -578,20 +578,20 @@ def execute_lowered_setup(
     return _setup_comparison(task["id"], expectations, result)
 
 
-def summarize(report: QualificationReport, *, minimum_rate: float = 1.0) -> dict:
+def summarize(report: QualificationReport) -> dict:
     """Admission summary with the pass rates and the recorded verdict."""
     return {
         "checked": len(report.preservation),
         "verified": len(report.verifier),
         "preservation_rate": report.preservation_rate,
         "verifier_rate": report.verifier_rate,
-        "minimum_rate": minimum_rate,
+        "minimum_rate": 1.0,
         "executed": len(report.execution),
         "execution_rate": report.execution_rate,
         "setup_failures": dict(Counter(result.outcome for result in report.execution if not result.passed)),
         "verifier_failures": dict(Counter(result.outcome for result in report.verifier if not result.passed)),
         "by_base": report.by_base(),
-        "oracle_validation": report.verdict(minimum_rate=minimum_rate),
+        "oracle_validation": report.verdict(),
     }
 
 

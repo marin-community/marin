@@ -12,7 +12,6 @@ It converts nothing, so it cannot improve on the published cohort's review; the
 source's oversight level and evidence describe the qualification the publish recorded.
 """
 
-import hashlib
 import json
 import shutil
 from dataclasses import dataclass
@@ -23,6 +22,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
+from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
 from taskcompendium.pipeline.conversion import normalization_columns
@@ -57,14 +58,6 @@ class PrebuiltCohort:
     @property
     def files(self) -> tuple[str, ...]:
         return (TASKS_FILENAME,)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def import_cohort(config: PrebuiltCohort) -> str:
@@ -138,7 +131,7 @@ def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptio
             "repo": config.repo,
             "revision": config.revision,
             "row_count": config.expected_rows,
-            "tasks_sha256": _sha256(destination / TASKS_FILENAME),
+            "tasks_sha256": file_sha256(StoragePath(str(destination / TASKS_FILENAME))),
         }
         (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         return CampaignArtifact(

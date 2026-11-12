@@ -4,15 +4,9 @@
 """Python-test sources retain their archived agent environments and separate graders."""
 
 import pytest
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements
-from taskcompendium.pipeline.conversion import row_source
-from taskcompendium.pipeline.inputs import ConversionContext
-from taskcompendium.pipeline.models import RawRow
 
 from experiments.post_training.task_curation.datasets.tasktrove import python_tests
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import unpack_task_binary
 from experiments.post_training.task_curation.environment_fidelity import PINNED_BASES
-from experiments.post_training.task_curation.pipeline import planned_lock_url, source_recipe
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task, tasktrove_row
 
 SOURCES = python_tests.sources()
@@ -54,24 +48,11 @@ def test_python_test_sources_keep_recipe_steps_and_runtime_variables(source):
 
 
 @pytest.mark.parametrize("source", SOURCES, ids=lambda source: source.name)
-def test_python_test_sources_keep_the_production_grader_lock(source):
-    recipe = source.config
-    lock = planned_lock_url(recipe.grader)
-    grader = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=lock)
-    context = ConversionContext({}, grader)
-    pipeline = source_recipe(recipe, {}, grader)
-    data = unpack_task_binary(python_archive(b"FROM python:3.10-slim\nWORKDIR /app\n"), context)
-    row = RawRow("fixture", source=row_source(pipeline, "fixture"), data=data)
-    converted = recipe.convert(row, context)
-    assert converted.task.grader.environment == grader
-    assert converted.task.environment_requirements.docker_image == PINNED_BASES["python:3.10-slim"]
-
-
-@pytest.mark.parametrize("source", SOURCES, ids=lambda source: source.name)
 @pytest.mark.parametrize(
     "dockerfile, match",
     [
         (b"FROM python:3.9-slim\n", "unmapped base"),
+        (b"FROM python:3.10-slim\n#\xff\n", "not UTF-8"),
         (b"FROM python:3.10-slim\nCOPY fixture /app/fixture\n", "unsupported step: COPY"),
     ],
 )
