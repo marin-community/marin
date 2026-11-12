@@ -117,16 +117,17 @@ class RelayJudgeEndpoint:
     """Discover an existing GLM relay through its Iris job registration."""
 
     relay_job: str
+    model: str
     api_key: str = field(repr=False)
 
     @property
     def identity(self) -> dict[str, Any]:
-        return {"kind": "relay", "relay_job": self.relay_job}
+        return {"kind": "relay", "relay_job": self.relay_job, "model": self.model}
 
     @contextmanager
     def connect(self, api_key: str | None = None) -> Iterator[JudgeConnection]:
         with HostedJudgeEndpoint(
-            JUDGE_TIERS[JudgeTier.HEAVY].spec.model,
+            self.model,
             resolve_glm_base_url(self.relay_job),
             api_key if api_key is not None else self.api_key,
         ).connect() as connection:
@@ -185,6 +186,38 @@ class LocalJudgeEndpoint:
                 yield connection
 
 
+def _heavy_tier() -> JudgeTierDefinition:
+    spec = replace(
+        JUDGE_CONTRACT,
+        model="glm-5.3",
+        max_completion_tokens=4096,
+        incomplete_retry_tokens=8192,
+        chat_template_kwargs={"reasoning_effort": "low"},
+        request_timeout=300,
+        transport_attempts=3,
+        transport_budget=900,
+        parse_attempts=3,
+    )
+    return JudgeTierDefinition(
+        spec=spec,
+        context_window_tokens=262_144,
+        model_identity="Ortet GLM-5.3 FP8; immutable checkpoint identity unverified",
+        model_revision=None,
+        reasoning_policy="low, explicit GLM chat-template setting",
+        qa_reviewer=ReviewerSpec(
+            tier=JudgeTier.HEAVY,
+            model=spec.model,
+            model_revision="unverified:ortet-glm-5.3-fp8",
+            endpoint=RelayJudgeEndpoint(DEFAULT_GLM_RELAY_JOB, spec.model, ""),
+            temperature=spec.temperature,
+            reasoning_effort=spec.chat_template_kwargs["reasoning_effort"],
+            max_tokens=spec.max_completion_tokens,
+            retry_max_tokens=spec.incomplete_retry_tokens,
+            max_attempts=spec.parse_attempts,
+        ),
+    )
+
+
 JUDGE_TIERS: Mapping[JudgeTier, JudgeTierDefinition] = MappingProxyType(
     {
         JudgeTier.LIGHT: JudgeTierDefinition(
@@ -219,28 +252,6 @@ JUDGE_TIERS: Mapping[JudgeTier, JudgeTierDefinition] = MappingProxyType(
             model_revision="c5454eb03678d8710e54a4e0fc681b9f3b4a3dba",
             reasoning_policy="adaptive, explicit MiniMax thinking_mode",
         ),
-        JudgeTier.HEAVY: JudgeTierDefinition(
-            spec=replace(
-                JUDGE_CONTRACT,
-                model="glm-5.3",
-                max_completion_tokens=4096,
-                incomplete_retry_tokens=8192,
-                chat_template_kwargs={"reasoning_effort": "low"},
-                request_timeout=300,
-                transport_attempts=3,
-                transport_budget=900,
-                parse_attempts=3,
-            ),
-            context_window_tokens=262_144,
-            model_identity="Ortet GLM-5.3 FP8; immutable checkpoint identity unverified",
-            model_revision=None,
-            reasoning_policy="low, explicit GLM chat-template setting",
-            qa_reviewer=ReviewerSpec(
-                tier=JudgeTier.HEAVY,
-                model="glm-5.3",
-                model_revision="unverified:ortet-glm-5.3-fp8",
-                endpoint=RelayJudgeEndpoint(DEFAULT_GLM_RELAY_JOB, ""),
-            ),
-        ),
+        JudgeTier.HEAVY: _heavy_tier(),
     }
 )
