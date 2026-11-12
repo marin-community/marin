@@ -491,10 +491,12 @@ class TaskRolloutWorker:
             task = lowered.task
             harbor = harbor_settings[index]
             session_id = session_ids[index]
+            has_sampled_turn = False
 
             async def model(request):
+                nonlocal has_sampled_turn
                 try:
-                    return await _model_turn(
+                    turn = await _model_turn(
                         self.model_client,
                         request,
                         sampling_params=sampling,
@@ -504,12 +506,19 @@ class TaskRolloutWorker:
                         session_id=session_id,
                     )
                 except (GenerationLimitReached, ContextLengthExceededError) as error:
-                    if lowered.harness != SKYRL_AGENT_HARNESS:
+                    # Harbor still verifies after a rejected prompt. Preserve the last
+                    # sampled turn instead of replacing it with the unsent conversation.
+                    recoverable = lowered.harness == SKYRL_AGENT_HARNESS or (
+                        lowered.harness == HARBOR_TRIAL_SESSION and has_sampled_turn
+                    )
+                    if not recoverable:
                         raise
                     raise ContextWindowExceeded(
                         f"This request exceeds the maximum context length of {max_context_length} tokens. "
                         "Compact the conversation and retry."
                     ) from error
+                has_sampled_turn = True
+                return turn
 
             engine = engines[index]
             harbor_slots = nullcontext() if harbor is None else self.harbor_task_slots
@@ -543,6 +552,7 @@ class TaskRolloutWorker:
                 with rollout_wait("retry_backoff"):
                     await self.retry_wait(delay)
                 retries += 1
+                has_sampled_turn = False
 
         with rollout_phase("collect"):
             async with asyncio.TaskGroup() as group:
