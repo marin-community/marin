@@ -86,6 +86,8 @@ class BackendSourceMap(BaseModel):
     backends: dict[str, BackendFit]
     role_backend_assignments: dict[str, dict[str, int]]
     """Daytona deployment: agent on Daytona, package-lock grader on LOCAL."""
+    grading_environment: dict | None
+    """The published grading-boundary census, carried through without re-assessment."""
 
 
 class BackendSurvey(BaseModel):
@@ -177,6 +179,8 @@ def task_demands(document: Mapping) -> dict[str, set[Requirement]]:
             continue
         environment = EnvironmentRequirements.model_validate(declared)
         demands = environment_demands(environment)
+        if task.get("integrity_contract") is not None:
+            demands.update(TASK_FIELDS["integrity_contract"])
         if role == "agent":
             if task.get("output_paths") or task.get("answer_type") in {"file", "state", "workspace_state"}:
                 demands.add(Requirement.FILESYSTEM)

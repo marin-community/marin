@@ -51,6 +51,7 @@ def source_map(
     checkers: dict[str, Checker],
     inputs: dict[str, str],
     runtime_defaults: dict[str, RuntimeProfile],
+    grading_environment: dict | None = None,
 ) -> BackendSourceMap:
     """Count every converted task, validating combined demands in each machine slot."""
     cells = {(cell.backend, cell.requirement): cell for cell in matrix}
@@ -115,6 +116,7 @@ def source_map(
         demands=dict(demand_counts),
         resource_ranges=dict(ranges),
         role_backend_assignments=dict(assignments),
+        grading_environment=grading_environment,
         backends={
             backend: BackendFit(
                 support=combined_support(task_counts[backend]),
@@ -158,7 +160,13 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
             with path.open("rb") as stream:
                 digests[f"{index}:{path.name}"] = hashlib.file_digest(stream, "sha256").hexdigest()
         measured = source_map(
-            source_id, converted_specs(paths, entry["column"]), matrix, checkers, digests, runtime_defaults
+            source_id,
+            converted_specs(paths, entry["column"]),
+            matrix,
+            checkers,
+            digests,
+            runtime_defaults,
+            manifest.get("grading_environments", {}).get(source_id),
         )
         if measured.task_count != entry["expected_tasks"]:
             raise ValueError(f"Converted population differs from manifest: {source_id}")
@@ -195,6 +203,7 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
                 resource_ranges={},
                 backends={},
                 role_backend_assignments={},
+                grading_environment=manifest.get("grading_environments", {}).get(source_id),
             )
             for source_id in source_ids
         ],
@@ -212,11 +221,17 @@ def main() -> None:
         configure_coreweave_s3()
         catalog = CurationCatalog(args.catalog_root)
         snapshot = catalog.current()
+        sources = list(catalog.sources(snapshot.snapshot_id))
         manifest = {
             **manifest,
             "catalog_root": catalog.root,
             "snapshot_id": snapshot.snapshot_id,
-            "source_ids": [source.id for source in catalog.sources(snapshot.snapshot_id)],
+            "source_ids": [source.id for source in sources],
+            "grading_environments": {
+                source.id: source.declaration.grading_environment.model_dump(mode="json")
+                for source in sources
+                if source.declaration.grading_environment is not None
+            },
         }
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     survey = build_survey(manifest, production_checkers(), revision)

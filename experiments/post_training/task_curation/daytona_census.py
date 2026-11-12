@@ -26,10 +26,11 @@ from rolloutengine.machines import _machine_spec
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.machine import check_local_environment
 from shellbox.machine import UnsupportedMachineSpec
+from taskcompendium.grading_environment import GradingEnvironmentStatus, assess_grading_environment
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskSpec, missing_environment
 from taskcompendium.pipeline.conversion import ConvertedRow, convert_source_row
-from taskcompendium.pipeline.models import ImportRejection
+from taskcompendium.pipeline.models import ImportRejection, NormalizedTask, SourceRecipe
 from taskcompendium.pipeline.sources import conversion_context, source_shards, staged_raw_file_rows
 
 from experiments.post_training.task_curation.daytona_identity import count_lowered_spec_identities
@@ -67,6 +68,7 @@ class DaytonaCensus:
     error: str | None
     roles: dict
     converter_sha256: str
+    admission_rejections: dict[str, int]
 
 
 class EnvelopeCensus(NamedTuple):
@@ -144,40 +146,46 @@ def measure_source(source_id: str, artifact_root: str) -> DaytonaCensus:
             "No configured converter or converted-spec artifact is registered for this inventory declaration"
         )
     rejections = Counter()
-    result = measure_envelopes(converted_source(source, artifact_root, rejections))
+    admission_rejections = Counter()
+    result = measure_envelopes(converted_source(source, artifact_root, rejections, admission_rejections))
     converted, machine_slots, sizes, failed_tasks, failures, mapping, roles = result
+    if isinstance(config, PrebuiltCohort) and converted != config.expected_rows:
+        raise ValueError(f"Published cohort has {converted} TaskSpecs, expected {config.expected_rows}")
     rows = converted + sum(rejections.values())
-    if not converted:
-        raise ValueError(
-            f"Conversion retained zero TaskSpecs from {rows} selected inputs; rejections={dict(rejections)}"
-        )
+    error = f"Registered converter emitted zero TaskSpecs from {rows} selected inputs" if not converted else None
     verdict = (
-        "not_applicable"
-        if not machine_slots
-        else ("unsafe" if len(sizes) > DAYTONA_SAFE_SNAPSHOT_LIMIT or failed_tasks or mapping else "safe")
+        None
+        if error
+        else (
+            "not_applicable"
+            if not machine_slots
+            else ("unsafe" if len(sizes) > DAYTONA_SAFE_SNAPSHOT_LIMIT or failed_tasks or mapping else "safe")
+        )
     )
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     return DaytonaCensus(
         source_id,
         source.dataset.revision if source.dataset else None,
-        "measured",
+        "ingestion_failure" if error else "measured",
         rows,
         converted,
         dict(rejections),
         machine_slots,
-        len(sizes),
+        None if error else len(sizes),
         dict(sizes),
         failed_tasks,
         dict(failures),
         dict(mapping),
         verdict,
-        f"Complete converted census; actor on Daytona, package-lock grader on LOCAL; "
+        f"Registered converter TaskSpec outputs before admission gates (post-18a population); "
+        f"actor on Daytona, package-lock grader on LOCAL; "
         f"production Harbor machine_spec -> shellbox snapshot_identity; converter checkout {revision}; "
         f"recipe version {source.version}; allocations from native task.toml or published runtime, absent values null; "
         f"no Daytona API calls",
-        None,
+        error,
         roles,
         converter_sha256(),
+        dict(admission_rejections),
     )
 
 
@@ -248,7 +256,7 @@ def measure_envelopes(documents: Iterable[tuple[dict, dict]]) -> EnvelopeCensus:
     return EnvelopeCensus(converted, machine_slots, sizes, failed_tasks, failures, mapping, roles)
 
 
-def converted_source(source, artifact_root: str, rejections: Counter):
+def converted_source(source, artifact_root: str, rejections: Counter, admission_rejections: Counter):
     config = source.config
     if isinstance(config, PrebuiltCohort):
         root = snapshot_download(
@@ -261,6 +269,17 @@ def converted_source(source, artifact_root: str, rejections: Counter):
         for batch in pq.ParquetFile(Path(root) / config.files[0]).iter_batches(batch_size=32):
             for row in batch.to_pylist():
                 envelope = json.loads(row["lowered_task_spec"])
+                task = TaskSpec.model_validate(envelope["task"])
+                if missing_environment(envelope["task"]) is not None:
+                    admission_rejections["source_defect:missing_environment"] += 1
+                else:
+                    try:
+                        assessment = assess_grading_environment(task)
+                    except ValueError:
+                        admission_rejections["source_defect:grading_environment_unavailable"] += 1
+                    else:
+                        if assessment.status == GradingEnvironmentStatus.MISMATCH:
+                            admission_rejections["source_defect:grading_environment_mismatch"] += 1
                 yield envelope["task"], envelope["runtime"]
         return
     root = cached_input(config.source)
@@ -275,15 +294,40 @@ def converted_source(source, artifact_root: str, rejections: Counter):
             grader = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=lock)
     recipe = source_recipe(config, inputs, grader)
     context = conversion_context(recipe)
-    for shard in source_shards(root, recipe.source):
-        for record in staged_raw_file_rows(root, shard, recipe.source, context):
-            conversion = convert_source_row(record, recipe)
-            result = conversion.result
-            if isinstance(result, ImportRejection):
-                rejections[f"{result.kind.value}:{result.reason}"] += 1
-                continue
-            task = result.task.model_dump(mode="json")
-            yield task, declared_shapes(conversion)
+    records = (
+        record
+        for shard in source_shards(root, recipe.source)
+        for record in staged_raw_file_rows(root, shard, recipe.source, context)
+    )
+    yield from converted_records(records, recipe, rejections, admission_rejections)
+
+
+def converted_records(
+    records: Iterable[dict], recipe: SourceRecipe, rejections: Counter, admission_rejections: Counter
+) -> Iterable[tuple[dict, dict]]:
+    """Retain emitted specifications and count common admission failures independently."""
+    emitted: list[TaskSpec] = []
+
+    def capture(row, context):
+        result = recipe.convert(row, context)
+        if isinstance(result, NormalizedTask):
+            emitted.append(result.task)
+        elif isinstance(result, TaskSpec):
+            emitted.append(result)
+        return result
+
+    census_recipe = replace(recipe, convert=capture)
+    for record in records:
+        emitted.clear()
+        conversion = convert_source_row(record, census_recipe)
+        result = conversion.result
+        if isinstance(result, ImportRejection):
+            counts = admission_rejections if emitted else rejections
+            counts[f"{result.kind.value}:{result.reason}"] += 1
+        if not emitted:
+            continue
+        task = emitted[0].model_dump(mode="json")
+        yield task, declared_shapes(conversion)
 
 
 def main() -> None:
@@ -322,6 +366,7 @@ def main() -> None:
                     f"{type(error).__name__}: {error}",
                     {},
                     converter_sha256(),
+                    {},
                 )
             target = args.output / (canonical_sha256(source_id)[:20] + ".json")
             target.write_text(json.dumps(asdict(result), indent=2) + "\n")

@@ -7,6 +7,7 @@ import base64
 import gzip
 import io
 import tarfile
+from collections import Counter
 
 import pytest
 
@@ -186,3 +187,44 @@ def test_daytona_role_census_routes_lock_grader_locally_and_retains_its_quota_fa
     no_actor = measure_envelopes([(task, {})])
     assert no_actor.machine_slots == 0 and not no_actor.snapshot_sizes
     assert not no_actor.roles["grader"]["local"]["failures"]
+
+
+@pytest.mark.usefixtures("taskcompendium_environment")
+def test_execution_cost_census_keeps_task_specs_rejected_by_the_grading_boundary():
+    # Marin curation is optional in Harbor's standalone test environment.
+    from taskcompendium.convert.answers import exact_answer_task  # noqa: PLC0415
+    from taskcompendium.models import EnvironmentRequirements, ScriptGrader  # noqa: PLC0415
+    from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat  # noqa: PLC0415
+    from taskcompendium.pipeline.models import IntendedUse, SourceRecipe  # noqa: PLC0415
+
+    from experiments.post_training.task_curation.daytona_census import (  # noqa: PLC0415
+        converted_records,
+        measure_envelopes,
+    )
+
+    def convert(row, _context):
+        task = exact_answer_task(row, prompt="Repair the repository", answers=("done",), ignore_case=False)
+        environment = EnvironmentRequirements(
+            command_semantics="linux_process", docker_image="actor@sha256:" + "a" * 64, capabilities=("git_repository",)
+        )
+        grader = ScriptGrader(
+            argv=("python", "tests.py"),
+            environment=EnvironmentRequirements(command_semantics="linux_process", packages_lock="grader.lock"),
+        )
+        return task.model_copy(update={"environment_requirements": environment, "grader": grader})
+
+    recipe = SourceRecipe(
+        name="workspace",
+        version="1",
+        source=SourceFiles("fixture", "pin", ("rows.jsonl",), SourceFormat.JSONL),
+        convert=convert,
+        intended_use=IntendedUse.TRAIN,
+        rubric=None,
+        controls=None,
+    )
+    rejected, admission = Counter(), Counter()
+    census = measure_envelopes(converted_records([{"locator": "rows.jsonl:0", "data": {}}], recipe, rejected, admission))
+    assert census.converted == census.machine_slots == 1 and len(census.snapshot_sizes) == 1
+    assert census.execution_failure_tasks == 0
+    assert admission == {"source_defect:grading_environment_mismatch": 1}
+    assert not rejected

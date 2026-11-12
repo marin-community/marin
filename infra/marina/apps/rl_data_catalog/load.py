@@ -155,6 +155,12 @@ def load_catalog(
 
     if {source.id for source in sources} != set(identities.fingerprints):
         raise ValueError("Source identity map does not cover the selected catalog inventory")
+    source_declarations = {source.id: source.declaration for source in sources}
+    for source in backend_map.sources:
+        evidence = source_declarations[source.source_id].grading_environment
+        expected = evidence.model_dump(mode="json") if evidence is not None else None
+        if source.grading_environment != expected:
+            raise ValueError(f"Backend map grading evidence differs from the catalog: {source.source_id}")
     groups = {member.source_id: group.model_dump(mode="json") for group in identities.groups for member in group.members}
     metadata: dict[str, list[dict[str, Any]]] = {
         "sources": [
