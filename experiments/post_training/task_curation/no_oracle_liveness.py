@@ -90,7 +90,7 @@ async def run_one(
     cgroup_parent: Path | None = None,
     submission_files: dict[str, bytes] | None = None,
 ) -> LivenessResult:
-    """Grade an empty submission with the task's own grader, on a fresh grading machine."""
+    """Grade captured candidate files or an empty submission in the declared grader environment."""
     with tempfile.TemporaryDirectory(prefix="liveness-build-") as context:
         task = TaskSpec.model_validate(spec["task"])
         runtime = MachineRuntimeSpec.model_validate(

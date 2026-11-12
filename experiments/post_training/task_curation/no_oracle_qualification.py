@@ -58,9 +58,9 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
+from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT
+
 ENVIRONMENT_PREFIX = "environment/"
-SETUP_ROOT = "/setup_files"
-FIXTURE_ARCHIVE = "calibforge-fixtures.tar.gz"
 COPY_SOURCE = re.compile(r"^\s*COPY\s+(?:--\S+\s+)*(?P<sources>.+)$", re.IGNORECASE | re.MULTILINE)
 ADD_SOURCE = re.compile(r"^\s*ADD\s", re.IGNORECASE | re.MULTILINE)
 
@@ -457,6 +457,27 @@ def _execute_container_setup(
     return started.stdout
 
 
+def _workspace_scan(roots: tuple[str, ...]) -> str:
+    paths = " ".join(shlex.quote(path) for path in dict.fromkeys(roots))
+    return (
+        f'for root in {paths}; do if [ -d "$root" ]; then '
+        '(find "$root" -type f -printf \'%m %p\\n\' && find "$root" -type f -exec sha256sum {} +); '
+        'elif [ -e "$root" ]; then (stat -c \'%a %n\' "$root" && sha256sum "$root"); fi; done'
+    )
+
+
+def _setup_comparison(task_id: str, expectations: tuple[FileExpectation, ...], stdout: str) -> SetupExecution:
+    comparison = _compare_workspace(expectations, stdout)
+    return SetupExecution(
+        task_id=task_id,
+        outcome="executed",
+        written=comparison.written,
+        missing=comparison.missing,
+        extra=comparison.extra,
+        changed=comparison.changed,
+    )
+
+
 def execute_setup_in_docker(
     task_id: str,
     native_payload: bytes,
@@ -484,28 +505,15 @@ def execute_setup_in_docker(
         for tool in ("apt-get", "apt"):
             (shim / tool).write_text(APT_SHIM)
             (shim / tool).chmod(0o755)
-        scan = " ".join(
-            f"$( [ -e {shlex.quote(item)} ] && printf '%s ' {shlex.quote(item)} )" for item in (workdir, *destinations)
-        )
         command = (
             ("PATH=/shim:$PATH; " if stub_apt else "")
             + f"sh {SETUP_ROOT}/{setup_script} && "
-            + f'for root in {scan}; do if [ -d "$root" ]; then (find "$root" -type f'
-            + ' -printf \'%m %p\\n\' && find "$root" -type f -exec sha256sum {} +); elif [ -e "$root" ]; then'
-            + ' (stat -c \'%a %n\' "$root" && sha256sum "$root"); fi; done'
+            + _workspace_scan((workdir, *destinations))
         )
         result = _execute_container_setup(task_id, image, command, ((setup, SETUP_ROOT), (shim, "/shim")), dns, timeout)
     if isinstance(result, SetupExecution):
         return result
-    comparison = _compare_workspace(workspace_expectations(native_payload), result)
-    return SetupExecution(
-        task_id=task_id,
-        outcome="executed",
-        written=comparison.written,
-        missing=comparison.missing,
-        extra=comparison.extra,
-        changed=comparison.changed,
-    )
+    return _setup_comparison(task_id, workspace_expectations(native_payload), result)
 
 
 @dataclass(frozen=True)
@@ -561,28 +569,13 @@ def execute_lowered_setup(
             mode = resource.get("mode")
             if mode is not None:
                 target.chmod(int(mode, 8))
-        roots = (workdir, *destinations)
-        scan = " ".join(f"$( [ -e {shlex.quote(item)} ] && printf '%s ' {shlex.quote(item)} )" for item in roots)
-        command = (
-            " && ".join(commands)
-            + f' && for root in {scan}; do if [ -d "$root" ]; then (find "$root" -type f'
-            + ' -printf \'%m %p\\n\' && find "$root" -type f -exec sha256sum {} +); elif [ -e "$root" ]; then'
-            + ' (stat -c \'%a %n\' "$root" && sha256sum "$root"); fi; done'
-        )
+        command = " && ".join(commands) + " && " + _workspace_scan((workdir, *destinations))
         result = _execute_container_setup(
             task["id"], requirements["docker_image"], command, ((root / "setup_files", SETUP_ROOT),), dns, timeout
         )
     if isinstance(result, SetupExecution):
         return result
-    comparison = _compare_workspace(expectations, result)
-    return SetupExecution(
-        task_id=task["id"],
-        outcome="executed",
-        written=comparison.written,
-        missing=comparison.missing,
-        extra=comparison.extra,
-        changed=comparison.changed,
-    )
+    return _setup_comparison(task["id"], expectations, result)
 
 
 def summarize(report: QualificationReport, *, minimum_rate: float = 1.0) -> dict:
