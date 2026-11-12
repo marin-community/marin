@@ -187,7 +187,7 @@ against the control commit, or gives the reason a local git comparison is unavai
 
 ## Tasks and evaluation
 
-The [EvalLite](../references/task-curation.md#eval-lite) is the held-out set that
+The [EvalLite](../references/task-curation.md#evallite) is the held-out set that
 `speed-short`, the learning and data presets and `train-long` evaluate: 1,500 public benchmark
 tasks graded on the training machines, and a 100-task fast subset. It shows whether a change moves
 scores on tasks the model never trains on, measured against controls on the same panel; it is not a

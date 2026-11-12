@@ -385,6 +385,9 @@ A root TPU submission without a cluster or region pin skips preparation: there i
 Both paths use the worker's model resolver. The job receives the serving worker's environment,
 including `HF_TOKEN`, and gets one retry for a failure. Preparation
 has one four-hour wait budget; a preparation timeout does not trigger a serving-startup retry.
+For direct `marin-serve iris` launches, `--secret HF_TOKEN env:MODEL_TOKEN` also authenticates
+the coordinator's revision lookup and the CPU preparation job. The token is delivered to the
+CPU job as a secret file; other explicit serving secrets are not copied to preparation.
 With different cache prefixes or a target cluster spanning several regions, preparation can warm
 a cache the serving worker cannot use, and that worker may still download on an accelerator.
 Candidate and hosted-judge preparation are separate: cold judge preparation can hold already
