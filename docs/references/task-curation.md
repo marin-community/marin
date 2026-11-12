@@ -483,8 +483,33 @@ The maintained Python SWE lowering is `harbor_payload` or `harbor_record` with
 It moves the exact initial repository/dependency setup into Harbor's pre-agent
 setup and uses common actor images. Publish the resulting native package, copy
 its metadata integrity contract into the TaskSpec, then run full-population
-Harbor ORACLE filtering and SAMPLE/FULL QA. Legacy non-Python script runners
-remain unsupported until their language-specific contracts are qualified.
+Harbor ORACLE filtering and SAMPLE/FULL QA.
+
+Non-Python SWE-rebench packages use the same API with a `shared-native` contract
+and an explicit `native.family`: Go, Rust, JVM (Gradle/Maven), Julia, Swift,
+C/C++, Dart, PHP, Elixir, .NET, Lua or OCaml. The declaration preserves the exact
+source `install_config.test_cmd` and self-contained test-ID parser. Before agent
+access, bootstrap applies the trusted source test patch, captures tests and build
+configuration, and freezes installed toolchains. Each grading launch restores
+those files and removes added test configuration. The command runs as the grader
+UID with a cleared environment. The root controller captures its output through
+an inherited file descriptor, kills grading-UID descendants, invokes the pinned
+parser in isolated Python, and writes the structured verdict. Dependency edits
+remain live and produce `dependencies-diff.json`; startup changes produce
+`startup-hooks-diff.json`. The contract records output-injection and dependency
+hook gaps for subsequent tamper audits.
+
+The manual Linux-root suite exercises real runners, failed tampering attempts
+and a passing external-dependency mutation. Run it inside a disposable Linux
+container with the declared toolchains installed, since the suite overwrites
+and restores their executable files:
+
+```bash
+uv run pytest lib/taskcompendium/tests/test_shared_native.py -m manual -n 0
+```
+
+Use `-k go` to start with Go or select another runner family by test ID. These
+controller regressions do not replace source oracle filtering or SAMPLE/FULL QA.
 
 An `Environment` declares grader build inputs. The converter records agent and
 grader requirements on each TaskSpec; execution selects suitable Shellbox machines.

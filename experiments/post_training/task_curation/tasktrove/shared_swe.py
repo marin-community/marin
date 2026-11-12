@@ -13,32 +13,49 @@ from pathlib import Path
 
 import tomlkit
 from taskcompendium.integrity import SharedDependencyState, SharedIntegrityContract, shared_preamble
-from taskcompendium.runtime import shared_pytest
-from verifyit.spec import PytestSpec, render_spec
+from taskcompendium.native_integrity import TEST_PATTERNS
+from taskcompendium.runtime import shared_native, shared_pytest
+from verifyit.spec import PytestSpec, ScriptSpec, render_spec
+
+from experiments.post_training.task_curation.tasktrove.native_shared_swe import native_runner
 
 BOOTSTRAP = "/opt/taskcompendium-shared-bootstrap/control.py"
 SETUP_PREFIX = "## Environment Setup (complete these steps first)\n\n```bash\n"
 
 
 def harden_shared_swe(
-    files: dict[str, bytes], *, spec: PytestSpec, dependency_state: SharedDependencyState
+    files: dict[str, bytes], *, spec: PytestSpec | ScriptSpec, dependency_state: SharedDependencyState
 ) -> SharedIntegrityContract:
     """Rewrite one new native package with a complete, versioned SHARED contract.
 
     The caller must publish this package under a new dataset version and qualify
     it; this function never changes an already-published task at runtime.
     """
-    source = Path(shared_pytest.__file__).read_bytes()
+    native = native_runner(files) if isinstance(spec, ScriptSpec) else None
+    source = Path(shared_native.__file__ if native else shared_pytest.__file__).read_bytes()
     test_files = {name.removeprefix("tests/"): data.hex() for name, data in files.items() if name.startswith("tests/")}
     reference = hashlib.sha256(json.dumps(test_files, sort_keys=True).encode()).hexdigest()
     contract = SharedIntegrityContract(
-        dependency_state=dependency_state, reference_sha256=reference, harness_sha256=hashlib.sha256(source).hexdigest()
+        dependency_state=dependency_state,
+        reference_sha256=reference,
+        harness_sha256=hashlib.sha256(source).hexdigest(),
+        **(
+            {
+                "id": "shared-native",
+                "native": native,
+                "protected_test_patterns": TEST_PATTERNS,
+                "audit_probes": ("dependencies-diff.json", "startup-hooks-diff.json"),
+                "known_open_gaps": ("Candidate-produced test-output injection", "Mutable dependency startup hooks"),
+            }
+            if native
+            else {}
+        ),
     )
     root = contract.protected_root
-    protected_spec = replace(spec, setup="", python=f"{root}/pytest-python")
+    protected_spec = replace(spec, setup="", python=f"{root}/pytest-python") if isinstance(spec, PytestSpec) else spec
     payload = {
         "contract": contract.model_dump(mode="json"),
-        "spec": {**asdict(spec), "mode": "pytest"},
+        "spec": {**asdict(spec), "mode": "script" if native else "pytest"},
         "verifier_spec": render_spec(protected_spec),
         "test_files": test_files,
     }
@@ -81,6 +98,8 @@ def harden_shared_swe(
         + instruction
     ).encode()
     files["environment/taskcompendium-shared/control.py"] = source
+    if native:
+        files["environment/taskcompendium-shared/shared_pytest.py"] = Path(shared_pytest.__file__).read_bytes()
     dockerfile = files["environment/Dockerfile"].decode()
     dockerfile += (
         "\nUSER 0:0\n"
@@ -88,7 +107,12 @@ def harden_shared_swe(
         "RUN getent passwd 10002 >/dev/null || useradd --create-home --uid 10002 --user-group taskcompendium-grade\n"
         "RUN mkdir -p /home/taskcompendium-agent && chown 10001:10001 /home/taskcompendium-agent\n"
         f"COPY taskcompendium-shared/control.py {BOOTSTRAP}\n"
-        'RUN verifyit_path="$(readlink -f "$(command -v verifyit)")"; '
+        + (
+            "COPY taskcompendium-shared/shared_pytest.py /opt/taskcompendium-shared-bootstrap/shared_pytest.py\n"
+            if native
+            else ""
+        )
+        + 'RUN verifyit_path="$(readlink -f "$(command -v verifyit)")"; '
         'python_path="$(head -n 1 "$verifyit_path" | cut -c 3-)"; '
         'ln -s "$python_path" /opt/taskcompendium-shared-bootstrap/python; '
         'ln -s "$verifyit_path" /opt/taskcompendium-shared-bootstrap/verifyit\n'

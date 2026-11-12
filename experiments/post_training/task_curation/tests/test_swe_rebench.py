@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+import tomlkit
+from taskcompendium.grading_environment import SharedGradingPolicy
+from taskcompendium.integrity import SharedDependencyState, SharedIntegrityContract, shared_preamble
 from taskcompendium.models import DockerBuildContext
 from taskcompendium.pipeline.models import ImportRejection
 from taskcompendium.runtime.resources import resource_bytes
@@ -19,6 +22,7 @@ from verifyit.spec import PytestSpec, parse_spec
 
 from experiments.post_training.task_curation.datasets.tasktrove import repositories
 from experiments.post_training.task_curation.pipeline import CurationRecipe
+from experiments.post_training.task_curation.tasktrove.harbor_export import harbor_payload
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task, tasktrove_row
 
 RECIPES = {source.name: cast(CurationRecipe, source.config) for source in repositories.sources()}
@@ -92,6 +96,48 @@ def elixir_source() -> dict[str, bytes]:
     )
     files["tests/config.json"] = json.dumps(config).encode()
     return files
+
+
+@pytest.mark.parametrize(
+    "language, command, family",
+    [
+        ("go", "go test -v ./...", "go"),
+        ("rust", "cargo test --all", "rust"),
+        ("java", "mvn test --settings ci/settings.xml", "jvm"),
+        ("kotlin", "./gradlew test --no-daemon", "jvm"),
+        ("julia", "julia --project -e 'using Pkg; Pkg.test()'", "julia"),
+        ("swift", "swift test", "swift"),
+        ("cpp", "cmake --build build && ctest --test-dir build", "cpp"),
+        ("dart", "dart test", "dart"),
+        ("php", "vendor/bin/phpunit", "php"),
+        ("elixir", "mix test", "elixir"),
+        ("csharp", "dotnet test", "dotnet"),
+        ("lua", "busted", "lua"),
+        ("ocaml", "dune runtest", "ocaml"),
+    ],
+)
+def test_native_shared_lowering_preserves_source_command_parser_and_contract(language, command, family):
+    files = go_source()
+    config = json.loads(files["tests/config.json"])
+    config.update(language=language, base_commit="abcdef0")
+    config["install_config"]["test_cmd"] = command
+    files["tests/config.json"] = json.dumps(config).encode()
+    files["tests/test.sh"] += f"\n{command} > /logs/verifier/test_output.log 2>&1\n".encode()
+    task = converted_task(RECIPES["tasktrove-swe_rebench"], tasktrove_row(files))
+    package = harbor_payload(
+        {"task_json": task.model_dump_json(), "source_row": "swe_rebench/fixture", "original_path": "fixture"},
+        grader_image=None,
+        family="tasktrove",
+        shared_policy=SharedGradingPolicy(dependency_state=SharedDependencyState.AGENT_MUTABLE),
+    )
+    metadata = tomlkit.parse(package.files["task.toml"].decode())["metadata"]
+    contract = SharedIntegrityContract.model_validate(metadata["integrity_contract"])
+    assert contract.native is not None
+    assert (contract.native.family, contract.native.command) == (family, command)
+    assert package.files["instruction.md"].decode().startswith(shared_preamble(contract))
+    private = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
+    assert package.files["tests/test_state.py"] == private["test_state.py"]
+    assert b"shared_pytest.py" in package.files["environment/Dockerfile"]
 
 
 @pytest.mark.parametrize("language", ["python", "go"])

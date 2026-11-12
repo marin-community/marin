@@ -108,6 +108,8 @@ def declared_plugins(reference: Path) -> list[str]:
                 continue
             if not any(isinstance(target, ast.Name) and target.id == "pytest_plugins" for target in targets):
                 continue
+            if statement.value is None:
+                continue
             values = ast.literal_eval(statement.value)
             if isinstance(values, str):
                 values = (values,)
