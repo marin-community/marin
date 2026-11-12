@@ -14,6 +14,7 @@ It converts nothing, so it cannot improve on the published cohort's review; the
 source's oversight level and evidence describe the qualification the publish recorded.
 """
 
+import hashlib
 import json
 import shutil
 import tomllib
