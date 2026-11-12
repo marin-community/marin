@@ -69,6 +69,7 @@ def test_pipeline_less_pointers_are_rejected():
 def test_unqualified_agentic_pipeline_stays_visible_but_cannot_be_selected(monkeypatch, missing):
     info = replace(
         _agentic(TaskFormat.TASKCOMPENDIUM).info,
+        within_source_dedup=number_source(Path("unused")).info.within_source_dedup,
         daytona_snapshot_count=1,
         daytona_machine_slots=1,
         daytona_execution_failures=0,

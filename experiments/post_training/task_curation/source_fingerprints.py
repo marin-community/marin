@@ -13,9 +13,8 @@ from heapq import nsmallest
 import dupekit
 import pyarrow as pa
 from finestore.rl.source_identity import canonical_source_id, canonical_source_map, original_source_id
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_identity
 from taskcompendium.models import TaskSpec, VerifyitGrader, format_conversation
-from taskcompendium.pipeline.fingerprints import deduplication_key
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 from taskcompendium.source_fingerprints import (
     DuplicateGroup,
@@ -68,7 +67,7 @@ def fingerprint_source(documents: Iterable[Mapping], inputs: dict[str, str]) -> 
             )
             for task, text, sketch in zip(tasks, texts, sketches, strict=True):
                 signature = [min(left, right) for left, right in zip(signature, sketch, strict=True)]
-                key = deduplication_key(task)
+                key = task_identity(task)
                 duplicate_count += key in seen
                 seen.add(key)
                 instruction_hash = canonical_sha256(text)
