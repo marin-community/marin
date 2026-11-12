@@ -19,7 +19,6 @@ from taskcompendium.pipeline.models import (
     CheckResult,
     Decision,
     Disposition,
-    FilterPolicy,
     ImportFailureKind,
     ImportRejection,
     NormalizedTask,
@@ -183,7 +182,7 @@ def review_record(row: dict[str, Any]) -> ReviewRecord:
     )
 
 
-def filter_row(row: dict[str, Any], policy: FilterPolicy) -> dict[str, Any]:
+def filter_row(row: dict[str, Any]) -> dict[str, Any]:
     if (
         row["normalization_reason"] is not None
         or row["duplicate_of"] is not None

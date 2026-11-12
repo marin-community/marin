@@ -29,6 +29,7 @@ from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.embedding import DescriptionEndpoint, curation_embedding_pipeline
 from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.tests.numbers_pipeline import NumbersConfig, numbers_pipeline
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
 
@@ -192,7 +193,7 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
             (directory / "curriculum.json").write_text(json.dumps(payload))
             stages.append(
                 curation_embedding_pipeline(
-                    curated={"source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
+                    curated={"Marin:source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
                     curriculum=ArtifactStep.adopt("curriculum-fixture", f"2026.10.14.{revision}", source=str(directory)),
                     runtime=runtime,
                     description_model=DescriptionModel("fixture", "1"),
@@ -205,13 +206,15 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
                     seed=0,
                     inventory=[
                         RlDataSource(
+                            config=NumbersConfig("source", tmp_path / "unused"),
+                            pipeline=numbers_pipeline,
                             info=SourceInfo(
                                 id="Marin:source",
                                 upstream_dataset="source",
                                 upstream_name="source",
                                 build_path="test",
                                 origin=SourceOrigin.MARIN,
-                            )
+                            ),
                         ).declaration
                     ],
                 )
@@ -306,7 +309,7 @@ def test_driver_converts_embeds_and_resumes_without_rereading_raw_inputs(
     assert tasks[0]["matches"]["subjects"][0]["subject_id"] == "D01"
 
 
-def test_publication_adds_declared_inventory_sources_without_placement(tmp_path, description_server):
+def test_publication_retains_registered_sources_without_placement(tmp_path, description_server):
     curated = tmp_path / "curated"
     (curated / "final").mkdir(parents=True)
     (curated / "manifest.json").write_text(json.dumps({"intended_use": "train", "revision": "fixture-1"}))
@@ -338,7 +341,7 @@ def test_publication_adds_declared_inventory_sources_without_placement(tmp_path,
         runtime.activate(context),
     ):
         stages = curation_embedding_pipeline(
-            curated={"source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
+            curated={"Marin:source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
             curriculum=ArtifactStep.adopt("curriculum-fixture", "2026.10.14.1", source=str(directory)),
             runtime=runtime,
             description_model=DescriptionModel("fixture", "1"),
@@ -351,47 +354,53 @@ def test_publication_adds_declared_inventory_sources_without_placement(tmp_path,
             seed=0,
             inventory=[
                 RlDataSource(
+                    config=NumbersConfig("source", tmp_path / "unused"),
+                    pipeline=numbers_pipeline,
                     info=SourceInfo(
                         id="Marin:source",
                         upstream_dataset="source",
                         upstream_name="source",
                         build_path="test",
                         origin=SourceOrigin.MARIN,
-                    )
+                    ),
                 ).declaration,
                 RlDataSource(
+                    config=NumbersConfig("source", tmp_path / "unused"),
+                    pipeline=numbers_pipeline,
                     info=SourceInfo(
-                        id="Pointer:release",
-                        upstream_dataset=("Pointer:release").partition(":")[2],
-                        upstream_name=("Pointer:release").partition(":")[2],
+                        id="Marin:release",
+                        upstream_dataset=("Marin:release").partition(":")[2],
+                        upstream_name=("Marin:release").partition(":")[2],
                         build_path="test",
                         origin=SourceOrigin.MARIN,
                         count=7,
-                    )
+                    ),
                 ).declaration,
                 RlDataSource(
+                    config=NumbersConfig("source", tmp_path / "unused"),
+                    pipeline=numbers_pipeline,
                     info=SourceInfo(
-                        id="Pointer:no-count",
-                        upstream_dataset=("Pointer:no-count").partition(":")[2],
-                        upstream_name=("Pointer:no-count").partition(":")[2],
+                        id="Marin:no-count",
+                        upstream_dataset=("Marin:no-count").partition(":")[2],
+                        upstream_name=("Marin:no-count").partition(":")[2],
                         build_path="test",
                         origin=SourceOrigin.MARIN,
-                    )
+                    ),
                 ).declaration,
             ],
         )
         built = run(stages.publication, max_concurrent=1)[0]
     release = json.loads((Path(built.path) / "release.json").read_text())
     rows = {row["source_id"]: row for row in release["sources"]}
-    assert rows["source"]["basis"] == "matched"
-    assert rows["Pointer:release"]["basis"] == "declared"
-    assert rows["Pointer:release"]["task_count"] == 7
-    assert rows["Pointer:release"]["intended_use"] is None
-    assert "Pointer:no-count" not in rows
+    assert rows["Marin:source"]["basis"] == "matched"
+    assert rows["Marin:release"]["basis"] == "declared"
+    assert rows["Marin:release"]["task_count"] == 7
+    assert rows["Marin:release"]["intended_use"] is None
+    assert "Marin:no-count" not in rows
     assert release["task_count"] == 1
 
 
-def test_corpus_resume_refreshes_inventory_and_declares_pointer_sources(tmp_path, monkeypatch, description_server):
+def test_corpus_resume_refreshes_registered_source_metadata(tmp_path, monkeypatch, description_server):
     monkeypatch.setattr(
         "experiments.post_training.task_curation.driver.load_harrier",
         lambda config: EmbeddingEndpoint(str(tmp_path / "embeddings.jsonl"), config.dimensions),
@@ -448,4 +457,5 @@ def test_corpus_resume_refreshes_inventory_and_declares_pointer_sources(tmp_path
     assert sources["MarinSkyRL:aime24"]["basis"] == "matched"
     declared = [row for row in sources.values() if row["basis"] == "declared"]
     assert declared and all(row["task_count"] > 0 and row["intended_use"] is None for row in declared)
-    assert any(row["source_id"] == "Campaign Release:smartie-calibforge-admitted" for row in declared)
+    assert "Campaign Release:smartie-calibforge-rebuilt-v1" in sources
+    assert "Campaign Release:smartie-calibforge-admitted" not in sources

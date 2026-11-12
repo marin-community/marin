@@ -765,7 +765,6 @@ def _population_shard_count(population_count: int, maximum: int) -> int:
 def _export_sidecars(
     run: _SourceRun,
     panel: _Panel,
-    decision: SourceQualityReport,
     checked: StoragePath,
     verification: SourceVerificationStatus,
     *,
@@ -966,9 +965,7 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
     verification, checked = _verify(run)
     verification_status = SourceVerificationStatus(verification["verification"]["status"])
     _write_download_manifest(run, panel.sample.population_count)
-    admissions, grading_environment = _export_sidecars(
-        run, panel, decision, checked, verification_status, expanded=expanded
-    )
+    admissions, grading_environment = _export_sidecars(run, panel, checked, verification_status, expanded=expanded)
     verification["verification"]["source_path"] = str(run.output / "normalize")
     verification["verification"]["review_path"] = str(run.output / "review")
     status = _source_status(

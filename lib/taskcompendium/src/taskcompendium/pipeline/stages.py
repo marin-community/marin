@@ -818,7 +818,7 @@ def filter_source(
     filtered = (
         Dataset.from_files(str(source / AUDIT_INPUT_PATTERN))
         .load_parquet()
-        .map(partial(filter_row, policy=policy))
+        .map(filter_row)
         .map_shard(partial(write_filtered_shard, output=output))
     )
     with (

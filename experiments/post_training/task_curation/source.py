@@ -134,7 +134,7 @@ class SourceInfo:
     interaction, benchmark status, and source-specific search terms.
     """
 
-    id: str
+    id: str = ""
     origin: SourceOrigin
     upstream_dataset: str
     upstream_name: str
@@ -198,6 +198,10 @@ class SourceInfo:
     def __post_init__(self) -> None:
         if not isinstance(self.origin, SourceOrigin):
             raise ValueError("origin must be an upstream SourceOrigin")
+        if not self.id:
+            object.__setattr__(
+                self, "id", source_identifier(self.origin, self.upstream_dataset, self.subset, self.variant)
+            )
         if PENDING_SOURCE_ID_RETIREMENTS.get(self.id, self.id) != source_identifier(
             self.origin, self.upstream_dataset, self.subset, self.variant
         ):
@@ -309,6 +313,8 @@ class RlDataSource[ConfigT: CatalogConfig]:
             agentic="agentic" in tags,
         )
         if info.id in GRANDFATHERED_MARINSKYRL_SOURCES:
+            safety = None
+        elif "agentic" in tags and (info.daytona_machine_slots is None or not info.daytona_count_basis):
             safety = None
         elif info.daytona_machine_slots == 0:
             safety = daytona_verdict(snapshot_count=0, execution_failures=0, agentic=False)

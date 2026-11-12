@@ -97,6 +97,7 @@ def test_unqualified_agentic_pipeline_stays_visible_but_cannot_be_selected(monke
     info = replace(
         _agentic(TaskFormat.TASKCOMPENDIUM).info,
         daytona_snapshot_count=1,
+        daytona_machine_slots=1,
         daytona_execution_failures=0,
         daytona_count_basis="production snapshot identities over pinned tasks",
         oversight=OversightEvidence(

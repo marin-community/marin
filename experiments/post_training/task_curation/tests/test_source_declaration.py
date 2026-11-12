@@ -10,6 +10,7 @@ from finestore.rl.curation import (
     DatasetRelease,
     DaytonaSafety,
     DaytonaUnsafeReason,
+    LexicalContaminationEvidence,
     SourceDeclaration,
     SourceOrigin,
     SourceQualityResult,
@@ -17,12 +18,12 @@ from finestore.rl.curation import (
 
 from experiments.post_training.task_curation.source import SourceInfo, SourceReference
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
+from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 
 
 def test_generated_identity_and_title_survive_catalog_serialization(tmp_path):
     source = number_source(tmp_path / "input", "math")
     info = SourceInfo(
-        id="Marin:math/test@repaired",
         origin=SourceOrigin.MARIN,
         upstream_dataset="math",
         upstream_name="Math",
@@ -100,3 +101,24 @@ def test_result_cannot_be_hand_set_after_roundtrip():
     assert SourceQualityResult.model_validate_json(result.model_dump_json()).verdict == "bad"
     with pytest.raises(ValueError, match="computed"):
         SourceQualityResult.model_validate({**result.model_dump(), "verdict": "good"})
+
+
+def test_current_release_selects_the_remediated_pin(tmp_path):
+    source = number_source(tmp_path / "input")
+    document = decontamination_evidence(source.dataset.name, source.dataset.revision, 2).model_dump(mode="json")
+    document.update(contaminated_tasks=1, contaminated_fraction=0.5)
+    document["receipt"].update(
+        status="remediated",
+        dataset_id="open-athena/remediated",
+        dataset_revision="b" * 40,
+        retained_tasks=1,
+        dropped_tasks=1,
+        drop_manifest_uri="s3://test/drop.json",
+        original_private_dataset_id=source.dataset.name,
+        original_private_dataset_revision=source.dataset.revision,
+    )
+    evidence = LexicalContaminationEvidence.model_validate(document)
+    source = replace(source, info=replace(source.info, lexical_contamination=evidence))
+    assert source.declaration.current_release.repo == "open-athena/remediated"
+    assert source.declaration.current_release.revision == "b" * 40
+    assert source.declaration.dataset_id == source.dataset.name
