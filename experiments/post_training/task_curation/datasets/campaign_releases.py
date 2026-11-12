@@ -23,6 +23,7 @@ from finestore.rl.curation import (
     Verdict,
 )
 
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_REVISION
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_prebuilt
 from experiments.post_training.task_curation.source import (
     RlDataSource,
@@ -199,7 +200,7 @@ def sources() -> list[RlDataSource]:
                     "ubuntu:24.04 recipe each task ships is lowered onto the digest-pinned base and its RUN "
                     "steps replay as setup commands, one distinct environment across the cohort. Measured "
                     "at the pinned upstream revision "
-                    "DCAgent2__nl2bash-tasks-cleaned-oracle-v2 @ 02923004846e4e73862c20962f823a6d05100e7a: "
+                    f"DCAgent2__nl2bash-tasks-cleaned-oracle-v2 @ {TASKTROVE_REVISION}: "
                     "zero refusals, zero substitutions. Withdrawn reward-only claim: setup fidelity matches on "
                     "all 1,498 rows and 20 of 20 sampled verifiers return a negative verdict on an empty "
                     "submission at this revision. The repository is private pending release."
@@ -248,7 +249,7 @@ def sources() -> list[RlDataSource]:
                     "the ubuntu:24.04 recipe each task ships is lowered onto the digest-pinned base and "
                     "its RUN steps replay as setup commands, one distinct environment across the cohort, "
                     "measured at the pinned upstream revision laion__codeforces-v3 @ "
-                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. 240 rows are "
+                    f"{TASKTROVE_REVISION} with zero substitutions. 240 rows are "
                     "refused as null graders and 15 for gold leaked into the instruction; refused rows "
                     "are the conversion's own reviewed outcome classes. Withdrawn reward-only claim: setup "
                     "fidelity matches on every converted row and 20 of 20 sampled verifiers return a "
@@ -298,7 +299,7 @@ def sources() -> list[RlDataSource]:
                     "specify: the ubuntu:24.04 recipe each task ships is lowered onto the digest-pinned "
                     "base and its RUN steps replay as setup commands, one distinct environment across the "
                     "cohort, measured at the pinned upstream revision "
-                    "laion__nemotron-gym-competitive-coding-v2 @ 02923004846e4e73862c20962f823a6d05100e7a "
+                    f"laion__nemotron-gym-competitive-coding-v2 @ {TASKTROVE_REVISION} "
                     "with zero substitutions. 1,739 rows are refused for gold leaked into the instruction "
                     "and one as a reviewed defect; refused rows are the conversion's own reviewed outcome "
                     "classes. Withdrawn reward-only claim: setup fidelity matches on every converted row "
@@ -348,7 +349,7 @@ def sources() -> list[RlDataSource]:
                     "505 curriculum-easy tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision "
                     "DCAgent__exp_rpt_curriculum-easy @ "
-                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
                     "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
@@ -395,7 +396,7 @@ def sources() -> list[RlDataSource]:
                     "488 curriculum-medium tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision "
                     "DCAgent__exp_rpt_curriculum-medium-v2 @ "
-                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
                     "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
@@ -442,7 +443,7 @@ def sources() -> list[RlDataSource]:
                 ),
                 notes=(
                     "477 e2egit-v2 tasks preserve their archived environment, lowered onto its digest-pinned base. "
-                    "The upstream is DCAgent__exp_rpt_e2egit-v2 at 02923004846e4e73862c20962f823a6d05100e7a; "
+                    f"The upstream is DCAgent__exp_rpt_e2egit-v2 at {TASKTROVE_REVISION}; "
                     "ten reviewed source defects remain excluded. The private release includes setup and liveness "
                     "evidence, retained rejections, and an explicit durable compiler grader lock. "
                     "Qualification uses an empty submission; no oracle or model-quality run is claimed. "
@@ -490,7 +491,7 @@ def sources() -> list[RlDataSource]:
                 notes=(
                     "4,993 e2egit-large tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_e2egit-large @ "
-                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
                     "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
@@ -536,7 +537,7 @@ def sources() -> list[RlDataSource]:
                 notes=(
                     "4,842 multifile tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_multifile-v3 @ "
-                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
                     "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
@@ -583,7 +584,7 @@ def sources() -> list[RlDataSource]:
                     "500 pymethods2test tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision "
                     "DCAgent__exp_rpt_pymethods2test-v3 @ "
-                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
                     "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
@@ -630,7 +631,7 @@ def sources() -> list[RlDataSource]:
                     "4,990 pymethods2test-large tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision "
                     "DCAgent__exp_rpt_pymethods2test-large-v2 @ "
-                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
                     "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
@@ -677,7 +678,7 @@ def sources() -> list[RlDataSource]:
                     "492 stack-pytest tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision "
                     "DCAgent__exp_rpt_stack-pytest-v2 @ "
-                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
                     "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
@@ -724,7 +725,7 @@ def sources() -> list[RlDataSource]:
                     "4,991 unitsyn-python tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision "
                     "DCAgent__exp_rpt_unitsyn-python-v4 @ "
-                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
                     "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
@@ -771,7 +772,7 @@ def sources() -> list[RlDataSource]:
                     "4,991 unitsyn-python-large tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision "
                     "DCAgent__exp_rpt_unitsyn-python-large-v2 @ "
-                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
+                    f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
                     "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),

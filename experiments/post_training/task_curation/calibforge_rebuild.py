@@ -27,6 +27,7 @@ from pathlib import Path, PurePosixPath
 import pyarrow as pa
 import pyarrow.parquet as pq
 import tomlkit
+from harbor_config.models.task.config import EnvironmentConfig
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -198,17 +199,14 @@ def _pack_tar(files: dict[str, bytes], modes: dict[str, int]) -> bytes:
 def compile_recipe(instructions: list[Instruction], files: dict[str, bytes], modes: dict[str, int]) -> CompiledRecipe:
     """Compile a native recipe into a base, workdir, setup script and fixture archive.
 
-    Dependency installs move into the setup script verbatim; file copies are
-    staged from the fixture payload; the FROM line maps onto the fixed base
-    set. ENV assignments persist in the setup script. Unsupported steps defer
-    with the reason admission records.
-
-    Unlike :func:`environment_fidelity.lower_environment` — which only checks
-    that a spec replays a recipe's simple steps — this compiles the task's full
-    native recipe, including COPY staging and package installs, and keeps a
-    digest the original FROM already carried. It compiles faithfully what
-    :func:`calibforge_fixtures.fixture_bundle` compiles conservatively at the
-    fixture-extraction stage; the two share only the setup-script preamble.
+    The compiled script must run the task's full native recipe: dependency
+    installs move into the setup script verbatim, file copies are staged from
+    the fixture payload, and ENV assignments persist in the setup script. A
+    step that cannot run that way without changing the task defers with the
+    reason admission records. This envelope is deliberately wider than the
+    replay check in ``environment_fidelity`` and the fixture-extraction
+    compiler in ``calibforge_fixtures``, which accept only the steps they must
+    replay or extract.
     """
     bases = [item for item in instructions if item.command == "from"]
     if len(bases) != 1:
@@ -410,20 +408,6 @@ def rebuild_task(task_binary: bytes) -> RebuiltTask:
     )
 
 
-def _size_mb(value: object) -> int | None:
-    """Parse a task.toml size such as 4096 or "8G" into MiB."""
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return int(value)
-    text = str(value).strip().upper()
-    if text.endswith("G"):
-        return int(float(text[:-1]) * 1024)
-    if text.endswith("M"):
-        return int(float(text[:-1]))
-    return int(float(text))
-
-
 def _rewrite_task_toml(original: bytes | None, base_ref: str, workdir: str) -> bytes:
     """Rewrite task.toml onto the fixed base with a setup-at-start hook.
 
@@ -438,13 +422,14 @@ def _rewrite_task_toml(original: bytes | None, base_ref: str, workdir: str) -> b
         raise DeferredRebuild("missing_environment_section")
     if "setup" in environment:
         raise DeferredRebuild("existing_setup_hook")
-    if environment.get("gpus") or environment.get("tpu"):
+    declared = EnvironmentConfig(**environment)
+    if declared.gpus or declared.tpu:
         raise DeferredRebuild("requires_accelerator_machine")
-    if (environment.get("cpus") or 0) > NORMALIZED_CPUS:
+    if (declared.cpus or 0) > NORMALIZED_CPUS:
         raise DeferredRebuild("requires_larger_machine_shape")
-    if (_size_mb(environment.get("memory")) or 0) > NORMALIZED_MEMORY_MB:
+    if (declared.memory_mb or 0) > NORMALIZED_MEMORY_MB:
         raise DeferredRebuild("requires_larger_machine_shape")
-    if (_size_mb(environment.get("storage")) or 0) > NORMALIZED_STORAGE_MB:
+    if (declared.storage_mb or 0) > NORMALIZED_STORAGE_MB:
         raise DeferredRebuild("requires_larger_machine_shape")
     document = tomlkit.parse(original.decode(errors="replace"))
     table = document["environment"]
@@ -512,20 +497,13 @@ def lowered_task_spec(task_id: str, task_binary: bytes) -> dict:
     }
 
 
-def main() -> None:
-    """Rebuild a native cohort parquet: staged tasks + evidence manifest."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cohort", type=Path, required=True, help="native cohort parquet (path, task_binary)")
-    parser.add_argument("--excluded", type=Path, required=True, help="decontamination exclusion list (json array)")
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-    args.output.mkdir(parents=True, exist_ok=False)
-    excluded = set(json.loads(args.excluded.read_text()))
-    records = []
+def _rebuild_cohort(cohort: Path, excluded: set[str]) -> tuple[list[dict], list[dict], list[dict], list[str]]:
+    """Rebuild each unexcluded task, returning staged tasks, lowered specs, evidence and base refs."""
+    records: list[dict] = []
     lowered: list[dict] = []
-    evidence = []
+    evidence: list[dict] = []
     base_refs: list[str] = []
-    for batch in pq.ParquetFile(args.cohort).iter_batches(batch_size=64, columns=["path", "task_binary"]):
+    for batch in pq.ParquetFile(cohort).iter_batches(batch_size=64, columns=["path", "task_binary"]):
         for path, blob in zip(batch.to_pydict()["path"], batch.to_pydict()["task_binary"], strict=True):
             raw = bytes(blob)
             if path in excluded:
@@ -553,13 +531,16 @@ def main() -> None:
             records.append({"path": path, "source": path, "task_binary": rebuilt.task_binary})
             lowered.append({"path": path, "lowered_task_spec": json.dumps(lowered_task_spec(path, rebuilt.task_binary))})
             evidence.append(record)
-    schema = pa.schema([("path", pa.string()), ("source", pa.string()), ("task_binary", pa.binary())])
-    pq.write_table(pa.Table.from_pylist(records, schema=schema), args.output / "pending-tasks.parquet")
-    lowered_schema = pa.schema([("path", pa.string()), ("lowered_task_spec", pa.string())])
-    pq.write_table(pa.Table.from_pylist(lowered, schema=lowered_schema), args.output / "lowered-tasks.parquet")
-    manifest = {
-        "cohort_sha256": hashlib.sha256(args.cohort.read_bytes()).hexdigest(),
-        "excluded_sha256": hashlib.sha256(args.excluded.read_bytes()).hexdigest(),
+    return records, lowered, evidence, base_refs
+
+
+def _evidence_manifest(
+    cohort: Path, excluded: Path, records: list[dict], evidence: list[dict], base_refs: list[str]
+) -> dict:
+    """The admission-facing summary of one rebuild run."""
+    return {
+        "cohort_sha256": hashlib.sha256(cohort.read_bytes()).hexdigest(),
+        "excluded_sha256": hashlib.sha256(excluded.read_bytes()).hexdigest(),
         "cohort_count": len(evidence),
         "excluded_count": sum(1 for row in evidence if row["status"] == "excluded_decontamination"),
         "rebuilt_count": len(records),
@@ -575,6 +556,23 @@ def main() -> None:
         "oracle_validation": "skipped",
         "tasks": evidence,
     }
+
+
+def main() -> None:
+    """Rebuild a native cohort parquet: staged tasks + evidence manifest."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--cohort", type=Path, required=True, help="native cohort parquet (path, task_binary)")
+    parser.add_argument("--excluded", type=Path, required=True, help="decontamination exclusion list (json array)")
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    args.output.mkdir(parents=True, exist_ok=False)
+    excluded = set(json.loads(args.excluded.read_text()))
+    records, lowered, evidence, base_refs = _rebuild_cohort(args.cohort, excluded)
+    schema = pa.schema([("path", pa.string()), ("source", pa.string()), ("task_binary", pa.binary())])
+    pq.write_table(pa.Table.from_pylist(records, schema=schema), args.output / "pending-tasks.parquet")
+    lowered_schema = pa.schema([("path", pa.string()), ("lowered_task_spec", pa.string())])
+    pq.write_table(pa.Table.from_pylist(lowered, schema=lowered_schema), args.output / "lowered-tasks.parquet")
+    manifest = _evidence_manifest(args.cohort, args.excluded, records, evidence, base_refs)
     (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(json.dumps({key: value for key, value in manifest.items() if key != "tasks"}))
 

@@ -20,7 +20,8 @@ shared environments. Empty-submission grading runs separately through
    payload-only diagnostic and does not establish dependency provisioning.
 3. **Empty-submission grading** (separate command). ``no_oracle_liveness``
    samples the grader on a fresh machine. Qualification requires a successful
-   verifier exit, a negative reward, and a positive structured executed-test count.
+   verifier exit, a reward below 1.0, and a positive structured executed-test
+   count.
 
 The offline report records preservation and setup pass rates by base and
 overall. Verifier results require an explicit ``--liveness`` receipt file. A reward-only

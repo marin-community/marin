@@ -26,7 +26,6 @@ no code path that deletes Daytona snapshots (see ``.agents/ops/daytona.md``).
 
 import argparse
 import asyncio
-import base64
 import json
 import random
 import tempfile
@@ -39,7 +38,7 @@ from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import HostImage, MachineFactory, MachineSpec, NetworkPolicy
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import EnvironmentRequirements, TaskSpec
+from taskcompendium.models import EnvironmentRequirements, ScriptGrader, TaskSpec, VerifyitGrader
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 
 VERIFIER_COMMAND = "bash /tests/test.sh"
@@ -88,9 +87,10 @@ async def run_one(spec: dict, base: str, cgroup_parent: Path | None = None) -> L
     with tempfile.TemporaryDirectory(prefix="liveness-build-") as context:
         task = TaskSpec.model_validate(spec["task"])
         runtime = _verifier_runtime(spec)
-        requirements = getattr(task.grader, "environment", None)
-        if requirements is None:
+        grader = task.grader
+        if not isinstance(grader, ScriptGrader | VerifyitGrader) or grader.environment is None:
             return LivenessResult(task.id, base, "infra_error", None, None, "", "Grader declares no sandbox environment")
+        requirements = grader.environment
         if runtime.gpus:
             return LivenessResult(
                 task.id, base, "infra_error", None, None, "", "CPU qualification cannot provision GPUs"
@@ -154,33 +154,18 @@ def _grader_placement(
         # (cgroup.procs is unwritable there), so an explicit parent overrides discovery.
         factory = LocalMachineFactory(cgroup_parent=cgroup_parent) if cgroup_parent else LocalMachineFactory()
         return _GraderPlacement(factory, machine, "")
-    from harbor.environments.daytona import machine_spec  # noqa: PLC0415
-    from harbor_config.models.task.config import EnvironmentConfig  # noqa: PLC0415
     from shellbox.backends.daytona.machine import (  # noqa: PLC0415
         DaytonaMachineFactory,
         snapshot_identity,
         snapshot_resources,
     )
 
-    if requirements.docker_build is not None:
-        for resource in requirements.docker_build.files:
-            target = context / resource.path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(base64.b64decode(resource.source.content_base64))
-        environment_dir = context
-    else:
-        environment_dir = Path("/nonexistent")
-    machine = machine_spec(
-        EnvironmentConfig(
-            docker_image=requirements.docker_image,
-            allow_internet=runtime.network == NetworkPolicy.ALLOW,
-            workdir=requirements.working_directory,
-            cpus=runtime.cpus,
-            memory_mb=runtime.memory_mb,
-            storage_mb=runtime.storage_mb,
-        ),
-        environment_dir,
-        {},
+    from experiments.post_training.task_curation.daytona_identity import declared_machine  # noqa: PLC0415
+
+    machine = declared_machine(
+        requirements,
+        context,
+        network=runtime.network,
         cpus=runtime.cpus,
         memory_mb=runtime.memory_mb,
         storage_mb=runtime.storage_mb,

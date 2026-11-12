@@ -12,7 +12,6 @@ NVARC rows ask for a reply.
 """
 
 from collections.abc import Mapping
-from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -250,17 +249,15 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             pipeline=process_rows,
-            info=replace(
-                SourceInfo(
-                    id="Task Trove:laion__nemotron-gym-arc-agi-python-inductive-v2",
-                    title="laion/nemotron-gym-arc-agi-python-inductive-v2",
-                    origin="Task Trove",
-                    family="arc-agi",
-                    tags=("agentic", "multi-turn", "language:python"),
-                    count=10000,
-                    notes="Agent writes a transform, graded on held-out grids. One of the best sources here.",
-                    task_format=TaskFormat.TASKCOMPENDIUM,
-                )
+            info=SourceInfo(
+                id="Task Trove:laion__nemotron-gym-arc-agi-python-inductive-v2",
+                title="laion/nemotron-gym-arc-agi-python-inductive-v2",
+                origin="Task Trove",
+                family="arc-agi",
+                tags=("agentic", "multi-turn", "language:python"),
+                count=10000,
+                notes="Agent writes a transform, graded on held-out grids. One of the best sources here.",
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
                 name="tasktrove-arc_inductive",
@@ -275,17 +272,15 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         ),
         RlDataSource(
             pipeline=process_rows,
-            info=replace(
-                SourceInfo(
-                    id="Task Trove:laion__nemotron-gym-arc-agi-transductive-v3",
-                    title="laion/nemotron-gym-arc-agi-transductive-v3",
-                    origin="Task Trove",
-                    family="arc-agi",
-                    tags=("agentic", "multi-turn"),
-                    count=10000,
-                    notes="Direct grid answer against gold. Subsample; the inductive variant is stronger.",
-                    task_format=TaskFormat.TASKCOMPENDIUM,
-                )
+            info=SourceInfo(
+                id="Task Trove:laion__nemotron-gym-arc-agi-transductive-v3",
+                title="laion/nemotron-gym-arc-agi-transductive-v3",
+                origin="Task Trove",
+                family="arc-agi",
+                tags=("agentic", "multi-turn"),
+                count=10000,
+                notes="Direct grid answer against gold. Subsample; the inductive variant is stronger.",
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
                 name="tasktrove-arc_transductive",

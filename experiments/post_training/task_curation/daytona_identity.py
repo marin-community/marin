@@ -39,6 +39,7 @@ from shellbox.machine import (
     MachineSpec,
     NetworkPolicy,
 )
+from taskcompendium.models import EnvironmentRequirements
 
 from experiments.post_training.task_curation.environment_fidelity import ENVIRONMENT_PREFIX
 
@@ -172,6 +173,50 @@ class _DeclaredIdentity:
     execution_error: str | None = None
 
 
+def declared_machine(
+    requirements: EnvironmentRequirements,
+    context: Path,
+    *,
+    network: NetworkPolicy,
+    cpus: int | None,
+    memory_mb: int | None,
+    storage_mb: int | None,
+    gpus: int = 0,
+) -> MachineSpec:
+    """The shellbox MachineSpec a task's declared requirements and machine shape resolve to.
+
+    A Docker build context is materialized into ``context``; a registry image, package
+    spec or host requirement maps onto the matching source. Graders run this same
+    resolution when they execute, so measurement and execution agree on the machine.
+    """
+    if requirements.docker_build is not None:
+        for resource in requirements.docker_build.files:
+            _write_context(
+                context,
+                resource.path,
+                base64.b64decode(resource.source.content_base64, validate=True),
+                int(resource.mode or "644", 8),
+            )
+        source: RegistryImage | DockerfileSource | HostImage | object = DockerfileSource(context, context / DOCKERFILE)
+    elif requirements.docker_image is not None:
+        source = RegistryImage(requirements.docker_image)
+    elif requirements.packages_lock is not None:
+        source = HostImage()
+    elif requirements.package_spec is not None:
+        source = requirements.package_spec
+    else:
+        raise ValueError("declared requirements name no environment")
+    return MachineSpec(
+        source=source,
+        workdir=requirements.working_directory or "",
+        network=network,
+        cpus=cpus,
+        memory_mb=memory_mb,
+        storage_mb=storage_mb,
+        gpus=gpus,
+    )
+
+
 def _declared_identity(
     role: str, declared: Mapping | None, shape: Mapping | None, factory: DaytonaMachineFactory
 ) -> _DeclaredIdentity:
@@ -180,38 +225,22 @@ def _declared_identity(
         return _DeclaredIdentity()
     # Native Harbor counting also runs in Harbor's standalone environment, which
     # does not install TaskCompendium. Only lowered TaskCompendium inputs need it.
-    from taskcompendium.models import EnvironmentRequirements, require_resolved_environment  # noqa: PLC0415
+    from taskcompendium.models import require_resolved_environment  # noqa: PLC0415
 
     requirements = EnvironmentRequirements.model_validate(declared)
     with tempfile.TemporaryDirectory() as tmp:
-        context = Path(tmp)
-        if requirements.docker_build is not None:
-            for resource in requirements.docker_build.files:
-                _write_context(
-                    context,
-                    resource.path,
-                    base64.b64decode(resource.source.content_base64, validate=True),
-                    int(resource.mode or "644", 8),
-                )
-            source = DockerfileSource(context, context / DOCKERFILE)
-        elif requirements.docker_image is not None:
-            source = RegistryImage(requirements.docker_image)
-        elif requirements.packages_lock is not None:
-            source = HostImage()
-        elif requirements.package_spec is not None:
-            source = requirements.package_spec
-        else:
-            error = f"{role}: no declared environment"
-            return _DeclaredIdentity(mapping_error=error, execution_error=error)
-        machine = MachineSpec(
-            source=source,
-            workdir=requirements.working_directory or "",
-            network=NetworkPolicy.ALLOW,
-            cpus=shape.get("cpus"),
-            memory_mb=shape.get("memory_mb"),
-            storage_mb=shape.get("storage_mb"),
-            gpus=shape.get("gpus", 0),
-        )
+        try:
+            machine = declared_machine(
+                requirements,
+                Path(tmp),
+                network=NetworkPolicy.ALLOW,
+                cpus=shape.get("cpus"),
+                memory_mb=shape.get("memory_mb"),
+                storage_mb=shape.get("storage_mb"),
+                gpus=shape.get("gpus", 0),
+            )
+        except ValueError as error:
+            return _DeclaredIdentity(mapping_error=f"{role}: {error}", execution_error=f"{role}: {error}")
         try:
             factory.check_environment(requirements, machine)
             require_resolved_environment(requirements)
@@ -221,11 +250,11 @@ def _declared_identity(
             execution_error = f"{role}: {error}"
         else:
             execution_error = None
-        if not isinstance(source, RegistryImage | DockerfileSource):
+        if not isinstance(machine.source, RegistryImage | DockerfileSource):
             return _DeclaredIdentity(execution_error=execution_error)
         try:
             return _DeclaredIdentity(
-                snapshot_identity(source, snapshot_resources(machine)), execution_error=execution_error
+                snapshot_identity(machine.source, snapshot_resources(machine)), execution_error=execution_error
             )
         except UnsupportedMachineSpec as error:
             return _DeclaredIdentity(mapping_error=f"{role}: {error}", execution_error=execution_error)
