@@ -662,16 +662,8 @@ pub fn read_group_extrema_section(
 }
 
 fn append_exact_sections(sections: &mut Vec<SectionInput>, sidecar: &ExactSection) {
-    let posted_values: BTreeMap<&str, Vec<&str>> = sidecar
-        .columns
-        .iter()
-        .filter(|(_, column)| !column.rows.is_empty())
-        .map(|(name, column)| {
-            (
-                name.as_str(),
-                column.rows.keys().map(String::as_str).collect(),
-            )
-        })
+    let posted_values: BTreeMap<&str, Vec<&str>> = exact::posted_columns(sidecar)
+        .map(|(name, rows)| (name, rows.keys().map(String::as_str).collect()))
         .collect();
     if !posted_values.is_empty() {
         sections.push(SectionInput {
@@ -687,11 +679,8 @@ fn append_exact_sections(sections: &mut Vec<SectionInput>, sidecar: &ExactSectio
         });
     }
 
-    let counted_columns: Vec<&str> = sidecar
-        .columns
-        .iter()
-        .filter(|(_, column)| column.counts.is_some())
-        .map(|(name, _)| name.as_str())
+    let counted_columns: Vec<&str> = exact::counted_columns(sidecar)
+        .map(|(name, _)| name)
         .collect();
     if !counted_columns.is_empty() {
         sections.push(SectionInput {

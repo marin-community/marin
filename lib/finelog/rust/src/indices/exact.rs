@@ -249,32 +249,47 @@ pub(crate) fn serialize(sidecar: &ExactSection) -> Vec<u8> {
     )
 }
 
-/// Encode the row postings of every column that has any, with no counts.
+/// Columns the exact-postings section covers: those with any row postings.
+pub(crate) fn posted_columns(
+    sidecar: &ExactSection,
+) -> impl Iterator<Item = (&str, &BTreeMap<String, Vec<RowRun>>)> {
+    sidecar
+        .columns
+        .iter()
+        .filter(|(_, column)| !column.rows.is_empty())
+        .map(|(name, column)| (name.as_str(), &column.rows))
+}
+
+/// Columns the value-counts section covers: those with a complete count summary.
+pub(crate) fn counted_columns(
+    sidecar: &ExactSection,
+) -> impl Iterator<Item = (&str, &BTreeMap<Option<String>, u64>)> {
+    sidecar
+        .columns
+        .iter()
+        .filter_map(|(name, column)| Some((name.as_str(), column.counts.as_ref()?)))
+}
+
+/// Encode the row postings of [`posted_columns`], with no counts.
 pub(crate) fn serialize_postings(sidecar: &ExactSection) -> Vec<u8> {
     encode(
         sidecar.total_rows,
-        sidecar
-            .columns
-            .iter()
-            .filter(|(_, column)| !column.rows.is_empty())
-            .map(|(name, column)| ColumnParts {
-                name,
-                counts: None,
-                rows: Some(&column.rows),
-            }),
+        posted_columns(sidecar).map(|(name, rows)| ColumnParts {
+            name,
+            counts: None,
+            rows: Some(rows),
+        }),
     )
 }
 
-/// Encode the value counts of every column that has them, with no postings.
+/// Encode the value counts of [`counted_columns`], with no postings.
 pub(crate) fn serialize_counts(sidecar: &ExactSection) -> Vec<u8> {
     encode(
         sidecar.total_rows,
-        sidecar.columns.iter().filter_map(|(name, column)| {
-            column.counts.as_ref().map(|counts| ColumnParts {
-                name,
-                counts: Some(counts),
-                rows: None,
-            })
+        counted_columns(sidecar).map(|(name, counts)| ColumnParts {
+            name,
+            counts: Some(counts),
+            rows: None,
         }),
     )
 }
