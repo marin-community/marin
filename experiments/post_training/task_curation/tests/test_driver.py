@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import shutil
+import sys
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -133,6 +134,7 @@ def test_local_canary_cannot_write_an_explicit_production_catalog(tmp_path, cata
     assert not production.exists()
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="The local bubblewrap backend requires Linux")
 def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_their_lock(tmp_path, monkeypatch, request):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
     install_fake_build_tools(tmp_path, monkeypatch)
@@ -519,7 +521,7 @@ def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, r
     assert len(review_server.requests) == 1
 
 
-def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_path, monkeypatch, review_server):
+def test_full_campaign_records_unavailable_qc_without_rejecting_tasks(tmp_path, monkeypatch, review_server):
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
     source = replace(declared, config=replace(math500(), controls=None))
     source = replace(
@@ -559,22 +561,23 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
         "--run",
     ]
     result = CliRunner().invoke(main, args)
-    assert result.exit_code != 0
+    assert result.exit_code == 0, result.output
     campaign = json.loads((cache / "campaigns/campaign.json").read_text())
     outcome = campaign["sources"][0]
-    assert campaign["status"] == "failed" and outcome["status"] == "incomplete"
+    assert campaign["status"] == "completed" and outcome["status"] == "completed"
     catalog = CurationCatalog(str(cache / "campaigns/catalog"))
     catalog_source = next(
         row for row in catalog.sources(catalog.current().snapshot_id) if row.declaration.name == "math500"
     )
-    assert catalog_source.curation.status == "incomplete"
+    assert catalog_source.curation.status == "completed"
     assert [(item.cohort, item.status) for item in catalog.items(catalog_source.assessment_key)] == [
-        ("excluded", "reviewed")
+        ("admitted", "reviewed"),
+        ("admitted", "reviewed"),
     ]
     requests = list(review_server.requests)
-    assert sum(request["tool_choice"]["function"]["name"] == "assess_task" for request in requests) == 1
+    assert sum(request["tool_choice"]["function"]["name"] == "assess_task" for request in requests) == 2
     repeated = CliRunner().invoke(main, args)
-    assert repeated.exit_code != 0
+    assert repeated.exit_code == 0, repeated.output
     assert review_server.requests == requests
     review_server.review_available = True
     retried = CliRunner().invoke(main, [*args, "--curation-attempt", "1"])
