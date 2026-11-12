@@ -276,7 +276,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request, native_json):
 
         native = {"config": relocate(config), "result": deepcopy(NATIVE_RECORD["receipt"]["result"])}
         launch, result = native["config"], native["result"]
-        pin = gate.control_pins(preset)[0] if presets.gated(preset) else None
+        pin = gate.control_pins(preset)[0] if preset.gated else None
         result.update(
             iris_job_id="/tests/native-run",
             started_at="2026-11-06T18:40:00+00:00",
@@ -309,7 +309,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request, native_json):
             ).model_dump(mode="json"),
         )
         (root / ".executor_status").write_text("SUCCESS")
-        generating = preset.recipe.layout.role_plan.generate_only
+        generating = isinstance(preset.recipe.layout.role_plan, presets.SkyRLGenerationPlan)
         stored_metrics = {}
         for step in (0,) if generating else range(1, preset.updates + 1):
             row = deepcopy(NATIVE_RECORD["metrics"])

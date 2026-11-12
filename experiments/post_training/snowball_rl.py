@@ -123,18 +123,18 @@ def build_run(
     wandb_entity = os.environ.get(_WANDB_ENTITY_ENV)
     if not 1 <= replicates <= 5:
         raise click.BadParameter("replicates must be between 1 and 5")
-    if preset.focus == presets.Focus.DATA:
-        if settings or (tasks is None and not control):
+    if settings and not preset.accepts_settings:
+        raise click.BadParameter("this preset accepts no --set")
+    if preset.tasks_input == "required":
+        if tasks is None and not control:
             raise click.BadParameter("data presets require --tasks and accept no --set")
-    elif preset.focus != presets.Focus.TRAIN and tasks is not None:
+    elif preset.tasks_input == "forbidden" and tasks is not None:
         raise click.BadParameter("use a data or train-long preset with --tasks")
-    if preset.focus not in (presets.Focus.LEARNING, presets.Focus.TRAIN) and init is not None:
+    if not preset.accepts_init and init is not None:
         raise click.BadParameter("--init requires a learning or train-long preset")
-    if preset.focus == presets.Focus.TRAIN and (replicates != 1 or control):
-        raise click.BadParameter("train-long accepts neither --replicates nor --control")
-    if control and (
-        settings or tasks is not None or init is not None or preset.name in snowball_rl_gate.SHARED_CONTROLS
-    ):
+    if (not preset.accepts_replicates and replicates != 1) or (not preset.accepts_control and control):
+        raise click.BadParameter(f"{preset.name} does not accept this replicate or control selection")
+    if control and (settings or tasks is not None or init is not None or preset.shared_control is not None):
         raise click.BadParameter("controls use only the preset's pinned default inputs")
     default = presets.default_selection(preset)
     selection = tasks or default
@@ -143,7 +143,7 @@ def build_run(
     summary = presets.selection_summary(selection)
     if (
         tasks is not None
-        and preset.focus == presets.Focus.DATA
+        and preset.tasks_input == "required"
         and summary["recipe"]["heldout"] != presets.selection_summary(default)["recipe"]["heldout"]
     ):
         raise click.BadParameter("candidate tasks use a different heldout input; curate against the default panel")
@@ -187,7 +187,7 @@ def build_run(
             tuple(runs),
             inputs=inputs,
         )
-        if presets.gated(preset) and not control
+        if preset.gated and not control
         else None
     )
     return SnowballRun(tuple(runs), gate)
@@ -205,19 +205,19 @@ def _changed_paths(ref: str, paths: tuple[str, ...]) -> tuple[list[dict[str, str
     return [{"path": path, "status": status} for status, path in zip(fields[::2], fields[1::2], strict=True)], None
 
 
-def _grafana_links(preset: presets.Preset, receipt: AttemptRecord | None, cluster: str) -> dict[str, str]:
+def _grafana_links(receipt: AttemptRecord | None, cluster: str) -> dict[str, str]:
     if receipt is None or not receipt.native.result.iris_job_id:
         return {}
     run_id = receipt.native.config.get("run", {}).get("id")
     if not run_id or receipt.native.result.started_at is None:
         return {}
     training_type = receipt.native.config.get("runtime", {}).get("training_type")
+    if training_type not in ("sync", "async"):
+        return {}
     return presets.grafana_links(
         run_id=run_id,
         cluster=cluster,
-        training_type=(
-            "async" if training_type == "async" or (training_type is None and preset.recipe.staleness) else "sync"
-        ),
+        training_type=training_type,
         started_ms=presets.utc_millis(receipt.native.result.started_at),
         finished_ms=presets.utc_millis(receipt.native.result.finished_at) if receipt.native.result.finished_at else None,
     )
@@ -271,7 +271,7 @@ def _status(
         team = (
             receipt.native.config.get("iris", {}).get("wandb_entity") if receipt is not None else execution.wandb_entity
         )
-        grafana = _grafana_links(preset, receipt, execution.cluster)
+        grafana = _grafana_links(receipt, execution.cluster)
         state = (
             result.state.value
             if result
@@ -295,7 +295,7 @@ def _status(
                 },
                 **({"grafana_links": grafana} if grafana else {}),
                 "latest_completed_update": _completed_update(
-                    path, generating=preset.recipe.layout.role_plan.generate_only
+                    path, generating=isinstance(preset.recipe.layout.role_plan, presets.SkyRLGenerationPlan)
                 ),
                 "cluster": execution.cluster,
                 "allocation": {
@@ -378,7 +378,11 @@ def _status(
             },
         },
         "context_budget": planned[0]["skyrl"]["context_budget"],
-        "updates": 0 if preset.recipe.layout.role_plan.generate_only else planned[0]["skyrl"]["trainer"]["max_steps"],
+        "updates": (
+            0
+            if isinstance(preset.recipe.layout.role_plan, presets.SkyRLGenerationPlan)
+            else planned[0]["skyrl"]["trainer"]["max_steps"]
+        ),
         "measured_updates": list(preset.measured),
         "config_changes": list(report.run.config_changes) if report else [],
         "budget_estimate": preset.budget,

@@ -30,12 +30,11 @@ from marin.rl.skyrl import (
     SkyRLSpec,
     SkyRLTopology,
     _materialize_role_plan_config,
-    role_plan_config_values,
     run_skyrl,
     skyrl_step,
 )
 from rigging.filesystem.storage_path import StoragePath
-from skyrlrecipe import ContextBudget, RecipePatch, RLEntrypoint, SkyRLRecipe, sections
+from skyrlrecipe import ContextBudget, RecipePatch, SkyRLRecipe, sections
 from skyrlrecipe.documents import MISSING, get_path
 from skyrlrecipe.sampling import EvalSamplingParams
 
@@ -131,7 +130,7 @@ def role_plan(
     )
 
 
-ROLE_SETTINGS = frozenset(role_plan_config_values(role_plan()))
+ROLE_SETTINGS = frozenset(role_plan().config_values())
 PROTECTED_SETTINGS = ROLE_SETTINGS | frozenset(
     {
         "entrypoint",
@@ -188,7 +187,6 @@ def training_config(
         "expert_tensor_parallel_size": 1,
     }
     config = SkyRLRecipe(
-        entrypoint=RLEntrypoint.STANDARD,
         context_budget=ContextBudget(request_window_tokens=128, max_new_tokens_per_turn=64, max_turns=1),
         environment=sections.Environment(env_class=ENV_CLASS),
         trainer=sections.Trainer(

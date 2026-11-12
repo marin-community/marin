@@ -207,7 +207,7 @@ from skyrl_train.utils.tracking import Tracking
 from finestore.rl.run_records import CheckpointReference
 config = OmegaConf.create({"trainer": {"export_path": sys.argv[1]},
     "runtime": {"run_id": sys.argv[2], "attempt_id": "retry"}})
-with Tracking("snowball", "retry", "records", config) as tracker:
+with Tracking("snowball", "retry", ("records",), config) as tracker:
     tracker.start(resumed_step=1, checkpoint=CheckpointReference(
         export_root=sys.argv[1], attempt_id="native-attempt", step=1))
     tracker.log({"startup/load_checkpoints": 2.0}, step=1, commit=False)
@@ -264,6 +264,9 @@ print("null")
         assert row["wandb_url"] is None and row["engine"] is None
     if case == "native-composed":
         assert row["engine"]["vllm_version"] == "fixture-vllm"
+        monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, name: replace(preset, publishes=False)})
+        with pytest.raises(ValueError, match="trained-panel"):
+            publication.build_record(str(source), preset, attempt_id="native-attempt")
 
 
 @pytest.mark.integration

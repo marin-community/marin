@@ -40,11 +40,7 @@ class PublicationOutcome:
 
 
 def publishes(preset: presets.Preset) -> bool:
-    return not preset.recipe.layout.role_plan.generate_only and preset.focus in (
-        presets.Focus.LEARNING,
-        presets.Focus.DATA,
-        presets.Focus.TRAIN,
-    )
+    return preset.publishes
 
 
 CONTROL_PRESETS = tuple(
@@ -52,7 +48,7 @@ CONTROL_PRESETS = tuple(
         name
         for name, preset in presets.PRESETS.items()
         if publishes(preset)
-        and any(pin.revision == preset.revision for pin in gate.CONTROLS.get(gate.SHARED_CONTROLS.get(name, name), ()))
+        and any(pin.revision == preset.revision for pin in gate.CONTROLS.get(preset.shared_control or name, ()))
     )
 )
 

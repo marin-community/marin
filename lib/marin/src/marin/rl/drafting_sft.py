@@ -96,7 +96,6 @@ def draft_sft_plan(
         n_samples_per_prompt=policy.n_samples_per_prompt,
     )
     config = {
-        "entrypoint": "standard",
         "context_budget": {
             "request_window_tokens": request_window_tokens,
             "max_new_tokens_per_turn": max_new_tokens_per_turn,

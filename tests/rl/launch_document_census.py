@@ -51,7 +51,7 @@ def _snowball_step(preset: snowball.Preset, settings: tuple[str, ...] = ()) -> A
         path.write_text(json.dumps(summary))
     return snowball_rl.build_run(
         preset,
-        tasks=selection if preset.focus == snowball.Focus.DATA else None,
+        tasks=selection if preset.tasks_input == "required" else None,
         settings=settings,
     ).runs[0]
 
