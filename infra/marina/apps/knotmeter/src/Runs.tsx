@@ -1,6 +1,15 @@
 import { useState } from "react";
 import { D3Chart } from "@/lib/d3-chart/D3Chart";
-import { type Run, modelName, sourceUrl } from "./types";
+import {
+  type Run,
+  modelName,
+  sourceUrl,
+  submissionIdentity,
+  measurementLabel,
+  measurementSeconds,
+  topologyLabel,
+} from "./types";
+import { comparisonScope } from "./metrics";
 import { navigate, setParameters, useRoute } from "./navigation";
 
 const WEEK = 7 * 86400_000;
@@ -30,6 +39,9 @@ export function Runs({ runs }: { runs: Run[] }) {
         r.date,
         r.framework,
         r.precision,
+        measurementLabel(r),
+        topologyLabel(r),
+        submissionIdentity(r),
       ]
         .join(" ")
         .toLowerCase()
@@ -48,9 +60,7 @@ export function Runs({ runs }: { runs: Run[] }) {
             : b.source_created_at.localeCompare(a.source_created_at),
     );
   const submissions = [
-    ...new Map(
-      runs.map((r) => [`${r.source.run_id}/${r.source.run_attempt}`, r]),
-    ).values(),
+    ...new Map(runs.map((r) => [submissionIdentity(r), r])).values(),
   ];
   const weekCounts = new Map<number, number>();
   for (const r of submissions) {
@@ -72,14 +82,26 @@ export function Runs({ runs }: { runs: Run[] }) {
   }
   const picked = runs.filter((r) => selected.has(r.key));
   const canCompare =
-    picked.length > 0 && new Set(picked.map((r) => r.model)).size === 1;
+    picked.length > 0 && new Set(picked.map(comparisonScope)).size === 1;
   return (
     <>
       <h1>Run inventory and submissions</h1>
       <p className="muted">
-        Imported, completed GitHub attempts. One submission can contain several
-        measured configurations.
+        Completed GitHub attempts and native private calibrations. One
+        submission can contain several measured configurations.
       </p>
+      {[...new Set(runs.filter((r) => r.calibration).map((r) => r.model))].map(
+        (model) => (
+          <p key={model}>
+            <a
+              href={`#/chart?${new URLSearchParams({ model, window: "900", date: "all", optimal: "0" })}`}
+            >
+              Compare all 15-minute {model.split("/").at(-1)} calibrations,
+              including repeats
+            </a>
+          </p>
+        ),
+      )}
       <div className="stats-grid">
         <div className="panel">
           <small>Imported submissions</small>
@@ -235,7 +257,7 @@ export function Runs({ runs }: { runs: Run[] }) {
           disabled={!canCompare}
           onClick={() =>
             navigate(
-              `/chart?${new URLSearchParams({ model: picked[0].model, runs: picked.map((r) => r.key).join(",") })}`,
+              `/chart?${new URLSearchParams({ model: picked[0].model, window: String(measurementSeconds(picked[0])), date: "all", optimal: "0", runs: picked.map((r) => r.key).join(",") })}`,
             )
           }
         >
@@ -244,7 +266,8 @@ export function Runs({ runs }: { runs: Run[] }) {
         <button onClick={() => setSelected(new Set())}>Clear selection</button>
         {picked.length > 1 && !canCompare && (
           <span>
-            Select runs for one model to compare their operating curves.
+            Select matching model, workload and measurement windows to compare
+            operating curves.
           </span>
         )}
       </div>
@@ -282,6 +305,7 @@ export function Runs({ runs }: { runs: Run[] }) {
                 <td>
                   <a href={`#/run/${r.key}`}>{modelName(r)}</a>
                   <small>{r.key}</small>
+                  <small>{measurementLabel(r)}</small>
                 </td>
                 <td>
                   {r.date}
@@ -293,9 +317,8 @@ export function Runs({ runs }: { runs: Run[] }) {
                 <td>
                   {r.hardware} · {r.physical_gpus} GPUs / {r.hosts} hosts
                   <small>
-                    {r.framework} · {r.precision.toUpperCase()} · TP{" "}
-                    {String(r.aggregate.tp)} / EP {String(r.aggregate.ep)} / PP{" "}
-                    {String(r.aggregate.pp)}
+                    {r.framework} · {r.precision.toUpperCase()} ·{" "}
+                    {topologyLabel(r)}
                   </small>
                 </td>
                 <td>C{r.concurrency}</td>

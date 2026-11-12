@@ -28,11 +28,30 @@ export interface Run {
   key: string;
   date: string;
   source_created_at: string;
-  source: {
-    repository: string;
-    run_id: number;
-    run_attempt: number;
-    head_sha: string;
+  source:
+    | {
+        kind: "github-actions";
+        repository: string;
+        run_id: number;
+        run_attempt: number;
+        head_sha: string;
+      }
+    | {
+        kind: "private-calibration";
+        commit: string;
+        files: Record<string, string>;
+        job_id: string;
+        attempt_uid: string;
+        artifact_uri: string;
+      };
+  measurement_seconds?: number;
+  topology?: { tp: number; dp: number; ep: number; pp: number };
+  calibration?: {
+    curve_fingerprint: string;
+    profiling_sent: number;
+    profiling_cancelled: number;
+    profiling_errors: number;
+    caveat: string;
   };
   model: string;
   hardware: string;
@@ -103,5 +122,39 @@ export function modelName(run: Run) {
   return run.model.split("/").at(-1)!;
 }
 export function sourceUrl(run: Run) {
+  if (run.source.kind === "private-calibration")
+    return `https://filer.marina.oa.dev/#${encodeURIComponent(run.source.artifact_uri)}`;
   return `https://github.com/${run.source.repository}/actions/runs/${run.source.run_id}/attempts/${run.source.run_attempt}`;
+}
+export function sourceLabel(run: Run) {
+  return run.source.kind === "private-calibration"
+    ? `Iris ${run.source.attempt_uid}`
+    : `#${run.source.run_id}/${run.source.run_attempt}`;
+}
+export function sourceCommit(run: Run) {
+  return run.source.kind === "private-calibration"
+    ? run.source.commit
+    : run.source.head_sha;
+}
+export function submissionIdentity(run: Run) {
+  return run.source.kind === "private-calibration"
+    ? `${run.source.job_id}/${run.source.attempt_uid}`
+    : `${run.source.repository}/${run.source.run_id}/${run.source.run_attempt}`;
+}
+export function measurementSeconds(run: Run) {
+  // GitHub collector imports require a full hour of native coverage.
+  return run.measurement_seconds ?? 3600;
+}
+export function measurementLabel(run: Run) {
+  return `${measurementSeconds(run) / 60}-minute ${run.source.kind === "private-calibration" ? "calibration" : "baseline"}`;
+}
+export function topologyLabel(run: Run) {
+  return run.topology
+    ? `TP${run.topology.tp} / DP${run.topology.dp} / EP${run.topology.ep}`
+    : "Parallelism not reported";
+}
+export function seriesLabel(run: Run) {
+  return run.calibration
+    ? `${topologyLabel(run)} · ${run.physical_gpus} ${run.hardware} · ${measurementLabel(run)}`
+    : `${run.hardware} · ${run.date} · ${sourceLabel(run)} · ${measurementLabel(run)}`;
 }

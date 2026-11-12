@@ -126,6 +126,8 @@ def prepare_bundle(bundle: Path, source_attempt: dict[str, Any]) -> list[ImportR
             "date": source_attempt["created_at"][:10],
             "source_created_at": source_attempt["created_at"],
             "source": source,
+            "measurement_seconds": 3600,
+            "topology": attempt["server_parallelism"],
             "model": aggregate["model"],
             "hardware": hardware["gpu"],
             "physical_gpus": physical_gpus,

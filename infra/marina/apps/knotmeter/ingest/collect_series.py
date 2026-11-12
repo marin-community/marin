@@ -10,29 +10,70 @@
 import argparse
 import json
 import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
+from io import TextIOWrapper
 from pathlib import Path
+from typing import IO, Any
 
 import ijson
 from ijson.common import ObjectBuilder
 
 
+def skip_value(events: Iterator[tuple[str, str, Any]]) -> None:
+    _, event, _ = next(events)
+    depth = int(event in {"start_map", "start_array"})
+    while depth:
+        _, event, _ = next(events)
+        depth += int(event in {"start_map", "start_array"}) - int(event in {"end_map", "end_array"})
+
+
+def chart_metric(events: Iterator[tuple[str, str, Any]], prefix: str) -> dict[str, Any]:
+    """Retain only fields read by the pinned reducer, including all original slices."""
+    allowed = {
+        prefix: {"series"},
+        f"{prefix}.series.item": {"endpoint_url", "labels", "timeslices"},
+        f"{prefix}.series.item.timeslices.item": {"start_ns", "end_ns", "avg", "rate", "sum", "count"},
+    }
+    builder = ObjectBuilder()
+    _, event, value = next(events)
+    builder.event(event, value)
+    depth = int(event in {"start_map", "start_array"})
+    while depth:
+        path, event, value = next(events)
+        if event == "map_key" and path in allowed and value not in allowed[path]:
+            skip_value(events)
+            continue
+        builder.event(event, value)
+        depth += int(event in {"start_map", "start_array"}) - int(event in {"end_map", "end_array"})
+    value = builder.value
+    assert isinstance(value, dict)
+    return value
+
+
+@contextmanager
+def export_stream(source: Path) -> Iterator[IO[bytes]]:
+    if source.suffix != ".zst":
+        with source.open("rb") as stream:
+            yield stream
+        return
+    with subprocess.Popen(["zstd", "--decompress", "--stdout", str(source)], stdout=subprocess.PIPE) as process:
+        assert process.stdout is not None
+        with process.stdout as stream:
+            yield stream
+        if process.wait() != 0:
+            raise subprocess.CalledProcessError(process.returncode, process.args)
+
+
 def collect(source: Path, reducer: Path, framework: str) -> bytes:
     wanted = set(json.loads(subprocess.check_output(["node", str(reducer), "--keys"])))
     phases = {"metrics": {}, "warmup_metrics": {}}
-    with source.open("rb") as stream:
+    with export_stream(source) as stream:
         events = iter(ijson.parse(stream, use_float=True))
         for prefix, event, key in events:
             if prefix not in phases or event != "map_key" or key not in wanted:
                 continue
-            builder = ObjectBuilder()
-            _, event, value = next(events)
-            builder.event(event, value)
-            depth = int(event in {"start_map", "start_array"})
-            while depth:
-                _, event, value = next(events)
-                builder.event(event, value)
-                depth += int(event in {"start_map", "start_array"}) - int(event in {"end_map", "end_array"})
-            phases[prefix][key] = builder.value
+            phases[prefix][key] = chart_metric(events, f"{prefix}.{key}")
     profile = {"isl": [], "osl": []}
     with source.with_name("profile_export.jsonl").open() as stream:
         for line in stream:
@@ -48,9 +89,15 @@ def collect(source: Path, reducer: Path, framework: str) -> bytes:
                     value = value.get("value")
                 if isinstance(value, (float, int)):
                     profile[key].append(value)
-    return subprocess.check_output(
-        ["node", str(reducer), framework], input=json.dumps(phases | {"profile": profile}, allow_nan=False).encode()
-    )
+    with subprocess.Popen(["node", str(reducer), framework], stdin=subprocess.PIPE, stdout=subprocess.PIPE) as process:
+        assert process.stdin is not None and process.stdout is not None
+        with TextIOWrapper(process.stdin, encoding="utf-8") as stream:
+            json.dump(phases | {"profile": profile}, stream, allow_nan=False)
+        phases.clear()
+        output = process.stdout.read()
+        if process.wait() != 0:
+            raise subprocess.CalledProcessError(process.returncode, process.args)
+        return output
 
 
 def main() -> None:

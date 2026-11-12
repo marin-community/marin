@@ -18,6 +18,7 @@ export function fixtureRun(
     date,
     source_created_at: `${date}T12:00:00Z`,
     source: {
+      kind: "github-actions",
       repository: "example/ui-test-fixtures",
       run_id: id,
       run_attempt: 1,
@@ -26,6 +27,7 @@ export function fixtureRun(
     model: "UI TEST FIXTURE — synthetic model",
     hardware,
     physical_gpus: 8,
+    topology: { tp: 1, dp: 8, ep: 8, pp: 1 },
     hosts: 1,
     concurrency,
     precision: "bf16",

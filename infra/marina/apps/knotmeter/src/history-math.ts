@@ -9,10 +9,16 @@ import {
   axisValue,
   metricValue,
   workloadIdentity,
+  comparisonScope,
   type Metric,
   type TokenBasis,
 } from "./metrics";
-import type { Run } from "./types";
+import {
+  type Run,
+  submissionIdentity,
+  measurementLabel,
+  topologyLabel,
+} from "./types";
 
 export interface HistoryPoint {
   date: string;
@@ -82,6 +88,8 @@ export function matchedHistory(
       run.dataset,
       run.dataset_revision,
       workloadIdentity(run),
+      comparisonScope(run),
+      run.calibration?.curve_fingerprint,
     ]);
     const group = groups.get(key) || [];
     group.push(run);
@@ -100,13 +108,12 @@ export function matchedHistory(
       const latest = [...values].sort(
         (a, b) =>
           b.source_created_at.localeCompare(a.source_created_at) ||
-          b.source.run_id - a.source.run_id ||
-          b.source.run_attempt - a.source.run_attempt,
+          submissionIdentity(b).localeCompare(submissionIdentity(a)),
       )[0];
       const curve = values.filter(
         (r) =>
-          r.source.run_id === latest.source.run_id &&
-          r.source.run_attempt === latest.source.run_attempt,
+          latest.calibration ||
+          submissionIdentity(r) === submissionIdentity(latest),
       );
       const interpolated = interpolateAtServicePoint(
         curve,
@@ -120,7 +127,7 @@ export function matchedHistory(
     const example = group[0];
     return {
       key,
-      label: `${example.hardware} · ${example.framework} · ${example.precision} · model ${example.model_revision.slice(0, 8)} · corpus ${example.dataset_revision.slice(0, 8)} · workload ${example.workload_key?.slice(0, 8) || "unknown (reimport)"}`,
+      label: `${example.hardware} · ${example.framework} · ${example.precision} · ${measurementLabel(example)}${example.calibration ? ` · ${topologyLabel(example)}` : ""} · model ${example.model_revision.slice(0, 8)} · corpus ${example.dataset_revision.slice(0, 8)} · workload ${example.workload_key?.slice(0, 8) || "unknown (reimport)"}`,
       points: points.sort((a, b) => a.date.localeCompare(b.date)),
     };
   });

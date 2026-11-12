@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Token accounting adapts InferenceX 315128ce benchmark-transform.ts.
-import type { Run } from "./types";
+import { type Run, measurementSeconds, submissionIdentity } from "./types";
 
 export const METRICS = {
   output: "Output throughput / GPU",
@@ -53,11 +53,12 @@ export function workloadIdentity(run: Run): string {
 }
 
 export function seriesKey(run: Run): string {
+  if (run.calibration)
+    return `calibration_${run.calibration.curve_fingerprint}`;
   const a = run.aggregate;
   return [
     "s",
-    run.source.run_id,
-    run.source.run_attempt,
+    submissionIdentity(run),
     run.hardware,
     run.precision,
     run.framework,
@@ -74,4 +75,17 @@ export function seriesKey(run: Run): string {
   ]
     .join("_")
     .replace(/[^\w-]/g, "_");
+}
+
+export function comparisonScope(run: Run): string {
+  return JSON.stringify([
+    run.model,
+    run.model_revision,
+    run.dataset,
+    run.dataset_revision,
+    run.precision,
+    workloadIdentity(run),
+    run.source.kind,
+    measurementSeconds(run),
+  ]);
 }

@@ -20,7 +20,16 @@ import {
   type StagePhase,
 } from "@/components/inference/agentic-point/phase-slice";
 import type { ThroughputSeriesKey } from "@/components/inference/agentic-point/time-series-math";
-import { api, type Run, modelName, sourceUrl } from "./types";
+import {
+  api,
+  type Run,
+  modelName,
+  sourceUrl,
+  sourceCommit,
+  measurementLabel,
+  topologyLabel,
+} from "./types";
+import { seriesKey } from "./metrics";
 import { requestTimeline, requestChartData, type RunData } from "./data";
 import { setParameters, useRoute } from "./navigation";
 
@@ -89,12 +98,7 @@ export function RunView({ run: listedRun, runs }: { run: Run; runs: Run[] }) {
     [server, sourceSeries, chartData, phase],
   );
   const siblings = runs
-    .filter(
-      (r) =>
-        r.source.run_id === run.source.run_id &&
-        r.source.run_attempt === run.source.run_attempt &&
-        r.model === run.model,
-    )
+    .filter((r) => seriesKey(r) === seriesKey(run) && r.model === run.model)
     .toSorted((a, b) => a.concurrency - b.concurrency);
   const pool =
     typeof run.aggregate.kv_cache_pool_tokens === "number"
@@ -109,7 +113,31 @@ export function RunView({ run: listedRun, runs }: { run: Run; runs: Run[] }) {
       <p className="muted">
         {run.date} UTC · {run.framework} · {run.precision.toUpperCase()} ·{" "}
         {run.physical_gpus} physical GPUs on {run.hosts} hosts
+        {" · "}
+        {measurementLabel(run)} · {topologyLabel(run)}
       </p>
+      {run.calibration && (
+        <section className="panel" aria-label="Calibration window">
+          <h2>15-minute calibration</h2>
+          <p>
+            When a calibration ends, the harness cancels unfinished requests.
+            Cancellation share rises with load, so full-hour throughput and
+            rankings may differ. Use full-hour measurements to choose a final
+            operating load.
+          </p>
+          <p>
+            {run.calibration.profiling_sent} profiling requests sent ·{" "}
+            {run.profiling_requests} completed ·{" "}
+            {run.calibration.profiling_cancelled} tail cancellations ·{" "}
+            {run.calibration.profiling_errors} profiling errors.
+          </p>
+          <p>
+            The native request export omits cancelled tail requests. Their
+            counts come from the phase log; the timeline contains exported
+            requests only.
+          </p>
+        </section>
+      )}
       {run.model.includes("Hero") &&
         run.configuration.enable_prefix_caching === false && (
           <p className="notice">
@@ -284,17 +312,23 @@ export function RunView({ run: listedRun, runs }: { run: Run; runs: Run[] }) {
       <section className="panel">
         <h2>Runtime, topology and provenance</h2>
         <p>
-          TP {String(run.aggregate.tp)} · EP {String(run.aggregate.ep)} · PP{" "}
-          {String(run.aggregate.pp)} · {run.physical_gpus} GPUs · {run.hosts}{" "}
-          hosts · KV offload{" "}
-          {String(run.aggregate.kv_offloading ?? "not reported")}
+          {topologyLabel(run)} · {run.physical_gpus} GPUs · {run.hosts} hosts ·
+          KV offload {String(run.aggregate.kv_offloading ?? "not reported")}
         </p>
         <p>
           <a href={sourceUrl(run)} target="_blank" rel="noreferrer">
-            Original GitHub attempt
+            Original {run.calibration ? "artifacts" : "GitHub attempt"}
           </a>{" "}
-          · source commit <code>{run.source.head_sha}</code>
+          · source commit <code>{sourceCommit(run)}</code>
         </p>
+        {run.source.kind === "private-calibration" && (
+          <p>
+            Iris job <code>{run.source.job_id}</code> · attempt{" "}
+            <code>{run.source.attempt_uid}</code>
+            <br />
+            Raw archive <code>{run.source.artifact_uri}</code>
+          </p>
+        )}
         <p>
           Runtime <code>{run.runtime}</code>
         </p>

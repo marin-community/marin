@@ -9,7 +9,8 @@ import {
 import { sliceTimelineByPhase } from "@/components/inference/agentic-point/phase-slice";
 import { buildRequestTimelineRows } from "@/components/inference/agentic-point/timeline-rows";
 import { inflightUniqueTokens } from "@/components/inference/agentic-point/time-series-math";
-import { metricValue } from "./metrics";
+import { metricValue, seriesKey, comparisonScope } from "./metrics";
+import { type Run, topologyLabel } from "./types";
 import {
   interpolateAtServicePoint,
   matchedHistory,
@@ -22,6 +23,58 @@ import {
 } from "../tests/frontend-fixtures";
 
 describe("benchmark data boundaries", () => {
+  it("groups calibration repeats across dates without mixing baselines or GPU denominators", () => {
+    const baseline = fixtureRun(1, "2026-10-05", "GB200", 8, 20, 30);
+    const points: Run[] = [1, 2, 6].flatMap((tp) =>
+      Array.from({ length: tp === 2 ? 5 : 4 }, (_, i) => ({
+        ...baseline,
+        key: `calibration-${tp}-${i}`,
+        date: `2026-11-${10 + (i % 3)}`,
+        source: {
+          kind: "private-calibration" as const,
+          commit: "source",
+          files: {},
+          job_id: `/test/job-${tp}-${i}`,
+          attempt_uid: `attempt-${tp}-${i}`,
+          artifact_uri: `s3://test/${tp}-${i}`,
+        },
+        measurement_seconds: 900,
+        topology: {
+          tp,
+          dp: tp === 6 ? 2 : 16 / tp,
+          ep: tp === 6 ? 12 : 16,
+          pp: 1,
+        },
+        aggregate: { ...baseline.aggregate, tp: tp === 6 ? 12 : 16 },
+        calibration: {
+          curve_fingerprint: `matched-controls-${tp}`,
+          profiling_sent: 3,
+          profiling_cancelled: 1,
+          profiling_errors: 0,
+          caveat: "15-minute calibration",
+        },
+      })),
+    );
+    const groups = new Map<string, Run[]>();
+    for (const point of points) {
+      const key = seriesKey(point);
+      groups.set(key, [...(groups.get(key) || []), point]);
+    }
+    expect([...groups.values()].map((p) => p.length)).toEqual([4, 5, 4]);
+    expect(new Set(points.map((p) => p.key)).size).toBe(13);
+    expect(topologyLabel(points.at(-1)!)).toBe("TP6 / DP2 / EP12");
+    expect(comparisonScope(points[0])).not.toBe(comparisonScope(baseline));
+    const histories = matchedHistory(
+      [baseline, ...points],
+      20,
+      "output",
+      "total",
+    );
+    expect(histories).toHaveLength(4);
+    for (const history of histories)
+      for (const point of history.points)
+        expect(new Set(point.sources.map(comparisonScope)).size).toBe(1);
+  });
   it("preserves the first profiling request after a large wall-clock origin", () => {
     const timeline = hierarchicalTimeline();
     timeline.requests = timeline.requests.slice(0, 2).map((r, i) => ({
@@ -69,7 +122,9 @@ describe("benchmark data boundaries", () => {
   });
   it("uses the measured throughput frontier and refuses to extrapolate history", () => {
     const runs = comparisonRuns();
-    const first = runs.filter((r) => r.source.run_id === 1001);
+    const first = runs.filter(
+      (r) => r.source.kind === "github-actions" && r.source.run_id === 1001,
+    );
     expect(
       interpolateAtServicePoint(first, 20, "output", "total")!.value,
     ).toBeCloseTo(30, 10);

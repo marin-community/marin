@@ -8,6 +8,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from infra.marina.apps.knotmeter.ingest.adapter import prepare_bundle
+from infra.marina.apps.knotmeter.ingest.calibration import prepare_calibrations
 from infra.marina.apps.knotmeter.ingest.load import load_corpus, load_run
 from infra.marina.apps.knotmeter.ingest.replay import prepare_requests
 from infra.marina.apps.knotmeter.server.app import create_api
@@ -28,6 +29,51 @@ def test_bundle_preserves_processor_metrics_and_exact_timestamps(bundle, hosts, 
     assert prepared.requests[0]["phase"] == "warmup"
     assert prepared.requests[1]["corpus_id"] == "conversation"
     assert prepared.requests[1]["source_outer_idx"] == 7
+
+
+def test_calibration_repeats_survive_native_import_and_keep_baselines_separate(calibration, bundle, knotmeter_database):
+    services, query = knotmeter_database
+    path, actual = bundle()
+    (baseline,) = prepare_bundle(path, actual)
+    load_run(baseline, query)
+    points = list(prepare_calibrations(calibration))
+    assert len(points) == 2  # The invalid screen has no artifacts and never enters this catalog.
+    assert points[0].key != points[1].key
+    assert points[0].run["calibration"]["curve_fingerprint"] == points[1].run["calibration"]["curve_fingerprint"]
+    for point in points:
+        assert load_run(point, query)["changed"]
+    with TestClient(create_api(services).app) as client:
+        catalog = client.get("/runs").json()
+        assert len(catalog) == 3
+        for index, point in enumerate(points):
+            saved = client.get(f"/runs/{point.key}/data").json()
+            run = saved["run"]
+            assert run["source"]["kind"] == "private-calibration"
+            assert run["source"]["job_id"] == f"/test/calibration-repeat-{index}"
+            assert "run_id" not in run["source"]
+            assert run["date"] == f"2026-11-{10 + index}"
+            assert run["measurement_seconds"] == 900
+            assert run["topology"] == {"tp": 6, "dp": 2, "ep": 12, "pp": 1}
+            assert run["aggregate"]["tp"] == run["physical_gpus"] == 12
+            assert run["metrics"]["throughput"]["per_gpu"]["output_tput_tps"] == 40.5
+            assert run["calibration"]["profiling_cancelled"] == 1
+            assert saved["requests"] == point.requests
+            assert not load_run(point, query)["changed"]
+        assert client.get(f"/runs/{baseline.key}").json()["measurement_seconds"] == 3600
+    # A serving-control change must split the comparison curve even at the same load.
+    receipt = calibration / "point-1/restored-point/attempt.json"
+    changed = json.loads(receipt.read_text())
+    changed["server_command"][4] = "256"
+    receipt.write_text(json.dumps(changed))
+    first, second = prepare_calibrations(calibration)
+    assert first.run["calibration"]["curve_fingerprint"] != second.run["calibration"]["curve_fingerprint"]
+    # The separate GitHub path keeps its full-hour coverage requirement.
+    source_path = path / "agentx-source.json"
+    submission = json.loads(source_path.read_text())
+    submission["points"][0]["receipt"]["validation"]["coverage"]["expected_duration_seconds"] = 900
+    source_path.write_text(json.dumps(submission))
+    with pytest.raises(ValueError, match="full-hour"):
+        prepare_bundle(path, actual)
 
 
 def test_multihost_import_rejects_per_host_gpu_normalization(bundle):

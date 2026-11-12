@@ -22,7 +22,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { globalParetoFrontier } from "@/lib/charts/pareto-frontier";
-import { type Run, modelName, sourceUrl } from "./types";
+import {
+  type Run,
+  modelName,
+  sourceUrl,
+  sourceLabel,
+  seriesLabel,
+  topologyLabel,
+  measurementSeconds,
+  measurementLabel,
+} from "./types";
 import { setParameters, useRoute } from "./navigation";
 import {
   METRICS,
@@ -33,7 +42,7 @@ import {
   metricValue,
   axisValue,
   seriesKey,
-  workloadIdentity,
+  comparisonScope,
 } from "./metrics";
 
 const COLORS = [
@@ -77,11 +86,26 @@ export function Performance({ runs }: { runs: Run[] }) {
   const percentile = params.get("percentile") || "p90";
   const hardware = params.get("hardware") || "";
   const runSelection = params.get("runs");
+  const windows = [
+    ...new Set(
+      runs.filter((r) => r.model === selected).map(measurementSeconds),
+    ),
+  ].sort((a, b) => b - a);
+  const pickedWindow = runs.find((r) =>
+    runSelection?.split(",").includes(r.key),
+  );
+  const measurement = Number(
+    params.get("window") ||
+      (pickedWindow ? measurementSeconds(pickedWindow) : windows[0]),
+  );
   const dates = [
     ...new Set(
       runs
         .filter(
-          (r) => r.model === selected && (!hardware || r.hardware === hardware),
+          (r) =>
+            r.model === selected &&
+            measurementSeconds(r) === measurement &&
+            (!hardware || r.hardware === hardware),
         )
         .map((r) => r.date),
     ),
@@ -116,6 +140,7 @@ export function Performance({ runs }: { runs: Run[] }) {
   const filtered = runs.filter(
     (r) =>
       r.model === selected &&
+      measurementSeconds(r) === measurement &&
       (!hardware || r.hardware === hardware) &&
       (!date || r.date === date) &&
       (!selectedRuns || selectedRuns.has(r.key)),
@@ -136,17 +161,7 @@ export function Performance({ runs }: { runs: Run[] }) {
     rulerMode,
     params.get("rulers"),
     Object.fromEntries(
-      series.map((s) => [
-        `roofline-${s.key}`,
-        JSON.stringify([
-          s.run.model,
-          s.run.model_revision,
-          s.run.dataset,
-          s.run.dataset_revision,
-          s.run.precision,
-          workloadIdentity(s.run),
-        ]),
-      ]),
+      series.map((s) => [`roofline-${s.key}`, comparisonScope(s.run)]),
     ),
   );
   const points = useMemo<Point[]>(
@@ -168,6 +183,7 @@ export function Performance({ runs }: { runs: Run[] }) {
       percentile,
       runSelection,
       basis,
+      measurement,
     ],
   );
   const visible = points.filter((p) => !hidden.has(p.series));
@@ -200,7 +216,7 @@ export function Performance({ runs }: { runs: Run[] }) {
             .map((s) => ({
               key: s.key,
               seriesId: s.key,
-              label: `${s.run.hardware} · ${s.run.date} · #${s.run.source.run_id}`,
+              label: seriesLabel(s.run),
               color: color(s.key),
               points: lines[s.key],
             })),
@@ -244,7 +260,7 @@ export function Performance({ runs }: { runs: Run[] }) {
         getColor: (p) => color(p.series),
         getLabelText: (p) =>
           labelStyle === "parallelism"
-            ? `TP${p.run.aggregate.tp} EP${p.run.aggregate.ep}`
+            ? topologyLabel(p.run)
             : labelStyle === "throughput"
               ? p.y.toFixed(2)
               : `C${p.run.concurrency}`,
@@ -259,7 +275,16 @@ export function Performance({ runs }: { runs: Run[] }) {
   const update = (values: Record<string, string>) => {
     if ("model" in values) {
       setLegendSearch("");
-      values = { hardware: "", date: "", runs: "", hidden: "", ...values };
+      values = {
+        hardware: "",
+        date: "",
+        runs: "",
+        hidden: "",
+        window: "",
+        ...values,
+      };
+    } else if ("window" in values) {
+      values = { date: "all", runs: "", hidden: "", ...values };
     } else if ("hardware" in values) {
       setLegendSearch("");
       values = { date: "", runs: "", hidden: "", ...values };
@@ -272,7 +297,8 @@ export function Performance({ runs }: { runs: Run[] }) {
       "model" in values ||
       "hardware" in values ||
       "date" in values ||
-      "runs" in values
+      "runs" in values ||
+      "window" in values
         ? { rulers: "" }
         : {}),
       ...values,
@@ -343,7 +369,7 @@ export function Performance({ runs }: { runs: Run[] }) {
       exportSeries.forEach((s, i) => {
         ctx.fillStyle = color(s.key);
         ctx.fillText(
-          `${s.run.hardware} · ${s.run.date} · #${s.run.source.run_id}/${s.run.source.run_attempt} · ${s.run.physical_gpus} physical GPUs`,
+          `${seriesLabel(s.run)} · ${s.run.physical_gpus} physical GPUs`,
           18,
           svg.clientHeight + 84 + i * 22,
         );
@@ -366,6 +392,8 @@ export function Performance({ runs }: { runs: Run[] }) {
         "hardware",
         "physical_gpus",
         "concurrency",
+        "measurement",
+        "topology",
         AXES[axis],
         yLabel,
         "percentile",
@@ -381,6 +409,8 @@ export function Performance({ runs }: { runs: Run[] }) {
         p.run.hardware,
         p.run.physical_gpus,
         p.run.concurrency,
+        measurementLabel(p.run),
+        topologyLabel(p.run),
         p.x,
         p.y,
         percentile,
@@ -407,6 +437,7 @@ export function Performance({ runs }: { runs: Run[] }) {
       basis,
       date: dateSelection === "latest" ? date : dateSelection,
       runs: filtered.map((r) => r.key).join(",") || "none",
+      window: String(measurement),
     }))
       selection.set(key, value);
     url.hash = `/chart?${selection}`;
@@ -449,6 +480,25 @@ export function Performance({ runs }: { runs: Run[] }) {
               ),
             ].map((h) => (
               <option key={h}>{h}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Measurement
+          <select
+            aria-label="Measurement"
+            value={measurement}
+            onChange={(e) => update({ window: e.target.value })}
+          >
+            {windows.map((seconds) => (
+              <option key={seconds} value={seconds}>
+                {measurementLabel(
+                  runs.find(
+                    (r) =>
+                      r.model === selected && measurementSeconds(r) === seconds,
+                  )!,
+                )}
+              </option>
             ))}
           </select>
         </label>
@@ -539,7 +589,10 @@ export function Performance({ runs }: { runs: Run[] }) {
         <button onClick={() => update({ runs: "" })}>All matching runs</button>
         <div className="run-selection">
           {runs
-            .filter((r) => r.model === selected)
+            .filter(
+              (r) =>
+                r.model === selected && measurementSeconds(r) === measurement,
+            )
             .map((r) => (
               <label key={r.key}>
                 <input
@@ -551,7 +604,11 @@ export function Performance({ runs }: { runs: Run[] }) {
                       ? new Set(selectedRuns)
                       : new Set(
                           runs
-                            .filter((r) => r.model === selected)
+                            .filter(
+                              (r) =>
+                                r.model === selected &&
+                                measurementSeconds(r) === measurement,
+                            )
                             .map((r) => r.key),
                         );
                     if (e.target.checked) keys.add(r.key);
@@ -559,8 +616,8 @@ export function Performance({ runs }: { runs: Run[] }) {
                     update({ runs: [...keys].join(",") || "none" });
                   }}
                 />
-                {r.date} · {r.hardware} · C{r.concurrency} · #{r.source.run_id}/
-                {r.source.run_attempt}
+                {r.date} · {r.hardware} · C{r.concurrency} · {sourceLabel(r)} ·{" "}
+                {measurementLabel(r)}
               </label>
             ))}
         </div>
@@ -791,7 +848,7 @@ export function Performance({ runs }: { runs: Run[] }) {
                   />
                   {series
                     .filter((s) =>
-                      `${s.run.hardware} ${s.run.date} ${s.run.source.run_id} ${s.run.framework}`
+                      `${seriesLabel(s.run)} ${s.run.date} ${sourceLabel(s.run)} ${s.run.framework}`
                         .toLowerCase()
                         .includes(legendSearch.toLowerCase()),
                     )
@@ -812,9 +869,9 @@ export function Performance({ runs }: { runs: Run[] }) {
                             });
                           }}
                         />
-                        {s.run.hardware} · {s.run.date} · #{s.run.source.run_id}
+                        {seriesLabel(s.run)}
                         <button
-                          aria-label={`Inspect series ${s.run.source.run_id}`}
+                          aria-label={`Inspect series ${seriesLabel(s.run)}`}
                           onClick={() => setInspected(s.key)}
                         >
                           Inspect
@@ -849,6 +906,9 @@ export function Performance({ runs }: { runs: Run[] }) {
               {point.run.date} · {point.run.physical_gpus} GPUs on{" "}
               {point.run.hosts} hosts · {point.run.framework} ·{" "}
               {point.run.precision.toUpperCase()}
+              {" · "}
+              {measurementLabel(point.run)} · {topologyLabel(point.run)} ·{" "}
+              {sourceLabel(point.run)}
             </p>
             <p>
               {AXES[axis]}: {point.x.toFixed(5)} · {yLabel}:{" "}
@@ -856,7 +916,7 @@ export function Performance({ runs }: { runs: Run[] }) {
             </p>
             <a href={`#/run/${point.run.key}`}>Run diagnostics</a> ·{" "}
             <a href={sourceUrl(point.run)} target="_blank" rel="noreferrer">
-              Original GitHub attempt
+              Original {point.run.calibration ? "artifacts" : "GitHub attempt"}
             </a>
           </aside>
         )}
@@ -897,8 +957,8 @@ export function Performance({ runs }: { runs: Run[] }) {
                         {p.run.hardware} · {p.run.physical_gpus} GPUs
                       </td>
                       <td>
-                        C{p.run.concurrency} · TP{String(p.run.aggregate.tp)} EP
-                        {String(p.run.aggregate.ep)}
+                        C{p.run.concurrency} · {topologyLabel(p.run)}
+                        <small>{measurementLabel(p.run)}</small>
                       </td>
                       <td>{p.x.toFixed(5)}</td>
                       <td>{p.y.toFixed(5)}</td>
@@ -922,8 +982,10 @@ export function Performance({ runs }: { runs: Run[] }) {
         </DialogContent>
       </Dialog>
       <p className="muted">
-        Curves connect measured load points within one run. A single observation
-        cannot establish a sweep or a matched comparison.
+        Curves connect loads with matching workload, runtime and serving
+        controls. Repeats remain separate observations. Fifteen-minute
+        calibrations and one-hour baselines have separate selections and ruler
+        scopes.
       </p>
     </>
   );

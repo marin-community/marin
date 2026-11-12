@@ -9,7 +9,12 @@ import {
   improvementWaterfall,
   type ImprovementStep,
 } from "./history-math";
-import { type Run, sourceUrl } from "./types";
+import {
+  type Run,
+  sourceUrl,
+  measurementLabel,
+  measurementSeconds,
+} from "./types";
 import { setParameters, useRoute } from "./navigation";
 
 export function History({ runs }: { runs: Run[] }) {
@@ -22,10 +27,17 @@ export function History({ runs }: { runs: Run[] }) {
     models.find((m) => m.includes("Snowball")) ||
     models[0];
   const hardware = params.get("hardware") || "";
+  const windows = [
+    ...new Set(runs.filter((r) => r.model === model).map(measurementSeconds)),
+  ].sort((a, b) => b - a);
+  const measurement = Number(params.get("window") || windows[0]);
   const metric = (params.get("metric") || "output") as Metric;
   const basis = (params.get("basis") || "total") as TokenBasis;
   const filtered = runs.filter(
-    (r) => r.model === model && (!hardware || r.hardware === hardware),
+    (r) =>
+      r.model === model &&
+      measurementSeconds(r) === measurement &&
+      (!hardware || r.hardware === hardware),
   );
   const xs = filtered
     .map((r) => axisValue(r, "interactivity", "p90"))
@@ -54,7 +66,7 @@ export function History({ runs }: { runs: Run[] }) {
   async function share() {
     const url = new URL(window.location.href);
     url.pathname = url.pathname.replace(/\/v\/\d+\/$/, "/");
-    url.hash = `/history?${new URLSearchParams({ model, hardware, metric, basis, target: String(target), view })}`;
+    url.hash = `/history?${new URLSearchParams({ model, hardware, metric, basis, target: String(target), view, window: String(measurement) })}`;
     await navigator.clipboard.writeText(url.href);
     setMessage("Link copied");
   }
@@ -63,8 +75,10 @@ export function History({ runs }: { runs: Run[] }) {
       <h1>Historical performance</h1>
       <p className="muted">
         Throughput at one matched P90 full-response interactivity. Each dated
-        value uses the latest submission that day and the upstream throughput
-        Pareto/Hermite calculation. Model and corpus revisions remain separate.
+        baseline uses the latest submission that day and the upstream throughput
+        Pareto/Hermite calculation. Calibrations group matching controls within
+        each date. Measurement windows, profiles and model/corpus revisions
+        remain separate.
       </p>
       <div className="controls">
         <label>
@@ -73,12 +87,38 @@ export function History({ runs }: { runs: Run[] }) {
             aria-label="Model"
             value={model}
             onChange={(e) =>
-              setParameters({ model: e.target.value, target: "", hardware: "" })
+              setParameters({
+                model: e.target.value,
+                target: "",
+                hardware: "",
+                window: "",
+              })
             }
           >
             {models.map((m) => (
               <option key={m} value={m}>
                 {m.split("/").at(-1)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Measurement
+          <select
+            aria-label="Measurement"
+            value={measurement}
+            onChange={(e) =>
+              setParameters({ window: e.target.value, target: "" })
+            }
+          >
+            {windows.map((seconds) => (
+              <option key={seconds} value={seconds}>
+                {measurementLabel(
+                  runs.find(
+                    (r) =>
+                      r.model === model && measurementSeconds(r) === seconds,
+                  )!,
+                )}
               </option>
             ))}
           </select>

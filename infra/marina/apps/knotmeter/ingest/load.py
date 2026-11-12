@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import subprocess
+import sys
 import uuid
 from collections.abc import Iterable, Iterator
 from dataclasses import replace
@@ -17,6 +18,7 @@ import requests
 from marina.client import AppletQuery, applet_query
 
 from .adapter import BUNDLE_MANIFEST, ImportRun, prepare_bundle, read_json
+from .calibration import prepare_calibrations
 from .corpus import conversation_summary, dataset_summary
 
 BATCH_BYTES = 750_000
@@ -34,7 +36,9 @@ def attach_series(prepared: ImportRun, bundle: Path, cache: Path) -> ImportRun:
     profile = next(name for name in prepared.run["source_files"] if name.endswith("profile_export.jsonl"))
     source = bundle / Path(profile).with_name("server_metrics_export.json")
     if not source.is_file():
-        return prepared
+        source = source.with_suffix(".json.zst")
+        if not source.is_file():
+            return prepared
     with source.open("rb") as stream:
         source_digest = hashlib.file_digest(stream, "sha256").hexdigest()
     reducer = Path(__file__).resolve().parent.parent / ".build/reduce-series.mjs"
@@ -209,7 +213,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", required=True, help="Explicit Marina origin; use the printed loopback origin locally")
     parser.add_argument("--app-id", required=True)
-    parser.add_argument("--bundle", type=Path, action="append", required=True)
+    parser.add_argument("--bundle", type=Path, action="append", default=[])
+    parser.add_argument("--calibration", type=Path, help="Saved calibration directory containing curve-summary.json")
+    parser.add_argument("--calibration-job", help="Import one exact native job from --calibration")
     parser.add_argument("--corpus", type=Path, help="JSONL of dataset, revision, conversation_id and structure")
     parser.add_argument(
         "--series-cache", type=Path, required=True, help="Local cache outside the app for reduced server series"
@@ -218,26 +224,35 @@ def main() -> None:
         "--source-attempts", type=Path, help="Saved GitHub attempt responses keyed by run ID; otherwise use gh"
     )
     args = parser.parse_args()
+    if not args.bundle and not args.calibration:
+        parser.error("Select --bundle or --calibration")
+    if args.calibration_job and not args.calibration:
+        parser.error("--calibration-job requires --calibration")
     attempts = read_json(args.source_attempts) if args.source_attempts else {}
-    prepared = []
-    for bundle in args.bundle:
-        source = read_json(bundle / BUNDLE_MANIFEST)["source"]
-        actual = attempts.get(str(source["run_id"]))
-        if actual is None:
-            actual = json.loads(
-                subprocess.check_output(
-                    [
-                        "gh",
-                        "api",
-                        f"repos/{source['repository']}/actions/runs/{source['run_id']}/attempts/{source['run_attempt']}",
-                    ]
-                )
-            )
-        prepared.extend(attach_series(run, bundle, args.series_cache) for run in prepare_bundle(bundle, actual))
     with requests.Session() as session:
         query = applet_query(args.url, args.app_id, session=session)
         corpus = load_corpus(args.corpus, query) if args.corpus else 0
-        report = {"corpus_processed": corpus, "runs": [load_run(run, query) for run in prepared]}
+        loaded = []
+        for bundle in args.bundle:
+            source = read_json(bundle / BUNDLE_MANIFEST)["source"]
+            actual = attempts.get(str(source["run_id"]))
+            if actual is None:
+                actual = json.loads(
+                    subprocess.check_output(
+                        [
+                            "gh",
+                            "api",
+                            f"repos/{source['repository']}/actions/runs/{source['run_id']}/attempts/{source['run_attempt']}",
+                        ]
+                    )
+                )
+            for run in prepare_bundle(bundle, actual):
+                loaded.append(load_run(attach_series(run, bundle, args.series_cache), query))
+        if args.calibration:
+            for run in prepare_calibrations(args.calibration, args.calibration_job):
+                print(f"Importing {run.key}", file=sys.stderr, flush=True)
+                loaded.append(load_run(attach_series(run, args.calibration, args.series_cache), query))
+        report = {"corpus_processed": corpus, "runs": loaded}
     print(json.dumps(report))
 
 

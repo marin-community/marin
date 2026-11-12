@@ -24,14 +24,17 @@ links freeze the selected run identities and effective date. Labels, high contra
 and Perf Ruler are visible controls.
 
 A single configuration is shown as a point. Curves require measured loads from the
-same submission and configuration identity. Matched history and rulers also require
+same submission and configuration identity, or matching private calibration controls.
+Matched history and rulers also require
 the same saved workload key, covering subset, context and tokenizer inputs. Reimport
 older bundles without that identity to enable matched comparisons. History uses the latest submission per
 UTC date and the pinned upstream Pareto/Hermite interpolation. It does not extrapolate.
 A submission is an original GitHub run/attempt; it can contain several loads
 (concurrency settings). Curves group loads within that attempt by hardware, framework,
 precision, parallelism/offload settings and model/corpus revisions. Dates use the
-original GitHub attempt’s `created_at` in UTC, never collection/import time.
+original GitHub attempt’s `created_at` in UTC. Private calibrations use their native
+benchmark start time. Neither uses collection/import time. Measurement selectors
+and ruler scopes separate 15-minute calibrations from one-hour baselines.
 
 Interactivity is the inverse of full-response inter-token latency, in tokens/s/user.
 E2E latency includes the whole request; E2E-normalized interactivity also includes
@@ -44,7 +47,8 @@ measured curve ranges and keeps model/corpus revisions and precision compatible.
 ## Start and load a local preview
 
 From the repository root, start a package release and disposable Postgres stack.
-Docker, Node 24, npm, uv and the Marina Python environment are required:
+Docker, Node 24, npm, uv and the Marina Python environment are required. Compressed
+calibration server exports also require `zstd`:
 
 ```bash
 uv run --package marin-marina marina release infra/marina/apps/knotmeter --local --json
@@ -72,6 +76,27 @@ The build creates `.build/reduce-series.mjs`; loading invokes it through an isol
 The cache key covers the export, profile and reducer/parser hashes. Node is needed
 for loading, not for serving. Without `--source-attempts`, the loader reads original
 attempts with `gh api`; a saved response file is a JSON object keyed by run ID.
+
+Load retained private calibrations into the same explicit preview:
+
+```bash
+uv run --package marin-marina python -m infra.marina.apps.knotmeter.ingest \
+  --url "$preview_origin" \
+  --app-id fe24b7ec-33fa-4edb-8787-2df5b9091a75 \
+  --calibration /path/to/hero-bf16-tp-calibration \
+  --series-cache /path/to/local-series-cache
+```
+
+Add `--calibration-job /romain/EXACT_JOB` to import one observation first. The loader
+reads `curve-summary.json` and `window-effects.json`, then checks native validity,
+900-second coverage, attempt identity, topology, request accounting and saved
+aggregate normalization. Invalid screens are excluded. Points load sequentially;
+adjacent server exports can be JSON or `.json.zst`. Original artifacts stay unchanged.
+
+The inventory's calibration link selects all dates and includes dominated points.
+For the retained Hero data, its chart fragment is
+`#/chart?model=marin-community%2FHero-535B-step144000&window=900&date=all&optimal=0`.
+Inspect a series to see every load, date and repeat, then open its diagnostics.
 
 The preview used artifacts `agentx-results-40625266678-1` and
 `agentx-results-40705471793-1`. Download and unpack them with:
@@ -121,6 +146,24 @@ Multihost runs also require `gang.json`. An adjacent `server_metrics_export.json
 supplies collected server series when present. It validates original attempt,
 recipe, receipts, request counts, the full-hour window and physical-GPU normalization.
 Multihost normalization counts unique devices across successful hosts.
+
+Private calibration inputs retain the original `private-calibration` source,
+Iris job/attempt, runtime and workload receipts, processor command, artifact archive
+and file hashes. Their keys use the native attempt UID. Curve identities cover
+the actual server command/environment, runtime pin, source files, workload,
+topology and duration. Listening addresses/ports, placement, startup timeout and
+local cache paths are omitted. Independent jobs and dates can therefore contribute loads to
+one curve. Repeats stay separate; no means replace them. History keeps each profile
+and date separate and uses the existing frontier interpolation.
+
+The processor's aggregate `tp` is its physical-GPU normalization input. Private
+calibrations display actual TP/DP/EP from the native receipt and retain the original
+aggregate. Tail cancellation counts come from hash-checked native phase logs.
+When a calibration ends, the harness cancels unfinished requests. These tail
+cancellations are absent from the request exports, so their individual
+timelines are unavailable. They are distinct from profiling errors. Short windows
+can change throughput and rankings; use one-hour measurements for final baselines
+and operating-load decisions.
 
 The saved bundles were produced with AgentX `1.0.12` and the isolated processor
 revision `80dff120d27fd6092210f4546b8faa5e6c9723ac`. This producer pin is separate
@@ -178,8 +221,14 @@ tokens 512 and max sequences 64. The preview labels those settings.
 
 The retained corpus has 393 conversations from
 `semianalysisai/cc-traces-weka-062126-256k` at
-`8fecd2fc56694469f758f0afbbb6335ad3043740`. Each model currently has one measured
-load/date. Separate synthetic browser fixtures exercise larger histories, sweeps,
+`8fecd2fc56694469f758f0afbbb6335ad3043740`. The one-hour results each have one measured
+load/date. The [retained Hero calibration](https://echo.oa.dev/wiki/945) adds 13 valid
+900-second observations: TP1/DP16/EP16 on 16 GB200s (four points), TP2/DP8/EP16
+with NCCL on 16 GB200s (five), and TP6/DP2/EP12 on 12 GB200s (four). These include
+three repeated loads and 11,673 successful profiling requests with zero profiling
+errors. Three preliminary 180-second trials failed native validity checks and
+are excluded. Separate synthetic
+browser fixtures exercise larger histories, sweeps,
 rulers and hierarchy; they are never imported as authentic preview results.
 
 Knotmeter adapts InferenceX revision `315128ce4e49c8a1ec1aa67eafa8f2de26e4c1f9`;

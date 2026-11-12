@@ -4,7 +4,13 @@ import {
 } from "@/components/inference/agentic-point/aggregate-chart";
 import { ExpandableChart } from "@/components/inference/agentic-point/expandable-chart";
 import { CHART_SIZES } from "@/components/inference/agentic-point/chart-shared";
-import { type Run, modelName } from "./types";
+import {
+  type Run,
+  modelName,
+  sourceLabel,
+  measurementLabel,
+  topologyLabel,
+} from "./types";
 import { setParameters, useRoute } from "./navigation";
 
 interface CacheShare {
@@ -63,7 +69,7 @@ export function CacheReuse({ runs }: { runs: Run[] }) {
     metric: "isl" | "osl" | "kvCacheUtil" | "prefixCacheHitRate",
   ): AggregatePoint[] =>
     filtered.map((r) => ({
-      label: `${r.hardware} C${r.concurrency} · ${r.date} · #${r.source.run_id}`,
+      label: `${r.hardware} C${r.concurrency} · ${topologyLabel(r)} · ${r.date} · ${sourceLabel(r)} · ${measurementLabel(r)}`,
       values: r.diagnostic_aggregates?.[metric] || {},
     }));
   return (
@@ -144,7 +150,8 @@ export function CacheReuse({ runs }: { runs: Run[] }) {
               <a href={`#/run/${r.key}`}>
                 {r.hardware} C{r.concurrency}
                 <small>
-                  {r.date} · #{r.source.run_id}
+                  {r.date} · {sourceLabel(r)} · {topologyLabel(r)} ·{" "}
+                  {measurementLabel(r)}
                 </small>
               </a>
               {share ? (

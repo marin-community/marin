@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -93,6 +94,7 @@ def bundle(tmp_path: Path):
         }
         attempt = {
             "source": source,
+            "server_parallelism": {"tp": 1, "dp": hosts * devices, "ep": hosts * devices, "pp": 1},
             "status": "succeeded",
             "iris_attempt_uid": "native-attempt",
             "recipe_fingerprint": "recipe",
@@ -159,3 +161,109 @@ def bundle(tmp_path: Path):
         return tmp_path, actual
 
     return build
+
+
+@pytest.fixture
+def calibration(bundle, tmp_path: Path):
+    """Tiny native-format repeats; synthetic data stays in the test database."""
+    original, _ = bundle(3)
+    root = tmp_path / "calibration"
+    root.mkdir()
+    source = {"kind": "private-calibration", "commit": "private-source", "files": {"runner.py": "runner-hash"}}
+    collector = json.loads((original / "agentx-source.json").read_text())
+    config = collector["points"][0]["receipt"]["configuration"]["series"] | {"duration": 900}
+    workload = collector["points"][0]["manifest"]["workload"]
+    aggregate = json.loads((original / "bmk_point/agg.json").read_text()) | {"tp": 12}
+    topology = {"tp": 6, "dp": 2, "ep": 12, "pp": 1}
+    rows, windows = [], []
+    for index in range(2):
+        job, uid = f"/test/calibration-repeat-{index}", f"native-{index}"
+        task = job + "/0"
+        processed = root / f"point-{index}"
+        raw = processed / "restored-point"
+        profile = raw / "aiperf_artifacts/profile_export.jsonl"
+        profile.parent.mkdir(parents=True)
+        profile.write_bytes((original / "point/aiperf_artifacts/profile_export.jsonl").read_bytes())
+        native = {
+            "start_time": f"2026-11-{10 + index}T12:00:00",
+            "metadata": {
+                "submission_valid": True,
+                "metric_duration_coverage": [
+                    {
+                        "expected_duration_seconds": 900,
+                        "required_ratio": 0.95,
+                        "ttft_ratio": 1,
+                        "inter_token_latency_ratio": 1,
+                    }
+                ],
+            },
+            "input_config": {"phases": [{"kind": "profiling", "duration": 900, "concurrency": 8}]},
+            "request_count": {"avg": 2},
+        }
+        native_path = profile.with_name("profile_export_aiperf.json")
+        native_path.write_text(json.dumps(native))
+        phase_log = root / f"phase-{index}.log"
+        phase_log.write_text("completed=2 cancelled=1 errors=0 sent=3")
+        attempt = {
+            "source": source,
+            "status": "succeeded",
+            "screening": False,
+            "profile": "test",
+            "iris_task_id": task + ":0",
+            "iris_attempt_uid": uid,
+            "gang_attempts": {task: uid},
+            "recipe_fingerprint": "recipe",
+            "all_allocated_gpus": 12,
+            "server_parallelism": topology,
+            "workload": workload,
+            "server_command": ["vllm", "serve", "example/model", "--max-num-seqs", "128", "--port", str(8000 + index)],
+            "server_environment": {},
+            "private_runtime": {"wheel": {"sha256": "runtime-pin"}},
+        }
+        files = {
+            f"point-{index}/restored-point/attempt.json": attempt,
+            f"point-{index}/aggregate/agg.json": aggregate,
+            f"point-{index}/processor-command.json": {"source": "processor-pin"},
+            f"point-{index}/summary.json": {"input_export_sha256": hashlib.sha256(native_path.read_bytes()).hexdigest()},
+            f"submission-{index}.json": {
+                "job_id": job,
+                "series": config,
+                "count": 12,
+                "campaign": {"source": source, "manifest": {"workload": workload}},
+            },
+        }
+        for name, content in files.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(content))
+        rows.append(
+            {
+                "job": job,
+                "native_submission_valid": True,
+                "screening": False,
+                "tp": 6,
+                "dp": 2,
+                "ep": 12,
+                "summary": f"point-{index}/summary.json",
+                "submission": f"submission-{index}.json",
+                "raw_archive": f"s3://test/point-{index}.tar.zst",
+                "raw_archive_sha256": f"archive-{index}",
+            }
+        )
+        windows.append(
+            {
+                "job": job,
+                "native_phase_log": phase_log.name,
+                "native_phase_log_sha256": hashlib.sha256(phase_log.read_bytes()).hexdigest(),
+                "profiling_sent": 3,
+                "profiling_requests": 2,
+                "profiling_cancelled": 1,
+                "profiling_errors": 0,
+            }
+        )
+    rows.append({"job": "/test/invalid-screen", "native_submission_valid": False, "screening": True})
+    (root / "curve-summary.json").write_text(json.dumps({"rows": rows}))
+    (root / "window-effects.json").write_text(
+        json.dumps({"rows": windows, "scope": "15-minute calibration; tail cancellations limit this window."})
+    )
+    return root
