@@ -1,7 +1,7 @@
 {
   "band.low": 0.25,
   "band.high": 0.75,
-  "solver.k": 3,
+  "solver.k": 8,
   "adversary.roster": [],
   "adversary.image": "${GRADER_BASE_IMAGE}",
   "adversary.max_revisions": 1,

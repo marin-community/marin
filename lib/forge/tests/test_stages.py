@@ -71,6 +71,7 @@ from forge.stages.validate import adversary_result, claim_result, control_result
 from forge.wiring import build_config, install
 
 pytest_plugins = ("lib.forge.tests.test_proposal",)
+K = load_policy(DEFAULTS_DIR).setting("solver.k", int)
 
 
 @pytest.fixture
@@ -115,7 +116,7 @@ def resources(ctx: Context, restart: int | None = None, grader: CandidateEngine 
     bundle = Resources(
         Environments(),
         FakeInference(()),
-        RolloutResource(SolverEngine(3, restart), solver_model, "solver"),
+        RolloutResource(SolverEngine(K, restart), solver_model, "solver"),
         GradingResource(grader, "grader"),
         Clock(),
         Ids(),
@@ -232,7 +233,7 @@ async def test_validate_restart_joins_adversary_before_replay(
     assert error.value.subgroup(Restart) is not None
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
     await ctx.drain()
-    assert isinstance(bundle.rollouts.engine, SolverEngine) and len(bundle.rollouts.engine.started) == 3
+    assert isinstance(bundle.rollouts.engine, SolverEngine) and len(bundle.rollouts.engine.started) == K
 
 
 @pytest.mark.parametrize("reply,confirmed", [("9", False), ("12", True)])
@@ -544,6 +545,21 @@ def evidence(solved: int = 1, *, controls_met: bool = True) -> ValidationResult:
     )
 
 
+# At k=8 the inclusive 0.25-0.75 band admits 2 to 6 solves; one solve is too hard, seven too easy.
+def test_default_band_at_default_k(workpiece: Workpiece) -> None:
+    setup = build_config(load_policy(DEFAULTS_DIR), "S", {})
+    assert K == 8
+    bands = {}
+    for solved in range(K + 1):
+        solver = tuple(TrialResult(i, GradeResult(Outcome.GRADED, float(i < solved))) for i in range(K))
+        wp = workpiece.with_(evidence=(replace(evidence(), solver=solver),))
+        decision = default_review(wp, setup.band, setup.budget)
+        assert isinstance(decision, (Accept, Modify))
+        bands[solved] = decision.band if isinstance(decision, Accept) else decision.placement
+    hard, easy = BandOutcome.TOO_HARD, BandOutcome.TOO_EASY
+    assert bands == {0: hard, 1: hard, **dict.fromkeys(range(2, 7), BandOutcome.IN_BAND), 7: easy, 8: easy}
+
+
 def decide(wp: Workpiece) -> Workpiece:
     wp = wp.with_(session=wp.session or Conversation((Message(Role.SYSTEM, "author"),), ()))
     setup = build_config(load_policy(DEFAULTS_DIR), "S", {})
@@ -730,7 +746,7 @@ async def test_adversary_interruptions_preserve_cause_and_close_environment(
         restored = WORKPIECE.validate_json(WORKPIECE.dump_json(workpiece.with_(evidence=(result,))))
         reason = "Hold: unavailable"
         assert restored.evidence[0].adversary == (AdversaryResult("finder", False, (), (reason,)),)
-        assert len(result.solver) == 3 and len(result.controls) == 2
+        assert len(result.solver) == K and len(result.controls) == 2
         decision = default_review(restored, setup.band, setup.budget)
         assert isinstance(decision, Incomplete) and decision.reasons == (f"finder: {reason}",)
     await ctx.drain()
