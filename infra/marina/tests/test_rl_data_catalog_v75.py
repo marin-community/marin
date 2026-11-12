@@ -21,11 +21,14 @@ def test_v75_api_marks_zero_actor_and_grandfathered_sources_without_false_unsafe
         "tags": ["agentic"],
         "daytona_safety": "unassessed",
         "daytona_snapshot_count": None,
+        "daytona_exemption": "Retained blend exemption from task curation",
     }
     # v75 recognizes 'na' and renders N/A; it has no dedicated dash state.
     assert daytona(no_actor, 10)["state"] == "na"
     exempt = daytona(grandfathered, 10)
     assert exempt["state"] == "na" and exempt["exempt"]
+    assert exempt["reason"] == grandfathered["daytona_exemption"]
+    assert daytona({**grandfathered, "daytona_exemption": None}, 10)["state"] == "unmeasured"
     locked = {
         "id": "actor-lock",
         "tags": ["agentic"],

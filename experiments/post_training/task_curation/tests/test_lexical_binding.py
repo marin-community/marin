@@ -25,10 +25,10 @@ from experiments.post_training.task_curation.lexical_artifacts import SourceText
 from experiments.post_training.task_curation.lexical_binding import (
     LexicalMeasurementReceipt,
     bind_lexical_measurement,
-    read_lexical_measurements,
 )
 from experiments.post_training.task_curation.lexical_policy import LexicalInputUse
 from experiments.post_training.task_curation.lexical_registration import main as register_measurements
+from experiments.post_training.task_curation.receipt_shards import read_receipt_shards
 from experiments.post_training.task_curation.source import RlDataSource, SourceOrigin
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
@@ -80,7 +80,7 @@ def test_historical_measurement_reaches_canonical_catalog_without_admitting_trai
     )
     record = {**receipt.model_dump(mode="json"), "source_id": historical_id}
     (tmp_path / "part-000.json").write_text(json.dumps({historical_id: record}))
-    receipts = read_lexical_measurements(tmp_path)
+    receipts = read_receipt_shards(tmp_path, LexicalMeasurementReceipt, "lexical")
     bound = bind_lexical_measurement(source, receipts[source.info.id], LexicalUse.TRAIN)
     table = pa.Table.from_pylist([bound.declaration.model_dump(mode="json")], schema=arrow_schema(SourceDeclaration))
     restored = SourceDeclaration.model_validate(table.to_pylist()[0])
@@ -185,7 +185,7 @@ def test_registration_writes_fresh_shards_and_preserves_occupied_directory(tmp_p
     output = tmp_path / "fresh"
     monkeypatch.setattr(sys, "argv", [*arguments, "--actor-receipts-dir", str(actor_dir), "--output-dir", str(output)])
     register_measurements()
-    written = read_lexical_measurements(output)[source.info.id]
+    written = read_receipt_shards(output, LexicalMeasurementReceipt, "lexical")[source.info.id]
     assert written.measurement.contaminated_tasks == 1 and written.measurement.receipt is None
     occupied = tmp_path / "occupied"
     occupied.mkdir()

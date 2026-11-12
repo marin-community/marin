@@ -564,6 +564,7 @@ class SourceDeclaration(CatalogRecord):
     pipeline: PipelineReference | None
     independent_qc: IndependentQC | None = None
     daytona_safety: DaytonaSafety | None
+    daytona_exemption: str | None = Field(default=None, min_length=1)
     daytona_snapshot_count: int | None = None
     daytona_snapshot_threshold: int | None = None
     daytona_count_basis: str | None = None

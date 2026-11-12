@@ -845,7 +845,12 @@ def main(
         else:
             _publish_campaign(report_path, selected, publication_root)
         if selection_step is not None or embedding is not None:
-            roots = {source.info.id: step.path() for source, step in zip(selected.values(), curation_steps, strict=True)}
+            roots = {
+                source.info.id: str(
+                    StoragePath(step.artifact_type.raw_load(step.path()).result.evidence["manifest"]).parent
+                )
+                for source, step in zip(selected.values(), curation_steps, strict=True)
+            }
             _write_corpus(roots, inventory, report_path, "admitted")
         if selection_step is not None:
             result = run(selection_step, max_concurrent=1)[0]

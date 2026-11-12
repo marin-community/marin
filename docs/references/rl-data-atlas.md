@@ -110,7 +110,9 @@ Before selecting a new catalog load:
 3. Check task-derived SHARED/SEPARATE grading evidence and actor-only Daytona
    measurements. Every UNSAFE reason needs details and affected actor-task counts;
    retain independent grader compatibility evidence. Grandfathered blends keep
-   their explicit dash exemption.
+   their explicit dash exemption. Task curation owns the fixed list of Daytona-exempt blends and
+   records the exemption reason in `SourceDeclaration.daytona_exemption`; the packaged Atlas
+   renderer reads that reason without owning source-specific policy.
 4. Recompute Result from reviewed issue counts using the inclusive 10% and 50%
    boundaries. Retain issues and repair recommendations separately from exclusions.
 5. Check Evalchemy benchmarks retain evaluation/heldout use. Run conversion in

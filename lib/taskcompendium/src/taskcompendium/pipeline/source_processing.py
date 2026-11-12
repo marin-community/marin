@@ -13,6 +13,7 @@ from enum import StrEnum
 from functools import partial
 from itertools import batched
 from typing import Any
+from uuid import uuid4
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -117,7 +118,7 @@ from taskcompendium.pipeline.stages import (
 )
 from taskcompendium.pipeline.transforms import admit_converted_row
 
-SOURCE_PIPELINE_REVISION = "17"
+SOURCE_PIPELINE_REVISION = "19"
 PANEL_ROWS_PER_SHARD = 16
 ROWS_PER_SHARD = 1000
 MAX_PREPARATION_SHARDS = 64
@@ -529,10 +530,6 @@ def _indexed_raw_sample(run: _SourceRun, telemetry: PhaseTelemetry) -> RawSample
 def _sample_panel(run: _SourceRun) -> _Panel:
     """Draw the raw panel while writing the locator ledger, then normalize, check and prepare only the panel."""
     policy = run.config.quality_policy
-    # An earlier run may have written the ledger under other shard names.
-    ledger = run.output / "download" / "locators"
-    if ledger.exists():
-        ledger.rmtree()
     with run.telemetry.phase("raw_sample") as phase:
         if run.config.mode == SourceProcessingMode.SAMPLE and run.recipe.source.parts is not None:
             sample = _indexed_raw_sample(run, phase)
@@ -635,11 +632,6 @@ def _expand_full(run: _SourceRun, panel: _Panel) -> StoragePath:
 def _audit(run: _SourceRun, prepared: StoragePath, review: ReviewConfig | None) -> int:
     """Review the prepared rows and return how many reviews are invalid or unavailable."""
     audited = run.scratch("audited")
-    # Rebuild incomplete audit shards while retaining exact-request journals and
-    # evidence. Successful requests are reconciled by the reviewer cache.
-    previous_audit = audited / "audit"
-    if previous_audit.exists():
-        previous_audit.rmtree()
     with run.telemetry.phase("audit_review") as phase:
         return audit_prepared_source(
             str(prepared),
@@ -800,12 +792,6 @@ def _export_sidecars(
     Locator files of an unexpanded sample write their unprocessed review rows alongside.
     """
     output = run.output
-    # A recovered panel can expand a formerly deferred source. Remove old
-    # derived shards, including unprocessed locators, before publishing that view.
-    for name in OUTPUT_VIEWS[1:]:
-        previous_output = output / name
-        if previous_output.exists():
-            previous_output.rmtree()
     audits = sorted(str(path) for path in (checked / AUDIT_INPUT_PATTERN).glob())
     inputs: list[_CheckedAudit | _UnprocessedLocators] = [
         _CheckedAudit(path, verification, run.config.oracle_filter) for path in audits
@@ -935,16 +921,8 @@ def _write_manifest(
     _write_json(output / "manifest.json", manifest)
 
 
-def _finish_scratch(run: _SourceRun, status: SourceStatus) -> None:
-    """Dispose of a finished run's redundant task payloads and point phase manifests at the normalize view."""
-    # Keep request/response evidence and decision manifests. Only the completed
-    # procedure's redundant task payloads are disposable; failures retain them.
-    if status != SourceStatus.INCOMPLETE:
-        for phase in SCRATCH_PHASES:
-            for view in ("audit", "accepted", "review-inputs"):
-                path = run.scratch(phase) / view
-                if path.exists():
-                    path.rmtree()
+def _finish_scratch(run: _SourceRun) -> None:
+    """Point phase manifests at the normalize view while retaining all phase evidence."""
     for phase in SCRATCH_PHASES:
         path = run.scratch(phase) / "manifest.json"
         if path.exists():
@@ -960,8 +938,8 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
 
     The caller owns the entered context and reviewer. Reading the raw
     population scans selected raw records with bounded memory, but does not
-    execute task converters or controls. Successful outputs retain request
-    evidence and decisions while disposing of redundant intermediate task payloads.
+    execute task converters or controls. Each invocation retains request evidence,
+    decisions and intermediate task payloads.
     """
     config = run.config
     if config.normalized_shards < 1:
@@ -1009,7 +987,7 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
         unavailable_reviews=unavailable_reviews,
         status=status,
     )
-    _finish_scratch(run, status)
+    _finish_scratch(run)
     return SourcePipelineResult(
         *(str(run.output / name) for name in OUTPUT_VIEWS),
         manifest_path=str(run.output / "manifest.json"),
@@ -1046,10 +1024,14 @@ def run_source_pipeline(
     require_decontamination(config.lexical_contamination, recipe.source.dataset, recipe.source.revision)
     if config.review is None:
         raise ValueError("SAMPLE/FULL require a ReviewerSpec")
-    telemetry = SourceTelemetry(canonical_source, output_path)
-    run = _SourceRun(
-        recipe, context, source_input, StoragePath(output_path), config, telemetry, source_overrides, parquet_shard_bytes
-    )
+    output = StoragePath(output_path)
+    if any(
+        (output / name).exists()
+        for name in (*OUTPUT_VIEWS, "work", "within-source-dedup", "manifest.json", TELEMETRY_FILENAME)
+    ):
+        output = output / "attempts" / uuid4().hex
+    telemetry = SourceTelemetry(canonical_source, str(output))
+    run = _SourceRun(recipe, context, source_input, output, config, telemetry, source_overrides, parquet_shard_bytes)
     with telemetry.record():
         return _run_source_pipeline(run)
 

@@ -4,8 +4,6 @@
 """The task catalog: training and evaluation dataset declarations, keyed by name."""
 
 
-from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
-
 from experiments.post_training.task_curation.census_binding import bind_actor_census
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
@@ -49,6 +47,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import structure
 from experiments.post_training.task_curation.lexical_binding import bind_lexical_measurement
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
 from experiments.post_training.task_curation.source import RlDataSource, TaskFormat
+from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 
 
 def all_sources() -> dict[str, RlDataSource]:

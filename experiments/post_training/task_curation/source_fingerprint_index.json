@@ -1,87 +1,87 @@
 {
   "TaskTrove:laion__codeforces-v3": {
     "input_sha256": "64021d6e6b7cef3eae11f3b709f79a67ec8d048b4b332fb69fdc354f075997e5",
-    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+    "sha256": "449773aaf2d3c363d975f3e8d5c5ff8148d96d28324ee3981c326187eff7cbf0",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/normalized-fp17-v1-449773aaf2d3c363.json"
   },
   "TaskTrove:smartie-calibforge-rebuilt-v1": {
     "input_sha256": "a8f7da4d324c11f97651f0146f5177e6e6967337f6a19fbf620aa8d66a8132e6",
-    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+    "sha256": "449773aaf2d3c363d975f3e8d5c5ff8148d96d28324ee3981c326187eff7cbf0",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/normalized-fp17-v1-449773aaf2d3c363.json"
   },
   "TaskTrove:tasktrove-code-contests-built-image": {
     "input_sha256": "1fee485717a80d5119834165776a11360a86510f1444ec74cb7366b1da225e0b",
-    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+    "sha256": "449773aaf2d3c363d975f3e8d5c5ff8148d96d28324ee3981c326187eff7cbf0",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/normalized-fp17-v1-449773aaf2d3c363.json"
   },
   "TaskTrove:tasktrove-codeforces-rebuilt-v1": {
     "input_sha256": "6d9f6b083709b27c26f185efa654c752946e798b3985635510dc70a3e43e84b4",
-    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+    "sha256": "449773aaf2d3c363d975f3e8d5c5ff8148d96d28324ee3981c326187eff7cbf0",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/normalized-fp17-v1-449773aaf2d3c363.json"
   },
   "TaskTrove:tasktrove-competitive-coding-rebuilt-v1": {
     "input_sha256": "e15cac72c97acfb4605219c793ade5dbc75cd19b0e4d0d9238dbe177dff10ec3",
-    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+    "sha256": "449773aaf2d3c363d975f3e8d5c5ff8148d96d28324ee3981c326187eff7cbf0",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/normalized-fp17-v1-449773aaf2d3c363.json"
   },
   "TaskTrove:tasktrove-curriculum-easy-rebuilt-v1": {
     "input_sha256": "9512b7453f3fe48104b9ea05fa5fd479daafbded22bb23ed63993af605f37ca0",
-    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+    "sha256": "449773aaf2d3c363d975f3e8d5c5ff8148d96d28324ee3981c326187eff7cbf0",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/normalized-fp17-v1-449773aaf2d3c363.json"
   },
   "TaskTrove:tasktrove-curriculum-medium-rebuilt-v1": {
     "input_sha256": "d9e587158966753f05667dc8f0ad8365ee502354328115fbd0e749dcbcb87515",
-    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+    "sha256": "449773aaf2d3c363d975f3e8d5c5ff8148d96d28324ee3981c326187eff7cbf0",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/normalized-fp17-v1-449773aaf2d3c363.json"
   },
   "TaskTrove:tasktrove-e2egit-large-rebuilt-v1": {
     "input_sha256": "469ba3d97509bb6005b701e84dfa8f26e50f31a043f8aa5dbb7cc031a42356a9",
-    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+    "sha256": "449773aaf2d3c363d975f3e8d5c5ff8148d96d28324ee3981c326187eff7cbf0",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/normalized-fp17-v1-449773aaf2d3c363.json"
   },
   "TaskTrove:tasktrove-e2egit-v2-rebuilt": {
     "input_sha256": "c5d0835f5d8764de8757a6e17a6f6860896f65c17daa5bc5e3013c81f203efea",
-    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+    "sha256": "449773aaf2d3c363d975f3e8d5c5ff8148d96d28324ee3981c326187eff7cbf0",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/normalized-fp17-v1-449773aaf2d3c363.json"
   },
   "TaskTrove:tasktrove-multifile-rebuilt-v1": {
     "input_sha256": "64424c3b6c7edd168041fdc7fac4bd913dbbbfed9feab69aefc91cd1ec160bb0",
-    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+    "sha256": "449773aaf2d3c363d975f3e8d5c5ff8148d96d28324ee3981c326187eff7cbf0",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/normalized-fp17-v1-449773aaf2d3c363.json"
   },
   "TaskTrove:tasktrove-nl2bash-rebuilt-v1": {
     "input_sha256": "7e4ca4f3907a425d84e129ea8eac306086eb80735df3430461a676086ee8c86c",
-    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+    "sha256": "449773aaf2d3c363d975f3e8d5c5ff8148d96d28324ee3981c326187eff7cbf0",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/normalized-fp17-v1-449773aaf2d3c363.json"
   },
   "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1": {
     "input_sha256": "82e08965e8443c7fae61374a765e519439adfdde3885817d627217d158b0233b",
-    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+    "sha256": "449773aaf2d3c363d975f3e8d5c5ff8148d96d28324ee3981c326187eff7cbf0",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/normalized-fp17-v1-449773aaf2d3c363.json"
   },
   "TaskTrove:tasktrove-pymethods2test-rebuilt-v1": {
     "input_sha256": "7b4dd909a3a55b493433122fcaaec286cf8630dab38ff1de310e23a361be1d49",
-    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+    "sha256": "449773aaf2d3c363d975f3e8d5c5ff8148d96d28324ee3981c326187eff7cbf0",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/normalized-fp17-v1-449773aaf2d3c363.json"
   },
   "TaskTrove:tasktrove-stack-pytest-rebuilt-v1": {
     "input_sha256": "e73a31ccf4bc2464999a75d1b20b44eecdd8fccd8a8c77e08989f9f569f8b1f4",
-    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+    "sha256": "449773aaf2d3c363d975f3e8d5c5ff8148d96d28324ee3981c326187eff7cbf0",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/normalized-fp17-v1-449773aaf2d3c363.json"
   },
   "TaskTrove:tasktrove-taco-built-image": {
     "input_sha256": "e642c9dc1727adf07d598be2b2269524a0d6b9d484097ee718297664d0f042d7",
-    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+    "sha256": "449773aaf2d3c363d975f3e8d5c5ff8148d96d28324ee3981c326187eff7cbf0",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/normalized-fp17-v1-449773aaf2d3c363.json"
   },
   "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1": {
     "input_sha256": "a384bcb408b9c12eb0ca784ffd19b259155a52d9bfbd9e04004e0d4b707f2118",
-    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+    "sha256": "449773aaf2d3c363d975f3e8d5c5ff8148d96d28324ee3981c326187eff7cbf0",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/normalized-fp17-v1-449773aaf2d3c363.json"
   },
   "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1": {
     "input_sha256": "bb22b63ba07c55fdd29a36f3779e9f36a855893b60ea7abb9bf43c8608a5ff0b",
-    "sha256": "1111efde3c70aa70af9c51947517a59108aa67e24be99812391a4f3be1148da4",
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/source-identities-reviewed-1111efde3c70aa70.json"
+    "sha256": "449773aaf2d3c363d975f3e8d5c5ff8148d96d28324ee3981c326187eff7cbf0",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261112/normalized-fp17-v1-449773aaf2d3c363.json"
   }
 }
