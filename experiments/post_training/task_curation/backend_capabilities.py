@@ -32,6 +32,7 @@ from taskcompendium.backend_requirements import (
     BackendSurvey,
     RuntimeProfile,
     backend_schema_sha256,
+    execution_resource_shape,
     task_demands,
 )
 from taskcompendium.models import EnvironmentRequirements
@@ -70,6 +71,7 @@ def source_map(
     inputs: dict[str, str],
     runtime_defaults: dict[str, RuntimeProfile],
     grading_environment: dict | None = None,
+    integrity_contracts: dict | None = None,
 ) -> BackendSourceMap:
     """Count every converted task, validating combined demands in each machine slot."""
     cells = {(cell.backend, cell.requirement): cell for cell in matrix}
@@ -86,7 +88,10 @@ def source_map(
         task = document.get("task", document)
         published_runtime = document.get("runtime") or {}
         runtime = {
-            slot: {**runtime_defaults[role].model_dump(mode="json"), **(published_runtime.get(slot) or {})}
+            slot: {
+                **runtime_defaults[role].model_dump(mode="json"),
+                **execution_resource_shape(task, published_runtime.get(slot)),
+            }
             for role, slot in (("agent", "task_machine"), ("grader", "verifier_machine"))
         }
         demands = task_demands({"task": task, "runtime": runtime})
@@ -135,6 +140,7 @@ def source_map(
         resource_ranges=dict(ranges),
         role_backend_assignments=dict(assignments),
         grading_environment=grading_environment,
+        integrity_contracts=integrity_contracts,
         backends={
             backend: BackendFit(
                 support=combined_support(task_counts[backend]),
@@ -185,6 +191,7 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
             digests,
             runtime_defaults,
             manifest.get("grading_environments", {}).get(source_id),
+            manifest.get("integrity_contracts", {}).get(source_id),
         )
         if measured.task_count != entry["expected_tasks"]:
             raise ValueError(f"Converted population differs from manifest: {source_id}")
@@ -222,6 +229,7 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
                 backends={},
                 role_backend_assignments={},
                 grading_environment=manifest.get("grading_environments", {}).get(source_id),
+                integrity_contracts=manifest.get("integrity_contracts", {}).get(source_id),
             )
             for source_id in source_ids
         ],

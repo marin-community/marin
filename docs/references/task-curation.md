@@ -1307,6 +1307,19 @@ their declared environments and resource shapes. Failed execution requirements m
 cohort Daytona-unsafe even when its snapshot count fits the budget. Unsafe cohorts with
 valid task environments and admission evidence remain ingested with that label.
 
+`TaskSpec.execution_requirements` declares CPUs, memory and storage in MiB, plus
+agent and verifier deadlines in seconds. The backend survey classifies all five
+fields and includes their schema in its version digest. Capacity must match any
+published runtime allocation; native Harbor tasks must also match their embedded
+`task.toml`. A conflict fails measurement. These budgets apply only to roles
+that already require a machine.
+
+The complete actor census also publishes integrity-contract group counts, one
+bounded full example, and an evidence URI bound to the input dataset revision
+and TaskSpec digest. The backend map can carry that summary alongside the
+published grading-environment census. Missing contracts remain visible as
+missing evidence and do not establish shared-grading integrity.
+
 ### Package-lock graders use the worker's local runtime
 
 A grader that declares `packages_lock` runs in the worker's local bubblewrap

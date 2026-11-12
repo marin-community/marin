@@ -36,7 +36,7 @@ class CensusConfig:
 
 
 def population_documents(population: SourceTextPopulation) -> Iterable[tuple[dict, dict]]:
-    for path in sorted(StoragePath(prefix_join(population.specs_output_dir, "*.parquet")).glob()):
+    for path in sorted(StoragePath(prefix_join(population.specs_output_dir, "*.parquet")).glob(), key=str):
         with path.open("rb") as stream:
             for batch in pq.ParquetFile(stream).iter_batches(batch_size=32, columns=["task_spec", "runtime"]):
                 for row in batch.to_pylist():

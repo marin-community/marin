@@ -35,6 +35,7 @@ from experiments.post_training.task_curation.lexical_artifacts import (
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
 from experiments.post_training.task_curation.lexical_scan import ReportConfig, measure_marks
 from experiments.post_training.task_curation.local import artifact_prefix
+from experiments.post_training.task_curation.published_census import CensusConfig, measure_population
 
 
 def lexical_task(identifier: str, public: str, private: str) -> dict:
@@ -158,3 +159,40 @@ def test_full_task_text_marks_public_eval_copy_and_excludes_private_reference(tm
         }
         dropped = pq.read_table(next((tmp_path / "report").glob("*/drop_manifest.parquet"))).to_pylist()
         assert [row["id"] for row in dropped] == ["public-copy"]
+
+
+def test_census_reads_every_partition_and_measures_empty_actor_environments(tmp_path):
+    files = write_text_population(
+        ((lexical_task(str(index), "A text-only task", "private"), {}) for index in range(1001)),
+        str(tmp_path / "population"),
+    )
+    population = SourceTextPopulation(
+        path=str(tmp_path / "population"),
+        source_id="two-partitions",
+        dataset_id="private/dataset",
+        dataset_revision="a" * 40,
+        source_version="1",
+        converter_revision="converter-pin",
+        text_renderer_version="renderer-v1",
+        task_count=files.task_count,
+        text_sha256=files.text_sha256,
+        task_specs_sha256=files.task_specs_sha256,
+        main_output_dir=files.main_output_dir,
+        specs_output_dir=files.specs_output_dir,
+        converter_rejections={},
+        admission_rejections={},
+    )
+    with artifact_prefix(str(tmp_path)):
+        write_record(
+            ArtifactRecord(
+                output_path=population.path,
+                result_type=result_type_name(type(population)),
+                result=population.result_payload(),
+            )
+        )
+        result = measure_population(CensusConfig(population.path, str(tmp_path / "census")))
+    assert result.task_count == 1001
+    assert result.daytona_safety == "not_applicable"
+    assert result.daytona_machine_slots == result.daytona_snapshot_count == result.daytona_execution_failures == 0
+    assert result.empty_declared_environment_tasks == {"agent": 1001, "grader": 1001}
+    assert result.integrity_contracts["missing_tasks"] == 1001

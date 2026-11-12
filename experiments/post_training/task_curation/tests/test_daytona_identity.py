@@ -284,7 +284,10 @@ def test_native_envelope_counts_original_toml_shape_without_unbuilt_lowering():
     from experiments.post_training.task_curation.daytona_census import measure_envelopes  # noqa: PLC0415
 
     dockerfile = "FROM ubuntu:24.04\nCOPY setup.sh /app/setup.sh\n"
-    toml = b"[environment]\ncpus=2\nmemory_mb=2048\nstorage_mb=4096\nallow_internet=false\n"
+    toml = (
+        b"[environment]\ncpus=2\nmemory_mb=2048\nstorage_mb=4096\nallow_internet=false\n"
+        b"[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=600\n"
+    )
     resources = [
         inline_resource("task.toml", toml),
         inline_resource("environment/Dockerfile", dockerfile.encode()),
@@ -315,3 +318,15 @@ def test_native_envelope_counts_original_toml_shape_without_unbuilt_lowering():
     # The generic unbuilt TaskCompendium route is distinct from native Harbor's build path.
     lowered = count_lowered_spec_identities([("native", {"task": task, "runtime": {"task_machine": {}}})])
     assert any("Unresolved Docker build context" in reason for _, reason in lowered.execution_failures)
+
+    task["execution_requirements"] = {
+        "cpus": 2,
+        "memory_mb": 2048,
+        "storage_mb": 4096,
+        "agent_timeout_sec": 900,
+        "verifier_timeout_sec": 600,
+    }
+    assert count_native_spec_identities([("native", task)]).sizes == direct.sizes
+    task["execution_requirements"]["storage_mb"] = 8192
+    with pytest.raises(ValueError, match="storage_mb conflicts"):
+        count_native_spec_identities([("native", task)])

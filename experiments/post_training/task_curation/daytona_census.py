@@ -26,6 +26,7 @@ from rolloutengine.machines import _machine_spec
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.machine import check_local_environment
 from shellbox.machine import UnsupportedMachineSpec
+from taskcompendium.backend_requirements import execution_resource_shape
 from taskcompendium.grading_environment import GradingEnvironmentStatus, assess_grading_environment
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskSpec, missing_environment
@@ -227,7 +228,12 @@ def measure_envelopes(documents: Iterable[tuple[dict, dict]]) -> EnvelopeCensus:
             ("grader", "verifier_machine", task["grader"].get("environment"), "deny"),
         ):
             needs_machine = (native and role == "agent") or (declared is not None and any(declared.values()))
-            shape = {**PROFILE, "backend": "daytona", "network": network, **(shapes.get(slot) or {})}
+            shape = {
+                **PROFILE,
+                "backend": "daytona",
+                "network": network,
+                **execution_resource_shape(task, shapes.get(slot)),
+            }
             if role == "grader" and declared and declared.get("packages_lock"):
                 shape["backend"] = "local"
             runtime[slot] = shape if needs_machine else None

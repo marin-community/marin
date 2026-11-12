@@ -141,11 +141,19 @@ def native_task_toml(task: Mapping) -> bytes:
 
 def count_native_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> SnapshotIdentityCount:
     """Count lossless Harbor envelopes through their unchanged native files and task.toml."""
+    from taskcompendium.backend_requirements import execution_resource_shape  # noqa: PLC0415
     from taskcompendium.models import TaskResource  # noqa: PLC0415
     from taskcompendium.runtime.resources import resource_bytes  # noqa: PLC0415
 
     def archives() -> Iterable[tuple[str, bytes]]:
         for task_id, task in tasks:
+            if task.get("execution_requirements") is not None:
+                document = tomllib.loads(native_task_toml(task).decode())
+                environment = EnvironmentConfig.model_validate(document.get("environment") or {})
+                execution_resource_shape(task, environment.model_dump())
+                for role, field in (("agent", "agent_timeout_sec"), ("verifier", "verifier_timeout_sec")):
+                    if (document.get(role) or {}).get("timeout_sec") != task["execution_requirements"][field]:
+                        raise ValueError(f"{task_id}: {field} conflicts with native task.toml")
             buffer = io.BytesIO()
             with tarfile.open(fileobj=buffer, mode="w") as archive:
                 for row in task["resources"]["verifier"]:
@@ -172,6 +180,7 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
     """
     # Native Harbor counting also runs in Harbor's standalone environment, which
     # does not install TaskCompendium. Only lowered TaskCompendium inputs need it.
+    from taskcompendium.backend_requirements import execution_resource_shape  # noqa: PLC0415
     from taskcompendium.models import EnvironmentRequirements, require_resolved_environment  # noqa: PLC0415
 
     sizes: Counter[str] = Counter()
@@ -191,6 +200,7 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
         for role, declared, shape in slots:
             if declared is None or shape is None:
                 continue
+            shape = execution_resource_shape(task, shape)
             requirements = EnvironmentRequirements.model_validate(declared)
             with tempfile.TemporaryDirectory() as tmp:
                 context = Path(tmp)
