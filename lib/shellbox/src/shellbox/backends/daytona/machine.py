@@ -629,12 +629,17 @@ class DaytonaMachineFactory:
                     ),
                     timeout=timeout,
                 )
+                # Resolve the image WORKDIR before setup can replace its inode.
+                # An omitted API cwd can retain the provider's deleted directory.
+                workdir = spec.workdir or await sandbox.get_work_dir()
+                if not PurePosixPath(workdir).is_absolute() or "\0" in workdir:
+                    raise UnsupportedMachineSpec(f"Daytona image workdir must be absolute: {workdir!r}")
             prepared = await sandbox.process.exec(
                 _control_command("command -v setsid"), cwd=CONTROL_CWD, timeout=INTERRUPT_TIMEOUT
             )
             if prepared.exit_code:
                 raise UnsupportedMachineSpec("Daytona task images require setsid for command timeout recovery")
-            machine = DaytonaMachine(sandbox, spec, lifetime)
+            machine = DaytonaMachine(sandbox, replace(spec, workdir=workdir), lifetime)
             if spec.workdir:
                 result = await machine.run(Command(("mkdir", "-p", spec.workdir), cwd="/", env={"PATH": CONTROL_PATH}))
                 if result.exit_code:

@@ -201,7 +201,10 @@ class LocalSnapshots:
 
 class LocalDaytona:
     def __init__(self):
-        self.sandbox = SimpleNamespace(fs=LocalFiles(), process=LocalProcess())
+        async def get_work_dir():
+            return str(Path.cwd())
+
+        self.sandbox = SimpleNamespace(fs=LocalFiles(), process=LocalProcess(), get_work_dir=get_work_dir)
         self.deleted = False
         self.closed = False
         self.params = None
@@ -324,7 +327,8 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
     asyncio.run(scenario())
 
 
-def test_daytona_recreated_workdir_preserves_command_output(tmp_path: Path) -> None:
+@pytest.mark.parametrize("inherit_workdir", [False, True])
+def test_daytona_recreated_workdir_preserves_command_output(tmp_path: Path, inherit_workdir: bool) -> None:
     workdir = tmp_path / "work"
     workdir.mkdir()
     original_inode = workdir.stat().st_ino
@@ -337,21 +341,27 @@ def test_daytona_recreated_workdir_preserves_command_output(tmp_path: Path) -> N
         async def exec(self, command, cwd=None, env=None, timeout=None):
             if self.workdir_replaced and cwd is None:
                 raise OSError("Provider process retained the deleted working directory")
-            result = await super().exec(command, cwd=cwd, env=env, timeout=timeout)
+            # The provider starts omitted-cwd commands in the image WORKDIR.
+            result = await super().exec(command, cwd=cwd or str(workdir), env=env, timeout=timeout)
             self.workdir_replaced = workdir.stat().st_ino != original_inode
             return result
 
     async def scenario():
         client = LocalDaytona()
         client.sandbox.process = StaleWorkdirProcess()
+
+        async def get_work_dir():
+            return str(workdir)
+
+        client.sandbox.get_work_dir = get_work_dir
         machine = await DaytonaMachineFactory(lambda: client).create(
-            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(workdir))
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir="" if inherit_workdir else str(workdir))
         )
         try:
             replaced = await machine.run(Command(("sh", "-c", 'rm -rf "$PWD" && mkdir -p "$PWD" && printf recreated')))
             assert (replaced.exit_code, replaced.stdout) == (0, b"recreated")
-            following = await machine.run(Command(("printf", "ready")))
-            assert (following.exit_code, following.stdout) == (0, b"ready")
+            following = await machine.run(Command(("pwd", "-P")))
+            assert (following.exit_code, following.stdout.strip()) == (0, str(workdir).encode())
             assert workdir.stat().st_ino != original_inode
         finally:
             await machine.close()
