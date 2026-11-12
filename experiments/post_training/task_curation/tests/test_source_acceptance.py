@@ -50,7 +50,6 @@ def test_every_runnable_agentic_source_ingests_a_task_directory_format():
 
 
 def test_a_new_internal_format_agentic_source_is_rejected():
-    """A MarinSkyRL-format source outside the frozen list cannot be selected."""
     with pytest.raises(ValueError, match="not grandfathered"):
         require_accepted_task_format(_agentic(TaskFormat.MARINSKYRL, "Marin:a-new-blend"))
 
