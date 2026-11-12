@@ -30,6 +30,7 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from experiments.post_training.task_curation import prebuilt
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import PipelineOptions
+from experiments.post_training.task_curation.driver import _write_corpus
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
@@ -116,3 +117,7 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
     for view in ("normalize", "final"):
         rows = pq.read_table(next((destination / view).glob("*.parquet"))).to_pylist()
         assert [TaskSpec.model_validate_json(row["task_json"]).id for row in rows] == ["a", "b"]
+
+    _write_corpus({"fixture": str(destination)}, [], str(tmp_path / "report.json"), "converted")
+    corpus = json.loads((tmp_path / "corpus.json").read_text())
+    assert corpus["sources"][0]["converted_rows"] == 2

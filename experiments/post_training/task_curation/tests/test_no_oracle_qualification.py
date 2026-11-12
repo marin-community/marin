@@ -15,6 +15,7 @@ from experiments.post_training.task_curation.no_oracle_qualification import (
     QualificationReport,
     SetupExecution,
     VerifierResult,
+    WorkspaceFile,
     _compare_workspace,
     _manifest,
     check_preservation,
@@ -155,7 +156,7 @@ def test_an_absolute_destination_keeps_its_mode():
     """stat reports an absolute path; normalizing must not strip the leading slash."""
     digest = "a" * 64
     manifest = _manifest(f"644 /data/products.csv\n{digest}  /data/products.csv\n")
-    assert manifest == [(digest, 0o644, "/data/products.csv")]
+    assert manifest == [WorkspaceFile("/data/products.csv", digest, 0o644)]
 
 
 def test_a_faithful_mode_change_is_reported_not_failed():

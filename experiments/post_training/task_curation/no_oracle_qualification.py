@@ -19,8 +19,8 @@ shared environments. Empty-submission grading runs separately through
    Package installation runs by default. ``--stub-apt`` skips installs for a
    payload-only diagnostic and does not establish dependency provisioning.
 3. **Empty-submission grading** (separate command). ``no_oracle_liveness``
-   samples the grader on a fresh machine and records its reward. Its current
-   negative-verdict classification does not confirm that verifier tests ran.
+   samples the grader on a fresh machine. Qualification requires a successful
+   verifier exit, a negative reward, and a positive structured executed-test count.
 
 The offline report records preservation and setup pass rates by base and
 overall. Verifier results require an explicit ``--liveness`` receipt file. A reward-only
@@ -207,6 +207,7 @@ class QualificationReport:
                     "task_id": result.task_id,
                     "outcome": result.outcome,
                     "exit_code": result.exit_code,
+                    "tests_executed": result.tests_executed,
                     "passed": result.passed,
                     "detail": result.detail,
                 }
@@ -298,9 +299,16 @@ def removed_workspace_paths(dockerfile: str, workdir: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(removed))
 
 
-def copy_mappings(dockerfile: str, workdir: str) -> list[tuple[str, str, bool]]:
+@dataclass(frozen=True)
+class CopyMapping:
+    source: str
+    destination: str
+    directory: bool
+
+
+def copy_mappings(dockerfile: str, workdir: str) -> list[CopyMapping]:
     """Each copied source with its absolute destination and whether that is a directory."""
-    mappings: list[tuple[str, str, bool]] = []
+    mappings: list[CopyMapping] = []
     for match in COPY_SOURCE.finditer(dockerfile):
         tokens = [token for token in match.group("sources").split() if not token.startswith("--")]
         if len(tokens) < 2:
@@ -312,7 +320,7 @@ def copy_mappings(dockerfile: str, workdir: str) -> list[tuple[str, str, bool]]:
         for source in sources:
             if any(character in source for character in "$*?"):
                 continue
-            mappings.append((source.rstrip("/"), absolute, is_directory))
+            mappings.append(CopyMapping(source.rstrip("/"), absolute, is_directory))
     return mappings
 
 
@@ -331,11 +339,13 @@ def workspace_expectations(native_payload: bytes) -> tuple[FileExpectation, ...]
     kept: dict[str, FileExpectation] = {}
     for item in expectations:
         relative = item.path[len(ENVIRONMENT_PREFIX) :]
-        for source, absolute, is_directory in mappings:
-            if relative == source:
-                destination = f"{absolute}/{relative.rsplit('/', 1)[-1]}" if is_directory else absolute
-            elif relative.startswith(source + "/"):
-                destination = f"{absolute}/{relative[len(source) + 1:]}"
+        for mapping in mappings:
+            if relative == mapping.source:
+                destination = (
+                    f"{mapping.destination}/{relative.rsplit('/', 1)[-1]}" if mapping.directory else mapping.destination
+                )
+            elif relative.startswith(mapping.source + "/"):
+                destination = f"{mapping.destination}/{relative[len(mapping.source) + 1:]}"
             else:
                 continue
             if any(destination == path or destination.startswith(path.rstrip("/") + "/") for path in removed):
@@ -391,13 +401,15 @@ def _normalized_path(path: str) -> str:
     return path[2:] if path.startswith("./") else path
 
 
-def _manifest(stdout: str) -> list[tuple[str, int, str]]:
-    r"""Parse ``mode path`` and ``sha256  path`` lines from one container run.
+@dataclass(frozen=True)
+class WorkspaceFile:
+    path: str
+    sha256: str
+    mode: int
 
-    ``find`` reports paths relative to the root it walks and ``stat`` reports the
-    absolute path it was given, so both forms appear. Normalizing a single leading
-    ``./`` keeps them consistent without touching a leading ``/``.
-    """
+
+def _manifest(stdout: str) -> list[WorkspaceFile]:
+    """Parse paired absolute-path mode and SHA-256 records from a container scan."""
     entries: dict[str, int] = {}
     digests: dict[str, str] = {}
     for line in stdout.splitlines():
@@ -412,7 +424,7 @@ def _manifest(stdout: str) -> list[tuple[str, int, str]]:
             entries[path] = int(first, 8)
         elif re.fullmatch(r"[0-9a-f]{64}", first):
             digests[path] = first
-    return [(digest, entries[path], path) for path, digest in digests.items() if path in entries]
+    return [WorkspaceFile(path, digest, entries[path]) for path, digest in digests.items() if path in entries]
 
 
 def _execute_container_setup(
@@ -506,16 +518,16 @@ class WorkspaceComparison:
 
 def _compare_workspace(expectations: tuple[FileExpectation, ...], stdout: str) -> WorkspaceComparison:
     """Require the native bytes at each native COPY destination, including duplicate contents."""
-    observed = {path: (digest, mode) for digest, mode, path in _manifest(stdout)}
+    observed = {item.path: item for item in _manifest(stdout)}
     expected = {item.path: item for item in expectations}
     missing = tuple(
-        path for path, item in sorted(expected.items()) if path not in observed or observed[path][0] != item.sha256
+        path for path, item in sorted(expected.items()) if path not in observed or observed[path].sha256 != item.sha256
     )
     extra = tuple(sorted(observed.keys() - expected.keys()))
     changed = tuple(
-        f"{item.sha256[:12]}:{path}:{oct(observed[path][1])}->{oct(item.mode)}"
+        f"{item.sha256[:12]}:{path}:{oct(observed[path].mode)}->{oct(item.mode)}"
         for path, item in sorted(expected.items())
-        if path in observed and observed[path][1] != item.mode
+        if path in observed and observed[path].mode != item.mode
     )
     return WorkspaceComparison(len(observed), missing, extra, changed)
 

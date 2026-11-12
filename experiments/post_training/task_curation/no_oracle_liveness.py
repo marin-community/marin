@@ -31,7 +31,7 @@ import json
 import random
 import tempfile
 from collections import defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -111,6 +111,10 @@ async def run_one(
             return LivenessResult(
                 task.id, base, "infra_error", None, None, "", "CPU qualification cannot provision GPUs"
             )
+        if runtime.user is not None:
+            return LivenessResult(
+                task.id, base, "infra_error", None, None, "", "Explicit runtime users require rollout execution"
+            )
         locked = requirements.packages_lock is not None
         if locked:
             # A packaged grader runs in the local bubblewrap runtime; no sandbox backend and
@@ -139,8 +143,6 @@ async def run_one(
             )
 
             if requirements.docker_build is not None:
-                # A build-graded task is graded on the backend against the declared build
-                # context; the backend builds it, so no snapshot identity is derived here.
                 context_dir = Path(context)
                 for resource in requirements.docker_build.files:
                     target = context_dir / resource.path
@@ -166,6 +168,7 @@ async def run_one(
             )
             snapshot = snapshot_identity(spec_machine.source, snapshot_resources(spec_machine))
             grading_factory = factory or DaytonaMachineFactory()
+        spec_machine = replace(spec_machine, startup_timeout=runtime.startup_timeout)
         try:
             if submission_files is None:
                 result = await grade_empty_in_sandbox(task, grading_factory, spec_machine, timeout=VERIFIER_TIMEOUT)

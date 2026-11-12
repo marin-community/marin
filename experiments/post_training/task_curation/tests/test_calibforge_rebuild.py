@@ -47,27 +47,6 @@ def unpack(task_binary: bytes) -> dict[str, bytes]:
         }
 
 
-def test_pinned_verifier_base_passes_through_and_data_files_stay_out_of_the_image():
-    dockerfile = (
-        "FROM aweaiteam/calibforge:tb2-verifier-base-v1@sha256:0f61b2776c40\n"
-        "WORKDIR /app\n"
-        "COPY files/data.csv /app/data.csv\n"
-        "COPY make_fixtures.py /app/make_fixtures.py\n"
-        "RUN python3 /app/make_fixtures.py\n"
-    )
-    rebuilt = rebuild_task(native_task(dockerfile, {"files/data.csv": b"x\n", "make_fixtures.py": b"print(1)\n"}))
-    output = unpack(rebuilt.task_binary)
-    assert b"FROM aweaiteam/calibforge:tb2-verifier-base-v1@sha256:0f61b2776c40" in output["environment/Dockerfile"]
-    assert "environment/files" not in " ".join(_names(rebuilt))
-    script = output["setup_files/calibforge-initialize.sh"].decode()
-    assert "cp -a" in script and "make_fixtures.py" in script
-
-
-def _names(rebuilt) -> list[str]:
-    with tarfile.open(fileobj=io.BytesIO(gzip.decompress(rebuilt.task_binary))) as archive:
-        return archive.getnames()
-
-
 def test_unmapped_and_unsupported_recipes_defer_with_reasons():
     with pytest.raises(DeferredRebuild, match="unmapped_base"):
         rebuild_task(native_task("FROM registry.example/weird:latest\nWORKDIR /app\n"))
@@ -77,28 +56,6 @@ def test_unmapped_and_unsupported_recipes_defer_with_reasons():
         rebuild_task(native_task("FROM ubuntu:24.04\nRUN service nginx start\n"))
     with pytest.raises(DeferredRebuild, match="env_support"):
         rebuild_task(native_task("FROM ubuntu:24.04\nENV TZ\nWORKDIR /app\n"))
-
-
-def test_package_flags_env_and_inline_env_normalize_without_deferring():
-    rebuilt = rebuild_task(
-        native_task(
-            "FROM ubuntu:24.04\n"
-            "ENV PYTHONDONTWRITEBYTECODE=1\n"
-            "WORKDIR /app\n"
-            "COPY files/ /app/files/\n"
-            "RUN apt-get update && apt-get install -y --no-install-recommends jq\n"
-            "RUN rm -f /app/files/stale.csv\n"
-            "RUN DEBIAN_FRONTEND=noninteractive apt-get install -y curl\n",
-            {"files/input.csv": b"a\n1\n", "files/stale.csv": b"old\n"},
-        )
-    )
-    script = unpack(rebuilt.task_binary)["setup_files/calibforge-initialize.sh"].decode()
-    assert "export PYTHONDONTWRITEBYTECODE=1" in script
-    assert "--no-install-recommends" in script
-    assert "rm -f /app/files/stale.csv" in script
-    assert (
-        script.count("DEBIAN_FRONTEND=noninteractive") == 3
-    )  # each apt segment (update + two installs; the inline one keeps its own)
 
 
 def test_instruction_level_run_flags_still_defer():

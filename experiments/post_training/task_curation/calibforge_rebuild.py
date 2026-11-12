@@ -422,14 +422,7 @@ LOWERED_RUNTIME = {"cpus": NORMALIZED_CPUS, "memory_mb": NORMALIZED_MEMORY_MB, "
 
 
 def lowered_task_spec(task_id: str, task_binary: bytes) -> dict:
-    """The TaskCompendium spec a rollout consumes: resources plus setup commands.
-
-    Harbor's task.toml cannot express a start hook, but the rollout runner executes
-    ``EnvironmentRequirements.setup_commands`` after installing resources
-    (``rolloutengine.machines``), so the fixtures travel as resources and the setup
-    script runs from ``/setup_files``. The models forbid extra keys, which makes an
-    unsupported field a validation error instead of a silently ignored one.
-    """
+    """Return a rollout envelope preserving a rebuilt task's workspace, setup and verifier."""
     with tarfile.open(fileobj=io.BytesIO(gzip.decompress(task_binary))) as archive:
         files = {member.name: archive.extractfile(member).read() for member in archive.getmembers() if member.isfile()}
     document = tomllib.loads(files["task.toml"].decode())

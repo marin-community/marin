@@ -98,6 +98,8 @@ def import_cohort(config: PrebuiltCohort) -> str:
 @dataclass(frozen=True)
 class PrebuiltImport:
     output_path: str
+    cohort: PrebuiltCohort
+    mode: SourceProcessingMode
 
 
 def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
@@ -110,10 +112,10 @@ def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptio
         raise ValueError(f"A published cohort is imported for admission, not for a quick pass: {source.name}")
 
     def build_config(context) -> PrebuiltImport:
-        return PrebuiltImport(context.output_path)
+        return PrebuiltImport(context.output_path, config, options.mode)
 
     def run(invocation: PrebuiltImport) -> CampaignArtifact:
-        local = Path(import_cohort(config))
+        local = Path(import_cohort(invocation.cohort))
         destination = Path(invocation.output_path)
         destination.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(local, destination / TASKS_FILENAME)
@@ -126,11 +128,12 @@ def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptio
             folder.mkdir()
             pq.write_table(pa.Table.from_pylist(tasks, schema=NORMALIZED_SCHEMA), folder / "part-00000.parquet")
         manifest = {
-            "mode": options.mode.value,
+            "mode": invocation.mode.value,
             "intended_use": "train",
             "input_rows": len(tasks),
             "converted_rows": len(tasks),
             "admitted_rows": len(tasks),
+            "rejections": {},
             "status": "completed",
             "repo": config.repo,
             "revision": config.revision,

@@ -173,10 +173,6 @@ def convert_python_tests(row: RawRow, context: ConversionContext) -> NormalizedT
     )
 
 
-def convert_stack_pytest(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
-    return convert_python_tests(row, context)
-
-
 def convert_unitsyn(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
     """Capture the fixed solution files, as the source's grader did."""
     return tasktrove_archive_task(
@@ -364,7 +360,7 @@ SOURCES = {
     ),
     "stack_pytest": PythonTestsSource(
         "DCAgent__exp_rpt_stack-pytest-v2",
-        convert_stack_pytest,
+        convert_python_tests,
         STACK_PYTEST_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_stack-pytest-v2",
