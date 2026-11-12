@@ -82,6 +82,13 @@ def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpu
         )
 
 
+class InferenceEngineBackend(StrEnum):
+    """Executor selection for SkyRL inference engines."""
+
+    RAY = "ray"
+    MULTIPROCESSING = "mp"
+
+
 @dataclass(frozen=True)
 class SkyRLRolePlan:
     """Explicit policy, rollout, and reference settings that bear experiment identity.
@@ -95,6 +102,7 @@ class SkyRLRolePlan:
     policy_num_nodes: int
     policy_num_gpus_per_node: int
     num_inference_engines: int
+    inference_engine_backend: InferenceEngineBackend
     inference_engine_tensor_parallel_size: int
     inference_engine_pipeline_parallel_size: int
     inference_engine_data_parallel_size: int
@@ -166,6 +174,10 @@ class SkyRLTopology:
             raise ValueError("SkyRL policy_num_gpus_per_node exceeds the GPUs on one allocated node")
         if plan.colocate_all and not plan.colocate_policy_ref:
             raise ValueError("colocate_all requires a shared policy/reference footprint")
+        if plan.inference_engine_backend is InferenceEngineBackend.MULTIPROCESSING and (
+            plan.colocate_all or plan.inference_engine_data_parallel_size != 1
+        ):
+            raise ValueError("SkyRL multiprocessing inference requires non-colocated DP=1 engines")
         if plan.reference_num_nodes is not None and plan.reference_num_nodes <= 0:
             raise ValueError("SkyRL reference_num_nodes must be positive")
 
@@ -515,6 +527,9 @@ def _role_plan_config_values(role_plan: SkyRLRolePlan) -> dict[str, object]:
         "trainer.policy_mini_batch_size": role_plan.policy_mini_batch_size,
         "trainer.micro_train_batch_size_per_gpu": role_plan.micro_train_batch_size_per_gpu,
         "generator.num_inference_engines": role_plan.num_inference_engines,
+        "generator.inference_engine_mp_backend": (
+            role_plan.inference_engine_backend is InferenceEngineBackend.MULTIPROCESSING
+        ),
         "generator.inference_engine_tensor_parallel_size": role_plan.inference_engine_tensor_parallel_size,
         "generator.inference_engine_pipeline_parallel_size": role_plan.inference_engine_pipeline_parallel_size,
         "generator.inference_engine_data_parallel_size": role_plan.inference_engine_data_parallel_size,

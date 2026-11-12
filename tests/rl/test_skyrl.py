@@ -22,6 +22,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
+    InferenceEngineBackend,
     IrisSkyRLExecution,
     MegatronGeometry,
     SkyRLRetentionPolicy,
@@ -196,6 +197,7 @@ def _role_plan() -> SkyRLRolePlan:
         policy_num_nodes=1,
         policy_num_gpus_per_node=4,
         num_inference_engines=4,
+        inference_engine_backend=InferenceEngineBackend.RAY,
         inference_engine_tensor_parallel_size=1,
         inference_engine_pipeline_parallel_size=1,
         inference_engine_data_parallel_size=1,
@@ -374,6 +376,59 @@ def test_skyrl_spec_rejects_config_that_disagrees_with_role_plan() -> None:
         dataclasses.replace(
             _spec(),
             config_yaml=_config_yaml().replace("  max_steps: 8", "  max_steps: 8\n  train_batch_size: 32"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("backend", "mp_backend"),
+    [(InferenceEngineBackend.RAY, False), (InferenceEngineBackend.MULTIPROCESSING, True)],
+)
+def test_skyrl_inference_backend_renders_runtime_config_and_rejects_recipe_conflict(
+    backend: InferenceEngineBackend, mp_backend: bool
+) -> None:
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        num_inference_engines=1,
+        inference_engine_backend=backend,
+        inference_engine_tensor_parallel_size=2,
+    )
+    topology = dataclasses.replace(_spec().topology, num_nodes=plan.num_nodes, role_plan=plan)
+    spec = dataclasses.replace(_spec(), topology=topology)
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    # This Hydra key selects the executor in the vendored runtime.
+    launch = yaml.safe_load(config.launch_config_yaml)
+    assert launch["skyrl"]["generator"]["inference_engine_mp_backend"] is mp_backend
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["generator"]["inference_engine_mp_backend"] = not mp_backend
+    with pytest.raises(ValueError, match=r"generator\.inference_engine_mp_backend"):
+        dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe))
+
+
+@pytest.mark.parametrize(
+    ("colocate_all", "gpus_per_node", "num_engines", "data_parallel_size"),
+    [(True, 4, 2, 1), (False, 8, 4, 3)],
+    ids=["colocated", "disaggregated-dp"],
+)
+def test_skyrl_topology_rejects_multiprocessing_layouts_that_require_ray(
+    colocate_all: bool, gpus_per_node: int, num_engines: int, data_parallel_size: int
+) -> None:
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=colocate_all,
+        policy_num_gpus_per_node=gpus_per_node,
+        num_inference_engines=num_engines,
+        inference_engine_tensor_parallel_size=2,
+        inference_engine_data_parallel_size=data_parallel_size,
+    )
+    topology = SkyRLTopology(num_nodes=plan.num_nodes, gpus_per_node=gpus_per_node, gpu_variant="GB200", role_plan=plan)
+
+    with pytest.raises(ValueError):
+        dataclasses.replace(
+            topology,
+            role_plan=dataclasses.replace(plan, inference_engine_backend=InferenceEngineBackend.MULTIPROCESSING),
         )
 
 

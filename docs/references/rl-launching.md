@@ -140,7 +140,7 @@ forwarding tests at every process boundary.
 field is required:
 
 - policy node and per-node GPU counts;
-- inference engine count;
+- inference engine count and backend (`InferenceEngineBackend.RAY` or `MULTIPROCESSING`);
 - tensor, pipeline, data, and expert parallel sizes;
 - train, policy mini-batch, and per-GPU micro-batch sizes;
 - samples per prompt and whether roles are colocated.
@@ -155,6 +155,12 @@ For one inference engine:
 engine slice = tensor parallel * pipeline parallel
 engine ranks = engine slice * data parallel
 ```
+
+`SkyRLRolePlan.inference_engine_backend` renders the runtime setting
+`generator.inference_engine_mp_backend`. `MULTIPROCESSING` selects vLLM's multiprocessing executor
+for non-colocated TP-by-PP groups larger than one GPU; single-GPU groups use the runtime's `uni`
+executor. Marin requires non-colocated DP=1 engines for `MULTIPROCESSING`. Recipes cannot override
+the role plan's backend. `RAY` and `MULTIPROCESSING` retain node-local engines in Marin's role plan.
 
 For disaggregated roles, one engine's ranks must fit within one node. For colocated roles, each
 TP-by-PP slice must fit within and divide a policy node; DP replicas occupy separate slices. Expert
