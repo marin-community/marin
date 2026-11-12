@@ -6,6 +6,7 @@
 import json
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
@@ -171,6 +172,36 @@ class OracleValidation(StrEnum):
     """Neither qualification ran; the source's execution is not certified."""
 
 
+class SourceUse(StrEnum):
+    """Whether a source's tasks are for training or for evaluation."""
+
+    TRAIN = "train"
+    EVAL = "eval"
+
+
+class CurriculumArea(CatalogRecord):
+    """The curriculum subject that the most of a source's placed tasks match."""
+
+    subject_id: str
+    name: str
+    instances: int
+
+
+class SourceCoverage(CatalogRecord):
+    """A source's use, converted example count and leading curriculum subject.
+
+    Values come from a curriculum release built over the source's converted tasks.
+    ``basis`` names that release and the rule applied. A value that no measurement
+    supports stays ``None`` and ``unavailable_reason`` says why.
+    """
+
+    intended_use: SourceUse
+    example_count: int | None
+    top_area: CurriculumArea | None
+    basis: str
+    unavailable_reason: str | None = None
+
+
 class SourceDeclaration(CatalogRecord):
     id: str
     name: str
@@ -203,6 +234,8 @@ class SourceDeclaration(CatalogRecord):
     # The weakest review behind the admission, with the pointers that establish it.
     oversight: OversightLevel = OversightLevel.NONE
     oversight_evidence: OversightEvidence | None = None
+    # None only in snapshots published before declarations had to carry their coverage.
+    coverage: SourceCoverage | None = None
 
 
 class AdmissionCounts(CatalogRecord):
@@ -336,6 +369,8 @@ INVENTORY = "curation_inventory"
 SNAPSHOTS = "curation_snapshots"
 CURRENT = "curation_current"
 ATTEMPTS = "curation_attempts"
+RUNS = "runs"
+"""Campaign run records, written by the campaign driver beside the catalog tables."""
 TABLES: dict[str, tuple[type[CatalogRecord], tuple[str, ...]]] = {
     ATTEMPTS: (AssessmentAttempt, ("run_id", "name")),
     ASSESSMENTS: (Assessment, ("pipeline_key",)),
@@ -392,6 +427,31 @@ class CurationCatalog:
     ) -> Iterator[T]:
         for row in self.view.iter_rows(table, columns=list(model.model_fields), where=where):
             yield model.model_validate(row)
+
+    def source_starts(self) -> dict[str, datetime]:
+        """Each source's latest published campaign start from retained run history.
+
+        Only runs that published a snapshot count, and a skipped attempt does not
+        update its source.
+        """
+        published = {key[0] for key in self.view.keys(SNAPSHOTS)}
+        starts = {
+            row["run_id"]: row["started_at"]
+            for row in self.view.iter_rows(RUNS, columns=["run_id", "started_at"])
+            if row["run_id"] in published
+        }
+        latest: dict[str, datetime] = {}
+        for row in self.view.iter_rows(ATTEMPTS, columns=["run_id", "source_id", "status"]):
+            if row["run_id"] not in starts or row["source_id"] is None or row["status"] == AssessmentStatus.SKIPPED:
+                continue
+            started_at = starts[row["run_id"]]
+            if started_at is None:
+                raise ValueError(f"Published campaign {row['run_id']} has no start time")
+            started = datetime.fromisoformat(started_at)
+            source_id = row["source_id"]
+            if source_id not in latest or started > latest[source_id]:
+                latest[source_id] = started
+        return latest
 
     def sources(self, snapshot_id: str) -> Iterator[SnapshotSource]:
         return self._records(INVENTORY, SnapshotSource, [("snapshot_id", "==", snapshot_id)])

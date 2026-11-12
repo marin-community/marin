@@ -82,17 +82,31 @@ not declared*. Edit the rules in the reference first, then the page text in
 
 ## Browsing sources
 
-**By source** lists individual sources with their catalog, converted example
-count, training/evaluation use, current sampled quality, any independent QC the
-pinned release performed, whether the source is Daytona safe, and the curriculum domain
-with the most mapped examples. Search names, datasets or tags; filter by catalog,
-use or quality; select a column heading to sort. Filters and sorting are included in the URL. CSV export
+**By source** lists individual sources with their converted example count,
+training/evaluation use, Quality, Result, Daytona label, the curriculum subject
+with the most converted tasks, the start of the latest published campaign that
+processed the source (**Last updated**) and a link to its evidence page. Catalog
+tabs show per-catalog counts. Search names, datasets or tags, filter by use,
+Quality or Result, and select a column heading to sort. The default view hides
+QUICK-quality and BAD-result sources; **Show QUICK-quality and BAD-result
+sources** turns that off. Filters and sorting are included in the URL. CSV export
 includes the filtered rows in the displayed order.
 
-**Daytona safe** marks sources whose execution needs at most ten unique Daytona
-snapshots. Every non-agentic source is safe because it never provisions a
-sandbox; an agentic source shows a dash until its unique snapshot count is
-assessed against that budget.
+[Quality and result](task-curation.md#quality-and-result) defines both labels.
+Examples, Use and Top curriculum area come from the declaration's measured
+[coverage](task-curation.md#coverage); a declaration from an older snapshot
+without coverage falls back to the selected curriculum release.
+
+**Daytona** shows N/A for non-agentic sources, which provision no sandbox.
+An agentic source shows Safe or Unsafe with its measured unique snapshot count
+against the limit of ten, or *Not measured* when its declaration records no
+production snapshot-identity measurement.
+
+**Evidence** (`source.html`) collects one source's quality evidence on one page:
+declared oversight pointers, grader controls and admission counts, the sampled
+LLM-judge review with its frozen sample, rubric, judge model and archived traces,
+independent QC, the pinned dataset and its revision, coverage and Daytona bases,
+diagnostics and archived reviews. Object-store URLs get a Filer link.
 
 Example counts describe successfully converted tasks before curation admission.
 A dash means no processed examples from that source are in the currently
@@ -180,7 +194,7 @@ and import are separate; grading a new source does not generate its heatmap cove
 Coordinate the code release and data load: the new API returns 503 until a
 catalog has been selected. The loader reads through `CurationCatalog`, sends byte-bounded
 SQL batches, checks sample and packet coverage, then selects the load with one
-conditional UPDATE. An unchanged snapshot skips loading. If the catalog or serving
+conditional UPDATE. An unchanged snapshot loaded by the same `LOADER_VERSION` skips loading; a newer loader restages it. The loader records each source's latest published campaign start as its last update. If the catalog or serving
 selection changes during an import, that import fails and can be retried. Cleanup
 after successful selection removes only older loads observed before staging; it
 preserves imports that started later. Schema changes may require downtime. FineStore's snapshot reader caches
