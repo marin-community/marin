@@ -36,13 +36,82 @@ from finestore.rl.curation import (
 from finestore.store import DataStore
 from marina.applets import AppletServices, validate_query
 from marina.client import AppletQuery
+from shellbox.machine import Backend
+from shellbox.requirements import Requirement, Support
+from shellbox.survey import CapabilityCell
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
+from taskcompendium.backend_requirements import BackendSourceMap, BackendSurvey, backend_schema_sha256
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 
-from infra.marina.apps.rl_data_catalog.load import load_catalog
+from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
+
+
+def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:
+    snapshot = catalog.current()
+    return BackendSurvey(
+        catalog_root=catalog.root,
+        snapshot_id=snapshot.snapshot_id,
+        generated_at="2026-11-12T00:00:00+00:00",
+        git_revision="test",
+        schema_sha256=backend_schema_sha256(),
+        runtime_defaults={},
+        deployment_limits={},
+        matrix=[
+            CapabilityCell(
+                backend=backend,
+                requirement=need,
+                support=Support.PARTIAL,
+                evidence=("test fixture",),
+                note="Unmeasured test environment",
+            )
+            for backend in [*(backend.value for backend in Backend), "iris"]
+            for need in Requirement
+        ],
+        sources=[
+            BackendSourceMap(
+                source_id=source.id,
+                basis="unassessed",
+                task_count=0,
+                inputs={},
+                demands={},
+                resource_ranges={},
+                backends={},
+            )
+            for source in catalog.sources(snapshot.snapshot_id)
+        ],
+    )
+
+
+def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]:
+    return load_surveyed_catalog(catalog, query, catalog_backend_map(catalog))
+
+
+def test_backend_survey_refresh_and_failed_staging_preserve_selected_map(catalog_database, catalog_query, tmp_path):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "graded", source_id="a")
+    catalog = CurationCatalog(root)
+    first = catalog_backend_map(catalog)
+    loaded = load_surveyed_catalog(catalog, catalog_query, first)
+    second = first.model_copy(update={"generated_at": "2026-11-12T01:00:00+00:00"})
+
+    def failing_query(sql, parameters):
+        if "INSERT INTO atlas_backend_sources" in sql:
+            raise RuntimeError("SQL transport interrupted")
+        return catalog_query(sql, parameters)
+
+    with pytest.raises(RuntimeError, match="transport interrupted"):
+        load_surveyed_catalog(catalog, failing_query, second)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        assert client.get("/backends").json()["generated_at"] == first.generated_at
+        assert client.get("/sources").json()["sources"][0]["backend_capabilities"]["basis"] == "unassessed"
+    refreshed = load_surveyed_catalog(catalog, catalog_query, second)
+    assert refreshed["load_id"] != loaded["load_id"]
+    assert not load_surveyed_catalog(catalog, catalog_query, second)["changed"]
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        assert client.get("/backends").json()["generated_at"] == second.generated_at
 
 
 @pytest.fixture
@@ -468,7 +537,16 @@ def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(
     query = catalog_query
 
     loaded = load_catalog(CurationCatalog(root), query)
-    assert loaded["counts"] == {"sources": 1, "assessments": 1, "populations": 2, "items": 3, "packets": 3}
+    assert loaded["counts"] == {
+        "sources": 1,
+        "assessments": 1,
+        "populations": 2,
+        "items": 3,
+        "packets": 3,
+        "backend_sources": 1,
+        "backend_surveys": 1,
+        "backend_cells": 301,
+    }
     assert load_catalog(CurationCatalog(root), query)["changed"] is False
     with engine.begin() as connection:
         connection.execute(
