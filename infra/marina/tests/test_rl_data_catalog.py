@@ -36,13 +36,130 @@ from finestore.rl.curation import (
 from finestore.store import DataStore
 from marina.applets import AppletServices, validate_query
 from marina.client import AppletQuery
+from shellbox.machine import Backend
+from shellbox.requirements import Requirement, Support
+from shellbox.survey import CapabilityCell
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
+from taskcompendium.backend_requirements import BackendSourceMap, BackendSurvey, backend_schema_sha256
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
+from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
 
-from infra.marina.apps.rl_data_catalog.load import load_catalog
+from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
+
+
+def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:
+    snapshot = catalog.current()
+    return BackendSurvey(
+        catalog_root=catalog.root,
+        snapshot_id=snapshot.snapshot_id,
+        generated_at="2026-11-12T00:00:00+00:00",
+        git_revision="test",
+        schema_sha256=backend_schema_sha256(),
+        runtime_defaults={},
+        deployment_limits={},
+        matrix=[
+            CapabilityCell(
+                backend=backend,
+                requirement=need,
+                support=Support.PARTIAL,
+                evidence=("test fixture",),
+                note="Unmeasured test environment",
+            )
+            for backend in [*(backend.value for backend in Backend), "iris"]
+            for need in Requirement
+        ],
+        sources=[
+            BackendSourceMap(
+                source_id=source.id,
+                basis="unassessed",
+                task_count=0,
+                inputs={},
+                demands={},
+                resource_ranges={},
+                backends={},
+                role_backend_assignments={},
+                grading_environment=None,
+            )
+            for source in catalog.sources(snapshot.snapshot_id)
+        ],
+    )
+
+
+def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]:
+    return load_surveyed_catalog(catalog, query, catalog_backend_map(catalog), catalog_identity_map(catalog))
+
+
+def catalog_identity_map(catalog: CurationCatalog) -> SourceIdentitySurvey:
+    snapshot = catalog.current()
+    return SourceIdentitySurvey(
+        catalog_root=catalog.root,
+        snapshot_id=snapshot.snapshot_id,
+        generated_at="2026-11-12T00:00:00+00:00",
+        fingerprints={source.id: None for source in catalog.sources(snapshot.snapshot_id)},
+        reviews=[],
+        groups=[],
+        judge=None,
+    )
+
+
+def test_backend_survey_refresh_and_failed_staging_preserve_selected_map(catalog_database, catalog_query, tmp_path):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "graded", source_id="a")
+    catalog = CurationCatalog(root)
+    first = catalog_backend_map(catalog)
+    identities = catalog_identity_map(catalog)
+    loaded = load_surveyed_catalog(catalog, catalog_query, first, identities)
+    second = first.model_copy(update={"generated_at": "2026-11-12T01:00:00+00:00"})
+
+    def failing_query(sql, parameters):
+        if "INSERT INTO atlas_backend_sources" in sql:
+            raise RuntimeError("SQL transport interrupted")
+        return catalog_query(sql, parameters)
+
+    with pytest.raises(RuntimeError, match="transport interrupted"):
+        load_surveyed_catalog(catalog, failing_query, second, identities)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        assert client.get("/backends").json()["generated_at"] == first.generated_at
+        assert client.get("/sources").json()["sources"][0]["backend_capabilities"]["basis"] == "unassessed"
+    refreshed = load_surveyed_catalog(catalog, catalog_query, second, identities)
+    assert refreshed["load_id"] != loaded["load_id"]
+    assert not load_surveyed_catalog(catalog, catalog_query, second, identities)["changed"]
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        assert client.get("/backends").json()["generated_at"] == second.generated_at
+
+
+def test_source_fingerprint_is_stored_separately_and_failed_refresh_keeps_previous(
+    catalog_database, catalog_query, tmp_path
+):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "graded", source_id="a")
+    catalog = CurationCatalog(root)
+    fixture = Path(__file__).resolve().parents[3] / (
+        "experiments/post_training/task_curation/tests/fixtures/source-overlap-fingerprints.json"
+    )
+    fingerprint = SourceFingerprint.model_validate(next(iter(json.loads(fixture.read_text()).values())))
+    identities = catalog_identity_map(catalog).model_copy(update={"fingerprints": {"a": fingerprint}})
+    backends = catalog_backend_map(catalog)
+    load_surveyed_catalog(catalog, catalog_query, backends, identities)
+    newer = identities.model_copy(update={"generated_at": "2026-11-12T02:00:00+00:00"})
+
+    def failing_query(sql, parameters):
+        if "INSERT INTO atlas_backend_cells" in sql:
+            raise RuntimeError("Import interrupted after source fingerprints")
+        return catalog_query(sql, parameters)
+
+    with pytest.raises(RuntimeError, match="Import interrupted"):
+        load_surveyed_catalog(catalog, failing_query, backends, newer)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        summary = client.get("/sources").json()["sources"][0]["source_fingerprint"]
+        assert summary["sample_sha256"] == fingerprint.sample_sha256 and "sample" not in summary
+        assert client.get("/source-fingerprint", params={"source_id": "a"}).json()["fingerprint"]["sample"] == [
+            sample.model_dump(mode="json") for sample in fingerprint.sample
+        ]
+        assert client.get("/source-duplicates").json()["generated_at"] == identities.generated_at
 
 
 @pytest.fixture
@@ -467,7 +584,18 @@ def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(
     query = catalog_query
 
     loaded = load_catalog(CurationCatalog(root), query)
-    assert loaded["counts"] == {"sources": 1, "assessments": 1, "populations": 2, "items": 3, "packets": 3}
+    assert loaded["counts"] == {
+        "sources": 1,
+        "assessments": 1,
+        "populations": 2,
+        "items": 3,
+        "packets": 3,
+        "backend_sources": 1,
+        "backend_surveys": 1,
+        "backend_cells": 301,
+        "identity_surveys": 1,
+        "duplicate_reviews": 0,
+    }
     assert load_catalog(CurationCatalog(root), query)["changed"] is False
     with engine.begin() as connection:
         connection.execute(
@@ -592,11 +720,12 @@ def test_atlas_cleanup_preserves_a_load_started_after_its_cutover(catalog_query,
             continue_load.set()
         assert later is not None
         assert later.result(timeout=30)["changed"]
+    # The three snapshots retain all three assessments and their three packets each.
     assert catalog_query(
         "SELECT l.snapshot_id, count(p.*) AS packets FROM atlas_current c JOIN atlas_loads l USING(load_id) "
         "JOIN atlas_packets p USING(load_id) GROUP BY l.snapshot_id",
         {},
-    )["rows"] == [{"snapshot_id": "later", "packets": 3}]
+    )["rows"] == [{"snapshot_id": "later", "packets": 9}]
 
 
 @pytest.mark.parametrize(

@@ -25,17 +25,12 @@ FROM = re.compile(r"^\s*FROM\s+(\S+)", re.IGNORECASE | re.MULTILINE)
 ENVIRONMENT_DOCKERFILE = "environment/Dockerfile"
 
 
-def dockerfile_of(files: Mapping[str, bytes | str]) -> str | None:
-    """The archive's environment Dockerfile, when it defines one.
-
-    ``unpack_task_binary`` exposes archived files as base64 text, so both forms are
-    accepted; anything that is not text is rejected rather than guessed at.
-    """
-    blob = files.get(ENVIRONMENT_DOCKERFILE)
-    if blob is None:
+def dockerfile_of(files: Mapping[str, str]) -> str | None:
+    """Decode the canonical base64 Dockerfile from an unpacked archive."""
+    encoded = files.get(ENVIRONMENT_DOCKERFILE)
+    if encoded is None:
         return None
-    if isinstance(blob, str):
-        blob = base64.b64decode(blob, validate=True)
+    blob = base64.b64decode(encoded, validate=True)
     try:
         return blob.decode()
     except UnicodeDecodeError as error:
@@ -43,7 +38,7 @@ def dockerfile_of(files: Mapping[str, bytes | str]) -> str | None:
 
 
 def environment_unused(
-    spec: Mapping, archive_files: Mapping[str, bytes | str], *, bases: Mapping[str, str] | None = None
+    spec: Mapping, archive_files: Mapping[str, str], *, bases: Mapping[str, str] | None = None
 ) -> str | None:
     """Why a converted task ignores its archive's environment, if it does.
 
@@ -179,7 +174,7 @@ def lower_environment(dockerfile: str, bases: Mapping[str, str]) -> LoweredEnvir
     )
 
 
-def archive_environment(files: Mapping[str, bytes | str], bases: Mapping[str, str] | None = None):
+def archive_environment(files: Mapping[str, str], bases: Mapping[str, str] | None = None):
     """A TaskTrove archive's own environment, lowered onto a pinned base.
 
     The archive defines how the task's machine is built; using anything else would run the

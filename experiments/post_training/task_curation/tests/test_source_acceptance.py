@@ -3,11 +3,17 @@
 
 """Agentic sources are admitted only in an accepted task format."""
 
+import json
+import re
 from dataclasses import replace
+from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
-from finestore.rl.curation import DaytonaSafety, OversightEvidence, OversightLevel
+from finestore.rl.curation import OversightEvidence, OversightLevel
 
+from experiments.post_training.task_curation.datasets.tasktrove import judged, structured_outputs
+from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.source import (
     GRANDFATHERED_MARINSKYRL_SOURCES,
     RlDataSource,
@@ -19,7 +25,8 @@ from experiments.post_training.task_curation.sources import all_sources, require
 
 def _agentic(task_format: TaskFormat | None, source_id: str = "fixture:agentic") -> RlDataSource:
     return RlDataSource(
-        info=SourceInfo(id=source_id, title=source_id, origin="fixture", tags=("agentic",), task_format=task_format)
+        config=PrebuiltCohort(name="fixture", version="1", repo="fixture/tasks", revision="pin", expected_rows=1),
+        info=SourceInfo(id=source_id, title=source_id, origin="fixture", tags=("agentic",), task_format=task_format),
     )
 
 
@@ -60,30 +67,19 @@ def test_an_agentic_source_without_a_declared_format_is_rejected():
         require_accepted_task_format(_agentic(None))
 
 
-@pytest.mark.parametrize("task_format", [TaskFormat.TASKCOMPENDIUM, TaskFormat.HARBOR])
-def test_task_directory_formats_pass_and_non_agentic_sources_need_none(task_format):
-    require_accepted_task_format(_agentic(task_format))
-    require_accepted_task_format(RlDataSource(info=SourceInfo(id="fixture:math", title="math", origin="fixture")))
-
-
-def test_pipeline_less_pointers_are_inventory_never_admitted():
-    """A pointer stays visible in the Atlas, labelled Inventory and unselectable."""
-    sources = all_sources()
+def test_failed_reply_sources_are_retired_with_frozen_qa_evidence():
+    candidates = (*judged.candidate_sources(), *structured_outputs.candidate_sources())
+    failed = {source.info.id for source in candidates if source.pipeline is None}
+    assert failed.isdisjoint(all_sources())
     runnable = set(runnable_sources())
-    pointers = [source for source in sources.values() if source.pipeline is None]
-    assert pointers
-
-    for source in pointers:
-        status = source.declaration.status
-        if "deprecated" in source.info.tags:
-            assert status == "Deprecated"
-        elif "excluded" in source.info.tags:
-            assert status == "Excluded"
-        else:
-            assert status == "Inventory"
-        assert source.name not in runnable
-        if "agentic" in source.info.tags and source.info.daytona_snapshot_count is None:
-            assert source.declaration.daytona_safety is DaytonaSafety.UNASSESSED
+    assert all(source.name not in runnable for source in candidates if source.info.id in failed)
+    retired = json.loads((Path(__file__).parents[1] / "retired-inventory-only.json").read_text())
+    evidence = {row["id"]: row for row in retired["entries"]}
+    for source_id in failed:
+        assert evidence[source_id]["pipeline"] is None
+        url = urlparse(evidence[source_id]["independent_qc"]["evidence_url"])
+        assert url.netloc == "huggingface.co"
+        assert re.fullmatch(r"[0-9a-f]{40}", url.path.rsplit("/", 1)[1])
 
 
 @pytest.mark.parametrize("missing", ["count", "basis", "oversight", "verification"])
@@ -107,10 +103,10 @@ def test_unqualified_agentic_pipeline_stays_visible_but_cannot_be_selected(monke
         info = replace(
             info, oversight=OversightEvidence(level=OversightLevel.SAMPLE, campaign="fixture", verification="")
         )
-    source = RlDataSource(info=info, pipeline=lambda _source, _options: None)
+    source = replace(_agentic(TaskFormat.TASKCOMPENDIUM), info=info, pipeline=lambda _source, _options: None)
     monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: {info.id: source})
     assert source.name not in runnable_sources()
-    assert source.declaration.status == "Inventory"
+    assert source.declaration.status == "Not selectable"
 
 
 def test_existing_internal_blend_selection_does_not_require_new_audit_evidence(monkeypatch):

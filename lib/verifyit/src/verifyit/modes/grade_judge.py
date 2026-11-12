@@ -149,6 +149,13 @@ class _ScoreResult:
 
 
 @dataclass(frozen=True)
+class _ChatResult:
+    response: ChatCompletion
+    transport_attempts: tuple[dict[str, Any], ...]
+    request: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class _LabelCompletion:
     text: str
     incomplete: bool
@@ -456,17 +463,8 @@ def _label_completion(
     spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int
 ) -> _LabelCompletion:
     if spec.api == "chat_completions":
-        options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
-        if spec.chat_template_kwargs:
-            options["extra_body"] = {"chat_template_kwargs": spec.chat_template_kwargs}
-        if spec.temperature is not None:
-            options["temperature"] = spec.temperature
-        request = {"model": model, "messages": messages, "max_completion_tokens": budget, **options}
-        response, attempts = _judge_transport(
-            spec,
-            lambda timeout: _chat_completion(client, timeout=timeout, **request),
-            request,
-        )
+        result = _chat_result(spec, client, model, messages, budget)
+        response, attempts, request = result.response, result.transport_attempts, result.request
         if spec.completion_policy is JudgeCompletionPolicy.CONTENT:
             if len(response.choices) != 1:
                 raise GradingInfraError(
@@ -509,7 +507,7 @@ def _label_completion(
             request,
             response.usage.prompt_tokens if response.usage else None,
         )
-    options = {"reasoning": {"effort": spec.reasoning_effort}} if spec.reasoning_effort else {}
+    options: dict[str, Any] = {"reasoning": {"effort": spec.reasoning_effort}} if spec.reasoning_effort else {}
     if spec.temperature is not None:
         options["temperature"] = spec.temperature
     request = {
@@ -785,21 +783,20 @@ def _completion_budgets(spec: JudgeSpec) -> tuple[int, ...]:
 
 
 def _complete(spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, budget: int) -> ChatCompletion:
+    return _chat_result(spec, client, model, [{"role": "user", "content": prompt}], budget).response
+
+
+def _chat_result(spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int) -> _ChatResult:
     options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
     if spec.chat_template_kwargs:
         options["extra_body"] = {"chat_template_kwargs": spec.chat_template_kwargs}
     if spec.temperature is not None:
         options["temperature"] = spec.temperature
-    request = dict(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        max_completion_tokens=budget,
-        **options,
-    )
-    response, _attempts = _judge_transport(
+    request = {"model": model, "messages": messages, "max_completion_tokens": budget, **options}
+    response, attempts = _judge_transport(
         spec, lambda timeout: _chat_completion(client, timeout=timeout, **request), request
     )
-    return response
+    return _ChatResult(response, attempts, request)
 
 
 def _chat_completion(client: openai.OpenAI, **options: Any) -> ChatCompletion:
