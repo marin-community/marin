@@ -15,7 +15,7 @@ bytes or verifier material, so no machine can execute these tasks from the publi
 release alone. Treat every entry as a data pointer, not a runnable pipeline.
 """
 
-from finestore.rl.curation import IndependentQC, Verdict
+from finestore.rl.curation import DaytonaSafety, IndependentQC, Verdict
 
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
@@ -60,15 +60,21 @@ def sources() -> list[RlDataSource]:
                 title="Snowball Smartie CalibForge admitted cohort",
                 origin="Snowball Smartie RL",
                 family="terminal-agent",
-                tags=("agentic", "multi-turn", "license:cc-by-4.0", "campaign-release"),
+                tags=("agentic", "multi-turn", "license:cc-by-4.0", "campaign-release", "deprecated"),
                 count=2205,
+                daytona_snapshot_count=2205,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned payloads; each task names its own "
+                    "registry image (2,205 distinct docker_image references)"
+                ),
                 notes=(
-                    "2,205 quality-admitted CalibForge tasks. Quality review accepted the task text; "
-                    "oracle solution execution was explicitly skipped, so successful execution is not "
-                    "certified. The pinned release manifest records this cohort as not published: "
-                    "source privacy, split and overlap checks remain. "
-                    "smartie-calibforge-shared-v2, repaired from these candidates, is the usable "
-                    "release. See the campaign report: " + CAMPAIGN_ISSUE
+                    "2,205 quality-admitted CalibForge tasks. Deprecated: every task names its own "
+                    "prebuilt registry image in task.toml, so running the cohort provisions one "
+                    "Daytona snapshot per task — 2,205 distinct images across 2,205 tasks on the "
+                    "pinned release payloads, far beyond the ten-snapshot budget. Oracle solution "
+                    "execution was also skipped, so successful execution is not certified, and the "
+                    "pinned release manifest records the cohort as not published. A snapshot-safe "
+                    "rebuild from these candidates is planned. See the campaign report: " + CAMPAIGN_ISSUE
                 ),
                 dataset=calibforge,
                 independent_qc=IndependentQC(
@@ -79,6 +85,7 @@ def sources() -> list[RlDataSource]:
                     admitted=2205,
                     evidence_url=_pinned_blob(calibforge, "manifest.json"),
                 ),
+                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -87,13 +94,22 @@ def sources() -> list[RlDataSource]:
                 title="Snowball Smartie repaired CalibForge shared environment v2",
                 origin="Snowball Smartie RL",
                 family="terminal-agent",
-                tags=("agentic", "multi-turn", "license:cc-by-4.0", "campaign-release"),
+                tags=("agentic", "multi-turn", "license:cc-by-4.0", "campaign-release", "deprecated"),
                 count=324,
+                daytona_snapshot_count=23,
+                daytona_count_basis=(
+                    "campaign provisioning record snapshot-capacity-check.json (the public lowered "
+                    "payloads carry no resource shapes and pin only two verifier contexts)"
+                ),
                 notes=(
-                    "324 environment-admitted CalibForge tasks split 259 train / 65 validation, with "
-                    "fixtures, qualification evidence, source attribution and reproduction scripts. "
-                    "Admission checks cover fixture equivalence and setup and verifier execution; "
-                    "oracle solution execution was waived."
+                    "324 environment-admitted CalibForge tasks split 259 train / 65 validation. "
+                    "Deprecated pending the snapshot-safe CalibForge rebuild: the campaign's "
+                    "provisioning records (snapshot-capacity-check) report the cohort needing 23 "
+                    "image/resource snapshot variants (19 on the retained training slice), over "
+                    "the ten-snapshot budget. The public lowered payloads pin only two verifier "
+                    "contexts and carry no per-task resource shapes, so the variants are invisible "
+                    "there; admission checks cover fixture equivalence and setup and verifier "
+                    "execution, and oracle solution execution was waived."
                 ),
                 dataset=shared_v2,
                 independent_qc=IndependentQC(
@@ -104,6 +120,7 @@ def sources() -> list[RlDataSource]:
                     admitted=324,
                     evidence_url=_pinned_blob(shared_v2, "manifest.json"),
                 ),
+                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -114,11 +131,15 @@ def sources() -> list[RlDataSource]:
                 family="swe-repo",
                 tags=("agentic", "multi-turn", "campaign-release"),
                 count=8045,
+                daytona_snapshot_count=5,
+                daytona_count_basis="shellbox-identity over the pinned tasks.parquet build contexts",
                 notes=(
                     "8,045 quality-admitted SWE-Smith tasks. The release keeps only tasks that passed "
                     "the Daytona oracle and a Good quality verdict; quality review is not a "
                     "model-solving accuracy claim, and campaign-specific train and validation splits "
-                    "remain in the private archive."
+                    "remain in the private archive. Tasks share five build contexts (two FROM bases, "
+                    "floating python:3.10/3.11-bookworm tags), so a run provisions five snapshots; "
+                    "the campaign's capacity check budgets all five."
                 ),
                 dataset=swesmith,
                 independent_qc=IndependentQC(
@@ -128,6 +149,7 @@ def sources() -> list[RlDataSource]:
                     admitted=8045,
                     evidence_url=_pinned_blob(swesmith, "manifest.json"),
                 ),
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -155,6 +177,7 @@ def sources() -> list[RlDataSource]:
                     reviewed=1699,
                     evidence_url=_pinned_blob(staged_v1, "manifest.json"),
                 ),
+                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -184,6 +207,7 @@ def sources() -> list[RlDataSource]:
                     reviewed=778,
                     evidence_url=_pinned_blob(staged_v2, "manifest.json"),
                 ),
+                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
     ]

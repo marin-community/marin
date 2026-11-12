@@ -5,8 +5,6 @@
 
 import asyncio
 import hashlib
-import importlib
-import inspect
 import json
 import os
 import sys
@@ -19,13 +17,9 @@ from typing import Any
 
 import fsspec.config
 import yaml
-from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import]  # installed by external driver
-from harbor.agents.installed.acp_registry import (  # pyrefly: ignore[missing-import]
-    is_acp_registry_shorthand,
-    parse_registry_spec,
-)
+from harbor.agents.base import BaseAgent  # pyrefly: ignore[missing-import]  # installed by external driver
+from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import]
 from harbor.agents.installed.base import BaseInstalledAgent  # pyrefly: ignore[missing-import]
-from harbor.agents.tau3_acp_relay.harbor_agent import candidate_agent_config  # pyrefly: ignore[missing-import]
 from harbor.environments.docker_translate import (  # pyrefly: ignore[missing-import]
     COMPOSE_FILENAMES,
     PINNED_IMAGE,
@@ -34,7 +28,6 @@ from harbor.environments.docker_translate import (  # pyrefly: ignore[missing-im
 )
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.environments.model_relay import (  # pyrefly: ignore[missing-import]
-    SUPPORTED_MODEL_APIS,
     JudgeAccess,
     task_model_relays,
 )
@@ -66,7 +59,6 @@ from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyre
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
 from rigging.filesystem.s3_compat import s3_credential_options
-from rigging.filesystem.storage_path import StoragePath
 
 from marin.evaluation.harbor.agent_context import (
     CANDIDATE_API_KEY_ENV,
@@ -79,11 +71,6 @@ from marin.evaluation.harbor.agent_context import (
 _HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
 _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
-_OPENCODE_AGENT = "opencode"
-_OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
-_PI_ACP_REGISTRY_ID = "pi-acp"
-_TAU3_USER_AGENT = "harbor.agents.tau3_acp_relay.harbor_agent:Tau3HarborACPRelay"
-_TERMINUS_2_AGENT = "terminus-2"
 _LLM_CALL_KWARGS_KEY = "llm_call_kwargs"
 _MAX_TOKENS_KEY = "max_tokens"
 _STABLE_JOB_NAME = "__marin_job__"
@@ -161,70 +148,8 @@ def _single_entry(config: JobConfig, field_name: str) -> object:
     return values[0]
 
 
-def _resolve_import_path(import_path: str, label: str) -> object:
-    if ":" not in import_path:
-        raise ValueError(f"Harbor {label} import path must use module.path:ClassName")
-    module_path, class_name = import_path.split(":", 1)
-    try:
-        module = importlib.import_module(module_path)
-        return getattr(module, class_name)
-    except (ImportError, AttributeError) as exc:
-        raise ValueError(f"Harbor {label} import path could not be resolved") from exc
-
-
-_AGENT_CALLBACK_KEYWORDS = (
-    ("setup", ("environment",)),
-    ("run", ("instruction", "environment", "context")),
-)
-
-
-def _validate_agent_callbacks(agent_class: object, import_path: str) -> None:
-    """Validate the keyword callbacks used by upstream Harbor's trial runner."""
-    for method_name, keywords in _AGENT_CALLBACK_KEYWORDS:
-        method = getattr(agent_class, method_name, None)
-        if not callable(method):
-            raise ValueError(f"Harbor agent {import_path} does not define a callable {method_name}()")
-        try:
-            inspect.signature(method).bind(agent_class, **dict.fromkeys(keywords))
-        except TypeError as exc:
-            raise ValueError(
-                f"Harbor agent {import_path}.{method_name}() does not accept the keyword arguments "
-                f"upstream Harbor calls it with ({', '.join(keywords)}): {exc}"
-            ) from exc
-
-
-def _validate_model_api(agent_class: object) -> None:
-    if isinstance(agent_class, type) and issubclass(agent_class, BaseInstalledAgent):
-        if agent_class.MODEL_API not in SUPPORTED_MODEL_APIS:
-            raise ValueError(f"Installed harness requires an unsupported model relay API: {agent_class.MODEL_API}")
-
-
-def _validate_agent(agent: AgentConfig) -> str:
-    if agent.import_path is not None:
-        if agent.mode == "local":
-            raise ValueError("Harbor local-mode agents must use a supported agent name")
-        agent_class = _resolve_import_path(agent.import_path, "agent")
-        _validate_agent_callbacks(agent_class, agent.import_path)
-        _validate_model_api(agent_class)
-        return agent.import_path
-    agent_name = agent.name
-    if agent_name is None:
-        raise ValueError("Harbor config agent name is not supported by the pinned runtime")
-    if is_acp_registry_shorthand(agent_name):
-        if agent.mode == "local" or AgentName.ACP not in AgentFactory._AGENT_MAP:
-            raise ValueError("Harbor ACP registry agent is not available in the pinned runtime")
-        agent_id, _ = parse_registry_spec(agent_name)
-        if agent_id != _PI_ACP_REGISTRY_ID:
-            raise ValueError("Marin's hosted model settings support only the pi-acp registry agent")
-        return agent_name
-    if agent_name not in AgentName.values():
-        raise ValueError("Harbor config agent name is not supported by the pinned runtime")
-    agent_name = AgentName(agent_name)
-    agent_registry = AgentFactory._LOCAL_AGENT_MAP if agent.mode == "local" else AgentFactory._AGENT_MAP
-    if agent_name not in agent_registry:
-        raise ValueError("Harbor config agent is not available in the pinned runtime")
-    _validate_model_api(agent_registry[agent_name])
-    return agent_name.value
+def _agent_class(agent: AgentConfig) -> type[BaseAgent]:
+    return AgentFactory.get_agent_class_from_config(agent)
 
 
 def _validate_environment(config: JobConfig) -> str:
@@ -246,33 +171,7 @@ def _validate_prepared_policy(config: JobConfig) -> None:
     unknown_kwargs = environment.kwargs.keys() - _LOCAL_ENVIRONMENT_KWARGS
     if unknown_kwargs:
         raise ValueError(f"Unsupported {label} environment kwargs: {sorted(unknown_kwargs)}")
-    if (user_agent := config.user_agent) is not None:
-        if user_agent.name is not None or user_agent.import_path != _TAU3_USER_AGENT:
-            raise ValueError(f"{label} supports only the sandboxed Tau3 ACP simulated user")
-        if user_agent.mode != "container" or user_agent.env or user_agent.skills:
-            raise ValueError(f"{label} does not accept simulated-user environment forwarding or skills")
-        if user_agent.user_persona_path is not None or user_agent.user_prompt_template_path is not None:
-            raise ValueError(f"{label} does not accept alternate simulated-user prompts")
-        if user_agent.bridge.prompt_path is not None or user_agent.bridge.kwargs:
-            raise ValueError(f"{label} does not accept alternate simulated-user bridge inputs")
-        if len(user_agent.mcp_servers) != 1:
-            raise ValueError(f"{label} requires the prepared tau3-runtime MCP service")
-        server = user_agent.mcp_servers[0]
-        if (
-            server.name != "tau3-runtime"
-            or server.transport != "streamable-http"
-            or server.url != "http://tau3-runtime:8000/mcp"
-            or server.command is not None
-            or server.args
-        ):
-            raise ValueError(f"{label} requires the prepared tau3-runtime MCP service")
-        if {"extra_env", "mcp_servers", "skills_dir", "turn_callback"} & user_agent.kwargs.keys():
-            raise ValueError(f"{label} does not accept alternate simulated-user inputs")
     for agent in config.agents:
-        if agent.import_path is not None or agent.mode != "container":
-            raise ValueError(f"{label} requires sandboxed named agents")
-        if agent.name not in {"terminus-2", "oracle", "pi"} and not _pi_acp_agent(agent):
-            raise ValueError(f"{label} requires terminus-2, oracle, Pi, or pi-acp")
         if agent.env or agent.mcp_servers or agent.skills:
             raise ValueError(f"{label} does not accept agent environment forwarding, MCP servers, or skills")
         if {"extra_env", "mcp_servers", "skills_dir", "turn_callback"} & agent.kwargs.keys():
@@ -280,17 +179,6 @@ def _validate_prepared_policy(config: JobConfig) -> None:
     if config.verifier.import_path is not None:
         raise ValueError(f"{label} requires a sandboxed verifier without a custom import")
     validate_task_environment(config.verifier.env)
-
-
-def _pi_acp_agent(agent: AgentConfig) -> bool:
-    if agent.name is None:
-        return False
-    if is_acp_registry_shorthand(agent.name):
-        return parse_registry_spec(agent.name)[0] == _PI_ACP_REGISTRY_ID
-    if agent.name != "acp" or {"registry_entry_path", "registry_spec"} & agent.kwargs.keys():
-        return False
-    entry = agent.kwargs.get("registry_entry")
-    return isinstance(entry, dict) and entry.get("id") == _PI_ACP_REGISTRY_ID
 
 
 def _validate_job_tasks(job: Job) -> None:
@@ -457,6 +345,7 @@ def _terminus_llm_call_kwargs(
 
 def _agent_config(
     agent: AgentConfig,
+    agent_class: type[BaseAgent],
     *,
     endpoint_url: str,
     served_model: str,
@@ -464,18 +353,15 @@ def _agent_config(
     kwargs: Mapping[str, object],
 ) -> AgentConfig:
     runtime_kwargs = {**kwargs, "api_base": endpoint_url}
-    if agent.name == _OPENCODE_AGENT:
+    if agent_class.name() == AgentName.OPENCODE:
         runtime_kwargs["opencode_config"] = _opencode_config(kwargs.get("opencode_config", {}), endpoint_url)
-    runtime_env = agent.env
-    if agent.name is not None and is_acp_registry_shorthand(agent.name):
-        runtime_env = {**agent.env, _OPENAI_BASE_URL_ENV: endpoint_url}
     configured = AgentConfig.model_validate(
         {
             **agent.model_dump(mode="python"),
             "model_name": f"{_HOSTED_VLLM_PROVIDER}/{model_identity}",
             "model_alias": f"{_HOSTED_VLLM_PROVIDER}/{served_model}",
             "kwargs": runtime_kwargs,
-            "env": runtime_env,
+            "env": agent.env,
         },
         extra="forbid",
     )
@@ -483,36 +369,24 @@ def _agent_config(
     return configured
 
 
-def _installed_agent(agent: AgentConfig) -> bool:
-    if agent.mode != "container":
-        return False
-    if agent.name is not None and is_acp_registry_shorthand(agent.name):
-        agent_class = AgentFactory.get_agent_class(AgentName.ACP)
-    elif agent.name is not None and agent.name in AgentName.values():
-        agent_class = AgentFactory.get_agent_class(AgentName(agent.name))
-    else:
-        assert agent.import_path is not None
-        agent_class = _resolve_import_path(agent.import_path, "agent")
-    return isinstance(agent_class, type) and issubclass(agent_class, BaseInstalledAgent)
-
-
-def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig:
+def _effective_agent(agent: AgentConfig, agent_class: type[BaseAgent], overlay: RuntimeOverlay) -> AgentConfig:
     kwargs = {**overlay.model_agent_kwargs, **agent.kwargs}
     model_info = reconciled_model_info(
         overlay.model_agent_kwargs.get(MODEL_INFO_KEY),
         agent.kwargs.get(MODEL_INFO_KEY),
     )
     kwargs[MODEL_INFO_KEY] = model_info
-    if agent.name == _TERMINUS_2_AGENT:
+    if agent_class.name() == AgentName.TERMINUS_2:
         kwargs[_LLM_CALL_KWARGS_KEY] = _terminus_llm_call_kwargs(
             kwargs.get(_LLM_CALL_KWARGS_KEY),
             model_info[MAX_OUTPUT_TOKENS_KEY],
         )
-    installed = _installed_agent(agent)
+    installed = issubclass(agent_class, BaseInstalledAgent)
     if installed:
         kwargs["api_key"] = "EMPTY"
     configured = _agent_config(
         agent,
+        agent_class,
         endpoint_url=(f"http://127.0.0.1:{CANDIDATE_MODEL_RELAY_PORT}/v1" if installed else overlay.endpoint_url),
         served_model=overlay.served_model,
         model_identity=overlay.model_identity,
@@ -536,6 +410,7 @@ def _stable_agent(agent: AgentConfig) -> AgentConfig:
     reconciled_model_info(None, agent.kwargs.get(MODEL_INFO_KEY))
     configured = _agent_config(
         agent,
+        _agent_class(agent),
         endpoint_url=_STABLE_ENDPOINT,
         served_model=_STABLE_MODEL,
         model_identity=_STABLE_MODEL,
@@ -571,16 +446,15 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
             for name, _ in get_required_host_vars(declaration)
         }
     )
-    agent = _effective_agent(config.agents[0], overlay)
+    agent_class = _agent_class(config.agents[0])
+    agent = _effective_agent(config.agents[0], agent_class, overlay)
     dataset = _dataset_with_runtime(
         config.datasets[0],
         dataset_path=overlay.dataset_path,
         task_limit=overlay.task_limit,
     )
     environment = config.environment
-    user_agent = config.user_agent
-    agent = candidate_agent_config(agent, user_agent)
-    if _installed_agent(config.agents[0]):
+    if issubclass(agent_class, BaseInstalledAgent):
         if environment.type not in _MODEL_RELAY_ENVIRONMENTS:
             raise ValueError("Installed candidate model relays require the local or Daytona Shellbox backend")
         environment = environment.model_copy(
@@ -610,27 +484,13 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
         )
         guest_model_name = overlay.judge_model_identity or config.verifier.model_name or model_name
         verifier_env = model_guest_environment(verifier_env, guest_model_name)
-        if user_agent is not None and user_agent.import_path == _TAU3_USER_AGENT:
-            user_agent = user_agent.model_copy(update={"env": task_model_environment(guest_model_name)})
-        if agent.name == "sotopia":
-            agent = agent.model_copy(
-                update={
-                    "kwargs": {
-                        **agent.kwargs,
-                        "partner_model": "openai/" + guest_model_name,
-                        "evaluator_model": "openai/" + guest_model_name,
-                        "partner_api_base": verifier_env["OPENAI_BASE_URL"],
-                        "evaluator_api_base": verifier_env["OPENAI_BASE_URL"],
-                    }
-                }
-            )
     agent = agent.model_copy(update={"env": model_guest_credentials(agent.env)})
-    effective = config.model_copy(
-        update={
+    effective = JobConfig.model_validate(
+        {
+            **dict(config),
             "job_name": overlay.job_name,
-            "jobs_dir": JobConfig(jobs_dir=str(StoragePath(overlay.jobs_dir))).jobs_dir,
+            "jobs_dir": overlay.jobs_dir,
             "agents": [agent],
-            "user_agent": user_agent,
             "datasets": [dataset],
             "environment": environment,
             "verifier": config.verifier.model_copy(
@@ -649,16 +509,11 @@ def _judge_access(config: JobConfig) -> JudgeAccess:
     explicit = config.environment.kwargs.get("judge_access")
     if explicit is not None:
         return JudgeAccess(explicit)
-    if config.agents[0].name == "sotopia":
-        return JudgeAccess.RUNTIME
-    if config.user_agent is not None and config.user_agent.import_path == _TAU3_USER_AGENT:
-        return JudgeAccess.RUNTIME
     return JudgeAccess.VERIFIER
 
 
 def _environment_declarations(config: JobConfig) -> tuple[dict[str, str], ...]:
-    agents = [*config.agents, *([config.user_agent] if config.user_agent is not None else [])]
-    return (*(agent.env for agent in agents), config.verifier.env)
+    return (*(agent.env for agent in config.agents), config.verifier.env)
 
 
 def _judge_settings(config: JobConfig, overlay: RuntimeOverlay) -> tuple[str, str] | None:
@@ -669,19 +524,6 @@ def _judge_settings(config: JobConfig, overlay: RuntimeOverlay) -> tuple[str, st
         if not model:
             raise ValueError("A judge endpoint requires an explicit verifier model role")
         return endpoint, model
-    agent = config.agents[0]
-    if agent.name == "sotopia":
-        partner_endpoint = agent.kwargs.get("partner_api_base")
-        evaluator_endpoint = agent.kwargs.get("evaluator_api_base")
-        partner_model = agent.kwargs.get("partner_model")
-        evaluator_model = agent.kwargs.get("evaluator_model")
-        if (
-            not partner_endpoint
-            or not partner_model
-            or (partner_endpoint, partner_model) != (evaluator_endpoint, evaluator_model)
-        ):
-            raise ValueError("Sotopia requires one explicit shared host model capability for partner and evaluator")
-        return str(partner_endpoint), str(partner_model).removeprefix("openai/")
     return None
 
 
@@ -689,10 +531,7 @@ def _judge_authentication(config: JobConfig, overlay: RuntimeOverlay, *, source:
     judge = _judge_settings(config, overlay)
     if judge is None:
         return {}
-    declarations = overlay.verifier_env or config.verifier.env
-    if config.agents[0].name == "sotopia" and model_api_url(declarations) is None:
-        declarations = {**config.agents[0].env, **declarations}
-    return endpoint_authentication(judge[0], declarations, source=source)
+    return endpoint_authentication(judge[0], overlay.verifier_env or config.verifier.env, source=source)
 
 
 def _model_authentication(
@@ -720,7 +559,6 @@ def _stable_config(config: JobConfig) -> JobConfig:
             "job_name": _STABLE_JOB_NAME,
             "jobs_dir": _STABLE_JOBS_DIR,
             "agents": [agent],
-            "user_agent": config.user_agent,
         }
     )
     return JobConfig.model_validate(stable.model_dump(mode="python"), extra="forbid")
@@ -760,7 +598,7 @@ def _preflight_one(
     dataset = _single_entry(config, "datasets")
     assert isinstance(agent, AgentConfig)
     assert isinstance(dataset, DatasetConfig)
-    agent_name = _validate_agent(agent)
+    agent_name = _agent_class(agent).name()
     environment_name = _validate_environment(config)
     if config.environment.type == EnvironmentType.DAYTONA and not host_environment.get("DAYTONA_TARGET"):
         raise ValueError("Harbor Daytona policies require DAYTONA_TARGET before model allocation")
@@ -796,7 +634,7 @@ def _preflight_one(
             ),
         )
         effective_agent = effective.agents[0]
-        if effective_agent.name == AgentName.PI:
+        if agent_name == AgentName.PI:
             try:
                 AgentFactory.create_agent_from_name(
                     AgentName.PI,

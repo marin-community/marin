@@ -57,8 +57,8 @@ def _normalize_unroll(unroll: int | bool | None, num_layers: int) -> int | bool:
     return resolved
 
 
-def _is_layer_batched_leaf(x: Any, num_layers: int) -> bool:
-    return _is_array_like(x) and x.ndim > 0 and x.shape[0] == num_layers
+def _is_layer_batched_leaf(x: Any, num_layers: int, *, is_array_like: Callable[[Any], bool] = _is_array_like) -> bool:
+    return is_array_like(x) and getattr(x, "ndim", 0) > 0 and x.shape[0] == num_layers
 
 
 def _slice_layer(x: Any, index: int, num_layers: int) -> Any:
@@ -251,7 +251,7 @@ class ArrayStacked(eqx.Module, Generic[M]):
 
             return jax.vmap(
                 mapped,
-                in_axes=(_layer_in_axes(self.stacked, self.num_layers), args_axes, kwargs_axes),
+                in_axes=(layer_in_axes(self.stacked, self.num_layers), args_axes, kwargs_axes),
                 out_axes=out_axes,
             )(self.stacked, args, kwargs)
 
@@ -333,9 +333,10 @@ def _slice_with_axis(x: Any, axis: AxisSpec, layer_index: int, num_layers: int, 
     return jnp.take(x, layer_index, axis=resolved_axis)
 
 
-def _layer_in_axes(tree: Any, num_layers: int) -> Any:
+def layer_in_axes(tree: Any, num_layers: int, *, is_array_like: Callable[[Any], bool] = _is_array_like) -> Any:
+    """Map leading layer axes to zero, retaining the caller's array-leaf policy."""
     return jax.tree.map(
-        lambda leaf: 0 if _is_layer_batched_leaf(leaf, num_layers) else None,
+        lambda leaf: 0 if _is_layer_batched_leaf(leaf, num_layers, is_array_like=is_array_like) else None,
         tree,
     )
 

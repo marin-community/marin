@@ -28,7 +28,7 @@ dependencies = [
     "google-cloud-storage",
     "huggingface-hub",
     "marin-haliax",
-    "jax>=0.9.2,<0.12",
+    "jax>=0.9.2,<0.13",
     "jaxopt>=0.8.3",
     "marin-levanter[serve]",
     "transformers>=5.5.3,<6.0",
@@ -63,6 +63,7 @@ marin-serve = "marin.inference.serve_cli:main"
 
 [dependency-groups]
 test = [
+    "marin-skyrlrecipe",
     "cloud-sql-python-connector[pg8000]>=1.9",
     "pytest>=8.3.2",
     "pytest-asyncio",
@@ -110,6 +111,18 @@ conflicts = [
     ],
     [
         { extra = "gpu" },
+        { extra = "cpu" },
+    ],
+    [
+        { extra = "rocm" },
+        { extra = "gpu" },
+    ],
+    [
+        { extra = "rocm" },
+        { extra = "tpu" },
+    ],
+    [
+        { extra = "rocm" },
         { extra = "cpu" },
     ],
 ]
@@ -163,6 +176,9 @@ cpu = [
   # Linux aarch64, macOS arm64: PyPI default wheel
   "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
+
+# AMD GPUs: Levanter's ROCm JAX stack.
+rocm = ["marin-levanter[rocm]"]
 
 # Vendored Evalchemy runs against a served OpenAI URL from its own locked uv project.
 # See vendor/evalchemy and marin.evaluation.evalchemy.runtime.

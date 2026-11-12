@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from marin.evaluation.metric_selection import base_metric
-from marin.evaluation.records import MetricKind, RunStatus
+from marin.evaluation.records import MetricKind, RepeatAggregate, RunStatus
 
 ALPHA = 0.05
 
@@ -202,7 +202,9 @@ class Measurement:
     """Graded items scored correct, for a binary metric whose value is integral in k."""
 
     recorded_stderr: float | None = None
-    """The harness-recorded standard error of the mean, for the continuous path."""
+    """The standard error used for the continuous score interval."""
+
+    repeat_aggregation: RepeatAggregate | None = None
 
     item_cap: int | None = None
     """A declared per-run item cap. A comparability attribute, not part of benchmark identity: making

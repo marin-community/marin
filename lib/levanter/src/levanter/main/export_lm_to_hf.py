@@ -127,6 +127,7 @@ def main(config: ConvertLmConfig):
             max_concurrent_shards=config.max_concurrent_shards,
             dtype=jnp.dtype(config.export_dtype) if config.export_dtype is not None else None,
             generation_config=build_generation_config(tokenizer, config.hf_generation_eos_token_ids),
+            field_dtype_overrides=config.trainer.field_dtype_overrides,
         )
 
 

@@ -410,7 +410,9 @@ def _promote(
     parent, separator, _ = destination_path.rpartition("/")
     if separator:
         filesystem.makedirs(parent, exist_ok=True)
-    copy_options = {"preserve_etag": True} if _is_s3(filesystem) else {}
+    # CoreWeave rejects UploadPartCopy for a one-part MPU containing a small file.
+    # The destination content check below still verifies an ordinary copy.
+    copy_options = {"preserve_etag": True} if _is_s3(filesystem) and verified.size >= S3_UPLOAD_PART_BYTES else {}
     filesystem.cp_file(staging_path, destination_path, **copy_options)
     filesystem.invalidate_cache(destination_path)
     promoted = _DestinationFile(

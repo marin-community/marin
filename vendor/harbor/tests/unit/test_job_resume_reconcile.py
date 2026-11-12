@@ -19,7 +19,6 @@ import logging
 from pathlib import Path
 
 import pytest
-
 from harbor.job import Job
 from harbor.models.job.reconciliation import (
     TrialPlanMismatchError,
@@ -171,18 +170,20 @@ def test_hf_dataset_materialization_path_drift_resume_proceeds() -> None:
     """A pinned HF task retains its result after a fresh local materialization."""
     existing = [
         TrialConfig(
+            agent=AgentConfig(name="pi"),
             task=TaskConfig(
                 path=Path("/tmp/harbor-run-old/hf_dataset/astropy__astropy-13236"),
                 source="hf_dataset",
-            )
+            ),
         )
     ]
     planned = [
         TrialConfig(
+            agent=AgentConfig(name="pi"),
             task=TaskConfig(
                 path=Path("/tmp/harbor-run-new/hf_dataset/astropy__astropy-13236"),
                 source="hf_dataset",
-            )
+            ),
         )
     ]
 

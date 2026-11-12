@@ -26,6 +26,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory, TemporaryFile
 from typing import Any
 
+from finestore.rl.curation import DaytonaSafety
 from pydantic import BaseModel, ValidationError
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_defect, unsupported
@@ -381,6 +382,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn"),
                 count=14259,
                 notes="reasoning_gym library scoring is sound; remove the substring fallback at conversion.",
+                daytona_safety=DaytonaSafety.SAFE,
             ),
             config=CurationRecipe(
                 name="tasktrove-reasoning-gym",

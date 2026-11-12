@@ -25,7 +25,6 @@ from marin.evaluation.runner import (
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
-from marin.inference.model_preparation import precache_inference_model
 from marin.inference.types import InferenceBackendState
 
 POLICY = "marin-10197"
@@ -90,7 +89,6 @@ class PolicyJudge:
             priority=self.priority,
             api_model=self.model.location,
         )
-        precache_inference_model(inference)
         try:
             with remote_inference(inference) as policy_judge:
                 jobs = {f"policy-judge-{i}": str(job.job_id) for i, job in enumerate(policy_judge.jobs)}

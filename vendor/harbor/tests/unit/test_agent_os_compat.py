@@ -1,27 +1,11 @@
 """Tests for the SUPPORTS_WINDOWS agent flag and OS-compat preflight check."""
 
 import pytest
-
-from harbor.agents.base import BaseAgent
-from harbor.agents.nop import NopAgent
-from harbor.agents.oracle import OracleAgent
 from harbor.models.task.config import TaskOS
-
 
 # ---------------------------------------------------------------------------
 # Flag defaults
 # ---------------------------------------------------------------------------
-
-
-class TestSupportsWindowsFlag:
-    def test_base_agent_defaults_to_false(self):
-        assert BaseAgent.SUPPORTS_WINDOWS is False
-
-    def test_oracle_supports_windows(self):
-        assert OracleAgent.SUPPORTS_WINDOWS is True
-
-    def test_nop_supports_windows(self):
-        assert NopAgent.SUPPORTS_WINDOWS is True
 
 
 class TestLinuxOnlyAgentsDoNotSupportWindows:
@@ -40,14 +24,14 @@ class TestLinuxOnlyAgentsDoNotSupportWindows:
         # These are the only agents that should support Windows.
         windows_agents = {"oracle", "nop"}
         for name, cls in installed_agents.items():
-            if name.value in windows_agents:
-                assert cls.SUPPORTS_WINDOWS is True, (
-                    f"{name.value} should have SUPPORTS_WINDOWS = True"
-                )
+            if name in windows_agents:
+                assert (
+                    cls.SUPPORTS_WINDOWS is True
+                ), f"{name} should have SUPPORTS_WINDOWS = True"
             else:
-                assert cls.SUPPORTS_WINDOWS is False, (
-                    f"{name.value} should not have SUPPORTS_WINDOWS = True"
-                )
+                assert (
+                    cls.SUPPORTS_WINDOWS is False
+                ), f"{name} should not have SUPPORTS_WINDOWS = True"
 
 
 # ---------------------------------------------------------------------------

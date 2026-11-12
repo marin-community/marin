@@ -43,7 +43,7 @@ from levanter.checkpoint import (
     CheckpointerConfig,
     CheckpointInterval,
     _collect_debug_checkpointer_state,
-    _load_metadata,
+    load_checkpoint_metadata,
     discover_checkpoint_candidates,
     discover_latest_checkpoint,
     is_checkpoint_path,
@@ -84,7 +84,7 @@ def _on_step(checkpointer: Checkpointer, step: int, *, force: bool = False):
 
 def _get_checkpoint_steps(checkpoint_dir):
     paths = list(pathlib.Path(checkpoint_dir).iterdir())
-    return sorted([_load_metadata(f)["step"] for f in paths])
+    return sorted([load_checkpoint_metadata(f)["step"] for f in paths])
 
 
 def _write_checkpoint_metadata(path: pathlib.Path, *, step: int, timestamp: str, is_temporary: bool = False) -> None:
@@ -915,6 +915,27 @@ def test_checkpointer_force_save_uses_permanent_path_even_when_time_policy_elaps
         assert list(pathlib.Path(temporary_dir).iterdir()) == []
 
 
+def test_checkpointer_commits_application_metadata_with_every_save(tmp_path):
+    config = CheckpointerConfig(
+        base_path=str(tmp_path / "checkpoints"),
+        temporary_base_path=str(tmp_path / "temporary"),
+        save_interval=None,
+        keep=None,
+        keep_last_temporary_checkpoints=1,
+    )
+    checkpointer = config.create("run1", metadata={"placement": {"fingerprint": "abc"}})
+    state = {"model": jnp.asarray([1.0, 2.0])}
+
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    checkpointer.on_step(tree=state, step=1)
+    checkpointer.save_final_checkpoint(tree=state, step=2)
+
+    temporary = load_checkpoint_metadata(str(tmp_path / "temporary" / "run1" / "step-1"))
+    permanent = load_checkpoint_metadata(str(tmp_path / "checkpoints" / "run1" / "step-2"))
+    assert (temporary["placement"], temporary["is_temporary"]) == ({"fingerprint": "abc"}, True)
+    assert (permanent["placement"], permanent["step"]) == ({"fingerprint": "abc"}, 2)
+
+
 def test_final_checkpoint_waits_for_pending_temporary_save_and_restores_completed_state(tmp_path):
     permanent_path = tmp_path / "checkpoints"
     temporary_path = tmp_path / "temporary"
@@ -934,7 +955,7 @@ def test_final_checkpoint_waits_for_pending_temporary_save_and_restores_complete
     assert path == str(permanent_path / "step-3")
     restored = load_checkpoint(jax.tree.map(jnp.zeros_like, state), path)
     assert_trees_all_equal(restored, state)
-    assert _load_metadata(path)["is_temporary"] is False
+    assert load_checkpoint_metadata(path)["is_temporary"] is False
 
 
 def test_checkpointer_coalesces_requests_into_one_temporary_checkpoint(tmp_path):

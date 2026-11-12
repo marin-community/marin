@@ -884,6 +884,7 @@ PRECOMMIT_CONFIGS = [
             "lib/fray/src/**/*.py",
             "lib/iris/src/**/*.py",
             "lib/rigging/src/**/*.py",
+            "lib/skyrlrecipe/src/**/*.py",
             "lib/zephyr/src/**/*.py",
             "infra/marina/src/**/*.py",
             "infra/marina/apps/**/*.py",

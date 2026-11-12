@@ -1,0 +1,4 @@
+applet_id = "58367197-a444-4cbd-b080-5ffd8d0b8034"
+title = "Model Scorecard"
+description = "Policy eval scores for selected baseline models. Each cell links to the EvalDash run or the raw results behind it."
+build_command = "uv run --no-project python build.py"

@@ -16,6 +16,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.nemotron_ultra import blend_task, text_request
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
@@ -257,6 +258,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn", "language:python"),
                 count=10000,
                 notes="Agent writes a transform, graded on held-out grids. One of the best sources here.",
+                daytona_safety=DaytonaSafety.SAFE,
             ),
             config=CurationRecipe(
                 name="tasktrove-arc_inductive",
@@ -279,6 +281,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn"),
                 count=10000,
                 notes="Direct grid answer against gold. Subsample; the inductive variant is stronger.",
+                daytona_safety=DaytonaSafety.SAFE,
             ),
             config=CurationRecipe(
                 name="tasktrove-arc_transductive",

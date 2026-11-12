@@ -171,7 +171,8 @@ before executing a campaign from a new root. `--publish-catalog` alone does not
 change either cache location. The shared catalog retains run history
 and accumulates assessments. Omit the option for local previews and SAMPLE campaigns.
 Use `--source` to grade only new or changed sources; other production sources keep
-their declarations and grades without executing their pipelines. Older attempts
+their declarations and grades without executing their pipelines. Inventory-only
+sources take their declarations from the current code at every publication. Older attempts
 are ignored per source, and removing a declaration does not retire its published entry.
 After publication, run the Atlas loader to refresh Postgres; no inference is repeated.
 

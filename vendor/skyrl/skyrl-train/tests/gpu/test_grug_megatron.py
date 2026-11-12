@@ -55,6 +55,7 @@ from tests.gpu.grug_serving import (
 )
 from tests.gpu.grug_tiny_checkpoint import TOY_SHAPE, write_tiny_checkpoint
 from tests.gpu.utils import get_test_actor_config, init_worker_with_type
+from skyrl_train.weight_sync.expert_block.driver import ExpertBlockSync
 
 ROLLOUT_WORLD_SIZE = 2
 RESPONSE_LENGTH = 8
@@ -512,20 +513,33 @@ def test_grug_megatron_pp2_train_step_updates_weights_and_exports(tmp_path):
 
 
 @pytest.mark.vllm
-@pytest.mark.parametrize("nccl_max_channels", [None, 32])
-def test_grug_megatron_four_gpu_pp2_disaggregated_rollout_train_broadcast_rollout(tmp_path, nccl_max_channels):
-    """Rollout, PP2 Megatron update, mixed-dtype broadcast, serving readback, rollout."""
+@pytest.mark.parametrize(
+    ("transport", "nccl_max_channels"),
+    [("broadcast", None), ("broadcast", 32), ("expert_block", None)],
+)
+def test_grug_megatron_four_gpu_disaggregated_rollout_train_sync_rollout(tmp_path, nccl_max_channels, transport):
+    """Rollout, Megatron update, checked weight transfer, serving readback, rollout."""
     policy_world_size = 2
     require_hoppers(policy_world_size + ROLLOUT_WORLD_SIZE)
     model_path = tmp_path / "model"
     model_path.mkdir()
     write_tiny_checkpoint(model_path)
-    cfg = _config(str(model_path), world_size=policy_world_size, pp=2, ep=1)
+    cfg = _config(
+        str(model_path), world_size=policy_world_size, pp=2 if transport == "broadcast" else 1,
+        ep=1 if transport == "broadcast" else 2,
+    )
+    cfg.generator.weight_sync_transport = transport
+    cfg.generator.expert_block_sync.verify = transport == "expert_block"
     if nccl_max_channels is not None:
         cfg.trainer.algorithm.batch_invariant = True
         cfg.trainer.policy.megatron_config.nccl_max_channels = nccl_max_channels
     initialize_ray(cfg)
-    client = grug_engine_client(cfg, str(model_path))
+    client = grug_engine_client(
+        cfg,
+        str(model_path),
+        require_verified_placements=transport == "expert_block",
+        moe_backend="triton" if transport == "expert_block" else None,
+    )
     try:
         prompt_pattern = [[1, 17, 29, 5, 11, 3], [1, 19, 31, 7, 13, 3]]
         prompts = [prompt_pattern[idx % 2] for idx in range(cfg.trainer.train_batch_size)]
@@ -548,8 +562,17 @@ def test_grug_megatron_four_gpu_pp2_disaggregated_rollout_train_broadcast_rollou
         for name in PARAMETER_NAMES:
             assert not torch.equal(training[name], before[name]), f"{name} did not update"
 
-        ray.get(policy.async_run_ray_method("pass_through", "init_weight_sync_state", client))
-        ray.get(policy.async_run_ray_method("pass_through", "broadcast_to_inference_engines", client))
+        if transport == "expert_block":
+            sync = ExpertBlockSync(policy_model=policy, inference_engine_client=client, timeout_seconds=600)
+            asyncio.run(sync.prepare())
+            asyncio.run(client.pause_generation())
+            asyncio.run(sync.sync(0))
+            asyncio.run(sync.verify(0))
+            asyncio.run(sync.close())
+            asyncio.run(client.resume_generation(policy_step=1))
+        else:
+            ray.get(policy.async_run_ray_method("pass_through", "init_weight_sync_state", client))
+            ray.get(policy.async_run_ray_method("pass_through", "broadcast_to_inference_engines", client))
         sync_names = [
             *BIAS_NAMES,
             *SERVING_EXPERT_INDEX_BY_NAME,
@@ -650,6 +673,123 @@ def test_grug_megatron_two_gpu_colocated_sleep_sync_preserves_grouped_experts(tm
     finally:
         ray.util.remove_placement_group(shared_pg)
         ray.shutdown()
+
+
+@pytest.mark.vllm
+def test_grug_megatron_four_gpu_colocated_expert_block_matches_fresh_load_after_two_updates(tmp_path):
+    """Each sleep/wake update must match a fresh vLLM load on every EP rank."""
+    require_hoppers(4)
+    model_path = tmp_path / "model"
+    model_path.mkdir()
+    write_tiny_checkpoint(model_path)
+    cfg = _config(str(model_path), world_size=4, pp=1, ep=4)
+    cfg.trainer.placement.colocate_all = True
+    cfg.trainer.micro_train_batch_size_per_gpu = 1
+    cfg.trainer.micro_forward_batch_size_per_gpu = 1
+    cfg.generator.inference_engine_data_parallel_size = 4
+    cfg.generator.inference_engine_expert_parallel_size = 4
+    cfg.generator.weight_sync_transport = "expert_block"
+    cfg.generator.expert_block_sync.verify = True
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    prompts = [[1, 17, 29, 5, 11, 3], [1, 19, 31, 7, 13, 3]] * 2
+    rollout_sampling = get_sampling_params_for_backend(cfg.generator.backend, cfg.generator.sampling_params)
+    rollout_sampling.update({"temperature": 0.0, "ignore_eos": True, "max_tokens": 4, "logprobs": 1})
+    score_sampling = {**rollout_sampling, "max_tokens": 1, "prompt_logprobs": 1}
+    target = 47
+    score_input = InferenceEngineInput(prompt_token_ids=[prompts[0] + [target]], sampling_params=score_sampling)
+    expert_names = [
+        f"model.layers.0.mlp.experts.{expert}.{part}_proj.weight"
+        for expert in range(TOY_SHAPE["num_local_experts"])
+        for part in ("gate", "down")
+    ]
+    names = [LM_HEAD_NAME, ROUTER_NAME, *expert_names]
+    observations = []
+
+    def read_weights(engine_client):
+        rows = {}
+        for engine in engine_client.engines:
+            result = ray.get(engine.inference_engine_actor.read_engine_weights.remote(names, False))
+            for row in result if isinstance(result, list) else [result]:
+                rank = int(row["__ranks__"]["ep_rank"])
+                assert rank not in rows
+                rows[rank] = row
+        assert set(rows) == set(range(4))
+        return rows
+
+    def logprob(engine_client):
+        result = asyncio.run(engine_client.generate(score_input))
+        return float(result["prompt_logprobs"][0][-1][target])
+
+    initialize_ray(cfg)
+    shared_pg = placement_group([{"GPU": 1, "CPU": 1}] * 4, strategy="PACK")
+    ray.get(shared_pg.ready(), timeout=120)
+    client = grug_engine_client(
+        cfg,
+        str(model_path),
+        shared_pg=shared_pg,
+        inference_engine_enable_sleep=True,
+        require_verified_placements=True,
+        moe_backend="triton",
+    )
+    try:
+        policy = init_worker_with_type(
+            "policy", shared_pg=shared_pg, colocate_all=True, num_gpus_per_node=4, cfg=cfg
+        )
+        sync = ExpertBlockSync(policy_model=policy, inference_engine_client=client, timeout_seconds=600, colocated=True)
+        for step in range(3):
+            if step:
+                rollout = asyncio.run(
+                    client.generate(InferenceEngineInput(prompt_token_ids=prompts, sampling_params=rollout_sampling))
+                )
+                asyncio.run(client.pause_generation())
+                asyncio.run(client.sleep())
+                policy.backload_to_gpu()
+                batch = rollout_training_batch(prompts, rollout)
+                batch.metadata["global_step"] = step
+                _train_step(policy, batch)
+            policy.offload_to_cpu(offload_optimizer=True, offload_model=False)
+            asyncio.run(client.wake_up(tags=["weights"]))
+            if step == 0:
+                asyncio.run(client.pause_generation())
+            asyncio.run(sync.prepare())
+            asyncio.run(sync.sync(step))
+            asyncio.run(sync.verify(step))
+            asyncio.run(sync.close())
+            if step:
+                export_dir = tmp_path / f"checkpoint-{step}"
+                ray.get(policy.async_run_ray_method("pass_through", "save_hf_model", str(export_dir), tokenizer))
+                observations.append((export_dir, read_weights(client)))
+            policy.offload_to_cpu(offload_optimizer=False, offload_model=True)
+            asyncio.run(client.wake_up(tags=["kv_cache"]))
+            asyncio.run(client.resume_generation(policy_step=step + 1))
+            if step:
+                observations[-1] += (logprob(client),)
+        first, second = observations
+        assert any(
+            not torch.equal(first[1][rank][name]["tensor"], second[1][rank][name]["tensor"])
+            for rank in range(4)
+            for name in expert_names
+            if first[1][rank][name].get("found") and second[1][rank][name].get("found")
+        ), "No sampled expert changed across updates"
+    finally:
+        ray.shutdown()
+
+    for export_dir, synced_weights, synced_logprob in observations:
+        initialize_ray(cfg)
+        try:
+            fresh = grug_engine_client(cfg, str(export_dir), moe_backend="triton")
+            reference_weights = read_weights(fresh)
+            for rank in range(4):
+                for name in names:
+                    actual, expected = synced_weights[rank][name], reference_weights[rank][name]
+                    assert actual.get("found") == expected.get("found"), (rank, name)
+                    if actual.get("found"):
+                        torch.testing.assert_close(actual["tensor"], expected["tensor"], rtol=0, atol=0)
+            # Both sides use the same vLLM backend and BF16 weights. This only allows
+            # small kernel-order variation, not the trainer-vLLM numerical gap.
+            assert abs(synced_logprob - logprob(fresh)) < 2e-3
+        finally:
+            ray.shutdown()
 
 
 def _idle_pinned_host_bytes(_worker) -> int:

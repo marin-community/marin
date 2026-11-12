@@ -40,7 +40,7 @@ class Task:
     ├── environment/
     │   ├── [docker-compose.yaml | Dockerfile | singularity-compose.yaml | etc.]
     │   └── ...
-    ├── solution/         # copied to container @ /solution by OracleAgent
+    ├── solution/         # reference solution; not copied by supported agents
     │   ├── solve.{sh,ps1,cmd,bat}
     │   └── ...
     └── tests/            # copied to container @ /tests by Evaluator

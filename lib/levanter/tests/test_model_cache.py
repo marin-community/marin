@@ -326,7 +326,7 @@ def test_resolve_keeps_distinct_refs_in_distinct_cache_dirs(monkeypatch):
     monkeypatch.setattr(
         model_cache,
         "model_info",
-        lambda model_id, *, revision=None: SimpleNamespace(sha=revisions[(model_id, revision)]),
+        lambda model_id, *, revision=None, token=None: SimpleNamespace(sha=revisions[(model_id, revision)]),
     )
 
     def fake_cache(cache_path, repo, *, revision=None, complete_marker):
@@ -350,7 +350,7 @@ def test_resolve_tracks_mutable_hf_revision(tmp_path, monkeypatch):
     current_commit = first_commit
     repo_files = ["config.json", "generation_config.json", "tokenizer_config.json"]
 
-    def fake_model_info(model_id, *, revision=None):
+    def fake_model_info(model_id, *, revision=None, token=None):
         assert model_id == "org/model"
         assert revision is None
         return SimpleNamespace(sha=current_commit)

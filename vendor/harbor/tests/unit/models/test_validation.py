@@ -3,7 +3,8 @@
 from pathlib import Path
 
 import pytest
-
+from harbor.agents.factory import AgentFactory
+from harbor.models.agent.name import AgentName
 from harbor.models.job.config import DatasetConfig
 from harbor.models.task.task import Task
 from harbor.models.trial.config import (
@@ -14,6 +15,7 @@ from harbor.models.trial.config import (
     VerifierConfig,
 )
 from harbor.trial.trial import Trial
+from tests.unit.fake_agent import FakeAgent
 
 
 def _scaffold(task_dir: Path, toml: str = "") -> None:
@@ -40,7 +42,7 @@ async def test_trial_with_custom_verifier_loads_task_without_test_script(
         task=TaskConfig(path=task_dir),
         trial_name="custom-verifier",
         trials_dir=tmp_path / "trials",
-        agent=AgentConfig(name="nop"),
+        agent=AgentConfig(name="pi"),
         environment=EnvironmentConfig(
             type="shellsim", kwargs={"network_policy": "deny"}
         ),
@@ -242,3 +244,8 @@ class TestTaskIsValidDir:
         configs = await DatasetConfig(path=tmp_path).get_task_configs()
 
         assert [config.path for config in configs] == [valid_task]
+
+
+@pytest.fixture(autouse=True)
+def register_test_agents(monkeypatch):
+    monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.PI, FakeAgent)
