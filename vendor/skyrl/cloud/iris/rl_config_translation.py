@@ -357,7 +357,6 @@ SKYRL_INTERNAL_ENGINE_KWARGS = frozenset(
         "attention_backend",  # Set from generator.vllm_attention_backend
         "tokenizer",  # Set from trainer.policy.model.tokenizer_path
         "skip_tokenizer_init",  # The launcher supplies the tokenizer.
-        "mm_attention_backend",  # Set from generator.vllm_attention_backend.
         "speculative_config",  # Derived from generator.speculative_decoding
     }
 )
