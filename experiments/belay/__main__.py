@@ -177,6 +177,7 @@ from experiments.belay.submit import (
     IrisJob,
     RunSpec,
     Stage,
+    check_ladder_launch,
     check_launch,
     check_variant,
     experiment_id,
@@ -626,6 +627,9 @@ def new_idea(
     defaults_text = defaults + (f" (hidden text removed from the comment: {', '.join(hidden)})" if hidden else "")
     if defaulted:
         defaults_text = f"track speedrun (no Track: line); {defaults_text}"
+    if ladder:  # all rungs or none: a rung launched alone would leave the idea planned with the rest never started
+        waiting = [t for t in tracks if not spec_launched(repo, experiment_id(registry_id, t, ladder))]
+        check_ladder_launch(waiting, iris_jobs(), state.node_cap, idea.node_grant, registry_id)
     for track in tracks:
         plan_and_launch(
             Plan(repo, branch, idea, registry_id, track, experiment_id(registry_id, track, ladder), defaults_text),
@@ -668,7 +672,7 @@ def plan_and_launch(
     repo, branch, idea, registry_id, experiment = plan.repo, plan.branch, plan.idea, plan.registry_id, plan.experiment
     state = page_state()
     existing = spec_path(experiment, repo / SPECS)
-    launched = existing.exists() and "launched" in yaml.safe_load(existing.read_text())
+    launched = spec_launched(repo, experiment)
     hero = None if launched else ladder_hero_mfu(plan, dry_run=dry_run)
     if launched:
         text = existing.read_text()  # resuming: the committed spec decides
@@ -730,6 +734,12 @@ def plan_and_launch(
     launch_stage(repo, branch, spec, data_runs, trial_id, state, dry_run=False)
     running = title(registry_id, entry["name"], spec.track, "running")
     publish_thread(registry_id, running, updated(body, running, number, section), idea.id, "plan", dry_run=False)
+
+
+def spec_launched(repo: Path, experiment: str) -> bool:
+    """Whether ``experiment``'s committed run spec records its launch."""
+    path = spec_path(experiment, repo / SPECS)
+    return path.exists() and "launched" in yaml.safe_load(path.read_text())
 
 
 def ladder_hero_mfu(plan: Plan, *, dry_run: bool) -> HeroMfuResult | None:

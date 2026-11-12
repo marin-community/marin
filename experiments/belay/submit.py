@@ -340,11 +340,21 @@ def refuse_reused_names(names: list[str], jobs: list[IrisJob]) -> None:
         raise SystemExit(f"refusing: {used} already ran on Iris; a rerun needs a new run key in the spec")
 
 
+def idea_jobs(jobs: list[IrisJob], registry_id: str) -> list[IrisJob]:
+    """The jobs of every run under ``registry_id``, its ladder rungs' included."""
+    out = []
+    for job in jobs:
+        match = REGISTRY_ID.match(job.job_id.rsplit("/", 1)[1].removeprefix(RUN_PREFIX))
+        if match is not None and match.group() == registry_id:
+            out.append(job)
+    return out
+
+
 def refuse_over_cap(needed: int, jobs: list[IrisJob], cap: int, grant: int | None, experiment: str) -> None:
     """Hold a launch past the node cap: the global ``cap`` over every Belay run, or for an idea with a maintainer's
-    ``grant``, the grant over that idea's own runs."""
+    ``grant``, the grant over that idea's own runs (every rung of a ladder)."""
     if grant is not None:
-        own = nodes_in_use([j for j in jobs if f"/{run_name(experiment, '')}" in j.job_id])
+        own = nodes_in_use(idea_jobs(jobs, registry_of(experiment)))
         if own + needed <= grant:
             return
         limit, in_use = f"node grant {grant} for {experiment}", own
@@ -356,6 +366,12 @@ def refuse_over_cap(needed: int, jobs: list[IrisJob], cap: int, grant: int | Non
         f"held: {limit} ({in_use} in use, {needed} needed).\n"
         "next: stop; the idea stays approved and a later session launches it"
     )
+
+
+def check_ladder_launch(tracks: list[Track], jobs: list[IrisJob], cap: int, grant: int | None, registry_id: str) -> None:
+    """Hold a ladder before any rung launches when its rungs not yet launched (``tracks``) would together pass the
+    node cap or the idea's grant: a ladder's rungs launch together, so the idea stays approved until all of them fit."""
+    refuse_over_cap(sum(TRACKS[t].nodes for t in tracks), jobs, cap, grant, registry_id)
 
 
 def track_command(

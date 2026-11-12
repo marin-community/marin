@@ -96,8 +96,8 @@ A human then decides what happens. Never work around a refusal.
      (`priority X not allowed for user Y`): run the escalate command it prints and stop. Never relaunch at a lower
      band yourself; a maintainer grants the band in Iris user budgets or re-queues without the grant.
    - **If it prints `held:`:** the launch would pass the node cap (set on the admin page) or the idea's node grant.
-     Stop working on this idea; it stays approved, and a later session reruns this step. Running it
-     again resumes where it stopped.
+     A ladder is checked as a whole, so its rungs launch together or not at all. Stop working on this idea; it stays
+     approved, and a later session reruns this step. Running it again resumes where it stopped.
 
 ## 1b. code-change (an idea that needs new code)
 
