@@ -130,13 +130,12 @@ td.scored a {
   font-weight: 500;
 }
 
-/* Provenance: a top bar on every scored cell, plus an amber fill for unofficial results. */
+/* Provenance: a top bar on every scored cell, green for official and amber for unofficial. */
 td.official {
   box-shadow: inset 0 3px 0 var(--official);
 }
 
 td.unofficial {
-  background: color-mix(in srgb, var(--unofficial) 22%, var(--surface-1));
   box-shadow: inset 0 3px 0 var(--unofficial);
 }
 
@@ -188,7 +187,6 @@ td:focus-within {
 }
 
 .swatch.unofficial {
-  background: color-mix(in srgb, var(--unofficial) 22%, var(--surface-1));
   box-shadow: inset 0 3px 0 var(--unofficial);
 }
 
