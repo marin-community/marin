@@ -36,7 +36,6 @@ from taskcompendium.pipeline.models import (
     CheckResult,
     Decision,
     Disposition,
-    FilterPolicy,
     QualityBasis,
     ReviewRecord,
     ReviewRubric,
@@ -815,7 +814,6 @@ def write_filtered_shard(
 def filter_source(
     audit_path: str,
     output_path: str,
-    policy: FilterPolicy,
     max_workers: int,
     worker_resources: ResourceConfig | None = None,
     *,
@@ -839,7 +837,7 @@ def filter_source(
         counts = combine_manifest_counts(
             execute_phase(context, filtered, telemetry=telemetry, operation="filter").results
         )
-    manifest: dict[str, Any] = {**counts, "policy": asdict(policy), "audited_source": str(source)}
+    manifest: dict[str, Any] = {**counts, "audited_source": str(source)}
     audited_manifest = _read_json(source / "manifest.json")
     manifest["source_quality"] = audited_manifest.get("source_quality")
     if manifest["input_rows"] != audited_manifest["input_rows"]:

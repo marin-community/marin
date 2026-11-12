@@ -6,7 +6,9 @@
 import asyncio
 import json
 import os
+import shlex
 import subprocess
+import sys
 import tomllib
 from dataclasses import replace
 from pathlib import Path
@@ -302,6 +304,8 @@ def test_codeforces_source_runner_and_converted_grader_agree_on_exit_status(tmp_
         f"import sys\nanswers={answers!r}\nsys.stdout.write(answers[sys.stdin.read()])\nsys.exit({exit_code})\n"
     )
     runner = source.text(TEST_SH)
+    # Bound the whole fixture runner on hosts without GNU timeout.
+    runner = runner.replace("timeout 30 python3", shlex.quote(sys.executable))
     for old, new in (
         ("/logs/verifier", str(tmp_path / "logs")),
         ("/tmp/codenet-actual.txt", str(tmp_path / "actual.txt")),
@@ -309,7 +313,7 @@ def test_codeforces_source_runner_and_converted_grader_agree_on_exit_status(tmp_
         ("/app", str(workspace)),
     ):
         runner = runner.replace(old, new)
-    subprocess.run(["bash", "-c", runner], check=False, capture_output=True)
+    subprocess.run(["bash", "-c", runner], check=False, capture_output=True, timeout=30)
     assert float((tmp_path / "logs/reward.txt").read_text()) == expected_reward
     assert grade(local_stdio(task, workspace), tests, workspace).reward == expected_reward
 

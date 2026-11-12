@@ -38,7 +38,6 @@ from taskcompendium.pipeline.conversion import convert_source_row
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFormat
 from taskcompendium.pipeline.models import (
     Controls,
-    FilterPolicy,
     ImportFailureKind,
     ImportRejection,
     OracleCommand,
@@ -230,7 +229,6 @@ def pipeline_config(
         verification,
         review_config(reviewer),
         execution if execution is not None else AuditExecution(reviewer=reviewer),
-        FilterPolicy(),
         normalized_shards=normalized_shards,
         machines=machines,
         judge_connection=judge_connection,

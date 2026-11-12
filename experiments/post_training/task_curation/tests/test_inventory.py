@@ -40,6 +40,7 @@ from experiments.post_training.task_curation.inventory import (
     task_selection_step,
     validation_task,
 )
+from experiments.post_training.task_curation.tests.resource_receipts import resource_recipe, write_fixture_receipt
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 
 FAMILIES = ("calendar", "competitive_coding", "reasoning_gym", "stem", "structural")
@@ -256,12 +257,21 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
     assert declared.config is not None
     source = replace(
         declared,
-        config=replace(
-            declared.config,
-            source=replace(declared.config.source, repo="open-athena/math500-fixture"),
-            rubric=None,
-            controls=None,
-            intended_use=IntendedUse.TRAIN,
+        config=resource_recipe(
+            replace(
+                declared.config,
+                source=replace(declared.config.source, repo="open-athena/math500-fixture"),
+                rubric=None,
+                controls=None,
+                intended_use=IntendedUse.TRAIN,
+            )
+        ),
+        info=replace(
+            declared.info,
+            daytona_machine_slots=0,
+            daytona_snapshot_count=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
         ),
     )
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
@@ -276,6 +286,7 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
     receipt = tmp_path / "decontamination.json"
     receipt.write_text(decontamination_evidence(source.dataset.name, source.dataset.revision, 1).model_dump_json())
     options = [
+        *write_fixture_receipt(source.config, staged, tmp_path / "oracle-filter.json"),
         "--decontamination-receipt",
         str(receipt),
         "--mode",

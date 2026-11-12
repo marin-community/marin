@@ -58,7 +58,6 @@ from taskcompendium.pipeline.inputs import SourceFileOverride
 from taskcompendium.pipeline.models import (
     Admission,
     Disposition,
-    FilterPolicy,
     GraderReadiness,
     ImportFailureKind,
     ImportRejection,
@@ -154,7 +153,6 @@ class SourcePipelineConfig:
     verification_policy: SourceVerificationPolicy
     review: ReviewConfig | None
     execution: AuditExecution
-    filter_policy: FilterPolicy
     normalized_shards: int
     machines: GradingMachines | None
     judge_connection: JudgeConnection | None = None
@@ -653,7 +651,6 @@ def _filter(run: _SourceRun) -> None:
         filter_source(
             str(run.scratch("audited")),
             str(run.scratch("filtered")),
-            run.config.filter_policy,
             run.config.execution.max_workers,
             run.config.execution.worker_resources,
             context=run.context,

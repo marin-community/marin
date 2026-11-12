@@ -29,7 +29,6 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, Sourc
 from taskcompendium.pipeline.models import (
     Controls,
     Converter,
-    FilterPolicy,
     ImportRejection,
     IntendedUse,
     RawRow,
@@ -187,7 +186,6 @@ def run_stages(
     output_path: Path,
     limit: int,
     reviewer: BatchReviewer,
-    policy: FilterPolicy = FilterPolicy(),
 ) -> dict[str, Any]:
     staged, audited, filtered = (output_path / name for name in ("staged", "audited", "filtered"))
     source = staged / "source.jsonl"
@@ -196,7 +194,7 @@ def run_stages(
         source.write_text("".join(json.dumps(dict(row)) + "\n" for row in rows))
     if not (audited / "manifest.json").exists():
         review_source(str(staged), str(audited), recipe, AuditExecution(reviewer=reviewer), limit)
-    return filter_source(str(audited), str(filtered), policy, max_workers=1)
+    return filter_source(str(audited), str(filtered), max_workers=1)
 
 
 def stage_table(output_path: Path, view: str = "audit") -> pa.Table:

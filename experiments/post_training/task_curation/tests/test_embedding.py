@@ -492,4 +492,4 @@ def test_corpus_resume_refreshes_registered_source_metadata(tmp_path, monkeypatc
     declared = [row for row in sources.values() if row["basis"] == "declared"]
     assert declared and all(row["task_count"] > 0 and row["intended_use"] is None for row in declared)
     retired = json.loads((Path(__file__).parents[1] / "retired-inventory-only.json").read_text())
-    assert {row["id"] for row in retired["entries"]}.isdisjoint(sources)
+    assert {row["id"] for row in retired["entries"] if row["disposition"] != "quick_converted"}.isdisjoint(sources)

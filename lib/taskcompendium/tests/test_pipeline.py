@@ -43,10 +43,8 @@ from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
     CheckStatus,
-    Confidence,
     Disposition,
     EnvironmentInventory,
-    FilterPolicy,
     ImportFailureKind,
     ImportRejection,
     RawRow,
@@ -366,7 +364,7 @@ def test_audit_deduplicates_across_acquired_shards_on_storage_uri(tmp_path, appl
         AuditExecution(max_workers=2, review_batch_size=1, reviewer=reviewer),
         len(rows),
     )
-    manifest = filter_source(f"{root}/audited", f"{root}/filtered", FilterPolicy(), max_workers=1)
+    manifest = filter_source(f"{root}/audited", f"{root}/filtered", max_workers=1)
     audit = []
     for file in (StoragePath(root) / "filtered/audit/*.parquet").glob():
         with file.open("rb") as stream:
@@ -413,7 +411,7 @@ def test_audit_restart_reuses_completed_shards_when_worker_count_changes(tmp_pat
     reviewed = [request["custom_id"] for requests in resumed.batches.values() for request in requests]
     assert set(reviewed) == missing_ids and len(reviewed) == len(missing_ids)
     assert all(hashlib.sha256(path.read_bytes()).hexdigest() == digest for path, digest in preserved.items())
-    manifest = filter_source(str(tmp_path / "audited"), str(tmp_path / "filtered"), FilterPolicy(), max_workers=1)
+    manifest = filter_source(str(tmp_path / "audited"), str(tmp_path / "filtered"), max_workers=1)
     assert manifest["input_rows"] == len(rows)
     assert manifest["dispositions"] == {"keep": len(rows)}
 
@@ -456,17 +454,15 @@ def test_one_preparation_partition_yields_independent_review_tasks(tmp_path, app
     assert sorted(len(requests) for requests in service.batches.values()) == [1, 1]
 
 
-def test_pipeline_refilters_completed_shards_without_new_requests(tmp_path, apple_row, svamp_recipe):
+def test_pipeline_reuses_completed_reviews_when_filtering_again(tmp_path, apple_row, svamp_recipe):
     service = BatchService(confidence="medium")
     reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment")
-    strict_policy = FilterPolicy(id="high-confidence", minimum_confidence=Confidence.HIGH)
     resumed = run_stages(
         svamp_recipe,
         [apple_row],
         output_path=tmp_path,
         limit=1,
         reviewer=reviewer,
-        policy=strict_policy,
     )
     assert resumed["dispositions"] == {"keep": 1}
     pending_audit = stage_table(tmp_path).to_pylist()[0]
@@ -476,7 +472,6 @@ def test_pipeline_refilters_completed_shards_without_new_requests(tmp_path, appl
         output_path=tmp_path,
         limit=1,
         reviewer=reviewer,
-        policy=FilterPolicy(id="medium-confidence", minimum_confidence=Confidence.MEDIUM),
     )
     assert accepted["dispositions"] == {"keep": 1}
     assert len(service.batches) == 1
@@ -1128,7 +1123,7 @@ def test_trusted_panel_with_defects_infers_unsampled_rows_without_reviewing_them
     report = assess_source_quality(str(prepared), str(quality), svamp_recipe, config, SourceQualityPolicy(), execution)
     assert report.status == "trust"
     audit_prepared_source(str(prepared), str(quality), str(audited), svamp_recipe, config, execution)
-    manifest = filter_source(str(audited), str(filtered), FilterPolicy(), max_workers=1)
+    manifest = filter_source(str(audited), str(filtered), max_workers=1)
     records = [row for path in (filtered / "audit").glob("*.parquet") for row in pq.read_table(path).to_pylist()]
     requests = {request["custom_id"] for batch in service.batches.values() for request in batch}
     assert requests == set(report.population.task_ids) and len(requests) == 100
@@ -1192,7 +1187,7 @@ def test_source_quality_gate_reuses_reviews_and_preserves_all_rows(
     assert sorted(len(batch) for batch in service.batches.values()) == [10, 10, 10]
     sampled_ids = {request["custom_id"] for batch in service.batches.values() for request in batch}
     audit_prepared_source(str(prepared), str(quality), str(audited), svamp_recipe, config, execution)
-    manifest = filter_source(str(audited), str(filtered), FilterPolicy(), max_workers=2)
+    manifest = filter_source(str(audited), str(filtered), max_workers=2)
     records = [row for path in (filtered / "audit").glob("*.parquet") for row in pq.read_table(path).to_pylist()]
     assert manifest["input_rows"] == len(records) == 102
     assert sum(record["duplicate_of"] is not None for record in records) == 1
@@ -1211,8 +1206,6 @@ def test_source_quality_gate_reuses_reviews_and_preserves_all_rows(
     assert len(inferred) == 70
     assert all(record["review_status"] is None for record in inferred)
     assert all(record["filter_status"] == "keep" for record in sample_rows)
-    strict = filter_source(str(audited), str(tmp_path / "strict"), FilterPolicy(minimum_confidence=Confidence.HIGH), 2)
-    assert strict["dispositions"] == {"keep": 100, "reject": 2}
 
 
 def test_source_quality_without_eligible_tasks_retains_import_failures(tmp_path, apple_row, svamp_recipe):

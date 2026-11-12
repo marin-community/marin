@@ -16,6 +16,7 @@ from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation.count_inputs import parquet_counts
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
+from experiments.post_training.task_curation.tests.resource_receipts import resource_recipe, write_fixture_receipt
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 
 
@@ -42,7 +43,9 @@ def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubr
     source = next(s for s in skyrl_math.sources() if s.name == "math500")
     source = replace(
         source,
-        config=replace(source.config, source=replace(source.config.source, repo="open-athena/math500-fixture")),
+        config=resource_recipe(
+            replace(source.config, source=replace(source.config.source, repo="open-athena/math500-fixture"))
+        ),
         info=replace(
             source.info,
             daytona_machine_slots=0,
@@ -58,6 +61,7 @@ def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubr
     receipt = tmp_path / "decontamination.json"
     receipt.write_text(decontamination_evidence(source.dataset.name, source.dataset.revision, 3).model_dump_json())
     args = [
+        *write_fixture_receipt(source.config, staged, tmp_path / "oracle-filter.json"),
         "--decontamination-receipt",
         str(receipt),
         "--mode",

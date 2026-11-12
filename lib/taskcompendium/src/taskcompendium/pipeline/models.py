@@ -297,12 +297,6 @@ class QualityBasis(StrEnum):
     SOURCE_INCOMPLETE = "source_incomplete"
 
 
-@dataclass(frozen=True)
-class FilterPolicy:
-    id: str = "evidence-static-v2"
-    minimum_confidence: Confidence = Confidence.MEDIUM
-
-
 class Decision(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     task_id: str

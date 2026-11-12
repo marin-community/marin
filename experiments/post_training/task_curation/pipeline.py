@@ -56,7 +56,6 @@ from taskcompendium.pipeline.models import (
     RESOURCE_BUDGET_BYTES,
     Controls,
     Converter,
-    FilterPolicy,
     IntendedUse,
     ReviewRubric,
     SourceRecipe,
@@ -389,7 +388,6 @@ def _pipeline_config(
             # worker so its request semaphore enforces the worker's provider cap.
             review_task_resources=worker_resources,
         ),
-        filter_policy=FilterPolicy(),
         normalized_shards=normalized_shards,
         machines=machines,
     )
@@ -672,7 +670,6 @@ def pipeline_identity(
         "normalized_shards": config.normalized_shards,
         "quality_policy": asdict(config.quality_policy),
         "verification_policy": asdict(config.verification_policy),
-        "filter_policy": asdict(config.filter_policy),
         "lexical_contamination": (
             config.lexical_contamination.model_dump(mode="json") if config.lexical_contamination else None
         ),

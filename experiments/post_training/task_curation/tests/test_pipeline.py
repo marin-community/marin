@@ -29,7 +29,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFormat
-from taskcompendium.pipeline.models import Controls, FilterPolicy, ReviewRubric
+from taskcompendium.pipeline.models import Controls, ReviewRubric
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
@@ -95,7 +95,6 @@ def config() -> SourcePipelineConfig:
         verification_policy=SourceVerificationPolicy(10, 0, 2, 0.9),
         review=ReviewConfig("fixture-model", "fixture-revision", mode=ReviewMode.BATCH),
         execution=AuditExecution(),
-        filter_policy=FilterPolicy(),
         normalized_shards=2,
         machines=CampaignMachines(),
     )
