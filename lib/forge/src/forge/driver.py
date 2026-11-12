@@ -30,7 +30,7 @@ from forge.effects.issues import DecisionModelUnavailable, Hold, LogFailure, Res
 from forge.effects.log import EventLog, JsonlSink, Status, fold
 from forge.model.proposal import TASK_PROPOSAL, TaskProposal, Verification
 from forge.model.review import Incomplete
-from forge.model.workpiece import WORKPIECE, Terminal, Workpiece
+from forge.model.workpiece import WORKPIECE, Submission, Terminal, Workpiece
 from forge.policy import Policy, load_policy, parse_overlay
 from forge.report import report
 from forge.stages.classify import replayable_grade
@@ -48,8 +48,54 @@ def proposal_key(path: str) -> PurePosixPath:
     return PurePosixPath(file.parent.name, file.name.removesuffix(".proposal.json").removeprefix("slot-"))
 
 
+WORKPIECE_FILE = "workpiece.json"
+
+
+def input_key(path: str) -> PurePosixPath:
+    """A proposal's output identity; a revised workpiece keeps the identity it had in its source run root."""
+    file = PurePosixPath(urlsplit(path).path)
+    return (
+        PurePosixPath(file.parent.parent.name, file.parent.name) if file.name == WORKPIECE_FILE else proposal_key(path)
+    )
+
+
 def proposal_bucket(path: str, buckets: int) -> int:
-    return int.from_bytes(hashlib.sha256(str(proposal_key(path)).encode()).digest()) % buckets
+    return int.from_bytes(hashlib.sha256(str(input_key(path)).encode()).digest()) % buckets
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptedRecord:
+    """The fields ``--revise`` reads from a published workpiece of any format; the rest is ignored."""
+
+    proposal: TaskProposal
+    submission: Submission | None
+    terminal: Terminal | None
+
+
+def revision_inputs(root: str) -> tuple[str, ...]:
+    fs, prefix = url_to_fs(root)
+    paths = tuple(fs.unstrip_protocol(path) for path in sorted(fs.glob(prefix_join(prefix, f"*/*/{WORKPIECE_FILE}"))))
+    if not paths:
+        raise ValueError(f"No published workpieces under {root}")
+    return paths
+
+
+def load_input(path: str, revise: bool) -> tuple[TaskProposal, Submission | None] | None:
+    """The proposal at ``path``, or with ``revise`` the proposal and accepted submission of a published workpiece.
+
+    A workpiece that was not accepted is skipped (None); an accepted one without a submission is an error.
+    """
+    with open_url(path, "rt") as source:
+        text = source.read()
+    if not revise:
+        return TASK_PROPOSAL.validate_json(text), None
+    record = TypeAdapter(AcceptedRecord).validate_json(text)
+    if record.terminal is not Terminal.ACCEPTED:
+        logging.info("SKIP %s: terminal=%s", path, record.terminal)
+        return None
+    if record.submission is None:
+        raise ValueError(f"Accepted workpiece {path} has no submission")
+    return record.proposal, record.submission
 
 
 def inputs(source: str, ranks: tuple[int, ...] = ()) -> tuple[str, ...]:
@@ -141,12 +187,14 @@ def decision_model_held(wp: Workpiece) -> bool:
 
 async def one(args: argparse.Namespace) -> int:
     configure_coreweave_s3()
-    with open_url(args.proposals, "rt") as source:
-        proposal = TASK_PROPOSAL.validate_json(source.read())
+    loaded = load_input(args.proposals, args.revise)
+    if loaded is None:
+        return 0
+    proposal, seed = loaded
     _, policy = run_policy(args.policy)
     if not eligible(proposal, policy):
         return 0
-    identity = proposal_key(args.proposals)
+    identity = input_key(args.proposals)
     if identity.is_absolute() or ".." in identity.parts:
         raise ValueError("Proposal id must be a relative path without '..'")
     workdir = Path(args.work_dir) / identity
@@ -174,7 +222,7 @@ async def one(args: argparse.Namespace) -> int:
                 policy.setting("provider.pool", str),
             )
             async with runtime(policy, args.arm, source, os.environ.get("PARALLEL_API_KEY", "")) as (config, resources):
-                wp = await run_workpiece(proposal, config, resources, log, install=install)
+                wp = await run_workpiece(proposal, config, resources, log, install=install, seed=seed)
     except* (Hold, Restart, Transient, LogFailure) as error:
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
         if log is not None:
@@ -206,9 +254,8 @@ async def run(args: argparse.Namespace) -> None:
     start, end = args.bucket_range or (0, args.buckets)
     if args.concurrency < 1 or not 0 <= start < end <= args.buckets:
         raise ValueError("Concurrency must be positive and bucket range nonempty within buckets")
-    proposals = (
-        path for path in inputs(args.proposals, args.ranks) if start <= proposal_bucket(path, args.buckets) < end
-    )
+    sources = revision_inputs(args.proposals) if args.revise else inputs(args.proposals, args.ranks)
+    proposals = (path for path in sources if start <= proposal_bucket(path, args.buckets) < end)
     active: dict[asyncio.Task[int], tuple[str, subprocess.Popen[bytes]]] = {}
     failures: list[str] = []
     _, policy = run_policy(args.policy)
@@ -235,9 +282,8 @@ async def run(args: argparse.Namespace) -> None:
                     if path is None:
                         exhausted = True
                         continue
-                    with open_url(path, "rt") as source:
-                        proposal = TASK_PROPOSAL.validate_json(source.read())
-                    if not eligible(proposal, policy):
+                    loaded = load_input(path, args.revise)
+                    if loaded is None or not eligible(proposal := loaded[0], policy):
                         skipped += 1
                         continue
                     if proposal.header.verification is Verification.DECISION_MODEL and not decision_model_ready():
@@ -254,6 +300,8 @@ async def run(args: argparse.Namespace) -> None:
                 ]
                 if resume:
                     command.append("--resume-held")
+                if args.revise:
+                    command.append("--revise")
                 process = subprocess.Popen(command)
                 submitted += 1
                 active[asyncio.create_task(asyncio.to_thread(process.wait))] = (path, process)
@@ -306,6 +354,11 @@ def main() -> None:
         command.add_argument("--policy", required=True)
         command.add_argument("--work-dir", default="forge-work")
         command.add_argument("--resume-held", action="store_true", help="Explicitly resume published held workpieces")
+        command.add_argument(
+            "--revise",
+            action="store_true",
+            help="--proposals is a run root: revalidate each accepted workpiece's submission into --output",
+        )
         if name == "run":
             command.add_argument("--concurrency", type=int, required=True)
             command.add_argument("--buckets", type=int, default=4096)

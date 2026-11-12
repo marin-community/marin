@@ -106,6 +106,13 @@ Keep `--buckets 4096` fixed across relaunches. The launcher passes `--max-retrie
 preemptible; a preempted driver resumes from its published checkpoints. Job names are
 `/muchanem/<prefix>-<driver-index>`.
 
+**Revision runs.** With `--revise`, `--proposals` names an existing run root (for example
+`$ROOT/S`) instead of proposals. Each published `<group>/<name>/workpiece.json` that is
+`accepted` starts in the new `--output` root at validation, from its accepted submission, so it
+gets the current solver count, adversary and rollout reviewer, and an author round when the
+reviewer suggests revisions. Other terminals are skipped. Only the proposal, submission and
+terminal of the old workpiece are read, so roots in older formats work.
+
 The driver prints every policy value it resolves next to the declared one (`POLICY key
 declared=… resolved=…`) and the model each role uses (`MODEL role=author model=… endpoint=…`).
 Read those lines first when a run looks wrong.

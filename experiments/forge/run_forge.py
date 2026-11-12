@@ -27,6 +27,7 @@ def main() -> None:
     parser.add_argument("--target-cluster", default="cw-rno2a")
     parser.add_argument("--ranks")
     parser.add_argument("--resume-held", action="store_true", help="Resume published held workpieces")
+    parser.add_argument("--revise", action="store_true", help="--proposals is a run root of accepted workpieces")
     args = parser.parse_args()
     start, end = args.driver_range or (0, args.drivers)
     if min(args.concurrency, args.cpu) < 1 or not 0 <= start < end <= args.drivers <= 4096:
@@ -72,6 +73,8 @@ def main() -> None:
         command += [item for key, value in driver.items() for item in (f"--{key}", value)]
         if args.resume_held:
             command.append("--resume-held")
+        if args.revise:
+            command.append("--revise")
         subprocess.run(command, check=True)
 
 

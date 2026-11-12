@@ -28,12 +28,12 @@ from forge.effects.events import StageCompleted
 from forge.effects.issues import Restart, Transient
 from forge.effects.log import EventLog, JsonlSink, fold
 from forge.harness.protocol import Stopped, StopReason
-from forge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
+from forge.model.controls import CONTROL, CONTROLS, Candidate, Control, ControlKind, RewardBand
 from forge.model.llm import Completion, FinishReason, ToolCall
 from forge.model.proposal import TASK_PROPOSAL, TaskProposal
-from forge.model.review import Abandon, BandRules, Budget, Decision, Incomplete, Modify
+from forge.model.review import Abandon, BandOutcome, BandRules, Budget, Decision, Incomplete, Modify
 from forge.model.stage import Stage
-from forge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpiece
+from forge.model.workpiece import WORKPIECE, Conversation, Fallback, Submission, Terminal, Workpiece
 from forge.policy import Policy, load_policy
 from forge.resources.bundle import Resources
 from forge.resources.clock import Clock
@@ -227,6 +227,7 @@ def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.Monk
         output=str(tmp_path / "out"),
         work_dir=str(tmp_path / "work"),
         resume_held=False,
+        revise=False,
         concurrency=2,
         buckets=4096,
         bucket_range=None,
@@ -519,25 +520,28 @@ async def test_driver_holds_an_undecodable_stream_without_touching_it(
 
 
 # Mark 2026-11-11: a rollout reviewer's suggestions send an accepted task back to the author for one round.
+EXCERPT = "unsure whether to round"
+REVIEW = (
+    call("list_trials", {}, "list"),
+    call("grep_trials", {"pattern": "round"}, "grep"),
+    call(
+        "suggest",
+        {
+            "revisions": [
+                {
+                    "kind": "ambiguous_prompt",
+                    "evidence": [{"trial": 1, "excerpt": EXCERPT}],
+                    "suggested_edit": "State that the answer is an exact integer.",
+                }
+            ]
+        },
+        "suggest",
+    ),
+)
+
+
 async def test_reviewer_suggestions_get_one_author_round_then_accept(proposal: TaskProposal) -> None:
-    excerpt = "unsure whether to round"
-    review = (
-        call("list_trials", {}, "list"),
-        call("grep_trials", {"pattern": "round"}, "grep"),
-        call(
-            "suggest",
-            {
-                "revisions": [
-                    {
-                        "kind": "ambiguous_prompt",
-                        "evidence": [{"trial": 1, "excerpt": excerpt}],
-                        "suggested_edit": "State that the answer is an exact integer.",
-                    }
-                ]
-            },
-            "suggest",
-        ),
-    )
+    excerpt, review = EXCERPT, REVIEW
     responses = (*script("S"), *review, *script("S"))
     log = EventLog()
     bundle = resources(Envs(), responses)
@@ -553,3 +557,50 @@ async def test_reviewer_suggestions_get_one_author_round_then_accept(proposal: T
     revision_prompt = bundle.inference.requests[len(script("S")) + len(review)].messages[-1].content
     assert "State that the answer is an exact integer." in revision_prompt and "may decline" in revision_prompt
     assert wp.fallback is not None and wp.fallback.submission.digest == first.task_digest
+
+
+# Mark 2026-11-11: already-accepted tasks get a revision round in a new run root, from their accepted submission.
+async def test_revise_mode_revalidates_accepted_workpieces_into_a_new_root(
+    driver_args: Namespace, proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = tmp_path / "old"
+    controls = Envs().commands["write-draft"].writes[PurePosixPath("/workspace/controls.json")]
+    submission = Submission(arithmetic_task(), CONTROLS.validate_json(controls), "accepted earlier")
+    for name, terminal in (("accepted", Terminal.ACCEPTED), ("abandoned", Terminal.ABANDONED)):
+        saved = WORKPIECE.dump_python(Workpiece("w", proposal, submission=submission, terminal=terminal), mode="json")
+        del saved["fallback"]
+        saved["too_easy_baseline"] = None  # the format of runs before the fallback generalisation
+        (old / "d01" / name).mkdir(parents=True)
+        (old / "d01" / name / "workpiece.json").write_text(json.dumps(saved))
+    launched: list[list[str]] = []
+    monkeypatch.setattr(
+        driver.subprocess, "Popen", lambda command: launched.append(command) or SimpleNamespace(wait=lambda: 0)
+    )
+    driver_args.proposals, driver_args.revise = str(old), True
+    await driver.run(driver_args)
+    (source,) = (command[command.index("--proposals") + 1] for command in launched)
+    assert source.endswith(f"{old}/d01/accepted/workpiece.json") and "--revise" in launched[0]
+
+    bundle = resources(Envs(), (*REVIEW, *script("S")))
+
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, arm: str, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[ForgeConfig, Resources]]:
+        yield config(arm, reviewer_rounds=1), bundle
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    driver_args.proposals = source
+    assert await driver.one(driver_args) == 0
+    published = tmp_path / "out" / "d01" / "accepted"
+    wp = WORKPIECE.validate_json((published / "workpiece.json").read_bytes())
+    assert wp.terminal is Terminal.ACCEPTED and [type(d).__name__ for d in wp.decisions] == ["Revise", "Accept"]
+    assert wp.evidence[0].task_digest == submission.digest and wp.fallback == Fallback(submission, BandOutcome.IN_BAND)
+    records = await JsonlSink(str(published / "events.jsonl")).read()
+    stages = [r.event.stage for r in records if isinstance(r.event, StageCompleted)]
+    assert stages == ["validate", "review", "author", "validate", "review"]
+    assert isinstance(bundle.inference, FakeInference)
+    author_start = bundle.inference.requests[len(REVIEW)].conversation
+    assert author_start[0].role == "system" and "exact integer" in author_start[-1].content
+    driver_args.proposals = str(old / "d01/abandoned/workpiece.json")
+    assert await driver.one(driver_args) == 0 and not (tmp_path / "out" / "d01" / "abandoned").exists()

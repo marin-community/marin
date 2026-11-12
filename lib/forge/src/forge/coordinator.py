@@ -15,7 +15,7 @@ from forge.model.content_hash import digest
 from forge.model.proposal import TaskProposal
 from forge.model.review import Incomplete
 from forge.model.stage import Exit, Stage
-from forge.model.workpiece import Terminal, Workpiece
+from forge.model.workpiece import Submission, Terminal, Workpiece
 from forge.resources.bundle import Resources
 from forge.resources.ids import NewId
 from forge.stages import STAGES
@@ -45,10 +45,12 @@ async def run_workpiece(
     log: EventLog,
     *,
     install: Callable[[Context, Resources], None],
+    seed: Submission | None = None,
 ) -> Workpiece:
+    """Run ``proposal`` from the configured initial stage, or from validation of a ``seed`` submission."""
     ctx = Context(log=log)
-    wp = Workpiece(proposal.header.id, proposal)
-    stage = config.initial_stage
+    wp = Workpiece(proposal.header.id, proposal, submission=seed)
+    stage = config.initial_stage if seed is None else Stage.VALIDATE
     config_digest = digest(config.policy)
     interrupted = False
     stage_attempts: dict[tuple[Stage, int], int] = {}

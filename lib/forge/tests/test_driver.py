@@ -202,6 +202,7 @@ async def test_driver_defers_decision_model_proposals_while_held_and_resumes_the
         output=str(tmp_path / "out"),
         work_dir=str(tmp_path / "work"),
         resume_held=False,
+        revise=False,
     )
     await driver.run(args)
     assert launches == [

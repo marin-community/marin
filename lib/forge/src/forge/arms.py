@@ -25,6 +25,7 @@ from forge.model.review import (
 from forge.model.stage import Stage
 from forge.model.workpiece import Conversation, Fallback, Terminal, Workpiece
 from forge.policy import Policy
+from forge.stages.author import system_prompt
 from forge.stages.exits import Decided, Validated
 from forge.stages.rules import modify_rounds, tagged
 from forge.stages.summary import validation_path, validation_summary
@@ -67,21 +68,24 @@ def decided(wp: Workpiece, result: Decided, *, budget: Budget, policy: Policy) -
             return wp.with_(terminal=Terminal.ABANDONED)
         case Modify(findings, placement):
             prompt = policy.prompt("author.revision").render(kind="review", detail="\n".join(findings))
-            return revising(wp, prompt, placement)
+            return revising(wp, policy, prompt, placement)
         case Revise(band, suggestions):
             assert wp.submission is not None
-            return revising(wp, policy.prompt("author.suggestions").render(suggestions=rendered(suggestions)), band)
+            return revising(
+                wp, policy, policy.prompt("author.suggestions").render(suggestions=rendered(suggestions)), band
+            )
         case Retry():
             return wp
         case Incomplete():
             return wp.with_(terminal=Terminal.HELD)
 
 
-def revising(wp: Workpiece, prompt: str, placement: BandOutcome | None) -> Workpiece:
-    """Start an author round on ``prompt``; a clean submission at ``placement`` becomes the fallback."""
-    previous = wp.session
-    if previous is None:
-        raise ValueError("Cannot revise without an author session")
+def revising(wp: Workpiece, policy: Policy, prompt: str, placement: BandOutcome | None) -> Workpiece:
+    """Start an author round on ``prompt``; a clean submission at ``placement`` becomes the fallback.
+
+    A workpiece seeded at validation (driver ``--revise``) has no author session and starts one.
+    """
+    previous = wp.session or Conversation((Message(Role.SYSTEM, system_prompt(policy)),), ())
     system = tuple(message for message in previous.messages if message.role == "system")
     fallback = wp.fallback
     if placement is not None:
