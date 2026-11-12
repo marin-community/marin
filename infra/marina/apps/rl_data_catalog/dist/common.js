@@ -51,3 +51,17 @@ function repairRecommendations(record) {
   visit(record);
   return section;
 }
+
+function daytonaLabel(daytona) {
+  if (daytona.state === 'na') return 'N/A';
+  if (daytona.state === 'unmeasured') return 'Unknown (not measured)';
+  if (daytona.state === 'safe') return 'Safe';
+  const reasons = {
+    too_many_snapshots: `too many snapshots (${daytona.snapshots})`,
+    unbuilt_image: 'unbuilt image',
+    host_image_required: 'needs host image',
+    execution_requirement: 'execution requirement',
+  };
+  const reason = reasons[String(daytona.reason_code).toLowerCase()];
+  return `Unsafe: ${reason || daytona.reason || 'execution requirement'}`;
+}

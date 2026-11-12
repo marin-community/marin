@@ -53,7 +53,7 @@ async function render(data, sourceId) {
   $('labels').replaceChildren(
     node('span', `Quality ${data.quality}`, `chip level level-${data.quality.toLowerCase()}`),
     node('span', result ? `Result ${resultLabels[result]}` : 'Result not assessed', `chip quality-${result ? resultClasses[result] : 'unassessed'}`),
-    node('span', data.daytona.state === 'na' ? 'Daytona N/A' : data.daytona.state === 'unmeasured' ? 'Daytona Unknown (not measured)' : `Daytona ${data.daytona.state}`, 'chip quality-unassessed'),
+    node('span', `Daytona ${daytonaLabel(data.daytona)}`, 'chip quality-unassessed'),
     node('span', data.updated_at ? `Last updated ${new Date(data.updated_at).toLocaleDateString()}` : 'Catalog load time unavailable', 'chip quality-unassessed'),
   );
   const sections = [];
@@ -84,17 +84,29 @@ async function render(data, sourceId) {
     ['Verdict', d.independent_qc.verdict], ['Method', d.independent_qc.method], ['Reviewed', d.independent_qc.reviewed],
     ['Admitted', d.independent_qc.admitted], ['Evidence', d.independent_qc.evidence_url && pointer(d.independent_qc.evidence_url, 'Release manifest ↗')],
   ] : [], 'Quality control the upstream release recorded itself. It counts as QUICK. QC never rejects a source or overrides the reviewed-sample Result.'));
+  sections.push(card('Converted examples', d.converted_examples ? [
+    ['TaskSpecs', number.format(d.converted_examples.count)], ['Input revision', d.converted_examples.source_revision],
+    ['Converter revision', d.converted_examples.converter_revision], ['Conversion basis', d.converted_examples.converter_version],
+    ['Census receipt', pointer(d.converted_examples.evidence_url)],
+  ] : [], 'Measured outputs from the registered converter, before admission gates.'));
   sections.push(card('Releases and measurements', [
+    ['Origin', d.origin], ['Build path', d.build_path],
     ['Dataset', d.url && pointer(d.url, `${d.dataset_id || d.url} ↗`)], ['Dataset revision', d.dataset_revision],
     ['Pipeline', d.pipeline && `${d.pipeline.name} @ ${d.pipeline.version}`],
     ['Examples', data.coverage?.example_count != null ? number.format(data.coverage.example_count) : null], ['Use', data.coverage?.intended_use],
     ['Top curriculum area', data.coverage?.top_area && `${data.coverage.top_area.name} (${number.format(data.coverage.top_area.instances)} placed tasks)`],
     ['Coverage basis', data.coverage?.basis], ['Coverage gap', data.coverage?.unavailable_reason],
-    ['Daytona', data.daytona.state === 'na' || data.daytona.state === 'unmeasured' ? data.daytona.reason : `${data.daytona.state}: ${number.format(data.daytona.snapshots)} unique snapshots, limit ${data.daytona.limit}`],
+    ['Daytona', daytonaLabel(data.daytona) + (data.daytona.state === 'safe' ? `: ${number.format(data.daytona.snapshots)} snapshots` : '')],
+    ['Daytona reason', data.daytona.reason],
     ['Daytona basis', data.daytona.basis || d.daytona_count_basis],
     ['Daytona machine slots', d.daytona_machine_slots], ['Daytona roles', d.daytona_roles],
     ['Daytona execution failures', d.daytona_execution_failures],
   ]));
+  sections.push(card('Contamination', d.contamination ? [
+    ['Status', d.contamination.status], ['Dropped tasks', d.contamination.dropped_tasks],
+    ['Input tasks', d.contamination.input_tasks], ['Matched evaluations', d.contamination.matched_evals],
+    ['Receipt', d.contamination.receipt_uri && pointer(d.contamination.receipt_uri)],
+  ] : [], 'Lexical decontamination is unmeasured until a receipt is recorded.'));
   const capabilities = data.backend_capabilities;
   sections.push(card('Backend requirements and overlap', [
     ['Measurement basis', capabilities?.basis], ['Measured tasks', capabilities?.task_count],

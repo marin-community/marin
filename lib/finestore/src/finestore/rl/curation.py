@@ -95,6 +95,15 @@ class DaytonaSafety(StrEnum):
     UNASSESSED = "unassessed"
 
 
+class DaytonaUnsafeReason(StrEnum):
+    """The measured reason a source cannot execute on Daytona."""
+
+    TOO_MANY_SNAPSHOTS = "TOO_MANY_SNAPSHOTS"
+    UNBUILT_IMAGE = "UNBUILT_IMAGE"
+    HOST_IMAGE_REQUIRED = "HOST_IMAGE_REQUIRED"
+    EXECUTION_REQUIREMENT = "EXECUTION_REQUIREMENT"
+
+
 DAYTONA_SAFE_SNAPSHOT_LIMIT = 10
 """The unique-snapshot budget a source must fit to count as Daytona-safe."""
 
@@ -216,6 +225,16 @@ class DaytonaRoleMeasurement(CatalogRecord):
     failures: dict[str, int]
 
 
+class ConvertedExamples(CatalogRecord):
+    """A registered converter's measured TaskSpec output count at a pinned input."""
+
+    count: int = Field(ge=0)
+    source_revision: str | None
+    converter_revision: str
+    converter_version: str
+    evidence_url: str
+
+
 class SourceDeclaration(CatalogRecord):
     id: str
     name: str
@@ -243,6 +262,7 @@ class SourceDeclaration(CatalogRecord):
     daytona_snapshot_count: int | None = None
     daytona_snapshot_threshold: int | None = None
     daytona_count_basis: str | None = None
+    daytona_unsafe_reason: DaytonaUnsafeReason | None = None
     daytona_execution_failures: int | None = Field(default=None, ge=0)
     daytona_machine_slots: int | None = Field(default=None, ge=0)
     daytona_roles: dict[str, dict[str, DaytonaRoleMeasurement]] | None = None
@@ -256,6 +276,7 @@ class SourceDeclaration(CatalogRecord):
 
     # None only in snapshots published before declarations had to carry their coverage.
     coverage: SourceCoverage | None = None
+    converted_examples: ConvertedExamples | None = None
 
 
 class AdmissionCounts(CatalogRecord):
