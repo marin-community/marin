@@ -1,21 +1,27 @@
-//! Stage-timed reproduction of one migration backfill batch, sized to the
-//! levanter.metrics production profile (~8M rows over ~180 run-partitioned
-//! legacy segments, 26 columns). Run with:
+//! Stage-timed reproductions of segment backfill work. Run with:
 //!
 //! ```text
-//! cargo test --release backfill_bench -- --ignored --nocapture
+//! cargo test --release --lib backfill_bench -- --ignored --nocapture --test-threads=1
 //! ```
+//!
+//! The migration batch is sized to the levanter.metrics production profile
+//! (~8M rows over ~180 run-partitioned legacy segments, 26 columns). The index
+//! backfill builds one telemetry_v1.node_agent segment's bundle with the
+//! production index policy, shaped from one minute of hub data: ~450k rows per
+//! segment, 630 nodes, 42 metric names, and attribute JSON too varied for value
+//! counts.
 
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
+use arrow::array::{ArrayRef, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::SchemaRef;
 use parquet::arrow::ArrowWriter;
 
-use crate::indices::{write_segment_index, SegmentIndexConfig};
+use crate::indices::{format, write_segment_index, SegmentIndexConfig};
 use crate::levanter_metrics_policy::levanter_metrics_schema;
+use crate::server::telemetry::telemetry_schema;
 use crate::store::compaction::executor::read_segment_projected;
 use crate::store::compaction::merge::{
     merge_row_converter, merge_runs, project_to_schema, sort_batch_to_run, sort_col_indices,
@@ -23,6 +29,8 @@ use crate::store::compaction::merge::{
 };
 use crate::store::schema::{schema_to_arrow, stored_form};
 use crate::store::segment::segment_writer_properties_with_max_rows;
+use crate::store::table::segment_format::SegmentFormat;
+use crate::telemetry_policy::NODE_AGENT_NAMESPACE;
 use crate::test_support::unique_dir;
 
 const SEGMENTS: usize = 180;
@@ -245,4 +253,184 @@ fn bench_one_backfill_batch(sorted: bool) {
     let index = Instant::now();
     write_segment_index(&out_path, &merged, &metrics_index_config()).unwrap();
     println!("stage index bundle: {:.1?}", index.elapsed());
+}
+
+const NODE_AGENT_NODES: usize = 630;
+const NODE_AGENT_SCRAPES: usize = 54;
+const NODE_AGENT_NAMES_PER_SCRAPE: usize = 13;
+const NODE_AGENT_SCRAPE_INTERVAL_MS: i64 = 10_000;
+const NODE_AGENT_UNITS: [&str; 14] = [
+    "bytes",
+    "percent",
+    "celsius",
+    "watts",
+    "ratio",
+    "count",
+    "seconds",
+    "bytes_per_second",
+    "errors",
+    "code",
+    "hertz",
+    "requests",
+    "pages",
+    "1",
+];
+
+/// Metric names a node agent emits: every host and accelerator name the
+/// telemetry schema indexes, plus names that only get value counts.
+fn node_agent_names() -> Vec<String> {
+    let indexed = [
+        "node_cpu_utilization_percent",
+        "node_disk_total_bytes",
+        "node_disk_used_bytes",
+        "node_memory_total_bytes",
+        "node_memory_used_bytes",
+        "node_network_receive_bytes",
+        "node_network_transmit_bytes",
+        "gpu_memory_temperature_celsius",
+        "gpu_memory_total_bytes",
+        "gpu_memory_used_bytes",
+        "gpu_nvlink_receive_bytes_per_second",
+        "gpu_nvlink_transmit_bytes_per_second",
+        "gpu_pcie_replay_errors",
+        "gpu_pcie_receive_bytes_per_second",
+        "gpu_pcie_transmit_bytes_per_second",
+        "gpu_power_watts",
+        "gpu_row_remap_failures",
+        "gpu_sm_active_ratio",
+        "gpu_temperature_celsius",
+        "gpu_tensor_active_ratio",
+        "gpu_utilization_percent",
+        "gpu_xid_error_code",
+        "hardware_inventory",
+    ];
+    let mut names: Vec<String> = indexed.iter().map(|name| name.to_string()).collect();
+    names.extend((names.len()..42).map(|index| format!("node_filesystem_metric_{index:02}")));
+    names
+}
+
+/// One flushed node-agent segment in arrival order: each scrape writes every
+/// node's sampled metrics together, so each metric name's rows interleave.
+fn synth_node_agent_segment(schema: &SchemaRef) -> RecordBatch {
+    let names = node_agent_names();
+    let rows = NODE_AGENT_NODES * NODE_AGENT_SCRAPES * NODE_AGENT_NAMES_PER_SCRAPE;
+    let mut timestamp = Vec::with_capacity(rows);
+    let mut batch_id = Vec::with_capacity(rows);
+    let mut record_index = Vec::with_capacity(rows);
+    let mut node_name = Vec::with_capacity(rows);
+    let mut name = Vec::with_capacity(rows);
+    let mut value = Vec::with_capacity(rows);
+    let mut unit = Vec::with_capacity(rows);
+    let mut resource_attributes = Vec::with_capacity(rows);
+    let mut attributes = Vec::with_capacity(rows);
+    let mut cluster = Vec::with_capacity(rows);
+    for scrape in 0..NODE_AGENT_SCRAPES {
+        for node in 0..NODE_AGENT_NODES {
+            for sample in 0..NODE_AGENT_NAMES_PER_SCRAPE {
+                let metric = (node + sample * 3) % names.len();
+                timestamp.push(1_790_000_000_000 + scrape as i64 * NODE_AGENT_SCRAPE_INTERVAL_MS);
+                batch_id.push(format!("batch-{scrape:03}-{:03}", node / 4));
+                record_index.push(((node % 4) * NODE_AGENT_NAMES_PER_SCRAPE + sample) as i64);
+                node_name.push(format!("node-{node:04}"));
+                name.push(names[metric].clone());
+                value.push((scrape * node + sample) as f64 * 0.5);
+                unit.push(Some(NODE_AGENT_UNITS[metric % NODE_AGENT_UNITS.len()]));
+                resource_attributes.push(format!(
+                    r#"{{"host.name":"node-{node:04}","node.uid":"{node:08x}-4c1e-9a7b","cloud.zone":"us-east-{}","service.version":"2026.11.0"}}"#,
+                    node % 4
+                ));
+                attributes.push(format!(
+                    r#"{{"device":"dev{sample}","node_uid":"{node:08x}","window":"{}"}}"#,
+                    scrape % 12
+                ));
+                cluster.push(Some(
+                    [
+                        "cw-us-east-08a",
+                        "cw-us-east-04b",
+                        "marin",
+                        "gcp-us-central",
+                    ][node % 4],
+                ));
+            }
+        }
+    }
+    let columns: Vec<ArrayRef> = schema
+        .fields()
+        .iter()
+        .map(|field| -> ArrayRef {
+            match field.name().as_str() {
+                "seq" => Arc::new(Int64Array::from_iter_values(1..=rows as i64)),
+                "schema_version" => Arc::new(Int32Array::from(vec![1; rows])),
+                "timestamp_ms" => Arc::new(Int64Array::from(timestamp.clone())),
+                "batch_id" => Arc::new(StringArray::from(batch_id.clone())),
+                "record_index" => Arc::new(Int64Array::from(record_index.clone())),
+                "service" => Arc::new(StringArray::from(vec!["iris-node-agent"; rows])),
+                "kind" => Arc::new(StringArray::from(vec!["gauge"; rows])),
+                "node_name" => Arc::new(StringArray::from(node_name.clone())),
+                "name" => Arc::new(StringArray::from(name.clone())),
+                "value" => Arc::new(Float64Array::from(value.clone())),
+                "unit" => Arc::new(StringArray::from(unit.clone())),
+                "resource_attributes_json" => {
+                    Arc::new(StringArray::from(resource_attributes.clone()))
+                }
+                "attributes_json" => Arc::new(StringArray::from(attributes.clone())),
+                "cluster" => Arc::new(StringArray::from(cluster.clone())),
+                _ => arrow::array::new_null_array(field.data_type(), rows),
+            }
+        })
+        .collect();
+    RecordBatch::try_new(Arc::clone(schema), columns).expect("node-agent batch construction")
+}
+
+#[test]
+#[ignore = "stage-timing benchmark; run explicitly with --release --ignored --nocapture"]
+fn bench_node_agent_index_backfill() {
+    let segment_format = SegmentFormat::resolve(stored_form(telemetry_schema())).unwrap();
+    let config = segment_format.index_config(NODE_AGENT_NAMESPACE);
+    let schema = Arc::clone(segment_format.arrow_schema());
+    let dir = unique_dir("node_agent_index_bench");
+    let path = dir.join("seg-node-agent.parquet");
+
+    let generated = Instant::now();
+    let batch = synth_node_agent_segment(&schema);
+    let props =
+        segment_writer_properties_with_max_rows(segment_format.max_row_group_rows()).unwrap();
+    let mut writer = ArrowWriter::try_new(
+        std::fs::File::create(&path).unwrap(),
+        Arc::clone(&schema),
+        Some(props),
+    )
+    .unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    println!(
+        "generated node-agent segment: {} rows, {:.1} MiB parquet in {:.1?}",
+        batch.num_rows(),
+        std::fs::metadata(&path).unwrap().len() as f64 / (1024.0 * 1024.0),
+        generated.elapsed()
+    );
+    drop(batch);
+
+    let read = Instant::now();
+    let projection = config.input_columns();
+    let batches = read_segment_projected(&path, Some(&projection)).unwrap();
+    println!("stage read+decode: {:.1?}", read.elapsed());
+
+    let index = Instant::now();
+    let built = write_segment_index(&path, &batches, &config).unwrap();
+    println!("stage index bundle: {:.1?}", index.elapsed());
+
+    let header = format::read_header(built.bundle.as_ref().unwrap()).unwrap();
+    for section in &header.sections {
+        println!("  section {:<34} {:>10} bytes", section.id, section.len);
+    }
+    let projection_bytes: u64 = built
+        .projections
+        .iter()
+        .map(|path| std::fs::metadata(path).unwrap().len())
+        .sum();
+    println!(
+        "  {} covering projections, {projection_bytes} bytes",
+        built.projections.len()
+    );
 }
