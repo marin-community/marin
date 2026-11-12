@@ -245,7 +245,8 @@ config:
       eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY
       override_timeout_sec: 1800
       eval_timeout_override_sec: 1800
-      trial_attempt_timeout_sec: 2520
+      verifier_override_timeout_sec: 900
+      trial_attempt_timeout_sec: 5400
       n_concurrent_trials: 256
       max_retries: 1
       enable_reward_shaping: false

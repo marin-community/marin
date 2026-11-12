@@ -241,3 +241,32 @@ The next trial explicitly budgets 12 hours from its first optimizer step. Native
 checkpoints save every two updates and retain the latest three plus the selected
 best; the selection uses five validation observations at two-update intervals.
 Final evaluation, HF export and archive use that same selected best checkpoint.
+# SWE task admission
+
+The repaired SWE release is derived from the pinned source packages rather than
+substituting a shared environment. Its five image contexts add a harness bootstrap
+and an isolated grading runtime. Bootstrap checks out the exact bug commit, runs
+the upstream dependency setup, then freezes trusted grading dependencies before
+the agent starts. Grading first checks HEAD ancestry, reconstructs a fresh source
+worktree, restores tests and pytest configuration, and runs the task tests with
+plugin autoload disabled. Agent package installations do not enter that interpreter.
+Each grade preserves HEAD, candidate patch, import origins, package inventory and
+the verifier report. Candidate failures score zero; infrastructure failures remain
+unscored.
+
+`swe_admission_cluster` runs the same CPU Docker controls used locally, sharded by
+repository and image context. Submit its coordinator on RNO2A at production priority
+with the privileged container profile, an inherited HF secret and a three-day task
+timeout. It takes the pinned input prefix and manifest SHA, output prefix, job
+prefix, tasks per shard, setup timeout, verifier timeout and enclosing Harbor timeout
+as arguments. A shard starts with a real corpus task; its successful image build
+precedes fan-out for that context. This uses no RL allocation or model requests.
+
+`seal_swe_admission` requires a complete shard plan and exactly one receipt per
+original SWE task. Only a scored unfixed-bug zero and scored reference one admit a
+task. Failed, degenerate and unexecuted controls cannot qualify it. Sealing records
+before/after identities, dependency locks and exclusions, preserves the nonagentic
+validation rows, and explicitly records any seeded replacement of rejected SWE
+validation rows. Its output is a new immutable dataset version; existing releases
+and stopped-run evidence remain unchanged.
+

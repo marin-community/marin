@@ -32,6 +32,7 @@ REQUIRED_FIELDS = (
     "generator.eval_sampling_params.skip_special_tokens",
     "generator.n_samples_per_prompt",
     "terminal_bench.harbor.override_timeout_sec",
+    "terminal_bench.harbor.verifier_override_timeout_sec",
     "terminal_bench.harbor.eval_timeout_override_sec",
     "terminal_bench.harbor.trial_attempt_timeout_sec",
     "terminal_bench.harbor.max_retries",

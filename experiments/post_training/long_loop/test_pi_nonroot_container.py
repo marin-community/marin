@@ -40,6 +40,7 @@ async def test_pi_setup_cleanup_and_verifier_as_nonroot(tmp_path, monkeypatch):
         f'[agent.env]\nHOME="{AGENT_HOME}"\n'
         '[verifier]\nuser="10001"\ntimeout_sec=30\n'
         '[environment]\nworkdir="/testbed"\n'
+        '[environment.setup]\ncommand="printf harness-populated > /testbed/bootstrap-marker"\ntimeout_sec=30\n'
     )
     message = {"role": "assistant", "content": [{"type": "text", "text": "Done."}], "stopReason": "stop"}
     events = "\n".join(
@@ -50,9 +51,11 @@ async def test_pi_setup_cleanup_and_verifier_as_nonroot(tmp_path, monkeypatch):
         "#!/bin/bash\nset -eu\n"
         'if [ "${1:-}" = --version ]; then echo 0.87.0; exit 0; fi\n'
         'test "$(id -u)" = 10001\n'
+        'test "$(cat /testbed/bootstrap-marker)" = harness-populated\n'
         "inode=$(stat -c %i /testbed)\n"
         "if rm -rf /testbed 2>/dev/null; then exit 91; fi\n"
         'test "$(stat -c %i /testbed)" = "$inode"\n'
+        "printf harness-populated > /testbed/bootstrap-proven\n"
         "id -u > /testbed/agent-uid\n"
         "printf answer > /testbed/answer\n"
         f"cat <<'PI_EVENTS'\n{events}\nPI_EVENTS\n"
@@ -74,6 +77,7 @@ async def test_pi_setup_cleanup_and_verifier_as_nonroot(tmp_path, monkeypatch):
         'test "$(id -u)" = 10001\n'
         'test "$(cat /testbed/agent-uid)" = 10001\n'
         'test "$(cat /testbed/answer)" = answer\n'
+        'test "$(cat /testbed/bootstrap-proven)" = harness-populated\n'
         'test "$(cat /setup_files/readable.txt)" = "admin fixture"\n'
         "test ! -e /logs/agent/harbor-pi-endpoint.env\n"
         "test ! -e /logs/agent/harbor-pi-context-budget.js\n"
@@ -81,8 +85,15 @@ async def test_pi_setup_cleanup_and_verifier_as_nonroot(tmp_path, monkeypatch):
         "id -u > /logs/verifier/verifier-uid\n"
         "printf '{\"reward\":1.0}' > /logs/verifier/reward.json\n"
     )
+    restored = tmp_path / "restored-task"
+    restore_harbor_trial_task(
+        harbor_trial_task(
+            task, source=Source(dataset="fixture", revision="fixture", row="1", importer_revision="fixture")
+        ),
+        restored,
+    )
     config = TrialConfig(
-        task=TaskConfig(path=task),
+        task=TaskConfig(path=restored),
         trial_name="pi-nonroot",
         trials_dir=tmp_path / "trials",
         environment=EnvironmentConfig(type="daytona"),
