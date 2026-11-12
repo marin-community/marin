@@ -4,7 +4,8 @@
 """Expert-parallel hero MoE grug variant model.
 
 Architecture: QB-routed MoE with GatedNorm, XSA, sigmoid combine weights.
-No load-balancing loss; router z-loss only. All layers are MoE (no dense layers).
+Cross-entropy training loss; router z-loss is logged but not added to it.
+All layers are MoE (no dense layers).
 """
 
 import dataclasses
