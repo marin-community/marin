@@ -41,6 +41,7 @@ from finestore.rl.curation import (
     register_catalog,
     validate_items,
 )
+from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from finestore.store import DataStore
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.storage_path import StoragePath
@@ -49,7 +50,7 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.campaign import CampaignStatus
 from experiments.post_training.task_curation.curation_catalog import RUNS
-from experiments.post_training.task_curation.source import GRANDFATHERED_MARINSKYRL_SOURCES, RlDataSource
+from experiments.post_training.task_curation.source import RlDataSource
 
 
 def assessment_quality_result(items: Iterable[AssessmentItem]) -> SourceQualityResult:
