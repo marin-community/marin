@@ -122,12 +122,10 @@ class HarborTrialHarness:
                     return last[1]
                 history = () if last is None else (*last[0].messages, last[1].message)
                 try:
-                    if (
-                        last is not None
-                        and prompt.options == last[0].options
-                        and messages_equal(prompt.messages[: len(history)], history)
-                    ):
-                        turn = await session.reply(prompt.messages[len(history) :], token_ids=prompt.token_ids)
+                    if last is not None and messages_equal(prompt.messages[: len(history)], history):
+                        turn = await session.reply(
+                            prompt.messages[len(history) :], token_ids=prompt.token_ids, options=prompt.options
+                        )
                     else:
                         turn = await session.start(prompt)
                 except LimitReached as error:

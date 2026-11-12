@@ -742,7 +742,12 @@ class Trial(ABC):
             ) from timeout_error
         try:
             await task
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as cancellation:
+            # Command cleanup can fail closed while preserving cancellation.
+            # Keep those diagnostics even if a later verifier error supersedes
+            # the phase timeout in the trial's primary exception slot.
+            if getattr(cancellation, "__notes__", ()):
+                self.result.secondary_exception_info.append(ExceptionInfo.from_exception(cancellation))
             raise timeout_error from None
         except ArtifactPersistenceError as error:
             self._artifact_persistence_failure = error

@@ -42,6 +42,9 @@ DEFAULT_RETRY_EXCLUSIONS = frozenset(
     {
         "AgentTimeoutError",
         "VerifierTimeoutError",
+        "AddTestsDirError",
+        "DownloadVerifierDirError",
+        "VerifierRuntimeError",
         "RewardFileNotFoundError",
         "RewardFileEmptyError",
         "VerifierOutputParseError",

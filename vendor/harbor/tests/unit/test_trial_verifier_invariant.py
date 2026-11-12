@@ -40,6 +40,7 @@ from harbor.agents.factory import AgentFactory
 from harbor.models.agent.name import AgentName
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
+from harbor.environments.base import ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
 from harbor.models.agent.context import AgentContext
 from harbor.models.environment_type import EnvironmentType
@@ -51,6 +52,9 @@ from harbor.models.trial.config import (
     VerifierConfig,
 )
 from harbor.trial.trial import Trial
+from harbor.trial.queue import TrialQueue
+from harbor.trial.hooks import TrialEvent
+from harbor.models.job.config import RetryConfig
 
 
 class TimeoutAgent(BaseAgent):
@@ -251,3 +255,63 @@ class TestVerifierResultInvariant:
 @pytest.fixture(autouse=True)
 def register_test_agents(monkeypatch):
     monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.PI, TimeoutAgent)
+
+
+@pytest.mark.parametrize("verifier_failure", ["AddTestsDirError", "VerifierRuntimeError"])
+async def test_verifier_failure_preserves_unscored_result_without_replaying_agent(
+    tmp_path: Path, monkeypatch, verifier_failure: str
+):
+    task = _create_task_dir(tmp_path)
+    if verifier_failure == "VerifierRuntimeError":
+        (task / "tests/verifier.toml").write_text('mode = "pytest"\n')
+
+        async def upload_succeeds(self, source_dir, target_dir):
+            pass
+
+        async def verifier_crashes(self, command, cwd=None, env=None, timeout_sec=None, *, user=None):
+            return ExecResult(return_code=1, stderr="supervisor timed out before writing verdict")
+
+        monkeypatch.setattr(UploadFailsEnvironment, "upload_dir", upload_succeeds)
+        monkeypatch.setattr(UploadFailsEnvironment, "exec", verifier_crashes)
+
+    starts = []
+
+    async def record_agent_start(event):
+        starts.append(event.trial_id)
+
+    queue = TrialQueue(n_concurrent=1, retry_config=RetryConfig(max_retries=1))
+    queue.add_hook(TrialEvent.AGENT_START, record_agent_start)
+    result = await queue.submit(
+        TrialConfig(
+            task=TaskConfig(path=task),
+            trials_dir=tmp_path / "trials",
+            agent=AgentConfig(name=AgentName.PI),
+            environment=EnvironmentConfig(type=EnvironmentType.LOCAL),
+        )
+    )
+    assert len(starts) == 1
+    assert result.verifier_result is None
+    assert result.exception_info.exception_type == verifier_failure
+    saved = json.loads((tmp_path / "trials" / result.trial_name / "result.json").read_text())
+    assert saved["verifier_result"] is None
+    assert saved["exception_info"]["exception_type"] == verifier_failure
+
+
+async def test_verifier_failure_retains_the_preceding_cancellation_cleanup_receipt(tmp_path, monkeypatch):
+    diagnostic = json.dumps({"operation": "stop_command", "status_code": 400, "message": "provider rejected cleanup"})
+
+    class CleanupFailedAgent(TimeoutAgent):
+        async def run(self, instruction, environment, context):
+            try:
+                await super().run(instruction, environment, context)
+            except asyncio.CancelledError as cancellation:
+                cancellation.add_note(diagnostic)
+                raise
+
+    monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.PI, CleanupFailedAgent)
+    trial = await _make_trial(tmp_path)
+    result = await trial.run()
+    assert result.exception_info.exception_type == "AddTestsDirError"
+    saved = json.loads(trial.paths.result_path.read_text())
+    assert len(saved["secondary_exception_info"]) == 1
+    assert diagnostic in saved["secondary_exception_info"][0]["exception_traceback"]

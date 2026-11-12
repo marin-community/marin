@@ -10,11 +10,12 @@ import shlex
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from daytona import DaytonaNotFoundError, SessionExecuteRequest
+from daytona import DaytonaError, DaytonaNotFoundError, SessionExecuteRequest
 from daytona._async.process import AsyncProcess
 
 from shellbox import process_framing
 from shellbox.backends.daytona import bridge
+from shellbox.backends.daytona.cleanup import DaytonaCleanupError
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT
 from shellbox.machine import MachineTerminated
 from shellbox.process_framing import CHUNK_BYTES, EXIT, STDERR, STDIN, STDOUT, FrameDecoder, decode_frame, encode_frame
@@ -149,6 +150,10 @@ class DaytonaProcessSession(StreamProcessSession):
                     await self._process.delete_session(self.name, request_timeout=INTERRUPT_TIMEOUT)
                 except DaytonaNotFoundError:
                     pass
+                except DaytonaError as error:
+                    raise DaytonaCleanupError(
+                        "delete_session", {"session_id": self.name, "request_timeout": INTERRUPT_TIMEOUT}, error
+                    ) from None
         except BaseException:
             await self._failed_cleanup()
             raise

@@ -37,6 +37,7 @@ from daytona.common.snapshot import Snapshot
 from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
 
+from shellbox.backends.daytona.cleanup import DaytonaCleanupError
 from shellbox.backends.daytona.leases import SnapshotLease, SnapshotLeaser
 from shellbox.backends.daytona.process import DaytonaProcessSession
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
@@ -295,17 +296,24 @@ class DaytonaMachine:
             await self.sandbox.process.exec(_control_command(f"rm -f {shlex.quote(clipped)}"), cwd=CONTROL_CWD)
 
     async def _stop_command(self, pidfile: str, completed_path: str) -> None:
+        command = _control_command(shlex.join(("/bin/sh", "-c", STOP_COMMAND, "stop-command", pidfile, completed_path)))
         async with asyncio.timeout(INTERRUPT_TIMEOUT):
-            stopped = await self.sandbox.process.exec(
-                _control_command(shlex.join(("/bin/sh", "-c", STOP_COMMAND, "stop-command", pidfile, completed_path))),
-                cwd=CONTROL_CWD,
-            )
+            try:
+                stopped = await self.sandbox.process.exec(command, cwd=CONTROL_CWD)
+            except DaytonaError as error:
+                raise DaytonaCleanupError("stop_command", {"command": command, "cwd": CONTROL_CWD}, error) from None
             if stopped.exit_code:
                 raise RuntimeError(stopped.result)
 
     async def _remove_command_files(self, prefix: str) -> None:
+        command = _control_command(f"rm -rf {shlex.quote(prefix)}")
         async with asyncio.timeout(INTERRUPT_TIMEOUT):
-            removed = await self.sandbox.process.exec(_control_command(f"rm -rf {shlex.quote(prefix)}"), cwd=CONTROL_CWD)
+            try:
+                removed = await self.sandbox.process.exec(command, cwd=CONTROL_CWD)
+            except DaytonaError as error:
+                raise DaytonaCleanupError(
+                    "remove_command_files", {"command": command, "cwd": CONTROL_CWD}, error
+                ) from None
             if removed.exit_code:
                 raise RuntimeError("Cannot remove Daytona command files")
 
@@ -319,7 +327,7 @@ class DaytonaMachine:
             else:
                 await finish_owned(own_cleanup(self.close()))
         except BaseException as cleanup_error:
-            cancellation.add_note(f"Daytona command cancellation cleanup failed ({type(cleanup_error).__name__})")
+            cancellation.add_note(f"Daytona command cancellation cleanup failed: {cleanup_error}")
             try:
                 await finish_owned(own_cleanup(self.close()))
             except BaseException as close_error:

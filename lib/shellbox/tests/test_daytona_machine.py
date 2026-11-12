@@ -4,6 +4,7 @@
 """Exercise the Daytona adapter against a local process and filesystem fake."""
 
 import asyncio
+import json
 import os
 import shlex
 import shutil
@@ -26,6 +27,7 @@ from daytona import (
     CreateSandboxFromSnapshotParams,
     DaytonaConfig,
     DaytonaNotFoundError,
+    DaytonaValidationError,
 )
 from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.machine import (
@@ -477,7 +479,7 @@ def test_daytona_command_interruption_stops_descendants_and_preserves_next_comma
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("interrupt_failure", ["exit", "timeout", "files"])
+@pytest.mark.parametrize("interrupt_failure", ["exit", "timeout", "files", "validation"])
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])
 def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_failure, interruption):
     entered = asyncio.Event()
@@ -488,6 +490,12 @@ def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_
                 entered.set()
                 await asyncio.Future()
             if "stop-command" in command:
+                if interrupt_failure == "validation":
+                    raise DaytonaValidationError(
+                        "synthetic cleanup rejection sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+                        status_code=400,
+                        error_code="INVALID_REQUEST",
+                    )
                 if interrupt_failure == "timeout":
                     raise TimeoutError("Provider interruption timed out")
                 if interrupt_failure == "files":
@@ -516,6 +524,19 @@ def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_
             with pytest.raises(RuntimeError) as failure:
                 await pending
             assert isinstance(failure.value.__cause__, TimeoutError if interrupt_failure == "timeout" else RuntimeError)
+        if interrupt_failure == "validation":
+            diagnostic = (
+                json.loads(failure.value.__notes__[0].split(": ", 1)[1])
+                if interruption == "cancel"
+                else json.loads(str(failure.value.__cause__))
+            )
+            assert diagnostic["operation"] == "stop_command"
+            assert diagnostic["error_type"] == "DaytonaValidationError"
+            assert diagnostic["status_code"] == 400
+            assert diagnostic["error_code"] == "INVALID_REQUEST"
+            assert diagnostic["request"]["cwd"] == "/"
+            assert "stop-command" in diagnostic["request"]["command"]
+            assert diagnostic["message"] == "synthetic cleanup rejection [REDACTED]"
         assert client.deleted and client.closed
         with pytest.raises(RuntimeError, match="closed"):
             await machine.run(Command(("true",)))

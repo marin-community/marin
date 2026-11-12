@@ -258,9 +258,13 @@ class TrainingContext:
         await asyncio.gather(*tasks, return_exceptions=True)
         ray.kill(self._buffer)
 
+    def pause(self) -> None:
+        """Stop new submissions while already submitted groups keep progressing."""
+        self._submission_allowed.clear()
+
     async def pause_and_drain(self) -> None:
         """Stop dispatching new generation and finish already submitted groups."""
-        self._submission_allowed.clear()
+        self.pause()
         if self._running:
             await self._until_failure(asyncio.gather(*self._running))
 

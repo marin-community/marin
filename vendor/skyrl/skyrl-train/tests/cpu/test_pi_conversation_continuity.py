@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from omegaconf import OmegaConf
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
 from harbor.models.verifier.result import VerifierResult
@@ -15,7 +16,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import NoGrader
 
 from skyrl_train.rollouts.agent_backend import AgentGenerationStopped
-from skyrl_train.rollouts.harbor_tasks import harbor_grading_failure
+from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings, harbor_grading_failure
 from skyrl_train.rollouts.harbor_trial_session import HarborTrialHarness
 from skyrl_train.rollouts.task_projections import rollout_loss_eligible
 from skyrl_train.rollouts.training_record import training_rollout
@@ -34,7 +35,7 @@ async def test_real_pi_roundtrip_preserves_all_turns_and_compaction_starts_a_con
     async def run(complete):
         messages = ({"role": "user", "content": "Inspect the workspace."},)
         for index in range(60):
-            await complete(Prompt(messages, {}))
+            await complete(Prompt(messages, {"max_tokens": 16_384 - 100 * (index % 3)}))
             if compact and index == 29:
                 messages = ({"role": "user", "content": "Intentional compacted summary."},)
             else:
@@ -69,7 +70,7 @@ async def test_real_pi_roundtrip_preserves_all_turns_and_compaction_starts_a_con
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["max_turns", "permission", "network", "verifier", "missing_verdict"])
+@pytest.mark.parametrize("failure", ["max_turns", "permission", "network", "verifier", "tests_upload", "missing_verdict"])
 @pytest.mark.parametrize("verifier_reward", [0.0, 1.0])
 async def test_real_pi_limit_keeps_verifier_reward_and_loss_but_infrastructure_remains_masked(failure, verifier_reward):
     fixtures = Path(__file__).parents[1] / "fixtures"
@@ -101,13 +102,15 @@ async def test_real_pi_limit_keeps_verifier_reward_and_loss_but_infrastructure_r
             message = "httpx.ReadError while contacting serving"
         elif failure == "verifier":
             exception_type, message = "VerifierRuntimeError", "Task verifier crashed"
+        elif failure == "tests_upload":
+            exception_type, message = "AddTestsDirError", "Machine is closed"
         return TrialResult(
             task_name="swe", trial_name="pi-limit", trial_uri="/tmp/pi-limit",
             task_id=TaskConfig(path=Path("/tmp/task")).get_task_id(), task_checksum="fixture",
             agent_info=AgentInfo(name="pi", version="0.87.0"),
             config=TrialConfig(task=TaskConfig(path=Path("/tmp/task")), agent=AgentConfig(name="pi")),
             verifier_result=(
-                None if failure in {"verifier", "missing_verdict"} else VerifierResult(rewards={"reward": verifier_reward})
+                None if failure in {"verifier", "tests_upload", "missing_verdict"} else VerifierResult(rewards={"reward": verifier_reward})
             ),
             exception_info=ExceptionInfo(
                 exception_type=exception_type, exception_message=message,
@@ -129,3 +132,6 @@ async def test_real_pi_limit_keeps_verifier_reward_and_loss_but_infrastructure_r
         assert rollout.grade.diagnostics["harbor_model_limit"] == "max_turns"
     else:
         assert rollout.failure is not None
+        if failure in {"verifier", "tests_upload"}:
+            settings = HarborTaskSettings.from_config(OmegaConf.create({"harbor": {"max_retries": 1}}))
+            assert settings.retry_delay(rollout.failure, retries=0) is None

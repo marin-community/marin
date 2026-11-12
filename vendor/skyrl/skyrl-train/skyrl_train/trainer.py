@@ -883,18 +883,27 @@ class RayPPOTrainer:
         self._control.reset()
         self._control = await self.callback_handler.call_event_async("on_step_end", state, self._control, trainer=self)
 
-        if self._control.should_save:
-            if step_wall is not None:
-                step_wall.start("checkpoint_work")
-            await self._save_intermediate_checkpoint(state)
-            self._control.should_save = False
+        evaluate_requested = self._control.should_evaluate and self.eval_dataset is not None
+        if evaluate_requested:
+            # Let the existing rollout tail progress during checkpoint I/O,
+            # without dispatching fresh long episodes just before evaluation.
+            self.context.pause()
+        try:
+            if self._control.should_save:
+                if step_wall is not None:
+                    step_wall.start("checkpoint_work")
+                await self._save_intermediate_checkpoint(state)
+                self._control.should_save = False
 
-        if self._control.should_evaluate and self.eval_dataset is not None:
-            if step_wall is not None:
-                step_wall.start("evaluation")
-            with Timer("eval", self.all_timings):
-                await self._evaluate_and_log(state, commit=False)
-            self._control.should_evaluate = False
+            if evaluate_requested:
+                if step_wall is not None:
+                    step_wall.start("evaluation")
+                with Timer("eval", self.all_timings):
+                    await self._evaluate_and_log(state, commit=False)
+                self._control.should_evaluate = False
+        finally:
+            if evaluate_requested:
+                self.context.resume()
 
         if self._control.should_save_hf_model:
             if step_wall is not None:

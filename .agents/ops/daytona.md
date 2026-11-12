@@ -187,6 +187,30 @@ summaries. Compare timezone-aware timestamps in UTC. Resolved configurations,
 logs, and trial metadata can contain capability JWTs inside model ingress URLs;
 redact those as well as named API keys before publication.
 
+## Cleanup and verifier failures
+
+An `AddTestsDirError` caused by `Machine is closed` can follow failed agent
+cleanup; it does not establish that the task package lacks tests. Shellbox logs
+`Daytona cleanup request failed` with the control operation, its credential-free
+request, provider exception type, message, HTTP status and error code. Operations
+include `stop_command`, `remove_command_files` and `delete_session`. Inspect the
+trial's `secondary_exception_info` for cancellation-cleanup diagnostics even
+when its primary exception is a later verifier failure. Preserve fail-closed
+cleanup when agent termination cannot be confirmed. A validation error alone
+does not establish that the process was already terminated.
+
+Harbor and the SkyRL task worker exclude tests-upload, verifier-runtime and
+verifier-download failures from whole-trial retries by default. Keep these
+attempts unscored; rerunning the agent discards its completed workspace and can
+repeat a long model episode. An explicit retry configuration can override these
+defaults, so inspect the resolved policy when diagnosing a replay.
+
+For missing structured verdicts, inspect the verifier stdout before assigning a
+task-authoring cause. Equal test and supervisor deadlines can suppress timeout
+verdict publication ([#11240](https://github.com/marin-community/marin/issues/11240)).
+Repair the budget nesting in a new task release and preserve partial output;
+do not alter a running dataset's grading semantics.
+
 ## Source provenance
 
 Transferred from MarinSkyRL revision
