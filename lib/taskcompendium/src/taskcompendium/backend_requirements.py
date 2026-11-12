@@ -10,20 +10,22 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from shellbox.machine import Backend, NetworkPolicy
 from shellbox.requirements import (
     COMMAND_FIELDS,
-    ENVIRONMENT_FIELDS,
-    EXECUTION_FIELDS,
-    HARBOR_ENVIRONMENT_FIELDS,
     MACHINE_FIELDS,
-    RESOURCE_FIELDS,
-    RUNTIME_FIELDS,
-    SCRIPT_GRADER_FIELDS,
     SOURCE_FIELDS,
-    TASK_FIELDS,
     Requirement,
     Support,
 )
 from shellbox.survey import CapabilityCell
 
+from taskcompendium.backend_fields import (
+    ENVIRONMENT_FIELDS,
+    EXECUTION_FIELDS,
+    HARBOR_ENVIRONMENT_FIELDS,
+    RESOURCE_FIELDS,
+    RUNTIME_FIELDS,
+    SCRIPT_GRADER_FIELDS,
+    TASK_FIELDS,
+)
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import EnvironmentRequirements, ExecutionRequirements
 
