@@ -15,7 +15,6 @@ import logging
 import pytest
 from marin.execution.artifact import (
     Artifact,
-    ArtifactRecord,
     FingerprintMismatchError,
     StepRecordIdentity,
     read_artifact,
@@ -238,11 +237,18 @@ def test_read_artifact_adopts_pre_6649_bare_payload(tmp_path):
     )
 
 
-def test_read_record_adopts_pre_6649_null_payload(tmp_path):
-    """A pre-#6649 step that returned None left ``null``; it reads as an empty record, not an error."""
-    (tmp_path / ".artifact.json").write_text("null")
+def test_legacy_null_record_rebuilds(tmp_path, monkeypatch):
+    """A bare ``null`` record from an older executor carries no provenance, so the step rebuilds."""
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    art = _toy(V, "a")
+    run(art)
+    (tmp_path / "datasets/toy" / V / ".artifact.json").write_text("null")
 
-    assert read_record(tmp_path.as_posix()) == ArtifactRecord()
+    run(art)
+
+    record = read_record(f"{tmp_path}/datasets/toy/{V}")
+    assert record.fingerprint == art.fingerprint()
+    assert record.result == {"payload": "a"}
 
 
 def test_read_record_leaves_a_genuine_data_record_untouched(tmp_path):

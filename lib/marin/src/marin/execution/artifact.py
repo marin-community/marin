@@ -274,11 +274,8 @@ def _parse_record(text: str) -> ArtifactRecord:
     :class:`ArtifactRecord` with every native field defaulted and the real payload dropped as
     ignored extras — leaving ``read_artifact`` with no ``result``. Detect that shape (no record
     identity, but keys foreign to the record schema) and take the whole document as ``result`` so
-    those caches load. A genuine record never carries foreign keys, so it is untouched. A legacy
-    step that returned ``None`` saved the bare payload ``null``; it reads as an empty record.
+    those caches load. A genuine record never carries foreign keys, so it is untouched.
     """
-    if json.loads(text) is None:
-        return ArtifactRecord()
     record = ArtifactRecord.model_validate_json(text)
     if any(getattr(record, field) for field in _RECORD_IDENTITY_FIELDS):
         return record
@@ -380,11 +377,28 @@ def write_step_record(identity: StepRecordIdentity, *, output_path: str, result:
     )
 
 
+def _has_null_record(output_path: str) -> bool:
+    """True when ``.artifact.json`` is the bare ``null`` an older executor wrote for a step returning None."""
+    text = _read_text(_resolved(output_path), RECORD_FILENAME)
+    return text is not None and json.loads(text) is None
+
+
+def forces_rebuild(step: StepSpec) -> bool:
+    """True for a lazy step that rebuilds whatever its status says.
+
+    That is a mutable (``dev``) version, or an output whose record is a legacy bare ``null``: such a
+    record says nothing about how the output was built, so it is rebuilt rather than trusted.
+    """
+    if step.hash_attrs.get(FINGERPRINT_KEY) is None:
+        return False
+    return is_mutable_version(step.hash_attrs.get(VERSION_KEY, "")) or _has_null_record(step.output_path)
+
+
 def check_drift(step: StepSpec) -> bool:
     """Advisory recipe-drift guard, run before serving a cached SUCCESS.
 
-    Returns ``False`` for a non-lazy step (no fingerprint). Returns ``True`` for a mutable
-    (``dev``) version so the caller rebuilds. Otherwise, if a record exists whose fingerprint
+    Returns ``False`` for a non-lazy step (no fingerprint). Returns ``True`` when
+    :func:`forces_rebuild` holds, so the caller rebuilds. Otherwise, if a record exists whose fingerprint
     differs from the step's: raises :class:`FingerprintMismatchError` if the step carries an
     ``expected_fingerprint`` pin, else logs a field-level warning and returns ``False`` (the
     cached output is served).
@@ -393,7 +407,13 @@ def check_drift(step: StepSpec) -> bool:
     if fingerprint is None:
         return False
     version = step.hash_attrs.get(VERSION_KEY, "")
-    if is_mutable_version(version):
+    if forces_rebuild(step):
+        if not is_mutable_version(version):
+            logger.warning(
+                "%s@%s: .artifact.json is a bare null from an older executor; rebuilding instead of serving it.",
+                step.name,
+                version,
+            )
         return True
     record = read_record(step.output_path)
     if record is None or record.fingerprint == fingerprint:
