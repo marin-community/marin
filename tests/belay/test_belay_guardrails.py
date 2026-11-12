@@ -82,6 +82,7 @@ from experiments.belay.submit import (
     LADDER_RUNGS,
     HeroMfuResult,
     IrisJob,
+    check_ladder_launch,
     check_launch,
     experiment_id,
     hero_mfu_result,
@@ -963,3 +964,19 @@ def test_the_watch_resets_its_registry_checkout_keeping_whatever_was_in_the_way(
     assert any(b.strip().startswith("belay-sync-backup-") for b in git(checkout, "branch").splitlines())
     assert len(notes) == 2
     assert reset_checkout(checkout, "registry") == []  # clean and current: nothing kept
+
+
+def test_a_ladder_is_held_whole_when_its_rungs_would_pass_the_node_cap() -> None:
+    rungs = list(LADDER_RUNGS)
+    needed = sum(TRACKS[t].nodes for t in rungs)
+    busy = [IrisJob(f"/u/belay-X9{i:03d}-seed0-coord", "running", "") for i in range(NODE_CAP - needed + 1)]
+    with pytest.raises(SystemExit, match="held: soft cap"):
+        check_ladder_launch(rungs, busy, NODE_CAP, None, "X0037")
+    check_ladder_launch(rungs, busy[:-1], NODE_CAP, None, "X0037")  # exactly fits
+    check_ladder_launch(rungs[1:], busy, NODE_CAP, None, "X0037")  # d512 already launched: only the rest must fit
+
+
+def test_a_node_grant_counts_every_rung_of_the_idea() -> None:
+    running = [IrisJob(f"/u/belay-X0037d{n}-seed0-coord", "running", "") for n in (512, 768)]
+    with pytest.raises(SystemExit, match="node grant 2 for X0037d1024"):
+        check_ladder_launch([Track.COMPETITIVE_D1024], running, 99, 2, "X0037d1024")
