@@ -12,7 +12,7 @@ code_commits:
 - 94ddd8bdc683eeeb11b2ad6168fe3708a986214b
 potential:
   score: null
-  rationale: 'a study: no verdict'
+  rationale: 'Study: no verdict'
   model: claude-opus-5-5
-  date: '2026-11-11'
+  date: '2026-11-12'
   inputs_digest: abb80d7e554f
