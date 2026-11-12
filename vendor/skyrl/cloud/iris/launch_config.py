@@ -13,6 +13,7 @@ from omegaconf import MISSING, DictConfig, OmegaConf, open_dict
 
 from skyrl_train.evaluation_profiles import evaluation_profiles, validate_evaluation_data
 
+from skyrl_train.config.utils import normalize_logging_backends
 from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.objective_spec import validate_objective
@@ -257,6 +258,7 @@ def load_launch_config(path: Path) -> DictConfig:
     if probe.get("enabled") and not probe.get("archive_uri"):
         artifact_root = posixpath.dirname(str(config.artifacts.resolved_config_uri))
         probe.archive_uri = join_resource_path(artifact_root, "mismatch_probe")
+    normalize_logging_backends(config.skyrl)
     validate_launch_config(config)
     evaluation_profiles(config.skyrl)
     return config

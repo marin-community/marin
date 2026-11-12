@@ -22,7 +22,8 @@ from functools import partial
 from pathlib import Path
 from datetime import datetime, timezone
 from types import TracebackType
-from typing import Any, Dict, List, Self, Union
+from typing import Any, Dict, Self
+from collections.abc import Sequence
 from uuid import uuid4
 from loguru import logger
 from rigging.secrets import require_secret
@@ -79,13 +80,27 @@ class WandbNodeLogger:
         self.wandb.finish()
 
 
+class _TrackingAdapter:
+    def start(self, *, resumed_step: int | None, checkpoint: CheckpointReference | None = None) -> None:
+        """Initialize the adapter at the selected checkpoint boundary."""
+
+
+class _SdkAdapter(_TrackingAdapter):
+    def __init__(self, sdk):
+        self.sdk = sdk
+
+    def log(self, **kwargs):
+        self.sdk.log(**kwargs)
+
+    def finish(self, **kwargs):
+        self.sdk.finish(**kwargs)
+
+
 # TODO(tgriggs): Test all backends.
 class Tracking:
     supported_backends = ["wandb", "mlflow", "swanlab", "tensorboard", "console", "records"]
 
-    def __init__(self, project_name, experiment_name, backends: Union[str, List[str]] = "console", config=None):
-        if isinstance(backends, str):
-            backends = [backends]
+    def __init__(self, project_name, experiment_name, backends: Sequence[str] = ("console",), config=None):
         for backend in backends:
             assert backend in self.supported_backends, f"{backend} is not supported"
 
@@ -139,7 +154,7 @@ class Tracking:
             run_id = run.id
             run.define_metric(_WANDB_STEP_METRIC)
             run.define_metric("*", step_metric=_WANDB_STEP_METRIC)
-            self.logger["wandb"] = run
+            self.logger["wandb"] = _SdkAdapter(run)
             self._prepare_worker_nodes_systems_logging_wandb(
                 project_name, experiment_name, run_id, tracking_config, current_node_ip
             )
@@ -164,7 +179,7 @@ class Tracking:
                 logdir=SWANLAB_LOG_DIR,
                 mode=SWANLAB_MODE,
             )
-            self.logger["swanlab"] = swanlab
+            self.logger["swanlab"] = _SdkAdapter(swanlab)
 
         if "tensorboard" in backends:
             self.logger["tensorboard"] = _TensorboardAdapter()
@@ -225,8 +240,8 @@ class Tracking:
 
     def start(self, *, resumed_step: int | None, checkpoint: CheckpointReference | None = None) -> None:
         """Record the checkpoint boundary for this execution's metric history."""
-        if "records" in self.logger:
-            self.logger["records"].start(resumed_step=resumed_step, checkpoint=checkpoint)
+        for adapter in self.logger.values():
+            adapter.start(resumed_step=resumed_step, checkpoint=checkpoint)
 
     def log(self, data, step, commit=True):
         for logger_name, logger_instance in self.logger.items():
@@ -263,7 +278,7 @@ class Tracking:
                 logger.warning("Tracker backend {} shutdown failed: {}", name, error)
 
 
-class _RecordsAdapter:
+class _RecordsAdapter(_TrackingAdapter):
     def __init__(self, export_root: str, run_id: str, attempt_id: str):
         self.export_root = export_root
         self.run_id = run_id
@@ -308,7 +323,7 @@ class _RecordsAdapter:
         self.store.close()
 
 
-class ConsoleLogger:
+class ConsoleLogger(_TrackingAdapter):
     def __init__(self):
         pass
 
@@ -333,7 +348,7 @@ class ConsoleLogger:
         return obj
 
 
-class _TensorboardAdapter:
+class _TensorboardAdapter(_TrackingAdapter):
     def __init__(self):
         import os
 
@@ -352,7 +367,7 @@ class _TensorboardAdapter:
         self.writer.close()
 
 
-class _MlflowLoggingAdapter:
+class _MlflowLoggingAdapter(_TrackingAdapter):
     def __init__(self, project_name, experiment_name, config):
         import os
 
@@ -486,7 +501,6 @@ class ValidationGenerationsLogger:
         """Log validation generation to mlflow as artifacts"""
         # https://mlflow.org/docs/latest/api_reference/python_api/mlflow.html?highlight=log_artifact#mlflow.log_artifact
 
-        import json
         import tempfile
 
         import mlflow
