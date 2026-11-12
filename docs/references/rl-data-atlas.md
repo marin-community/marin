@@ -62,8 +62,8 @@ text alone does not force Unknown.
 
 Assessment keys use ordinary artifact dependencies and explicit versions.
 Changing only the rubric or grading model reuses curation. A failed new key has
-no current grade; archived evidence remains available. Inventory-only sources
-carry a skip reason. Source details show the latest curation outcome; the
+no current grade; archived evidence remains available. Every source has a registered converter and enters through QUICK, SAMPLE or FULL.
+QUICK records conversion without review. Source details show the latest curation outcome; the
 assessment page shows the curation associated with its selected grade.
 
 ## Browsing sources
@@ -75,17 +75,15 @@ with the most mapped examples. Search names, datasets or tags; filter by catalog
 use or quality; select a column heading to sort. Filters and sorting are included in the URL. CSV export
 includes the filtered rows in the displayed order.
 
-**Daytona safe** requires both execution compatibility and at most ten unique
-Daytona snapshots. Check agent and grader machines independently: a package-lock
-grader requires local execution even when the agent's image works on Daytona.
-The backend map records these separate machine slots and their blockers.
+**Daytona safe** measures the actor only: SAFE requires at most ten snapshot
+identities and no refused actor requirements. Sources without an actor show N/A;
+grandfathered blends show a dash. Package-lock graders run on LOCAL with separate
+compatibility evidence. A source without a measured actor verdict cannot enter
+new ingestion. The backend map records each role's demands and blockers.
 
-Example counts describe successfully converted tasks before curation admission.
-A dash means no processed examples from that source are in the currently
-published curriculum release. An inventory-only declaration without a conversion
-recipe can still carry a pinned row count; the curriculum release lists it with a
-*declared* basis, so its count shows without a placement area and the source is
-excluded from the processed-examples total.
+Example counts describe successfully converted tasks before training selection.
+Every entry has a registered conversion pipeline; there is no inventory-only
+path that substitutes a declared count for conversion.
 **Not assessed** means there is no current sampled assessment; **Unknown** is a
 completed assessment without enough conclusive judgments. Curation never re-grades
 independent QC; the **Independent QC** column and the source details present the
@@ -236,11 +234,12 @@ a grading snapshot. Adding a dataset declaration alone does not execute its pipe
 Publication updates selected sources and preserves all other production entries,
 including their pinned declarations. Use `--source` to grade only new or changed
 sources; the other sources' assessments carry forward without executing their
-pipelines. Metadata-only edits to names, tags or URLs
-therefore reach production when that source is selected. Inventory-only sources
-have no pipeline to select, so every publication takes their declarations,
-including `independent_qc`, from the current code. Removing a declaration
-from code does not retire its production entry. Older attempts are ignored per
+pipelines. Metadata changes can use `catalog_snapshot.refresh_catalog` with a new snapshot
+ID and matching pinned declarations. It preserves assessments and historical
+snapshots while explicitly retiring the supplied source IDs. A changed input or
+pipeline pin requires a conversion campaign. Removing pipeline-less declarations
+from code also prevents them from being carried into new campaign snapshots.
+Older attempts are ignored per
 source, so an out-of-order campaign can still publish its other sources. Failed
 attempts under a changed assessment key clear the old grade; exact-key retries
 can reuse completed evidence. The key includes rubric, model and pipeline identity.
@@ -372,15 +371,13 @@ object storage.
 
 Converted populations contain successfully converted TaskSpecs before admission.
 They retain training/evaluation intent. Selecting a source shows its full
-conversion ledger in **About counts and matching** when available. Sources
-outside the release remain in the source inventory, where **Not processed**
-filters them for inspection. An inventory-only declaration with a pinned row
-count joins the release on a *declared* basis: its Examples count shows without
-placement statistics, area or processed-total participation.
+conversion ledger in **About counts and matching** when available. All Atlas entries have conversion evidence from QUICK, SAMPLE or FULL. Entries
+without a registered converter are retired from the served catalog; their prior
+snapshots, packets and underlying artifacts remain archived.
 
 Run the embedding graph through `--embed coverage`. The `publication` stage
 counts assignment outcomes by source, reconciles complete converted populations
-against source manifests, folds in declared-only sources, and writes `release.json` referencing the assignment Parquet. The subsequent `coverage` stage writes aggregated
+against source manifests, and writes `release.json` referencing the assignment Parquet. The subsequent `coverage` stage writes aggregated
 statistics, bounded example Parquet and `coverage.json` without rerunning
 embeddings or matching. Re-running from a completed campaign's `corpus.json`
 merges the current dataset declarations over the recorded inventory, so added

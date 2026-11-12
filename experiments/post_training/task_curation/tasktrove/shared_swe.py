@@ -73,7 +73,7 @@ def harden_shared_swe(
     config["verifier"]["user"] = "root"
     config["verifier"]["restart_environment"] = False
     config["metadata"]["integrity_contract"] = contract.model_dump(mode="json")
-    config["metadata"]["execution_policy"] = "shared_agent_mutable_v1"
+    config["metadata"]["execution_policy"] = f"shared_agent_mutable_v{contract.version}"
     files["task.toml"] = tomlkit.dumps(config).encode()
     files["instruction.md"] = (
         shared_preamble(contract)

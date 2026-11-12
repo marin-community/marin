@@ -175,9 +175,8 @@ class RlDataSource[ConfigT: CatalogConfig]:
     """One source population, its dataset-owned configuration and callable.
 
     Stable IDs preserve Atlas review history even when the callable changes.
-    Sources without a pipeline remain discoverable in the inventory.
-    Configurations expose catalog facts independently of execution. Inventory
-    entries without a configuration or callable retain their authored metadata.
+    A catalog declaration requires a registered conversion pipeline. QUICK
+    records conversion without review; it does not make tasks selectable.
     """
 
     info: SourceInfo
@@ -227,6 +226,8 @@ class RlDataSource[ConfigT: CatalogConfig]:
     def declaration(self) -> SourceDeclaration:
         """Project a source declaration into catalog metadata without executing it."""
         info, pipeline = self.info, self.pipeline
+        if pipeline is None or self.config is None:
+            raise ValueError(f"Source {info.id} has no registered conversion pipeline")
         dataset = self.dataset
         invocation = None
         if pipeline is not None:
@@ -278,7 +279,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             kind="Generator" if "generator" in tags else "Dataset",
             status=next(
                 (label for tag, label in (("deprecated", "Deprecated"), ("excluded", "Excluded")) if tag in tags),
-                "Inventory" if pipeline is None or self.admission_blockers else "Available",
+                "Not selectable" if self.admission_blockers else "Available",
             ),
             pipeline=invocation,
             independent_qc=info.independent_qc,
