@@ -542,7 +542,7 @@ def test_inherited_recipe_round_trips_as_a_self_contained_launch(tmp_path: Path,
 
 def test_loaded_launch_revision_selects_downloaded_tokenizer_bytes(tmp_path, monkeypatch):
     revision = "68c46c4b3498877f3ef123c856ecfde50c39f404"
-    raw = _raw_config()
+    raw = raw_launch_config()
     raw["inputs"]["model"] = {
         "uri": "org/policy",
         "identity": "a" * 40,
@@ -571,7 +571,7 @@ def test_loaded_launch_revision_selects_downloaded_tokenizer_bytes(tmp_path, mon
 
 def test_loaded_launch_policy_revision_selects_downloaded_weights(tmp_path, monkeypatch):
     revision = "b" * 40
-    raw = _raw_config()
+    raw = raw_launch_config()
     raw["inputs"]["model"] = {
         "uri": "org/policy",
         "identity": revision,
