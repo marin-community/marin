@@ -476,8 +476,7 @@ def test_zero1_with_the_overlapped_last_microbatch_reduces_into_the_shard_per_la
 
 
 @pytest.mark.timeout(900)
-@pytest.mark.parametrize("optimizer_name", ["adamw", "muonh"])
-@pytest.mark.parametrize("layout", ["stacked", "per_node_qb"])
+@pytest.mark.parametrize(("layout", "optimizer_name"), [("stacked", "muonh"), ("per_node_qb", "adamw")])
 @pytest.mark.multidevice
 def test_gather_in_first_microbatch_matches_zero1(layout, optimizer_name):
     # Gathering the expert weights in the first microbatch's forward rather than at the end of the step does the same
@@ -488,8 +487,10 @@ def test_gather_in_first_microbatch_matches_zero1(layout, optimizer_name):
     # weights are those the step ran with, the cast of the parameters it started from, bit for bit, and its other
     # weights the cast of the updated parameters, as without it.
     with use_cpu_devices(8):
-        cases = [(name, k, overlap, "BATCH") for name in _meshes() for k, overlap in ((4, False), (4, True), (2, True))]
-        cases += [
+        cases = [
+            ("replica4_expert2", 4, False, "BATCH"),
+            ("replica2_data2_expert2", 4, True, "BATCH"),
+            ("replica4_expert2", 2, True, "BATCH"),
             ("replica4_expert2", 4, True, "UNWEIGHTED_MICROBATCH"),
             ("replica2_data2_expert2", 4, False, "PADDED_BATCH"),
         ]

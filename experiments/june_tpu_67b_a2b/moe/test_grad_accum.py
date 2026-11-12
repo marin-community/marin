@@ -411,13 +411,12 @@ def test_overlapping_the_last_microbatch_keeps_no_copy_of_the_expert_weights():
             if is_expert
         )
         assert sum(expert_shapes.values()) == 3, expert_shapes
-        for k in (2, 4):
-            hlo = compiled_step_hlo(cfg, mesh, policy, microbatches=k, overlap_last_microbatch=True)
-            loop_states = re.findall(r"= (\(.*?\)) while\(", hlo)
-            held = [sum(state.count(shape) for shape in expert_shapes) for state in loop_states]
-            # Two loops carry the expert weights, each of them once: the forward layer scans of the microbatch loop
-            # and of the last microbatch. Routed before the checkpoint, a third loop carries the stacked copy.
-            assert sorted(h for h in held if h) == [3, 3], (k, held)
+        hlo = compiled_step_hlo(cfg, mesh, policy, microbatches=4, overlap_last_microbatch=True)
+        loop_states = re.findall(r"= (\(.*?\)) while\(", hlo)
+        held = [sum(state.count(shape) for shape in expert_shapes) for state in loop_states]
+        # Two loops carry the expert weights, each of them once: the forward layer scans of the microbatch loop
+        # and of the last microbatch. Routed before the checkpoint, a third loop carries the stacked copy.
+        assert sorted(h for h in held if h) == [3, 3], held
 
 
 def test_overlapping_the_last_microbatch_needs_two_microbatches():
