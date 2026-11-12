@@ -10,7 +10,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 import dataclasses
 import math
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, get_args
 
 import equinox as eqx
 import jax
@@ -38,6 +38,7 @@ from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoeImplementation,
     QBRoutedMoE,
+    RingAssignmentSelection,
     validate_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
@@ -116,6 +117,9 @@ class GrugModelConfig:
     """Sender pool capacity per destination shard; required by ``ring_filtered`` and ``fixed_pooled_wave_all_to_all``."""
     num_expert_waves: int = 1
     """Static wave count for ``fixed_pooled_wave_all_to_all``; must divide the local expert count."""
+    ring_selection: RingAssignmentSelection = "top_k"
+    """How the ring backends order each shard's accepted assignments. ``rank_scatter`` was faster on MI355X and
+    slower on H100, GB200 and TPU v4."""
     ce_implementation: str | None = None
     """Fused cross-entropy backend selection (levanter fused_cross_entropy_loss). None keeps the
     backend default (GPU: full-logits ``xla`` path). Set ``"batched_xla"`` to use the blocked-vocab
@@ -164,6 +168,8 @@ class GrugModelConfig:
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         validate_moe_implementation(self.moe_implementation)
+        if self.ring_selection not in get_args(RingAssignmentSelection):
+            raise ValueError(f"Unknown ring_selection {self.ring_selection!r}")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -522,6 +528,7 @@ class MoEMLP(eqx.Module):
                 capacity_factor=cfg.capacity_factor,
                 pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
                 num_expert_waves=cfg.num_expert_waves,
+                ring_selection=cfg.ring_selection,
             ),
             routed_moe=QBRoutedMoE(
                 num_experts_per_token=cfg.num_experts_per_token,

@@ -34,7 +34,12 @@ from levanter.grug._moe.common import (
     CapacityDrops,
 )
 from levanter.grug._moe.ep_common import _assignment_sources, _combine_gather_sum_impl
-from levanter.grug._moe.ep_ring import _combine_rows, _dispatch_rows, _select_local_assignments
+from levanter.grug._moe.ep_ring import (
+    RingAssignmentSelection,
+    _combine_rows,
+    _dispatch_rows,
+    _select_local_assignments,
+)
 
 
 def destination_hit_fraction(*, num_experts: int, local_experts: int, topk: int) -> float:
@@ -140,6 +145,7 @@ def _moe_mlp_ep_ring_filtered_local(
     capacity_factor: float,
     transport_capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
+    ring_selection: RingAssignmentSelection,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Filtered all-to-all dispatch, ring's grouped expert MLP, expert-side combine.
 
@@ -237,6 +243,7 @@ def _moe_mlp_ep_ring_filtered_local(
             local_experts=local_experts,
             logical_capacity=logical_capacity,
             physical_capacity=expert_capacity,
+            selection=ring_selection,
         )
         picked = jnp.where(dispatch_valid, picked, received_assignments)
         dispatch_row = jnp.where(dispatch_valid, picked // topk, send_rows)

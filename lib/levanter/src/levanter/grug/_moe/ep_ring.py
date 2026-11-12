@@ -5,7 +5,7 @@
 
 import math
 from collections.abc import Callable
-from typing import NamedTuple, TypeAlias
+from typing import Literal, NamedTuple, TypeAlias
 
 import jax
 import jax.numpy as jnp
@@ -23,6 +23,32 @@ from levanter.grug._moe.common import (
 )
 from levanter.grug._moe.ep_common import _assignment_sources, _prefix_cap_counts
 
+RingAssignmentSelection: TypeAlias = Literal["top_k", "rank_scatter"]
+"""How the ring backends order a shard's accepted assignments by expert.
+
+``top_k`` takes a ``top_k`` over (local expert id, flat position) keys. ``rank_scatter`` scatters each flat position to
+its expert-major rank instead, which avoids the sort ``top_k`` lowers to. On 2x MI355X it was faster; on H100, GB200
+and TPU v4 it made the ``ring`` layer 8-16% slower in forward and backward, so it is opt-in.
+"""
+
+
+def _expert_major_slots(
+    local_expert: Int[Array, "A"], local_mask: Bool[Array, "A"], one_hot: Int[Array, "A Elocal"], *, out_of_range: int
+) -> Int[Array, "A"]:
+    """Each assignment's rank in (local expert id, flat position) order, as distinct scatter indices.
+
+    ``one_hot[a, e]`` is one when assignment ``a`` is masked in and routed to local expert ``e``. Masked-in
+    assignments get their rank, which lies below the assignment count: their expert's start plus their rank within
+    the expert. Masked-out assignments get distinct slots from ``max(assignments, out_of_range)`` up, so a scatter
+    into ``out_of_range`` slots drops them without colliding with any masked-in slot.
+    """
+    assignments = local_expert.shape[0]
+    position = jnp.arange(assignments, dtype=jnp.int32)
+    counts = jnp.sum(one_hot, axis=0, dtype=jnp.int32)
+    rank_in_expert = jnp.take_along_axis(jnp.cumsum(one_hot, axis=0, dtype=jnp.int32), local_expert[:, None], axis=1)
+    slot = (jnp.cumsum(counts) - counts)[local_expert] + rank_in_expert[:, 0] - 1
+    return jnp.where(local_mask, slot, max(assignments, out_of_range) + position)
+
 
 def _select_local_assignments(
     local_expert: Int[Array, "A"],
@@ -31,31 +57,39 @@ def _select_local_assignments(
     local_experts: int,
     logical_capacity: jax.Array,
     physical_capacity: int,
+    selection: RingAssignmentSelection,
 ) -> tuple[Int[Array, "Elocal"], jax.Array, Int[Array, "C"], Bool[Array, "C"]]:
     """Pick this shard's assignments in (local expert id, flat position) order under ring's capacity rule.
 
     ``local_expert`` must be zero where ``local_mask`` is false. Returns accepted counts per expert, the dropped
-    assignment count, picked flat positions, and validity for each of the ``physical_capacity`` picks.
+    assignment count, picked flat positions, and validity for each of the ``physical_capacity`` picks. Both
+    selections pick the same valid positions; the invalid picks past the accepted total differ, and every caller
+    masks them.
     """
     assignments = local_expert.shape[0]
     # TPU lowers this small-expert count reduction better as a dense compare+sum than as `bincount`.
     expert_ids = jnp.arange(local_experts, dtype=jnp.int32)
-    counts = jnp.sum(
-        (local_expert[:, None] == expert_ids[None, :]).astype(jnp.int32) * local_mask.astype(jnp.int32)[:, None],
-        axis=0,
-        dtype=jnp.int32,
-    )
+    one_hot = ((local_expert[:, None] == expert_ids[None, :]) & local_mask[:, None]).astype(jnp.int32)
+    counts = jnp.sum(one_hot, axis=0, dtype=jnp.int32)
     accepted_counts = _prefix_cap_counts(counts, capacity=logical_capacity)
     accepted_total = jnp.sum(accepted_counts, dtype=jnp.int32)
     dropped = jnp.sum(counts, dtype=jnp.int32) - accepted_total
     valid = jnp.arange(physical_capacity, dtype=jnp.int32) < accepted_total
 
-    # A top_k over (local expert id, flat position) keys avoids a global argsort while preserving the
-    # grouped layout expected by ragged_dot.
-    order_key = local_expert * assignments + jnp.arange(assignments, dtype=jnp.int32)
-    selection_key = jnp.where(local_mask, local_experts * assignments - order_key, -1)
-    _, picked = jax.lax.top_k(selection_key, physical_capacity)
-    # `picked` pads with invalid rows at the end. They stay outside every group, so ragged_dot skips them and leaves
+    position = jnp.arange(assignments, dtype=jnp.int32)
+    if selection == "top_k":
+        # A top_k over (local expert id, flat position) keys avoids a global argsort while preserving the
+        # grouped layout expected by ragged_dot.
+        order_key = local_expert * assignments + position
+        selection_key = jnp.where(local_mask, local_experts * assignments - order_key, -1)
+        _, picked = jax.lax.top_k(selection_key, physical_capacity)
+    elif selection == "rank_scatter":
+        # Scattering the flat positions to their expert-major slots keeps the grouped layout without a sort.
+        slot = _expert_major_slots(local_expert, local_mask, one_hot, out_of_range=physical_capacity)
+        picked = jnp.zeros((physical_capacity,), jnp.int32).at[slot].set(position, mode="drop", unique_indices=True)
+    else:
+        raise ValueError(f"Unknown ring assignment selection {selection!r}")
+    # Picks past accepted_total are padding: invalid and outside every group, so ragged_dot skips them and leaves
     # their output unspecified; the dispatch and combine read only the valid rows.
     return accepted_counts, dropped, picked, valid
 
@@ -173,6 +207,7 @@ def _moe_mlp_ep_ring_local(
     num_experts: int,
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
+    ring_selection: RingAssignmentSelection,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect.
 
@@ -222,6 +257,7 @@ def _moe_mlp_ep_ring_local(
             local_experts=local_experts,
             logical_capacity=logical_capacity,
             physical_capacity=physical_capacity,
+            selection=ring_selection,
         )
 
         dispatch_combine = make_dispatch_combine(local_idx, valid, tokens, topk)

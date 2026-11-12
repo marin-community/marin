@@ -16,7 +16,7 @@ Implementation overview:
 
 from collections.abc import Callable
 from functools import partial
-from typing import cast
+from typing import cast, get_args
 
 import equinox as eqx
 import jax
@@ -54,6 +54,7 @@ from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import _moe_mlp_ep_fixed_pooled_wave_a2a_local
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import (
+    RingAssignmentSelection,
     _gather_dispatch_combine,
     _moe_mlp_ep_ring_local,
     _scatter_add_dispatch_combine,
@@ -78,6 +79,8 @@ MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC = "moe/sender_dropped_assignments"
 MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC = "moe/receiver_dropped_assignments"
 MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC = "moe/skipped_padding_assignments"
 MOE_VALID_ASSIGNMENTS_METRIC = "moe/valid_assignments"
+# The expert-parallel backends that pick each shard's assignments with `_select_local_assignments`.
+_RING_SELECTION_IMPLEMENTATIONS = ("ring", "ring_gather_combine", "ring_filtered")
 
 
 def _expert_assignment_counts(
@@ -369,6 +372,7 @@ class MoEExpertMlp(eqx.Module):
     pooled_transport_capacity_factor: float | None = eqx.field(static=True, default=None)
     expert_chunks: int = eqx.field(static=True, default=1)
     num_expert_waves: int = eqx.field(static=True, default=1)
+    ring_selection: RingAssignmentSelection = eqx.field(static=True, default="top_k")
 
     @staticmethod
     def init(
@@ -385,6 +389,7 @@ class MoEExpertMlp(eqx.Module):
         pooled_transport_capacity_factor: float | None = None,
         expert_chunks: int = 1,
         num_expert_waves: int = 1,
+        ring_selection: RingAssignmentSelection = "top_k",
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -408,6 +413,7 @@ class MoEExpertMlp(eqx.Module):
             pooled_transport_capacity_factor=pooled_transport_capacity_factor,
             expert_chunks=expert_chunks,
             num_expert_waves=num_expert_waves,
+            ring_selection=ring_selection,
         )
 
     @named_call
@@ -437,6 +443,7 @@ class MoEExpertMlp(eqx.Module):
             report_capacity_overflow=report_capacity_overflow,
             expert_chunks=self.expert_chunks,
             num_expert_waves=self.num_expert_waves,
+            ring_selection=self.ring_selection,
         )
 
 
@@ -457,6 +464,7 @@ def moe_mlp(
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
     num_expert_waves: int = 1,
+    ring_selection: RingAssignmentSelection = "top_k",
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -493,8 +501,19 @@ def moe_mlp(
     destination pool (`fixed_pooled_wave_all_to_all`) or destination shard
     (`ring_filtered`). `num_expert_waves` sets the static wave count for the
     fixed pooled-wave implementation.
+
+    `ring_selection` chooses how `ring`, `ring_gather_combine` and `ring_filtered`
+    order each shard's accepted assignments; see `RingAssignmentSelection`. Other
+    implementations reject any value but the default `top_k`.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
+    if ring_selection not in get_args(RingAssignmentSelection):
+        raise ValueError(f"Unknown ring_selection {ring_selection!r}")
+    if ring_selection != "top_k" and resolved_implementation not in _RING_SELECTION_IMPLEMENTATIONS:
+        raise ValueError(
+            f"ring_selection={ring_selection!r} applies only to {_RING_SELECTION_IMPLEMENTATIONS}; "
+            f"got implementation={resolved_implementation!r}"
+        )
 
     if mesh is None:
         mesh = _current_mesh()
@@ -590,13 +609,22 @@ def moe_mlp(
             raise ValueError(f"{resolved_implementation} requires pooled_transport_capacity_factor")
 
         if resolved_implementation == "ring":
-            shard_local_fn = partial(_moe_mlp_ep_ring_local, make_dispatch_combine=_scatter_add_dispatch_combine)
+            shard_local_fn = partial(
+                _moe_mlp_ep_ring_local,
+                make_dispatch_combine=_scatter_add_dispatch_combine,
+                ring_selection=ring_selection,
+            )
         elif resolved_implementation == "ring_gather_combine":
-            shard_local_fn = partial(_moe_mlp_ep_ring_local, make_dispatch_combine=_gather_dispatch_combine)
+            shard_local_fn = partial(
+                _moe_mlp_ep_ring_local,
+                make_dispatch_combine=_gather_dispatch_combine,
+                ring_selection=ring_selection,
+            )
         elif resolved_implementation == "ring_filtered":
             shard_local_fn = partial(
                 _moe_mlp_ep_ring_filtered_local,
                 transport_capacity_factor=pooled_transport_capacity_factor,
+                ring_selection=ring_selection,
             )
         elif resolved_implementation == "ragged_all_to_all":
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
@@ -732,6 +760,7 @@ __all__ = [
     "MoeImplementation",
     "PspecAxis",
     "QBRoutedMoE",
+    "RingAssignmentSelection",
     "moe_mlp",
     "moe_routing_stats",
     "moe_routing_stats_local",

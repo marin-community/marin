@@ -189,9 +189,18 @@ def _ragged_dot_with_unwritten_rows(fill: float) -> Callable[..., jax.Array]:
 
 
 @pytest.mark.timeout(240)
-@pytest.mark.parametrize("implementation", ["ring", "ring_gather_combine", "ring_filtered"])
+@pytest.mark.parametrize(
+    ("implementation", "ring_selection"),
+    [
+        ("ring", "top_k"),
+        ("ring_gather_combine", "top_k"),
+        ("ring_filtered", "top_k"),
+        ("ring", "rank_scatter"),
+        ("ring_filtered", "rank_scatter"),
+    ],
+)
 @pytest.mark.multidevice
-def test_ring_paths_never_read_the_padding_rows_past_the_groups(implementation: str, monkeypatch):
+def test_ring_paths_never_read_the_padding_rows_past_the_groups(implementation: str, ring_selection: str, monkeypatch):
     """The ring paths leave unused dispatch capacity outside every ragged_dot group, where the kernels' output is
     unspecified. NaN there instead of zero must leave every output and gradient finite and unchanged up to the
     rounding of a different compiled program."""
@@ -238,6 +247,7 @@ def test_ring_paths_never_read_the_padding_rows_past_the_groups(implementation: 
                     capacity_factor=2.0,
                     pooled_transport_capacity_factor=2.0,
                     report_capacity_overflow=True,
+                    ring_selection=ring_selection,
                 )
                 return jnp.sum(out * cotangent), out
 

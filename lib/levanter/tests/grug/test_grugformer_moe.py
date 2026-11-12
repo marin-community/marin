@@ -46,7 +46,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _transport_buffer,
     _unpermute_from_global_expert,
 )
-from levanter.grug._moe.ep_ring import _gather_dispatch_combine
+from levanter.grug._moe.ep_ring import _expert_major_slots, _gather_dispatch_combine, _select_local_assignments
 from levanter.grug._moe.ep_ring_filtered import _down_project_combine, _slot_weights
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
@@ -2463,3 +2463,50 @@ def test_routing_counts_stay_exact_past_the_float32_integer_range():
         counts = reduced_counts(selected_experts, router_scores, token_valid)
 
     assert int(np.asarray(counts)[0, 0]) == num_tokens
+
+
+@pytest.mark.parametrize(
+    ("logical_capacity", "physical_capacity"),
+    [(40, 48), (200, 200), (200, 230), (0, 16)],
+    ids=["drops", "fits", "physical_past_logical", "none_accepted"],
+)
+def test_rank_scatter_selection_matches_top_k_selection(logical_capacity, physical_capacity):
+    rng = np.random.default_rng(0)
+    assignments, local_experts = 240, 6
+    local_mask = jnp.asarray(rng.random(assignments) < 0.7)
+    local_expert = jnp.where(local_mask, jnp.asarray(rng.integers(0, local_experts, assignments), jnp.int32), 0)
+    kwargs = dict(
+        local_experts=local_experts, logical_capacity=jnp.int32(logical_capacity), physical_capacity=physical_capacity
+    )
+
+    sizes, dropped, picked, valid = _select_local_assignments(
+        local_expert, local_mask, selection="rank_scatter", **kwargs
+    )
+    want_sizes, want_dropped, want_picked, want_valid = _select_local_assignments(
+        local_expert, local_mask, selection="top_k", **kwargs
+    )
+
+    np.testing.assert_array_equal(sizes, want_sizes)
+    assert int(dropped) == int(want_dropped)
+    np.testing.assert_array_equal(valid, want_valid)
+    np.testing.assert_array_equal(
+        np.asarray(picked)[np.asarray(valid)], np.asarray(want_picked)[np.asarray(want_valid)]
+    )
+    assert bool(jnp.all((picked >= 0) & (picked < assignments)))
+
+
+@pytest.mark.parametrize(
+    "out_of_range", [2, 3, 8], ids=["capacity_below_true", "capacity_equals_true", "capacity_past"]
+)
+def test_expert_major_slots_are_distinct(out_of_range):
+    # A masked-out assignment ahead of more masked-in ones than the capacity: its slot must not reuse a dropped
+    # masked-in assignment's slot, since the scatter promises unique indices.
+    local_mask = jnp.asarray([False, True, True, True, False])
+    local_expert = jnp.zeros(5, jnp.int32)
+    one_hot = (local_mask[:, None] & (local_expert[:, None] == 0)).astype(jnp.int32)
+
+    slot = np.asarray(_expert_major_slots(local_expert, local_mask, one_hot, out_of_range=out_of_range))
+
+    assert len(set(slot.tolist())) == slot.size
+    np.testing.assert_array_equal(slot[[1, 2, 3]], [0, 1, 2])
+    assert np.all(slot[[0, 4]] >= out_of_range)
