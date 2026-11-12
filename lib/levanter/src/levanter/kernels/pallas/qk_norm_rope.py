@@ -12,7 +12,7 @@ This module computes it in one kernel per direction:
 - forward: ``y = rope(x * rsqrt(mean(x^2) + eps)) * scale...`` from ``x``;
 - backward: ``dx`` from ``x`` and ``dy``, recomputing the statistic from ``x`` (only ``x`` is saved).
 
-All three implementations round where the separate ops do, so their forward matches them up to the float32 rounding
+Both implementations round where the separate ops do, so their forward matches them up to the float32 rounding
 of the statistic (one bfloat16 ulp in a few elements): the normalized ``x`` is rounded to ``x.dtype``, then the
 rotated value, then the product with each scale in turn (a scale of 1 is skipped, as XLA drops it); the backward
 rounds the scaled cotangent after each scale, the rotated-back cotangent and ``dx``.
@@ -20,8 +20,6 @@ rounds the scaled cotangent after each scale, the rotated-back cotangent and ``d
 ``impl``:
 
 - ``"reference"``: the separate ops, differentiated by JAX (the June model's own formulation).
-- ``"custom_vjp"``: the same forward under a ``jax.custom_vjp`` whose backward is the closed form above, in JAX ops;
-  XLA fuses each direction as it can.
 - ``"pallas"``: Pallas-Triton kernels for both directions (GPU). On CPU they run in the Pallas interpreter, for
   tests; TPU is rejected.
 """
@@ -37,7 +35,7 @@ from jaxtyping import Array, Float
 
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 
-QkNormRopeImpl = Literal["reference", "custom_vjp", "pallas"]
+QkNormRopeImpl = Literal["reference", "pallas"]
 
 # Rows (one head of one token each) per program and warps: the best of a sweep at [8, 4096, 20|5, 128] bf16 on MI355X
 # (q and k, forward 0.101 ms and forward + backward 0.215 ms, against 0.385 and 0.655 ms for the separate XLA ops).
@@ -123,23 +121,6 @@ def _bwd_jax(x, cos, sin, g, *, eps: float, rope: bool, scales: tuple[float, ...
     inv_rms = _inverse_rms(x_f32, eps)
     projection = jnp.mean(g * x_f32, axis=-1, keepdims=True)
     return (inv_rms * (g - x_f32 * (inv_rms * inv_rms) * projection)).astype(dtype)
-
-
-@functools.partial(jax.custom_vjp, nondiff_argnums=(3, 4, 5))
-def _qk_norm_rope_custom_vjp(x, cos, sin, eps, rope, scales):
-    return _fwd_jax(x, cos, sin, eps=eps, rope=rope, scales=scales)
-
-
-def _custom_vjp_fwd(x, cos, sin, eps, rope, scales):
-    return _fwd_jax(x, cos, sin, eps=eps, rope=rope, scales=scales), (x, cos, sin)
-
-
-def _custom_vjp_bwd(eps, rope, scales, residuals, g):
-    x, cos, sin = residuals
-    return _bwd_jax(x, cos, sin, g, eps=eps, rope=rope, scales=scales), jnp.zeros_like(cos), jnp.zeros_like(sin)
-
-
-_qk_norm_rope_custom_vjp.defvjp(_custom_vjp_fwd, _custom_vjp_bwd)
 
 
 def qk_norm_rope_reference(
@@ -369,8 +350,6 @@ def qk_norm_rope(
     scales = tuple(float(s) for s in scales)
     if impl == "reference":
         return qk_norm_rope_reference(x, cos, sin, eps=eps, rope=rope, scales=scales)
-    if impl == "custom_vjp":
-        return _qk_norm_rope_custom_vjp(x, cos, sin, eps, rope, scales)
     if impl == "pallas":
         if jax.default_backend() == "tpu" and not interpret:
             raise ValueError(

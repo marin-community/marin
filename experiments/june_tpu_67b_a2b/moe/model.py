@@ -149,12 +149,8 @@ class GrugModelConfig:
     scan body so XLA only plans HBM for one iteration's intermediates — needed
     at scale where the unrolled program OOMs at compile time."""
     qk_norm_rope: QkNormRope = "xla"
-    """How the attention normalizes, rotates and scales q and k per head. "xla" runs ``rms_norm``, the half-RoPE
-    rotation and the ``qk_mult`` scale as separate ops, which XLA splits into several kernels per tensor and direction.
-    "pallas" computes all three in one Pallas-Triton kernel per direction, whose backward recomputes the norm's
-    statistic from the saved input (``levanter.kernels.pallas.qk_norm_rope``; GPU only, the Pallas interpreter on
-    CPU). It rounds where the separate ops do and differs from "xla" only in how the float32 statistic is summed
-    (about one bfloat16 ulp in a few elements)."""
+    """Use separate XLA ops or one fused Pallas-Triton kernel per direction (GPU) for the q/k head norm, half-RoPE and
+    q scale. Pallas requires a head dimension of at least 64 whose quarter is a power of two."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -249,7 +245,9 @@ def _pallas_qk_head_norm(
     if position_ids is None:
         positions, positions_spec = jnp.arange(x.shape[1], dtype=jnp.float32)[None, :], P(None, None)
     else:
-        positions, positions_spec = position_ids.astype(jnp.float32), P(_BATCH_AXES, None)
+        positions = position_ids.astype(jnp.float32)
+        # A table shared by the whole batch ([1, S]) stays replicated; it cannot be split over the batch shards.
+        positions_spec = P(None, None) if positions.shape[0] == 1 else P(_BATCH_AXES, None)
 
     def local(x, positions):
         cos, sin = rope_tables(positions, x.shape[-1] // 4, rope.theta)
