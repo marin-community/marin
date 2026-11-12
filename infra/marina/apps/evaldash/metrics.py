@@ -275,6 +275,11 @@ def cell_payload(measurement: Measurement) -> dict:
         "interval_kind": interval.kind.value,
         "metric": measurement.metric,
         "metric_kind": measurement.kind.value,
+        "repeat_aggregation": (
+            measurement.repeat_aggregation.model_dump(mode="json")
+            if measurement.repeat_aggregation is not None
+            else None
+        ),
         "declared": measurement.declared,
         "n_scored": coverage.n_scored,
         "n_benchmark": coverage.n_benchmark,
