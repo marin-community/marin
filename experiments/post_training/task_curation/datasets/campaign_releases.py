@@ -7,6 +7,8 @@ Each entry pins an immutable Hugging Face revision in the RL Data Atlas.
 Rebuilt TaskCompendium cohorts use ``prebuilt.import_prebuilt`` to validate and
 admit their published tasks without repeating conversion. Their qualification
 evidence and oversight levels describe the checks behind admission.
+Native Harbor cohorts use ``prebuilt.import_harbor_prebuilt`` and require
+exact-package control receipts for admission.
 
 Legacy Snowball Smartie releases remain inventory pointers: their host-local
 image locators, absent image bytes and omitted verifier material cannot be used

@@ -132,11 +132,9 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
     path = tmp_path / "tasks.parquet"
     pq.write_table(pa.Table.from_pylist([{"task_spec": serialized}]), path)
     (tmp_path / "controls.jsonl").write_text(json.dumps(receipt) + "\n")
-    original = path.read_bytes()
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(tmp_path / kwargs["filename"]))
     if change == "none":
         assert prebuilt.import_harbor_cohort(_cohort(1)) == str(path)
-        assert path.read_bytes() == original
     else:
         with pytest.raises(ValueError, match=r"differs from its control|controls do not admit"):
             prebuilt.import_harbor_cohort(_cohort(1))

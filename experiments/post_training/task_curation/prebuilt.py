@@ -7,6 +7,8 @@ A converted dataset is published once and then read back, never regenerated: the
 published revision is the artifact a reader and a run both consume. This stage
 downloads the pinned revision through the cached Hugging Face login, validates every
 row as a task spec under the admission predicates, and records what it admitted.
+Native Harbor cohorts use ``import_harbor_prebuilt`` and require exact-package
+control receipts for admission.
 
 It converts nothing, so it cannot improve on the published cohort's review; the
 source's oversight level and evidence describe the qualification the publish recorded.
