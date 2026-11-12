@@ -75,6 +75,7 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
+from experiments.post_training.long_loop.sft_runtime.insert_dataset import InsertedDataset
 from experiments.post_training.long_loop.sft_runtime.model import (
     OFFLOAD_CARRY_REMAT_MODE,
     GrugModelConfig,
@@ -445,6 +446,17 @@ class FlopsBaseline:
 
 
 @dataclass(frozen=True)
+class InsertConfig:
+    """Extra rows spread evenly over the whole schedule without reordering the main mixture.
+
+    ``data`` stages count rows (it is read with batch size 1). See ``InsertedDataset``.
+    """
+
+    data: LmDataConfig
+    rows: int
+
+
+@dataclass(frozen=True)
 class GrugRunConfig:
     """Top-level config for grug training."""
 
@@ -473,6 +485,7 @@ class GrugRunConfig:
     max_retries_preemption: int = 0
     max_retries_failure: int = 0
     max_task_failures: int = 10
+    insert: InsertConfig | None = None
 
 
 def build_train_dataset(
@@ -1268,8 +1281,21 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 batch_schedule=batch_schedule,
                 key=data_key,
             )
+            loader_dataset: AsyncDataset[GrugLmExample] = train_dataset
+            if config.insert is not None:
+                loader_dataset = InsertedDataset(
+                    train_dataset,
+                    build_train_dataset(
+                        config.insert.data,
+                        max_seq_len=config.model.max_seq_len,
+                        batch_schedule=BatchSchedule(1),
+                        key=jax.random.fold_in(data_key, 1),
+                    ),
+                    rows=config.insert.rows,
+                    total=batch_schedule.global_data_offset_by_step(config.trainer.trainer.num_train_steps),
+                )
             train_loader = build_train_loader(
-                train_dataset,
+                loader_dataset,
                 batch_schedule=batch_schedule,
                 mesh=mesh,
             )

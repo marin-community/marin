@@ -4,6 +4,8 @@
 import hashlib
 import json
 import shutil
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -455,3 +457,50 @@ def test_copied_native_start_must_match_its_receipt(tmp_path):
         check_initializer(str(root), "native_copy")
     with pytest.raises(ValueError, match="Unknown initializer evidence"):
         check_initializer(str(root), "guess")
+
+
+def test_b2_arms_differ_only_in_the_contributor_insert(tmp_path, monkeypatch):
+    long_loop = SPEC.parents[1]
+    resolved = {}
+    for share in (0.0, 0.05):
+        out = tmp_path / str(share)
+        subprocess.run(
+            [
+                sys.executable,
+                str(long_loop / "runs/b2/make_specs.py"),
+                str(long_loop / "specs"),
+                str(long_loop / "runs/t436/specs"),
+                str(out),
+                "0" * 40,
+                "--contrib-loss-share",
+                str(share),
+            ],
+            check=True,
+        )
+        resolved[share] = resolve_spec(out / "round1.yaml", smoke=False)
+    replay, contrib = resolved[0.0], resolved[0.05]
+    assert "insert" not in replay["sft"] and "sft_insert" not in replay["datasets"]
+    insert = contrib["sft"].pop("insert")
+    tags = [arm["sft"]["trainer"]["trainer"]["tracker"].pop("tags") for arm in (replay, contrib)]
+    assert tags == [["long-loop", "b2", "replay"], ["long-loop", "b2", "contrib-5pct-loss"]]
+    assert replay["sft"] == contrib["sft"]
+    for arm, tag in zip((replay, contrib), tags, strict=True):
+        arm["sft"]["trainer"]["trainer"]["tracker"]["tags"] = tag
+    assert stage_blockers(contrib, "export") == []
+    provenance = contrib["datasets"]["sft_insert"]["provenance"]["insert"]
+    assert insert["rows"] == provenance["rows"] and 0 < insert["rows"] < 100 * 256
+    stages = insert["data"]["train_weights"]
+    assert [start for start, _ in stages] == [452 * i for i in range(len(stages))]
+    assert len(stages) * 452 >= insert["rows"]
+    monkeypatch.setenv("MARIN_PREFIX", contrib["storage"]["output_prefix"])
+    config = spec_pipeline.fresh_sft_config(
+        output="/tmp/b2/sft",
+        initializer=contrib["initializer"]["uri"],
+        recipe={**contrib["sft"], "insert": insert},
+        run_id="b2",
+    )
+    assert config.insert.rows == insert["rows"] and config.insert.data.mixture_block_size == 1
+    assert config.trainer.trainer.mp.param_dtype == jnp.float32 and config.trainer.reseed_special_token_rows is False
+    assert config.optimizer.learning_rate == 5e-5 and config.optimizer.adam_lr == 5e-5
+    assert config.stop_after_steps == config.trainer.trainer.num_train_steps == 100
+    assert config.optimizer.decay == 10

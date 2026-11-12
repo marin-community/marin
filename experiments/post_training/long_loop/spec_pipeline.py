@@ -89,7 +89,10 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             version=version,
             output=OUT,
             manifests=(
-                {"sft": datasets["sft"], "initializer": resolved["initializer"]}
+                {
+                    "initializer": resolved["initializer"],
+                    **{key: datasets[key] for key in ("sft", "sft_insert") if key in datasets},
+                }
                 if through in {"sft", "export"}
                 else datasets
             ),

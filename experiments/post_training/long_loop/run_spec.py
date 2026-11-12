@@ -30,6 +30,8 @@ class DatasetPins:
     heldout: FilePin | None
     exclusions: FilePin | None
     evaluation: FilePin
+    # Rows spread evenly through the SFT stream; see sft_runtime/insert_dataset.py.
+    sft_insert: FilePin | None = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +105,8 @@ def resolve_spec(path: Path, *, smoke: bool) -> dict:
         "blockers": [],
     }
     for name, pin in vars(spec.datasets).items():
+        if pin is None and name == "sft_insert":
+            continue
         if pin is None:
             result["blockers"].append(f"Missing admitted {name} manifest")
             continue
@@ -168,6 +172,9 @@ def resolve_spec(path: Path, *, smoke: bool) -> dict:
                 raise ValueError("Best-checkpoint validation cardinality differs from the pinned held-out manifest")
     # Dataset manifests are the sole data authority, independent of stage files.
     result["sft"]["data"] = copy.deepcopy(result["datasets"]["sft"]["data"])
+    insert = result["datasets"].get("sft_insert")
+    if insert is not None:
+        result["sft"]["insert"] = {"data": copy.deepcopy(insert["data"]), "rows": insert["rows"]}
     result["gpu_peaks"] = allocation_peaks(result)
     result["resolved_sha256"] = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
     return result
@@ -221,4 +228,6 @@ def stage_blockers(resolved: dict, through: str) -> list[str]:
         "initializer": resolved["initializer"],
         "tokenizer": resolved["tokenizer"],
     }
+    if "sft_insert" in resolved["datasets"]:
+        documents["sft_insert"] = resolved["datasets"]["sft_insert"]
     return [f"{name}: {reason}" for name, value in documents.items() for reason in value.get("admission_pending", [])]
