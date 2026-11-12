@@ -271,10 +271,11 @@ def test_actor_unsafe_reasons_distinguish_snapshot_budget_build_and_host_image()
             )
         ]
     )
-    assert "Unresolved Docker build context" in daytona_unsafe_reasons(build)["unbuilt_image"]
+    assert set(daytona_unsafe_reasons(build)) == {"unbuilt_image"}
     assert daytona_unsafe_counts(build) == {"unbuilt_image": 1}
     locked = measure_envelopes([(actor({"command_semantics": "linux_process", "packages_lock": "actor.lock"}), {})])
-    assert "requires a registry image or Docker build context" in daytona_unsafe_reasons(locked)["host_image_required"]
+    assert set(daytona_unsafe_reasons(locked)) == {"host_image_required"}
+    assert daytona_unsafe_counts(locked) == {"host_image_required": 1}
 
 
 @pytest.mark.usefixtures("taskcompendium_environment")

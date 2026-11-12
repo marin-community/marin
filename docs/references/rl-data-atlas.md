@@ -319,12 +319,17 @@ with Ctrl-C when finished; its database is disposable.
 
 ### Source identity and overlap review
 
-`source_duplicates fingerprint` reads complete converted populations using the
-same manifest shape as the backend survey. It records seed-0 samples of at most
+`source_duplicates fingerprint` reads complete converted TaskSpec populations
+before admission using the [backend survey's manifest shape](#backend-survey).
+It records seed-0 samples of at most
 20 normalized tasks, instruction MinHash sketches, reference/test hashes,
 upstream dataset revisions, identifier/URL hashes and within-source duplicate
-counts. Pin each immutable artifact URI, its SHA-256 and the declaration digest
+counts. Pin each source's fingerprint artifact URI, its SHA-256 and task-input digest
 in `experiments/post_training/task_curation/source_fingerprint_index.json`.
+The task-input digest binds the consumed dataset revision, pipeline, converter
+revision and the actor census's `task_specs_sha256` for that population.
+Catalog titles, counts and assessment
+evidence can change while reusing an unchanged population's fingerprint.
 
 The `Atlas source overlap` workflow detects added or changed declarations and
 requires their fingerprints. It ranks candidates mechanically and reviews only
