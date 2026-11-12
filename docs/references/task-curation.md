@@ -717,6 +717,9 @@ graded real tasks end to end through the production grader:
 Record the judge definition, its endpoint at validation time, the verdicts and
 the agreement in the source's oversight evidence. A judge that cannot be reached
 or validated leaves the source at oversight `none`.
+The production reference and checklist graders retain each parsed provider
+response, including token usage, under `judge_responses`. Confirm that every
+remote prompt plus its completion budget fits the tier's declared context.
 
 ## Sources without oracle solutions
 

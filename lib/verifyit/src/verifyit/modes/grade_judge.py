@@ -27,7 +27,7 @@ import string
 import time
 import unicodedata
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -138,6 +138,7 @@ class _ValidatedJudgeSpec:
 class _CompletionAttempt:
     finish_reason: str | None
     completion_tokens: int | None
+    response: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -745,6 +746,7 @@ def _ask(
                 _CompletionAttempt(
                     finish_reason=choice.finish_reason,
                     completion_tokens=response.usage.completion_tokens if response.usage else None,
+                    response=response.model_dump(mode="json"),
                 )
             )
             if choice.finish_reason == "length":
@@ -766,7 +768,14 @@ def _ask(
 
 
 def _attempt_detail(attempts: tuple[_CompletionAttempt, ...] | list[_CompletionAttempt]) -> dict[str, object]:
-    return {"attempt_count": len(attempts), "attempts": [asdict(attempt) for attempt in attempts]}
+    return {
+        "attempt_count": len(attempts),
+        "attempts": [
+            {"finish_reason": attempt.finish_reason, "completion_tokens": attempt.completion_tokens}
+            for attempt in attempts
+        ],
+        "judge_responses": [attempt.response for attempt in attempts],
+    }
 
 
 def _completion_budgets(spec: JudgeSpec) -> tuple[int, ...]:
