@@ -31,7 +31,7 @@ from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TI
 from experiments.post_training.long_loop.pi_rl_data import SOURCE, image_context_digest
 from experiments.post_training.long_loop.rl_dataset_admission import file_digest
 from experiments.post_training.long_loop.swe_admission import build_image, run_controls
-from experiments.post_training.long_loop.swe_verified_data import CURRENT_GRADER, RECIPE_VERSION, RUNTIME, prepare_task
+from experiments.post_training.long_loop.swe_verified_data import RUNTIME, prepare_task
 
 
 def publish_directory(directory: Path, destination: str) -> None:
@@ -109,7 +109,6 @@ def run_shard(
                         verifier_timeout=verifier_timeout,
                         harbor_verifier_timeout=harbor_timeout,
                         dependency_constraints="",
-                        profile=CURRENT_GRADER,
                     )
                     for row in rows
                 ]
@@ -199,9 +198,6 @@ def main() -> None:
         if file_digest(root / "manifest.json") != args.manifest_sha256:
             raise ValueError("The pinned source manifest changed")
         manifest = json.loads((root / "manifest.json").read_text())
-        runtime_uri = str(output / "grader.py")
-        StoragePath(runtime_uri).write_bytes(CURRENT_GRADER.runtime)
-        profiles = {file_digest(RUNTIME): {"uri": runtime_uri, "version": RECIPE_VERSION}}
         failures = []
         for name in ("agentic-train.parquet", "validation.parquet"):
             local = root / name
@@ -220,7 +216,6 @@ def main() -> None:
                             verifier_timeout=args.verifier_timeout,
                             harbor_verifier_timeout=args.harbor_verifier_timeout,
                             dependency_constraints="",
-                            profile=CURRENT_GRADER,
                         )
                     except ValueError as error:
                         failures.append({"task_id": task.id, "reason": str(error)})
@@ -298,9 +293,7 @@ def main() -> None:
         )
         if any(status != "succeeded" for status in statuses):
             raise RuntimeError("Some CPU admission shards failed; inspect terminal.json before recovery")
-        finalize_admission(
-            [args.output_prefix], args.output_prefix, workers=32, profiles=profiles, replacement_sources=()
-        )
+        finalize_admission([args.output_prefix], args.output_prefix, workers=32)
 
 
 if __name__ == "__main__":

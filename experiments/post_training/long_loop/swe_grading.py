@@ -27,23 +27,8 @@ CONTROL_BIN = Path("/opt/long-loop-control-bin")
 WORKSPACE = Path("/testbed")
 AGENT_UID = 10001
 GRADER_UID = 10002
-VERIFIER_FINISH_MARGIN = 120
 PYTEST_CONFIGS = frozenset({"pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "conftest.py"})
 SHA = re.compile(r"[0-9a-f]{40}")
-SETUP_CACHE_DIRECTORIES = frozenset(
-    {
-        ".venv",
-        "venv",
-        ".tox",
-        ".nox",
-        ".git",
-        "__pycache__",
-        ".pytest_cache",
-        ".mypy_cache",
-        ".ruff_cache",
-        "node_modules",
-    }
-)
 
 
 @dataclass(frozen=True)
@@ -177,38 +162,6 @@ def restore_paths(repo: Path, workspace: Path, pins: TaskPins, paths: list[str])
             break
 
 
-def snapshot_setup_files(workspace: Path, destination: Path) -> None:
-    """Preserve setup-generated build inputs that a fresh Git worktree omits."""
-    destination.mkdir()
-    paths = set()
-    for options in (("--others", "--exclude-standard"), ("--others", "--ignored", "--exclude-standard")):
-        paths.update(checked(git(workspace, "ls-files", "-z", *options)).decode().split("\0"))
-    for name in sorted(paths - {""}):
-        relative = PurePosixPath(name)
-        if relative.is_absolute() or ".." in relative.parts:
-            raise ValueError("Generated setup file escapes its workspace")
-        if SETUP_CACHE_DIRECTORIES.intersection(relative.parts):
-            continue
-        source = workspace / name
-        if not source.is_file():
-            continue
-        target = destination / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        # Capture bytes before agent access, never a symlink into mutable state.
-        shutil.copyfile(source, target)
-
-
-def grading_scratch_permissions(workspace: Path) -> None:
-    """Permit test scratch creation while preserving root-owned files from replacement."""
-    for path in workspace.rglob("*"):
-        if path.is_file() and not path.is_symlink():
-            os.chown(path, 0, GRADER_UID)
-            path.chmod((path.stat().st_mode & 0o777 & ~0o022) | 0o440)
-    for path in (workspace, *(p for p in workspace.rglob("*") if p.is_dir() and not p.is_symlink())):
-        os.chown(path, 0, GRADER_UID)
-        path.chmod(0o1775)
-
-
 def bootstrap(pins: TaskPins) -> None:
     """Materialize the task and freeze its declared dependencies before agent access."""
     started = time.time()
@@ -268,7 +221,6 @@ def bootstrap(pins: TaskPins) -> None:
     (TRUST / "setup.stdout").write_bytes(setup.stdout)
     (TRUST / "setup.stderr").write_bytes(setup.stderr)
     checked(setup)
-    snapshot_setup_files(WORKSPACE, TRUST / "setup-files")
     phases["declared_dependency_install"] = time.time() - dependencies_started
     freeze_started = time.time()
     python = executables["python3"]
@@ -325,6 +277,7 @@ def bootstrap(pins: TaskPins) -> None:
         "for n in (d.read_text('top_level.txt') or '').splitlines()}; "
         "roots=[pathlib.Path(p) for p in sys.path if p=='/testbed' or p.startswith('/testbed/')]; "
         "modules.update(p.parent.name for root in roots for p in root.glob('*/__init__.py')); "
+        "modules.update(p.stem for root in roots for p in root.glob('*.py') if p.stem not in ('setup','conftest')); "
         "print(json.dumps({'packages':sorted((d.metadata.get('Name') or '',d.version) for d in ds),"
         "'plugins':sorted(e.value for e in m.entry_points(group='pytest11')),'candidate_modules':sorted(modules)}))"
     )
@@ -342,19 +295,6 @@ def bootstrap(pins: TaskPins) -> None:
             for name in (*discovered, *json.loads(packages)["candidate_modules"])
             if name and not name.startswith("_") and name not in ("tests", "test")
         }
-    )
-    origin_probe = (
-        "import importlib.util,json,sys; names=json.loads(sys.argv[1]); "
-        "specs={n:importlib.util.find_spec(n) for n in names}; "
-        "print(json.dumps([n for n,s in specs.items() if s is not None and s.origin "
-        "and (s.origin=='/testbed' or s.origin.startswith('/testbed/'))]))"
-    )
-    modules = json.loads(
-        checked(
-            command(
-                [str(frozen / "bin/python"), "-I", "-c", origin_probe, json.dumps(modules)], cwd=WORKSPACE, timeout=60
-            )
-        )
     )
     if not modules:
         raise ValueError("No declared editable project import roots; task needs an explicit import contract")
@@ -418,8 +358,6 @@ def grade(tests: Path, logs: Path) -> None:
             )
             checked(result)
         restore_paths(TRUST / "repository.git", WORKSPACE, pins, trusted_paths)
-        shutil.copytree(TRUST / "setup-files", WORKSPACE, dirs_exist_ok=True)
-        grading_scratch_permissions(WORKSPACE)
         module_probe = (
             "import importlib,json,pathlib; "
             f"names={json.loads((TRUST / 'candidate-modules.json').read_text())!r}; "
@@ -498,7 +436,7 @@ def grade(tests: Path, logs: Path) -> None:
             cwd=Path("/"),
             env=environment,
             capture_output=True,
-            timeout=pins.verifier_timeout + VERIFIER_FINISH_MARGIN,
+            timeout=pins.verifier_timeout,
             check=False,
         )
         (logs / "verifyit.stdout").write_bytes(result.stdout)

@@ -7,12 +7,12 @@ import argparse
 import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.long_loop.swe_verified_data import load_grader_profiles
+from experiments.post_training.long_loop.rl_dataset_admission import file_digest
+from experiments.post_training.long_loop.swe_verified_data import RUNTIME
 
 
 def committed_task(root: str, task_id: str) -> dict | None:
@@ -25,34 +25,27 @@ def committed_task(root: str, task_id: str) -> dict | None:
     inventory = json.loads(inventory_raw)
     raw = (path / "receipt.json").read_bytes()
     checksum = hashlib.sha256(raw).hexdigest()
-    receipt = json.loads(raw)
-    if checksum != inventory["receipt.json"]["sha256"] or receipt["task_id"] != task_id:
+    if checksum != inventory["receipt.json"]["sha256"] or json.loads(raw)["task_id"] != task_id:
         raise ValueError(f"Published control receipt differs from its commit inventory: {root}")
     return {
         "task_id": task_id,
         "uri": root,
         "receipt_sha256": checksum,
         "inventory_sha256": hashlib.sha256(inventory_raw).hexdigest(),
-        "task_sha256": receipt["task_sha256"],
-        "status": receipt["status"],
     }
 
 
-def finalize_admission(
-    sources: list[str], output: str, workers: int, profiles: dict[str, dict], replacement_sources: tuple[str, ...]
-) -> dict:
+def finalize_admission(sources: list[str], output: str, workers: int) -> dict:
     """Reject missing or duplicate commits; reference existing evidence without copying it."""
     expected = set()
     candidates = []
     source_pins = []
     manifest = None
-    load_grader_profiles(profiles)
-    superseded = []
     for index, source in enumerate(sources):
         root = StoragePath(source)
         raw = (root / "plan.json").read_bytes()
         plan = json.loads(raw)
-        if not plan["submitted"] or plan["runtime_sha256"] not in profiles:
+        if not plan["submitted"] or plan["runtime_sha256"] != file_digest(RUNTIME):
             raise ValueError("Admission plan is incomplete or uses a different grader")
         if json.loads((root / "input-exclusions.json").read_text()):
             raise ValueError("Source-pin exclusions require explicit resolution")
@@ -68,45 +61,23 @@ def finalize_admission(
         for shard in plan["shards"]:
             for task_id in shard["task_ids"]:
                 key = hashlib.sha256(task_id.encode()).hexdigest()
-                candidates.append(
-                    (
-                        str(root / "shards" / f"{shard['index']:04d}" / "tasks" / key),
-                        task_id,
-                        plan["runtime_sha256"],
-                        source,
-                    )
-                )
-
-    def read_candidate(candidate):
-        uri, task_id, runtime_sha256, source = candidate
-        receipt = committed_task(uri, task_id)
-        return None if receipt is None else {**receipt, "runtime_sha256": runtime_sha256, "source": source}
+                candidates.append((str(root / "shards" / f"{shard['index']:04d}" / "tasks" / key), task_id))
 
     receipts = {}
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for receipt in pool.map(read_candidate, candidates):
+        for receipt in pool.map(lambda pair: committed_task(*pair), candidates):
             if receipt is None:
                 continue
             task_id = receipt["task_id"]
             if task_id in receipts:
-                previous = receipts[task_id]
-                if (
-                    receipt["source"] not in replacement_sources
-                    or previous["status"] != "excluded"
-                    or previous["task_sha256"] == receipt["task_sha256"]
-                ):
-                    raise ValueError(f"Duplicate committed controls require reconciliation: {task_id}")
-                superseded.append(previous)
-            elif receipt["source"] in replacement_sources:
-                raise ValueError(f"Repair lacks a previous excluded control: {task_id}")
+                raise ValueError(f"Duplicate committed controls require reconciliation: {task_id}")
             receipts[task_id] = receipt
     if set(receipts) != expected:
         raise ValueError(f"Admission lacks committed controls for {len(expected - set(receipts))} tasks")
     result = {
         "complete": True,
         "manifest_sha256": manifest,
-        "runtime_profiles": profiles,
-        "superseded": superseded,
+        "runtime_sha256": file_digest(RUNTIME),
         "sources": source_pins,
         "tasks": [receipts[task_id] for task_id in sorted(receipts)],
     }
@@ -126,12 +97,8 @@ def main() -> None:
     parser.add_argument("--source", action="append", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--workers", type=int, required=True)
-    parser.add_argument("--profiles", type=Path, required=True)
-    parser.add_argument("--replacement-source", action="append", default=[])
     args = parser.parse_args()
-    result = finalize_admission(
-        args.source, args.output, args.workers, json.loads(args.profiles.read_text()), tuple(args.replacement_source)
-    )
+    result = finalize_admission(args.source, args.output, args.workers)
     print(json.dumps({"committed_tasks": len(result["tasks"])}))
 
 

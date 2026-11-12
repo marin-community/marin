@@ -18,12 +18,7 @@ from experiments.post_training.long_loop.repartition_swe_admission import recove
 from experiments.post_training.long_loop.rl_dataset_admission import file_digest
 from experiments.post_training.long_loop.seal_swe_admission import admitted, load_admission
 from experiments.post_training.long_loop.swe_admission_cluster import admission_job, publish_directory
-from experiments.post_training.long_loop.swe_verified_data import RECIPE_VERSION, RUNTIME
-
-
-@pytest.fixture
-def grader_profiles():
-    return {file_digest(RUNTIME): {"uri": str(RUNTIME), "version": RECIPE_VERSION}}
+from experiments.post_training.long_loop.swe_verified_data import RUNTIME
 
 
 def test_actual_admission_request_compiles_native_privileged_profile():
@@ -33,7 +28,7 @@ def test_actual_admission_request_compiles_native_privileged_profile():
     assert request.max_retries_failure == request.max_retries_preemption == 0
 
 
-def test_complete_control_evidence_never_promotes_infra_zero_or_degenerate_task(tmp_path, grader_profiles):
+def test_complete_control_evidence_never_promotes_infra_zero_or_degenerate_task(tmp_path):
     task_ids = ["swe/good", "swe/degenerate", "swe/infra", "swe/swesmith-09581"]
     plan = {
         "submitted": True,
@@ -55,7 +50,6 @@ def test_complete_control_evidence_never_promotes_infra_zero_or_degenerate_task(
         }
         receipt = {
             "task_id": task_id,
-            "task_sha256": hashlib.sha256(task_id.encode()).hexdigest(),
             "status": "admitted",
             "controls": {"bug": bug, "reference": {"status": "scored", "reward": 1}},
         }
@@ -64,7 +58,7 @@ def test_complete_control_evidence_never_promotes_infra_zero_or_degenerate_task(
             (staged / "bootstrap").mkdir()
             (staged / "bootstrap/dependencies.json").write_text(json.dumps({"packages": [["pytest", "8.4.2"]]}))
         publish_directory(staged, str(task_root))
-    finalize_admission([str(tmp_path)], str(tmp_path), workers=2, profiles=grader_profiles, replacement_sources=())
+    finalize_admission([str(tmp_path)], str(tmp_path), workers=2)
     rows, _ = load_admission(str(tmp_path), workers=2)
     assert [task_id for task_id, row in rows.items() if admitted(row["receipt"])] == ["swe/good"]
     dependency = shard / "tasks" / hashlib.sha256(b"swe/good").hexdigest() / "bootstrap/dependencies.json"
@@ -78,7 +72,7 @@ def test_complete_control_evidence_never_promotes_infra_zero_or_degenerate_task(
         load_admission(str(tmp_path), workers=2)
 
 
-def test_recovery_index_preserves_completed_receipts_and_rejects_duplicate_commits(tmp_path, grader_profiles):
+def test_recovery_index_preserves_completed_receipts_and_rejects_duplicate_commits(tmp_path):
     original, recovery = tmp_path / "original", tmp_path / "recovery"
     for root, ids in ((original, ["swe/one", "swe/two"]), (recovery, ["swe/two"])):
         root.mkdir()
@@ -96,26 +90,18 @@ def test_recovery_index_preserves_completed_receipts_and_rejects_duplicate_commi
     for root, task_id in ((original, "swe/one"), (recovery, "swe/two")):
         staged = tmp_path / task_id.replace("/", "-")
         staged.mkdir()
-        (staged / "receipt.json").write_text(
-            json.dumps(
-                {"task_id": task_id, "status": "excluded", "task_sha256": hashlib.sha256(task_id.encode()).hexdigest()}
-            )
-        )
+        (staged / "receipt.json").write_text(json.dumps({"task_id": task_id, "status": "excluded"}))
         key = hashlib.sha256(task_id.encode()).hexdigest()
         publish_directory(staged, str(root / "shards/0000/tasks" / key))
     sources = [str(original), str(recovery)]
-    index = finalize_admission(
-        sources, str(tmp_path / "final"), workers=2, profiles=grader_profiles, replacement_sources=()
-    )
+    index = finalize_admission(sources, str(tmp_path / "final"), workers=2)
     assert [row["task_id"] for row in index["tasks"]] == ["swe/one", "swe/two"]
     assert index["tasks"][0]["uri"].startswith(str(original))
     assert index["tasks"][1]["uri"].startswith(str(recovery))
     duplicate = original / "shards/0000/tasks" / hashlib.sha256(b"swe/two").hexdigest()
     publish_directory(tmp_path / "swe-two", str(duplicate))
     with pytest.raises(ValueError, match="Duplicate committed"):
-        finalize_admission(
-            sources, str(tmp_path / "duplicate"), workers=2, profiles=grader_profiles, replacement_sources=()
-        )
+        finalize_admission(sources, str(tmp_path / "duplicate"), workers=2)
 
 
 def test_repartition_requires_terminal_workers_and_preserves_existing_evidence(tmp_path):
@@ -141,9 +127,7 @@ def test_repartition_requires_terminal_workers_and_preserves_existing_evidence(t
     )
     staged = tmp_path / "staged"
     staged.mkdir()
-    (staged / "receipt.json").write_text(
-        json.dumps({"task_id": "swe/one", "status": "excluded", "task_sha256": hashlib.sha256(b"swe/one").hexdigest()})
-    )
+    (staged / "receipt.json").write_text(json.dumps({"task_id": "swe/one", "status": "excluded"}))
     committed = admission / "shards/0000/tasks" / hashlib.sha256(b"swe/one").hexdigest()
     publish_directory(staged, str(committed))
     partial = admission / "shards/0000/tasks" / hashlib.sha256(b"swe/two").hexdigest()
@@ -162,40 +146,3 @@ def test_repartition_requires_terminal_workers_and_preserves_existing_evidence(t
     assert (partial / "receipt.json").read_text() == "uncommitted bytes"
     assert json.loads((committed / "receipt.json").read_text())["task_id"] == "swe/one"
     assert pq.read_table(output / "agentic-train.parquet").to_pylist() == [{"task_spec": json.dumps({"id": "swe/two"})}]
-
-
-def test_repaired_profile_supersedes_only_excluded_task_with_new_exact_package(tmp_path, grader_profiles):
-    original, repaired = tmp_path / "original", tmp_path / "repaired"
-    old_runtime = tmp_path / "old-grader.py"
-    old_runtime.write_text("# preserved admitted guest bytes\n")
-    old_sha = file_digest(old_runtime)
-    profiles = {**grader_profiles, old_sha: {"uri": str(old_runtime), "version": "preserved"}}
-    for root, runtime_sha, status in ((original, old_sha, "excluded"), (repaired, file_digest(RUNTIME), "admitted")):
-        root.mkdir()
-        (root / "plan.json").write_text(
-            json.dumps(
-                {
-                    "submitted": True,
-                    "manifest_sha256": "corpus",
-                    "runtime_sha256": runtime_sha,
-                    "shards": [{"index": 0, "task_ids": ["swe/task"]}],
-                }
-            )
-        )
-        (root / "input-exclusions.json").write_text("[]")
-        staged = root / "staged"
-        staged.mkdir()
-        (staged / "receipt.json").write_text(
-            json.dumps({"task_id": "swe/task", "status": status, "task_sha256": runtime_sha})
-        )
-        publish_directory(staged, str(root / "shards/0000/tasks" / hashlib.sha256(b"swe/task").hexdigest()))
-    index = finalize_admission([str(original), str(repaired)], str(tmp_path / "final"), 2, profiles, (str(repaired),))
-    assert index["tasks"][0]["runtime_sha256"] == file_digest(RUNTIME)
-    assert index["superseded"][0]["runtime_sha256"] == old_sha
-    receipt_path = original / "staged/receipt.json"
-    receipt = json.loads(receipt_path.read_text())
-    receipt["status"] = "admitted"
-    receipt_path.write_text(json.dumps(receipt))
-    publish_directory(original / "staged", str(original / "shards/0000/tasks" / hashlib.sha256(b"swe/task").hexdigest()))
-    with pytest.raises(ValueError, match="Duplicate committed"):
-        finalize_admission([str(original), str(repaired)], str(tmp_path / "invalid"), 2, profiles, (str(repaired),))
