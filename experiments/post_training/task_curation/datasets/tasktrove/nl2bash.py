@@ -48,6 +48,7 @@ def nl2bash_environment(files: dict) -> EnvironmentRequirements:
         docker_image=lowered.base_ref,
         working_directory=lowered.working_directory,
         setup_commands=lowered.setup_commands,
+        environment_variables=lowered.environment_variables,
     )
 
 
@@ -98,7 +99,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name="tasktrove-nl2bash",
                 source=tasktrove_source(CONFIG),
                 convert=TaskTroveConverter(CONFIG, convert_nl2bash_task),
-                version="2",
+                version="3",
                 intended_use=IntendedUse.TRAIN,
                 rubric=NL2BASH_RUBRIC,
                 controls=Controls(golden=solve_script),

@@ -6,8 +6,8 @@
 Each source ships one pytest file and, usually, a ``solution/solution.py`` oracle. The agent writes
 files under ``/app``; unitsyn's agent writes the fixed solution file instead. The hidden tests run
 with the grader packages (``GRADER_PACKAGES``). The sources differ only by
-configuration, rubric and, for the Stack Overflow tasks, the agent image carrying their dependencies;
-the grader packages include the same ones, so a submission that imports one there grades here.
+configuration and rubric. Each agent environment replays its archived Dockerfile on its pinned base;
+the grader runs separately with ``GRADER_PACKAGES``.
 """
 
 from dataclasses import dataclass, field, replace
@@ -174,7 +174,7 @@ def convert_python_tests(row: RawRow, context: ConversionContext) -> NormalizedT
 
 
 def convert_stack_pytest(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
-    """Capture the workspace written in the image with Stack Overflow dependencies."""
+    """Capture the workspace written in the archived Stack Overflow environment."""
     return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
@@ -201,7 +201,7 @@ class PythonTestsSource:
     convert: Converter
     rubric: str
     info: SourceInfo = field(kw_only=True)
-    version: str = "4"
+    version: str = "5"
 
 
 SOURCES = {
@@ -229,7 +229,7 @@ SOURCES = {
         "DCAgent__exp_rpt_curriculum-medium-v2",
         convert_python_tests,
         CURRICULUM_MEDIUM_RUBRIC,
-        version="5",
+        version="6",
         info=replace(
             SourceInfo(
                 id="Task Trove:DCAgent__exp_rpt_curriculum-medium-v2",
@@ -250,7 +250,7 @@ SOURCES = {
         "DCAgent__exp_rpt_e2egit-v2",
         convert_python_tests,
         E2EGIT_RUBRIC,
-        version="7",
+        version="8",
         info=replace(
             SourceInfo(
                 id="Task Trove:DCAgent__exp_rpt_e2egit-v2",

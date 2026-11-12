@@ -259,6 +259,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "laion__nemotron-gym-competitive-coding-v2",
             convert_competitive_coding_task,
             COMPETITIVE_CODING_RUBRIC,
+            version="2",
             info=replace(
                 SourceInfo(
                     id="Task Trove:laion__nemotron-gym-competitive-coding-v2",

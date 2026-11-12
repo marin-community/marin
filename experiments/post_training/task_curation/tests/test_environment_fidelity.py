@@ -91,3 +91,24 @@ def test_replaying_the_archive_steps_counts_as_using_its_environment():
     assert environment_unused(faithful, archive) is None
     stale = {**faithful, "environment_requirements": {**faithful["environment_requirements"], "setup_commands": []}}
     assert "does not replay" in environment_unused(stale, archive)
+
+
+def test_lowering_retains_runtime_environment_and_working_directory():
+    archive = {
+        "environment/Dockerfile": (
+            b'FROM python:3.11-slim-bookworm\nENV LABEL="two words" PYTHONUNBUFFERED=1\nWORKDIR /app\n'
+        )
+    }
+    lowered = lower_environment(archive["environment/Dockerfile"].decode(), PINNED_BASES)
+    assert lowered.environment_variables == {"LABEL": "two words", "PYTHONUNBUFFERED": "1"}
+    requirements = {
+        "docker_image": lowered.base_ref,
+        "working_directory": "/app",
+        "setup_commands": list(lowered.setup_commands),
+        "environment_variables": lowered.environment_variables,
+    }
+    assert environment_unused({"environment_requirements": requirements}, archive) is None
+    missing_variables = {**requirements, "environment_variables": {}}
+    assert "environment variables" in environment_unused({"environment_requirements": missing_variables}, archive)
+    wrong_directory = {**requirements, "working_directory": "/workspace"}
+    assert "working directory" in environment_unused({"environment_requirements": wrong_directory}, archive)

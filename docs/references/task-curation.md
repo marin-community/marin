@@ -413,6 +413,13 @@ uv run --isolated --project vendor/harbor --extra runtime --no-default-groups --
 An `Environment` declares grader build inputs. The converter records agent and
 grader requirements on each TaskSpec; execution selects suitable Shellbox machines.
 
+TaskTrove's Python-test sources lower each archived `environment/Dockerfile` onto
+its digest-pinned base. `RUN` steps become setup commands, `WORKDIR` sets the
+working directory, and `ENV` assignments remain in `environment_variables` for
+both setup and later agent commands. An unsupported recipe is refused. Agent
+snapshot counts exclude the separate package-lock grader, which requires the
+local runtime unless its lock is built into an image.
+
 | Field | Meaning |
 |---|---|
 | `requirements` | Direct Python requirements, each an exact `name==version` pin or a `name @ https://...` URL naming a commit, compiled at build time with `uv pip compile --generate-hashes` for Python 3.12 on `x86_64-unknown-linux-gnu`, with transitive packages limited to releases before the `EXCLUDE_NEWER` cutoff in `images/build.py` so every build of an identity resolves the same lock. |
