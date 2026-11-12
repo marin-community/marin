@@ -324,8 +324,39 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/harbor-hub-skill2env-d208e05b-taskcompendium-20261112",
+        "revision": "6198459210ab98e0c9c4e021b20f50e93c41b9d4",
+        "file_hashes": {
+          "tasks.parquet": "cb96c4076ba954c96707a48f19240a1b21f58fbf375c387eb8e22d1d87edf7b0",
+          "manifest.json": "08e226a5f0f4af922abd0ea968723a9a2381c36dfb0915b82554f7c1c74478c7",
+          "README.md": "620fecc3a7e4ff1d10251180f382bb6837fd6ebbfe9b119ed573708e9b525689"
+        },
+        "input_rows": 7496,
+        "converted_rows": 7496,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 7496,
+          "required_counts": {
+            "shared": 7496
+          },
+          "declared_counts": {
+            "shared": 7496
+          },
+          "status_counts": {
+            "matched": 7496
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 7496
+          }
+        },
+        "converter_identity": "c2e831a9c09cc28493cc4c7ecf82d63acc76912da22da4dd1e2b6b09985a75b0",
+        "combined_backend_pass": "handed_off",
+        "task_specs_uri": "s3://marin-us-east-02a/marin/rl-data/atlas-disposition/2026.11.12.2/artifacts/harbor-hub-skill2env/tasks.parquet",
+        "manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas-disposition/2026.11.12.2/artifacts/harbor-hub-skill2env/manifest.json"
+      }
     },
     {
       "id": "Task Trove:AweAI-Team__CalibForge",
@@ -3582,8 +3613,39 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-laion-tulu3-sft-personas-math-sandboxes-verified-v3-5de37fd5-taskcompendium-20261112",
+        "revision": "5bdb54edd8813ad0f3839af7f09c6d252f22bc20",
+        "file_hashes": {
+          "tasks.parquet": "7dfe67bd0edf4a23cc1283f1f7f2dff51bcf8ddcba69a197e7405ef91c2601b3",
+          "manifest.json": "dcd5812bab564a17c8fe2c35c06bb26572589c1cd502b7f4a4c8fc875bba84aa",
+          "README.md": "b862b2d3e021d8d1a7ac2adda7a83db3c726db3bdf8531178baea76bbf8f0049"
+        },
+        "input_rows": 9998,
+        "converted_rows": 9998,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 9998,
+          "required_counts": {
+            "shared": 9998
+          },
+          "declared_counts": {
+            "shared": 9998
+          },
+          "status_counts": {
+            "matched": 9998
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 9998
+          }
+        },
+        "converter_identity": "a47b617ff80a30096606c113a128994bb013e20d65e55e13a016e54f3ee07c81",
+        "combined_backend_pass": "handed_off",
+        "task_specs_uri": "s3://marin-us-east-02a/marin/rl-data/atlas-disposition/2026.11.12.2/artifacts/task-trove-laion-tulu3-sft-personas-math-sandboxes-verified-v3/tasks.parquet",
+        "manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas-disposition/2026.11.12.2/artifacts/task-trove-laion-tulu3-sft-personas-math-sandboxes-verified-v3/manifest.json"
+      }
     },
     {
       "id": "Task Trove:R2E-Gym__R2E-Gym-V1",
@@ -3682,8 +3744,39 @@
       "oversight": "none",
       "oversight_evidence": null,
       "grading_environment": null,
-      "disposition": "pending_quick_conversion",
-      "disposition_reason": "Retired until a registered, pinned QUICK conversion establishes a faithful task specification."
+      "disposition": "quick_converted",
+      "disposition_reason": "Full pinned native Harbor QUICK conversion completed; private TaskCompendium upload read back with matching hashes. Quality warnings are retained; SAMPLE/FULL admission has not run.",
+      "disposition_release": {
+        "repo": "open-athena/task-trove-sankalpkj-nemotron-code-oracle-filtered-a9703112-taskcompendium-20261112",
+        "revision": "0345f49efe82c629871b0548821d6adbc2fdc1cd",
+        "file_hashes": {
+          "tasks.parquet": "8bfa97b0f6f67be59ac84c4a5273065883b3c5ceaf2ea9b48ec5c6017491a23f",
+          "manifest.json": "604cb5159e8b4777b5908afa907e48661bc3a9788bb98285429fedd65cf7bbb2",
+          "README.md": "a40e63d0cf22f09b927505ee053d96ca8ba0c1dc8e70eb7c79ed380698729a3f"
+        },
+        "input_rows": 15165,
+        "converted_rows": 15165,
+        "rejections": {},
+        "grading_environment": {
+          "assessed_tasks": 15165,
+          "required_counts": {
+            "shared": 15165
+          },
+          "declared_counts": {
+            "shared": 15165
+          },
+          "status_counts": {
+            "matched": 15165
+          },
+          "reason_counts": {
+            "Repository or workspace-state grading reads state the agent can mutate": 15165
+          }
+        },
+        "converter_identity": "81d66125805ad01627296dca2d8aff28071937c086f063364c11da75871e856a",
+        "combined_backend_pass": "handed_off",
+        "task_specs_uri": "s3://marin-us-east-02a/marin/rl-data/atlas-disposition/2026.11.12.2/artifacts/task-trove-sankalpkj-nemotron-code-oracle-filtered/tasks.parquet",
+        "manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas-disposition/2026.11.12.2/artifacts/task-trove-sankalpkj-nemotron-code-oracle-filtered/manifest.json"
+      }
     },
     {
       "id": "Task Trove:SWE-Gym__SWE-Gym",
