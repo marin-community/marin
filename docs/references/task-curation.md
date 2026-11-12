@@ -316,6 +316,94 @@ does not change the actor's Daytona label. Unsafe sources can still be ingested.
 The measured count, refused-task count, actor machine count and provenance remain
 visible beside the label.
 
+### Lexical decontamination before publication
+
+Count every TaskSpec emitted by the registered converter before common QA or
+admission gates. This is the Atlas **Examples** count; the upstream row count is
+separate. Record mechanical conversion rejections, admission rejections, the input
+pin and converter version with that count. A converter emitting zero TaskSpecs
+is an ingestion failure with its exact reason, not an empty successful source.
+
+The retained source set is the explicit inventory of the intended Atlas catalog
+snapshot, including grandfathered sources. It is fixed before per-task QA or
+lexical exclusions. Use that complete source set for DF filtering.
+
+Before admitting a new or changed source:
+
+1. Normalize the complete converted population with `lexical_contamination`.
+   It uses TaskCompendium's `format_conversation` for the public instruction and
+   conversation context, preserving case and blank-line paragraphs. It excludes
+   private grader, test and oracle resources from the scanned text, and retains
+   full TaskSpecs separately for publication and fingerprinting.
+2. Run `lexical_scan` over every retained source using the shared eval bloom and
+   its hash index. DF means document frequency; these filters remove common
+   boilerplate features from matching. The implementation calls Datakit's existing
+   filters and `decon_to_parquet`: contiguous word 13-grams and a 0.5 overlap
+   threshold, measured as matching features divided by remaining features in
+   each task paragraph after DF filtering. Normally two distinct matched features
+   are required. Datakit also retains a complete single-feature match, including
+   an exact whole-record feature for a complete 3–12-token record and a sole
+   usable n-gram remaining after filtering.
+   Source-local DF samples 5,000 documents and drops features meeting both 0.005
+   frequency and five occurrences. Global DF samples up to 1,000,000 documents
+   per source and drops a feature found in at least 50 documents across at
+   least three sources in that retained inventory.
+3. Inspect the per-source measurement table before mass publication. Evidence
+   includes the contaminated count/fraction, maximum, mean and p95 of per-task
+   maximum overlap over all tasks, and matched eval families. Every task's flags
+   and exact eval IDs are retained: join every matched feature hash that caused
+   a flag to the shared index's `(hash, eval_id)` rows. The report scans the full
+   index and all marked tasks, without gallery sampling.
+4. Publish a new pinned **private open-athena TaskCompendium** version. A clean
+   population retains every converted task. A flagged population drops exactly
+   the task IDs in its drop manifest, which records eval IDs and overlap values.
+   If a flagged source did not originate in open-athena, first archive its exact
+   pinned raw snapshot in a private open-athena repository. Preserve the input
+   revision, converter identity, counts and all exclusion reasons.
+5. Read the publication back, compare every published TaskSpec hash with the
+   retained conversion/drop-manifest population, and verify repository privacy.
+   Store the receipt in the source declaration's `lexical_contamination.receipt`,
+   with complete measurement artifacts linked through `evidence_url`. A clean
+   receipt has zero exclusions; a remediated receipt accounts for every flagged
+   task in its drop manifest and records the original private snapshot pin.
+   Both bind the published dataset ID and revision. The receipt records
+   `private: true` and `format: taskcompendium`. A raw measurement, including a
+   zero-flag measurement, is not a publication receipt. Fingerprint and review
+   the published remainder, then attach the production backend survey and
+   curation assessment to that source declaration and catalog snapshot.
+
+Grandfathered MarinSkyRL blends are included in measurements and candidate
+remediated versions. Their existing admission and training selection remain
+unchanged until explicitly approved. Lexical filtering detects verbatim and
+near-verbatim overlap; it does not establish absence of paraphrases or semantic
+contamination. Semantic decontamination remains separate future work.
+
+For an explicitly enumerated source set, create `source-ids.json` as a JSON list
+of registered Atlas IDs. Run in the data's region; use a new immutable artifact
+version after changing converters or policy. Obtain the bloom from the matching
+`decontamination_steps({}).bloom.output_path` in the Datakit reference pipeline
+under the chosen artifact root; record that artifact's eval corpus and feature
+versions together. Its `_bloom/eval_hash_index.parquet` is selected automatically,
+so a separately chosen index cannot be substituted:
+
+```bash
+uv run --extra cpu --extra dedup python -m experiments.post_training.task_curation.lexical_contamination \
+  --source-ids source-ids.json --converter-revision CONVERTER_COMMIT \
+  --artifact-version YYYY.MM.DD.N --artifact-root ARTIFACT_ROOT \
+  --max-workers 4 --output populations.json --run
+uv run --extra cpu --extra dedup python -m experiments.post_training.task_curation.lexical_scan \
+  --populations populations.json --source-ids source-ids.json \
+  --bloom-path PINNED_SHARED_BLOOM --eval-corpus-version EVAL_CORPUS_VERSION \
+  --population-set retained --artifact-version YYYY.MM.DD.N \
+  --artifact-root ARTIFACT_ROOT --max-workers 4 --output lexical-report.json --run
+```
+
+These commands perform acquisition, conversion and measurement only. They do not
+publish Hugging Face versions or create admission receipts. `--population-set
+pilot` labels a bounded calibration run; its DF corpus must not stand in for the
+complete retained corpus. Keep population manifests and report artifacts together
+so a resumed scan reuses completed conversion work.
+
 **Publishing a conversion.** A curation step that converts data publishes the converted
 artifact to the `open-athena` Hugging Face org as a **private** repository: campaign
 datasets stay private until an explicit release, so a card says so and the verification
