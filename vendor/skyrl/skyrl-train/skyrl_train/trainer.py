@@ -769,11 +769,7 @@ class RayPPOTrainer:
                 with Timer("save_checkpoints", self.all_timings):
                     rollout_state = await self._rollout_state()
                     snapshot = await asyncio.to_thread(self._snapshot_checkpoint, rollout_state)
-                try:
-                    await self.callback_handler.call_event_async("on_save", final_state, self._control, trainer=self)
-                except BaseException:
-                    await self._await_checkpoint_upload(snapshot)
-                    raise
+                await self.callback_handler.call_event_async("on_save", final_state, self._control, trainer=self)
                 self._start_checkpoint_upload(snapshot, final_state)
                 if await self._drain_checkpoint_upload():
                     logger.info("Saved final checkpoint.")
@@ -815,35 +811,26 @@ class RayPPOTrainer:
             self._record_checkpoint_save_failure(state)
             return
 
-        try:
-            await self.callback_handler.call_event_async("on_save", state, self._control, trainer=self)
-        except BaseException:
-            await self._await_checkpoint_upload(snapshot)
-            raise
+        await self.callback_handler.call_event_async("on_save", state, self._control, trainer=self)
         self._start_checkpoint_upload(snapshot, state)
 
     def _start_checkpoint_upload(self, snapshot: CheckpointSnapshot, state: TrainerState) -> None:
         assert getattr(self, "_pending_checkpoint_upload", None) is None
-        task = asyncio.create_task(self._finish_checkpoint_upload(snapshot, commit=True))
+        task = asyncio.create_task(self._finish_checkpoint_upload(snapshot))
         self._pending_checkpoint_upload = (task, state)
 
-    def _finish_checkpoint_upload_blocking(self, snapshot: CheckpointSnapshot, *, commit: bool) -> tuple[float, float]:
-        cleanup_duration = 0.0
-        if commit:
-            io.write_bytes_atomic(snapshot.trainer_state_path, snapshot.trainer_state_payload)
-            io.write_bytes_atomic(snapshot.rollout_state_path, snapshot.rollout_state_payload)
-            io.write_bytes_atomic(snapshot.marker_path, str(snapshot.step).encode())
-            self._last_saved_step = snapshot.step
-            cleanup_started = time.monotonic()
-            self._cleanup_old_checkpoints()
-            cleanup_duration = time.monotonic() - cleanup_started
+    def _finish_checkpoint_upload_blocking(self, snapshot: CheckpointSnapshot) -> tuple[float, float]:
+        io.write_bytes_atomic(snapshot.trainer_state_path, snapshot.trainer_state_payload)
+        io.write_bytes_atomic(snapshot.rollout_state_path, snapshot.rollout_state_payload)
+        io.write_bytes_atomic(snapshot.marker_path, str(snapshot.step).encode())
+        self._last_saved_step = snapshot.step
+        cleanup_started = time.monotonic()
+        self._cleanup_old_checkpoints()
+        cleanup_duration = time.monotonic() - cleanup_started
         return time.monotonic() - snapshot.upload_started_at, cleanup_duration
 
-    async def _finish_checkpoint_upload(self, snapshot: CheckpointSnapshot, *, commit: bool) -> tuple[float, float]:
-        return await asyncio.to_thread(self._finish_checkpoint_upload_blocking, snapshot, commit=commit)
-
-    async def _await_checkpoint_upload(self, snapshot: CheckpointSnapshot) -> None:
-        await self._finish_checkpoint_upload(snapshot, commit=False)
+    async def _finish_checkpoint_upload(self, snapshot: CheckpointSnapshot) -> tuple[float, float]:
+        return await asyncio.to_thread(self._finish_checkpoint_upload_blocking, snapshot)
 
     async def _drain_checkpoint_upload(self) -> bool:
         pending = getattr(self, "_pending_checkpoint_upload", None)
@@ -3037,7 +3024,7 @@ class RayPPOTrainer:
         """Wait for prior uploads, then save and publish a complete checkpoint."""
         await self._drain_checkpoint_upload()
         snapshot = await asyncio.to_thread(self._snapshot_checkpoint, await self._rollout_state())
-        upload_duration, cleanup_duration = await self._finish_checkpoint_upload(snapshot, commit=True)
+        upload_duration, cleanup_duration = await self._finish_checkpoint_upload(snapshot)
         self.all_timings["checkpoint_upload"] = self.all_timings.get("checkpoint_upload", 0.0) + upload_duration
         self.all_timings["cleanup_old_checkpoints"] = (
             self.all_timings.get("cleanup_old_checkpoints", 0.0) + cleanup_duration

@@ -28,7 +28,9 @@ from marinskyrl.speculative_decoding import SpeculativeDecodingMethod
 
 
 def _literal(choices) -> str:
-    return "Literal[" + ", ".join(repr(choice.value if isinstance(choice, Enum) else choice) for choice in choices) + "]"
+    return (
+        "Literal[" + ", ".join(repr(choice.value if isinstance(choice, Enum) else choice) for choice in choices) + "]"
+    )
 
 
 CORRECTION_PRESETS = tuple(
@@ -48,7 +50,6 @@ TYPES = MappingProxyType(
         "trainer.strategy": 'Literal["megatron"]',
         "trainer.hf_export_checkpoint": 'Literal["latest", "best"]',
         "trainer.policy.optimizer_config.lr_decay_steps": "int | None",
-        "trainer.critic.optimizer_config.lr_decay_steps": "int | None",
         "trainer.policy.megatron_config.nccl_max_channels": "int | None",
         "trainer.ref.megatron_config.nccl_max_channels": "int | None",
         "generator.trajectory_reward_shaping.reasoning_span.target": _literal(ReasoningSpanPenaltyTarget),
@@ -58,7 +59,6 @@ TYPES = MappingProxyType(
         "trainer.preflight_gate.on_failure": 'Literal["abort", "warn"]',
         "trainer.logger": "LoggingBackend | tuple[LoggingBackend, ...]",
         "trainer.policy.optimizer_config.scheduler": 'Literal["constant_with_warmup", "cosine"]',
-        "trainer.critic.optimizer_config.scheduler": 'Literal["constant_with_warmup", "cosine"]',
         "trainer.policy.megatron_config.optimizer_checkpoint_sharding_type": OPTIMIZER_CHECKPOINT_SHARDING,
         "trainer.ref.megatron_config.optimizer_checkpoint_sharding_type": OPTIMIZER_CHECKPOINT_SHARDING,
         "trainer.rollout_buffer.max_staleness_steps": "NonNegativeInt",
@@ -82,19 +82,16 @@ TYPES = MappingProxyType(
         "trainer.algorithm.distillation.advantage_clip": "int | float | None",
         "trainer.mismatch_probe.rescore_prefix_cache": 'Literal["off", "on", "both"]',
         "trainer.mismatch_probe.extra_trainer_modes": 'tuple[Literal["router_replay", "router_replay_filtered"], ...]',
-        "generator.backend": 'Literal["vllm", "sglang"]',
+        "generator.backend": 'Literal["vllm"]',
         "generator.weight_sync_backend": 'Literal["nccl", "gloo"]',
         "generator.weight_sync_transport": _literal(runtime_options.WeightSyncTransport),
         "generator.override_existing_update_group": 'Literal["auto", "enable", "disable"]',
         "generator.weight_sync_pause.mode": _literal(WeightSyncPauseMode),
         "generator.r3_transport": _literal(runtime_options.R3Transport),
-        "generator.gdn_backend": _literal(runtime_options.GDNBackend),
         "generator.chat_template": "ChatTemplate | None",
         "generator.chat_template.source": 'Literal["name", "file"]',
         "generator.error_handling.default_error_treatment": _literal(ErrorTreatment),
         "generator.trajectory_retention.phases": 'tuple[Literal["train", "eval"], ...]',
-        "trainer.policy.model.lora.dropout": "Annotated[int | float, Field(ge=0, le=1)]",
-        "trainer.critic.model.lora.dropout": "Annotated[int | float, Field(ge=0, le=1)]",
         "trainer.step_phase_budgets.group_admission": "Annotated[int | float, Field(ge=0)]",
         "trainer.step_phase_budgets.batch_assembly": "Annotated[int | float, Field(ge=0)]",
         "trainer.step_phase_budgets.training_preparation": "Annotated[int | float, Field(ge=0)]",
@@ -108,7 +105,6 @@ TYPES = MappingProxyType(
         "trainer.step_phase_budgets.unaccounted": "Annotated[int | float, Field(ge=0)]",
         "trainer.train_batch_size": "PositiveInt",
         "trainer.policy_mini_batch_size": "PositiveInt",
-        "trainer.critic_mini_batch_size": "PositiveInt",
         "trainer.micro_train_batch_size_per_gpu": "PositiveInt",
         "trainer.eval_batch_size": "PositiveInt",
         "trainer.update_epochs_per_batch": "PositiveInt",
@@ -138,7 +134,6 @@ TYPES = MappingProxyType(
         "trainer.rollout_buffer.max_in_flight": "PositiveInt | None",
         "trainer.rollout_buffer.object_store_root": "str | None",
         "trainer.policy.megatron_config.expert_tensor_parallel_size": "PositiveInt | None",
-        "trainer.critic.model.path": "str | None",
         "trainer.mismatch_probe.seed": "NonNegativeInt | None",
         "trainer.mismatch_probe.archive_uri": "str | None",
         "trainer.mismatch_probe.reuse_probe": "str | None",
@@ -168,9 +163,6 @@ TYPES = MappingProxyType(
         "trainer.policy.model.source_uri": "str | None",
         "trainer.policy.model.source_identity": "str | None",
         "trainer.policy.model.lora.adapter_path": "str | None",
-        "trainer.policy.model.lora.adapter_revision": "str | None",
-        "trainer.policy.model.lora.exclude_modules": "tuple[str, ...] | None",
-        "trainer.critic.model.lora.exclude_modules": "tuple[str, ...] | None",
         "trainer.policy.megatron_config.torch_profiler_config.ranks": "tuple[int, ...]",
         "trainer.policy.megatron_config.torch_profiler_config.save_path": "str | None",
         "trainer.ref.megatron_config.expert_tensor_parallel_size": "PositiveInt | None",
@@ -200,7 +192,6 @@ OPEN = frozenset(
         "generator.chat_template_kwargs",
         "generator.engine_init_kwargs",
         "generator.rope_scaling",
-        "trainer.critic.optimizer_config.optimizer_kwargs",
         "trainer.policy.megatron_config.model_config_kwargs",
         "trainer.policy.megatron_config.transformer_config_kwargs",
         "trainer.policy.optimizer_config.optimizer_kwargs",
@@ -246,7 +237,6 @@ UNDECLARED = MappingProxyType(
         "generator.speculative_decoding.model.source_uri": ("str", Ellipsis),
         "generator.speculative_decoding.model.source_identity": ("str", Ellipsis),
         "generator.speculative_decoding.num_speculative_tokens": ("PositiveInt", Ellipsis),
-        "generator.speculative_decoding.training": ("SpeculatorTraining | None", None),
         "generator.speculative_decoding.training.interval_steps": ("PositiveInt", Ellipsis),
         "generator.speculative_decoding.training.max_tokens_per_update": ("PositiveInt", Ellipsis),
         "generator.speculative_decoding.training.max_window_tokens": ("PositiveInt", Ellipsis),
@@ -268,22 +258,19 @@ UNDECLARED = MappingProxyType(
 
 NAMES = MappingProxyType(
     {
+        "generator.speculative_decoding.model": "SpeculatorModel",
+        "generator.speculative_decoding.training": "SpeculatorTraining",
         "trainer.policy.megatron_config": "PolicyMegatronConfig",
         "trainer.ref.megatron_config": "RefMegatronConfig",
         "trainer.policy.model": "PolicyModel",
         "trainer.ref.model": "RefModel",
-        "trainer.critic.model": "CriticModel",
         "trainer.policy.optimizer_config": "PolicyOptimizerConfig",
-        "trainer.critic.optimizer_config": "CriticOptimizerConfig",
         "trainer.policy.model.lora": "PolicyLora",
-        "trainer.critic.model.lora": "CriticLora",
         "trainer.policy.megatron_config.ddp_config": "DdpConfig",
         "trainer.ref.megatron_config.ddp_config": "RefDdpConfig",
         "trainer.policy.megatron_config.torch_profiler_config": "TorchProfilerConfig",
         "trainer.ref.megatron_config.torch_profiler_config": "RefTorchProfilerConfig",
         "trainer.policy.megatron_config.optimizer_config_kwargs": "OptimizerConfigKwargs",
         "trainer.ref.megatron_config.optimizer_config_kwargs": "RefOptimizerConfigKwargs",
-        "generator.speculative_decoding.model": "SpeculatorModel",
-        "generator.speculative_decoding.training": "SpeculatorTraining",
     }
 )

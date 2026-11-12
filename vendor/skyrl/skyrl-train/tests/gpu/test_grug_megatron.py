@@ -168,7 +168,6 @@ def test_grug_embedding_recompute_preserves_gradients_and_reduces_saved_activati
 def _config(model_path: str, *, world_size: int, pp: int, ep: int):
     cfg = get_test_actor_config()
     cfg.trainer.policy.model.path = model_path
-    cfg.trainer.critic.model.path = None
     cfg.trainer.strategy = "megatron"
     cfg.trainer.flash_attn = False
     cfg.trainer.bf16 = True
@@ -248,7 +247,6 @@ def _padded_batch(
             "action_log_probs": zeros.clone(),
             "base_action_log_probs": zeros.clone(),
             "rollout_logprobs": zeros.clone(),
-            "values": zeros.clone(),
             "returns": zeros.clone(),
             "advantages": advantages,
             "loss_mask": response_mask.clone(),

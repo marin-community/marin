@@ -112,10 +112,6 @@ class Placement(Section):
     """TOPOLOGY-SENSITIVE: these fields define the policy's physical footprint before scheduling and its Ray actor
     geometry after launch. Do not override either field without updating the canonical launch topology."""
     policy_num_gpus_per_node: PositiveInt | None = field(4)
-    critic_num_nodes: int = field(1)
-    """TOPOLOGY-SENSITIVE: trainer.critic.model.path activates this physical role. These values are ignored only
-    while that path is null; setting the path in a wrapper can therefore increase the requested gang size."""
-    critic_num_gpus_per_node: int = field(4)
     ref_num_nodes: PositiveInt | None = field(1)
     """TOPOLOGY-SENSITIVE: use_kl_loss or use_kl_in_reward activates this physical role. Do not repurpose these
     values as generic non-policy capacity; they must describe the active reference role and its bundle."""
@@ -124,8 +120,7 @@ class Placement(Section):
     """PLACEMENT-SENSITIVE: this changes reservation order and whether policy GPUs are kept on nodes disjoint from
     rollout engines. The pre-submit topology may be numerically sufficient but impossible to realize if wrong."""
     policy_per_gpu_bundles: bool = field(False)
-    """PLACEMENT-SENSITIVE: this changes policy placement-group bundle shape from whole-node to per-GPU bundles.
-    Wrappers must preserve the compiled pool size and the assumptions of policy_strict_spread_pg."""
+    "PLACEMENT-SENSITIVE: this changes policy placement-group bundle shape from whole-node to per-GPU bundles."
     policy_force_cvd_mask: bool = field(False)
     """PLACEMENT-SENSITIVE: this binds policy actors to Ray-assigned physical GPU IDs and is valid only with the
     compatible per-GPU placement plan. It is not an independent device-selection convenience flag."""
@@ -139,15 +134,9 @@ class HostMemoryMonitor(Section):
 
 class PolicyLora(Section):
     rank: int = field(0)
-    alpha: int = field(16)
-    dropout: Annotated[int | float, Field(ge=0, le=1)] = field(0)
     adapter_path: str | None = field(None)
     """Load an existing adapter instead of creating fresh LoRA weights. Its stored PEFT config is authoritative; rank
     must match for vLLM sync."""
-    adapter_revision: str | None = field(None)
-    lora_sync_path: str = field("/tmp/skyrl_lora_sync")
-    target_modules: str = field("all-linear")
-    exclude_modules: tuple[str, ...] | None = field(None)
 
 
 class PolicyModel(Section):
@@ -160,7 +149,6 @@ class PolicyOptimizerConfig(Section):
     adam_betas: tuple[int | float, ...] = field([0.9, 0.999])
     weight_decay: int | float = field(0.01)
     max_grad_norm: int | float = field(1.0)
-    offload_after_step: bool = field(True)
     num_warmup_steps: int = field(0)
     lr_decay_steps: int | None = field(None)
     scheduler: Literal["constant_with_warmup", "cosine"] = field("constant_with_warmup")
@@ -226,7 +214,6 @@ class Policy(Section):
     model: PolicyModel = Field(default_factory=PolicyModel)
     optimizer_config: PolicyOptimizerConfig = Field(default_factory=PolicyOptimizerConfig)
     sequence_parallel_size: int = field(1)
-    use_torch_compile: bool = field(False)
     record_memory: bool = field(False)
     nccl_buffer_size_bytes: PositiveInt | None = field(None)
     """Limit per-peer NCCL buffers before Megatron policy process-group initialization. Null preserves NCCL's
@@ -294,40 +281,6 @@ class Ref(Section):
     model: RefModel = Field(default_factory=RefModel)
     sequence_parallel_size: int = field(1)
     megatron_config: RefMegatronConfig = Field(default_factory=RefMegatronConfig)
-
-
-class CriticLora(Section):
-    rank: int = field(0)
-    alpha: int = field(16)
-    dropout: Annotated[int | float, Field(ge=0, le=1)] = field(0)
-    target_modules: str = field("all-linear")
-    exclude_modules: tuple[str, ...] | None = field(None)
-
-
-class CriticModel(Section):
-    path: str | None = field(None)
-    """ROLE-ACTIVATING: a non-null path creates a local critic role. The launcher then claims critic_num_nodes and
-    the runtime creates critic actors, so a wrapper that sets this also changes the launch topology."""
-    lora: CriticLora = Field(default_factory=CriticLora)
-
-
-class CriticOptimizerConfig(Section):
-    optimizer: str = field("AdamW")
-    lr: int | float = field(5e-06)
-    adam_betas: tuple[int | float, ...] = field([0.9, 0.999])
-    weight_decay: int | float = field(0.01)
-    max_grad_norm: int | float = field(1.0)
-    offload_after_step: bool = field(True)
-    num_warmup_steps: int = field(0)
-    lr_decay_steps: int | None = field(None)
-    scheduler: Literal["constant_with_warmup", "cosine"] = field("constant_with_warmup")
-    optimizer_kwargs: OpenMap = field({})
-
-
-class Critic(Section):
-    model: CriticModel = Field(default_factory=CriticModel)
-    optimizer_config: CriticOptimizerConfig = Field(default_factory=CriticOptimizerConfig)
-    sequence_parallel_size: int = field(1)
 
 
 class ResolvedGroupAdvantage(Section):
@@ -427,8 +380,8 @@ class Distillation(Section):
 
 class Algorithm(Section):
     batch_invariant: bool = field(False)
-    advantage_estimator: Literal["uniform", "reward", "reinforce++", "rloo", "rloo_n", "rloo_n_pbs", "gae", "grpo"] = (
-        field("grpo")
+    advantage_estimator: Literal["uniform", "reward", "reinforce++", "rloo", "rloo_n", "rloo_n_pbs", "grpo"] = field(
+        "grpo"
     )
     group_advantage_min_size: PositiveInt | None = field(None)
     resolved_group_advantage: ResolvedGroupAdvantage = Field(default_factory=ResolvedGroupAdvantage)
@@ -444,7 +397,6 @@ class Algorithm(Section):
     use_entropy_loss: bool = field(False)
     entropy_loss_coef: int | float = field(0.01)
     advantage_batch_normalize: bool = field(False)
-    value_head_prefix: str = field("value_head")
     policy_loss_type: Literal[
         "regular",
         "dual_clip",
@@ -470,7 +422,6 @@ class Algorithm(Section):
     ] = field("token_mean")
     grpo_norm_by_std: bool = field(True)
     rloo_n_filter_zero_reward_groups: bool = field(True)
-    lambd: int | float = field(1.0)
     gamma: int | float = field(1.0)
     eps_clip_low: int | float = field(0.2)
     eps_clip_high: int | float = field(0.2)
@@ -479,12 +430,10 @@ class Algorithm(Section):
         None
     )
     off_policy_correction_rules: tuple[CorrectionRule, ...] | None = field(None)
-    tis_splice: bool = field(True)
     tis_lcs_alert_threshold: int | float = field(0.005)
     enable_token_reward_channel: bool = field(False)
     think_token_weight: int | float = field(1.0)
     sapo: Sapo = Field(default_factory=Sapo)
-    value_clip: int | float = field(0.2)
     dynamic_sampling: DynamicSampling = Field(default_factory=DynamicSampling)
     group_admission: GroupAdmission = Field(default_factory=GroupAdmission)
     clip_cov: ClipCov = Field(default_factory=ClipCov)
@@ -589,7 +538,6 @@ class Trainer(Section):
     strategy: Literal["megatron"] = field("megatron")
     policy: Policy = Field(default_factory=Policy)
     ref: Ref = Field(default_factory=Ref)
-    critic: Critic = Field(default_factory=Critic)
     algorithm: Algorithm = Field(default_factory=Algorithm)
     rollout_buffer: RolloutBuffer = Field(default_factory=RolloutBuffer)
     """Rollout workers generate prompt groups under leases from the rollout buffer; each step trains on
@@ -622,7 +570,6 @@ class Trainer(Section):
     update_epochs_per_batch: PositiveInt = field(1)
     train_batch_size: PositiveInt = field(1024)
     policy_mini_batch_size: PositiveInt = field(256)
-    critic_mini_batch_size: PositiveInt = field(256)
     micro_train_batch_size_per_gpu: PositiveInt = field(1)
     micro_forward_batch_size_per_gpu: PositiveInt = unset_field()
     update_ref_every_epoch: bool = field(False)
@@ -638,7 +585,6 @@ class Trainer(Section):
     eval_interval: int = field(5)
     preflight_gate: PreflightGate = Field(default_factory=PreflightGate)
     flash_attn: bool = field(False)
-    attn_backend: str = field("auto")
     disable_fast_tokenizer: bool = field(False)
     project_name: str = field("skyrl")
     run_name: str | None = field("test_run")
@@ -708,7 +654,7 @@ class SpeculativeDecoding(Section):
     method: Literal["eagle3"] = unset_field()
     model: SpeculatorModel = unset_field()
     num_speculative_tokens: PositiveInt = unset_field()
-    training: SpeculatorTraining | None = field(None)
+    training: SpeculatorTraining = unset_field()
 
 
 class SamplingParams(Section):
@@ -794,7 +740,7 @@ class TrajectoryRetention(Section):
     model_path: str = unset_field()
     model_source_identity: str = unset_field()
     resume_path: str = unset_field()
-    inference_backend: Literal["vllm", "sglang"] = unset_field()
+    inference_backend: Literal["vllm"] = unset_field()
 
 
 class Generator(Section):
@@ -811,7 +757,7 @@ class Generator(Section):
     """TOPOLOGY-SENSITIVE: this is a replica count; local disaggregated launchers compile replica geometry into a
     packed whole-node rollout pool. Wrappers must not assume that changing replicas leaves the requested gang
     unchanged."""
-    backend: Literal["vllm", "sglang"] = field("vllm")
+    backend: Literal["vllm"] = field("vllm")
     vllm_attention_backend: str | None = field(None)
     weight_sync_backend: Literal["nccl", "gloo"] = field("nccl")
     weight_sync_pause: WeightSyncPause = Field(default_factory=WeightSyncPause)
@@ -826,7 +772,6 @@ class Generator(Section):
     fuse_weights: bool = field(False)
     r3_transport: Literal["by_value", "resident", "decentral"] = field("decentral")
     r3_dispatch_put_timeout_seconds: int = field(600)
-    gdn_backend: Literal["torch", "flashqla"] = field("torch")
     weight_transfer_threshold_cuda_ipc_GB: int | float = field(1.0)
     inference_engine_tensor_parallel_size: PositiveInt = field(4)
     """TOPOLOGY-INPUT: TP and PP determine the node-atomic GPU group for each engine. Their product must fit on one

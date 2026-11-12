@@ -67,6 +67,25 @@ def moe_router_replay_requested(cfg: DictConfig, role: str = "policy") -> bool:
     return bool(cfg.trainer[role].megatron_config.get("moe_router_replay", False))
 
 
+def policy_strict_spread_eligible(cfg: DictConfig) -> bool:
+    """Whether to reserve policy nodes before inference engines start.
+
+    Pure (Ray-free) predicate so it is unit-testable. Eligible only when ALL of:
+      - `trainer.placement.policy_strict_spread_pg` is enabled (opt-in; default
+        false, so every existing run is byte-for-byte unchanged),
+      - the run is disaggregated (`colocate_all=false`), and
+      - a reference model, when used, shares the policy placement group.
+    """
+    placement = cfg.trainer.placement
+    if not bool(getattr(placement, "policy_strict_spread_pg", False)):
+        return False
+    if placement.colocate_all:
+        return False
+    algo = cfg.trainer.algorithm
+    use_ref_model = reference_model_required(algo)
+    return not use_ref_model or bool(placement.colocate_policy_ref)
+
+
 def resolve_pinned_local_rank(
     *,
     noset_visible_devices: bool,
@@ -387,7 +406,6 @@ def validate_megatron_cfg(cfg: DictConfig):
     # not yet supported + tested features
     assert cfg.generator.weight_sync_backend == "nccl", "only nccl is supported for megatron weight sync"
     assert cfg.generator.backend == "vllm", "only vllm is supported for with megatron"
-    assert cfg.trainer.critic.model.path is None, "only GRPO training is currently supported for megatron"
 
     if cfg.trainer.flash_attn:
         importlib.import_module("flash_attn")
@@ -429,8 +447,6 @@ def validate_cfg(cfg: DictConfig):
     validate_mismatch_probe_config(cfg)
     if cfg.trainer.strategy != "megatron":
         raise ValueError(f"Unsupported training strategy: {cfg.trainer.strategy}")
-    if cfg.trainer.critic.model.path:
-        raise ValueError("Megatron does not support a critic worker")
     distillation_plan = compile_distillation_plan_from_config(cfg)
     validate_distillation_runtime_support(distillation_plan)
     validate_nemotron_ultra_grading(cfg, distillation_plan)
@@ -1053,7 +1069,6 @@ def prepare_runtime_environment(cfg: DictConfig) -> dict[str, str]:
         gpu_counts.extend(
             [
                 placement.policy_num_gpus_per_node,
-                placement.critic_num_gpus_per_node,
                 placement.ref_num_gpus_per_node,
             ]
         )

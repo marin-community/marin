@@ -112,7 +112,6 @@ def rollout_training_batch(prompts: list[list[int]], rollout) -> TrainingInputBa
             "action_log_probs": action_log_probs,
             "base_action_log_probs": action_log_probs.clone(),
             "rollout_logprobs": action_log_probs.clone(),
-            "values": torch.zeros_like(ones),
             "returns": torch.zeros_like(ones),
             "advantages": advantages,
             "loss_mask": ones.long(),

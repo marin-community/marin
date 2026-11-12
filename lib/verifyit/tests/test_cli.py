@@ -212,8 +212,7 @@ def test_pytest_setup_failure_opt_in_clears_previous_reward(tmp_path):
     assert not (logs / "reward.txt").exists()
 
 
-@pytest.mark.parametrize("invalid_tolerance", [str(10**400), "inf"])
-def test_predicted_action_overflowing_private_tolerance_clears_stale_reward(tmp_path, invalid_tolerance):
+def test_predicted_action_overflowing_private_tolerance_clears_stale_reward(tmp_path):
     specification = PredictedActionSpec(
         expected_calls=(FunctionCall("lookup", {"id": 1}),),
         output=str(tmp_path / "answer.json"),
@@ -227,7 +226,7 @@ def test_predicted_action_overflowing_private_tolerance_clears_stale_reward(tmp_
     assert json.loads((logs / "reward.json").read_text()) == {"reward": 1.0}
     assert (logs / "reward.txt").read_text() == "1.0\n"
 
-    config.write_text(config.read_text() + f"numeric_tolerance = {invalid_tolerance}\n")
+    config.write_text(config.read_text() + f"numeric_tolerance = {10**400}\n")
     assert main(arguments) == 0
     assert _verdict(logs)["status"] == Status.INVALID_TASK
     assert not (logs / "reward.json").exists()

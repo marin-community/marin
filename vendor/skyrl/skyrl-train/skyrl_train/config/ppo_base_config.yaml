@@ -83,12 +83,13 @@ trainer:
     # geometry after launch. Do not override either field without updating the canonical launch topology.
     policy_num_nodes: 1
     policy_num_gpus_per_node: 4
-    # The peer-access probe counts this value; the OPD nightly sets it.
-    critic_num_gpus_per_node: 4
     # TOPOLOGY-SENSITIVE: use_kl_loss or use_kl_in_reward activates this physical role. Do not repurpose these
     # values as generic non-policy capacity; they must describe the active reference role and its bundle.
     ref_num_nodes: 1
     ref_num_gpus_per_node: 4
+    # PLACEMENT-SENSITIVE: this changes reservation order and whether policy GPUs are kept on nodes disjoint from
+    # rollout engines. The pre-submit topology may be numerically sufficient but impossible to realize if wrong.
+    policy_strict_spread_pg: false
     # PLACEMENT-SENSITIVE: this changes policy placement-group bundle shape from whole-node to per-GPU bundles.
     policy_per_gpu_bundles: false
     # PLACEMENT-SENSITIVE: this binds policy actors to Ray-assigned physical GPU IDs and is valid only with the
@@ -145,12 +146,6 @@ trainer:
       source_uri: ${trainer.policy.model.source_uri}
       source_identity: ${trainer.policy.model.source_identity}
     sequence_parallel_size: 1
-  critic:
-    model:
-      # Must stay null; validation rejects a critic model.
-      path: null
-    optimizer_config:
-      lr_decay_steps: null
   algorithm:
     batch_invariant: false
     advantage_estimator: "grpo"

@@ -133,7 +133,6 @@ START=$(date +%s)
   trainer.use_sample_packing=false \
   trainer.placement.colocate_all=false \
   trainer.placement.policy_num_gpus_per_node=1 \
-  trainer.placement.critic_num_gpus_per_node=1 \
   trainer.placement.ref_num_gpus_per_node=1 \
   trainer.epochs=1 \
   trainer.max_steps="$MAX_STEPS" \

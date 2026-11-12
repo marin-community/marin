@@ -14,7 +14,6 @@ def skyrl_config(**overrides) -> dict:
                 "policy_num_nodes": 1,
                 "policy_num_gpus_per_node": 8,
             },
-            "critic": {"model": {"path": None}},
             "algorithm": {
                 "use_kl_loss": False,
                 "use_kl_in_reward": False,

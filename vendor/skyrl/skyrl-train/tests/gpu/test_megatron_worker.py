@@ -237,7 +237,6 @@ def get_test_training_batch(batch_size=4) -> TrainingInputBatch:
             "action_log_probs": torch.tensor([[0.1] * num_actions] * batch_size),
             "base_action_log_probs": torch.tensor([[0.2] * num_actions] * batch_size),
             "rollout_logprobs": torch.tensor([[0.11] * num_actions] * batch_size),
-            "values": torch.tensor([[0.1] * num_actions] * batch_size),
             "returns": torch.tensor([[0.1] * num_actions] * batch_size),
             "advantages": torch.tensor([[0.5] * num_actions] * batch_size),
             "loss_mask": torch.tensor([[1] * num_actions] * batch_size),

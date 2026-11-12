@@ -18,7 +18,7 @@ runtime and a live process group at the saved parallel geometry.
 The task enters ``skyrl_train.entrypoints.checkpoint_export`` instead of an RL entrypoint.
 It creates only the saved policy worker group, restores only model tensors, invokes the
 strategy's existing HF converter, and exits. It does not create rollout engines, datasets,
-generators, tracking, reference models, critics, optimizers, or schedulers. ``--timeout``
+generators, tracking, reference models, optimizers, or schedulers. ``--timeout``
 belongs to this export job and is independent of the source training gang's process-group
 timeout.
 
@@ -150,9 +150,6 @@ def checkpoint_export_launch_config(
     algorithm = config.skyrl.trainer.setdefault("algorithm", {})
     algorithm["use_kl_loss"] = False
     algorithm["use_kl_in_reward"] = False
-    critic = config.skyrl.trainer.setdefault("critic", {})
-    critic["model"] = critic.get("model", {})
-    critic["model"]["path"] = None
     config.skyrl.pop("teachers", None)
     config.skyrl.pop("teacher_routing", None)
     if config.skyrl.generator.get("speculative_decoding") is not None:

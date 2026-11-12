@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import click
 import pytest
 from click.testing import CliRunner
 from connectrpc.code import Code
@@ -91,7 +92,7 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import launch_provenance
 
-from experiments.evaluation.cli import cli
+from experiments.evaluation.cli import cli, resolve_model_config
 from experiments.evaluation.evals import (
     EVALS,
     EvalchemyDefinition,
@@ -2488,6 +2489,12 @@ def test_launch_dry_run_accepts_file_backed_model_config(tmp_path, monkeypatch):
     config_path = _write_model_config(tmp_path / "fresh-checkpoint.yaml")
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
 
+    model = resolve_model_config(None, config_path)
+    assert model.name == "fresh-rl-checkpoint"
+    assert model.location == "s3://marin-us-east-02a/marin/exports/rl/fresh-checkpoint/"
+    assert model.resource_hint.gpu == {"H100": 8}
+    assert model.serve.data_parallel_size == 8
+
     result = CliRunner().invoke(
         cli,
         [
@@ -2501,7 +2508,6 @@ def test_launch_dry_run_accepts_file_backed_model_config(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    assert "s3://marin-us-east-02a/marin/exports/rl/fresh-checkpoint/" in result.output
 
 
 def test_launch_dry_run_accepts_hosted_judge(monkeypatch):
@@ -2536,6 +2542,18 @@ def test_launch_dry_run_accepts_hosted_judge(monkeypatch):
     assert "judge: qwen3.5-122b-a10b-fp8" in result.output
     assert "accel=H100x8" in result.output
     assert "region_or_cluster=cw-rno2a" in result.output
+
+
+def test_resolve_model_config_rejects_registry_and_file_selectors_together(tmp_path):
+    config_path = _write_model_config(tmp_path / "fresh-checkpoint.yaml")
+
+    with pytest.raises(click.BadParameter):
+        resolve_model_config("qwen3-8b", config_path)
+
+
+def test_resolve_model_config_requires_one_selector():
+    with pytest.raises(click.BadParameter):
+        resolve_model_config(None, None)
 
 
 def test_launch_rejects_invalid_harbor_config_before_iris_submission(tmp_path, monkeypatch):
@@ -2833,15 +2851,6 @@ def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
     assert _step_status(batch, 0) == STATUS_SUCCESS
     assert executed == [final_evaluation.identity.output_dir]
     assert priorities == [job_pb2.PRIORITY_BAND_INTERACTIVE]
-
-
-def test_launch_cli_reports_invalid_model_selection_as_usage_error(tmp_path):
-    path = _write_model_config(tmp_path / "model.yaml")
-    options = ["--model", "qwen3-8b", "--model-config", str(path)]
-    result = CliRunner().invoke(cli, ["launch", *options, "--evals", "mmlu-smoke", "--dry-run"])
-
-    assert result.exit_code == 2
-    assert "specify exactly one of --model or --model-config" in result.output
 
 
 @pytest.mark.parametrize("code", [Code.NOT_FOUND, Code.PERMISSION_DENIED])
