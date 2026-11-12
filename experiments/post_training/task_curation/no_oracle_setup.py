@@ -13,6 +13,7 @@ import shlex
 import subprocess
 import tempfile
 import tomllib
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
@@ -71,12 +72,7 @@ class SetupExecution:
 
     @property
     def passed(self) -> bool:
-        """Whether every expected file is present with the native bytes.
-
-        A mode difference is reported in ``remoded`` and does not fail the check,
-        because the native recipe's own ``chmod`` steps are replayed verbatim by the
-        rebuild, so a faithful rebuild legitimately differs from the source byte mode.
-        """
+        """Whether setup completed with every expected file's bytes, allowing mode changes."""
         return self.outcome == SetupOutcome.EXECUTED and not (self.missing or self.altered)
 
 
@@ -96,9 +92,13 @@ def _execute_container_setup(
     copies: tuple[tuple[Path, str], ...],
     dns: tuple[str, ...],
     timeout: int,
+    *,
+    workdir: str,
+    environment_variables: Mapping[str, str],
 ) -> SetupExecution:
     resolvers = tuple(part for server in dns for part in ("--dns", server))
-    created = _docker("create", *resolvers, image, "sh", "-c", command)
+    environment = tuple(part for key, value in environment_variables.items() for part in ("--env", f"{key}={value}"))
+    created = _docker("create", *resolvers, "--workdir", workdir, *environment, image, "sh", "-c", command)
     if created.returncode:
         return SetupExecution(task_id=task_id, outcome=SetupOutcome.DOCKER_ERROR, detail=created.stderr[-DETAIL_LIMIT:])
     container = created.stdout.strip()
@@ -176,7 +176,16 @@ def execute_setup_in_docker(
             + f"sh {SETUP_ROOT}/{setup_script} && "
             + _workspace_scan((workdir, *destinations))
         )
-        result = _execute_container_setup(task_id, image, command, ((setup, SETUP_ROOT), (shim, "/shim")), dns, timeout)
+        result = _execute_container_setup(
+            task_id,
+            image,
+            command,
+            ((setup, SETUP_ROOT), (shim, "/shim")),
+            dns,
+            timeout,
+            workdir=workdir,
+            environment_variables={},
+        )
     if result.workspace_stdout is None:
         return result
     return _setup_comparison(task_id, workspace_expectations(native_payload), result.workspace_stdout)
@@ -211,7 +220,14 @@ def execute_lowered_setup(
                 target.chmod(int(resource.mode, 8))
         command = " && ".join(commands) + " && " + _workspace_scan((workdir, *destinations))
         result = _execute_container_setup(
-            task.id, requirements.docker_image, command, ((root / "setup_files", SETUP_ROOT),), dns, timeout
+            task.id,
+            requirements.docker_image,
+            command,
+            ((root / "setup_files", SETUP_ROOT),),
+            dns,
+            timeout,
+            workdir=workdir,
+            environment_variables=requirements.environment_variables,
         )
     if result.workspace_stdout is None:
         return result

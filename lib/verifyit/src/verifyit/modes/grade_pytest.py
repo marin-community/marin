@@ -375,7 +375,7 @@ def _candidate_module_path(module: str, workspace: Path) -> str:
 
 
 def _validate_test_dependencies(failures: list[_PytestFailure]) -> None:
-    """Reject missing imports outright; callers filter failures with candidate provenance first."""
+    """Raise InvalidTask when pytest failures identify missing dependencies."""
     missing = sorted({failure.missing_module for failure in failures if failure.kind == _FailureKind.DEPENDENCY})
     if missing:
         raise InvalidTask(f"pytest tests require modules missing from the grader environment: {', '.join(missing)}")

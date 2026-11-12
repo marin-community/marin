@@ -4,7 +4,23 @@
 """The no-oracle qualification checks what they claim to check."""
 
 
+import subprocess
+
 import pytest
+from taskcompendium.models import (
+    AnswerType,
+    CommandSemantics,
+    ConversationInput,
+    EnvironmentRequirements,
+    InlineFile,
+    NoGrader,
+    PlainText,
+    ResourceGroups,
+    Source,
+    TaskResource,
+    TaskSpec,
+    TextMessage,
+)
 
 from experiments.post_training.task_curation.no_oracle_preservation import (
     FileExpectation,
@@ -21,7 +37,7 @@ from experiments.post_training.task_curation.no_oracle_qualification import (
     VerifierResult,
     summarize,
 )
-from experiments.post_training.task_curation.no_oracle_setup import SetupExecution
+from experiments.post_training.task_curation.no_oracle_setup import SetupExecution, execute_lowered_setup
 from experiments.post_training.task_curation.tests.task_tar_fixtures import pack_tar as _tar
 
 
@@ -109,6 +125,37 @@ def test_workspace_expectations_resolve_the_final_native_workdir(workdirs, desti
     recipe = f"FROM ubuntu:24.04\n{workdirs}COPY files/a.csv \\\n    ./result.csv\n"
     expected = workspace_expectations(_native(recipe=recipe))
     assert tuple(item.path for item in expected) == (destination,)
+
+
+def test_lowered_setup_passes_runtime_settings_to_docker(monkeypatch):
+    task = TaskSpec(
+        id="fixture",
+        context=ConversationInput(events=(TextMessage(role="user", content="Do the task."),)),
+        answer_type=AnswerType.TEXT,
+        answer_format=PlainText(),
+        grader=NoGrader(reason="setup qualification only"),
+        source=Source(dataset="fixture", revision="1", row="fixture", importer_revision="1"),
+        environment_requirements=EnvironmentRequirements(
+            docker_image="ubuntu@sha256:" + "a" * 64,
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            working_directory="/workspace",
+            environment_variables={"LABEL": "two words"},
+            setup_commands=("true",),
+        ),
+        resources=ResourceGroups(all=(TaskResource(path="seed", source=InlineFile(content_base64="eA==")),)),
+    )
+    requests = []
+
+    def docker_run(argv, **kwargs):
+        requests.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="container\n" if argv[1] == "create" else "", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", docker_run)
+    assert execute_lowered_setup(task, ()).passed
+    # Docker's argv is the external contract; values containing spaces stay one argument.
+    create = requests[0]
+    assert create[create.index("--workdir") + 1] == "/workspace"
+    assert create[create.index("--env") + 1] == "LABEL=two words"
 
 
 def test_setup_execution_requires_every_expected_file():

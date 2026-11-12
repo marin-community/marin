@@ -60,20 +60,17 @@ def test_an_agentic_task_without_an_environment_is_rejected():
     assert missing_environment(spec({"docker_image": AGENT})) is None
 
 
-def test_a_recipe_lowers_onto_its_pinned_base():
+def test_a_recipe_lowers_onto_its_pinned_base(tmp_path):
     recipe = (
         "FROM ubuntu:24.04\n"
         "ENV DEBIAN_FRONTEND=noninteractive\n"
-        "WORKDIR /workspace\n"
-        "RUN mkdir -p /out && chmod 777 /out\n"
+        f"WORKDIR {tmp_path}\n"
+        "RUN mkdir -p out && touch out/ready\n"
     )
     lowered = lower_environment(recipe, PINNED_BASES)
     assert lowered.base_ref == PINNED_BASES["ubuntu:24.04"]
-    assert lowered.working_directory == "/workspace"
-    assert lowered.setup_commands == (
-        "mkdir -p /workspace",
-        "(cd /workspace && export DEBIAN_FRONTEND=noninteractive; mkdir -p /out && chmod 777 /out)",
-    )
+    subprocess.run(["sh", "-c", " && ".join(lowered.setup_commands)], check=True)
+    assert (tmp_path / "out/ready").is_file()
 
 
 @pytest.mark.parametrize(
