@@ -220,16 +220,7 @@ def restore_first_checkpoint(state, checkpointer, mesh):
 def template_for_candidate_layout(
     state: "GrugTrainState", candidate: str, run_mode: MasterParamMode
 ) -> "GrugTrainState":
-    """Pick the template restore reads checkpoint ``candidate`` with.
-
-    Restore reads only the leaves the template names and takes each dtype from storage, checking
-    neither against the checkpoint, so reading a master-bearing checkpoint with the run's own
-    master-less template would silently return the bf16 compute copy. When the layouts match the
-    template is ``state`` itself. A master-bearing checkpoint read by a master-less run migrates
-    in process: the run's device fp32 ``params`` template is presented under ``master_params``, so
-    the checkpoint's authoritative fp32 master loads directly into it and the bf16 copy goes
-    unread; ``take_master_as_params`` then moves it back, and the next save writes the new layout.
-    """
+    """Return a restore template that selects the checkpoint's authoritative fp32 parameters."""
     has_master = checkpoint_stores_master(candidate)
     if has_master == (run_mode != MasterParamMode.DEVICE):
         return state
