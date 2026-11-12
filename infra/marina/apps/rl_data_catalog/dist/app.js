@@ -44,23 +44,23 @@ function filtered() {
     return order * state.direction || a.id.localeCompare(b.id);
   });
 }
-// Field contract (served by the duplicate-detection loader): each source row may carry
-// duplicate_group = {id, canonical_id, overlap}, where overlap is the fraction (0 to 1) of this
-// source's tasks that also occur in the canonical member, 1 for the canonical itself. Rows without
-// the field, or with null, stay ungrouped.
+// The backend survey serves reviewed groups with canonical source IDs and per-member overlap.
+function sourceOverlap(row) {
+  return row.duplicate_group.members.find(member => member.source_id === row.id).overlap_with_canonical;
+}
 function collapsed(rows) {
   const groups = new Map(), entries = [];
   for (const row of rows) {
     const group = row.duplicate_group;
-    if (!group?.id) { entries.push({row, others: []}); continue; }
-    if (!groups.has(group.id)) { const entry = {row: null, members: []}; groups.set(group.id, entry); entries.push(entry); }
-    groups.get(group.id).members.push(row);
+    if (!group?.group_id) { entries.push({row, others: []}); continue; }
+    if (!groups.has(group.group_id)) { const entry = {row: null, members: []}; groups.set(group.group_id, entry); entries.push(entry); }
+    groups.get(group.group_id).members.push(row);
   }
   for (const entry of entries) {
     if (!entry.members) continue;
-    const canonical = entry.members.find(row => row.id === row.duplicate_group.canonical_id) || entry.members[0];
+    const canonical = entry.members.find(row => row.id === row.duplicate_group.canonical_source_id) || entry.members[0];
     entry.row = canonical;
-    entry.others = entry.members.filter(row => row !== canonical).sort((a, b) => (b.duplicate_group.overlap ?? 0) - (a.duplicate_group.overlap ?? 0));
+    entry.others = entry.members.filter(row => row !== canonical).sort((a, b) => (sourceOverlap(b) ?? 0) - (sourceOverlap(a) ?? 0));
     delete entry.members;
   }
   return entries;
@@ -113,7 +113,7 @@ function render() {
   const rows = filtered();
   const entries = collapsed(rows);
   $('rows').replaceChildren(...entries.flatMap(({row, others}) => {
-    const groupId = row.duplicate_group?.id;
+    const groupId = row.duplicate_group?.group_id;
     const open = groupId && expandedGroups.has(groupId);
     return [sourceRow(row, others), ...(open ? others.map(other => sourceRow(other, [], row)) : [])];
   }));
@@ -129,9 +129,9 @@ function sourceRow(row, others, canonical) {
     open.title = row.display_name; open.addEventListener('click', () => details(row));
     name.append(open, node('span', row.origin, 'source-subtitle'));
     if (canonical) {
-      name.append(node('span', `${Math.round(100 * (row.duplicate_group.overlap ?? 0))}% of its tasks overlap ${canonical.display_name}`, 'source-subtitle duplicate-note'));
+      name.append(node('span', `${sourceOverlap(row) == null ? "Unmeasured overlap" : `${Math.round(100 * sourceOverlap(row))}% overlap`} with ${canonical.display_name}`, 'source-subtitle duplicate-note'));
     } else if (others.length) {
-      const groupId = row.duplicate_group.id, expanded = expandedGroups.has(groupId);
+      const groupId = row.duplicate_group.group_id, expanded = expandedGroups.has(groupId);
       const toggle = node('button', `${expanded ? '▾' : '▸'} ${others.length} likely duplicate${others.length === 1 ? '' : 's'}`, 'text-button duplicate-toggle');
       toggle.setAttribute('aria-expanded', String(expanded));
       toggle.addEventListener('click', () => { expanded ? expandedGroups.delete(groupId) : expandedGroups.add(groupId); render(); });
@@ -170,7 +170,7 @@ function details(row) {
     ['Last updated', row.updated_at ? day(row.updated_at) : null], ['Input rows', row.task_count], ['Source ID', row.id],
     ['Dataset revision', row.dataset_revision], ['Pipeline', row.pipeline?.name], ['Curation', row.curation?.status],
     ['Admission counts', row.curation?.admission_counts], ['Control status', controls?.status], ['Control counts', controls?.counts],
-    ['Duplicate group', row.duplicate_group && `${row.duplicate_group.id}; canonical ${row.duplicate_group.canonical_id}; overlap ${Math.round(100 * (row.duplicate_group.overlap ?? 0))}%`],
+    ['Duplicate group', row.duplicate_group && `${row.duplicate_group.group_id}; canonical ${row.duplicate_group.canonical_source_id}; overlap ${sourceOverlap(row) == null ? "unknown" : `${Math.round(100 * sourceOverlap(row))}%`}`],
     ['Backend capabilities', row.backend_capabilities],
   ];
   $('detail-fields').replaceChildren(...fields.filter(([, item]) => item !== null && item !== undefined).map(([title, item]) => {

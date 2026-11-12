@@ -161,14 +161,12 @@ def create_api(services: AppletServices) -> FastAPI:
                         **declaration,
                         "task_count": row["task_count"],
                         "curation": row["curation"],
-
                         "coverage": declared_coverage(declaration) or coverage.get(row["id"]),
                         "quality": level,
                         "result": result(declaration, row["curation"], grade, level),
                         "daytona": daytona(declaration, DAYTONA_SAFE_SNAPSHOT_LIMIT),
                         "updated_at": metadata["loaded_at"],
                         "backend_capabilities": row["backend_capabilities"],
-
                         "source_fingerprint": (
                             {
                                 key: value
@@ -387,6 +385,10 @@ def create_api(services: AppletServices) -> FastAPI:
                     {"source_id": source_id},
                 ).mappings()
             ]
+            capabilities = connection.execute(
+                text("SELECT capabilities FROM atlas_backend_sources WHERE load_id=:load_id AND source_id=:source_id"),
+                {"load_id": source["load_id"], "source_id": source_id},
+            ).scalar_one_or_none()
             load = loaded_catalog(connection)
         declaration = source["declaration"]
         grade = (summaries.get("admitted") or {}).get("grade")
@@ -396,6 +398,8 @@ def create_api(services: AppletServices) -> FastAPI:
             "coverage": declared_coverage(declaration),
             "curation": source["curation"],
             "diagnostics": source["diagnostics"],
+            "backend_capabilities": capabilities,
+            "duplicate_group": source["duplicate_group"],
             "latest_attempt": {
                 "key": source["latest_attempt_key"],
                 "status": source["latest_attempt_status"],

@@ -96,7 +96,8 @@ def load_catalog(
     survey_id = canonical_sha256(backend_map.model_dump(mode="json"))
     current = query(
         """
-        SELECT c.load_id, l.catalog_root, l.snapshot_id, l.loader_version, b.survey_id, i.survey_id AS identity_id FROM atlas_current c
+        SELECT c.load_id, l.catalog_root, l.snapshot_id, l.loader_version,
+            b.survey_id, i.survey_id AS identity_id FROM atlas_current c
         JOIN atlas_loads l USING (load_id)
         LEFT JOIN atlas_backend_surveys b USING (load_id)
         LEFT JOIN atlas_identity_surveys i USING (load_id) WHERE c.name = 'latest'

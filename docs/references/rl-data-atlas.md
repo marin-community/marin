@@ -104,12 +104,12 @@ against the limit of ten, or *Unknown (not measured)* when its declaration recor
 production snapshot-identity measurement.
 
 **Likely duplicates** fold into one entry. A `/sources` row may carry
-`duplicate_group`, an object with `id` (the group), `canonical_id` (the source
-shown for the group) and `overlap` (the fraction, 0 to 1, of this source's tasks
-that also occur in the canonical member; 1 for the canonical). The view shows the
-canonical member with an expandable list of the others and their overlap. Rows
-without the field, or with `null`, stay ungrouped. Source details also show a
-row's `backend_capabilities` map when the row carries one.
+`duplicate_group`, an object with `group_id`, `canonical_source_id` and a `members` list.
+Each member records `source_id` and its measured `overlap_with_canonical` (or null
+when unavailable). The view shows the canonical member with an expandable list of
+the others. The groups remain advisory; the complete recorded opinions are served
+by `/source-duplicates`. Rows without a group stay ungrouped. Source details and
+evidence pages show the source's backend requirements and per-role assignments.
 
 **Evidence** (`source.html`) collects one source's quality evidence on one page:
 declared oversight pointers, grader controls and admission counts, the sampled

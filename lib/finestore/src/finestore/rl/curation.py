@@ -167,7 +167,6 @@ class OracleValidation(StrEnum):
     """Neither qualification ran; the source's execution is not certified."""
 
 
-
 class GradingEnvironmentEvidence(CatalogRecord):
     """Census derived from the published task specifications, including rejected mismatches."""
 
@@ -177,6 +176,7 @@ class GradingEnvironmentEvidence(CatalogRecord):
     status_counts: dict[str, int]
     reason_counts: dict[str, int]
     evidence_url: str
+
 
 class SourceUse(StrEnum):
     """Whether a source's tasks are for training or for evaluation."""
@@ -206,7 +206,6 @@ class SourceCoverage(CatalogRecord):
     top_area: CurriculumArea | None
     basis: str
     unavailable_reason: str | None = None
-
 
 
 class SourceDeclaration(CatalogRecord):
@@ -246,7 +245,6 @@ class SourceDeclaration(CatalogRecord):
 
     # None only in snapshots published before declarations had to carry their coverage.
     coverage: SourceCoverage | None = None
-
 
 
 class AdmissionCounts(CatalogRecord):

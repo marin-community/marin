@@ -30,7 +30,6 @@ import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
 from rigging.filesystem.storage_path import StoragePath
-
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.grading_environment import (
     GradingEnvironmentStatus,
@@ -38,7 +37,6 @@ from taskcompendium.grading_environment import (
     count_grading_environment,
     grading_environment_census,
 )
-
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
 from taskcompendium.pipeline.conversion import normalization_columns
@@ -288,7 +286,6 @@ def prebuilt_artifact(
     config = source.config
     assert config is not None
     quick = options.mode is SourceProcessingMode.QUICK
-
 
     def build_config(context) -> PrebuiltImport:
         return PrebuiltImport(context.output_path, config, options.mode, task_format, encoding)

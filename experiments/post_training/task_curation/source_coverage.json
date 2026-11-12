@@ -2880,5 +2880,75 @@
   },
   "basis": "curriculum release s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json: converted population of 9999 tasks, every task embedded; leading subject by placed-task count",
   "unavailable_reason": null
+ },
+ "Campaign Release:tasktrove-code-contests-built-image": {
+  "intended_use": "train",
+  "example_count": 8222,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-taco-built-image": {
+  "intended_use": "train",
+  "example_count": 5116,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-math_oracle-qa": {
+  "intended_use": "train",
+  "example_count": 57424,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-math_stack-qa": {
+  "intended_use": "train",
+  "example_count": 110604,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-math_openreasoning-qa": {
+  "intended_use": "train",
+  "example_count": 42621,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-math_gym-qa": {
+  "intended_use": "train",
+  "example_count": 3941,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-math_prism-qa": {
+  "intended_use": "train",
+  "example_count": 2221,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-safety-qa": {
+  "intended_use": "train",
+  "example_count": 44939,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-knowledge-openqa-qa": {
+  "intended_use": "train",
+  "example_count": 122314,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
+ },
+ "Campaign Release:tasktrove-science-openqa-qa": {
+  "intended_use": "train",
+  "example_count": 150644,
+  "top_area": null,
+  "basis": "declaration: pinned row count before conversion; use from the eval tag",
+  "unavailable_reason": "converted tasks have not been embedded in a curriculum release"
  }
 }

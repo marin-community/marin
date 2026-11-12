@@ -93,6 +93,14 @@ async function render(data, sourceId) {
     ['Daytona', data.daytona.state === 'na' || data.daytona.state === 'unmeasured' ? data.daytona.reason : `${data.daytona.state}: ${number.format(data.daytona.snapshots)} unique snapshots, limit ${data.daytona.limit}`],
     ['Daytona basis', data.daytona.basis],
   ]));
+  const capabilities = data.backend_capabilities;
+  sections.push(card('Backend requirements and overlap', [
+    ['Measurement basis', capabilities?.basis], ['Measured tasks', capabilities?.task_count],
+    ['Role assignments', capabilities?.role_backend_assignments], ['Declared requirements', capabilities?.demands],
+    ['Backend fit and blockers', capabilities?.backends], ['Duplicate group', data.duplicate_group],
+    ['Full backend matrix', link('Open the backend survey', 'api/backends')],
+    ['Overlap reviews', link('Open recorded duplicate opinions', 'api/source-duplicates')],
+  ]));
   sections.push(card('Diagnostics and archived reviews', [
     ['Diagnostics', data.diagnostics.length ? list(data.diagnostics.map(file => { const span = node('span'); span.append(`${file.name}: `, pointer(file.uri)); return span; })) : null],
     ['Archived reviews', data.archived_reviews.length ? list(data.archived_reviews.map(review => link(`${new Date(review.updated_at).toLocaleDateString()} · ${review.review_count} reviews`, `archive.html?id=${encodeURIComponent(review.id)}`))) : null],
