@@ -131,7 +131,7 @@ class OracleTrialReceipt(BaseModel):
             self.scored
             and self.result.get("task_checksum") == task_checksum
             and self.oracle_exit_code == 0
-            and self.verdict["reward"] == 1
+            and (self.verdict or {}).get("reward") == 1
         )
 
 
@@ -398,7 +398,7 @@ class OracleTaskReceipt(BaseModel):
             ):
                 raise ValueError("Infrastructure retry changed the task or its native environment")
             if transition.parent_history_sha256 != canonical_sha256(
-                [previous.model_dump(mode="json") for previous in history[:index]]
+                {"phases": [previous.model_dump(mode="json") for previous in history[:index]]}
             ):
                 raise ValueError("Infrastructure retry history does not extend its exact parent")
             previous, current = phases[index : index + 2]

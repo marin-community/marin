@@ -794,7 +794,7 @@ def retry_cohort(plan_path: Path, destination: Path, concurrency: int) -> None:
             parent_map_path=str(parent_map),
             parent_map_sha256=plan.parent_map_sha256,
             parent_mapping_sha256=canonical_sha256(parent),
-            parent_history_sha256=canonical_sha256(parent.get("infrastructure_retries", [])),
+            parent_history_sha256=canonical_sha256({"phases": parent.get("infrastructure_retries", [])}),
             parent_calibration=ResourceCalibrationReceipt.model_validate(parent["calibration"]),
             backend_fix=plan.backend_fix,
             approval=plan.approvals[task_id],
