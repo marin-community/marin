@@ -1,5 +1,8 @@
 import asyncio
 import json
+import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -7,9 +10,10 @@ from harbor.agents.factory import AgentFactory
 from harbor.agents.oracle import OracleAgent
 from harbor.environments.local import LocalEnvironment
 from harbor.models.agent.context import AgentContext
-from harbor.models.task.config import EnvironmentConfig
+from harbor.models.task.config import EnvironmentConfig, TaskOS
 from harbor.models.trial.config import AgentConfig
 from harbor.models.trial.paths import EnvironmentPaths, TrialPaths
+from harbor.resource_usage import resource_counters, write_resource_usage
 from tests.unit.environments.test_local import ProcessTaskFactory
 
 
@@ -49,3 +53,16 @@ async def test_restored_oracle_runs_source_solution_through_local_environment(tm
     assert (factory.root / "workspace/answer.txt").read_text() == "solved"
     assert (paths.agent_dir / "oracle.txt").is_file()
     assert (paths.agent_dir / "exit-code.txt").read_text() == str(exit_code)
+
+
+async def test_oracle_cgroup_evidence_records_cpu_and_oom_counter_deltas(tmp_path):
+    environment = SimpleNamespace(os=TaskOS.LINUX, exec=AsyncMock(side_effect=[
+        SimpleNamespace(stdout="usage_usec 1000\noom_kill 4\n"),
+        SimpleNamespace(stdout="usage_usec 1501000\noom_kill 6\n"),
+    ]))
+    initial = await resource_counters(environment)
+    output = tmp_path / "resource-usage.json"
+    await write_resource_usage(environment, output, initial, time.monotonic())
+    evidence = json.loads(output.read_text())
+    assert evidence["cpu_seconds"] == 1.5
+    assert evidence["oom_kills"] == 2
