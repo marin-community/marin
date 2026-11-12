@@ -1307,18 +1307,24 @@ their declared environments and resource shapes. Failed execution requirements m
 cohort Daytona-unsafe even when its snapshot count fits the budget. Unsafe cohorts with
 valid task environments and admission evidence remain ingested with that label.
 
-`TaskSpec.execution_requirements` declares CPUs, memory and storage in MiB, plus
-agent and verifier deadlines in seconds. The backend survey classifies all five
-fields and includes their schema in its version digest. Capacity must match any
-published runtime allocation; native Harbor tasks must also match their embedded
-`task.toml`. A conflict fails measurement. These budgets apply only to roles
-that already require a machine.
+`TaskSpec.execution_requirements` declares an integer CPU count, memory and
+storage in MiB, and agent/verifier deadlines in seconds. The backend survey
+classifies all five fields and includes their schema in its version digest.
+Capacity must match the converted envelope's `runtime.task_machine` and
+`runtime.verifier_machine` allocations where present. Native Harbor capacity
+and deadlines must also match the embedded `task.toml`. A conflict fails that
+source's census; it publishes no replacement verdict. Budgets apply to roles
+with a declared machine environment (`environment_requirements` or
+`grader.environment`), and to the native Harbor actor defined by `task.toml`.
+Budgets alone do not create a machine requirement for text-only tasks.
 
-The complete actor census also publishes integrity-contract group counts, one
-bounded full example, and an evidence URI bound to the input dataset revision
-and TaskSpec digest. The backend map can carry that summary alongside the
-published grading-environment census. Missing contracts remain visible as
-missing evidence and do not establish shared-grading integrity.
+The complete actor census groups shared-grader protection contracts by their
+ID, version, dependency state, native family and harness policy. It publishes
+counts of each group and tasks missing contracts, plus one complete contract
+example of at most 16 KiB. Its evidence URI binds the summary to the input
+dataset revision and TaskSpec digest. `BackendSourceMap.integrity_contracts`
+carries this optional summary beside the published grading-environment census.
+Missing contracts remain missing evidence for qualification.
 
 ### Package-lock graders use the worker's local runtime
 
