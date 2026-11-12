@@ -21,6 +21,9 @@ from experiments.post_training.task_curation.datasets.evalchemy import mmlu as e
 from experiments.post_training.task_curation.datasets.evalchemy import nupa as eval_nupa
 from experiments.post_training.task_curation.datasets.evalchemy import reasoning as eval_reasoning
 from experiments.post_training.task_curation.datasets.evalchemy import simpleqa as eval_simpleqa
+from experiments.post_training.task_curation.datasets.lean import evals as lean_evals
+from experiments.post_training.task_curation.datasets.lean import numina as lean_numina
+from experiments.post_training.task_curation.datasets.lean import proofs as lean_proofs
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
 from experiments.post_training.task_curation.datasets.skyrl import code as skyrl_code
@@ -73,6 +76,9 @@ def all_sources() -> dict[str, RlDataSource]:
         *tasktrove_instructions.sources(),
         *tasktrove_multichallenge.sources(),
         *tasktrove_puzzles.sources(),
+        *lean_proofs.sources(),
+        *lean_numina.sources(),
+        *lean_evals.sources(),
         *arc.sources(),
         *reasoning_gym.sources(),
         *nemotron_ultra.sources(),
