@@ -169,6 +169,7 @@ PINNED_BASES = {
     "python:3.11-slim-bookworm": (
         "python:3.11-slim-bookworm@sha256:e8c69d86735f6df3efa06b324694fe51f0422785f83a3bd463052636c2421944"
     ),
+    "python:3.10-slim": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256",
     "python:3.10-slim-bookworm": (
         "python:3.10-slim-bookworm@sha256:db6ee5170ebce0f4d165af242e8e77addc08bd9ffc37e8b1815752cf027aa4f8"
     ),
@@ -212,10 +213,12 @@ def lower_environment(dockerfile: str, bases: Mapping[str, str]) -> LoweredEnvir
             commands.append(f"mkdir -p {shlex.quote(workdir)}")
             continue
         if directive == "ENV":
-            assignments = body.strip()
-            if "=" not in assignments or " " in assignments.split("=", 1)[1].strip():
-                raise UnlowerableRecipe(f"unsupported ENV form: {body!r}")
-            environment.append(f"{assignments.split('=', 1)[0]}={shlex.quote(assignments.split('=', 1)[1].strip())}")
+            # One ENV line may set several variables: ENV A=1 B=2.
+            for assignment in body.split():
+                key, separator, value = assignment.partition("=")
+                if not separator or not key:
+                    raise UnlowerableRecipe(f"unsupported ENV form: {body!r}")
+                environment.append(f"{key}={shlex.quote(value)}")
             continue
         if directive == "RUN":
             prefix = f"{' '.join(environment)} " if environment else ""
