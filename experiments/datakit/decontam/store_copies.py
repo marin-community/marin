@@ -12,7 +12,9 @@ A field of a record is found in a document when the field's text occurs in the d
 both lowercased with whitespace collapsed; the document is also searched after undoing
 JSON and Python string escapes, since many copies sit inside JSON lines and code. Fields
 shorter than ``--min-words`` words are not searched. A record is copied when one kept
-document holds every searched field.
+document holds every searched field. A generic field, such as a multiple-choice stem like
+"which of the following is a correct statement?", also matches text that is not a copy;
+search several fields of each record, or raise ``--min-words``, to require more evidence.
 
 Input is a Hugging Face dataset (``--hf REPO --revision SHA --config NAME --split NAME``)
 or Parquet files (``--parquet GLOB``), with the string fields to search (``--fields``).
