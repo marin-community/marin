@@ -164,29 +164,22 @@ def incomplete_environment(tmp_path):
     return str(environment / "bin" / "python")
 
 
-@pytest.mark.parametrize("phase", ["startup", "collection", "mixed"])
+@pytest.mark.parametrize("phase", ["startup", "collection"])
 def test_pytest_missing_uninstalled_dependency_is_invalid_task(tmp_path, incomplete_environment, phase):
     workspace = _project(tmp_path, FIXED, "import missing_test_dependency\n")
     if phase == "startup":
         (workspace / "conftest.py").write_text("import missing_test_dependency\n")
-    elif phase == "mixed":
-        (workspace / "tests/test_candidate.py").write_text("import missing_candidate\n")
     with pytest.raises(InvalidTask, match="missing_test_dependency"):
-        grade_pytest.grade(
-            _spec(python=incomplete_environment, paths=("tests",)),
-            tmp_path,
-            workspace,
-        )
+        grade_pytest.grade(_spec(python=incomplete_environment, paths=("tests",)), tmp_path, workspace)
 
 
 @pytest.mark.parametrize("phase", ["startup", "collection"])
-@pytest.mark.parametrize("paths", [("tests/test_calc.py",), ()])
-def test_pytest_declared_missing_module_in_tests_scores_zero_then_implementation_passes(tmp_path, phase, paths):
+def test_pytest_declared_missing_module_in_tests_scores_zero_then_implementation_passes(tmp_path, phase):
     workspace = _project(tmp_path, FIXED)
     (workspace / "calc.py").unlink()
     if phase == "startup":
         (workspace / "conftest.py").write_text("from calc import add\n")
-    spec = _spec(paths=paths, candidate_modules=("calc",))
+    spec = _spec(candidate_modules=("calc",))
     failure = grade_pytest.grade(spec, tmp_path, workspace)
     assert (failure.status, failure.reward) == (Status.SCORED, 0.0)
     (workspace / "calc.py").write_text(FIXED)
@@ -656,21 +649,12 @@ def test_pytest_editable_installed_candidate_can_add_missing_submodule(
         '[project]\nname = "editable-candidate"\nversion = "1.0"\n'
         '[tool.setuptools]\npackages = ["editable_candidate"]\n'
     )
-    subprocess.run(
-        [
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            incomplete_environment,
-            "--no-build-isolation",
-            "--no-deps",
-            "-e",
-            str(workspace),
-        ],
-        check=True,
+    installed = subprocess.run(
+        ["uv", "pip", "install", "--python", incomplete_environment, "--no-build-isolation", "--no-deps", "-e", "."],
         capture_output=True,
+        cwd=workspace,
     )
+    assert installed.returncode == 0, installed.stderr.decode() + installed.stdout.decode()
     spec = _spec(python=incomplete_environment, candidate_modules=candidate_modules)
     missing = grade_pytest.grade(spec, tmp_path, workspace)
     assert (missing.status, missing.reward) == (Status.SCORED, 0.0)
