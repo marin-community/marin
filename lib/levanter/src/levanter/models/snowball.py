@@ -20,7 +20,9 @@ guards against drift.
 """
 
 import dataclasses
+import math
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Literal, NamedTuple, Optional, Type, TypeAlias, cast
 
 import equinox as eqx
@@ -904,6 +906,13 @@ class SnowballAttention(eqx.Module):
 def _fixed_shared_attention(
     q: jax.Array, k: jax.Array, v: jax.Array, mask: AttentionMask, *, cfg: SnowballConfig
 ) -> jax.Array:
+    """Run the bounded four-slot fixed forward with a reference reverse mode."""
+    return _fixed_shared_attention_with_vjp(q, k, v, mask, cfg)
+
+
+def _fixed_shared_attention_forward(
+    q: jax.Array, k: jax.Array, v: jax.Array, mask: AttentionMask, *, cfg: SnowballConfig
+) -> jax.Array:
     """Run the bounded four-slot fixed forward for full 256-position NoPE batches."""
     _validate_fixed_shared_attention_config(cfg)
     if q.shape != (4, 256, cfg.num_heads, cfg.inferred_head_dim):
@@ -928,6 +937,72 @@ def _fixed_shared_attention(
         valid,
         spec=spec,
     )
+
+
+def _fixed_shared_attention_reference(
+    q: jax.Array, k: jax.Array, v: jax.Array
+) -> jax.Array:
+    """Evaluate the cast-aware contiguous grouped-query attention used by the VJP."""
+    if not get_abstract_mesh().empty:
+        # Training can annotate the singleton expert axis on sequence. Q and K
+        # form independent sequence dimensions, so contract with batch-only sharding.
+        q, k, v = (reshard(value, P("data", None, None, None)) for value in (q, k, v))
+    scale = jnp.asarray(1.0 / math.sqrt(q.shape[-1]), dtype=jnp.float32)
+    q_compute = q.astype(jnp.float32)
+    k_compute = k.astype(jnp.bfloat16)
+    v_compute = v.astype(jnp.bfloat16)
+    # Keep the BF16 head-reduction adjoint while making dot operands explicitly FP32.
+    k_aligned = align_kv_heads(k_compute, num_q_heads=q.shape[2]).astype(jnp.float32)
+    v_aligned = align_kv_heads(v_compute, num_q_heads=q.shape[2]).astype(jnp.float32)
+    scores = jnp.einsum(
+        "bqhd,bkhd->bhqk",
+        q_compute * scale,
+        k_aligned,
+        precision=jax.lax.Precision.HIGHEST,
+        preferred_element_type=jnp.float32,
+    )
+    positions = jnp.arange(q.shape[1])
+    scores = jnp.where(positions[None, None, None, :] <= positions[None, None, :, None], scores, -1e9)
+    weights = jax.nn.softmax(scores, axis=-1)
+    return jnp.einsum(
+        "bhqk,bkhd->bqhd",
+        weights,
+        v_aligned,
+        precision=jax.lax.Precision.HIGHEST,
+        preferred_element_type=jnp.float32,
+    )
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(3, 4))
+def _fixed_shared_attention_with_vjp(
+    q: jax.Array, k: jax.Array, v: jax.Array, mask: AttentionMask, cfg: SnowballConfig
+) -> jax.Array:
+    return _fixed_shared_attention_forward(q, k, v, mask, cfg=cfg)
+
+
+def _fixed_shared_attention_with_vjp_fwd(
+    q: jax.Array, k: jax.Array, v: jax.Array, mask: AttentionMask, cfg: SnowballConfig
+) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array]]:
+    return _fixed_shared_attention_forward(q, k, v, mask, cfg=cfg), (q, k, v)
+
+
+def _fixed_shared_attention_with_vjp_bwd(
+    mask: AttentionMask,
+    cfg: SnowballConfig,
+    residuals: tuple[jax.Array, jax.Array, jax.Array],
+    cotangent: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    del mask, cfg
+    q, k, v = residuals
+    _, pullback = jax.vjp(_fixed_shared_attention_reference, q, k, v)
+    cotangent = cotangent.astype(jnp.float32)
+    if not get_abstract_mesh().empty:
+        cotangent = reshard(cotangent, P("data", None, None, None))
+    dq, dk, dv = pullback(cotangent)
+    return dq.astype(q.dtype), dk.astype(k.dtype), dv.astype(v.dtype)
+
+
+_fixed_shared_attention_with_vjp.defvjp(_fixed_shared_attention_with_vjp_fwd, _fixed_shared_attention_with_vjp_bwd)
 
 
 def _fixed_shared_attention_decode(
@@ -1061,6 +1136,10 @@ def _fixed_schedule_projection(x: jax.Array, weight: jax.Array) -> jax.Array:
         weight = jnp.pad(weight, ((0, padded_contraction_dim - contraction_dim), (0, 0)))
     if padded_output_dim != output_dim:
         weight = jnp.pad(weight, ((0, 0), (0, padded_output_dim - output_dim)))
+    if padded_contraction_dim != contraction_dim or padded_output_dim != output_dim:
+        # Keep the padding adjoint outside the replicated-gradient collective;
+        # TPUv4 can otherwise fuse a cropped slice with a padded reduce-scatter.
+        weight = jax.lax.optimization_barrier(weight)
     x_sharding = jax.typeof(flat_x).sharding if isinstance(flat_x, core.Tracer) else flat_x.sharding
     if isinstance(x_sharding, NamedSharding):
         flat_x = reshard(flat_x, P(tuple(x_sharding.spec)[0], None))

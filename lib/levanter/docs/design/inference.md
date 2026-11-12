@@ -167,6 +167,20 @@ Cached decode writes use the physical page map supplied by `PageBatchInfo`,
 with placement checks at positions 127 and 128. The selector is runtime-only;
 checkpoint fields and the native default remain unchanged.
 
+The contiguous four-slot training adapter now retains that exact fixed forward
+under a custom VJP. Its reverse mode is a readable grouped-query softmax
+reference over BF16-materialized K/V operands, with FP32 QK and output
+accumulation, causal positions, and reduction from two query heads to one KV
+head. This is a cast-aware mathematical gradient convention: it does not claim
+to differentiate discrete BF16 rounding or establish backward bitwise parity.
+The reverse rule is limited to the one-layer, two-expert, NoPE fixture; serving
+decode, normal attention dispatch, RoPE, paged-cache training gradients, and
+other layer/expert counts remain unchanged. Focused CPU reference checks cover
+nontrivial cotangents at positions 127, 128, and 255 and all Q/K/V gradients.
+Native TPU gradient qualification, including sharding and full-model
+value-and-grad checks, remains pending and is owned by the parent validation
+stage.
+
 Snowball Q/K projection has a separate runtime-only
 `qk_rms_norm_implementation` selector. Its default is the existing native
 non-parametric RMSNorm; `reference` and `pallas_tpu` reuse
