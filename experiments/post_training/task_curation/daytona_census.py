@@ -21,7 +21,6 @@ from typing import NamedTuple
 import pyarrow.parquet as pq
 from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT
 from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
-from harbor_config.models.task.config import EnvironmentConfig
 from huggingface_hub import snapshot_download
 from rolloutengine.machines import _machine_spec
 from rolloutengine.models import MachineRuntimeSpec
@@ -135,6 +134,8 @@ def declared_shapes(converted: ConvertedRow) -> dict:
 
 
 def native_shapes(task_toml: bytes) -> dict:
+    from harbor_config.models.task.config import EnvironmentConfig  # noqa: PLC0415
+
     document = tomllib.loads(task_toml.decode())
     actor = EnvironmentConfig.model_validate(document.get("environment") or {})
     verifier = EnvironmentConfig.model_validate(
@@ -264,6 +265,8 @@ def measure_envelopes(documents: Iterable[tuple[dict, dict]]) -> EnvelopeCensus:
                     )
                 grader_measurement = identities[grader_key]
                 outcome["failures"].update(reason for _, reason in grader_measurement.execution_failures)
+        if runtime["task_machine"] is None:
+            continue
         actor_runtime = {**runtime, "verifier_machine": None}
         if runtime["task_machine"] is not None:
             actor_sources.update(

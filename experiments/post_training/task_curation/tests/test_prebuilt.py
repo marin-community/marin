@@ -488,7 +488,7 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
 
 
 @pytest.mark.parametrize("policy", ["public", "other_namespace", "raw_format"])
-def test_atlas_private_release_policy_blocks_prebuilt_download(tmp_path, monkeypatch, policy):
+def test_atlas_private_release_policy_blocks_prebuilt_download(monkeypatch, policy):
     config = _cohort(1)
     if policy == "other_namespace":
         config = prebuilt.PrebuiltCohort(

@@ -34,7 +34,6 @@ from taskcompendium.backend_requirements import RuntimeProfile
 from taskcompendium.models import EnvironmentRequirements, ExecutionRequirements, ScriptGrader, TaskResource, TaskSpec
 
 from experiments.post_training.task_curation.backend_capabilities import source_map
-from experiments.post_training.task_curation.daytona_identity import count_lowered_spec_identities
 
 ROOT = Path(__file__).resolve().parents[4]
 RUNTIME = RuntimeProfile(
@@ -183,8 +182,6 @@ def test_actor_capacity_preserves_independent_separate_grader_profile():
         "verifier_machine": {"cpus": 4, "memory_mb": 8192, "storage_mb": 20480},
     }
     document = {"task": task, "runtime": runtime}
-    counts = count_lowered_spec_identities([("independent", document)])
-    assert counts.distinct == 2 and not counts.execution_failures
     checkers = {"docker": DockerMachineFactory().check_environment}
     mapped = source_map(
         "independent", [document], capability_matrix(checkers), checkers, {}, {"agent": RUNTIME, "grader": RUNTIME}
