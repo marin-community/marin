@@ -191,10 +191,10 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return scored(0.0, reason="timeout", passed=0, total=0)
-                files = _candidate_error_files(failures, directory, protected, spec.candidate_modules)
+                files = _validate_test_dependencies(failures, paths, directory, spec.python, remaining)
                 if not files:
-                    files = _validate_test_dependencies(failures, paths, directory, spec.python, remaining)
-                if files and _pytest_available(spec.python, Path(scratch), remaining):
+                    files = _candidate_error_files(failures, directory, protected, spec.candidate_modules)
+                if files and _pytest_available(spec.python, Path(scratch), max(0.0, deadline - time.monotonic())):
                     candidate_failure = scored(
                         0.0,
                         reason="startup_error",
@@ -219,11 +219,11 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
                     collector["nodeid"] for collector in failed_collectors
                 }:
                     raise RuntimeError("pytest collection failure has no exception provenance")
-                files = _candidate_error_files(collection_failures, directory, protected, spec.candidate_modules)
+                files = _validate_test_dependencies(
+                    collection_failures, paths, directory, spec.python, max(0.0, deadline - time.monotonic())
+                )
                 if not files:
-                    files = _validate_test_dependencies(
-                        collection_failures, paths, directory, spec.python, max(0.0, deadline - time.monotonic())
-                    )
+                    files = _candidate_error_files(collection_failures, directory, protected, spec.candidate_modules)
                 if not files:
                     raise RuntimeError(
                         "pytest collection failed in trusted code or dependencies: "
@@ -384,7 +384,11 @@ def _validate_test_dependencies(
         filename = (root / failure.filename).resolve()
         if not any(
             filename == path
-            or (path.is_dir() and filename.is_relative_to(path) and filename.match("test*.py"))
+            or (
+                path.is_dir()
+                and filename.is_relative_to(path)
+                and (filename.match("test_*.py") or filename.match("*_test.py"))
+            )
             or (filename.name == "conftest.py" and path.is_relative_to(filename.parent))
             for path in test_paths
         ):

@@ -168,14 +168,19 @@ def incomplete_environment(tmp_path):
 
 
 @pytest.mark.parametrize("phase", ["startup", "collection", "mixed"])
-def test_pytest_missing_installed_dependency_is_invalid_task(tmp_path, incomplete_environment, phase):
+@pytest.mark.parametrize("candidate_modules", [(), ("missing_test_dependency",)])
+def test_pytest_missing_installed_dependency_is_invalid_task(tmp_path, incomplete_environment, phase, candidate_modules):
     workspace = _project(tmp_path, FIXED, "import missing_test_dependency\n")
     if phase == "startup":
         (workspace / "conftest.py").write_text("import missing_test_dependency\n")
     elif phase == "mixed":
         (workspace / "tests/test_candidate.py").write_text("import missing_candidate\n")
     with pytest.raises(InvalidTask, match="missing_test_dependency"):
-        grade_pytest.grade(_spec(python=incomplete_environment, paths=("tests",)), tmp_path, workspace)
+        grade_pytest.grade(
+            _spec(python=incomplete_environment, paths=("tests",), candidate_modules=candidate_modules),
+            tmp_path,
+            workspace,
+        )
 
 
 @pytest.mark.parametrize("phase", ["startup", "collection"])
