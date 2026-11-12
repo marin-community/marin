@@ -79,7 +79,7 @@ includes the filtered rows in the displayed order.
 identities and no refused actor requirements. Sources without an actor show N/A;
 grandfathered blends show a dash. Package-lock graders run on LOCAL with separate
 compatibility evidence. A source without a measured actor verdict cannot enter
-new ingestion.
+new ingestion. The backend map records each role's demands and blockers.
 
 Example counts describe successfully converted tasks before training selection.
 Every entry has a registered conversion pipeline; there is no inventory-only
@@ -97,6 +97,92 @@ visible; source details contain the remaining fields.
 
 ## Updating Atlas
 
+### Deployment checklist
+
+1. Use Marin latest and inspect the current Atlas package version and selected catalog.
+   Record the package version, selected catalog snapshot, source commit and survey
+   artifact URIs in the deployment's issue or PR.
+2. Survey the production backends at Marin latest for their current capabilities
+   with the [survey procedure](#backend-survey), and publish the matrix beside the deployment record.
+   Execute this survey at each deployment; do not reuse an older deployment's matrix.
+3. Validate and release the app against the inspected package version, then load
+   the catalog with that survey's `--backend-map` artifact and the selected
+   snapshot's `--source-identities` artifact. Fingerprint changed sources and
+   resolve or acknowledge their shortlisted source-overlap flags before admission.
+4. Check `/backends`, `/source-duplicates`, `/sources`, an assessment and its evidence. Confirm the
+   selected snapshot and survey revision agree with the deployment record.
+
+### Backend survey
+
+The enum in `shellbox.requirements` classifies TaskCompendium environments,
+resources, runtime shapes, machine sources and commands, plus Harbor environment
+fields. Schema tests fail when a field is added without classification. Backend
+selection stays deployment metadata. The survey calls production factory checks
+over generated specs, then validates each converted task's combined agent and
+grader machine demands through rolloutengine's machine mapping.
+
+Prepare `survey-inputs.json` with `inputs` entries containing `source_id`, local
+Parquet `paths`, JSON spec `column` and `expected_tasks`. Use complete converted
+populations, not sampled assessment packets. Each entry must match the selected
+catalog's pinned source revision. Stage remote shards with `uv run fsutil cp`
+near their storage region. The survey streams rows and records input SHA-256s.
+Sources without converted inputs remain explicitly `unassessed`.
+
+Set `runtime_defaults.agent` and `runtime_defaults.grader` to the deployment's
+explicit machine settings: `network`, `cpus`, `memory_mb`, `storage_mb`, `gpus`,
+`user`, `startup_timeout` and `cleanup_timeout`. Use JSON null for unset limits.
+Published task values override this profile. The artifact records the profile;
+it never infers missing resource or network policy from backend choice.
+
+```bash
+uv run --prerelease allow --with-editable './lib/shellbox[daytona,qemu,shellsim,iris]' python -m \
+  experiments.post_training.task_curation.backend_capabilities \
+  --catalog-root s3://marin-us-east-02a/marin/rl-data/catalog/production \
+  --manifest survey-inputs.json --output backend-map.json
+```
+
+The versioned artifact contains every backend/requirement cell, evidence and
+conditions, per-role requirement counts and resource ranges, and per-backend task
+outcomes. `supported` means the declared feature passes its check; `partial`
+records an implementation or deployment condition; `unsupported` records a
+rejection or missing implementation. These are execution-contract checks, not
+provider capacity or verifier-liveness measurements. Docker storage quotas depend
+on its storage driver; Iris disk is a scheduling request. QEMU OCI inputs need
+configured assets and caches. Uploaded mtimes and non-root users have separate cells.
+
+This offline survey makes no provider calls and creates no machines or snapshots.
+Record measured account limits separately in `deployment_limits`, keyed by backend,
+with `max_concurrent_sandboxes`, `snapshot_cap`, `observed_at` and `evidence`.
+Unmeasured limits stay null. The ten-snapshot source budget differs from an
+account's snapshot quota. Live Daytona observations use only the RL organization
+and existing snapshots. Any agent may remove a snapshot only when provider
+last-use is older than one hour and the active run's snapshot reference registry
+has `queued_reference_inventory_complete=true` with no reference to that
+snapshot from any live or queued run. An unavailable or incomplete registry
+blocks cleanup.
+
+`/backends` serves the selected matrix, revision, profile and limit observations.
+Each `/sources` row includes `backend_capabilities`: census basis, input digests,
+role demands, resource ranges, supported/partial/unsupported task counts and
+blockers. Both slots must fit for a single-backend deployment; per-role results
+also describe split execution. `role_backend_assignments` records the Daytona
+deployment: the actor uses Daytona and a package-lock grader uses LOCAL. Read
+the assigned backend's `roles` counts for each role. Daytona safety counts only
+actor snapshots and actor refusals; a reply-only task has no Daytona actor and
+is N/A. LOCAL grader quota or feature failures remain visible independently.
+Backend names are never distribution features.
+The map carries the catalog's `grading_environment` census unchanged; its
+required/declared boundary counts and mismatch reasons come from converted-row
+evidence. The loader rejects a map carrying different grading evidence.
+The offline `daytona_census` command measures registered converters' TaskSpec
+outputs before admission gates and records admission rejections separately.
+An all-rejected population retains its measured execution cost and a BAD
+curation result. A converter emitting no TaskSpecs is an ingestion failure.
+The loader checks schema, snapshot and source coverage and stages the matrix and
+source maps under the catalog load ID before its conditional atomic selection.
+Changing a survey refreshes an otherwise unchanged catalog. A failed import
+preserves the selected map.
+
 Source code lives in `infra/marina/apps/rl_data_catalog/`. Its migration
 creates the SQL tables; it does not read object storage or run curation.
 Publish code when the schema or UI changes, then load data explicitly:
@@ -108,7 +194,8 @@ uv run marina apps versions fb11c931-5861-4878-8bb5-a964d652b45f --json
 uv run marina release infra/marina/apps/rl_data_catalog --base-version CURRENT_VERSION
 
 uv run python infra/marina/apps/rl_data_catalog/load.py \
-  --app-id fb11c931-5861-4878-8bb5-a964d652b45f
+  --app-id fb11c931-5861-4878-8bb5-a964d652b45f --backend-map backend-map.json \
+  --source-identities source-identities-reviewed.json
 ```
 
 `applet.toml` declares the existing app's UUID. Any authenticated internal
@@ -194,11 +281,55 @@ loader against a local curation cache using the printed app ID and origin:
 uv run marina release infra/marina/apps/rl_data_catalog --local --json
 uv run python infra/marina/apps/rl_data_catalog/load.py \
   --catalog-root ~/.cache/marin/rl-curation/campaigns/catalog \
-  --app-id PRINTED_ID --url PRINTED_ORIGIN
+  --app-id PRINTED_ID --url PRINTED_ORIGIN --backend-map local-backend-map.json \
+  --source-identities local-source-identities-reviewed.json
 ```
 
 Inspect the inventory, an assessment and its task evidence. Stop the local stack
 with Ctrl-C when finished; its database is disposable.
+
+### Source identity and overlap review
+
+`source_duplicates fingerprint` reads complete converted populations using the
+same manifest shape as the backend survey. It records seed-0 samples of at most
+20 normalized tasks, instruction MinHash sketches, reference/test hashes,
+upstream dataset revisions, identifier/URL hashes and within-source duplicate
+counts. Pin each immutable artifact URI, its SHA-256 and the declaration digest
+in `experiments/post_training/task_curation/source_fingerprint_index.json`.
+
+The `Atlas source overlap` workflow detects added or changed declarations and
+requires their fingerprints. It ranks candidates mechanically and reviews only
+the top three per changed source. The runtime-selected `JudgeEndpoint` uses
+`Qwen/Qwen3.8-27B` at revision
+`37561816e66b5b9153b1b64c10968c18c1e6f4a0`, temperature 0.7 and prompt
+`source-overlap-v1`. Hosted endpoints must advertise that exact model. The local
+route owns one H100 through `remote_inference`, with compilation and CUDA graphs
+enabled, and releases it when the bounded batch exits. Identical complete
+requests reuse cached reviews. Use a labelled duplicate/distinct fixture before
+accepting a new model or prompt.
+
+```bash
+uv run --extra dedup python -m experiments.post_training.task_curation.source_duplicates fingerprint \
+  --manifest identity-inputs.json --output source-identities.json
+uv run --extra dedup python -m experiments.post_training.task_curation.source_duplicates scan \
+  --fingerprints source-identities.json --changed-sources changed-sources.json \
+  --top-k 3 --route local --labels labelled-pairs.json \
+  --acknowledgements experiments/post_training/task_curation/source_duplicate_acknowledgements.json \
+  --require-acknowledged --output source-identities-reviewed.json
+```
+
+Reviews label pairs `duplicate`, `partial_overlap` (with the estimated fraction
+of the smaller population present in the larger), or `distinct`, with a reason.
+Non-distinct flags require resolution or an acknowledgement keyed by the exact
+request digest in `source_duplicate_acknowledgements.json`. Groups choose a
+stable canonical member for default collapsing; every source and its assessment
+remains available. These are advisory opinions, not deletion instructions.
+
+The staged loader selects fingerprints, pair reviews and groups atomically with
+the catalog and backend map. Pass the scan's reviewed output to the loader's
+`--source-identities` option. `/sources` returns a compact fingerprint summary
+and group membership; `/source-fingerprint?source_id=...` returns its bounded
+sample, and `/source-duplicates` returns review provenance, opinions and groups.
 
 ## Curriculum coverage
 

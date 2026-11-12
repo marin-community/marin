@@ -142,7 +142,7 @@ class JudgeEndpoint(Protocol):
     def connect(self) -> AbstractContextManager[JudgeConnection]: ...
 
 
-def _validate_model(connection: JudgeConnection, tier: JudgeTier) -> None:
+def _validate_model(connection: JudgeConnection, expected: str) -> None:
     response = httpx.get(
         f"{connection.base_url.rstrip('/')}/models",
         headers={"Authorization": f"Bearer {connection.api_key}"},
@@ -152,23 +152,22 @@ def _validate_model(connection: JudgeConnection, tier: JudgeTier) -> None:
     payload = response.json()
     # Together lists models directly; OpenAI-compatible servers wrap them in data.
     models = payload if isinstance(payload, list) else payload["data"]
-    expected = JUDGE_TIERS[tier].spec.model
     if expected not in {model["id"] for model in models}:
-        raise ValueError(f"Judge endpoint does not advertise the pinned {tier} model {expected!r}")
+        raise ValueError(f"Judge endpoint does not advertise the pinned model {expected!r}")
 
 
 @dataclass(frozen=True)
 class HostedJudgeEndpoint:
     """Connect to an existing provider using credentials supplied by the caller."""
 
-    tier: JudgeTier
+    model: str
     base_url: str
     api_key: str = field(repr=False)
 
     @contextmanager
     def connect(self) -> Iterator[JudgeConnection]:
-        connection = JudgeConnection(self.base_url, self.api_key, default_model=JUDGE_TIERS[self.tier].spec.model)
-        _validate_model(connection, self.tier)
+        connection = JudgeConnection(self.base_url, self.api_key, default_model=self.model)
+        _validate_model(connection, self.model)
         yield connection
 
 
@@ -182,7 +181,7 @@ class RelayJudgeEndpoint:
     @contextmanager
     def connect(self) -> Iterator[JudgeConnection]:
         with HostedJudgeEndpoint(
-            JudgeTier.HEAVY, resolve_glm_base_url(self.relay_job), self.api_key
+            JUDGE_TIERS[JudgeTier.HEAVY].spec.model, resolve_glm_base_url(self.relay_job), self.api_key
         ).connect() as connection:
             yield connection
 
@@ -229,5 +228,7 @@ class LocalJudgeEndpoint:
             endpoint = session.model.endpoint
             if endpoint.model != definition.spec.model:
                 raise ValueError(f"Serving endpoint returned an unexpected model {endpoint.model!r}")
-            with HostedJudgeEndpoint(self.tier, endpoint.base_url, endpoint.api_key or "unused").connect() as connection:
+            with HostedJudgeEndpoint(
+                definition.spec.model, endpoint.base_url, endpoint.api_key or "unused"
+            ).connect() as connection:
                 yield connection
