@@ -8,7 +8,6 @@ from skyrl_train.inference_engines.base import (
 from skyrl_train.weight_sync.weight_loader import WeightLoader
 from typing import List, Optional, Any, Dict
 import json
-from transformers import PreTrainedTokenizerBase
 
 
 class RemoteWeightLoader(WeightLoader):
@@ -121,7 +120,6 @@ class RemoteInferenceEngine(InferenceEngineInterface):
         url: str,
         model_name: str,
         engine_backend: str,
-        tokenizer: PreTrainedTokenizerBase,
         tp_size: Optional[int] = None,
         pp_size: Optional[int] = None,
         dp_size: Optional[int] = None,
@@ -144,7 +142,6 @@ class RemoteInferenceEngine(InferenceEngineInterface):
         self._dp_size = dp_size
         self._ep_size = ep_size
         self._dcp_size = dcp_size
-        self.tokenizer = tokenizer
 
         # Create weight loader for coordinating weight updates
         self._weight_loader = RemoteWeightLoader(self.url, engine_backend)
@@ -324,7 +321,6 @@ def create_remote_inference_engines(
     urls: List[str],
     model_name: str,
     engine_backend: str,
-    tokenizer: PreTrainedTokenizerBase,
     tensor_parallel_size: Optional[int] = None,
     pipeline_parallel_size: Optional[int] = None,
     data_parallel_size: Optional[int] = None,
@@ -339,7 +335,6 @@ def create_remote_inference_engines(
         RemoteInferenceEngine(
             url=url,
             model_name=model_name,
-            tokenizer=tokenizer,
             engine_backend=engine_backend,
             tp_size=tensor_parallel_size,
             pp_size=pipeline_parallel_size,

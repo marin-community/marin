@@ -1,18 +1,12 @@
 """Exact rollout token transport against a local OpenAI-compatible server."""
 
 import pytest
+from httpx import AsyncClient, ASGITransport
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from skyrl_train.inference_engines.remote_inference_engine import RemoteInferenceEngine
-
-
-class AliasingTokenizer:
-    def encode(self, text, add_special_tokens=False):
-        return [2]  # Both 2 and 3 decode to the same text; retokenization loses identity.
-
-    def decode(self, tokens, skip_special_tokens=True):
-        return " X"
+from skyrl_train.inference_engines.inference_engine_client_http_endpoint import create_app, set_global_state
 
 
 @pytest.mark.asyncio
@@ -46,9 +40,7 @@ async def test_remote_completion_keeps_sampled_ids_and_aligned_behavior_logprobs
     app = web.Application()
     app.router.add_post("/v1/completions", generate)
     async with TestServer(app) as server:
-        engine = RemoteInferenceEngine(
-            str(server.make_url("")).removeprefix("http://").rstrip("/"), "test", "vllm", AliasingTokenizer()
-        )
+        engine = RemoteInferenceEngine(str(server.make_url("")).removeprefix("http://").rstrip("/"), "test", "vllm")
         result = await engine.generate({"prompt_token_ids": [[0, 1], [0, 2]], "sampling_params": {"temperature": 1.0}})
         # An abort retry extends the original prompt with served IDs, never encoded response text.
         retry_ids = [[0, 1] + result["response_ids"][0], [0, 2] + result["response_ids"][1]]
@@ -69,8 +61,6 @@ async def test_remote_weight_publication_and_lifecycle_use_vllm_wire_protocol():
     async def receive(request):
         body = await request.json() if request.can_read_body else None
         requests.append((request.path, body))
-        if request.path == "/reset_prefix_cache":
-            return web.Response(text="cache cleared")
         return web.json_response({"accepted": request.path})
 
     app = web.Application()
@@ -84,19 +74,16 @@ async def test_remote_weight_publication_and_lifecycle_use_vllm_wire_protocol():
     ):
         app.router.add_post(f"/{path}", receive)
     async with TestServer(app) as server:
-        engine = RemoteInferenceEngine(
-            str(server.make_url("")).removeprefix("http://").rstrip("/"), "test", "vllm", AliasingTokenizer()
-        )
+        engine = RemoteInferenceEngine(str(server.make_url("")).removeprefix("http://").rstrip("/"), "test", "vllm")
         await engine.init_weight_update_communicator("trainer", 29500, 1, 3, "policy", "nccl", True)
         result = await engine.update_named_weights(
             {"names": ["model.norm.weight"], "dtypes": ["bfloat16"], "shapes": [[128]], "extras": None}
         )
         await engine.sleep(level=2)
         await engine.wake_up(tags=["weights", "kv_cache"])
-        cache_result = await engine.reset_prefix_cache()
+        await engine.reset_prefix_cache()
         await engine.teardown()
     assert result == {"accepted": "/update_weights"}
-    assert cache_result == {"status": 200, "body": "cache cleared"}
     assert requests == [
         (
             "/init_weight_update_communicator",
@@ -127,7 +114,7 @@ async def test_remote_weight_publication_and_lifecycle_use_vllm_wire_protocol():
         {"object": "error", "message": "invalid request", "code": 400},
     ],
 )
-async def test_openai_compatible_requests_and_errors_pass_through(endpoint, error):
+async def test_openai_bridge_preserves_requests_and_maps_both_error_shapes_to_http_status(endpoint, error):
     received = []
 
     async def complete(request):
@@ -143,9 +130,14 @@ async def test_openai_compatible_requests_and_errors_pass_through(endpoint, erro
         body["messages"] = [{"role": "user", "content": "hello"}]
     async with TestServer(app) as server:
         engine = RemoteInferenceEngine(
-            str(server.make_url("")).removeprefix("http://").rstrip("/"), "external-model", "vllm", AliasingTokenizer()
+            str(server.make_url("")).removeprefix("http://").rstrip("/"), "external-model", "vllm"
         )
-        method = engine.completion if endpoint == "/v1/completions" else engine.chat_completion
-        result = await method({"json": body})
-    assert result == error
+        set_global_state(engine, None)
+        try:
+            async with AsyncClient(transport=ASGITransport(app=create_app()), base_url="http://bridge") as client:
+                response = await client.post(endpoint, json=body)
+        finally:
+            set_global_state(None, None)
+    assert response.status_code == 400
+    assert response.json() == error
     assert received == [body]

@@ -498,7 +498,6 @@ def init_remote_inference_servers(
     engines = create_remote_inference_engines(
         urls=[f"localhost:{engine_port}"],
         model_name=model,
-        tokenizer=tokenizer,
         engine_backend=backend,
         tensor_parallel_size=tp_size,
         data_parallel_size=1,

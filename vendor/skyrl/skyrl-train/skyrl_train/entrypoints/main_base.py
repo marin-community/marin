@@ -14,7 +14,6 @@ from ray.util.placement_group import placement_group, PlacementGroup
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from ray.remote_function import RemoteFunction
 
-from transformers import PreTrainedTokenizerBase
 from omegaconf import OmegaConf, DictConfig
 from pathlib import Path
 import ray
@@ -261,7 +260,7 @@ def create_ray_wrapped_inference_engines_from_config(
     return create_ray_wrapped_inference_engines(**engine_kwargs)
 
 
-def create_remote_inference_engines_from_config(cfg: DictConfig, tokenizer: PreTrainedTokenizerBase):
+def create_remote_inference_engines_from_config(cfg: DictConfig):
     from skyrl_train.inference_engines.remote_inference_engine import create_remote_inference_engines  # noqa: PLC0415
 
     # TODO(tgriggs): We may want a separate config for the model name in case it's different from the name used in the OpenAI API
@@ -269,7 +268,6 @@ def create_remote_inference_engines_from_config(cfg: DictConfig, tokenizer: PreT
         urls=cfg.generator.remote_inference_engine_urls,
         model_name=cfg.trainer.policy.model.path,
         engine_backend=cfg.generator.backend,
-        tokenizer=tokenizer,
         tensor_parallel_size=cfg.generator.inference_engine_tensor_parallel_size,
         pipeline_parallel_size=cfg.generator.inference_engine_pipeline_parallel_size,
         data_parallel_size=cfg.generator.inference_engine_data_parallel_size,
@@ -327,7 +325,7 @@ class BasePPOExp:
                 operation=operation,
             )
         else:
-            inference_engines = create_remote_inference_engines_from_config(self.cfg, self.tokenizer)
+            inference_engines = create_remote_inference_engines_from_config(self.cfg)
         logger.info("Inference engines ready: mode={} count={}", engine_mode, len(inference_engines))
         return InferenceEngineClient(inference_engines, self.tokenizer, self.cfg)
 
