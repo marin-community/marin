@@ -328,6 +328,53 @@ def calculate_per_dataset_metrics(
     return eval_metrics
 
 
+def evaluation_result_entries(
+    tokenizer: AutoTokenizer,
+    trajectory_batch: TrajectoryBatch,
+    data_sources: List[str | None],
+    env_classes: List[str],
+    uids: List[str],
+) -> list[dict[str, Any]]:
+    """Serialize scored trajectory rows for full and partial evaluation dumps."""
+    input_prompts = [tokenizer.decode(prompt) for prompt in trajectory_batch["prompt_token_ids"]]
+    output_responses = [tokenizer.decode(response) for response in trajectory_batch["response_ids"]]
+    entries = []
+    for i, data_source in enumerate(data_sources):
+        verification = (trajectory_batch.get("verification_results") or [None] * len(input_prompts))[i]
+        entry = {
+            "uid": uids[i],
+            "prompt_token_ids": trajectory_batch["prompt_token_ids"][i],
+            "response_token_ids": trajectory_batch["response_ids"][i],
+            "input_prompt": input_prompts[i],
+            "output_response": output_responses[i],
+            "score": trajectory_batch["rewards"][i],
+            "stop_reason": trajectory_batch.get("stop_reasons", [None] * len(input_prompts))[i],
+            "exception_type": (trajectory_batch.get("exception_types") or [None] * len(input_prompts))[i],
+            "error_treatment": (trajectory_batch.get("error_treatments") or [None] * len(input_prompts))[i],
+            "server_error": (trajectory_batch.get("server_errors") or [None] * len(input_prompts))[i],
+            "env_class": env_classes[i],
+            "data_source": data_source if data_source is not None else "unknown",
+            "env_metrics": (trajectory_batch.get("env_metrics") or [{}] * len(input_prompts))[i],
+            "verification": None
+            if verification is None
+            else {
+                "status": verification.status.value,
+                "reason": verification.reason,
+                "score": verification.score,
+                "passed": verification.passed,
+                "score_min": verification.score_min,
+                "score_max": verification.score_max,
+                "diagnostics": {
+                    key: value for key, value in verification.diagnostics.items() if key in EVAL_DIAGNOSTIC_FIELDS
+                },
+            },
+        }
+        if "is_last_step" in trajectory_batch:
+            entry["is_last_step"] = trajectory_batch["is_last_step"][i]
+        entries.append(entry)
+    return entries
+
+
 def dump_per_dataset_eval_results(
     dump_dir_path: str,
     tokenizer: AutoTokenizer,
@@ -339,9 +386,7 @@ def dump_per_dataset_eval_results(
 ):
     """Dump evaluation results per dataset and overall aggregated results."""
 
-    # Prepare common data
-    input_prompts = [tokenizer.decode(prompt) for prompt in trajectory_batch["prompt_token_ids"]]
-    output_responses = [tokenizer.decode(response) for response in trajectory_batch["response_ids"]]
+    entries = evaluation_result_entries(tokenizer, trajectory_batch, concat_data_sources, concat_all_envs, uids)
 
     # Group indices by data source
     data_source_indices = {}
@@ -359,39 +404,7 @@ def dump_per_dataset_eval_results(
 
         with io.open_file(filename, "w") as f:
             for i in indices:
-                verification = (trajectory_batch.get("verification_results") or [None] * len(input_prompts))[i]
-                entry = {
-                    "uid": uids[i],
-                    "prompt_token_ids": trajectory_batch["prompt_token_ids"][i],
-                    "response_token_ids": trajectory_batch["response_ids"][i],
-                    "input_prompt": input_prompts[i],
-                    "output_response": output_responses[i],
-                    "score": trajectory_batch["rewards"][i],
-                    "stop_reason": trajectory_batch.get("stop_reasons", [None] * len(input_prompts))[i],
-                    "exception_type": (trajectory_batch.get("exception_types") or [None] * len(input_prompts))[i],
-                    "error_treatment": (trajectory_batch.get("error_treatments") or [None] * len(input_prompts))[i],
-                    "server_error": (trajectory_batch.get("server_errors") or [None] * len(input_prompts))[i],
-                    "env_class": concat_all_envs[i],
-                    "data_source": data_source,
-                    "env_metrics": (trajectory_batch.get("env_metrics") or [{}] * len(input_prompts))[i],
-                    # Keep operational categories, not arbitrary verifier references or credentials.
-                    "verification": None
-                    if verification is None
-                    else {
-                        "status": verification.status.value,
-                        "reason": verification.reason,
-                        "score": verification.score,
-                        "passed": verification.passed,
-                        "score_min": verification.score_min,
-                        "score_max": verification.score_max,
-                        "diagnostics": {
-                            key: value
-                            for key, value in verification.diagnostics.items()
-                            if key in EVAL_DIAGNOSTIC_FIELDS
-                        },
-                    },
-                }
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                f.write(json.dumps(entries[i], ensure_ascii=False) + "\n")
 
         logger.info(f"Dumped eval data for {data_source} to {filename}")
 
