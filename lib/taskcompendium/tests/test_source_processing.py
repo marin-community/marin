@@ -1084,3 +1084,26 @@ def test_decontamination_receipt_precedes_conversion_and_quality_review(tmp_path
     assert len(parquet_rows(result.final_path)) == 1
     assert service.files
     assert read_json(result.manifest_path)["lexical_contamination"] == document
+
+
+def test_transport_outage_cannot_qualify_tasks_with_passing_controls(tmp_path):
+    source = tmp_path / "source"
+    write_jsonl(source, apple_rows(2))
+    recipe = fixture_recipe(convert_svamp, controls=REFERENCE_CONTROLS)
+    available = BatchReviewer(BatchService(), "fixture", "available", max_attempts=1)
+    qualified = run_pipeline(
+        recipe, source, tmp_path / "available", pipeline_config(SourceProcessingMode.FULL, available)
+    )
+    assert qualified.status == "completed"
+    assert len(parquet_rows(qualified.final_path)) == 2
+    unavailable = BatchReviewer(BatchService(interrupted=True), "fixture", "unavailable", max_attempts=1)
+    pending = run_pipeline(
+        recipe, source, tmp_path / "unavailable", pipeline_config(SourceProcessingMode.FULL, unavailable)
+    )
+    assert pending.status == "incomplete"
+    assert parquet_rows(pending.final_path) == []
+    report = read_json(pending.manifest_path)
+    assert report["quality"]["result"]["verdict"] == "unknown"
+    assert report["quality"]["result"]["issue_count"] == 0
+    assert report["quality"]["result"]["unavailable_count"] == 2
+    assert {row["admission"] for row in parquet_rows(pending.verify_path)} == {"deferred"}

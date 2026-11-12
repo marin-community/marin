@@ -104,7 +104,7 @@ Before selecting a new catalog load:
    Preserve published IDs until approved retirement and evidence re-pointing.
 2. Verify `current_release.repo`, `revision` and `url` identify the exact consumed
    pin. QA/repair releases must be private open-athena TaskCompendium datasets;
-   decontamination remediation must select the new version. Keep `url` as upstream
+   decontamination remediation must configure the new version as the pipeline input. Its URL must match the repository and revision. Keep `url` as upstream
    provenance.
 3. Check task-derived SHARED/SEPARATE grading evidence and actor-only Daytona
    measurements. Every UNSAFE reason needs details and affected actor-task counts;
@@ -114,7 +114,11 @@ Before selecting a new catalog load:
    boundaries. Retain issues and repair recommendations separately from exclusions.
 5. Check Evalchemy benchmarks retain evaluation/heldout use. Run conversion in
    QUICK, SAMPLE or FULL; changed behavior requires SAMPLE/FULL QA and new pins.
-6. Retain lexical decontamination receipts and original artifacts. Stage and
+6. Keep unmeasured sources pending. N/A requires measured zero actor slots,
+   snapshots and refusals with a count basis; null is reserved for grandfathered
+   blends. Preserve the selected legacy SQL load until all new declarations have
+   evidence-backed census records.
+7. Retain lexical decontamination receipts and original artifacts. Stage and
    validate the complete load before selecting it.
 
 Source code lives in `infra/marina/apps/rl_data_catalog/`. Its migration

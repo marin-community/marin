@@ -11,6 +11,7 @@ from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
     ConvertedExamples,
     DatasetRelease,
+    DaytonaMeasurement,
     DaytonaUnsafeReason,
     GradingEnvironmentEvidence,
     IndependentQC,
@@ -23,7 +24,6 @@ from finestore.rl.curation import (
     SourceDeclaration,
     SourceOrigin,
     SourceQualityResult,
-    daytona_verdict,
     source_identifier,
     source_title,
 )
@@ -242,21 +242,45 @@ class RlDataSource[ConfigT: CatalogConfig]:
         return self.config.dataset if self.config is not None else self.info.dataset
 
     @property
-    def current_release(self) -> DatasetRelease:
+    def pipeline_reference(self) -> PipelineReference:
+        if self.pipeline is None or self.config is None:
+            raise ValueError(f"Source {self.info.id} has no registered conversion pipeline")
+        dataset = self.dataset
+        return PipelineReference(
+            name=self.name,
+            version=self.version,
+            source=dataset.name if dataset else None,
+            revision=dataset.revision if dataset else None,
+            files=list(self.files),
+        )
+
+    @property
+    def has_actor_census(self) -> bool:
         info = self.info
-        if info.lexical_contamination is not None and info.lexical_contamination.receipt is not None:
-            receipt = info.lexical_contamination.receipt
-            return DatasetRelease(
-                repo=receipt.dataset_id,
-                revision=receipt.dataset_revision,
-                url=f"https://huggingface.co/datasets/{receipt.dataset_id}/tree/{receipt.dataset_revision}",
-            )
-        if info.current_release is not None:
-            return info.current_release
+        return (
+            info.daytona_snapshot_count is not None
+            and info.daytona_machine_slots is not None
+            and info.daytona_execution_failures is not None
+            and bool((info.daytona_count_basis or "").strip())
+        )
+
+    @property
+    def catalog_declaration(self) -> SourceDeclaration | None:
+        """Hold metadata pending while QUICK produces the actor census."""
+        if self.info.id not in GRANDFATHERED_MARINSKYRL_SOURCES and not self.has_actor_census:
+            return None
+        return self.declaration
+
+    @property
+    def current_release(self) -> DatasetRelease:
         dataset = self.dataset
         if dataset is None or not dataset.revision:
-            raise ValueError(f"Source {info.id} requires an exact current release pin")
-        return DatasetRelease(repo=dataset.name, revision=dataset.revision, url=dataset.url)
+            raise ValueError(f"Source {self.info.id} requires an exact current release pin")
+        release = DatasetRelease(repo=dataset.name, revision=dataset.revision, url=dataset.url)
+        declared = self.info.current_release
+        if declared is not None and declared != release:
+            raise ValueError("Current release must match the configured dataset pin")
+        return release
 
     @property
     def admission_blockers(self) -> tuple[str, ...]:
@@ -272,6 +296,14 @@ class RlDataSource[ConfigT: CatalogConfig]:
             )
         except ValueError as error:
             blockers.append(str(error))
+        if not self.has_actor_census:
+            blockers.append("actor census evidence is missing")
+        if (
+            info.oversight is None
+            or info.oversight.level not in {OversightLevel.SAMPLE, OversightLevel.FULL}
+            or not info.oversight.verification.strip()
+        ):
+            blockers.append("SAMPLE or FULL oversight with verification evidence is missing")
         if "agentic" not in info.tags:
             return tuple(blockers)
         if info.task_format is None or (
@@ -282,12 +314,6 @@ class RlDataSource[ConfigT: CatalogConfig]:
             blockers.append("production snapshot identity measurement is missing")
         if info.daytona_execution_failures is None:
             blockers.append("execution requirement measurement is missing")
-        if (
-            info.oversight is None
-            or info.oversight.level not in {OversightLevel.SAMPLE, OversightLevel.FULL}
-            or not info.oversight.verification.strip()
-        ):
-            blockers.append("SAMPLE or FULL oversight with verification evidence is missing")
         return tuple(blockers)
 
     @property
@@ -297,27 +323,33 @@ class RlDataSource[ConfigT: CatalogConfig]:
         if pipeline is None or self.config is None:
             raise ValueError(f"Source {info.id} has no registered conversion pipeline")
         dataset = self.dataset
-        invocation = None
-        if pipeline is not None:
-            invocation = PipelineReference(
-                name=self.name,
-                version=self.version,
-                source=dataset.name if dataset else None,
-                revision=dataset.revision if dataset else None,
-                files=list(self.files),
-            )
+        invocation = self.pipeline_reference
         tags = info.tags
-        safety = daytona_verdict(
-            snapshot_count=info.daytona_snapshot_count,
-            execution_failures=info.daytona_execution_failures,
-            agentic="agentic" in tags,
-        )
         if info.id in GRANDFATHERED_MARINSKYRL_SOURCES:
             safety = None
-        elif "agentic" in tags and (info.daytona_machine_slots is None or not info.daytona_count_basis):
-            safety = None
-        elif info.daytona_machine_slots == 0:
-            safety = daytona_verdict(snapshot_count=0, execution_failures=0, agentic=False)
+        else:
+            if (
+                info.daytona_snapshot_count is None
+                or info.daytona_machine_slots is None
+                or info.daytona_execution_failures is None
+                or not info.daytona_count_basis
+                or not info.daytona_count_basis.strip()
+            ):
+                raise ValueError(f"Source {info.id} requires an actor safety measurement before catalog declaration")
+            release = self.current_release
+            measurement = DaytonaMeasurement(
+                dataset_id=release.repo,
+                dataset_revision=release.revision,
+                daytona_snapshot_count=info.daytona_snapshot_count,
+                daytona_machine_slots=info.daytona_machine_slots,
+                daytona_execution_failures=info.daytona_execution_failures,
+                daytona_count_basis=info.daytona_count_basis,
+                daytona_unsafe_reasons=list(info.daytona_unsafe_reasons),
+                daytona_unsafe_details=info.daytona_unsafe_details or {},
+                daytona_unsafe_counts=info.daytona_unsafe_counts or {},
+                daytona_roles=info.daytona_roles,
+            )
+            safety = measurement.safety
         return SourceDeclaration(
             id=info.id,
             name=self.name,

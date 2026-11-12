@@ -27,7 +27,7 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.runtime.resources import resource_bytes
 
-SOURCE_QUALITY_REVISION = "9"
+SOURCE_QUALITY_REVISION = "10"
 MAX_SOURCE_QUALITY_SAMPLE_SIZE = 100
 SOURCE_QUALITY_SAMPLE_SIZE = MAX_SOURCE_QUALITY_SAMPLE_SIZE
 
@@ -200,7 +200,7 @@ def source_quality_report(
     *,
     coverage: QualitySampleCoverage,
 ) -> SourceQualityReport:
-    """Report reviewed-sample issues without changing task admission or expansion."""
+    """Report sample issues separately from review transport availability."""
     if (
         len(sample.task_ids) != min(sample.eligible_count, policy.sample_size)
         or len(reviews) != len(sample.task_ids)
@@ -227,13 +227,18 @@ def source_quality_report(
             else "No repair indicated by the reviewed sample."
         ),
     )
+    unavailable = bool(reviews) and counts[Assessment.UNAVAILABLE] == len(reviews)
     return SourceQualityReport(
         policy=policy,
         population=sample,
         coverage=coverage,
         assessments=dict(counts),
         defect_fraction=result.issue_rate,
-        status=SourceQualityStatus.CENSUS if coverage == QualitySampleCoverage.CENSUS else SourceQualityStatus.TRUST,
+        status=(
+            SourceQualityStatus.INCOMPLETE
+            if unavailable
+            else SourceQualityStatus.CENSUS if coverage == QualitySampleCoverage.CENSUS else SourceQualityStatus.TRUST
+        ),
         reason="Sample QC is informational; mechanical exclusions and execution qualification remain separate.",
         result=result,
     )

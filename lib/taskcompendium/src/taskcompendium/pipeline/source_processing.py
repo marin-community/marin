@@ -113,7 +113,7 @@ from taskcompendium.pipeline.stages import (
 )
 from taskcompendium.pipeline.transforms import admit_converted_row
 
-SOURCE_PIPELINE_REVISION = "16"
+SOURCE_PIPELINE_REVISION = "17"
 PANEL_ROWS_PER_SHARD = 16
 ROWS_PER_SHARD = 1000
 MAX_PREPARATION_SHARDS = 64

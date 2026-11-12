@@ -623,6 +623,16 @@ def _complete_audit_batch(
                     }
                 )
             )
+            if (
+                report is not None
+                and report.status == SourceQualityStatus.INCOMPLETE
+                and row["filter_status"] != "reject"
+            ):
+                row.update(
+                    quality_basis=QualityBasis.SOURCE_INCOMPLETE.value,
+                    filter_status="defer",
+                    filter_reasons=["source_review:unavailable"],
+                )
             yield row
             continue
         if quality_exclusion(audit) is not None:

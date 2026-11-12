@@ -116,6 +116,10 @@ def test_unqualified_agentic_pipeline_stays_visible_but_cannot_be_selected(monke
         )
     source = replace(number_source(Path("unused")), info=info)
     monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: {info.id: source})
+    if missing in {"count", "basis"}:
+        with pytest.raises(ValueError, match="actor safety measurement"):
+            _ = source.declaration
+        return
     assert source.name not in runnable_sources()
     assert source.declaration.status == "Not selectable"
 

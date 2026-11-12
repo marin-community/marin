@@ -104,7 +104,7 @@ def _selected_sources(sources: tuple[str, ...], mode: SourceProcessingMode) -> d
     return {
         name: pipeline
         for name, pipeline in catalog.items()
-        if (name in sources if sources else pipeline.declaration.type != "eval")
+        if (name in sources if sources else "eval" not in pipeline.info.tags)
     }
 
 
@@ -133,7 +133,9 @@ def _publish_campaign(report_path: str, selected: dict[str, RlDataSource], catal
     report = json.loads(path.read_text())
     # Selected recipes may supply declarations absent from the default inventory.
     sources = {**all_sources(), **{source.info.id: source for source in selected.values()}}
-    publish_catalog(catalog_root, report["run_id"], sources.values())
+    publish_catalog(
+        catalog_root, report["run_id"], (source for source in sources.values() if source.catalog_declaration is not None)
+    )
 
 
 def _conversion_steps(
@@ -142,11 +144,10 @@ def _conversion_steps(
     steps = {}
     for source in sources.values():
         step = cast(CurationPipeline, source.pipeline)(source, options)
-        declaration = source.declaration
-        assert declaration.pipeline is not None
+        reference = source.pipeline_reference
         identity = canonical_sha256(
             {
-                "pipeline": declaration.pipeline.model_dump(),
+                "pipeline": reference.model_dump(),
                 "step": f"{step.name}@{step.version}",
                 "dependencies": step.fingerprint(),
             }
@@ -563,9 +564,7 @@ def main(
             name: replace(source, info=replace(source.info, lexical_contamination=decontamination))
             for name, source in selected.items()
         }
-    if processing_mode != SourceProcessingMode.QUICK and any(
-        source.declaration.type == "eval" for source in selected.values()
-    ):
+    if processing_mode != SourceProcessingMode.QUICK and any("eval" in source.info.tags for source in selected.values()):
         raise click.UsageError("Evaluation sources use --mode quick to publish their full benchmark population")
     runtime = CampaignRuntime()
     assess = assess if assess is not None else processing_mode == SourceProcessingMode.FULL
@@ -649,7 +648,11 @@ def main(
             pool=pool,
             stage=embed,
         )
-    declarations = {source.declaration.id: source.declaration for source in {**all_sources(), **selected}.values()}
+    declarations = {
+        declaration.id: declaration
+        for source in {**all_sources(), **selected}.values()
+        if (declaration := source.catalog_declaration) is not None
+    }
     inventory = list(declarations.values())
     if corpus is not None:
         restored = _corpus_sources(corpus)

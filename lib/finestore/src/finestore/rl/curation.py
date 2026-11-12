@@ -9,6 +9,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, get_args, get_origin
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -137,10 +138,12 @@ class DatasetRelease(CatalogRecord):
 
     @model_validator(mode="after")
     def _immutable_hugging_face_pin(self) -> "DatasetRelease":
-        if ("huggingface.co/" in self.url or self.repo.startswith("open-athena/")) and re.fullmatch(
-            r"[0-9a-f]{40}", self.revision
-        ) is None:
-            raise ValueError("Hugging Face current_release requires an immutable commit")
+        host = urlsplit(self.url).hostname
+        if host == "huggingface.co" or self.repo.startswith("open-athena/"):
+            if re.fullmatch(r"[0-9a-f]{40}", self.revision) is None:
+                raise ValueError("Hugging Face current_release requires an immutable commit")
+            if self.url != f"https://huggingface.co/datasets/{self.repo}/tree/{self.revision}":
+                raise ValueError("Hugging Face current_release URL must match its repository and revision")
         return self
 
 
@@ -227,19 +230,6 @@ class DaytonaSafety(StrEnum):
 
 DAYTONA_SAFE_SNAPSHOT_LIMIT = 10
 """The unique-snapshot budget a source must fit to count as Daytona-safe."""
-
-
-def daytona_verdict(
-    *, snapshot_count: int | None, execution_failures: int | None, agentic: bool
-) -> DaytonaSafety | None:
-    """Derive actor safety; absent measurements never establish safety."""
-    if not agentic:
-        return DaytonaSafety.NOT_APPLICABLE
-    if snapshot_count is None or execution_failures is None:
-        return None
-    if snapshot_count > DAYTONA_SAFE_SNAPSHOT_LIMIT or execution_failures:
-        return DaytonaSafety.UNSAFE
-    return DaytonaSafety.SAFE
 
 
 class CurationMode(StrEnum):
@@ -528,7 +518,7 @@ class SourceDeclaration(CatalogRecord):
             raise ValueError("Source ID differs from generated identity")
         if self.display_name != source_title(self.upstream_name, self.subset, self.variant):
             raise ValueError("Source title differs from generated title")
-        if self.daytona_safety in (DaytonaSafety.SAFE, DaytonaSafety.UNSAFE):
+        if self.daytona_safety is not None:
             measurement = DaytonaMeasurement.model_validate(
                 {
                     "dataset_id": self.dataset_id,

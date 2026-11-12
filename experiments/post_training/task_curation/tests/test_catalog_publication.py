@@ -171,11 +171,17 @@ def test_selected_new_pin_invalidates_the_prior_grade(tmp_path):
     source = number_source(tmp_path / "input")
     record_attempt(root, source, "first", "2026-10-16T10:00:00Z", "key-a")
     publish_catalog(root, "first", [source])
-    changed = replace(source, config=replace(source.config, dataset=replace(source.dataset, revision="new-pin")))
+    changed = replace(
+        source,
+        config=replace(
+            source.config,
+            dataset=replace(source.dataset, revision="b" * 40, url=source.dataset.url.replace("a" * 40, "b" * 40)),
+        ),
+    )
     record_attempt(root, changed, "failed", "2026-10-16T12:00:00Z", "key-b", AssessmentStatus.FAILED)
     publish_catalog(root, "failed", [changed])
     row = selected_sources(root)[source.info.id]
-    assert row.declaration.dataset_revision == "new-pin"
+    assert row.declaration.dataset_revision == "b" * 40
     assert row.assessment_key is None
 
 
@@ -240,6 +246,13 @@ def test_an_unselected_runnable_source_picks_up_the_current_safety_verdict(tmp_p
             title=None,
             tags=("agentic",),
             dataset=pinned,
+            daytona_snapshot_count=11,
+            daytona_machine_slots=11,
+            daytona_execution_failures=0,
+            daytona_count_basis="complete actor census",
+            daytona_unsafe_reasons=(DaytonaUnsafeReason.TOO_MANY_SNAPSHOTS,),
+            daytona_unsafe_details={"too_many_snapshots": "11 identities"},
+            daytona_unsafe_counts={"too_many_snapshots": 11},
         ),
     )
     record_attempt(root, first, "first", "2026-10-16T10:00:00Z", "key-a", source_count=2)
@@ -251,6 +264,9 @@ def test_an_unselected_runnable_source_picks_up_the_current_safety_verdict(tmp_p
         agent,
         info=replace(
             agent.info,
+            daytona_unsafe_reasons=(),
+            daytona_unsafe_details={},
+            daytona_unsafe_counts={},
             daytona_snapshot_count=5,
             daytona_machine_slots=5,
             daytona_execution_failures=0,
@@ -369,7 +385,7 @@ def test_retirement_materializes_legacy_missing_defaults_without_changing_archiv
     (current,) = CurationCatalog(root).sources("retired")
     assert current.declaration.daytona_safety is None
     assert current.declaration.oversight.value == "none"
-    assert current.declaration.daytona_snapshot_count is None
+    assert current.declaration.daytona_snapshot_count == 0
     original = CurationCatalog(root).view.point(INVENTORY, snapshot_id="legacy", id=kept.info.id)
     assert original["declaration"]["daytona_safety"] is None
     assert original["declaration"]["oversight"] is None
@@ -380,6 +396,9 @@ def test_measured_refresh_preserves_assessments_and_roundtrips_arrow_maps(tmp_pa
     source = number_source(tmp_path / "input")
     record_attempt(root, source, "first", "2026-10-16T10:00:00Z", "reviewed")
     publish_catalog(root, "first", [source])
+    with pytest.raises(ValueError, match="Actor measurement is missing"):
+        refresh_daytona_measurements(root, "unmeasured", {}, retired_source_ids=frozenset())
+    assert CurationCatalog(root).current().snapshot_id == "first"
     measurement = DaytonaMeasurement(
         dataset_id=source.dataset.name,
         dataset_revision=source.dataset.revision,

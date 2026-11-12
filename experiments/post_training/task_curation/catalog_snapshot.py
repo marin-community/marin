@@ -34,7 +34,6 @@ from finestore.rl.curation import (
     CurationSummary,
     CurrentCatalog,
     DaytonaMeasurement,
-    DaytonaSafety,
     JudgmentStatus,
     SnapshotSource,
     SourceQualityResult,
@@ -472,18 +471,6 @@ def refresh_daytona_measurements(
                 declaration["daytona_snapshot_threshold"] = DAYTONA_SAFE_SNAPSHOT_LIMIT
             elif source_id in GRANDFATHERED_MARINSKYRL_SOURCES:
                 declaration["daytona_safety"] = None
-            elif "agentic" not in declaration["tags"]:
-                declaration.update(
-                    {
-                        "daytona_safety": DaytonaSafety.NOT_APPLICABLE.value,
-                        "daytona_machine_slots": 0,
-                        "daytona_snapshot_count": 0,
-                        "daytona_execution_failures": 0,
-                        "daytona_count_basis": "Non-agentic source: no actor machine",
-                        "daytona_unsafe_reasons": [],
-                        "daytona_unsafe_details": {},
-                    }
-                )
             else:
                 raise ValueError(f"Actor measurement is missing for live source: {source_id}")
             examples = (converted_examples or {}).get(source_id)

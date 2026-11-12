@@ -1150,7 +1150,7 @@ def test_trusted_panel_with_defects_infers_unsampled_rows_without_reviewing_them
         (BatchService, "trust", {"reviewed"}),
         (OneMissingResponseService, "trust", {"reviewed", "unavailable"}),
         (MixedQualityBatchService, "trust", {"reviewed"}),
-        (UnavailableBatchService, "trust", {"unavailable"}),
+        (UnavailableBatchService, "incomplete", {"unavailable"}),
         (FirstBatchUnavailableService, "trust", {"unavailable", "reviewed"}),
     ],
 )
@@ -1201,6 +1201,11 @@ def test_source_quality_gate_reuses_reviews_and_preserves_all_rows(
     assert len(requests) == len(set(requests)) == 30
     sample_rows = [record for record in records if record["task_id"] in sampled_ids]
     assert {record["review_status"] for record in sample_rows} == sample_review_statuses
+    if status == "incomplete":
+        assert report.result.unavailable_count == 30
+        assert report.result.verdict == "unknown"
+        assert manifest["dispositions"] == {"defer": 100, "reject": 2}
+        return
     assert manifest["dispositions"] == {"keep": 100, "reject": 2}
     inferred = [record for record in records if record["quality_basis"] == "inferred_from_source"]
     assert len(inferred) == 70

@@ -279,3 +279,20 @@ def test_raw_exclusions_do_not_change_reviewed_sample_result(exclusion):
     assert report.result.issue_count == 0
     assert report.result.verdict == "good"
     assert report.population.exclusions == {exclusion: 99}
+
+
+def test_transport_outage_does_not_certify_qa_or_invent_a_bad_result():
+    ids = ("a", "b")
+    report = source_quality_report(
+        QualitySample(10, 10, {}, {"numeric": 10}, ids),
+        [
+            ReviewRecord(task_id=i, status=ReviewStatus.UNAVAILABLE, verdict=None, detail="Transport unavailable")
+            for i in ids
+        ],
+        SourceQualityPolicy(sample_size=2),
+        coverage=QualitySampleCoverage.SAMPLE,
+    )
+    assert report.status == SourceQualityStatus.INCOMPLETE
+    assert report.result.verdict == "unknown"
+    assert report.result.reviewed == 0
+    assert report.result.unavailable_count == 2
