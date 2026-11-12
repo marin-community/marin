@@ -1126,8 +1126,9 @@ the actor's allocation; a shared grader uses the task's container budget.
 
 `SOURCE_ENV_INCOMPATIBLE` identifies a measured source-environment defect.
 The current signature requires a source setup explicitly installing
-`pytest==6.2.5`, a successful oracle exit, and a protected pre-agent
-`pytest_metadata/plugin.py` failing because `pytest.StashKey` is absent.
+`pytest==6.2.5`, an oracle `solve.sh` exit of zero, and a verifier startup
+failure in `pytest_metadata/plugin.py` because `pytest.StashKey` is absent.
+That plugin implementation was captured before the agent ran.
 The exclusion records the signature and hashes of the unchanged setup and raw
 verdict. Preserve the declared environment and the raw infrastructure verdict;
 this exclusion does not establish an oracle score of zero. Unrecognized
