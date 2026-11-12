@@ -18,9 +18,7 @@ import pyarrow.parquet as pq
 from finestore.rl.source_identity import canonical_source_id, original_source_id
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
-from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, run
-from pydantic import BaseModel, Field
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -29,6 +27,7 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import has_oracle_solution
 
+from experiments.post_training.task_curation.full_qc_artifacts import FullQCInputs, RetentionPlan
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.published_census import population_documents
@@ -36,35 +35,6 @@ from experiments.post_training.task_curation.published_census import population_
 logger = logging.getLogger(__name__)
 INDEX_SCHEMA = pa.schema([("task_id", pa.string()), ("task_sha256", pa.string()), ("runtime_sha256", pa.string())])
 INDEX_BATCH_SIZE = 1000
-
-
-class RetentionPlan(BaseModel):
-    source_id: str
-    source_dataset_id: str
-    source_revision: str
-    converter_revision: str
-    converter_version: str
-    input_artifact: str
-    task_specs_sha256: str
-    raw_count: int = Field(ge=0)
-    combined_drop_count: int = Field(ge=0)
-    retained_count: int = Field(ge=0)
-    combined_drop_manifest_uri: str
-    lexical_use: str
-
-
-class FullQCInputs(Artifact):
-    source_id: str
-    population: SourceTextPopulation
-    retention: RetentionPlan
-    drop_manifest_sha256: str
-    index_path: str
-    index_sha256: str
-    retained_count: int
-    task_bytes: int
-    oracle_tasks: int
-    missing_execution_requirements: int
-    grading_environments: dict[str, int]
 
 
 @dataclass(frozen=True)

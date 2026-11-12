@@ -4,6 +4,9 @@
 """Full QC inputs bind proposed retention to exact task and deployment contracts."""
 
 import json
+import subprocess
+import sys
+from dataclasses import dataclass, replace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -13,9 +16,22 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
+from taskcompendium.pipeline.models import (
+    Confidence,
+    Defect,
+    Quality,
+    ReferenceStatus,
+    ReviewRecord,
+    ReviewRubric,
+    ReviewStatus,
+    ReviewVerdict,
+)
+from taskcompendium.pipeline.review import ReviewBatchResult
 from taskcompendium.runtime.resources import inline_resource
 
-from experiments.post_training.task_curation.full_qc_inputs import InputConfig, RetentionPlan, prepare_inputs
+from experiments.post_training.task_curation.full_qc_artifacts import FullQCInputs, FullQCReview, RetentionPlan
+from experiments.post_training.task_curation.full_qc_inputs import InputConfig, prepare_inputs
+from experiments.post_training.task_curation.full_qc_review import review_inputs
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
@@ -113,3 +129,102 @@ def test_unknown_drop_id_cannot_certify_full_retention_coverage(qc_inputs):
     changed = InputConfig(config.population_path, config.retention, file_sha256(StoragePath(path)), config.output_path)
     with pytest.raises(ValueError, match="complete retention plan"):
         prepare_inputs(changed)
+
+
+def test_cli_artifact_can_be_reloaded_by_another_process(qc_inputs, tmp_path):
+    config, _ = qc_inputs
+    plans = tmp_path / "plans.json"
+    sources = tmp_path / "sources.json"
+    output = tmp_path / "outputs.json"
+    plans.write_text(json.dumps([config.retention.model_dump(mode="json")]))
+    sources.write_text(json.dumps([config.retention.source_id]))
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "experiments.post_training.task_curation.full_qc_inputs",
+            "--retention-plans",
+            str(plans),
+            "--source-ids",
+            str(sources),
+            "--artifact-root",
+            str(tmp_path / "graph"),
+            "--artifact-version",
+            "2026.11.12.1",
+            "--output",
+            str(output),
+            "--run",
+        ],
+        check=True,
+    )
+    result = FullQCInputs.raw_load(json.loads(output.read_text())[0]["path"])
+    assert {row["task_id"] for row in pq.read_table(result.index_path).to_pylist()} == {"kept", "unshaped"}
+
+
+@dataclass(frozen=True)
+class ReviewService:
+    available: bool = True
+
+    @property
+    def identity(self):
+        return {"model": "fixture-reviewer", "revision": "fixed"}
+
+    def review(self, tasks, rubric, *, originals=None, cached=None):
+        if not self.available:
+            raise ConnectionError("Review service unavailable")
+        records = [
+            ReviewRecord(
+                task_id=task.id,
+                status=ReviewStatus.REVIEWED,
+                verdict=ReviewVerdict(
+                    task_id=task.id,
+                    quality=Quality.BAD if task.id == "unshaped" else Quality.GOOD,
+                    confidence=Confidence.HIGH,
+                    reference_status=ReferenceStatus.CONSISTENT,
+                    defects=[Defect.RUBRIC_MISMATCH] if task.id == "unshaped" else [],
+                    evidence="The required answer is unspecified." if task.id == "unshaped" else "A coherent task.",
+                ),
+                detail="",
+            )
+            for task in tasks
+        ]
+        return ReviewBatchResult(records, [])
+
+    def read_cache(self, batches, rubric):
+        return [None] * len(batches)
+
+
+def test_full_review_keeps_bad_tasks_and_resumes_without_the_provider(qc_inputs, tmp_path):
+    config, _ = qc_inputs
+    inputs = prepare_inputs(config)
+    reviewer = ReviewService()
+    rubric = ReviewRubric("quality", "1", ("Check the complete task contract.",))
+    output = str(tmp_path / "reviews")
+    result = review_inputs(inputs, reviewer, rubric, output)
+    assert result.coverage_complete
+    assert result.attempted_count == result.result.reviewed == 2
+    assert result.result.issue_count == 1
+    assert result.result.verdict == "bad"
+    assert result.result.issue_rate == 0.5
+    assert {row["task_id"] for row in pq.read_table(result.records_path).to_pylist()} == {"kept", "unshaped"}
+    reloaded = FullQCReview.raw_load(result.path)
+    assert reloaded.records_sha256 == file_sha256(StoragePath(reloaded.records_path))
+    resumed = review_inputs(inputs, replace(reviewer, available=False), rubric, output)
+    assert resumed.result == result.result
+    assert resumed.records_path != result.records_path
+    assert pq.read_table(resumed.records_path).to_pylist() == pq.read_table(result.records_path).to_pylist()
+
+
+def test_deployment_mutation_invalidates_completed_review_evidence(qc_inputs, tmp_path):
+    config, _ = qc_inputs
+    inputs = prepare_inputs(config)
+    reviewer = ReviewService()
+    rubric = ReviewRubric("quality", "1", ("Check the complete task contract.",))
+    output = str(tmp_path / "reviews")
+    review_inputs(inputs, reviewer, rubric, output)
+    shard = tmp_path / "population/specs/part-000000.parquet"
+    table = pq.read_table(shard)
+    rows = [{**row, "runtime": json.dumps({"deployment": 2})} for row in table.to_pylist()]
+    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), shard)
+    with pytest.raises(ValueError, match="differs from prepared contract"):
+        review_inputs(inputs, replace(reviewer, available=False), rubric, output)

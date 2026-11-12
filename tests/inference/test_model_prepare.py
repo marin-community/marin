@@ -25,6 +25,7 @@ from marin.inference.config import (
 from marin.inference.iris import InferenceStartupPhase, RemoteInferenceStartupError, remote_inference
 from marin.inference.model_preparation import resolve_model_path
 from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import Duration
 
 REVISION = "a" * 40
 DRAFT_REVISION = "b" * 40
@@ -153,6 +154,27 @@ def test_warm_colocated_coordinator_skips_cpu_preparation(serving):
         pass
     assert serving.events == ["gpu"]
     assert serving.downloads == []
+
+
+def test_long_prepare_outlives_default_deadline_with_explicit_worker_budget(serving, monkeypatch):
+    clock = SimpleNamespace(now=0.0)
+    original_status = FakePrepareJob.status
+
+    def status(job):
+        return JobStatus.RUNNING if clock.now == 0 else original_status(job)
+
+    def advance(_seconds):
+        clock.now += 5 * 3600
+
+    monkeypatch.setattr(FakePrepareJob, "status", status)
+    monkeypatch.setattr("fray.client.time.monotonic", lambda: clock.now)
+    monkeypatch.setattr("fray.client.time.sleep", advance)
+    config = _config(REVISION)
+    config = replace(config, iris=replace(config.iris, worker_timeout=Duration.from_hours(72)))
+    with remote_inference(config):
+        pass
+    assert serving.events == ["prepare", "gpu"]
+    assert len(serving.downloads) == 1
 
 
 def test_warm_coordinator_does_not_skip_named_target_preparation(serving, monkeypatch):
