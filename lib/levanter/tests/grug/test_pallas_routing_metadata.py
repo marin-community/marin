@@ -1,10 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The Pallas-Triton routing-metadata kernels of ``ring_filtered`` against a sequential reference and the XLA path.
-
-Off GPU the kernels run in the Pallas interpreter; on TPU the option is rejected, so these tests skip there.
-"""
+"""Compare Pallas routing maps with a sequential reference and the XLA path."""
 
 import math
 

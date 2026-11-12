@@ -502,7 +502,7 @@ def moe_mlp(
 
     `routing_metadata="pallas"` builds `ring_filtered`'s integer routing maps (send slots, expert rows, group sizes,
     drop counts) with Pallas-Triton counting sorts instead of XLA fusions, with the same values (`ring_filtered` only;
-    GPU, or the Pallas interpreter on CPU).
+    GPU, or the Pallas interpreter on CPU). It requires power-of-two destination shard and local expert counts.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
     if routing_metadata not in get_args(MoeRoutingMetadata):

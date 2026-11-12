@@ -143,7 +143,7 @@ def parse_args() -> argparse.Namespace:
         default="xla",
         help="ring_filtered only: build the integer routing maps (send slots, expert rows, group sizes, drop counts) "
         "with XLA fusions (xla) or Pallas-Triton counting sorts (pallas), with the same values "
-        "(GrugModelConfig.moe_routing_metadata).",
+        "(GrugModelConfig.moe_routing_metadata); pallas requires power-of-two destination and local expert counts.",
     )
     parser.add_argument("--profile-steps", type=int, default=0, help="Profile this many steps (0 disables).")
     parser.add_argument("--profile-start", type=int, default=10, help="First profiled step.")

@@ -120,7 +120,7 @@ class GrugModelConfig:
     moe_routing_metadata: MoeRoutingMetadata = "xla"
     """How ``ring_filtered`` builds its integer routing maps from the top-k expert ids (send slots, expert rows, group
     sizes, drop counts): XLA fusions ("xla") or Pallas-Triton counting sorts ("pallas", GPU only). Both give the same
-    values. Needs ``moe_implementation="ring_filtered"``."""
+    values. Needs ``moe_implementation="ring_filtered"`` and power-of-two destination shard and local expert counts."""
     ce_implementation: str | None = None
     """Fused cross-entropy backend selection (levanter fused_cross_entropy_loss). None keeps the
     backend default (GPU: full-logits ``xla`` path). Set ``"batched_xla"`` to use the blocked-vocab

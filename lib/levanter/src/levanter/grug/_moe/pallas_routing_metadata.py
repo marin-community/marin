@@ -1,24 +1,10 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pallas-Triton kernels for ``ring_filtered``'s routing metadata: top-k expert ids to send slots and expert rows.
+"""Stable counting sorts for ``ring_filtered`` sender slots and receiver expert rows.
 
-``ring_filtered`` turns each layer's top-k expert ids into integer index maps twice per exchange: the sender ranks its
-tokens per destination shard (``send_slots``), and the receiver ranks the received assignments per local expert
-(``expert_rows``). XLA builds each map from one-hot matrices, a cumulative sum over the token or assignment axis
-(lowered to a tree of reduce-windows) and a scatter that inverts the map, in about ten small kernels per side; on
-MI355X under the all-to-all the receiver's scatter alone takes up to 0.2 ms.
-
-Each side here is a stable counting sort in three kernels: the first counts the items of every bucket (destination
-shard or local expert) per block of items, the second (one program per bucket) turns the counts into each block's
-first rank, and the third ranks each item within its bucket and block, writes the forward map and scatters the
-inverse map. The in-block rank is a cumulative sum of one-hot bits packed four buckets to an int64 (16-bit fields),
-which is several times cheaper in Triton than a [block, buckets] scan. The outputs equal the XLA formulations in
-``ep_ring_filtered`` and ``ep_ring._select_local_assignments`` exactly (integers only).
-
-The kernels are Pallas-Triton: they run on GPUs, and on CPU in the Pallas interpreter (for tests); other backends
-raise. ``ring_filtered`` calls them on shard-local arrays inside its ``shard_map``, so the wrappers take local arrays
-only.
+Each sort counts items per block, scans bucket counts, then ranks and scatters items. In-block ranks pack four
+16-bit counters in each int64. The wrappers operate on shard-local arrays.
 """
 
 import functools
