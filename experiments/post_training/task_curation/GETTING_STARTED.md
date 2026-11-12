@@ -104,8 +104,9 @@ Declaring, converting or assessing a source does **not** approve it for training
      --review-mode chat --model-revision GLM_REVISION --base-url GLM_ENDPOINT --run
    ```
 
-7. **Check your production access.** A production FULL campaign writes the shared catalog in `s3://marin-us-east-02a`. You need Iris access and CoreWeave credentials that can write to that bucket (refer to Before you start). Keep the same `--quality-sample-size` and `--seed` as in SAMPLE, so that FULL uses the same panel.
-8. **Run the production FULL campaign** in an Iris job. `--publish-catalog` requires FULL with assessment and no `--cache-dir`. Remove `--run` to print the plan first. The plan shows each resolved default:
+7. **Debug graders on a Linux dev box, if necessary.** The local bubblewrap backend and in-pod Docker run only on Linux. To examine a bubblewrap grader or the liveness of a verifier, allocate a privileged CPU dev box and run the grader there. Refer to [CPU dev boxes](../../../.agents/skills/use-iris/references/dev-accelerators.md#cpu).
+8. **Check your production access.** A production FULL campaign writes the shared catalog in `s3://marin-us-east-02a`. You need Iris access and CoreWeave credentials that can write to that bucket (refer to Before you start). Keep the same `--quality-sample-size` and `--seed` as in SAMPLE, so that FULL uses the same panel.
+9. **Run the production FULL campaign** in an Iris job. `--publish-catalog` requires FULL with assessment and no `--cache-dir`. Remove `--run` to print the plan first. The plan shows each resolved default:
 
    ```bash
    uv run iris --cluster=marin job run --target-cluster YOUR-CW-REGION \
@@ -125,8 +126,8 @@ Declaring, converting or assessing a source does **not** approve it for training
     - `--max-workers` (default 64), `--coordinator-memory` (default `16g`) and `--normalized-shards` (default 32) set the scale of the Iris job.
 
    For grader images and other flags, refer to [Run a campaign](../../../docs/references/task-curation.md#run-a-campaign) and the [reviewed local loop](README.md#reviewed-local-loop-on-real-sources).
-9. **Read the campaign report.** Make sure that the campaign is successful before anyone loads the Atlas. A failed FULL campaign also publishes a snapshot.
-10. **Load the Atlas.** Run the [Atlas loader](../../../docs/references/rl-data-atlas.md#updating-atlas):
+10. **Read the campaign report.** Make sure that the campaign is successful before anyone loads the Atlas. A failed FULL campaign also publishes a snapshot.
+11. **Load the Atlas.** Run the [Atlas loader](../../../docs/references/rl-data-atlas.md#updating-atlas):
 
     ```bash
     uv run python infra/marina/apps/rl_data_catalog/load.py \
@@ -134,7 +135,7 @@ Declaring, converting or assessing a source does **not** approve it for training
     ```
 
     The loader needs a Marina login and read access to the catalog bucket. Any authenticated internal Marina user can also release the Atlas app ([Updating Atlas](../../../docs/references/rl-data-atlas.md#updating-atlas)).
-11. **Add the source to training data.** To use the source for training, add it (or its cohorts) to a selection recipe.
+12. **Add the source to training data.** To use the source for training, add it (or its cohorts) to a selection recipe.
 
 ## Authoring executable-environment cohorts
 
