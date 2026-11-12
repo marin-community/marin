@@ -161,7 +161,7 @@ def write_deduplicated(rows: Iterator[DeduplicationRecord], shard: ShardInfo, *,
 def deduplicate_population(
     rows: Dataset[ConvertedRow], context: ZephyrContext, path: str, *, telemetry: PhaseTelemetry | None = None
 ) -> DeduplicatedPopulation:
-    """Persist unique converted contracts and every duplicate mapping, in lowest-task-ID order."""
+    """Persist unique converted contracts and drops, retaining the lowest task ID per contract."""
     manifest = StoragePath(path) / "manifest.json"
     if manifest.exists():
         return DeduplicatedPopulation(**json.loads(manifest.read_text()))
