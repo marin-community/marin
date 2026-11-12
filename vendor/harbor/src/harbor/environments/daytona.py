@@ -51,12 +51,7 @@ from shellbox.process_session import (
 
 
 def machine_spec(task_env_config, environment_dir: Path, env: dict[str, str], *, cpus: int | None, memory_mb: int | None, storage_mb: int | None) -> MachineSpec:
-    """The shellbox spec for one task environment.
-
-    Pure mapping from the task's environment config to the spec the Daytona
-    factory prepares, so measurement code can derive snapshot identities from
-    the same inputs production uses.
-    """
+    """Map a task environment and resource limits to a Shellbox machine spec."""
     source = (
         RegistryImage(task_env_config.docker_image)
         if task_env_config.docker_image

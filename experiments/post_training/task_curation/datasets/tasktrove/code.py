@@ -10,7 +10,6 @@ an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an
 
 import json
 import shlex
-from dataclasses import replace
 
 from taskcompendium.models import ScriptGrader
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
@@ -222,7 +221,7 @@ def stdio_source(
 ) -> RlDataSource[CurationRecipe]:
     return RlDataSource(
         pipeline=process_rows,
-        info=replace(info, task_format=TaskFormat.TASKCOMPENDIUM),
+        info=info,
         config=CurationRecipe(
             name=f"tasktrove-{name}",
             source=tasktrove_source(config),
@@ -245,17 +244,15 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             CODE_CONTESTS_RUBRIC,
             version="3",
             grader=None,
-            info=replace(
-                SourceInfo(
-                    id="Task Trove:DCAgent__code-contests-noblock",
-                    title="DCAgent/code-contests-noblock",
-                    origin="Task Trove",
-                    family="competitive-programming",
-                    tags=("agentic", "multi-turn", "language:python"),
-                    count=8728,
-                    notes="Hidden test_data.json, only the first case is shown. Exact-line compare; fine.",
-                    task_format=TaskFormat.TASKCOMPENDIUM,
-                )
+            info=SourceInfo(
+                id="Task Trove:DCAgent__code-contests-noblock",
+                title="DCAgent/code-contests-noblock",
+                origin="Task Trove",
+                family="competitive-programming",
+                tags=("agentic", "multi-turn", "language:python"),
+                count=8728,
+                notes="Hidden test_data.json, only the first case is shown. Exact-line compare; fine.",
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
         ),
         stdio_source(
@@ -263,20 +260,18 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "laion__codeforces-v3",
             convert_codeforces_task,
             CODEFORCES_RUBRIC,
-            info=replace(
-                SourceInfo(
-                    id="Task Trove:laion__codeforces-v3",
-                    title="laion/codeforces-v3",
-                    origin="Task Trove",
-                    family="competitive-programming",
-                    tags=("agentic", "multi-turn", "language:python"),
-                    count=10000,
-                    notes=(
-                        "Keep rows with at least 5 test files; drop the zero-test fallback (currently full "
-                        "credit for not crashing)."
-                    ),
-                    task_format=TaskFormat.TASKCOMPENDIUM,
-                )
+            info=SourceInfo(
+                id="Task Trove:laion__codeforces-v3",
+                title="laion/codeforces-v3",
+                origin="Task Trove",
+                family="competitive-programming",
+                tags=("agentic", "multi-turn", "language:python"),
+                count=10000,
+                notes=(
+                    "Keep rows with at least 5 test files; drop the zero-test fallback (currently full "
+                    "credit for not crashing)."
+                ),
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
         ),
         stdio_source(
@@ -285,17 +280,15 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             convert_competitive_coding_task,
             COMPETITIVE_CODING_RUBRIC,
             version="2",
-            info=replace(
-                SourceInfo(
-                    id="Task Trove:laion__nemotron-gym-competitive-coding-v2",
-                    title="laion/nemotron-gym-competitive-coding-v2",
-                    origin="Task Trove",
-                    family="competitive-programming",
-                    tags=("agentic", "multi-turn", "language:python"),
-                    count=15713,
-                    notes="50 hidden stdin/stdout cases per task. Best competitive source in the corpus.",
-                    task_format=TaskFormat.TASKCOMPENDIUM,
-                )
+            info=SourceInfo(
+                id="Task Trove:laion__nemotron-gym-competitive-coding-v2",
+                title="laion/nemotron-gym-competitive-coding-v2",
+                origin="Task Trove",
+                family="competitive-programming",
+                tags=("agentic", "multi-turn", "language:python"),
+                count=15713,
+                notes="50 hidden stdin/stdout cases per task. Best competitive source in the corpus.",
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
         ),
         stdio_source(
@@ -305,20 +298,18 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             TACO_RUBRIC,
             version="3",
             grader=None,
-            info=replace(
-                SourceInfo(
-                    id="Task Trove:laion__exp_rpt_taco-v2",
-                    title="laion/exp_rpt_taco-v2",
-                    origin="Task Trove",
-                    family="stdin-stdout",
-                    tags=("agentic", "multi-turn", "language:python"),
-                    count=10000,
-                    notes=(
-                        "Hidden cases plus oracle. Filter to tasks with at least 5 cases and add tolerance-"
-                        "aware compare where the prompt promises one."
-                    ),
-                    task_format=TaskFormat.TASKCOMPENDIUM,
-                )
+            info=SourceInfo(
+                id="Task Trove:laion__exp_rpt_taco-v2",
+                title="laion/exp_rpt_taco-v2",
+                origin="Task Trove",
+                family="stdin-stdout",
+                tags=("agentic", "multi-turn", "language:python"),
+                count=10000,
+                notes=(
+                    "Hidden cases plus oracle. Filter to tasks with at least 5 cases and add tolerance-"
+                    "aware compare where the prompt promises one."
+                ),
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
         ),
     ]

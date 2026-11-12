@@ -92,14 +92,18 @@ def _validated_source(source: RegistryImage | DockerfileSource) -> RegistryImage
     return source
 
 
-def snapshot_identity(source: RegistryImage | DockerfileSource, resources: Resources) -> str:
-    """The snapshot name :class:`DaytonaMachineFactory` would create for this pair.
+def snapshot_resources(spec: MachineSpec) -> Resources:
+    """Return the production Daytona resource shape for a machine specification."""
+    return Resources(
+        cpu=spec.cpus,
+        memory=math.ceil(spec.memory_mb / 1024) if spec.memory_mb is not None else None,
+        disk=math.ceil(spec.storage_mb / 1024) if spec.storage_mb is not None else None,
+        gpu=spec.gpus or None,
+    )
 
-    Validates the source the way ``_prepare`` does (rejecting ADD and Dockerfiles
-    outside the context root) and derives the deterministic name from the build
-    context contents or registry reference plus the resource shape. Measurement
-    code calls this to count snapshots through the production naming path.
-    """
+
+def snapshot_identity(source: RegistryImage | DockerfileSource, resources: Resources) -> str:
+    """Return the deterministic Daytona snapshot name for a validated source."""
     source = _validated_source(source)
     identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
     return f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
@@ -556,12 +560,7 @@ class DaytonaMachineFactory:
 
     async def _prepare(self, client: AsyncDaytona, spec: MachineSpec) -> str:
         source = _validated_source(self._check_spec(spec))
-        resources = Resources(
-            cpu=spec.cpus,
-            memory=math.ceil(spec.memory_mb / 1024) if spec.memory_mb is not None else None,
-            disk=math.ceil(spec.storage_mb / 1024) if spec.storage_mb is not None else None,
-            gpu=spec.gpus or None,
-        )
+        resources = snapshot_resources(spec)
         return await _snapshot(client, source, resources)
 
     async def prepare(self, spec: MachineSpec) -> str:

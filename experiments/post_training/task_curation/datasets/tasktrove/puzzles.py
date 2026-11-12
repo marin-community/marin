@@ -8,7 +8,6 @@ item, numbers and coordinates with the symbolic math comparator, and other answe
 """
 
 import json
-from dataclasses import replace
 
 from taskcompendium.convert.answers import answer_task, source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
@@ -79,20 +78,18 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             pipeline=process_rows,
-            info=replace(
-                SourceInfo(
-                    id=f"Task Trove:{PUZZLES_CONFIG}",
-                    title="laion/all-puzzles-v2",
-                    origin="Task Trove",
-                    family="math-answer",
-                    tags=("agentic", "multi-turn"),
-                    count=6926,
-                    notes=(
-                        "Numeric compare on real puzzles. Gold lives in /tests, which the harness must hide; "
-                        "fine under the new grader."
-                    ),
-                    task_format=TaskFormat.TASKCOMPENDIUM,
-                )
+            info=SourceInfo(
+                id=f"Task Trove:{PUZZLES_CONFIG}",
+                title="laion/all-puzzles-v2",
+                origin="Task Trove",
+                family="math-answer",
+                tags=("agentic", "multi-turn"),
+                count=6926,
+                notes=(
+                    "Numeric compare on real puzzles. Gold lives in /tests, which the harness must hide; "
+                    "fine under the new grader."
+                ),
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
                 name="tasktrove-puzzles",

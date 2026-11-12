@@ -19,10 +19,14 @@ from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
 from taskcompendium.models import TaskSpec
+from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
+from taskcompendium.pipeline.conversion import normalization_columns
+from taskcompendium.pipeline.models import SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
@@ -91,22 +95,45 @@ def import_cohort(config: PrebuiltCohort) -> str:
     return str(local)
 
 
+@dataclass(frozen=True)
+class PrebuiltImport:
+    output_path: str
+    cohort: PrebuiltCohort
+    mode: SourceProcessingMode
+
+
 def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
     """Read the published cohort back and admit its tasks."""
+    if "excluded" in source.info.tags:
+        raise ValueError(f"Published cohort is excluded pending qualification: {source.name}")
     config = source.config
     assert config is not None
     if options.mode is SourceProcessingMode.QUICK:
         raise ValueError(f"A published cohort is imported for admission, not for a quick pass: {source.name}")
 
-    def build_config(context) -> str:
-        return context.output_path
+    def build_config(context) -> PrebuiltImport:
+        return PrebuiltImport(context.output_path, config, options.mode)
 
-    def run(output_path: str) -> CampaignArtifact:
-        local = Path(import_cohort(config))
-        destination = Path(output_path)
+    def run(invocation: PrebuiltImport) -> CampaignArtifact:
+        local = Path(import_cohort(invocation.cohort))
+        destination = Path(invocation.output_path)
         destination.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(local, destination / TASKS_FILENAME)
+        tasks = []
+        for row in pq.read_table(local).to_pylist():
+            task = TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"])
+            tasks.append(normalization_columns(task.id, task.source, task, None, (), row["path"]))
+        for view in ("normalize", "final"):
+            folder = destination / view
+            folder.mkdir()
+            pq.write_table(pa.Table.from_pylist(tasks, schema=NORMALIZED_SCHEMA), folder / "part-00000.parquet")
         manifest = {
+            "mode": invocation.mode.value,
+            "intended_use": "train",
+            "input_rows": len(tasks),
+            "converted_rows": len(tasks),
+            "admitted_rows": len(tasks),
+            "rejections": {},
             "status": "completed",
             "repo": config.repo,
             "revision": config.revision,
@@ -117,7 +144,7 @@ def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptio
         return CampaignArtifact(
             status="completed",
             result=PipelineResult(
-                status="completed",
+                status=SourceStatus.COMPLETED,
                 outputs={"tasks": str(destination / TASKS_FILENAME)},
                 evidence={"manifest": str(destination / "manifest.json")},
                 stages=("download", "validate"),

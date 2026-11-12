@@ -11,9 +11,9 @@ from taskcompendium.pipeline.models import RawRow
 
 from experiments.post_training.task_curation.datasets.tasktrove import python_tests
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import unpack_task_binary
-from experiments.post_training.task_curation.environment_fidelity import PINNED_BASES, UnlowerableRecipe
+from experiments.post_training.task_curation.environment_fidelity import PINNED_BASES
 from experiments.post_training.task_curation.pipeline import planned_lock_url, source_recipe
-from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
+from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task, tasktrove_row
 
 SOURCES = python_tests.sources()
 
@@ -46,7 +46,7 @@ def test_python_test_sources_keep_recipe_steps_and_runtime_variables(source):
     assert environment.docker_image == PINNED_BASES["python:3.11-slim-bookworm"]
     assert environment.working_directory == "/app"
     assert environment.setup_commands == (
-        "(cd / && PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 "
+        "(cd / && export PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1; "
         "pip install --no-cache-dir pytest==8.3.5 numpy==2.1.3)",
         "mkdir -p /app",
     )
@@ -69,12 +69,13 @@ def test_python_test_sources_keep_the_production_grader_lock(source):
 
 @pytest.mark.parametrize("source", SOURCES, ids=lambda source: source.name)
 @pytest.mark.parametrize(
-    "dockerfile, error, match",
+    "dockerfile, match",
     [
-        (b"FROM python:3.9-slim\n", UnlowerableRecipe, "unmapped base"),
-        (b"FROM python:3.10-slim\nCOPY fixture /app/fixture\n", UnlowerableRecipe, "unsupported step: COPY"),
+        (b"FROM python:3.9-slim\n", "unmapped base"),
+        (b"FROM python:3.10-slim\nCOPY fixture /app/fixture\n", "unsupported step: COPY"),
     ],
 )
-def test_python_test_sources_refuse_an_environment_they_cannot_lower(source, dockerfile, error, match):
-    with pytest.raises(error, match=match):
-        converted_task(source.config, python_archive(dockerfile))
+def test_python_test_sources_refuse_an_environment_they_cannot_lower(source, dockerfile, match):
+    converted = convert_row(source.config, python_archive(dockerfile))
+    assert converted.reason == "environment_unlowerable"
+    assert match in converted.detail
