@@ -25,6 +25,9 @@ ENVIRONMENT_PREFIX = "environment/"
 
 ENVIRONMENT_DOCKERFILE = f"{ENVIRONMENT_PREFIX}Dockerfile"
 
+COPY_GLOB_CHARACTERS = "$*?["
+"""Shell glob syntax a Docker COPY treats as a pattern rather than a literal path."""
+
 DEFAULT_WORKDIR = "/app"
 """The workdir a task gets when neither the recipe nor the spec declares one."""
 

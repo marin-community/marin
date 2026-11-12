@@ -83,6 +83,9 @@ def _rebuilt_verification(converted: int, sampled: int, *, environments: str) ->
     )
 
 
+SAMPLED_PER_BASE = 20
+"""The verifier sample size the rebuilt cohorts record."""
+
 SINGLE_ENVIRONMENT_SPREAD = "drawn across the cohort's single environment"
 MULTI_ENVIRONMENT_SPREAD = "across the cohort's environments"
 
@@ -242,13 +245,14 @@ def sources() -> list[RlDataSource]:
                     "steps replay as setup commands, one distinct environment across the cohort. Measured "
                     "at the pinned upstream revision "
                     f"DCAgent2__nl2bash-tasks-cleaned-oracle-v2 @ {TASKTROVE_REVISION}: "
-                    "zero refusals, zero substitutions. Withdrawn reward-only claim: setup fidelity matches on "
-                    "all 1,498 rows and 20 of 20 sampled verifiers return a negative verdict on an empty "
-                    "submission at this revision. The repository is private pending release."
+                    "zero refusals, zero substitutions. Withdrawn reward-only claim: setup fidelity "
+                    f"matches on all 1,498 rows and {SAMPLED_PER_BASE} of {SAMPLED_PER_BASE} sampled verifiers return "
+                    "a negative verdict on an empty submission at this revision. The repository is private "
+                    "pending release."
                 ),
             ),
             agent_identities=1,
-            sampled=20,
+            sampled=SAMPLED_PER_BASE,
             spread=SINGLE_ENVIRONMENT_SPREAD,
             oversight_campaign="RL Data Atlas",
             oversight_recipe_revision="datasets/tasktrove/nl2bash.py @ e6be97168d",
@@ -279,12 +283,13 @@ def sources() -> list[RlDataSource]:
                     f"{TASKTROVE_REVISION} with zero substitutions. 240 rows are "
                     "refused as null graders and 15 for gold leaked into the instruction; refused rows "
                     "are the conversion's own reviewed outcome classes. Withdrawn reward-only claim: setup "
-                    "fidelity matches on every converted row and 20 of 20 sampled verifiers return a "
-                    "negative verdict on an empty submission. The repository is private pending release."
+                    f"fidelity matches on every converted row and {SAMPLED_PER_BASE} of {SAMPLED_PER_BASE} sampled "
+                    "verifiers return a negative verdict on an empty submission. The repository is private "
+                    "pending release."
                 ),
             ),
             agent_identities=1,
-            sampled=20,
+            sampled=SAMPLED_PER_BASE,
             spread=SINGLE_ENVIRONMENT_SPREAD,
             oversight_campaign="RL Data Atlas",
             oversight_recipe_revision="datasets/tasktrove/code.py @ e6be97168d",
@@ -316,12 +321,13 @@ def sources() -> list[RlDataSource]:
                     "with zero substitutions. 1,739 rows are refused for gold leaked into the instruction "
                     "and one as a reviewed defect; refused rows are the conversion's own reviewed outcome "
                     "classes. Withdrawn reward-only claim: setup fidelity matches on every converted row "
-                    "and 20 of 20 sampled verifiers return a negative verdict on an empty submission. "
+                    f"and {SAMPLED_PER_BASE} of {SAMPLED_PER_BASE} sampled verifiers return a negative verdict on an"
+                    "empty submission. "
                     "The repository is private pending release."
                 ),
             ),
             agent_identities=1,
-            sampled=20,
+            sampled=SAMPLED_PER_BASE,
             spread=SINGLE_ENVIRONMENT_SPREAD,
             oversight_campaign="RL Data Atlas",
             oversight_recipe_revision="datasets/tasktrove/code.py @ e6be97168d",
@@ -349,12 +355,13 @@ def sources() -> list[RlDataSource]:
                     "the digest-pinned base, measured at the pinned upstream revision "
                     "DCAgent__exp_rpt_curriculum-easy @ "
                     f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
-                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    f"oracles: per-row setup fidelity matches and {SAMPLED_PER_BASE} of {SAMPLED_PER_BASE} sampled"
+                    "verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
             agent_identities=2,
-            sampled=20,
+            sampled=SAMPLED_PER_BASE,
             spread=MULTI_ENVIRONMENT_SPREAD,
             oversight_campaign="RL Data Atlas",
             oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
@@ -382,12 +389,13 @@ def sources() -> list[RlDataSource]:
                     "the digest-pinned base, measured at the pinned upstream revision "
                     "DCAgent__exp_rpt_curriculum-medium-v2 @ "
                     f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
-                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    f"oracles: per-row setup fidelity matches and {SAMPLED_PER_BASE} of {SAMPLED_PER_BASE} sampled"
+                    "verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
             agent_identities=1,
-            sampled=20,
+            sampled=SAMPLED_PER_BASE,
             spread=MULTI_ENVIRONMENT_SPREAD,
             oversight_campaign="RL Data Atlas",
             oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
@@ -420,7 +428,7 @@ def sources() -> list[RlDataSource]:
                 ),
             ),
             agent_identities=1,
-            sampled=20,
+            sampled=SAMPLED_PER_BASE,
             spread=MULTI_ENVIRONMENT_SPREAD,
             oversight_campaign="RL Data Atlas",
             oversight_recipe_revision="datasets/tasktrove/python_tests.py version 8; verifyit @ f0155c1143",
@@ -454,12 +462,13 @@ def sources() -> list[RlDataSource]:
                     "4,993 e2egit-large tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_e2egit-large @ "
                     f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
-                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    f"oracles: per-row setup fidelity matches and {SAMPLED_PER_BASE} of {SAMPLED_PER_BASE} sampled"
+                    "verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
             agent_identities=1,
-            sampled=20,
+            sampled=SAMPLED_PER_BASE,
             spread=MULTI_ENVIRONMENT_SPREAD,
             oversight_campaign="RL Data Atlas",
             oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
@@ -486,12 +495,13 @@ def sources() -> list[RlDataSource]:
                     "4,842 multifile tasks converted to run in their archived environment, lowered onto "
                     "the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_multifile-v3 @ "
                     f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
-                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    f"oracles: per-row setup fidelity matches and {SAMPLED_PER_BASE} of {SAMPLED_PER_BASE} sampled"
+                    "verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
             agent_identities=1,
-            sampled=20,
+            sampled=SAMPLED_PER_BASE,
             spread=MULTI_ENVIRONMENT_SPREAD,
             oversight_campaign="RL Data Atlas",
             oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
@@ -519,12 +529,13 @@ def sources() -> list[RlDataSource]:
                     "the digest-pinned base, measured at the pinned upstream revision "
                     "DCAgent__exp_rpt_pymethods2test-v3 @ "
                     f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
-                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    f"oracles: per-row setup fidelity matches and {SAMPLED_PER_BASE} of {SAMPLED_PER_BASE} sampled"
+                    "verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
             agent_identities=1,
-            sampled=20,
+            sampled=SAMPLED_PER_BASE,
             spread=MULTI_ENVIRONMENT_SPREAD,
             oversight_campaign="RL Data Atlas",
             oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
@@ -552,12 +563,13 @@ def sources() -> list[RlDataSource]:
                     "the digest-pinned base, measured at the pinned upstream revision "
                     "DCAgent__exp_rpt_pymethods2test-large-v2 @ "
                     f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
-                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    f"oracles: per-row setup fidelity matches and {SAMPLED_PER_BASE} of {SAMPLED_PER_BASE} sampled"
+                    "verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
             agent_identities=1,
-            sampled=20,
+            sampled=SAMPLED_PER_BASE,
             spread=MULTI_ENVIRONMENT_SPREAD,
             oversight_campaign="RL Data Atlas",
             oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
@@ -585,12 +597,13 @@ def sources() -> list[RlDataSource]:
                     "the digest-pinned base, measured at the pinned upstream revision "
                     "DCAgent__exp_rpt_stack-pytest-v2 @ "
                     f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
-                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    f"oracles: per-row setup fidelity matches and {SAMPLED_PER_BASE} of {SAMPLED_PER_BASE} sampled"
+                    "verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
             agent_identities=1,
-            sampled=20,
+            sampled=SAMPLED_PER_BASE,
             spread=MULTI_ENVIRONMENT_SPREAD,
             oversight_campaign="RL Data Atlas",
             oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
@@ -618,12 +631,13 @@ def sources() -> list[RlDataSource]:
                     "the digest-pinned base, measured at the pinned upstream revision "
                     "DCAgent__exp_rpt_unitsyn-python-v4 @ "
                     f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
-                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    f"oracles: per-row setup fidelity matches and {SAMPLED_PER_BASE} of {SAMPLED_PER_BASE} sampled"
+                    "verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
             agent_identities=1,
-            sampled=20,
+            sampled=SAMPLED_PER_BASE,
             spread=MULTI_ENVIRONMENT_SPREAD,
             oversight_campaign="RL Data Atlas",
             oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
@@ -651,12 +665,13 @@ def sources() -> list[RlDataSource]:
                     "the digest-pinned base, measured at the pinned upstream revision "
                     "DCAgent__exp_rpt_unitsyn-python-large-v2 @ "
                     f"{TASKTROVE_REVISION} with zero substitutions. Qualified without "
-                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
+                    f"oracles: per-row setup fidelity matches and {SAMPLED_PER_BASE} of {SAMPLED_PER_BASE} sampled"
+                    "verifiers return a "
                     "negative verdict on an empty submission. The repository is private pending release."
                 ),
             ),
             agent_identities=1,
-            sampled=20,
+            sampled=SAMPLED_PER_BASE,
             spread=MULTI_ENVIRONMENT_SPREAD,
             oversight_campaign="RL Data Atlas",
             oversight_recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",

@@ -49,8 +49,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import pyarrow.parquet as pq
-
+from experiments.post_training.task_curation.calibforge_rebuild import iter_task_payloads
 from experiments.post_training.task_curation.no_oracle_liveness import (
     UNKNOWN_BASE,
     LivenessOutcome,
@@ -183,14 +182,6 @@ def summarize(report: QualificationReport) -> dict:
     }
 
 
-def _native_tasks(path: Path):
-    parquet = pq.ParquetFile(path)
-    for batch in parquet.iter_batches(batch_size=64, columns=["path", "task_binary"]):
-        columns = batch.to_pydict()
-        for task_id, blob in zip(columns["path"], columns["task_binary"], strict=True):
-            yield task_id, bytes(blob)
-
-
 def _wanted_task_ids(args: argparse.Namespace, rebuilt: dict[str, bytes]) -> set[str]:
     """The task ids this run should cover: explicit ids plus a previous report's failures."""
     wanted = set(args.task)
@@ -232,13 +223,13 @@ def main() -> None:
     args = parser.parse_args()
 
     bases = manifest_bases(args.rebuild_out / "manifest.json")
-    rebuilt = dict(_native_tasks(args.rebuild_out / "pending-tasks.parquet"))
+    rebuilt = dict(iter_task_payloads(args.rebuild_out / "pending-tasks.parquet"))
 
     report = QualificationReport(bases=bases)
     wanted = _wanted_task_ids(args, rebuilt)
     native = {
         task_id: payload
-        for task_id, payload in _native_tasks(args.cohort)
+        for task_id, payload in iter_task_payloads(args.cohort)
         if task_id in rebuilt and (not wanted or task_id in wanted)
     }
     for task_id, native_payload in native.items():

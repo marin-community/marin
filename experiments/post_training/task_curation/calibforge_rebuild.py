@@ -57,13 +57,14 @@ from experiments.post_training.task_curation.calibforge_fixtures import (
 )
 from experiments.post_training.task_curation.environment import dockerfile_lines
 from experiments.post_training.task_curation.environment_fidelity import (
+    COPY_GLOB_CHARACTERS,
     DEFAULT_WORKDIR,
     ENVIRONMENT_DOCKERFILE,
     ENVIRONMENT_PREFIX,
     PINNED_BASES,
 )
 from experiments.post_training.task_curation.lowered_envelope import (
-    LOWED_TASK_SPEC_COLUMN,
+    LOWERED_TASK_SPEC_COLUMN,
     LoweredSpec,
     MachineShape,
 )
@@ -345,13 +346,13 @@ def _stage_copy(item: Instruction, workdir: str, files: dict[str, bytes], steps:
     if item.flags:
         raise DeferredRebuild("requires_copy_flags_support")
     *sources, destination = item.args
-    if any(character in destination for character in "$*?[") or ".." in PurePosixPath(destination).parts:
+    if any(character in destination for character in COPY_GLOB_CHARACTERS) or ".." in PurePosixPath(destination).parts:
         raise DeferredRebuild("requires_dynamic_destination_support")
     target = str(PurePosixPath(workdir) / destination)
     directory_target = destination.endswith("/") or len(sources) > 1
     for source_name in sources:
         if (
-            any(character in source_name for character in "$*?[")
+            any(character in source_name for character in COPY_GLOB_CHARACTERS)
             or PurePosixPath(source_name).is_absolute()
             or ".." in PurePosixPath(source_name).parts
         ):
@@ -514,16 +515,6 @@ def lowered_task_spec(task_id: str, task_binary: bytes) -> LoweredSpec:
 
 
 @dataclass(frozen=True)
-class _RebuildOutcome:
-    """One rebuild run's staged tasks, lowered specs, evidence rows and base refs."""
-
-    records: list[dict]
-    lowered: list[dict]
-    evidence: list[dict]
-    base_refs: list[str]
-
-
-@dataclass(frozen=True)
 class TaskEvidence:
     """One cohort task's rebuild outcome, as the evidence manifest records it."""
 
@@ -555,47 +546,64 @@ class TaskEvidence:
         }
 
 
+def iter_task_payloads(path: Path):
+    """Each (task_id, payload) pair in a cohort parquet's ``task_binary`` column."""
+    parquet = pq.ParquetFile(path)
+    for batch in parquet.iter_batches(batch_size=64, columns=["path", "task_binary"]):
+        columns = batch.to_pydict()
+        for task_id, blob in zip(columns["path"], columns["task_binary"], strict=True):
+            yield task_id, bytes(blob)
+
+
+@dataclass(frozen=True)
+class _RebuildOutcome:
+    """One rebuild run's staged tasks, lowered specs, evidence rows and base refs."""
+
+    records: list[dict]
+    lowered: list[dict]
+    evidence: list[TaskEvidence]
+    base_refs: list[str]
+
+
 def _rebuild_cohort(cohort: Path, excluded: set[str]) -> _RebuildOutcome:
     """Rebuild each unexcluded task, staging its payload and lowered spec."""
     records: list[dict] = []
     lowered: list[dict] = []
     evidence: list[TaskEvidence] = []
     base_refs: list[str] = []
-    for batch in pq.ParquetFile(cohort).iter_batches(batch_size=64, columns=["path", "task_binary"]):
-        for path, blob in zip(batch.to_pydict()["path"], batch.to_pydict()["task_binary"], strict=True):
-            raw = bytes(blob)
-            if path in excluded:
-                evidence.append(TaskEvidence(task_id=path, status=EXCLUDED_DECONTAMINATION))
-                continue
-            if path in SETUP_FAILURES:
-                evidence.append(TaskEvidence(task_id=path, status=EXCLUDED_SETUP_FAILURE, reason=SETUP_FAILURES[path]))
-                continue
-            source_sha256 = hashlib.sha256(raw).hexdigest()
-            try:
-                rebuilt = rebuild_task(raw)
-            except DeferredRebuild as error:
-                evidence.append(TaskEvidence(task_id=path, status=DEFERRED, reason=str(error)))
-                continue
-            base_refs.append(rebuilt.base_ref)
-            evidence.append(
-                TaskEvidence(
-                    task_id=path,
-                    status=REBUILT,
-                    source_archive_sha256=source_sha256,
-                    base_ref=rebuilt.base_ref,
-                    workdir=rebuilt.workdir,
-                    payload_sha256=rebuilt.payload_sha256,
-                    setup_sha256=rebuilt.setup_sha256,
-                    archive_sha256=hashlib.sha256(rebuilt.task_binary).hexdigest(),
-                )
+    for path, raw in iter_task_payloads(cohort):
+        if path in excluded:
+            evidence.append(TaskEvidence(task_id=path, status=EXCLUDED_DECONTAMINATION))
+            continue
+        if path in SETUP_FAILURES:
+            evidence.append(TaskEvidence(task_id=path, status=EXCLUDED_SETUP_FAILURE, reason=SETUP_FAILURES[path]))
+            continue
+        source_sha256 = hashlib.sha256(raw).hexdigest()
+        try:
+            rebuilt = rebuild_task(raw)
+        except DeferredRebuild as error:
+            evidence.append(TaskEvidence(task_id=path, status=DEFERRED, reason=str(error)))
+            continue
+        base_refs.append(rebuilt.base_ref)
+        evidence.append(
+            TaskEvidence(
+                task_id=path,
+                status=REBUILT,
+                source_archive_sha256=source_sha256,
+                base_ref=rebuilt.base_ref,
+                workdir=rebuilt.workdir,
+                payload_sha256=rebuilt.payload_sha256,
+                setup_sha256=rebuilt.setup_sha256,
+                archive_sha256=hashlib.sha256(rebuilt.task_binary).hexdigest(),
             )
-            records.append({"path": path, "source": path, "task_binary": rebuilt.task_binary})
-            lowered.append(
-                {
-                    "path": path,
-                    LOWED_TASK_SPEC_COLUMN: json.dumps(lowered_task_spec(path, rebuilt.task_binary).envelope()),
-                }
-            )
+        )
+        records.append({"path": path, "source": path, "task_binary": rebuilt.task_binary})
+        lowered.append(
+            {
+                "path": path,
+                LOWERED_TASK_SPEC_COLUMN: json.dumps(lowered_task_spec(path, rebuilt.task_binary).envelope()),
+            }
+        )
     return _RebuildOutcome(records, lowered, evidence, base_refs)
 
 
@@ -635,7 +643,7 @@ def main() -> None:
     outcome = _rebuild_cohort(args.cohort, excluded)
     schema = pa.schema([("path", pa.string()), ("source", pa.string()), ("task_binary", pa.binary())])
     pq.write_table(pa.Table.from_pylist(outcome.records, schema=schema), args.output / "pending-tasks.parquet")
-    lowered_schema = pa.schema([("path", pa.string()), ("lowered_task_spec", pa.string())])
+    lowered_schema = pa.schema([("path", pa.string()), (LOWERED_TASK_SPEC_COLUMN, pa.string())])
     pq.write_table(pa.Table.from_pylist(outcome.lowered, schema=lowered_schema), args.output / "lowered-tasks.parquet")
     manifest = _evidence_manifest(args.cohort, args.excluded, outcome.records, outcome.evidence, outcome.base_refs)
     (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

@@ -13,6 +13,8 @@ import tarfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from experiments.post_training.task_curation.environment_fidelity import COPY_GLOB_CHARACTERS
+
 FIXTURE_ARCHIVE = "calibforge-fixtures.tar.gz"
 SETUP_SCRIPT = "calibforge-initialize.sh"
 SETUP_ROOT = "/setup_files"
@@ -110,13 +112,16 @@ def fixture_bundle(context: Path, instructions: list[dict]) -> FixtureBundle:
             commands.append("(cd " + shlex.quote(workdir) + " && " + shlex.join(arguments) + ")")
             continue
         *sources, destination = item["args"]
-        if any(character in destination for character in "$*?[") or ".." in PurePosixPath(destination).parts:
+        if (
+            any(character in destination for character in COPY_GLOB_CHARACTERS)
+            or ".." in PurePosixPath(destination).parts
+        ):
             raise DeferredEnvironment("requires_dynamic_destination_support")
         target = str(PurePosixPath(workdir) / destination)
         directory_target = destination.endswith("/") or len(sources) > 1
         for source in sources:
             if (
-                any(character in source for character in "$*?[")
+                any(character in source for character in COPY_GLOB_CHARACTERS)
                 or PurePosixPath(source).is_absolute()
                 or ".." in PurePosixPath(source).parts
             ):

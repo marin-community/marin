@@ -43,7 +43,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements, ScriptGrader, VerifyitGrader
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 
-from experiments.post_training.task_curation.lowered_envelope import LOWED_TASK_SPEC_COLUMN, LoweredSpec
+from experiments.post_training.task_curation.lowered_envelope import LOWERED_TASK_SPEC_COLUMN, LoweredSpec
 
 logger = logging.getLogger(__name__)
 
@@ -88,9 +88,9 @@ class LivenessResult:
 def load_specs(path: Path) -> dict[str, LoweredSpec]:
     """Each lowered task envelope in a published cohort parquet, validated at load."""
     specs = {}
-    for batch in pq.ParquetFile(path).iter_batches(batch_size=32, columns=["path", LOWED_TASK_SPEC_COLUMN]):
+    for batch in pq.ParquetFile(path).iter_batches(batch_size=32, columns=["path", LOWERED_TASK_SPEC_COLUMN]):
         columns = batch.to_pydict()
-        for task_id, spec in zip(columns["path"], columns[LOWED_TASK_SPEC_COLUMN], strict=True):
+        for task_id, spec in zip(columns["path"], columns[LOWERED_TASK_SPEC_COLUMN], strict=True):
             specs[task_id] = LoweredSpec.from_document(json.loads(spec))
     return specs
 
@@ -126,16 +126,6 @@ async def run_one(spec: LoweredSpec, base: str, cgroup_parent: Path | None = Non
         if runtime.gpus:
             return LivenessResult(
                 task.id, base, LivenessOutcome.INFRA_ERROR, None, None, "", "CPU qualification cannot provision GPUs"
-            )
-        if runtime.user is not None:
-            return LivenessResult(
-                task.id,
-                base,
-                LivenessOutcome.INFRA_ERROR,
-                None,
-                None,
-                "",
-                "Explicit runtime users require rollout execution",
             )
         placement = _grader_placement(requirements, runtime, Path(context), cgroup_parent)
         spec_machine = replace(placement.machine, startup_timeout=runtime.startup_timeout)

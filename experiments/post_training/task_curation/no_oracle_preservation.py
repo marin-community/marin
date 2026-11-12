@@ -19,6 +19,7 @@ from dataclasses import dataclass, replace
 
 from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT
 from experiments.post_training.task_curation.environment_fidelity import (
+    COPY_GLOB_CHARACTERS,
     DEFAULT_WORKDIR,
     ENVIRONMENT_DOCKERFILE,
     ENVIRONMENT_PREFIX,
@@ -92,7 +93,7 @@ def copied_paths(dockerfile: str) -> list[str]:
         source.rstrip("/")
         for sources, _destination in _copy_steps(dockerfile)
         for source in sources
-        if not any(character in source for character in "$*?")
+        if not any(character in source for character in COPY_GLOB_CHARACTERS)
     ]
 
 
@@ -146,7 +147,7 @@ def removed_workspace_paths(dockerfile: str, workdir: str) -> tuple[str, ...]:
             if not tokens or tokens[0] != "rm":
                 continue
             for token in tokens[1:]:
-                if token.startswith("-") or any(character in token for character in "$*?"):
+                if token.startswith("-") or any(character in token for character in COPY_GLOB_CHARACTERS):
                     continue
                 removed.append(token if token.startswith("/") else f"{workdir.rstrip('/')}/{token}")
     return tuple(dict.fromkeys(removed))
@@ -163,13 +164,13 @@ def copy_mappings(dockerfile: str, workdir: str) -> list[CopyMapping]:
     """Each copied source with its absolute destination and whether that is a directory."""
     mappings: list[CopyMapping] = []
     for sources, destination in _copy_steps(dockerfile):
-        if any(character in destination for character in "$*?"):
+        if any(character in destination for character in COPY_GLOB_CHARACTERS):
             continue
         is_directory = len(sources) > 1 or destination.endswith("/")
         absolute = destination if destination.startswith("/") else f"{workdir.rstrip('/')}/{destination}"
         absolute = absolute.rstrip("/") or "/"
         for source in sources:
-            if any(character in source for character in "$*?"):
+            if any(character in source for character in COPY_GLOB_CHARACTERS):
                 continue
             mappings.append(CopyMapping(source.rstrip("/"), absolute, is_directory))
     return mappings

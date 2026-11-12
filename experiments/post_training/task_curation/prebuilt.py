@@ -31,7 +31,7 @@ from experiments.post_training.task_curation.calibforge_publish import TASKS_FIL
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.environment_fidelity import missing_environment
-from experiments.post_training.task_curation.lowered_envelope import LOWED_TASK_SPEC_COLUMN, LoweredSpec
+from experiments.post_training.task_curation.lowered_envelope import LOWERED_TASK_SPEC_COLUMN, LoweredSpec
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference
 
 
@@ -71,7 +71,7 @@ def import_cohort(config: PrebuiltCohort) -> str:
         raise ValueError(f"{config.repo}@{config.revision} has {len(rows)} rows, expected {config.expected_rows}")
     for row in rows:
         # A lowered row is the rollout envelope: the task spec plus its machine shapes.
-        envelope = json.loads(row[LOWED_TASK_SPEC_COLUMN])
+        envelope = json.loads(row[LOWERED_TASK_SPEC_COLUMN])
         lowered = LoweredSpec.from_document(envelope)
         if not envelope.get("runtime"):
             raise ValueError(f"{row['path']}: envelope carries no runtime machines")
@@ -108,7 +108,7 @@ def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptio
         tasks_path.upload_from(str(local))
         tasks = []
         for row in pq.read_table(local).to_pylist():
-            task = LoweredSpec.from_document(json.loads(row[LOWED_TASK_SPEC_COLUMN])).task
+            task = LoweredSpec.from_document(json.loads(row[LOWERED_TASK_SPEC_COLUMN])).task
             tasks.append(normalization_columns(task.id, task.source, task, None, (), row["path"]))
         for view in ("normalize", "final"):
             folder = destination / view
