@@ -614,6 +614,113 @@ each host. On Iris, they use the executable `/cache/task-curation` mount because
 Build locks and completion markers let concurrent workers reuse finished
 environments; uv retains its configured package cache.
 
+## LLM-judged sources
+
+An LLM judge is part of a task's grading semantics. A judged TaskSpec whose
+`JudgeSpec.model` is empty, or whose rubric and judge settings are unstated, does
+not describe what grades the task. Such a source is unrepaired, whatever its
+sample review found, and stays at oversight `none`.
+
+### Choose a judge tier
+
+When a repair meets a judged source without a specified judge, the repairer
+works out the judge it needs:
+
+1. Judge ten tasks from the frozen sample yourself, under the source's rubric if
+   it has one. For each task, record the verdict, the evidence the judgment
+   needed and how hard the judgment was.
+2. Estimate the tier the source needs:
+
+   | Tier | Judgment it supports | Example | Historical model |
+   |---|---|---|---|
+   | `LIGHT` | Surface checks with a clear contract | format compliance, schema adherence | GPT OSS 120B |
+   | `MEDIUM` | Comparing content with a reference or checklist | open QA against references | MiniMax M3 |
+   | `HEAVY` | Multi-step verification that needs deep domain reasoning | Lean proof validation | GLM 5.3 |
+
+3. Pin the source's `JudgeSpec` to that tier's instantiable judge definition in
+   `JUDGE_TIERS` (`experiments/post_training/task_curation/judges.py`). Record the
+   ten verdicts and the tier rationale in the source's QA evidence.
+
+### What a judge specification must state
+
+A judge specification names the model and every setting that changes a verdict:
+
+- the rubric, written well enough for a reviewer to apply it by hand;
+- what the judge sees: the question, the candidate answer and any references,
+  checklist criteria or conversation context, and whether reasoning blocks are
+  removed;
+- the context length, maximum completion tokens and reasoning effort;
+- the harness: the API (`chat_completions` or another), the system prompt and
+  prompt template, and the label parsing and scores;
+- the turns allowed, the request timeout and the transport retry budget.
+
+The specification says nothing about how its OpenAI-compatible endpoint is
+reached. A hosted provider, a relay or a co-hosted local server serving the named
+model are interchangeable for curation. `JudgeConnection` supplies the base URL
+and key at run time. A specification may not depend on a particular endpoint's
+defaults; if a verdict changes with an unstated setting, state the setting.
+
+Every tier sets temperature to **0.7**. If an API cannot accept temperature,
+omit that request parameter and explicitly record **API default** in the preset.
+`context_char_limit` bounds auxiliary context in characters; it is separate
+from the preset's declared model context window in tokens. `max_turns` is one:
+parse retries issue independent requests without conversation continuation.
+
+`JUDGE_TIERS` maps each `JudgeTier` to a `JudgeTierDefinition`. Bind a task's
+question and rubric by replacing fields on its `.spec`; keep the accompanying
+`context_window_tokens`, model identity and revision in the qualification evidence.
+The presets do not certify endpoint availability or source admission.
+
+Choose a `JudgeEndpoint` at run time and use its `connect()` context to obtain
+the grader's `JudgeConnection`. `HostedJudgeEndpoint` accepts a provider URL
+and credentials; `RelayJudgeEndpoint` discovers an existing Iris GLM relay;
+`LocalJudgeEndpoint` owns `marin.inference.iris.remote_inference` inside an
+Iris job. Every implementation checks that `/models` advertises the tier's
+exact served model name. This check does not establish a hosted alias's
+underlying weight revision.
+
+Local hosting additionally requires a model YAML matching the tier's immutable
+revision and context window, and confirms the running server's context window.
+For MEDIUM, use
+`experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/olympiadbench_judge/MiniMaxAI-MiniMax-M3-MXFP8-262k.yaml`:
+it pins 262,144 tokens and eight H100s. The 32k judge YAML does not satisfy this
+tier. Exit the endpoint context as soon as validation finishes to release its
+workers. Keep endpoint URLs and credentials out of task specifications.
+
+| Tier | Model requested | Completion budget | Request timeout | Transport attempts | Parse attempts |
+|---|---|---:|---:|---:|---:|
+| LIGHT | `openai/gpt-oss-120b` | 8,192 | 120 seconds | 3 | 2 |
+| MEDIUM | `MiniMaxAI/MiniMax-M3-MXFP8` | 2,048 | 300 seconds | 6 | 1 |
+| HEAVY | `glm-5.3` | 4,096, then 8,192 if truncated | 300 seconds | 3 | 3 |
+
+MEDIUM requires checkpoint `c5454eb03678d8710e54a4e0fc681b9f3b4a3dba`.
+The historical HEAVY deployment reports GLM-5.3 FP8 but exposes no immutable
+weight revision; its tokenizer revision does not establish the weight identity.
+Qualification records that limitation. LIGHT uses explicit low reasoning;
+MEDIUM uses explicit adaptive thinking; HEAVY uses explicit low reasoning
+through its chat template. These presets pin temperature and reasoning settings
+that historical callers sometimes left to provider defaults.
+
+### Validate the judge end to end
+
+A judged source is repaired and quality-checked only after its pinned judge has
+graded real tasks end to end through the production grader:
+
+- a reference or known-good answer scores 1 wherever one exists;
+- an empty, unrelated or known-wrong answer scores 0;
+- on the frozen sample, the judge's verdicts agree with the repairer's own ten
+  verdicts and with a blinded review. Report the disagreements and an estimated
+  error rate, using the `audit-grader` method;
+- verdict coverage is complete: every request returns a parsed verdict within
+  the stated budgets.
+
+Record the judge definition, its endpoint at validation time, the verdicts and
+the agreement in the source's oversight evidence. A judge that cannot be reached
+or validated leaves the source at oversight `none`.
+The production reference and checklist graders retain each parsed provider
+response, including token usage, under `judge_responses`. Confirm that every
+remote prompt plus its completion budget fits the tier's declared context.
+
 ## Sources without oracle solutions
 
 Some sources ship no oracle solution: every row has `has_solution` false, or its
