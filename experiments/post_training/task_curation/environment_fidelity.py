@@ -18,6 +18,8 @@ from dataclasses import dataclass
 
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
+from experiments.post_training.task_curation.environment import dockerfile_lines
+
 FROM = re.compile(r"^\s*FROM\s+(\S+)", re.IGNORECASE | re.MULTILINE)
 ENVIRONMENT_DOCKERFILE = "environment/Dockerfile"
 
@@ -109,28 +111,11 @@ class UnlowerableRecipe(ValueError):
 UNSUPPORTED_DIRECTIVES = frozenset({"COPY", "ADD", "USER", "VOLUME", "ENTRYPOINT", "CMD", "ARG", "SHELL", "HEALTHCHECK"})
 
 
-def _logical_lines(dockerfile: str) -> list[str]:
-    """Recipe lines with backslash continuations joined, comments and blanks dropped."""
-    lines: list[str] = []
-    buffer: str | None = None
-    for raw in dockerfile.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if buffer is None:
-            buffer = ""
-        if line.endswith("\\"):
-            buffer += line[:-1].rstrip() + " "
-            continue
-        buffer += line
-        lines.append(buffer.strip())
-        buffer = None
-    if buffer:
-        lines.append(buffer.strip())
-    return lines
-
-
 PINNED_BASES = {
+    "aweaiteam/calibforge:tb2-verifier-base-v1": (
+        "aweaiteam/calibforge:tb2-verifier-base-v1@sha256:"
+        "0f61b2776c40231d5d868278ed6042295ddbc9d24b036cd72f0b88ebe9bd621a"
+    ),
     # Digest-pinned references for the bases a conversion may lower onto. A tag would let
     # the environment drift under a published cohort; changing one is a deliberate edit.
     "ubuntu:24.04": "ubuntu:24.04@sha256:78d4744ead1f5b19b04d0df558ab182a5300903900755e515b2ca4d10eb2044d",
@@ -177,7 +162,7 @@ def lower_environment(dockerfile: str, bases: Mapping[str, str]) -> LoweredEnvir
     environment: list[str] = []
     variables: dict[str, str] = {}
     commands: list[str] = []
-    for line in _logical_lines(dockerfile):
+    for line in dockerfile_lines(dockerfile):
         directive, _, body = line.partition(" ")
         directive = directive.upper()
         if directive == "FROM":
@@ -192,13 +177,13 @@ def lower_environment(dockerfile: str, bases: Mapping[str, str]) -> LoweredEnvir
             # One ENV line may set several variables: ENV A=1 B=2.
             for assignment in shlex.split(body):
                 key, separator, value = assignment.partition("=")
-                if not separator or not key:
+                if not separator or not key or "$" in value or "`" in value:
                     raise UnlowerableRecipe(f"unsupported ENV form: {body!r}")
                 environment.append(f"{key}={shlex.quote(value)}")
                 variables[key] = value
             continue
         if directive == "RUN":
-            prefix = f"{' '.join(environment)} " if environment else ""
+            prefix = f"export {' '.join(environment)}; " if environment else ""
             commands.append(f"(cd {shlex.quote(workdir)} && {prefix}{body.strip()})")
             continue
         raise UnlowerableRecipe(f"unknown step: {directive}")

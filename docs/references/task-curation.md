@@ -294,7 +294,7 @@ search tags, notes and an optional input-row count. The `deprecated` tag marks a
 source `Deprecated` in the catalog (overriding `excluded`), and its notes carry
 the deprecation reason. A source without a `pipeline` is `Inventory`: it stays
 visible in the Atlas with its evidence, but it is never admitted to selection and
-carries `unassessed` snapshot and oracle status rather than a verdict.
+its measured Daytona and oracle evidence remains visible even without a pipeline.
 
 Every runnable agentic source declares its ingested `task_format`. New agentic
 sources must ingest TaskCompendium or Harbor task directories; selection rejects
@@ -628,12 +628,14 @@ provisioning.
 
 **Empty-submission grading (sandbox).** `no_oracle_liveness` samples tasks by
 base and calls `grade_empty_in_sandbox` on a fresh grading machine. The task
-machine's setup commands do not run in this path. A `GRADED` reward below 1 is
-recorded as `negative_verdict`, without checking a verifier test report or the
-verifier's exit code. This observation does not establish that tests executed.
+machine's setup commands do not run in this path; the grader's declared setup
+commands do. A `negative_verdict` requires exit code zero, a reward below one,
+and a positive structured executed-test count (`detail.total`). Numeric reward
+files without execution evidence report `unverified_execution`. Crashes and
+missing exit diagnostics report `verifier_error`, even when a reward is zero.
 
 The offline report records payload preservation and setup execution rates. Its
-verifier result is not populated by the command below. `skipped` is the default
+verifier results are populated only from an explicit `--liveness` JSONL file. `skipped` is the default
 `oracle_validation` for a source without oracles; a reward-only sample cannot
 establish `verifier_executed`. The Atlas shows the declared value beside the
 catalog, and catalog publication carries it forward.
@@ -657,6 +659,9 @@ uv run python -m experiments.post_training.task_curation.no_oracle_liveness \
     --output /path/to/liveness.jsonl \
     --sample-per-base 20
 ```
+
+Pass the resulting JSONL to the offline command with `--liveness /path/to/liveness.jsonl`
+to combine the receipts. That command rejects duplicate and unknown task IDs.
 
 This phase needs a Daytona credential for image-graded tasks. It records each
 sample's outcome and snapshot name in the JSONL file. Hand snapshot names to an

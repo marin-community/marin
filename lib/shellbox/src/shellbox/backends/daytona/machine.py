@@ -92,6 +92,16 @@ def _validated_source(source: RegistryImage | DockerfileSource) -> RegistryImage
     return source
 
 
+def snapshot_resources(spec: MachineSpec) -> Resources:
+    """Return the production Daytona resource shape for a machine specification."""
+    return Resources(
+        cpu=spec.cpus,
+        memory=math.ceil(spec.memory_mb / 1024) if spec.memory_mb is not None else None,
+        disk=math.ceil(spec.storage_mb / 1024) if spec.storage_mb is not None else None,
+        gpu=spec.gpus or None,
+    )
+
+
 def snapshot_identity(source: RegistryImage | DockerfileSource, resources: Resources) -> str:
     """Return the deterministic Daytona snapshot name for a validated source."""
     source = _validated_source(source)
@@ -550,12 +560,7 @@ class DaytonaMachineFactory:
 
     async def _prepare(self, client: AsyncDaytona, spec: MachineSpec) -> str:
         source = _validated_source(self._check_spec(spec))
-        resources = Resources(
-            cpu=spec.cpus,
-            memory=math.ceil(spec.memory_mb / 1024) if spec.memory_mb is not None else None,
-            disk=math.ceil(spec.storage_mb / 1024) if spec.storage_mb is not None else None,
-            gpu=spec.gpus or None,
-        )
+        resources = snapshot_resources(spec)
         return await _snapshot(client, source, resources)
 
     async def prepare(self, spec: MachineSpec) -> str:

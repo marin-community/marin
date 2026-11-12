@@ -18,7 +18,6 @@ from experiments.post_training.task_curation.no_oracle_qualification import (
     _compare_workspace,
     _manifest,
     check_preservation,
-    classify_verifier_run,
     copied_destinations,
     copied_paths,
     summarize,
@@ -80,27 +79,21 @@ def test_preservation_flags_changed_missing_and_remoded_files():
     assert not remoded.passed and remoded.remoded == ("environment/files/a.csv",)
 
 
-def test_verifier_classification_separates_a_real_run_from_infrastructure():
-    assert classify_verifier_run(exit_code=0, timed_out=False, stdout="0.0") == "negative_verdict"
-    assert classify_verifier_run(exit_code=0, timed_out=False, stdout="tests failed\nreward: 0") == "negative_verdict"
-    assert classify_verifier_run(exit_code=0, timed_out=False, stdout="1.0") == "positive_reward"
-    assert classify_verifier_run(exit_code=1, timed_out=False, stdout="0.0") == "infra_error"
-    assert classify_verifier_run(exit_code=None, timed_out=True, stdout="") == "timeout"
-    assert classify_verifier_run(exit_code=0, timed_out=False, stdout="") == "infra_error"
-    assert classify_verifier_run(exit_code=0, timed_out=False, stdout="Traceback (most recent call last)") == "malformed"
-
-
 def test_verdict_needs_every_phase_and_every_sample():
     preservation = [PreservationResult("a", expected=())]
     execution = [SetupExecution("a", "executed", written=1)]
     only_offline = QualificationReport(preservation=preservation)
     assert only_offline.verdict() == "skipped"  # no setup execution or verifier run yet
 
-    no_execution = QualificationReport(preservation=preservation, verifier=[VerifierResult("a", "negative_verdict", 0)])
+    no_execution = QualificationReport(
+        preservation=preservation, verifier=[VerifierResult("a", "negative_verdict", 0, tests_executed=1)]
+    )
     assert no_execution.verdict() == "skipped"  # preservation and verifier alone are not enough
 
     clean = QualificationReport(
-        preservation=preservation, execution=execution, verifier=[VerifierResult("a", "negative_verdict", 0)]
+        preservation=preservation,
+        execution=execution,
+        verifier=[VerifierResult("a", "negative_verdict", 0, tests_executed=1)],
     )
     assert clean.verdict() == "verifier_executed"
 
@@ -155,7 +148,7 @@ def test_a_kept_file_is_still_required_when_another_is_deleted():
             "environment/files/config.py": (b"x = 1\n", 0o644),
         }
     )
-    assert [item.path for item in workspace_expectations(native)] == ["environment/files/config.py"]
+    assert [item.path for item in workspace_expectations(native)] == ["/app/config.py"]
 
 
 def test_an_absolute_destination_keeps_its_mode():
@@ -167,16 +160,24 @@ def test_an_absolute_destination_keeps_its_mode():
 
 def test_a_faithful_mode_change_is_reported_not_failed():
     """The native recipe's own chmod is replayed, so mode alone cannot fail the check."""
-    expectations = (FileExpectation(path="environment/files/run.sh", sha256="b" * 64, mode=0o644),)
-    written, missing, extra, changed = _compare_workspace(expectations, f"755 ./run.sh\n{'b' * 64}  ./run.sh\n")
-    assert (written, missing, extra) == (1, (), ())
-    assert changed and changed[0].startswith("bbbbbbbbbbbb:")
+    expectations = (FileExpectation(path="/app/run.sh", sha256="b" * 64, mode=0o644),)
+    comparison = _compare_workspace(expectations, f"755 /app/run.sh\n{'b' * 64}  /app/run.sh\n")
+    assert (comparison.written, comparison.missing, comparison.extra) == (1, (), ())
+    assert comparison.changed and comparison.changed[0].startswith("bbbbbbbbbbbb:")
 
 
 def test_a_mode_zero_file_still_counts_as_present():
     """stat prints "0" for a task's deliberately unreadable file; content still matches."""
-    expectations = (FileExpectation(path="environment/files/admin.conf", sha256="c" * 64, mode=0o000),)
-    written, missing, _extra, _changed = _compare_workspace(
+    expectations = (FileExpectation(path="/etc/nginx/sites-enabled/admin.conf", sha256="c" * 64, mode=0o000),)
+    comparison = _compare_workspace(
         expectations, f"0 /etc/nginx/sites-enabled/admin.conf\n{'c' * 64}  /etc/nginx/sites-enabled/admin.conf\n"
     )
-    assert written == 1 and missing == ()
+    assert comparison.written == 1 and comparison.missing == ()
+
+
+def test_duplicate_contents_must_reach_both_native_paths():
+    expectations = (FileExpectation("/app/a", "a" * 64, 0o644), FileExpectation("/app/b", "a" * 64, 0o644))
+    result = _compare_workspace(expectations, f"644 /app/a\n{'a' * 64}  /app/a\n")
+    assert result.missing == ("/app/b",)
+    misplaced = _compare_workspace(expectations, f"644 /wrong/path\n{'a' * 64}  /wrong/path\n")
+    assert misplaced.missing == ("/app/a", "/app/b")

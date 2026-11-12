@@ -1,14 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sample empty-submission rewards on a fresh grading machine.
+"""Run a lowered task's verifier in its real sandbox, with no agent.
 
-``grade_empty_in_sandbox`` stages grader resources and an empty submission. It
-does not run the task machine's setup commands. This script records a graded
-reward below 1 as a negative verdict but does not check a verifier test report or
-the verifier's exit code. A negative verdict alone does not establish liveness.
+The verifier-liveness phase of the no-oracle procedure grades an empty submission
+in each task's declared environment. Lock-based graders run locally; other
+graders use a sandbox. No agent solution is executed.
 
-For image-graded tasks, run it with the RL Daytona credential installed::
+A qualifying rejection requires exit code zero, reward below one, and a positive
+structured executed-test count in the grader result. Numeric reward files without
+test execution evidence report ``unverified_execution``. The published runtime
+shape and grader environment are used without lock substitution.
+
+Run it with the RL Daytona credential installed::
 
     uv run python -m experiments.post_training.task_curation.no_oracle_liveness \
         --lowered /path/to/lowered-tasks.parquet \
@@ -16,15 +20,14 @@ For image-graded tasks, run it with the RL Daytona credential installed::
         --output /path/to/liveness.jsonl \
         --sample-per-base 20
 
-Daytona snapshot names are written beside each result for cleanup; see
-``.agents/ops/daytona.md``.
+Snapshot names are written beside each result for cleanup; this repository has
+no code path that deletes Daytona snapshots (see ``.agents/ops/daytona.md``).
 """
 
 import argparse
 import asyncio
 import base64
 import json
-import math
 import random
 import tempfile
 from collections import defaultdict
@@ -35,22 +38,9 @@ import pyarrow.parquet as pq
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import HostImage, MachineSpec, NetworkPolicy
-from taskcompendium.grading_result import Outcome
-from taskcompendium.models import TaskSpec
-from taskcompendium.runtime.grading import grade_empty_in_sandbox
-
-
-def _resources(cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int):
-    """The ``Resources`` the Daytona factory builds from the same numbers."""
-    from daytona import Resources  # noqa: PLC0415  (optional: only the Daytona placement needs it)
-
-    return Resources(
-        cpu=cpus,
-        memory=math.ceil(memory_mb / 1024) if memory_mb is not None else None,
-        disk=math.ceil(storage_mb / 1024) if storage_mb is not None else None,
-        gpu=gpus or None,
-    )
-
+from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.models import ConversationTrace, GradingAttempt, TaskSpec, TextMessage
+from taskcompendium.runtime.grading import grade_empty_in_sandbox, grade_in_sandbox
 
 VERIFIER_COMMAND = "bash /tests/test.sh"
 VERIFIER_TIMEOUT = 900.0
@@ -66,6 +56,7 @@ class LivenessResult:
     reward: float | None
     snapshot: str
     detail: str = ""
+    tests_executed: int = 0
 
     @property
     def passed(self) -> bool:
@@ -93,108 +84,122 @@ def sample_by_base(specs: dict[str, dict], bases: dict[str, str], per_base: int,
 
 
 async def run_one(
-    spec: dict, base: str, factory=None, lock_url: str | None = None, cgroup_parent: Path | None = None
+    spec: dict,
+    base: str,
+    factory=None,
+    cgroup_parent: Path | None = None,
+    submission_files: dict[str, bytes] | None = None,
 ) -> LivenessResult:
     """Grade an empty submission with the task's own grader, on a fresh grading machine."""
-    task = TaskSpec.model_validate(spec["task"])
-    if lock_url is not None and getattr(task.grader, "environment", None) is not None:
-        # Grade against the lock this run built, so the cohort is qualified on the artifact
-        # the pipeline produces rather than on a path recorded somewhere else.
-        task = task.model_copy(
-            update={
-                "grader": task.grader.model_copy(
-                    update={"environment": task.grader.environment.model_copy(update={"packages_lock": lock_url})}
-                )
+    with tempfile.TemporaryDirectory(prefix="liveness-build-") as context:
+        task = TaskSpec.model_validate(spec["task"])
+        runtime = MachineRuntimeSpec.model_validate(
+            {
+                "backend": "daytona",
+                "network": NetworkPolicy.ALLOW,
+                "gpus": 0,
+                "user": None,
+                "startup_timeout": 900.0,
+                "cleanup_timeout": 120.0,
+                **(spec["runtime"].get("verifier_machine") or {}),
             }
         )
-    runtime = MachineRuntimeSpec.model_validate(
-        {
-            **(spec["runtime"].get("verifier_machine") or {}),
-            "backend": "daytona",
-            "network": NetworkPolicy.ALLOW,
-            "gpus": 0,
-            "user": None,
-            "startup_timeout": 900.0,
-            "cleanup_timeout": 120.0,
-        }
-    )
-    requirements = task.environment_requirements
-    grader_environment = getattr(task.grader, "environment", None)
-    locked = grader_environment is not None and grader_environment.packages_lock is not None
-    if locked:
-        # A packaged grader runs in the local bubblewrap runtime; no sandbox backend and
-        # no snapshot identity are involved, so the Daytona pieces are never imported.
-        snapshot = ""
-        spec_machine = MachineSpec(
-            source=HostImage(),
-            workdir=requirements.working_directory or "/workspace",
-            network=NetworkPolicy.ALLOW,
-            cpus=runtime.cpus,
-            memory_mb=runtime.memory_mb,
-            # The local backend provides no disk quota; declaring one is refused.
-            storage_mb=None,
-        )
-        # A worker whose own cgroup is threaded cannot host the grading cgroups
-        # (cgroup.procs is unwritable there), so an explicit parent overrides discovery.
-        grading_factory = LocalMachineFactory(cgroup_parent=cgroup_parent) if cgroup_parent else LocalMachineFactory()
-    else:
-        from harbor.environments.daytona import machine_spec  # noqa: PLC0415
-        from harbor_config.models.task.config import EnvironmentConfig  # noqa: PLC0415
-        from shellbox.backends.daytona.machine import (  # noqa: PLC0415
-            DaytonaMachineFactory,
-            snapshot_identity,
-        )
-        from shellbox.image import RegistryImage  # noqa: PLC0415
-
-        if requirements.docker_build is not None:
-            # A build-graded task is graded on the backend against the declared build
-            # context; the backend builds it, so no snapshot identity is derived here.
-            context_dir = Path(tempfile.mkdtemp(prefix="liveness-build-"))
-            for resource in requirements.docker_build.files:
-                target = context_dir / resource.path
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(base64.b64decode(resource.source.content_base64))
-            environment_dir = context_dir
-        else:
-            environment_dir = Path("/nonexistent")
-        if requirements.docker_image is not None:
-            snapshot = snapshot_identity(
-                RegistryImage(requirements.docker_image),
-                _resources(runtime.cpus, runtime.memory_mb, runtime.storage_mb, runtime.gpus),
+        requirements = getattr(task.grader, "environment", None)
+        if requirements is None:
+            return LivenessResult(task.id, base, "infra_error", None, None, "", "Grader declares no sandbox environment")
+        if runtime.gpus:
+            return LivenessResult(
+                task.id, base, "infra_error", None, None, "", "CPU qualification cannot provision GPUs"
             )
-        else:
+        locked = requirements.packages_lock is not None
+        if locked:
+            # A packaged grader runs in the local bubblewrap runtime; no sandbox backend and
+            # no snapshot identity are involved, so the Daytona pieces are never imported.
             snapshot = ""
-        spec_machine = machine_spec(
-            EnvironmentConfig(
-                docker_image=requirements.docker_image,
-                workdir=requirements.working_directory,
+            spec_machine = MachineSpec(
+                source=HostImage(),
+                workdir=requirements.working_directory or "/workspace",
+                network=runtime.network,
                 cpus=runtime.cpus,
                 memory_mb=runtime.memory_mb,
                 storage_mb=runtime.storage_mb,
-            ),
-            environment_dir,
-            {},
-            cpus=runtime.cpus,
-            memory_mb=runtime.memory_mb,
-            storage_mb=runtime.storage_mb,
-        )
-        grading_factory = factory or DaytonaMachineFactory()
-    try:
-        result = await grade_empty_in_sandbox(task, grading_factory, spec_machine, timeout=VERIFIER_TIMEOUT)
-    except TimeoutError as error:
-        return LivenessResult(task.id, base, "timeout", None, None, snapshot, str(error))
-    except Exception as error:
-        return LivenessResult(
-            task.id, base, "infra_error", None, None, snapshot, f"{type(error).__name__}: {error}"[:500]
-        )
-    if result.status is not Outcome.GRADED:
-        return LivenessResult(
-            task.id, base, "infra_error", None, result.reward, snapshot, (result.error or str(result.status))[:300]
-        )
-    if result.reward is None:
-        return LivenessResult(task.id, base, "missing_reward", None, None, snapshot)
-    outcome = "negative_verdict" if result.reward < 1.0 else "positive_reward"
-    return LivenessResult(task.id, base, outcome, 0, result.reward, snapshot)
+            )
+            # A worker whose own cgroup is threaded cannot host the grading cgroups
+            # (cgroup.procs is unwritable there), so an explicit parent overrides discovery.
+            grading_factory = (
+                LocalMachineFactory(cgroup_parent=cgroup_parent) if cgroup_parent else LocalMachineFactory()
+            )
+        else:
+            from harbor.environments.daytona import machine_spec  # noqa: PLC0415
+            from harbor_config.models.task.config import EnvironmentConfig  # noqa: PLC0415
+            from shellbox.backends.daytona.machine import (  # noqa: PLC0415
+                DaytonaMachineFactory,
+                snapshot_identity,
+                snapshot_resources,
+            )
+
+            if requirements.docker_build is not None:
+                # A build-graded task is graded on the backend against the declared build
+                # context; the backend builds it, so no snapshot identity is derived here.
+                context_dir = Path(context)
+                for resource in requirements.docker_build.files:
+                    target = context_dir / resource.path
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(base64.b64decode(resource.source.content_base64))
+                environment_dir = context_dir
+            else:
+                environment_dir = Path("/nonexistent")
+            spec_machine = machine_spec(
+                EnvironmentConfig(
+                    docker_image=requirements.docker_image,
+                    allow_internet=runtime.network == NetworkPolicy.ALLOW,
+                    workdir=requirements.working_directory,
+                    cpus=runtime.cpus,
+                    memory_mb=runtime.memory_mb,
+                    storage_mb=runtime.storage_mb,
+                ),
+                environment_dir,
+                {},
+                cpus=runtime.cpus,
+                memory_mb=runtime.memory_mb,
+                storage_mb=runtime.storage_mb,
+            )
+            snapshot = snapshot_identity(spec_machine.source, snapshot_resources(spec_machine))
+            grading_factory = factory or DaytonaMachineFactory()
+        try:
+            if submission_files is None:
+                result = await grade_empty_in_sandbox(task, grading_factory, spec_machine, timeout=VERIFIER_TIMEOUT)
+            else:
+                attempt = GradingAttempt(
+                    ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))),
+                    files=submission_files,
+                )
+                result = await grade_in_sandbox(task, attempt, grading_factory, spec_machine, timeout=VERIFIER_TIMEOUT)
+        except TimeoutError as error:
+            return LivenessResult(task.id, base, "timeout", None, None, snapshot, str(error))
+        except Exception as error:
+            return LivenessResult(
+                task.id, base, "infra_error", None, None, snapshot, f"{type(error).__name__}: {error}"[:500]
+            )
+        return classify_result(task.id, base, snapshot, result)
+
+
+def classify_result(task_id: str, base: str, snapshot: str, result: GradeResult) -> LivenessResult:
+    """Require a completed verifier and a structured executed-test count before qualification."""
+    exit_code = result.diagnostics.get("exit_code")
+    detail = (result.error or json.dumps(result.diagnostics, default=str))[-1500:]
+    tests_executed = (result.detail or {}).get("total", 0)
+    if not isinstance(tests_executed, int) or tests_executed < 0:
+        tests_executed = 0
+    if result.status is not Outcome.GRADED or exit_code != 0:
+        outcome = "verifier_error"
+    elif result.reward is None:
+        outcome = "missing_reward"
+    elif tests_executed == 0:
+        outcome = "unverified_execution"
+    else:
+        outcome = "negative_verdict" if result.reward < 1.0 else "positive_reward"
+    return LivenessResult(task_id, base, outcome, exit_code, result.reward, snapshot, detail, tests_executed)
 
 
 async def run(
@@ -202,14 +207,11 @@ async def run(
     bases: dict[str, str],
     task_ids: list[str],
     output: Path,
-    lock_url: str | None = None,
     cgroup_parent: Path | None = None,
 ) -> None:
     with output.open("a") as handle:
         for index, task_id in enumerate(task_ids, start=1):
-            result = await run_one(
-                specs[task_id], bases.get(task_id, "<unknown>"), lock_url=lock_url, cgroup_parent=cgroup_parent
-            )
+            result = await run_one(specs[task_id], bases.get(task_id, "<unknown>"), cgroup_parent=cgroup_parent)
             handle.write(json.dumps(asdict(result)) + "\n")
             handle.flush()
             print(f"[{index}/{len(task_ids)}] {task_id}: {result.outcome}", flush=True)
@@ -223,7 +225,6 @@ def main() -> None:
     parser.add_argument("--sample-per-base", type=int, default=20)
     parser.add_argument("--limit", type=int, default=0, help="cap the sample for a pilot run")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--lock-url", help="grade packaged graders against this built lock")
     parser.add_argument(
         "--cgroup-parent",
         type=Path,
@@ -243,7 +244,7 @@ def main() -> None:
     if args.limit:
         task_ids = task_ids[: args.limit]
     print(f"sampled {len(task_ids)} of {len(specs)} tasks", flush=True)
-    asyncio.run(run(specs, bases, task_ids, args.output, args.lock_url, args.cgroup_parent))
+    asyncio.run(run(specs, bases, task_ids, args.output, args.cgroup_parent))
 
 
 if __name__ == "__main__":

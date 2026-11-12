@@ -46,6 +46,9 @@ from taskcompendium.models import (
 )
 from tomlkit.items import Table
 
+from experiments.post_training.task_curation.environment import dockerfile_lines
+from experiments.post_training.task_curation.environment_fidelity import PINNED_BASES
+
 FIXTURE_ARCHIVE = "calibforge-fixtures.tar.gz"
 SETUP_SCRIPT = "calibforge-initialize.sh"
 SETUP_ROOT = "/setup_files"
@@ -61,34 +64,6 @@ Snapshot identity includes the resource shape, so leaving each task's declared
 shape in place multiplies the cohort's snapshots by every distinct size. Tasks
 that need more than this shape are deferred rather than silently shrunk."""
 
-# Fixed base set: one digest-pinned image per runtime family in the V1 FROM
-# census. The rebuild refuses unmapped families.
-FIXED_BASES = {
-    # Every base is digest-pinned: a lowered task spec rejects a floating tag, and a
-    # digest change is a deliberate edit here rather than a silent rebuild.
-    "ubuntu:24.04": "ubuntu:24.04@sha256:78d4744ead1f5b19b04d0df558ab182a5300903900755e515b2ca4d10eb2044d",
-    "aweaiteam/calibforge:tb2-verifier-base-v1": (
-        "aweaiteam/calibforge:tb2-verifier-base-v1@sha256:"
-        "0f61b2776c40231d5d868278ed6042295ddbc9d24b036cd72f0b88ebe9bd621a"
-    ),
-    "python:3.13-slim-bookworm": (
-        "python:3.13-slim-bookworm@sha256:f3dac913ab53b78c64f26d5518fcd7043d5a1a46522d6a493b598c3ed12f62a6"
-    ),
-    "python:3.12-slim-bookworm": (
-        "python:3.12-slim-bookworm@sha256:0f086103b026048cc50cb5da25ec435c023c5241a83fc44daea593377abc61c4"
-    ),
-    "python:3.11-slim": (
-        "python:3.11-slim-bookworm@sha256:e8c69d86735f6df3efa06b324694fe51f0422785f83a3bd463052636c2421944"
-    ),
-    "python:3.11-slim-bookworm": (
-        "python:3.11-slim-bookworm@sha256:e8c69d86735f6df3efa06b324694fe51f0422785f83a3bd463052636c2421944"
-    ),
-    "python:3.10-slim-bookworm": (
-        "python:3.10-slim-bookworm@sha256:db6ee5170ebce0f4d165af242e8e77addc08bd9ffc37e8b1815752cf027aa4f8"
-    ),
-    "debian:12-slim": "debian:12-slim@sha256:c67e92c8099ba22853ab4cfda7cfb494d253d6012ca82dee98ba8976772af018",
-    "debian:13.0-slim": "debian:13.0-slim@sha256:f2306da7a8fb6440535937baed0ce0018736742d6dc5beec9d6a31355b259726",
-}
 
 SETUP_FAILURES = {
     # Exercised through the lowered spec's own setup command in its base image: the
@@ -139,18 +114,11 @@ def parse_instructions(dockerfile: str) -> list[Instruction]:
     detection. Heredocs defer; compilation decides which instructions are supported.
     """
     instructions: list[Instruction] = []
-    buffer = ""
-    for raw_line in dockerfile.splitlines():
-        stripped = raw_line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        candidate = f"{buffer} {stripped}".strip() if buffer else stripped
-        if candidate.endswith("\\"):
-            # Continuation: the next line joins after removing the backslash and
-            # any trailing whitespace it hides.
-            buffer = candidate[:-1].rstrip()
-            continue
-        line, buffer = candidate, ""
+    try:
+        lines = dockerfile_lines(dockerfile)
+    except ValueError as error:
+        raise DeferredRebuild("requires_continuation_terminator") from error
+    for line in lines:
         if "<<" in line:
             raise DeferredRebuild("requires_heredoc_support")
         words = line.split(None, 1)
@@ -182,8 +150,6 @@ def parse_instructions(dockerfile: str) -> list[Instruction]:
                 continue
             args = parts
         instructions.append(Instruction(command=command, args=args, flags=flags, json_form=json_form, raw=raw_args))
-    if buffer:
-        raise DeferredRebuild("requires_continuation_terminator")
     return instructions
 
 
@@ -202,10 +168,16 @@ def _tainted(arguments: list[str]) -> bool:
     return any(character in argument for argument in arguments for character in _METACHARACTERS)
 
 
-def compile_recipe(
-    instructions: list[Instruction], files: dict[str, bytes], modes: dict[str, int]
-) -> tuple[str, str, str, bytes]:
-    """Compile a native recipe into (base_ref, workdir, setup script, payload tar).
+@dataclass(frozen=True)
+class CompiledRecipe:
+    base_ref: str
+    workdir: str
+    setup_script: str
+    payload: bytes
+
+
+def compile_recipe(instructions: list[Instruction], files: dict[str, bytes], modes: dict[str, int]) -> CompiledRecipe:
+    """Compile a native recipe into a base, workdir, setup script and fixture archive.
 
     Dependency installs move into the setup script verbatim; file copies are
     staged from the fixture payload; the FROM line maps onto the fixed base
@@ -217,10 +189,10 @@ def compile_recipe(
         raise DeferredRebuild("requires_multistage_support")
     original_from = bases[0].args[0]
     base_key, _, original_digest = original_from.partition("@")
-    if base_key not in FIXED_BASES:
+    if base_key not in PINNED_BASES:
         raise DeferredRebuild("requires_unmapped_base:" + original_from)
     # The mapped base already carries a digest; a digest-pinned original keeps its own.
-    base_ref = f"{base_key}@{original_digest}" if original_digest else FIXED_BASES[base_key]
+    base_ref = f"{base_key}@{original_digest}" if original_digest else PINNED_BASES[base_key]
     workdir = "/"
     commands = [
         "#!/bin/sh",
@@ -343,7 +315,7 @@ def compile_recipe(
             info.size = len(content)
             info.mode = modes.get(name, 0o644)
             archive.addfile(info, io.BytesIO(content))
-    return base_ref, workdir, "\n".join(commands) + "\n", gzip.compress(payload.getvalue(), mtime=0)
+    return CompiledRecipe(base_ref, workdir, "\n".join(commands) + "\n", gzip.compress(payload.getvalue(), mtime=0))
 
 
 def rebuild_task(task_binary: bytes) -> RebuiltTask:
@@ -372,7 +344,9 @@ def rebuild_task(task_binary: bytes) -> RebuiltTask:
         for name, content in files.items()
         if name.startswith(ENVIRONMENT_PREFIX)
     }
-    base_ref, workdir, setup_script, payload = compile_recipe(instructions, context_files, environment_modes)
+    recipe = compile_recipe(instructions, context_files, environment_modes)
+    base_ref, workdir = recipe.base_ref, recipe.workdir
+    setup_script, payload = recipe.setup_script, recipe.payload
     output_files = {name: content for name, content in files.items() if not name.startswith(ENVIRONMENT_PREFIX)}
     output_files["task.toml"] = _rewrite_task_toml(files.get("task.toml"), base_ref, workdir)
     output_files["environment/Dockerfile"] = f"FROM {base_ref}\nWORKDIR {workdir}\n".encode()
@@ -462,6 +436,8 @@ def lowered_task_spec(task_id: str, task_binary: bytes) -> dict:
     environment = document["environment"]
     base_ref = environment["docker_image"]
     workdir = environment.get("workdir") or "/app"
+    if workdir == "/":
+        raise DeferredRebuild("requires_explicit_output_workspace")
     setup_script = (environment.get("setup") or {}).get("command", "").split()[-1].rsplit("/", 1)[-1]
 
     def resource(path: str, content: bytes, mode: str | None = None) -> TaskResource:
@@ -483,12 +459,18 @@ def lowered_task_spec(task_id: str, task_binary: bytes) -> dict:
             working_directory=workdir,
             setup_commands=(f"sh {SETUP_ROOT}/{setup_script}",),
         ),
+        output_paths=(workdir,),
         answer_type=AnswerType.TEXT,
         answer_format=PlainText(),
         grader=ScriptGrader(
             argv=("bash", "/tests/test.sh"),
             cwd=workdir,
-            environment=EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=base_ref),
+            environment=EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+                docker_image=base_ref,
+                working_directory=workdir,
+                setup_commands=(f"sh {SETUP_ROOT}/{setup_script}",),
+            ),
             reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)),
         ),
         source=Source(dataset="smartie-calibforge-rebuilt", revision="1", row=task_id, importer_revision="1"),
@@ -515,7 +497,7 @@ def main() -> None:
     base_refs: list[str] = []
     for batch in pq.ParquetFile(args.cohort).iter_batches(batch_size=64, columns=["path", "task_binary"]):
         for path, blob in zip(batch.to_pydict()["path"], batch.to_pydict()["task_binary"], strict=True):
-            raw = bytes(blob.as_py() if hasattr(blob, "as_py") else blob)
+            raw = bytes(blob)
             if path in excluded:
                 evidence.append({"task_id": path, "status": "excluded_decontamination"})
                 continue

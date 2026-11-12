@@ -16,7 +16,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     unpack_task_binary,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.source_defects import SOURCE_DEFECTS
-from experiments.post_training.task_curation.environment_fidelity import environment_unused
+from experiments.post_training.task_curation.environment_fidelity import UnlowerableRecipe, environment_unused
 from experiments.post_training.task_curation.pipeline import HfSource
 
 TASKTROVE_REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
@@ -39,7 +39,12 @@ class TaskTroveConverter:
         reason = SOURCE_DEFECTS.get((self.config, row.data["path"]))
         if reason is not None:
             return ImportRejection(kind=ImportFailureKind.SOURCE_DEFECT, reason="reviewed_defect", detail=reason)
-        converted = self.convert(row, context)
+        try:
+            converted = self.convert(row, context)
+        except UnlowerableRecipe as error:
+            return ImportRejection(
+                kind=ImportFailureKind.CONVERTER_ERROR, reason="environment_unlowerable", detail=str(error)
+            )
         if isinstance(converted, ImportRejection):
             return converted
         task = converted.task if isinstance(converted, NormalizedTask) else converted

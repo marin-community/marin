@@ -181,8 +181,8 @@ def write_training(config: SelectionConfig, full: tuple[TaskSpec, ...], destinat
         for source in sources:
             root = StoragePath(source.root)
             manifest = json.loads((root / "manifest.json").read_text())
-            if manifest["mode"] != "full":
-                raise ValueError(f"Selection requires FULL curation: {source.source_id}")
+            if manifest["mode"] not in {"sample", "full"}:
+                raise ValueError(f"Selection requires SAMPLE/FULL curation: {source.source_id}")
             if manifest["intended_use"] != IntendedUse.TRAIN:
                 raise ValueError(f"Selection source is not a training population: {source.source_id}")
             for path in sorted((root / "final" / "*.parquet").glob(), key=str):
