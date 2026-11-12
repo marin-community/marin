@@ -136,7 +136,9 @@ class MegatronWorker:
         override_config_kwargs.update(model_config_kwargs.get("model_config", {}))
         update_model_config(hf_config, override_config_kwargs=override_config_kwargs)
 
-        # if flash_attn is enabled, we use flash attention backend, otherwise fall back to fused attention backend
+        # cuDNN's BF16 train/eval rounding can change Grug's MoE routes.
+        # FlashAttention preserves the scoring/training parity PPO requires.
+        flash_attn = flash_attn or (bf16 and getattr(hf_config, "model_type", None) == GRUG_MOE_MODEL_TYPE)
         transformer_config_kwargs = OmegaConf.to_container(transformer_config_kwargs, resolve=True)
         transformer_config_kwargs["attention_backend"] = "flash" if flash_attn else "fused"
 

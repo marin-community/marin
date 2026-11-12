@@ -39,8 +39,6 @@ from skyrl_train.distributed.megatron.checkpoint_restore import (
 )
 from marinskyrl.remote_io import abort_multipart_uploads
 
-from megatron.core.dist_checkpointing.strategies import base as ckpt_base
-from megatron.core.dist_checkpointing.strategies.async_utils import AsyncCallsQueue
 from megatron.core import dist_checkpointing
 from megatron.core.dist_checkpointing.serialization import (
     get_default_save_sharded_strategy,
@@ -170,10 +168,6 @@ class MegatronStrategy(DistributedStrategy):
         self.hf_config = None  # Set by the megatron worker once configs are initialized.
         if optimizer_config is not None:
             _optimizer_checkpoint_metadata(megatron_config.optimizer_checkpoint_sharding_type)
-
-        # NOTE: Set Megatron dist checkpoint async backend to persistent to avoid `os.fork()`-ing
-        # short-lived background workers, which does not work well with Ray.
-        ckpt_base.async_calls = AsyncCallsQueue(persistent=True)
 
     def set_seed(self, seed: int) -> None:
         random.seed(seed)
@@ -401,8 +395,6 @@ class MegatronStrategy(DistributedStrategy):
                     torch.save({"client_state": client_state, "tag": tag}, f)
 
         dist.barrier()
-        ckpt_base.async_calls.close()
-        ckpt_base.async_calls = AsyncCallsQueue(persistent=True)
         self.log(f"Checkpoint successfully saved to {ckpt_dir}")
 
     def load_checkpoint(
@@ -435,7 +427,7 @@ class MegatronStrategy(DistributedStrategy):
 
         muonh = self.optimizer_config is not None and str(self.optimizer_config.optimizer).lower() == "muonh"
         model_weights_from_optimizer = False
-        with remote_checkpoint_metadata(ckpt_dir) as read_dir:
+        with remote_checkpoint_metadata(ckpt_dir, load_strategy) as read_dir:
             if optimizer and load_training_state:
                 common_state = dist_checkpointing.load_common_state_dict(read_dir)
                 if muonh and common_state.get("optimizer_recipe") != _MUONH_CHECKPOINT_RECIPE:

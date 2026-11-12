@@ -25,7 +25,7 @@ dependencies = [
     "ijson>=3.5",
     "jinja2>=3.1",
     "math-verify==0.9.0",
-    "hydra-core==1.3.2",
+    "hydra-core==1.3.4",
     "jaxtyping",
     "langdetect==1.0.9",
     "loguru",
@@ -71,50 +71,50 @@ cpu = [
     "torchdata",
 ]
 cuda = [
-    "cuda-toolkit[nvcc,cccl]==13.2.1 ; sys_platform == 'linux'",
+    "cuda-toolkit[nvcc,cccl]==13.2.2 ; sys_platform == 'linux'",
     "accelerate>=1.14,<2 ; sys_platform == 'linux'",
     "peft>=0.19 ; sys_platform == 'linux'",
     "tensordict ; sys_platform == 'linux'",
-    "torch==2.13.0 ; sys_platform == 'linux'",
+    "torch==2.14.1 ; sys_platform == 'linux'",
     "torchdata ; sys_platform == 'linux'",
-    "torchvision==0.28.0 ; sys_platform == 'linux'",
+    "torchvision==0.29.1 ; sys_platform == 'linux'",
 ]
 vllm = [
     # The CPU audio wheel uses Torch for GPU resampling without loading a cu132 extension.
     "torchaudio==2.11.0+cpu ; sys_platform == 'linux'",
-    "torchcodec==0.16.0+cu132 ; sys_platform == 'linux'",
-    "cuda-toolkit[nvcc,cccl]==13.2.1 ; sys_platform == 'linux'",
+    "torchcodec==0.17.0+cu132 ; sys_platform == 'linux'",
+    "cuda-toolkit[nvcc,cccl]==13.2.2 ; sys_platform == 'linux'",
     "accelerate>=1.14,<2 ; sys_platform == 'linux'",
     "flashinfer-cubin==0.6.18.post1 ; sys_platform == 'linux'",
     "flashinfer-python==0.6.18.post1 ; sys_platform == 'linux'",
     "peft>=0.19 ; sys_platform == 'linux'",
-    "quack-kernels==0.6.4 ; sys_platform == 'linux'",
+    "quack-kernels==0.6.5 ; sys_platform == 'linux'",
     "runai-model-streamer[gcs,s3]==0.16.1 ; sys_platform == 'linux'",
     "hs-connectors ; sys_platform == 'linux'",
     "speculators ; sys_platform == 'linux'",
     "tensordict ; sys_platform == 'linux'",
-    "torch==2.13.0 ; sys_platform == 'linux'",
+    "torch==2.14.1 ; sys_platform == 'linux'",
     "torchdata ; sys_platform == 'linux'",
-    "torchvision==0.28.0 ; sys_platform == 'linux'",
-    "vllm==0.0.0.dev20260929+marin.39e62869693c.cu132 ; sys_platform == 'linux'",
+    "torchvision==0.29.1 ; sys_platform == 'linux'",
+    "vllm==0.0.0.dev20261110+marin.3004cd8f1632.cu132 ; sys_platform == 'linux'",
 ]
 megatron = [
     "harbor ; sys_platform == 'linux'",
-    "cuda-toolkit[nvcc,cccl]==13.2.1 ; sys_platform == 'linux'",
+    "cuda-toolkit[nvcc,cccl]==13.2.2 ; sys_platform == 'linux'",
     "accelerate>=1.14,<2 ; sys_platform == 'linux'",
-    "causal-conv1d>=1.5,<2 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "causal-conv1d==1.7.0+marin.cu132torch2141.1 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     # Keep the qualified FlashAttention 2 path for context parallelism.
-    "flash-attn==2.8.3 ; sys_platform == 'linux'",
+    "flash-attn==2.8.3.post1+marin.cu132torch2141.1 ; sys_platform == 'linux'",
     "flash-linear-attention==0.4.2 ; sys_platform == 'linux'",
-    "mamba-ssm>=2.2,<3 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "megatron-bridge==0.6.0 ; sys_platform == 'linux'",
-    "megatron-core==0.18.0 ; sys_platform == 'linux'",
+    "mamba-ssm==2.3.2.post1+marin.cu132torch2141.1 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "megatron-bridge==0.6.2+marin.torch2141.2 ; sys_platform == 'linux'",
+    "megatron-core==0.19.2+marin.torch2141.4 ; sys_platform == 'linux'",
     "nvidia-modelopt==0.46.1 ; sys_platform == 'linux'",
     "peft>=0.19 ; sys_platform == 'linux'",
     "tensordict ; sys_platform == 'linux'",
-    "torch==2.13.0 ; sys_platform == 'linux'",
+    "torch==2.14.1 ; sys_platform == 'linux'",
     "torchdata ; sys_platform == 'linux'",
-    "torchvision==0.28.0 ; sys_platform == 'linux'",
+    "torchvision==0.29.1 ; sys_platform == 'linux'",
     "transformer-engine[pytorch]==2.19.0 ; sys_platform == 'linux'",
     "transformer-engine-cu13==2.19.0 ; sys_platform == 'linux'",
     "transformer-engine-torch==2.19.0 ; sys_platform == 'linux'",
@@ -192,8 +192,6 @@ override-dependencies = [
     "flashinfer-python==0.6.18.post1 ; sys_platform == 'linux'",
     "flashinfer-cubin==0.6.18.post1 ; sys_platform == 'linux'",
     "transformers==5.16.1",
-    "opentelemetry-api==1.44.0 ; sys_platform == 'linux'",
-    "opentelemetry-api ; sys_platform != 'linux'",
 ]
 constraint-dependencies = [
     "dnspython>=2.9.0",
@@ -228,12 +226,17 @@ pycosat = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wh
 torchaudio = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
 torchcodec = { index = "pytorch-cu132", extra = "vllm", marker = "sys_platform == 'linux'" }
 flash-attn = [
-    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/native-cu132-fa283-20260920/flash_attn-2.8.3-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
-    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/native-cu132-fa283-20260920/flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/flash_attn-2.8.3.post1+marin.cu132torch2141.1-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/flash_attn-2.8.3.post1+marin.cu132torch2141.1-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
 ]
 harbor = { path = "../harbor", editable = true }
-hs-connectors = { git = "https://github.com/lukedhlee/speculators.git", rev = "6496b4db007de00dd4741349643d23b23e29dce8", subdirectory = "hs_connectors" }
-speculators = { git = "https://github.com/lukedhlee/speculators.git", rev = "6496b4db007de00dd4741349643d23b23e29dce8" }
+hs-connectors = { git = "https://github.com/marin-community/speculators.git", rev = "ecac1b16278063e9640004135153882c02de5801", subdirectory = "hs_connectors" }
+speculators = { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-trimmed-candidate-20261007-604f2c14/speculators-0.9.0a16.post1-py3-none-any.whl" }
+megatron-core = [
+    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-trimmed-candidate-20261007-604f2c14/megatron_core-0.19.2+marin.torch2141.4-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-trimmed-candidate-20261007-604f2c14/megatron_core-0.19.2+marin.torch2141.4-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+]
+megatron-bridge = { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-trimmed-candidate-20261007-604f2c14/megatron_bridge-0.6.2+marin.torch2141.2-py3-none-any.whl", marker = "sys_platform == 'linux'" }
 torch = [
     { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
     { index = "pytorch-cu132", extra = "cuda" },
@@ -247,18 +250,18 @@ torchvision = [
 ]
 flashinfer-cubin = { index = "flashinfer", marker = "sys_platform == 'linux'" }
 vllm = [
-    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260929-39e62869693c/vllm-0.0.0.dev20260929+marin.39e62869693c.cu132-cp38-abi3-manylinux_2_28_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
-    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260929-39e62869693c/vllm-0.0.0.dev20260929+marin.39e62869693c.cu132-cp38-abi3-manylinux_2_28_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261110-3004cd8f1632/vllm-0.0.0.dev20261110+marin.3004cd8f1632.cu132-cp38-abi3-manylinux_2_28_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261110-3004cd8f1632/vllm-0.0.0.dev20261110+marin.3004cd8f1632.cu132-cp38-abi3-manylinux_2_28_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
 ]
 transformer-engine-torch = [
-    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/fa4-te219-cu132-20260920-694f3adf/transformer_engine_torch-2.19.0-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
-    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/fa4-te219-cu132-20260920-694f3adf/transformer_engine_torch-2.19.0-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/transformer_engine_torch-2.19.0-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/transformer_engine_torch-2.19.0-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
 ]
 causal-conv1d = [
-    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/native-cu132-torch2.13-20260910-6d12d7a0/causal_conv1d-1.6.1-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/causal_conv1d-1.7.0+marin.cu132torch2141.1-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
 ]
 mamba-ssm = [
-    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/native-cu132-torch2.13-20260910-6d12d7a0/mamba_ssm-2.3.1-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/mamba_ssm-2.3.2.post1+marin.cu132torch2141.1-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
 ]
 
 [[tool.uv.index]]

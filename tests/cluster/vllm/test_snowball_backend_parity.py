@@ -57,7 +57,7 @@ def _levanter_job(goldens: tuple[RepresentativeGolden, ...]) -> JobRequest:
                 "XLA_FLAGS": "--xla_gpu_deterministic_ops=true",
             },
         ),
-        priority=job_pb2.PRIORITY_BAND_PRODUCTION,
+        priority=job_pb2.PRIORITY_BAND_INTERACTIVE,
     )
 
 
@@ -87,7 +87,7 @@ def _vllm_job(
                 "VLLM_USE_FLASHINFER_SAMPLER": "0",
             },
         ),
-        priority=job_pb2.PRIORITY_BAND_PRODUCTION,
+        priority=job_pb2.PRIORITY_BAND_INTERACTIVE,
         replicas=pipeline_parallel_size,
         max_retries_failure=2,
         max_task_failures=2,
@@ -151,7 +151,10 @@ def test_vllm_job_payload_survives_worker_serialization(backend):
     request = (
         _tpu_vllm_job(goldens) if backend == "vllm-tpu-v4-tp16" else _vllm_job(goldens, "FLASH_ATTN", int(backend[-1]))
     )
-    assert request.priority == job_pb2.PRIORITY_BAND_PRODUCTION
+    expected_priority = (
+        job_pb2.PRIORITY_BAND_PRODUCTION if backend == "vllm-tpu-v4-tp16" else job_pb2.PRIORITY_BAND_INTERACTIVE
+    )
+    assert request.priority == expected_priority
     assert request.max_retries_failure == 2
     assert request.max_task_failures == 2
     entrypoint = convert_entrypoint(request.entrypoint)
