@@ -42,7 +42,6 @@ TASKTROVE_UPSTREAM_URL = (
 
 
 def _rebuilt_cohort(config: PrebuiltCohort, info: SourceInfo) -> RlDataSource[PrebuiltCohort]:
-    """Derive inventory identity and row counts from the pinned import configuration."""
     return RlDataSource(
         pipeline=import_prebuilt,
         config=config,

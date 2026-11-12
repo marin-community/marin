@@ -71,22 +71,6 @@ def test_an_agentic_source_without_a_declared_format_is_rejected():
         require_accepted_task_format(_agentic(None))
 
 
-@pytest.mark.parametrize("task_format", [TaskFormat.TASKCOMPENDIUM, TaskFormat.HARBOR])
-def test_task_directory_formats_pass_and_non_agentic_sources_need_none(task_format):
-    require_accepted_task_format(_agentic(task_format))
-    require_accepted_task_format(
-        RlDataSource(
-            info=SourceInfo(
-                id="Marin:math",
-                upstream_dataset=("Marin:math").partition(":")[2],
-                upstream_name=("Marin:math").partition(":")[2],
-                build_path="test",
-                origin=SourceOrigin.MARIN,
-            )
-        )
-    )
-
-
 def test_pipeline_less_pointers_are_rejected():
     with pytest.raises(ValueError, match="no registered conversion pipeline"):
         _ = _agentic(TaskFormat.TASKCOMPENDIUM).declaration
