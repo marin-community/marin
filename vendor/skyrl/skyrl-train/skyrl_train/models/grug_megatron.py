@@ -29,7 +29,7 @@ from megatron.core import tensor_parallel
 from megatron.core.tensor_parallel.mappings import all_gather_last_dim_from_tensor_parallel_region
 from megatron.core.transformer.moe.moe_layer import MoELayer
 from megatron.core.transformer.moe.shared_experts import SharedExpertMLP
-from megatron.core.extensions.transformer_engine import TEColumnParallelLinear, TENorm
+from megatron.core.extensions.transformer_engine import TEColumnParallelGroupedLinear, TEColumnParallelLinear, TENorm
 from megatron.core.extensions.transformer_engine_spec_provider import TESpecProvider
 from megatron.core.fusions.fused_bias_dropout import get_bias_dropout_add
 from megatron.core.models.common.embeddings.rope_utils import apply_rotary_pos_emb
@@ -480,6 +480,28 @@ class GrugSharedExperts(nn.Module):
             expert.backward_dw()
 
 
+class GrugColumnParallelGroupedLinear(TEColumnParallelGroupedLinear):
+    """Keep Blackwell BF16 expert rows independent of peer-rank token counts."""
+
+    def forward(self, x: torch.Tensor, m_splits: list[int] | torch.Tensor):
+        if (
+            x.dtype != torch.bfloat16
+            or not x.is_cuda
+            or torch.cuda.get_device_capability(x.device)[0] < 10
+            or self.config.fp8
+            or self.config.fp4
+            or self.single_grouped_weight
+        ):
+            return super().forward(x, m_splits)
+
+        assert not self.use_bias, "Grug expert projections do not use bias"
+        # TE's per-expert GEMMs can round identical rows differently as M changes.
+        # Stack the existing parameters so autograd and checkpoint names stay intact.
+        weights = torch.stack([getattr(self, f"weight{i}") for i in range(self.num_gemms)])
+        offsets = torch.as_tensor(m_splits, dtype=torch.int32, device=x.device).cumsum(0, dtype=torch.int32)
+        return torch._grouped_mm(x, weights.transpose(1, 2), offs=offsets), None
+
+
 class GrugMoELayer(MoELayer):
     """Native Megatron latent dispatch, with Hero's pre-dispatch latent RMSNorm."""
 
@@ -541,6 +563,7 @@ def grug_layer_spec(config: TransformerConfig) -> ModuleSpec:
 
     backend = TESpecProvider()
     moe = get_moe_module_spec_for_backend(backend, num_experts=config.num_moe_experts, moe_grouped_gemm=True)
+    moe.keywords["submodules"].experts.keywords["submodules"].linear_fc1 = GrugColumnParallelGroupedLinear
     moe.keywords["submodules"].router = GrugTopKRouter
     if config.grug_hero:
         shared = moe.keywords["submodules"].shared_experts
