@@ -223,7 +223,7 @@ trials (`comment_url`). Nothing is posted on #9451.
 
 ## 2d. score (after every `run-finished` that records a stage, and after an escalation of a registered idea)
 
-1. **Run:** `B score X#### --score <0-10> --rationale "<one line>" --model <your model name>`. It stores
+1. **Run:** `B score X#### --score <0-10> --rationale "<one line, at most 160 characters>" --model <your model name>`. It stores
    `potential` (score, rationale, model, date, and a digest of the results it saw) on the registry entry. The
    Status page shows it; nothing else writes it.
 2. **Score with this rubric**, from the entry's trials and events. A win's validations are equal-time speedrun,
@@ -337,7 +337,11 @@ End with two to five plain lines:
 - what is still running.
 
 A scheduled session (one that ran `B claim`) then reports these lines with
-`B finish --session <id from claim> --summary "<the lines>"`, which frees the queue for the next session.
+`B finish --session <id from claim> --summary "<the lines>"`, which frees the queue for the next session. If a
+command crashed or refused for a reason outside any one idea (the registry or weekly branch, Iris, the page) so the
+session could not work its events, add `--blocked`: the page offers those events again to a later session instead of
+counting them as done. An idea escalated on its own merits (already tested, a house rule, an unknown Track) is
+handled, so a session whose only escalations are those is not blocked.
 
 ## 8. House rules (an idea that asks for any of these goes to section 6)
 
