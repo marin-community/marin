@@ -15,19 +15,10 @@ from marin.execution.lazy import StepContext, run
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     AnswerType,
-    CommandSemantics,
-    ConversationInput,
     EnvironmentRequirements,
-    FileReward,
     NoGrader,
-    PlainText,
     ResourceGroups,
-    RewardFile,
-    RewardFileFormat,
-    ScriptGrader,
-    Source,
     TaskSpec,
-    TextMessage,
 )
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.runtime.resources import inline_resource
@@ -39,36 +30,9 @@ from experiments.post_training.task_curation.driver import _write_corpus
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 from lib.taskcompendium.tests.oracle_filter_fixtures import oracle_receipt
 
+from .prebuilt_fixtures import prebuilt_task
+
 IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
-
-
-def _task(task_id: str, *, image: str | None = IMAGE, capabilities: tuple[str, ...] = ()) -> dict:
-    requirements = EnvironmentRequirements(
-        command_semantics=CommandSemantics.LINUX_PROCESS,
-        docker_image=image,
-        working_directory="/app",
-        setup_commands=("true",),
-        capabilities=capabilities,
-    )
-    grader = ScriptGrader(
-        argv=("true",),
-        environment=EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=IMAGE),
-        reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)),
-    )
-    spec = TaskSpec(
-        id=task_id,
-        context=ConversationInput(events=(TextMessage(role="user", content="Do the task."),)),
-        environment_requirements=requirements,
-        answer_type=AnswerType.TEXT,
-        answer_format=PlainText(),
-        grader=grader,
-        source=Source(dataset="d", revision="r", row=task_id, importer_revision="1"),
-        resources=ResourceGroups(),
-    )
-    return {
-        "path": task_id,
-        "lowered_task_spec": json.dumps({"task": spec.model_dump(mode="json"), "runtime": {"task_machine": {}}}),
-    }
 
 
 def _write(tmp_path, rows: list[dict]):
@@ -83,20 +47,20 @@ def _cohort(rows: int):
 
 
 def test_a_published_cohort_is_downloaded_and_validated(tmp_path, monkeypatch):
-    path = _write(tmp_path, [_task("a"), _task("b")])
+    path = _write(tmp_path, [prebuilt_task("a"), prebuilt_task("b")])
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
     assert prebuilt.import_cohort(_cohort(2)) == str(path)
 
 
 def test_a_cohort_smaller_than_recorded_is_refused(tmp_path, monkeypatch):
-    path = _write(tmp_path, [_task("a")])
+    path = _write(tmp_path, [prebuilt_task("a")])
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
     with pytest.raises(ValueError, match="has 1 rows, expected 2"):
         prebuilt.import_cohort(_cohort(2))
 
 
 def test_an_envelope_without_machine_shapes_is_refused(tmp_path, monkeypatch):
-    row = _task("a")
+    row = prebuilt_task("a")
     row["lowered_task_spec"] = json.dumps({"task": json.loads(row["lowered_task_spec"])["task"]})
     path = _write(tmp_path, [row])
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
@@ -106,7 +70,7 @@ def test_an_envelope_without_machine_shapes_is_refused(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
 def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_path, monkeypatch, mode):
-    published = _write(tmp_path, [_task("a"), _task("b")])
+    published = _write(tmp_path, [prebuilt_task("a"), prebuilt_task("b")])
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(published))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
@@ -132,7 +96,7 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
 @pytest.mark.parametrize("change", ["none", "package", "infrastructure_zero"])
 def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch, change, mode):
-    task = TaskSpec.model_validate(json.loads(_task("native")["lowered_task_spec"])["task"])
+    task = TaskSpec.model_validate(json.loads(prebuilt_task("native")["lowered_task_spec"])["task"])
     task = task.model_copy(
         update={
             "tags": ("harbor",),
@@ -192,7 +156,7 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
 
 def test_prebuilt_workspace_cohort_rejects_missing_environment_without_capabilities(tmp_path, monkeypatch):
     answer_type = AnswerType.WORKSPACE_STATE
-    row = _task("missing", image=None)
+    row = prebuilt_task("missing", image=None)
     envelope = json.loads(row["lowered_task_spec"])
     envelope["task"]["answer_type"] = answer_type.value
     if answer_type is AnswerType.WORKSPACE_STATE:
@@ -206,7 +170,7 @@ def test_prebuilt_workspace_cohort_rejects_missing_environment_without_capabilit
 
 @pytest.mark.parametrize("qualified", [False, True])
 def test_direct_prebuilt_admission_requires_oversight_but_allows_unsafe_tasks(tmp_path, monkeypatch, qualified):
-    path = _write(tmp_path, [_task("a")])
+    path = _write(tmp_path, [prebuilt_task("a")])
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
     config = prebuilt.PrebuiltCohort(
         name="unsafe-cohort", version="2026.11.12.1", repo="org/repo", revision="rev", expected_rows=1
@@ -246,7 +210,7 @@ def test_direct_prebuilt_admission_requires_oversight_but_allows_unsafe_tasks(tm
 
 
 def test_reply_only_rewrite_needs_no_agent_machine(tmp_path, monkeypatch):
-    row = _task("reply")
+    row = prebuilt_task("reply")
     envelope = json.loads(row["lowered_task_spec"])
     envelope["task"]["environment_requirements"] = {}
     row["lowered_task_spec"] = json.dumps(envelope)
@@ -258,7 +222,7 @@ def test_reply_only_rewrite_needs_no_agent_machine(tmp_path, monkeypatch):
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
 @pytest.mark.parametrize("state", ["missing", "failed", "passed"])
 def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, monkeypatch, mode, state):
-    row = _task("oracle")
+    row = prebuilt_task("oracle")
     envelope = json.loads(row["lowered_task_spec"])
     spec = TaskSpec.model_validate(envelope["task"])
     spec = spec.model_copy(

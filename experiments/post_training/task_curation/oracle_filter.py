@@ -5,12 +5,11 @@
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from harbor.models.task.task import Task
-from harbor.models.trial.result import TrialResult
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
@@ -21,6 +20,19 @@ from taskcompendium.pipeline.oracle_filter import (
     OracleTrialReceipt,
     has_oracle_solution,
 )
+
+
+def harbor_inspection(kind: str, paths: list[str]) -> dict:
+    """Validate in Harbor's locked runtime without importing it into the curation environment."""
+    project = Path(__file__).resolve().parents[3] / "vendor/harbor"
+    result = subprocess.run(
+        ["uv", "run", "--project", str(project), "--frozen", "python", "-m", "harbor.cli.curation_inspect", kind],
+        input=json.dumps(paths),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
 
 
 def row_task(row: dict) -> TaskSpec | None:
@@ -37,25 +49,26 @@ def row_runtime_hash(row: dict) -> str | None:
 def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]]:
     trials: dict[tuple[str, str], list[OracleTrialReceipt]] = {}
     seen = {}
-    for path in sorted(jobs.rglob("result.json")):
+    paths = sorted(jobs.rglob("result.json"))
+    validated = harbor_inspection("results", [str(path) for path in paths])
+    for path in paths:
         document = decode_json_value(path.read_text())
-        if not isinstance(document, dict) or "trial_name" not in document:
+        if str(path) not in validated:
             continue
-        result = TrialResult.model_validate(document)
         digest = canonical_sha256(document)
-        if result.id in seen:
-            if seen[result.id] != digest:
-                raise ValueError(f"Conflicting copies of oracle trial {result.id}")
+        if document["id"] in seen:
+            if seen[document["id"]] != digest:
+                raise ValueError(f"Conflicting copies of oracle trial {document["id"]}")
             continue
-        seen[result.id] = digest
-        if result.config.agent.name != "oracle":
+        seen[document["id"]] = digest
+        if document["config"]["agent"]["name"] != "oracle":
             raise ValueError(f"Non-oracle trial in filter job: {path}")
         verdict_path = path.parent / "verifier/verdict.json"
         verdict = decode_json_value(verdict_path.read_text()) if verdict_path.exists() else None
         if verdict is not None and not isinstance(verdict, dict):
             raise ValueError(f"Structured verdict must be an object: {verdict_path}")
         exit_path = path.parent / "agent/exit-code.txt"
-        exit_code = int(exit_path.read_text()) if exit_path.exists() else 0
+        exit_code = int(exit_path.read_text()) if exit_path.exists() else None
         receipt = OracleTrialReceipt(
             path=str(path),
             result=document,
@@ -63,7 +76,7 @@ def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]
             oracle_exit_code=exit_code,
             result_sha256=canonical_sha256(document),
         )
-        trials.setdefault((result.task_name, result.task_checksum), []).append(receipt)
+        trials.setdefault((document["task_name"], document["task_checksum"]), []).append(receipt)
     return trials
 
 
@@ -165,6 +178,7 @@ def write_task_map(cohort: Path, tasks_dir: Path, output: Path) -> None:
     """Bind each oracle TaskSpec to its already-exported native Harbor task."""
     root = tasks_dir.resolve()
     mappings = {}
+    native = harbor_inspection("tasks", [str(path.resolve()) for path in root.iterdir() if path.is_dir()])
     paths = sorted(cohort.glob("*.parquet")) if cohort.is_dir() else [cohort]
     for path in paths:
         for batch in pq.ParquetFile(path).iter_batches(batch_size=32):
@@ -173,15 +187,14 @@ def write_task_map(cohort: Path, tasks_dir: Path, output: Path) -> None:
                 if task is None or not has_oracle_solution(task):
                     continue
                 candidates = {(root / name).resolve() for name in (task.id, row.get("path", task.id))}
-                candidates = {path for path in candidates if path.is_relative_to(root) and Task.is_valid_dir(path)}
+                candidates = {path for path in candidates if path.is_relative_to(root) and str(path) in native}
                 if len(candidates) != 1:
                     raise ValueError(
                         f"Expected one native task directory for {task.id}; supply an explicit task map otherwise"
                     )
-                native = Task(candidates.pop())
+                package = native[str(candidates.pop())]
                 mappings[task.id] = {
-                    "task_name": native.name,
-                    "task_checksum": native.checksum,
+                    **package,
                     "task_sha256": canonical_sha256(task.model_dump(mode="json")),
                     "runtime_sha256": row_runtime_hash(row),
                 }

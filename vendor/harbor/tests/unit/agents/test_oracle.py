@@ -48,7 +48,4 @@ async def test_restored_oracle_runs_source_solution_through_local_environment(tm
             await environment.stop(True)
     assert (factory.root / "workspace/answer.txt").read_text() == "solved"
     assert (paths.agent_dir / "oracle.txt").is_file()
-    if exit_code:
-        assert (paths.agent_dir / "exit-code.txt").read_text() == str(exit_code)
-    else:
-        assert not (paths.agent_dir / "exit-code.txt").exists()
+    assert (paths.agent_dir / "exit-code.txt").read_text() == str(exit_code)
