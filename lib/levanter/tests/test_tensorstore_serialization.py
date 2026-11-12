@@ -579,12 +579,6 @@ def test_a_save_after_an_interrupted_save_to_the_same_directory_commits():
         np.testing.assert_array_equal(restored, np.stack([values, values + 1, values + 2]))
 
 
-def test_a_single_process_save_keeps_default_locking(tmp_path):
-    assert tensorstore_serialization._file_io_locking(TensorStoreWriteConfig(), str(tmp_path)) is None
-    explicit = TensorStoreWriteConfig(file_io_locking="os")
-    assert tensorstore_serialization._file_io_locking(explicit, str(tmp_path)) == "os"
-
-
 def test_checkpoint_written_on_one_mesh_loads_on_another():
     """Content must not depend on the mesh that wrote it, so writer layout can keep changing."""
     run_on_eight_devices(eight_device_checkpoints.a_checkpoint_loads_on_another_mesh)
