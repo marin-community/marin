@@ -146,11 +146,6 @@ def publish_assessment(store: DataStore, catalog: CurationCatalog, attempt: Asse
     return assessment
 
 
-def published_source_starts(catalog: CurationCatalog) -> dict[str, datetime]:
-    """Return each source's latest published campaign start from retained run history."""
-    return catalog.source_starts()
-
-
 def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> CatalogSnapshot:
     """Archive selected outputs before publishing their typed catalog snapshot."""
     declarations = [source.declaration for source in sources]
@@ -183,7 +178,7 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
             started = datetime.fromisoformat(run["started_at"])
             superseded = {
                 source_id
-                for source_id, prior_start in published_source_starts(catalog).items()
+                for source_id, prior_start in catalog.source_starts().items()
                 if source_id in selected and source_id in previous and started < prior_start
             }
             declarations.extend(row.declaration for source_id, row in previous.items() if source_id not in by_id)

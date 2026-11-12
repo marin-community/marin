@@ -53,7 +53,7 @@ function render(data, sourceId) {
   $('labels').replaceChildren(
     node('span', `Quality ${data.quality}`, `chip level level-${data.quality.toLowerCase()}`),
     node('span', result ? `Result ${resultLabels[result]}` : 'Result not assessed', `chip quality-${result ? resultClasses[result] : 'unassessed'}`),
-    node('span', data.daytona.state === 'na' ? 'Daytona N/A' : data.daytona.state === 'unmeasured' ? 'Daytona not measured' : `Daytona ${data.daytona.state}`, 'chip quality-unassessed'),
+    node('span', data.daytona.state === 'na' ? 'Daytona N/A' : data.daytona.state === 'unmeasured' ? 'Daytona Unknown (not measured)' : `Daytona ${data.daytona.state}`, 'chip quality-unassessed'),
     node('span', data.updated_at ? `Last updated ${new Date(data.updated_at).toLocaleDateString()}` : 'Catalog load time unavailable', 'chip quality-unassessed'),
   );
   const sections = [];

@@ -99,7 +99,7 @@ without coverage falls back to the selected curriculum release.
 
 **Daytona** shows N/A for non-agentic sources or a measured count of zero machine snapshots.
 An agentic source shows Safe or Unsafe with its measured unique snapshot count
-against the limit of ten, or *Not measured* when its declaration records no
+against the limit of ten, or *Unknown (not measured)* when its declaration records no
 production snapshot-identity measurement.
 
 **Likely duplicates** fold into one entry. A `/sources` row may carry

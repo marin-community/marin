@@ -76,7 +76,7 @@ function evidenceLink(row) { return `source.html#${new URLSearchParams({source_i
 function daytonaCell(row) {
   const cell = node('td'), daytona = row.daytona;
   if (daytona.state === 'na') { const chip = node('span', 'N/A', 'chip quality-unassessed'); chip.title = daytona.reason; cell.append(chip); return cell; }
-  if (daytona.state === 'unmeasured') { const chip = node('span', 'Not measured', 'chip quality-some_issues'); chip.title = daytona.reason; cell.append(chip); return cell; }
+  if (daytona.state === 'unmeasured') { const chip = node('span', 'Unknown (not measured)', 'chip quality-some_issues'); chip.title = daytona.reason; cell.append(chip); return cell; }
   const safe = daytona.state === 'safe';
   const chip = node('span', safe ? 'Safe' : 'Unsafe', `chip quality-${safe ? 'good' : 'bad'}`);
   chip.title = `${number.format(daytona.snapshots)} unique snapshots, limit ${number.format(daytona.limit)}`;
