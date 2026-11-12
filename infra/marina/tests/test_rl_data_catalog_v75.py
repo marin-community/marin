@@ -33,6 +33,8 @@ def test_v75_api_marks_zero_actor_and_grandfathered_sources_without_false_unsafe
         "daytona_machine_slots": 100,
         "daytona_snapshot_count": 0,
         "daytona_unsafe_reasons": ["host_image_required"],
+        "daytona_execution_failures": 100,
+        "daytona_count_basis": "Complete actor factory census",
         "daytona_unsafe_details": {"host_image_required": "Factory requires a registry image"},
         "daytona_unsafe_counts": {"host_image_required": 100},
     }
@@ -49,3 +51,15 @@ def test_v75_api_requires_census_evidence_and_exact_frozen_exemption():
         {"id": "MarinSkyRL:new-agentic-blend", "tags": ["agentic"]},
     ):
         assert daytona(declaration, 10)["state"] == "unmeasured"
+
+    complete = {
+        "daytona_safety": "safe",
+        "daytona_snapshot_count": 1,
+        "daytona_machine_slots": 10,
+        "daytona_execution_failures": 0,
+        "daytona_count_basis": "Complete actor census",
+    }
+    assert daytona(complete, 10)["state"] == "safe"
+    for missing in ("daytona_machine_slots", "daytona_execution_failures", "daytona_count_basis"):
+        incomplete = {key: value for key, value in complete.items() if key != missing}
+        assert daytona(incomplete, 10)["state"] == "unmeasured"
