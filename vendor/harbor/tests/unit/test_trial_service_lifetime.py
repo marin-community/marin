@@ -119,7 +119,8 @@ class BackgroundServerAgent(PartialAnswerAgent):
         ("terminal-bench/git-multibranch", _GIT_TASK_REF, True, "complete"),
         ("terminal-bench/qemu-alpine-ssh", "sha256:" + "b" * 64, False, "complete"),
         ("terminal-bench/ordinary-task", "sha256:" + "a" * 64, False, "complete"),
-        ("terminal-bench/qemu-alpine-ssh", _QEMU_TASK_REF, False, "timeout"),
+        ("terminal-bench/qemu-alpine-ssh", _QEMU_TASK_REF, True, "timeout"),
+        ("terminal-bench/git-multibranch", _GIT_TASK_REF, True, "timeout"),
         ("terminal-bench/qemu-alpine-ssh", _QEMU_TASK_REF, False, "cancel"),
     ],
 )
@@ -321,6 +322,40 @@ async def test_actual_grader_observes_agent_background_service_stopped(
         assert result.exception_info.exception_type == "AgentTimeoutError"
     else:
         assert result.exception_info is None
+    assert result.verifier_result.rewards == {"reward": 1.0}
+    assert factory.machine.closed
+
+
+async def test_tb2_timeout_retains_agent_service_for_actual_verifier(tmp_path, monkeypatch):
+    port = available_port()
+    factory = ProcessTaskFactory(tmp_path / "guest")
+    monkeypatch.setattr(local, "LocalMachineFactory", lambda **kwargs: factory)
+    config = trial_config(tmp_path, "tb2-timeout", guest_root=tmp_path / "guest")
+    config.agent = AgentConfig(
+        name="test-BackgroundServerAgent",
+        override_timeout_sec=1,
+        env={"HTTP_PORT": str(port), "WAIT_FOR_TIMEOUT": "1"},
+    )
+    (config.task.path / "tests/test.sh").write_text(
+        "#!/bin/sh\nset -eu\npython3 - <<'PY'\n"
+        "import os, urllib.request\n"
+        f"assert urllib.request.urlopen('http://127.0.0.1:{port}/answer', timeout=1).read() == b'partial'\n"
+        "pid = int(open('foreground.pid').read())\n"
+        "try:\n    os.kill(pid, 0)\n"
+        "except ProcessLookupError:\n    pass\n"
+        "else:\n    raise AssertionError('Timed-out foreground command survived')\n"
+        "open(os.environ['TEST_REWARD_PATH'], 'w').write('1')\nPY\n"
+    )
+    trial = await Trial.create(config)
+    trial.config.task = TaskConfig(
+        name="terminal-bench/git-multibranch",
+        ref=_GIT_TASK_REF,
+        source="terminal-bench/terminal-bench-2-1",
+    )
+
+    result = await trial.run()
+
+    assert result.exception_info.exception_type == "AgentTimeoutError"
     assert result.verifier_result.rewards == {"reward": 1.0}
     assert factory.machine.closed
 

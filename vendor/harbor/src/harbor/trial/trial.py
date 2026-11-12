@@ -649,7 +649,7 @@ class Trial(ABC):
             primary = exc
             raise
         finally:
-            if primary is None and self._keep_agent_services_for_verifier():
+            if (primary is None or isinstance(primary, AgentTimeoutError)) and self._keep_agent_services_for_verifier():
                 target.agent_execution.finished_at = self._now()
             else:
                 try:
