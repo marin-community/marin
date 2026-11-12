@@ -182,7 +182,8 @@ no-build-isolation-package = [
     "transformer-engine-torch",
 ]
 override-dependencies = [
-    # Published dependency floors do not apply to the checkout's development version.
+    # Use Rigging from this checkout; its static 0.2.0 label is below
+    # Taskcompendium's and Finestore's published version floors.
     "marin-rigging[secrets,prometheus]",
     # This profile uses Core checkpointing and no Hadamard transforms.
     # Bridge's NVRx training entry points are not included.
@@ -192,6 +193,8 @@ override-dependencies = [
     # Megatron Bridge pins older serving libraries; share the selected vLLM ABI.
     "flashinfer-python==0.6.18.post1 ; sys_platform == 'linux'",
     "flashinfer-cubin==0.6.18.post1 ; sys_platform == 'linux'",
+    # Inherited override above Bridge 0.6.2's declared <=5.12.1 requirement.
+    # Grug and Qwen3 paths pass here; other Bridge adapters remain unqualified.
     "transformers==5.16.1",
 ]
 constraint-dependencies = [
@@ -226,6 +229,8 @@ langdetect = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu
 pycosat = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wheelhouse/resolve/d761f1e357b6d5a9b80427f4710eb2e04adf1101/linux-x86_64/cp312/20260915-tinker-aime/pycosat-0.6.6-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }
 torchaudio = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
 torchcodec = { index = "pytorch-cu132", extra = "vllm", marker = "sys_platform == 'linux'" }
+# Torch 2.14.1 wheels use pinned sources and checked-in patches:
+# https://github.com/marin-community/MarinSkyRL/tree/604f2c1463032ffc1f47da114f43cf1d550dd473/scripts/wheels
 flash-attn = [
     { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/flash_attn-2.8.3.post1+marin.cu132torch2141.1-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
     { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/flash_attn-2.8.3.post1+marin.cu132torch2141.1-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },

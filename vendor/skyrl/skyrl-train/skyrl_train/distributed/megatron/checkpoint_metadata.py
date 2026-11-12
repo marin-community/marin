@@ -27,9 +27,12 @@ def remote_checkpoint_metadata(checkpoint_dir: str, load_strategy):
         if not (root / "common.pt").exists():
             from megatron.core.dist_checkpointing.mapping import ShardedObject
 
-            # Core 0.19 stores common state as one DCP record. Read only that
-            # record through S3, then expose the legacy control file to Core's
-            # local metadata loader without staging any rank tensor shards.
+            # Core 0.19 stores common state in DCP records. Its common-state
+            # helper uses a filesystem reader, bypassing our direct S3 reader.
+            # Decode that saved record into a temporary legacy metadata view;
+            # the remote checkpoint and rank tensor shards stay in S3.
+            # Remove this bridge when the helper accepts our remote reader.
+            # Context: https://github.com/marin-community/marin/pull/11241
             common = load_strategy.load(
                 {"common_state": ShardedObject("common_state", None, (1,), (0,))}, root
             )

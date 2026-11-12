@@ -137,8 +137,11 @@ class MegatronWorker:
         override_config_kwargs.update(model_config_kwargs.get("model_config", {}))
         update_model_config(hf_config, override_config_kwargs=override_config_kwargs)
 
-        # cuDNN's BF16 train/eval rounding can change Grug's MoE routes.
-        # FlashAttention preserves the scoring/training parity PPO requires.
+        # In this pinned stack, cuDNN BF16 train/eval forwards gave Grug
+        # different log-probs at fixed weights. PPO needs those scores to agree.
+        # Revisit after cuDNN passes test_grug_megatron_train_forward_matches_eval_forward
+        # in the selected profile. This observation does not establish a cuDNN defect.
+        # Evidence: https://github.com/marin-community/marin/pull/11241
         flash_attn = flash_attn or (bf16 and getattr(hf_config, "model_type", None) == GRUG_MOE_MODEL_TYPE)
         transformer_config_kwargs = OmegaConf.to_container(transformer_config_kwargs, resolve=True)
         transformer_config_kwargs["attention_backend"] = (

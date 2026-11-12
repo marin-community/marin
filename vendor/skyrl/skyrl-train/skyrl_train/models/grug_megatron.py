@@ -480,6 +480,10 @@ class GrugSharedExperts(nn.Module):
             expert.backward_dw()
 
 
+# TE 2.19 BF16 FC1 changed fixed local rows when peer expert row counts changed.
+# A 1 KiB workspace passed the repro but was slower and needed a global allocator patch.
+# Revisit when native TE passes Grug's peer-batch parity and trainer checks without that cost.
+# Measurements and tested scope: https://github.com/marin-community/marin/pull/11241
 class GrugColumnParallelGroupedLinear(TEColumnParallelGroupedLinear):
     """Keep Blackwell BF16 expert rows independent of peer-rank token counts."""
 
@@ -496,7 +500,6 @@ class GrugColumnParallelGroupedLinear(TEColumnParallelGroupedLinear):
             return super().forward(x, m_splits)
 
         assert not self.use_bias, "Grug expert projections do not use bias"
-        # TE's per-expert GEMMs can round identical rows differently as M changes.
         # Stack the existing parameters so autograd and checkpoint names stay intact.
         weights = torch.stack([getattr(self, f"weight{i}") for i in range(self.num_gemms)])
         offsets = torch.as_tensor(m_splits, dtype=torch.int32, device=x.device).cumsum(0, dtype=torch.int32)
