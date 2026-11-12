@@ -25,6 +25,7 @@ from zephyr.dataset import Dataset, ShardInfo, format_shard_path
 from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file
 
+from taskcompendium.grading_environment import count_grading_environment, grading_environment_census
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import Grader, NoGrader, TaskSpec, VerifyitGrader, grades_in_process
 from taskcompendium.pipeline.audit_schema import (
@@ -162,6 +163,7 @@ class ConversionResult:
     converted_rows: int
     rejections: dict[str, int]
     elapsed_seconds: float
+    grading_environment: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -723,13 +725,21 @@ class _UnprocessedLocators:
         return iter(())
 
 
-def _write_export_shard(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, output: str) -> Iterator[Counter[str]]:
+@dataclass(frozen=True)
+class _ExportCounts:
+    admissions: Counter[str]
+    grading_environment: Counter[str]
+
+
+def _write_export_shard(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, output: str) -> Iterator[_ExportCounts]:
     """Write one shard of the normalize, review, verify and final views; return its admission counts."""
     admissions: Counter[str] = Counter()
+    grading: Counter[str] = Counter()
 
     def counted() -> Iterator[dict[str, Any]]:
         for row in rows:
             admissions[row["admission"]] += 1
+            count_grading_environment(grading, row.get("grading_environment"))
             yield row
 
     root = StoragePath(output)
@@ -742,7 +752,7 @@ def _write_export_shard(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, out
     outputs["final"] = ShardOutput(str(root / "final" / SIDECAR_SHARD), _sidecar_schema(NORMALIZED_COLUMNS), _final_row)
     for view, path in zip(outputs, write_shard_outputs(counted(), shard, list(outputs.values())), strict=True):
         _written_output(path, view)
-    yield admissions
+    yield _ExportCounts(admissions, grading)
 
 
 def _population_shard_count(population_count: int, maximum: int) -> int:
@@ -758,7 +768,7 @@ def _export_sidecars(
     verification: SourceVerificationStatus,
     *,
     expanded: bool,
-) -> dict[str, int]:
+) -> tuple[dict[str, int], dict[str, Any]]:
     """Publish the normalize, review, verify and final views in one execution; return admission counts.
 
     Every view takes its rows from one shuffle by task ID into the canonical normalized shards.
@@ -801,7 +811,11 @@ def _export_sidecars(
             telemetry=phase,
             operation="export",
         ).results
-    return dict(_merge_admissions(iter(shard_admissions)))
+    shards = list(shard_admissions)
+    return (
+        dict(_merge_admissions(iter(shard.admissions for shard in shards))),
+        grading_environment_census(_merge_admissions(iter(shard.grading_environment for shard in shards))),
+    )
 
 
 def _source_status(
@@ -827,6 +841,7 @@ def _write_manifest(
     decision: SourceQualityReport,
     verification: dict[str, Any],
     admissions: dict[str, int],
+    grading_environment: dict[str, Any],
     *,
     expanded: bool,
     unavailable_reviews: int,
@@ -865,6 +880,7 @@ def _write_manifest(
         "verification": report,
         "admission": source_admission(admissions),
         "admission_counts": admissions,
+        "grading_environment": grading_environment,
         "processed_rows": verification["input_rows"],
         "unprocessed_rows": panel.sample.population_count - verification["input_rows"],
     }
@@ -947,7 +963,9 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
     verification, checked = _verify(run)
     verification_status = SourceVerificationStatus(verification["verification"]["status"])
     _write_download_manifest(run, panel.sample.population_count)
-    admissions = _export_sidecars(run, panel, decision, checked, verification_status, expanded=expanded)
+    admissions, grading_environment = _export_sidecars(
+        run, panel, decision, checked, verification_status, expanded=expanded
+    )
     verification["verification"]["source_path"] = str(run.output / "normalize")
     verification["verification"]["review_path"] = str(run.output / "review")
     status = _source_status(
@@ -962,6 +980,7 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
         decision,
         verification,
         admissions,
+        grading_environment,
         expanded=expanded,
         unavailable_reviews=unavailable_reviews,
         status=status,
@@ -1015,6 +1034,9 @@ def _write_conversion(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, outpu
 
     def counted() -> Iterator[dict[str, Any]]:
         for row in rows:
+            grading: Counter[str] = Counter()
+            count_grading_environment(grading, row.get("grading_environment"))
+            counts.update({"grading:" + key: value for key, value in grading.items()})
             counts["input_rows"] += 1
             if row["task_json"] is not None:
                 counts["converted_rows"] += 1
@@ -1059,6 +1081,9 @@ def write_conversion(
             key.removeprefix("rejection:"): count for key, count in counts.items() if key.startswith("rejection:")
         },
         elapsed_seconds=time.monotonic() - started,
+        grading_environment=grading_environment_census(
+            Counter({key.removeprefix("grading:"): value for key, value in counts.items() if key.startswith("grading:")})
+        ),
     )
     _write_json(output / "manifest.json", {**asdict(result), "reviewed": False, "verified": False})
     return result

@@ -166,6 +166,17 @@ class OracleValidation(StrEnum):
     """Neither qualification ran; the source's execution is not certified."""
 
 
+class GradingEnvironmentEvidence(CatalogRecord):
+    """Census derived from the published task specifications, including rejected mismatches."""
+
+    assessed_tasks: int = Field(ge=0)
+    required_counts: dict[str, int]
+    declared_counts: dict[str, int]
+    status_counts: dict[str, int]
+    reason_counts: dict[str, int]
+    evidence_url: str
+
+
 class SourceDeclaration(CatalogRecord):
     id: str
     name: str
@@ -198,6 +209,7 @@ class SourceDeclaration(CatalogRecord):
     # The weakest review behind the admission, with the pointers that establish it.
     oversight: OversightLevel = OversightLevel.NONE
     oversight_evidence: OversightEvidence | None = None
+    grading_environment: GradingEnvironmentEvidence | None = None
 
 
 class AdmissionCounts(CatalogRecord):

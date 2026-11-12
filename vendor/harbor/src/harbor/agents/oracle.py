@@ -61,7 +61,6 @@ class OracleAgent(BaseAgent):
                     f"{self._task.paths.step_solve_path_for(step_name, task_os)}"
                 )
 
-        # Use OS-aware discovery for single-step tasks (e.g. solve.bat on Windows)
         discovered = self._task.paths.discovered_solve_path_for(task_os)
         if discovered is not None:
             return self._task.paths.solution_dir, discovered
@@ -117,15 +116,10 @@ class OracleAgent(BaseAgent):
             )
 
             if not environment.capabilities.mounted:
-                try:
-                    await environment.download_file(
-                        source_path=str(container_oracle_path),
-                        target_path=str(host_oracle_path),
-                    )
-                except Exception as e:
-                    self.logger.error(
-                        f"Failed to download {self._ORACLE_LOG_FILE}: {e}"
-                    )
+                await environment.download_file(
+                    source_path=str(container_oracle_path),
+                    target_path=str(host_oracle_path),
+                )
 
             if result.return_code != 0:
                 exit_code_path = self._trial_paths.agent_dir / "exit-code.txt"

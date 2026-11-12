@@ -281,3 +281,8 @@ Historical reviews and raw artifacts remain in their original Postgres tables.
 They do not affect current grades. Atlas retains an archive reader; the previous
 manual review, source-verification and difficulty workflows are removed.
 
+
+Before deploying a source release, retain its task-derived grading-environment
+census beside the backend capability evidence. Check that no admitted task has
+`grading_environment_mismatch`; repair and qualify a new dataset version before
+loading a source whose workspace grader requires SHARED execution.

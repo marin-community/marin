@@ -9,6 +9,7 @@ from typing import Protocol
 
 from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
+    GradingEnvironmentEvidence,
     IndependentQC,
     OracleValidation,
     OversightEvidence,
@@ -166,6 +167,8 @@ class SourceInfo:
     oversight: OversightEvidence | None = None
     """The review this source's admission rests on, with its evidence pointers."""
 
+    grading_environment: GradingEnvironmentEvidence | None = None
+
 
 @dataclass(frozen=True)
 class RlDataSource[ConfigT: CatalogConfig]:
@@ -285,6 +288,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             oracle_validation=info.oracle_validation,
             oversight=info.oversight.level if info.oversight else OversightLevel.NONE,
             oversight_evidence=info.oversight,
+            grading_environment=info.grading_environment,
             daytona_snapshot_threshold=(
                 DAYTONA_SAFE_SNAPSHOT_LIMIT if info.daytona_snapshot_count is not None else None
             ),

@@ -10,6 +10,11 @@ from typing import Any
 from pydantic import ValidationError
 from zephyr import counters
 
+from taskcompendium.grading_environment import (
+    GradingEnvironmentAssessment,
+    GradingEnvironmentStatus,
+    assess_grading_environment,
+)
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import Source, TaskSpec, missing_environment
 from taskcompendium.pipeline.inputs import ConversionContext
@@ -56,6 +61,18 @@ def convert_row(row: RawRow, convert: Converter, context: ConversionContext) -> 
         return ImportRejection(kind=ImportFailureKind.SOURCE_DEFECT, reason="missing_environment", detail=missing)
     if normalized.task.id != row.id or normalized.task.source != row.source:
         raise ValueError("A converter must retain its supplied task identity and source provenance")
+    try:
+        assessment = assess_grading_environment(normalized.task)
+    except ValueError as error:
+        return ImportRejection(
+            kind=ImportFailureKind.SOURCE_DEFECT, reason="grading_environment_unavailable", detail=str(error)
+        )
+    if assessment.status is GradingEnvironmentStatus.MISMATCH:
+        return ImportRejection(
+            kind=ImportFailureKind.SOURCE_DEFECT,
+            reason="grading_environment_mismatch",
+            detail=assessment.model_dump_json(exclude={"status"}),
+        )
     return normalized
 
 
@@ -119,6 +136,9 @@ def normalization_columns(
     original_path: str | None,
 ) -> dict[str, Any]:
     """The common mechanical output columns of every curation mode."""
+    assessment = assess_grading_environment(task) if task is not None else None
+    if rejection is not None and rejection.reason == "grading_environment_mismatch":
+        assessment = GradingEnvironmentAssessment.model_validate_json(rejection.detail)
     return {
         "task_id": task_id,
         "source_dataset": source.dataset,
@@ -132,6 +152,7 @@ def normalization_columns(
         "normalization_reason": rejection.reason if rejection is not None else None,
         "normalization_detail": rejection.detail if rejection is not None else None,
         "normalization_changes": [change.model_dump(mode="json") for change in changes],
+        "grading_environment": assessment.model_dump(mode="json") if assessment is not None else None,
     }
 
 
