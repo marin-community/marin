@@ -79,10 +79,6 @@ coordinator:
   - MARIN_PREFIX
   - MARIN_TEMP_PREFIX
   - HF_TOKEN
-  - DAYTONA_RL_API_KEY
-  - DAYTONA_EVAL_API_KEY
-  - DAYTONA_TARGET
-  - TOGETHER_API_KEY
   container_profile: 4
 sandbox:
   cpu: 4

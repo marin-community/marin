@@ -156,6 +156,11 @@ for name, path in (
     node["priority"] = "interactive"
     dump(name, doc)
 
+# SFT and export read only these; the shared default also asks for the RL and eval sandbox and judge keys.
+execution = load("execution.yaml")
+execution["coordinator"]["required_env_vars"] = ["MARIN_PREFIX", "MARIN_TEMP_PREFIX", "HF_TOKEN"]
+dump("execution.yaml", execution)
+
 spec = load("round1.yaml")
 spec["name"] = "long-loop/t436-contrib"
 spec["marin_revision"] = revision
