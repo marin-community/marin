@@ -26,6 +26,7 @@ from rigging.filesystem.transfer import copy
 from rigging.timing import Duration
 from taskcompendium.models import TaskSpec
 
+from experiments.post_training.long_loop.admission_index import finalize_admission
 from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.pi_rl_data import SOURCE, image_context_digest
 from experiments.post_training.long_loop.rl_dataset_admission import file_digest
@@ -292,6 +293,7 @@ def main() -> None:
         )
         if any(status != "succeeded" for status in statuses):
             raise RuntimeError("Some CPU admission shards failed; inspect terminal.json before recovery")
+        finalize_admission([args.output_prefix], args.output_prefix, workers=32)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import TaskSpec
 
@@ -42,52 +43,37 @@ def admitted(receipt: dict) -> bool:
 
 def load_admission(prefix: str, workers: int) -> tuple[dict[str, dict], dict]:
     root = StoragePath(prefix)
-    plan_text = (root / "plan.json").read_text()
+    plan_text = (root / "index.json").read_text()
     plan = json.loads(plan_text)
-    if not plan["submitted"] or plan["runtime_sha256"] != file_digest(RUNTIME):
+    if not plan["complete"] or plan["runtime_sha256"] != file_digest(RUNTIME):
         raise ValueError("Admission is incomplete or was run with a different grader")
-    inputs = json.loads((root / "input-exclusions.json").read_text())
-    if inputs:
-        raise ValueError("Resolve source-pin exclusions before sealing complete task coverage")
 
-    def read_shard(shard):
-        shard_root = root / "shards" / f"{shard['index']:04d}"
-        complete = json.loads((shard_root / "complete.json").read_text())
-        if complete["shard_sha256"] != shard["sha256"] or set(shard["task_ids"]) != {
-            r["task_id"] for r in complete["results"]
-        }:
-            raise ValueError("A completed admission shard has different task identities")
-        rows = []
-        for task_id in shard["task_ids"]:
-            key = hashlib.sha256(task_id.encode()).hexdigest()
-            task_root = shard_root / "tasks" / key
-            text = (task_root / "receipt.json").read_text()
-            receipt = json.loads(text)
-            if receipt["task_id"] != task_id:
-                raise ValueError("Admission receipt belongs to another task")
-            dependencies = (
-                json.loads((task_root / "bootstrap" / "dependencies.json").read_text()) if admitted(receipt) else None
-            )
-            rows.append(
-                (
-                    task_id,
-                    {
-                        "receipt": receipt,
-                        "dependencies": dependencies,
-                        "receipt_sha256": hashlib.sha256(text.encode()).hexdigest(),
-                        "uri": str(task_root),
-                    },
-                )
-            )
-        return rows
+    def read_receipt(entry):
+        task_root = StoragePath(entry["uri"])
+        raw = (task_root / "receipt.json").read_bytes()
+        receipt = json.loads(raw)
+        if receipt["task_id"] != entry["task_id"] or hashlib.sha256(raw).hexdigest() != entry["receipt_sha256"]:
+            raise ValueError("Admission receipt differs from the completed index")
+        inventory_raw = (task_root / "evidence-inventory.json").read_bytes()
+        if hashlib.sha256(inventory_raw).hexdigest() != entry["inventory_sha256"]:
+            raise ValueError("Admission evidence inventory changed after indexing")
+        dependencies = None
+        if admitted(receipt):
+            dependency_raw = (task_root / "bootstrap/dependencies.json").read_bytes()
+            if (
+                hashlib.sha256(dependency_raw).hexdigest()
+                != json.loads(inventory_raw)["bootstrap/dependencies.json"]["sha256"]
+            ):
+                raise ValueError("Admitted dependency metadata differs from the committed inventory")
+            dependencies = json.loads(dependency_raw)
+        return entry["task_id"], {**entry, "receipt": receipt, "dependencies": dependencies}
 
     receipts = {}
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for rows in pool.map(read_shard, plan["shards"]):
-            for task_id, row in rows:
-                if task_id in receipts:
-                    raise ValueError("Admission shards overlap")
-                receipts[task_id] = row
+        for task_id, row in pool.map(read_receipt, plan["tasks"]):
+            if task_id in receipts:
+                raise ValueError("Admission index contains duplicate tasks")
+            receipts[task_id] = row
     return receipts, {"plan_sha256": hashlib.sha256(plan_text.encode()).hexdigest(), "prefix": prefix, "plan": plan}
 
 
@@ -236,6 +222,7 @@ def seal(
 
 
 def main() -> None:
+    configure_coreweave_s3()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)

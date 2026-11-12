@@ -265,7 +265,12 @@ as arguments. All shards are submitted directly; each builds its original task
 image and runs the controls with private userspace networking. This uses no RL
 allocation or model requests.
 
-`seal_swe_admission` requires a complete shard plan and exactly one receipt per
+`admission_index` commits exactly one complete evidence inventory per original
+task across original and recovery shard plans. It rejects missing or duplicate
+commits and references existing evidence without copying it. Interrupted,
+uncommitted task outputs remain preserved but cannot certify admission.
+
+`seal_swe_admission` requires this complete index and exactly one receipt per
 original SWE task. Only a scored unfixed-bug zero and scored reference one admit a
 task. Failed, degenerate and unexecuted controls cannot qualify it. Sealing records
 before/after identities, dependency locks and exclusions, preserves the nonagentic
