@@ -123,6 +123,13 @@ trials:
     cplm_plus: 'true'
   commit: e99890b69f
   priority: batch
+  loss:
+  - 2.3993
+  delta:
+  - -0.0113
+  steps: 39210
+  baseline: s7n-d1024 2.4106 (same commit, seed 0)
+  step_time_change: +8%
 - id: t007
   variant: CPLM Plus copy head (cplm_plus=true)
   rung: competitive-d1280
