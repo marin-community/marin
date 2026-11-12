@@ -30,6 +30,7 @@ from taskcompendium.backend_requirements import (
     BackendFit,
     BackendSourceMap,
     BackendSurvey,
+    RuntimeProfile,
     backend_schema_sha256,
     task_demands,
 )
@@ -49,7 +50,7 @@ def source_map(
     matrix: list[CapabilityCell],
     checkers: dict[str, Checker],
     inputs: dict[str, str],
-    runtime_defaults: dict[str, dict],
+    runtime_defaults: dict[str, RuntimeProfile],
 ) -> BackendSourceMap:
     """Count every converted task, validating combined demands in each machine slot."""
     cells = {(cell.backend, cell.requirement): cell for cell in matrix}
@@ -65,7 +66,7 @@ def source_map(
         task = document.get("task", document)
         published_runtime = document.get("runtime") or {}
         runtime = {
-            slot: {**runtime_defaults[role], **(published_runtime.get(slot) or {})}
+            slot: {**runtime_defaults[role].model_dump(mode="json"), **(published_runtime.get(slot) or {})}
             for role, slot in (("agent", "task_machine"), ("grader", "verifier_machine"))
         }
         demands = task_demands({"task": task, "runtime": runtime})
@@ -135,9 +136,9 @@ def converted_specs(paths: list[Path], column: str) -> Iterable[dict]:
 def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) -> BackendSurvey:
     """Bind a census to its catalog inventory; unavailable sources remain unassessed."""
     matrix = capability_matrix(checkers)
-    runtime_defaults = manifest["runtime_defaults"]
-    for role in ("agent", "grader"):
-        MachineRuntimeSpec.model_validate({**runtime_defaults[role], "backend": "survey"})
+    runtime_defaults = {
+        role: RuntimeProfile.model_validate(manifest["runtime_defaults"][role]) for role in ("agent", "grader")
+    }
     source_ids = manifest["source_ids"]
     if len(set(source_ids)) != len(source_ids):
         raise ValueError("Duplicate inventory source IDs")

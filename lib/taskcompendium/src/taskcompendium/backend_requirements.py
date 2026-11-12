@@ -6,8 +6,8 @@
 from collections.abc import Mapping
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
-from shellbox.machine import Backend
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from shellbox.machine import Backend, NetworkPolicy
 from shellbox.requirements import (
     COMMAND_FIELDS,
     ENVIRONMENT_FIELDS,
@@ -27,11 +27,27 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import EnvironmentRequirements
 
 
+class RuntimeProfile(BaseModel):
+    """Explicit deployment settings used where a converted spec omits a value."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    network: NetworkPolicy
+    cpus: int | None = Field(gt=0)
+    memory_mb: int | None = Field(gt=0)
+    storage_mb: int | None = Field(gt=0)
+    gpus: int = Field(ge=0)
+    user: str | None
+    startup_timeout: float | None = Field(gt=0)
+    cleanup_timeout: float | None = Field(gt=0)
+
+
 def backend_schema_sha256() -> str:
     """Identify the requirement vocabulary and owning task-schema classifications."""
     return canonical_sha256(
         {
             "environment": EnvironmentRequirements.model_json_schema(),
+            "runtime_profile": RuntimeProfile.model_json_schema(),
             "requirements": [requirement.value for requirement in Requirement],
             "classifications": [
                 COMMAND_FIELDS,
@@ -81,7 +97,7 @@ class BackendSurvey(BaseModel):
     generated_at: str
     git_revision: str
     schema_sha256: str
-    runtime_defaults: dict[str, dict]
+    runtime_defaults: dict[str, RuntimeProfile]
     matrix: list[CapabilityCell]
     deployment_limits: dict[str, dict]
     sources: list[BackendSourceMap]
@@ -159,6 +175,13 @@ def task_demands(document: Mapping) -> dict[str, set[Requirement]]:
             continue
         environment = EnvironmentRequirements.model_validate(declared)
         demands = environment_demands(environment)
+        if role == "agent":
+            if task.get("output_paths") or task.get("answer_type") in {"file", "state", "workspace_state"}:
+                demands.add(Requirement.FILESYSTEM)
+            if task.get("tool_bindings"):
+                demands.add(Requirement.TOOL_PROVIDERS)
+            if grader.get("collect"):
+                demands.add(Requirement.PROCESS)
         if files:
             demands.add(Requirement.FILE_UPLOAD)
         if any(resource.get("mode") is not None for resource in files):

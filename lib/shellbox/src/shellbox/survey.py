@@ -45,12 +45,7 @@ class ProbeRequirements:
 
 
 def production_checkers() -> dict[str, Checker]:
-    """Load optional backend dependencies only for the survey, without provider clients.
-
-    Local uses its public pre-acquisition checker: its factory constructor needs
-    a working Linux bubblewrap installation, unrelated to spec acceptance.
-    QEMU's default configuration has no OCI assets; those demands report partial.
-    """
+    """Return all production validators without acquiring machines or provider clients."""
     checkers = {}
     for backend, class_name in (
         ("docker", "DockerMachineFactory"),
@@ -124,69 +119,82 @@ def requirement_probe(requirement: Requirement, backend: str) -> tuple[ProbeRequ
     return None
 
 
-def _runtime_cell(backend: str, requirement: Requirement) -> tuple[Support, str, str]:
+@dataclass(frozen=True)
+class RuntimeSupport:
+    support: Support
+    evidence: str
+    note: str
+
+
+def _runtime_cell(backend: str, requirement: Requirement) -> RuntimeSupport:
     path = f"lib/shellbox/src/shellbox/backends/{backend}/machine.py"
     if requirement == Requirement.DOCKER_IN_DOCKER:
-        return Support.UNSUPPORTED, path + ":create", "No privileged Docker daemon or socket is exposed by this factory."
+        return RuntimeSupport(
+            Support.UNSUPPORTED, path + ":create", "No privileged Docker daemon or socket is exposed by this factory."
+        )
     if requirement in {Requirement.WINDOWS, Requirement.TPU, Requirement.GPU_TYPES}:
-        return (
+        return RuntimeSupport(
             Support.UNSUPPORTED,
             "lib/shellbox/src/shellbox/machine.py:MachineSpec",
             "No field lowers this demand to Shellbox.",
         )
     if requirement == Requirement.MOUNTS:
         if backend == "local":
-            return (
+            return RuntimeSupport(
                 Support.PARTIAL,
                 path + ":_check_mounts",
                 "HostImage read-only mounts; host paths must exist and avoid system directories.",
             )
-        return (
+        return RuntimeSupport(
             Support.UNSUPPORTED,
             "lib/shellbox/src/shellbox/machine.py:HostImage",
             "Mounts require HostImage, rejected by this factory.",
         )
     if requirement == Requirement.FILE_MTIME:
         if backend in {"local", "docker", "gvisor"}:
-            return (
+            return RuntimeSupport(
                 Support.PARTIAL,
                 path + ":upload",
                 "Archive/copy transfer preserves timestamp at archive precision; nanoseconds are not guaranteed.",
             )
-        return (
+        return RuntimeSupport(
             Support.UNSUPPORTED,
             path + ":upload",
             "Single-file upload writes bytes without restoring the declared mtime.",
         )
     if requirement == Requirement.FILE_MODE and backend == "iris":
-        return Support.UNSUPPORTED, path + ":IrisMachine.upload", "Single-file upload does not restore permission bits."
+        return RuntimeSupport(
+            Support.UNSUPPORTED, path + ":IrisMachine.upload", "Single-file upload does not restore permission bits."
+        )
     if requirement == Requirement.USER:
         if backend in {"qemu", "shellsim"}:
-            return Support.UNSUPPORTED, path + ":run", "Separate execution users are explicitly rejected."
-        return (
+            return RuntimeSupport(
+                Support.UNSUPPORTED, path + ":run", "Separate execution users are explicitly rejected."
+            )
+        return RuntimeSupport(
             Support.PARTIAL,
             path + ":run",
             "Guest account must exist; Daytona requires util-linux su; local requires host privilege.",
         )
     if requirement in {Requirement.TOOL_PROVIDERS, Requirement.SERVICES, Requirement.HEALTHCHECK, Requirement.SKILLS}:
-        return (
+        return RuntimeSupport(
             Support.PARTIAL,
             "vendor/harbor/src/harbor/environments/base.py",
             "Adapter-owned orchestration; not guaranteed by a Shellbox factory check.",
         )
     if requirement == Requirement.SETUP:
-        return (
+        return RuntimeSupport(
             Support.PARTIAL,
             "lib/rolloutengine/src/rolloutengine/machines.py:_prepare_machine",
             "Runtime executes sh commands as root after creation; commands must be supported by the image or simulator.",
         )
     if requirement == Requirement.CLEANUP_TIMEOUT:
-        return (
+        return RuntimeSupport(
             Support.SUPPORTED,
             "lib/rolloutengine/src/rolloutengine/cleanup.py",
             "Rolloutengine bounds cleanup independently of factory creation.",
         )
-    return (
+    return RuntimeSupport(
         Support.PARTIAL,
         path,
         "Implemented by the command/transfer path; factory acceptance does not execute a runtime probe.",
@@ -199,10 +207,14 @@ def survey_backend(backend: str, check: Checker) -> list[CapabilityCell]:
     for requirement in Requirement:
         probe = requirement_probe(requirement, backend)
         if probe is None:
-            support, evidence, note = _runtime_cell(backend, requirement)
+            result = _runtime_cell(backend, requirement)
             cells.append(
                 CapabilityCell(
-                    backend=backend, requirement=requirement, support=support, evidence=(evidence,), note=note
+                    backend=backend,
+                    requirement=requirement,
+                    support=result.support,
+                    evidence=(result.evidence,),
+                    note=result.note,
                 )
             )
             continue

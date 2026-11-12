@@ -28,12 +28,13 @@ from shellbox.requirements import (
     Support,
 )
 from shellbox.survey import capability_matrix
+from taskcompendium.backend_requirements import RuntimeProfile
 from taskcompendium.models import EnvironmentRequirements, ScriptGrader, TaskResource, TaskSpec
 
 from experiments.post_training.task_curation.backend_capabilities import source_map
 
 ROOT = Path(__file__).resolve().parents[4]
-RUNTIME = dict(
+RUNTIME = RuntimeProfile(
     network="deny", cpus=None, memory_mb=None, storage_mb=None, gpus=0, user=None, startup_timeout=60, cleanup_timeout=30
 )
 
@@ -50,6 +51,7 @@ def test_backend_demand_classification_tracks_owning_schemas():
         assert set(schema.model_fields) == set(classified), schema.__name__
     assert {field.name for field in fields(MachineSpec)} == set(MACHINE_FIELDS)
     assert {field.name for field in fields(Command)} == set(COMMAND_FIELDS)
+    assert set(RuntimeProfile.model_fields) == set(MachineRuntimeSpec.model_fields) - {"backend"}
     sources = (*get_args(get_type_hints(MachineSpec)["source"]), Mount)
     assert {source.__name__ for source in sources} == set(SOURCE_FIELDS)
     for source in sources:
