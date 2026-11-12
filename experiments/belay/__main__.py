@@ -192,6 +192,7 @@ from experiments.belay.submit import (
     own_runs,
     parse_spec,
     parse_track,
+    previous_tracks,
     refuse_over_cap,
     refuse_reused_names,
     registry_of,
@@ -562,13 +563,19 @@ def new_idea(
     if hidden:
         print(f"note: the comment had text a reviewer would not see: {', '.join(hidden)}")
     tracks, defaulted = idea_tracks(idea)
+    registry_id = idea.registry_id or (entry_for_intake(idea.url) if idea.url else None) or named(idea, named_entry)
+    if defaulted and registry_id is not None:  # a rerun that names no Track repeats its last attempt's
+        previous = previous_tracks(load_entry(registry_id))
+        if previous is not None:
+            tracks, defaulted = previous, False
+            label = LADDER if len(previous) > 1 else previous[0]
+            print(f"{registry_id} ran before; no Track named, so it reruns on {label}")
     ladder = len(tracks) > 1
     for track in tracks:
         if track is Track.CUSTOM:
             require_study_budget(idea)
         else:
             runnable(idea, track)
-    registry_id = idea.registry_id or (entry_for_intake(idea.url) if idea.url else None) or named(idea, named_entry)
     if registry_id is not None:
         held = prior_trials_hold(load_entry(registry_id), idea.note, tracks)
         if held is not None:

@@ -79,6 +79,7 @@ from experiments.belay.posts import (
 from experiments.belay.registry_entry import potential_of, with_step_time
 from experiments.belay.results import Verdict, after_equal_data, change, overall_verdict, verdict, wall_step_time
 from experiments.belay.submit import (
+    LADDER_RUNGS,
     HeroMfuResult,
     IrisJob,
     check_launch,
@@ -90,6 +91,7 @@ from experiments.belay.submit import (
     launch_command,
     new_spec_text,
     parse_spec,
+    previous_tracks,
     registry_of,
     run_id,
     run_suffix,
@@ -906,3 +908,21 @@ def test_hero_step_time_is_wall_clock_over_its_timed_window() -> None:
     assert wall_step_time(timestamps) == pytest.approx(11.5)
     with pytest.raises(SystemExit, match="fewer than two"):
         wall_step_time({3: 1.0, 30: 2.0})
+
+
+def test_a_rerun_that_names_no_track_repeats_its_last_attempts_tracks() -> None:
+    def trial(rung: str, date: str) -> dict:
+        return {"rung": rung, "date": date}
+
+    ladder = [
+        trial("speedrun", "2026-11-01"),
+        *(trial(f"competitive-d{n}", "2026-11-05") for n in (512, 768, 1024, 1280)),
+    ]
+    assert previous_tracks({"trials": ladder}) == tuple(LADDER_RUNGS)
+    one_rung = [trial("speedrun", "2026-11-01"), trial("competitive-d768", "2026-11-05")]
+    assert previous_tracks({"trials": one_rung}) == (Track.COMPETITIVE_D768,)
+    assert previous_tracks({"trials": [trial("d512", "2026-09-26"), trial("speedrun", "2026-11-01")]}) == (
+        Track.SPEEDRUN,
+    )
+    assert previous_tracks({"track": "custom", "trials": []}) == (Track.CUSTOM,)  # a study records no trials
+    assert previous_tracks({"trials": [trial("d512", "2026-09-26")]}) is None  # only legacy rungs

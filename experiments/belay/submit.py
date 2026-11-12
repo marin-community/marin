@@ -183,6 +183,20 @@ def tracks_of_comment(text: str, instructions: str | None = None) -> tuple[tuple
     return (parse_track(match.group(1)),), False
 
 
+def previous_tracks(entry: dict) -> tuple[Track, ...] | None:
+    """The Tracks of an entry's last attempt, for a rerun that names none: every competitive rung when that attempt
+    (the trials dated like its last one) ran more than one, else the last trial's Track; with no trial on a current
+    Track, the entry's own Track (a study's ``custom``). None when there is neither."""
+    tracks = {t.value for t in Track}
+    trials = [t for t in entry.get("trials") or [] if t.get("rung") in tracks]
+    if trials:
+        last = trials[-1]
+        rungs = {t["rung"] for t in trials if t.get("date") == last.get("date")} & {r.value for r in LADDER_RUNGS}
+        return tuple(LADDER_RUNGS) if len(rungs) > 1 else (Track(last["rung"]),)
+    track = entry.get("track")
+    return (Track(track),) if track in tracks else None
+
+
 def experiment_id(registry_id: str, track: Track, ladder: bool) -> str:
     """The id of an idea's spec and runs on ``track``: the registry id, plus the rung tag on a ladder."""
     return f"{registry_id}{LADDER_RUNGS[track]}" if ladder else registry_id
