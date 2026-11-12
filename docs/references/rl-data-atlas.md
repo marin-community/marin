@@ -82,6 +82,16 @@ not declared*. Edit the rules in the reference first, then the page text in
 
 ## Browsing sources
 
+Source rows in the main table and the source evidence page's **Releases and
+measurements** card show **Original dataset ↗** for a recorded upstream reference
+and **Current dataset ↗** for the pinned training release. Current links use
+`current_release` (repo, revision and URL). In snapshots predating that field,
+**Campaign Release** entries importing already published tasks use their recorded
+Hugging Face repository and commit: that import reads the training release itself.
+Other entries without a complete release reference have no Current link. A release
+URL is never relabeled as an upstream original when no separate upstream reference
+is recorded.
+
 **By source** lists individual sources with their converted example count,
 training/evaluation use, Quality, Result, Daytona label, the curriculum subject
 with the most converted tasks, the selected catalog snapshot’s load time

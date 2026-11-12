@@ -223,3 +223,7 @@ a.secondary:hover { text-decoration: none; }
   .level-quick, .quality-unassessed, .quality-unknown { background: #354239; color: #c3d0c6; }
   .filters > label, .filters .checkbox, .sync-banner, .tab { color: var(--muted); }
 }
+
+.dataset-links { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; margin-top: 6px; font-size: 11px; }
+.dataset-links > span { color: var(--muted); }
+.assessment-card .dataset-links { font-size: 13px; }
