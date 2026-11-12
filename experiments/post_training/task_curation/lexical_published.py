@@ -82,7 +82,9 @@ def normalize_published(config: PublishedTextConfig) -> SourceTextPopulation:
     )
 
 
-def published_text_config(population: PublishedPopulation, source: ArtifactStep, ctx: StepContext) -> PublishedTextConfig:
+def published_text_config(
+    population: PublishedPopulation, source: ArtifactStep, ctx: StepContext
+) -> PublishedTextConfig:
     return PublishedTextConfig(population, ctx.artifact_path(source), ctx.output_path)
 
 
@@ -91,10 +93,16 @@ def published_text_steps(populations: list[PublishedPopulation], version: str) -
     for population in populations:
         key = canonical_sha256(population.source_id)[:20]
         source = ArtifactStep.adopt(f"rl-data/atlas/lexical/published/{key}", version, population.tasks_parquet_uri)
-        steps.append(ArtifactStep(
-            name=f"rl-data/atlas/lexical/text/{key}", version=version, artifact_type=SourceTextPopulation,
-            deps=[source], run=normalize_published, build_config=partial(published_text_config, population, source),
-        ))
+        steps.append(
+            ArtifactStep(
+                name=f"rl-data/atlas/lexical/text/{key}",
+                version=version,
+                artifact_type=SourceTextPopulation,
+                deps=[source],
+                run=normalize_published,
+                build_config=partial(published_text_config, population, source),
+            )
+        )
     return steps
 
 
@@ -114,15 +122,23 @@ def main() -> None:
     with artifact_prefix(args.artifact_root):
         steps = published_text_steps(populations, args.artifact_version)
         if not args.run:
-            args.output.write_text(json.dumps([{"source_id": p.source_id, "path": step.path()}
-                                               for p, step in zip(populations, steps, strict=True)], indent=2)+'\n')
+            args.output.write_text(
+                json.dumps(
+                    [
+                        {"source_id": p.source_id, "path": step.path()}
+                        for p, step in zip(populations, steps, strict=True)
+                    ],
+                    indent=2,
+                )
+                + "\n"
+            )
             return
         with ExitStack() as cleanup:
             client = LocalClient()
             cleanup.callback(client.shutdown)
             cleanup.enter_context(set_current_client(client))
             results = run(*steps, max_concurrent=2)
-        args.output.write_text(json.dumps([r.model_dump(mode="json") for r in results], indent=2)+'\n')
+        args.output.write_text(json.dumps([r.model_dump(mode="json") for r in results], indent=2) + "\n")
 
 
 if __name__ == "__main__":
