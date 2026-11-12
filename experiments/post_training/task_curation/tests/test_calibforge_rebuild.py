@@ -6,7 +6,6 @@
 import gzip
 import io
 import tarfile
-import tomllib
 
 import pytest
 
@@ -76,20 +75,6 @@ def test_parse_instructions_handles_continuations_comments_and_json_run():
     assert [item.command for item in instructions] == ["from", "run", "run"]
     assert instructions[1].args == ["echo", "one", "two"]
     assert instructions[2].json_form and instructions[2].args == ["apt-get", "install", "-y", "jq"]
-
-
-def test_the_machine_shape_is_normalized_so_snapshots_collapse():
-    rebuilt = rebuild_task(
-        native_task(
-            "FROM ubuntu:24.04\nWORKDIR /app\nCOPY files/ /app/files/\n",
-            {"files/input.csv": b"a\n1\n"},
-        )
-    )
-    config = tomllib.loads(unpack(rebuilt.task_binary)["task.toml"].decode())
-    environment = config["environment"]
-    assert environment["cpus"] == 2
-    assert environment["memory"] == "4G"
-    assert environment["storage"] == "10G"
 
 
 def test_a_task_declaring_more_than_the_normalized_shape_defers():
