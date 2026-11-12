@@ -31,7 +31,7 @@ def terminal_attempts(reader: ReadView) -> dict[tuple[str, str, int], dict]:
 
 
 def logical_samples(reader: ReadView, *, task: str | None = None) -> Iterator[dict]:
-    """Expose one physical sample per logical trial to summaries and the sample browser."""
+    """Yield the sample from the latest finished attempt of each logical trial."""
     trials = {
         (f"{row['dataset']}/{row['trial']}/{row['retry']}", row["task_id"]) for row in terminal_attempts(reader).values()
     }
