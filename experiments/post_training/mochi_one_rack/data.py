@@ -5,11 +5,15 @@
 
 import argparse
 import hashlib
+import io
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from marin.execution.artifact import Artifact
+from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoTokenizer
 
 SOURCE_FILES = {
@@ -25,6 +29,7 @@ NONAGENTIC_IDS = (
     "reasoning_gym_generated-60f84bd9d331d39b51ce0befb27ba00cb0c7204b809dc3baa9c5d9d2324e428b",
 )
 PROBE_TEXT_TOKEN_LIMIT = 31_600
+PROBE_CONTEXT_OVERHEAD_TOKENS = 208
 
 
 def selected_tasks(root: Path) -> dict[str, dict]:
@@ -43,24 +48,31 @@ def selected_tasks(root: Path) -> dict[str, dict]:
     return selected
 
 
-def length_probe(task: dict, tokenizer) -> tuple[dict, int]:
+def length_probe(task: dict, tokenizer, token_limit: int = PROBE_TEXT_TOKEN_LIMIT) -> tuple[dict, int]:
     """Keep the real arithmetic verifier; add visible, fully attended ledger text."""
     task = json.loads(json.dumps(task))
     question = task["context"]["events"][-1]["content"]
-    lines = [f"Ledger entry {index}: recorded value {index % 97}.\n" for index in range(4000)]
+    line_count = 4000
+    while True:
+        lines = [f"Ledger entry {index}: recorded value {index % 97}.\n" for index in range(line_count)]
+        full_text = "This is a controlled context-length probe. Read the final question.\n" + "".join(lines)
+        full_text += "\nFinal question: " + question
+        if len(tokenizer.encode(full_text, add_special_tokens=False)) >= token_limit:
+            break
+        line_count *= 2
     start, stop = 0, len(lines)
     while start < stop:
         count = (start + stop + 1) // 2
         text = "This is a controlled context-length probe. Read the final question.\n" + "".join(lines[:count])
         text += "\nFinal question: " + question
-        if len(tokenizer.encode(text, add_special_tokens=False)) <= PROBE_TEXT_TOKEN_LIMIT:
+        if len(tokenizer.encode(text, add_special_tokens=False)) <= token_limit:
             start = count
         else:
             stop = count - 1
     text = "This is a controlled context-length probe. Read the final question.\n" + "".join(lines[:start])
     text += "\nFinal question: " + question
     tokens = len(tokenizer.encode(text, add_special_tokens=False))
-    assert 31_500 <= tokens <= PROBE_TEXT_TOKEN_LIMIT
+    assert token_limit - 100 <= tokens <= token_limit
     task["context"]["events"][-1]["content"] = text
     task["id"] = "mochi-controlled-length-probe:visible-ledger-arithmetic"
     task["source"] = {
@@ -71,6 +83,73 @@ def length_probe(task: dict, tokenizer) -> tuple[dict, int]:
     }
     task["tags"] = [*task["tags"], "controlled-length-probe"]
     return task, tokens
+
+
+def write_context_trial_data(
+    *,
+    retained_data: str,
+    retained_data_sha256: str,
+    tokenizer_source: str,
+    output_path: str,
+    context_cap: int,
+    updates: int,
+    max_new_tokens: int,
+) -> Artifact:
+    """Write consecutive mixed-task pairs with a near-limit probe in every pair."""
+    source = StoragePath(retained_data) / "train.parquet"
+    with source.open("rb") as stream:
+        data = stream.read()
+    observed_sha256 = hashlib.sha256(data).hexdigest()
+    if observed_sha256 != retained_data_sha256:
+        raise ValueError(f"Retained task artifact changed: {source}")
+    tasks = {
+        task["id"]: task
+        for row in pq.read_table(io.BytesIO(data)).to_pylist()
+        for task in [json.loads(row["task_spec"])]
+    }
+    if set(tasks) != set((*AGENTIC_IDS, *NONAGENTIC_IDS)):
+        raise ValueError("Context trials require the four retained mixed-task inputs")
+    tokenizer_hashes = {}
+    with TemporaryDirectory(prefix="mochi-context-tokenizer-") as temporary:
+        local = Path(temporary)
+        for name in ("config.json", "tokenizer.json", "tokenizer_config.json"):
+            with (StoragePath(tokenizer_source) / name).open("rb") as stream:
+                contents = stream.read()
+            (local / name).write_bytes(contents)
+            tokenizer_hashes[name] = hashlib.sha256(contents).hexdigest()
+        model_maximum = json.loads((local / "config.json").read_text())["max_position_embeddings"]
+        if context_cap > model_maximum:
+            raise ValueError(f"Context {context_cap} exceeds the model maximum {model_maximum}")
+        tokenizer = AutoTokenizer.from_pretrained(local, local_files_only=True)
+        probe, tokens = length_probe(
+            tasks[NONAGENTIC_IDS[0]], tokenizer, context_cap - max_new_tokens - PROBE_CONTEXT_OVERHEAD_TOKENS
+        )
+    rows = [task for index in range(updates) for task in (tasks[AGENTIC_IDS[index % len(AGENTIC_IDS)]], probe)]
+    destination = StoragePath(output_path)
+    destination.mkdirs()
+    encoded = pa.BufferOutputStream()
+    pq.write_table(pa.table({"task_spec": [json.dumps(task) for task in rows]}), encoded)
+    parquet_bytes = encoded.getvalue().to_pybytes()
+    with (destination / "train.parquet").open("wb") as stream:
+        stream.write(parquet_bytes)
+    manifest = {
+        "retained_data": str(source),
+        "retained_data_sha256": observed_sha256,
+        "tokenizer_source": tokenizer_source,
+        "tokenizer_hashes": tokenizer_hashes,
+        "context_cap": context_cap,
+        "model_max_position_embeddings": model_maximum,
+        "updates": updates,
+        "max_new_tokens": max_new_tokens,
+        "controlled_probe_text_tokens": tokens,
+        "train_parquet_sha256": hashlib.sha256(parquet_bytes).hexdigest(),
+        "train_parquet_bytes": len(parquet_bytes),
+        "task_ids": [task["id"] for task in rows],
+    }
+    with (destination / "manifest.json").open("wt") as stream:
+        json.dump(manifest, stream, indent=2)
+        stream.write("\n")
+    return Artifact(path=output_path)
 
 
 def main() -> None:

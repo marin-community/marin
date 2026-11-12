@@ -40,6 +40,19 @@ uv run python -m experiments.post_training.mochi_one_rack.launch \
 
 Artifact names under `checkpoints/mochi-muonh/` keep these fresh-optimizer runs separate from the earlier AdamW experiment. Native checkpoints retain the Muon momentum, Adam moments, FP32 masters, optimizer counters, schedule and RNG state.
 
+After a stage completes, use `--stage context` for a measured context trial. It adopts the completed MuonH artifact without rebuilding the earlier ladder and checks its native checkpoint marker before submission. The trial creates a small data artifact from the retained four-task subset and original tokenizer. Every update pairs an original Harbor task with the marked arithmetic length probe and preserves eight responses per group. The requested cap must fit the model's declared maximum. For example, continue a completed 32K checkpoint 10 with three 48K updates:
+
+```bash
+uv run python -m experiments.post_training.mochi_one_rack.launch \
+  --stage context --version 2026.11.12.9305 \
+  --context-cap 49152 --resume-stage 32k \
+  --resume-version 2026.11.12.9304 --resume-step 10 --updates 3
+```
+
+Inspect the graph and effective configuration before adding `--run`. Use a fresh version for each trial. A trial writes its own checkpoint root and stops at the resumed step plus `--updates`. Three updates provide later rollouts that can consume the first two updated versions. Confirm their archived model versions, actual attended lengths, positive loss masks and applied updates. A configured cap or padded tensor size alone does not establish a passing length.
+
+Choose the next cap from measured CUDA allocation/reservation, cgroup memory peaks and host availability, including checkpoint saving. The 900 GiB main-container limit is lower than Ray's host-based 95% threshold on these hosts, so use the cgroup limit when calculating headroom. Increase in measured steps and retain a passing checkpoint. Stop the search at the model maximum or a practical bracket between passing and resource-limited lengths; diagnose runtime failures before treating them as resource limits.
+
 The wheel in `config/external/vllm/mochi-gb200.toml` is experimental. `runtime.vllm_backend()` selects it through Marin's ordinary CUDA serving launcher without changing the promoted `gpu.toml`. The vendored SkyRL lock selects the same vLLM bytes for every aarch64 GPU job, rather than providing an opt-in selector. It also changes the ARM Torch/CUDA/native dependency stack and removes the ARM speculators and hs-connectors dependencies. The standalone Marin serving selector has CPU validation only; this RL experiment exercises the SkyRL route. Its Python implementation is the merged schema-3 source `3004cd8f163299116b96d1b324cfff418c387388`; its SM100 native payloads are byte-identical to release `5fa2e9bad66dcc2b9836e657323214aefc179a7f`. The matching Torch 2.14.1/cu132 FlashAttention package retains FA2 kernels and excludes an incompatible optional FA4 namespace. Artifact manifests are attached to the task-scoped prerelease.
 
 Validation is restricted to Mochi on GB200. This experiment does not qualify a general vLLM or SkyRL release. H100, TPU, Snowball parity, other model families and online EAGLE remain outside its validation scope. The promoted Marin GPU descriptor and protected branches stay unchanged. Vendored dependency changes select the experimental runtime on aarch64; x86 GPU pins retain their existing versions and have no new accelerator validation.
