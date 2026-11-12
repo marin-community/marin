@@ -3,6 +3,9 @@
 
 """The environment-fidelity checks reject substitution and missing environments."""
 
+import os
+import subprocess
+
 import pytest
 
 from experiments.post_training.task_curation.environment_fidelity import (
@@ -11,28 +14,9 @@ from experiments.post_training.task_curation.environment_fidelity import (
     environment_unused,
     lower_environment,
     missing_environment,
-    provably_no_op_against,
 )
 
 AGENT = "ghcr.io/marin-community/iris-task@sha256:" + "a" * 64
-
-
-def test_a_stock_agent_image_recipe_is_provably_no_op():
-    ok, reason = provably_no_op_against(f"FROM {AGENT}\nWORKDIR /app\n", [], agent_image=AGENT)
-    assert ok, reason
-
-
-@pytest.mark.parametrize(
-    ("recipe", "files"),
-    [
-        (f"FROM {AGENT}\nRUN pip install requests==2.32.3\n", []),
-        ("FROM python:3.13-slim-bookworm\nWORKDIR /app\n", []),
-        (f"FROM {AGENT}\nCOPY data/ /app/data/\n", ["setup_files/data.csv"]),
-    ],
-)
-def test_anything_the_image_cannot_already_satisfy_is_not_a_no_op(recipe, files):
-    ok, reason = provably_no_op_against(recipe, files, agent_image=AGENT)
-    assert not ok and reason
 
 
 def test_a_spec_that_replaces_its_archive_environment_is_flagged():
@@ -61,7 +45,7 @@ def test_a_recipe_lowers_onto_its_pinned_base():
     assert lowered.working_directory == "/workspace"
     assert lowered.setup_commands == (
         "mkdir -p /workspace",
-        "(cd /workspace && DEBIAN_FRONTEND=noninteractive mkdir -p /out && chmod 777 /out)",
+        "(cd /workspace && export DEBIAN_FRONTEND=noninteractive; mkdir -p /out && chmod 777 /out)",
     )
 
 
@@ -112,3 +96,21 @@ def test_lowering_retains_runtime_environment_and_working_directory():
     assert "environment variables" in environment_unused({"environment_requirements": missing_variables}, archive)
     wrong_directory = {**requirements, "working_directory": "/workspace"}
     assert "working directory" in environment_unused({"environment_requirements": wrong_directory}, archive)
+
+
+def test_env_applies_to_every_command_in_a_run(tmp_path):
+    recipe = (
+        f"FROM ubuntu:24.04\nWORKDIR {tmp_path}\nENV LABEL=expected\nRUN true && printf '%s' \"$LABEL\" > observed\n"
+    )
+    lowered = lower_environment(recipe, PINNED_BASES)
+    subprocess.run(
+        ["sh", "-c", " && ".join(lowered.setup_commands)],
+        env={key: value for key, value in os.environ.items() if key != "LABEL"},
+        check=True,
+    )
+    assert (tmp_path / "observed").read_text() == "expected"
+
+
+def test_env_dependent_on_the_base_image_is_deferred():
+    with pytest.raises(UnlowerableRecipe, match="ENV"):
+        lower_environment("FROM ubuntu:24.04\nENV PATH=/tool/bin:$PATH\n", PINNED_BASES)

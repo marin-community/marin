@@ -3,12 +3,14 @@
 
 """The prebuilt importer admits a cohort only as published and only when valid."""
 
-import hashlib
 import json
+import hashlib
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from marin.execution.lazy import run
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -25,9 +27,14 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
+from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation import prebuilt
+from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.config import PipelineOptions
+from experiments.post_training.task_curation.driver import _write_corpus
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
 
@@ -69,7 +76,7 @@ def _write(tmp_path, rows: list[dict]):
 
 
 def _cohort(rows: int):
-    return prebuilt.PrebuiltCohort(name="c", version="1", repo="org/repo", revision="rev", expected_rows=rows)
+    return prebuilt.PrebuiltCohort(name="c", version="2026.11.12.1", repo="org/repo", revision="rev", expected_rows=rows)
 
 
 def test_a_published_cohort_is_downloaded_and_validated(tmp_path, monkeypatch):
@@ -94,8 +101,34 @@ def test_an_envelope_without_machine_shapes_is_refused(tmp_path, monkeypatch):
         prebuilt.import_cohort(_cohort(1))
 
 
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_path, monkeypatch, mode):
+    published = _write(tmp_path, [_task("a"), _task("b")])
+    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(published))
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
+    source = RlDataSource(
+        config=_cohort(2),
+        pipeline=prebuilt.import_prebuilt,
+        info=SourceInfo(id="fixture", title="fixture", origin="fixture"),
+    )
+    artifact = run(prebuilt.import_prebuilt(source, PipelineOptions(mode, CampaignRuntime())))[0]
+    destination = Path(artifact.path)
+    manifest = json.loads((destination / "manifest.json").read_text())
+    assert (manifest["mode"], manifest["intended_use"]) == (mode.value, "train")
+    assert (destination / "tasks.parquet").read_bytes() == published.read_bytes()
+    for view in ("normalize", "final"):
+        rows = pq.read_table(next((destination / view).glob("*.parquet"))).to_pylist()
+        assert [TaskSpec.model_validate_json(row["task_json"]).id for row in rows] == ["a", "b"]
+
+    _write_corpus({"fixture": str(destination)}, [], str(tmp_path / "report.json"), "converted")
+    corpus = json.loads((tmp_path / "corpus.json").read_text())
+    assert corpus["sources"][0]["converted_rows"] == 2
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
 @pytest.mark.parametrize("change", ["none", "package", "infrastructure_zero"])
-def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch, change):
+def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch, change, mode):
     task = TaskSpec.model_validate(json.loads(_task("native")["lowered_task_spec"])["task"])
     task = task.model_copy(
         update={
@@ -135,6 +168,19 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(tmp_path / kwargs["filename"]))
     if change == "none":
         assert prebuilt.import_harbor_cohort(_cohort(1)) == str(path)
+        monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+        monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
+        source = RlDataSource(
+            config=_cohort(1), pipeline=prebuilt.import_harbor_prebuilt,
+            info=SourceInfo(id="native", title="native", origin="fixture", task_format=TaskFormat.HARBOR),
+        )
+        artifact = run(prebuilt.import_harbor_prebuilt(source, PipelineOptions(mode, CampaignRuntime())))[0]
+        destination = Path(artifact.path)
+        assert (destination / "tasks.parquet").read_bytes() == path.read_bytes()
+        for view in ("normalize", "final"):
+            rows = pq.read_table(next((destination / view).glob("*.parquet"))).to_pylist()
+            assert rows[0]["task_json"] == serialized
+            assert hashlib.sha256(rows[0]["task_json"].encode()).hexdigest() == receipt["task_sha256"]
     else:
         with pytest.raises(ValueError, match=r"differs from its control|controls do not admit"):
             prebuilt.import_harbor_cohort(_cohort(1))

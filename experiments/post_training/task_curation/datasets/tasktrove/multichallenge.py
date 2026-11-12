@@ -12,7 +12,6 @@ source has no controls and its kept rows are admitted without them.
 """
 
 import tomllib
-from dataclasses import replace
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
@@ -90,20 +89,18 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             pipeline=process_rows,
-            info=replace(
-                SourceInfo(
-                    id="Task Trove:laion__nemotron-gym-multichallenge-advanced-v4",
-                    title="laion/nemotron-gym-multichallenge-advanced-v4",
-                    origin="Task Trove",
-                    family="llm-judge-freeform",
-                    tags=("agentic", "multi-turn"),
-                    count=1068,
-                    notes=(
-                        "Multi-turn with four factual or formatting criteria per task. The converter "
-                        "preserves the source's explicit positive or negated pass condition."
-                    ),
-                    task_format=TaskFormat.TASKCOMPENDIUM,
-                )
+            info=SourceInfo(
+                id="Task Trove:laion__nemotron-gym-multichallenge-advanced-v4",
+                title="laion/nemotron-gym-multichallenge-advanced-v4",
+                origin="Task Trove",
+                family="llm-judge-freeform",
+                tags=("agentic", "multi-turn"),
+                count=1068,
+                notes=(
+                    "Multi-turn with four factual or formatting criteria per task. The converter "
+                    "preserves the source's explicit positive or negated pass condition."
+                ),
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
                 name="tasktrove-multichallenge",

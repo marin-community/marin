@@ -9,7 +9,6 @@ recorded output as an order-insensitive multiset of normalized lines. The oracle
 source's ``solution/solve.sh``.
 """
 
-from dataclasses import replace
 
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
@@ -57,17 +56,15 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             pipeline=process_rows,
-            info=replace(
-                SourceInfo(
-                    id="Task Trove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
-                    title="DCAgent2/nl2bash-tasks-cleaned-oracle-v2",
-                    origin="Task Trove",
-                    family="shell-cmd",
-                    tags=("agentic", "multi-turn", "language:bash"),
-                    count=1498,
-                    notes="Semantic output comparison against an oracle command run in the same sandbox.",
-                    task_format=TaskFormat.TASKCOMPENDIUM,
-                )
+            info=SourceInfo(
+                id="Task Trove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+                title="DCAgent2/nl2bash-tasks-cleaned-oracle-v2",
+                origin="Task Trove",
+                family="shell-cmd",
+                tags=("agentic", "multi-turn", "language:bash"),
+                count=1498,
+                notes="Semantic output comparison against an oracle command run in the same sandbox.",
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
                 name="tasktrove-nl2bash",

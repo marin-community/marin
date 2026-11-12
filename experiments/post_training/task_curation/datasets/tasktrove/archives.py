@@ -5,10 +5,15 @@
 
 from dataclasses import dataclass, replace
 
+from taskcompendium.convert.tasks import shell_environment
 from taskcompendium.models import CONVERSATION_ANSWERS, EnvironmentRequirements, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Converter, ImportFailureKind, ImportRejection, NormalizedTask, RawRow
 
+from experiments.post_training.task_curation.datasets.tasktrove.built_images import (
+    BUILT_IMAGES,
+    archive_build_environment,
+)
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
     TASKS_FILE,
     TASKTROVE_REPO,
@@ -16,7 +21,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     unpack_task_binary,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.source_defects import SOURCE_DEFECTS
-from experiments.post_training.task_curation.environment_fidelity import environment_unused
+from experiments.post_training.task_curation.environment_fidelity import UnlowerableRecipe, environment_unused
 from experiments.post_training.task_curation.pipeline import HfSource
 
 TASKTROVE_REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
@@ -39,16 +44,32 @@ class TaskTroveConverter:
         reason = SOURCE_DEFECTS.get((self.config, row.data["path"]))
         if reason is not None:
             return ImportRejection(kind=ImportFailureKind.SOURCE_DEFECT, reason="reviewed_defect", detail=reason)
-        converted = self.convert(row, context)
+        try:
+            converted = self.convert(row, context)
+        except UnlowerableRecipe as error:
+            return ImportRejection(
+                kind=ImportFailureKind.CONVERTER_ERROR, reason="environment_unlowerable", detail=str(error)
+            )
         if isinstance(converted, ImportRejection):
             return converted
         task = converted.task if isinstance(converted, NormalizedTask) else converted
-        # Reply-only conversions have no agent machine. Keep the archive as oracle
-        # evidence, while enforcing environment fidelity for tasks that use a machine.
+        # Reply-only tasks have no agent machine; their archive remains oracle evidence.
         reply_only = (
             task.answer_type in CONVERSATION_ANSWERS and task.environment_requirements == EnvironmentRequirements()
         )
-        reused = None if reply_only else environment_unused(task.model_dump(mode="json"), row.data["files"])
+        if reply_only:
+            reused = None
+        elif task.environment_requirements.docker_image in BUILT_IMAGES.values():
+            # Reconstruct source files, modes and the verifier-install recipe before
+            # accepting the registry output, which retains its frozen bundled verifier.
+            expected = archive_build_environment(row.data)
+            reused = (
+                None
+                if task.environment_requirements == shell_environment(expected)
+                else "spec does not use its archived build"
+            )
+        else:
+            reused = environment_unused(task.model_dump(mode="json"), row.data["files"])
         if reused is not None:
             return ImportRejection(
                 kind=ImportFailureKind.CONVERTER_ERROR, reason="environment_substituted", detail=reused

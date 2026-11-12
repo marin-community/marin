@@ -151,9 +151,10 @@ class GradingMachine:
                     assert stream is not None
                     self.files["/" + member.name] = stream.read()
             return EXITED
-        if program == "python3":
+        if program in {"python3", "bash"}:
             # The verdict depends on the submitted program, never on a verdict an agent supplied.
             reward = {b"print(7)\n": 1.0, b"partial": 0.25}.get(self.files.get("/app/solution.py", b""), 0.0)
+            self.files["/logs/verifier/reward.txt"] = str(reward).encode()
             self.files["/logs/verifier/verdict.json"] = json.dumps(
                 {"status": self.verdict_status, "reward": reward, "detail": {}}
             ).encode()

@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import subprocess
 import sys
 import time
 import venv
@@ -143,13 +144,14 @@ def test_pytest_restored_source_failure_stays_unscored(tmp_path, implementation,
     trusted = tmp_path / "trusted"
     trusted.mkdir()
     (trusted / "calc.py").write_text(implementation)
-    with pytest.raises(RuntimeError):
+    expected = InvalidTask if implementation.startswith("import ") else RuntimeError
+    with pytest.raises(expected):
         grade_pytest.grade(_spec(restore=("calc.py",)), trusted, workspace)
 
 
 def test_pytest_candidate_missing_dependency_stays_unscored(tmp_path):
     workspace = _project(tmp_path, "import missing_dependency\n")
-    with pytest.raises(RuntimeError):
+    with pytest.raises(InvalidTask):
         grade_pytest.grade(_spec(candidate_modules=("calc",)), tmp_path, workspace)
 
 
@@ -159,17 +161,11 @@ def incomplete_environment(tmp_path):
     venv.EnvBuilder(system_site_packages=True).create(environment)
     packages = environment / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
     (packages / "test-dependencies.pth").write_text(str(Path(pytest.__file__).parent.parent) + "\n")
-    metadata = packages / "task_dependencies-1.0.dist-info"
-    metadata.mkdir()
-    (metadata / "METADATA").write_text("Name: task-dependencies\nVersion: 1.0\n")
-    # Model an installed lock distribution whose module payload is missing.
-    (metadata / "top_level.txt").write_text("missing_test_dependency\nmissing_task_dependency\n")
     return str(environment / "bin" / "python")
 
 
 @pytest.mark.parametrize("phase", ["startup", "collection", "mixed"])
-@pytest.mark.parametrize("candidate_modules", [(), ("missing_test_dependency",)])
-def test_pytest_missing_installed_dependency_is_invalid_task(tmp_path, incomplete_environment, phase, candidate_modules):
+def test_pytest_missing_uninstalled_dependency_is_invalid_task(tmp_path, incomplete_environment, phase):
     workspace = _project(tmp_path, FIXED, "import missing_test_dependency\n")
     if phase == "startup":
         (workspace / "conftest.py").write_text("import missing_test_dependency\n")
@@ -177,7 +173,7 @@ def test_pytest_missing_installed_dependency_is_invalid_task(tmp_path, incomplet
         (workspace / "tests/test_candidate.py").write_text("import missing_candidate\n")
     with pytest.raises(InvalidTask, match="missing_test_dependency"):
         grade_pytest.grade(
-            _spec(python=incomplete_environment, paths=("tests",), candidate_modules=candidate_modules),
+            _spec(python=incomplete_environment, paths=("tests",)),
             tmp_path,
             workspace,
         )
@@ -185,12 +181,12 @@ def test_pytest_missing_installed_dependency_is_invalid_task(tmp_path, incomplet
 
 @pytest.mark.parametrize("phase", ["startup", "collection"])
 @pytest.mark.parametrize("paths", [("tests/test_calc.py",), ()])
-def test_pytest_missing_module_inferred_from_test_scores_zero_then_implementation_passes(tmp_path, phase, paths):
+def test_pytest_declared_missing_module_in_tests_scores_zero_then_implementation_passes(tmp_path, phase, paths):
     workspace = _project(tmp_path, FIXED)
     (workspace / "calc.py").unlink()
     if phase == "startup":
         (workspace / "conftest.py").write_text("from calc import add\n")
-    spec = _spec(paths=paths)
+    spec = _spec(paths=paths, candidate_modules=("calc",))
     failure = grade_pytest.grade(spec, tmp_path, workspace)
     assert (failure.status, failure.reward) == (Status.SCORED, 0.0)
     (workspace / "calc.py").write_text(FIXED)
@@ -643,3 +639,41 @@ def test_invalid_timeout_rejects_before_restore_or_setup(tmp_path, timeout):
     assert result.reward == 0.0
     assert (workspace / "tests/test_calc.py").read_text() == REAL_TESTS
     assert not (workspace / "setup-ran").exists()
+
+
+@pytest.mark.parametrize("candidate_modules", [(), ("editable_candidate.newmod",)])
+def test_pytest_editable_installed_candidate_can_add_missing_submodule(
+    tmp_path, incomplete_environment, candidate_modules
+):
+    workspace = _project(
+        tmp_path, FIXED, "from editable_candidate.newmod import add\ndef test_add():\n    assert add(2, 3) == 5\n"
+    )
+    package = workspace / "editable_candidate"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    (workspace / "pyproject.toml").write_text(
+        '[build-system]\nrequires = ["setuptools"]\nbuild-backend = "setuptools.build_meta"\n'
+        '[project]\nname = "editable-candidate"\nversion = "1.0"\n'
+        '[tool.setuptools]\npackages = ["editable_candidate"]\n'
+    )
+    subprocess.run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            incomplete_environment,
+            "--no-build-isolation",
+            "--no-deps",
+            "-e",
+            str(workspace),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    spec = _spec(python=incomplete_environment, candidate_modules=candidate_modules)
+    missing = grade_pytest.grade(spec, tmp_path, workspace)
+    assert (missing.status, missing.reward) == (Status.SCORED, 0.0)
+    (package / "newmod.py").write_text(FIXED)
+    repaired = grade_pytest.grade(spec, tmp_path, workspace)
+    assert (repaired.status, repaired.reward) == (Status.SCORED, 1.0)

@@ -3,15 +3,9 @@
 
 """Keep a task's specified environment as part of its data.
 
-A task must run in the environment its archive specifies. Two mechanical checks
-enforce that, and neither is a judgement call:
-
-- ``provably_no_op_against`` proves that a Dockerfile changes nothing relative to
-  the agent image, so the task may declare that image directly. Anything it cannot
-  prove — an extra package, a version mismatch, a copied fixture — means the task
-  needs its own environment built.
-- ``environment_unused`` flags a task whose archive defines an environment its
-  spec does not carry, which happens when a conversion replaces it.
+A task must run in the environment its archive specifies.
+``environment_unused`` flags a task whose archive defines an environment its
+spec does not carry, which happens when a conversion replaces it.
 
 The rule applies to agentic tasks: a conversation-only task needs no machine.
 """
@@ -19,15 +13,15 @@ The rule applies to agentic tasks: a conversation-only task needs no machine.
 import base64
 import re
 import shlex
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
+from experiments.post_training.task_curation.environment import dockerfile_lines
+
 FROM = re.compile(r"^\s*FROM\s+(\S+)", re.IGNORECASE | re.MULTILINE)
-STEP = re.compile(r"^\s*(RUN|COPY|ADD|ENV|ARG|USER|WORKDIR|VOLUME|ENTRYPOINT|CMD)\b", re.IGNORECASE | re.MULTILINE)
 ENVIRONMENT_DOCKERFILE = "environment/Dockerfile"
-SETUP_PREFIX = "setup_files/"
 
 
 def dockerfile_of(files: Mapping[str, bytes | str]) -> str | None:
@@ -42,28 +36,6 @@ def dockerfile_of(files: Mapping[str, bytes | str]) -> str | None:
     if isinstance(blob, str):
         blob = base64.b64decode(blob, validate=True)
     return blob.decode(errors="replace")
-
-
-def provably_no_op_against(dockerfile: str, files: Iterable[str], *, agent_image: str) -> tuple[bool, str]:
-    """Prove that ``dockerfile`` changes nothing relative to ``agent_image``.
-
-    ``agent_image`` is a digest-pinned reference. A no-op must start from exactly
-    that image and carry no step that could install, copy or configure anything.
-    A copied fixture is never a no-op, because the agent image cannot contain it.
-    """
-    froms = FROM.findall(dockerfile)
-    if len(froms) != 1:
-        return False, f"expected one FROM, found {len(froms)}"
-    if froms[0] != agent_image:
-        return False, f"FROM {froms[0]} is not the agent image"
-    steps = [match.group(1).upper() for match in STEP.finditer(dockerfile)]
-    blocking = [step for step in steps if step not in {"WORKDIR"}]
-    if blocking:
-        return False, f"steps change the image: {', '.join(sorted(set(blocking)))}"
-    fixtures = [name for name in files if name.startswith(SETUP_PREFIX)]
-    if fixtures:
-        return False, f"copies fixtures: {len(fixtures)} file(s)"
-    return True, "no changes relative to the agent image"
 
 
 def environment_unused(
@@ -139,28 +111,11 @@ class UnlowerableRecipe(ValueError):
 UNSUPPORTED_DIRECTIVES = frozenset({"COPY", "ADD", "USER", "VOLUME", "ENTRYPOINT", "CMD", "ARG", "SHELL", "HEALTHCHECK"})
 
 
-def _logical_lines(dockerfile: str) -> list[str]:
-    """Recipe lines with backslash continuations joined, comments and blanks dropped."""
-    lines: list[str] = []
-    buffer: str | None = None
-    for raw in dockerfile.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if buffer is None:
-            buffer = ""
-        if line.endswith("\\"):
-            buffer += line[:-1].rstrip() + " "
-            continue
-        buffer += line
-        lines.append(buffer.strip())
-        buffer = None
-    if buffer:
-        lines.append(buffer.strip())
-    return lines
-
-
 PINNED_BASES = {
+    "aweaiteam/calibforge:tb2-verifier-base-v1": (
+        "aweaiteam/calibforge:tb2-verifier-base-v1@sha256:"
+        "0f61b2776c40231d5d868278ed6042295ddbc9d24b036cd72f0b88ebe9bd621a"
+    ),
     # Digest-pinned references for the bases a conversion may lower onto. A tag would let
     # the environment drift under a published cohort; changing one is a deliberate edit.
     "ubuntu:24.04": "ubuntu:24.04@sha256:78d4744ead1f5b19b04d0df558ab182a5300903900755e515b2ca4d10eb2044d",
@@ -207,7 +162,7 @@ def lower_environment(dockerfile: str, bases: Mapping[str, str]) -> LoweredEnvir
     environment: list[str] = []
     variables: dict[str, str] = {}
     commands: list[str] = []
-    for line in _logical_lines(dockerfile):
+    for line in dockerfile_lines(dockerfile):
         directive, _, body = line.partition(" ")
         directive = directive.upper()
         if directive == "FROM":
@@ -222,13 +177,13 @@ def lower_environment(dockerfile: str, bases: Mapping[str, str]) -> LoweredEnvir
             # One ENV line may set several variables: ENV A=1 B=2.
             for assignment in shlex.split(body):
                 key, separator, value = assignment.partition("=")
-                if not separator or not key:
+                if not separator or not key or "$" in value or "`" in value:
                     raise UnlowerableRecipe(f"unsupported ENV form: {body!r}")
                 environment.append(f"{key}={shlex.quote(value)}")
                 variables[key] = value
             continue
         if directive == "RUN":
-            prefix = f"{' '.join(environment)} " if environment else ""
+            prefix = f"export {' '.join(environment)}; " if environment else ""
             commands.append(f"(cd {shlex.quote(workdir)} && {prefix}{body.strip()})")
             continue
         raise UnlowerableRecipe(f"unknown step: {directive}")
