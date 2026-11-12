@@ -98,6 +98,8 @@ def main() -> None:
         "DATABASE_SOCKET_DIR": database_socket_dir,
         "GF_DATABASE_NAME": "grafana",
         "GF_DATABASE_USER": "grafana",
+        "GF_DATABASE_MAX_OPEN_CONN": "10",
+        "GF_DATABASE_MAX_IDLE_CONN": "2",
     }
     if loom_alerts_enabled:
         loom = pulumi.StackReference(LOOM_STACK)

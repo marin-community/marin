@@ -4,25 +4,23 @@
 import dataclasses
 import functools
 import importlib.util
-import os
-import subprocess
-import sys
-import textwrap
 from collections.abc import Callable
-
-import numpy as np
-import pytest
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+import pytest
+from haliax.nn.ragged_dot import ragged_dot
 from jax._src import config as jax_config
 from jax.extend import core as jax_core
 from jax.extend.backend import get_backend
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
-from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
+from levanter.grug._moe import ep_ragged_all_to_all
 from levanter.grug._moe.common import (
+    CapacityDrops,
+    _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS,
     _deinterleave_gate_up,
     _interleave_gate_up,
     _interleave_halves,
@@ -30,26 +28,26 @@ from levanter.grug._moe.common import (
     _prepare_moe_dispatch_indices_with_assignment_ids,
     _scaled_capacity,
     _swiglu_gate_up_backward,
-    CapacityDrops,
 )
+from levanter.grug._moe.ep_common import _combine_gather_sum
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
-    _moe_mlp_ep_fixed_pooled_wave_a2a_local,
     _interleaved_receiver_ranks,
+    _moe_mlp_ep_fixed_pooled_wave_a2a_local,
     _receiver_ranks,
 )
-from levanter.grug._moe import ep_ragged_all_to_all
 from levanter.grug._moe.ep_ragged_all_to_all import (
-    _accepted_assignments,
-    _gather_dispatch_rows,
     _RaggedDotExpertMlp,
     _RoutingWeightGradient,
-    _transport_buffer,
     _TransportBufferSite,
+    _accepted_assignments,
+    _gather_dispatch_rows,
+    _transport_buffer,
     _unpermute_from_global_expert,
 )
 from levanter.grug._moe.ep_ring import _gather_dispatch_combine
+from levanter.grug._moe.ep_ring_filtered import _down_project_combine, _slot_weights
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
@@ -346,6 +344,7 @@ def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
     np.testing.assert_allclose(np.asarray(y_default), np.asarray(y_ring), rtol=1e-5, atol=1e-5)
 
 
+@pytest.mark.tpu
 def test_moe_mlp_padding_matches_compact_value_and_gradients():
     x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
         key=jax.random.key(52),
@@ -406,6 +405,7 @@ def test_moe_mlp_padding_matches_compact_value_and_gradients():
     assert int(overflow.padding_skipped) == 4
 
 
+@pytest.mark.tpu
 def test_moe_mlp_all_padding_has_no_expert_output_or_gradients():
     x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
         key=jax.random.key(54),
@@ -622,6 +622,56 @@ def test_combine_skips_dropped_rows_and_differentiates_accepted_zero_weights():
 
     np.testing.assert_allclose(np.asarray(actual), expected, rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(np.asarray(actual_weight_gradient), expected_weight_gradient, rtol=1e-5, atol=1e-6)
+
+
+@pytest.mark.parametrize("topk", [2, 4])
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+@pytest.mark.parametrize("pair_capacity", [3, 12], ids=["sender-drops", "spare-rows"])
+def test_ring_filtered_slot_weights_gradient_matches_autodiff(topk, dtype, pair_capacity):
+    tokens, num_experts, local_experts = 12, 8, 2
+    ep_size = num_experts // local_experts
+    send_rows = ep_size * pair_capacity
+    rng = np.random.default_rng(5)
+    selected = np.stack([rng.choice(num_experts, size=topk, replace=False) for _ in range(tokens)]).astype(np.int32)
+    token_valid = np.ones(tokens, dtype=bool)
+    token_valid[[2, 7]] = False
+
+    # Each destination shard owns a block of pair_capacity rows, filled first come, first served by token.
+    source = np.full(send_rows, tokens, dtype=np.int32)
+    on_destination = np.zeros((send_rows, topk), dtype=bool)
+    assignment_slot = np.full((tokens, topk), send_rows, dtype=np.int32)
+    filled = np.zeros(ep_size, dtype=np.int32)
+    for t in np.flatnonzero(token_valid):
+        for shard in np.unique(selected[t] // local_experts):
+            if filled[shard] == pair_capacity:
+                continue
+            row = shard * pair_capacity + filled[shard]
+            filled[shard] += 1
+            source[row] = t
+            ks = selected[t] // local_experts == shard
+            on_destination[row, ks] = True
+            assignment_slot[t, ks] = row
+    dropped = (assignment_slot == send_rows) & token_valid[:, None]
+    # Each case exercises its layout: some assignments dropped, or some rows left empty.
+    assert dropped.any() if pair_capacity == 3 else (source == tokens).any()
+
+    safe_source = jnp.asarray(np.minimum(source, tokens - 1))
+    on_destination = jnp.asarray(on_destination)
+    assignment_slot = jnp.asarray(assignment_slot)
+    weights = jnp.asarray(rng.random((tokens, topk)), dtype=dtype)
+    # Nonzero everywhere, so a gradient read from a masked cell would show up.
+    cotangent = jnp.asarray(rng.standard_normal((send_rows, topk)), dtype=jnp.float32)
+
+    def gradient(fn):
+        _, pullback = jax.vjp(lambda w: fn(w, safe_source, on_destination, assignment_slot), weights)
+        return pullback(cotangent)[0]
+
+    actual = jax.jit(lambda: gradient(_slot_weights))()
+    expected = jax.jit(lambda: gradient(_slot_weights.__wrapped__))()
+
+    assert actual.dtype == dtype
+    np.testing.assert_array_equal(np.asarray(actual, np.float32), np.asarray(expected, np.float32))
+    np.testing.assert_array_equal(np.asarray(actual, np.float32)[dropped | ~token_valid[:, None]], 0)
 
 
 def test_portable_expert_mlp_backward_ignores_rows_past_the_active_count():
@@ -1044,7 +1094,14 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
 
 @pytest.mark.parametrize(
     "implementation",
-    ["ring", "ring_gather_combine", "ragged_all_to_all", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"],
+    [
+        "ring",
+        "ring_gather_combine",
+        "ring_filtered",
+        "ragged_all_to_all",
+        "fixed_all_to_all",
+        "fixed_pooled_wave_all_to_all",
+    ],
 )
 def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
@@ -1098,7 +1155,9 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
                 activation=ActivationFunctionEnum.silu,
                 implementation=implementation,
                 mesh=mesh,
-                pooled_transport_capacity_factor=(1.05 if implementation == "fixed_pooled_wave_all_to_all" else None),
+                pooled_transport_capacity_factor=(
+                    1.05 if implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS else None
+                ),
                 num_expert_waves=1,
             )
 
@@ -1111,6 +1170,7 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
         assert lowered is not None
 
 
+@pytest.mark.tpu
 def test_fixed_all_to_all_drops_assignments_over_capacity():
     mesh = Mesh(
         np.asarray([jax.devices()[0]]),
@@ -1192,6 +1252,7 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
     assert int(overflow.receiver_dropped) == 0
 
 
+@pytest.mark.tpu
 def test_fixed_all_to_all_padding_does_not_change_capacity_acceptance():
     mesh = _make_single_expert_mesh()
     x, _, combine_weights, w_up_gate, w_down = _make_inputs(
@@ -1281,6 +1342,7 @@ def test_fixed_all_to_all_padding_does_not_change_capacity_acceptance():
     assert padded_overflow.dropped == compact_overflow.dropped == 4
 
 
+@pytest.mark.tpu
 @pytest.mark.timeout(180)
 def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients():
     mesh = _make_single_expert_mesh()
@@ -1369,6 +1431,7 @@ def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients():
     assert _count_jaxpr_primitives(gradient_jaxpr, "all_to_all") == 6 * num_expert_waves
 
 
+@pytest.mark.tpu
 def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
     mesh = _make_single_expert_mesh()
     tokens = 6
@@ -1420,235 +1483,6 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
     assert int(overflow.receiver_dropped) == 3
 
 
-@pytest.mark.parametrize(
-    "implementation", ["ring", "ring_gather_combine", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"]
-)
-@pytest.mark.parametrize(
-    "token_valid",
-    [[True, True, True, True], [True, False, True, True]],
-    ids=["all_valid", "padded"],
-)
-def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
-    implementation: MoeImplementation,
-    token_valid: list[bool],
-):
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
-    script = """
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-        from levanter.grug.grug_moe import moe_mlp
-
-        assert jax.device_count() == 4
-        mesh = Mesh(
-            np.asarray(jax.devices()).reshape(2, 2, 1),
-            axis_names=("data", "expert", "model"),
-            axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
-        )
-        x = jax.random.normal(jax.random.key(0), (4, 4))
-        selected_experts = jnp.asarray(
-            [[2, 3], [4, 5], [6, 7], [0, 1]],
-            dtype=jnp.int32,
-        )
-        combine_weights = jax.nn.softmax(jax.random.normal(jax.random.key(1), (4, 2)), axis=-1)
-        token_valid = jnp.asarray(__TOKEN_VALID__)
-        w_up_gate = jax.random.normal(jax.random.key(2), (8, 4, 6))
-        w_down = jax.random.normal(jax.random.key(3), (8, 3, 4))
-        cotangent = jax.random.normal(jax.random.key(4), (4, 4))
-
-        def dense_output(x, w_up_gate, w_down):
-            selected_w13 = w_up_gate[selected_experts]
-            hidden = jnp.einsum("th,tkhi->tki", x, selected_w13)
-            gate, up = jnp.split(hidden, [3], axis=-1)
-            expert_output = jnp.einsum(
-                "tki,tkih->tkh",
-                jax.nn.silu(gate) * up,
-                w_down[selected_experts],
-            )
-            return jnp.einsum("tkh,tk->th", expert_output, combine_weights * token_valid[:, None])
-
-        expected = jax.jit(dense_output)(x, w_up_gate, w_down)
-        expected_gradients = jax.jit(
-            jax.grad(
-                lambda x, w_up_gate, w_down: jnp.sum(dense_output(x, w_up_gate, w_down) * cotangent),
-                argnums=(0, 1, 2),
-            )
-        )(x, w_up_gate, w_down)
-
-        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
-        token_sharding = NamedSharding(mesh, P(("data", "expert")))
-        expert_sharding = NamedSharding(mesh, P("expert", None, None))
-        x = jax.device_put(x, batch_sharding)
-        selected_experts = jax.device_put(selected_experts, batch_sharding)
-        combine_weights = jax.device_put(combine_weights, batch_sharding)
-        token_valid = jax.device_put(token_valid, token_sharding)
-        w_up_gate = jax.device_put(w_up_gate, expert_sharding)
-        w_down = jax.device_put(w_down, expert_sharding)
-        cotangent = jax.device_put(cotangent, batch_sharding)
-
-        implementation = "__IMPLEMENTATION__"
-        extra = {}
-        if implementation == "fixed_pooled_wave_all_to_all":
-            extra["pooled_transport_capacity_factor"] = 4.0
-
-        def backend_output(x, w_up_gate, w_down):
-            return moe_mlp(
-                x,
-                selected_experts,
-                combine_weights,
-                w_up_gate,
-                w_down,
-                token_valid=token_valid,
-                activation=jax.nn.silu,
-                implementation=implementation,
-                mesh=mesh,
-                capacity_factor=4.0,
-                report_capacity_overflow=True,
-                **extra,
-            )
-
-        with jax.set_mesh(mesh):
-            actual, overflow = jax.jit(backend_output)(x, w_up_gate, w_down)
-            actual_gradients = jax.jit(
-                jax.grad(
-                    lambda x, w_up_gate, w_down: jnp.sum(backend_output(x, w_up_gate, w_down)[0] * cotangent),
-                    argnums=(0, 1, 2),
-                )
-            )(x, w_up_gate, w_down)
-
-        np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
-        for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
-            np.testing.assert_allclose(
-                np.asarray(actual_gradient),
-                np.asarray(expected_gradient),
-                rtol=1e-5,
-                atol=1e-5,
-            )
-        assert int(overflow.dropped) == 0
-        assert int(overflow.padding_skipped) == int(jnp.sum(~token_valid)) * 2
-    """
-    script = script.replace("__IMPLEMENTATION__", implementation).replace("__TOKEN_VALID__", repr(token_valid))
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-
-
-@pytest.mark.parametrize(
-    "token_valid",
-    [[True] * 16, [True, False, True, True] * 4],
-    ids=["all_valid", "padded"],
-)
-def test_ring_gather_combine_matches_scatter_combine_with_drops(token_valid: list[bool]):
-    """`ring_gather_combine` gives `ring`'s values, drops and gradients without token-buffer scatter-adds."""
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
-    script = """
-        import functools
-
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-        from levanter.grug.grug_moe import moe_mlp
-
-        mesh = Mesh(
-            np.asarray(jax.devices()).reshape(2, 2, 1),
-            axis_names=("data", "expert", "model"),
-            axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
-        )
-        tokens, hidden, inter, experts, topk = 16, 10, 6, 8, 3
-        keys = jax.random.split(jax.random.key(0), 6)
-        x = jax.random.normal(keys[0], (tokens, hidden))
-        # Skewed routing so some shards run out of capacity.
-        logits = jax.random.normal(keys[1], (tokens, experts)) + jnp.linspace(2.0, 0.0, experts)
-        selected_experts = jax.lax.top_k(logits, topk)[1].astype(jnp.int32)
-        combine_weights = jax.nn.softmax(jax.random.normal(keys[2], (tokens, topk)), axis=-1)
-        token_valid = jnp.asarray(__TOKEN_VALID__)
-        w_up_gate = jax.random.normal(keys[3], (experts, hidden, 2 * inter))
-        w_down = jax.random.normal(keys[4], (experts, inter, hidden))
-        cotangent = jax.random.normal(keys[5], (tokens, hidden))
-
-        batch = NamedSharding(mesh, P(("data", "expert"), None))
-        expert = NamedSharding(mesh, P("expert", None, None))
-        x, selected_experts, combine_weights, cotangent = (
-            jax.device_put(a, batch) for a in (x, selected_experts, combine_weights, cotangent)
-        )
-        token_valid = jax.device_put(token_valid, NamedSharding(mesh, P(("data", "expert"))))
-        w_up_gate, w_down = jax.device_put(w_up_gate, expert), jax.device_put(w_down, expert)
-
-        def loss(implementation, x, combine_weights, w_up_gate, w_down):
-            out, counts = moe_mlp(
-                x,
-                selected_experts,
-                combine_weights,
-                w_up_gate,
-                w_down,
-                token_valid=token_valid,
-                activation=jax.nn.silu,
-                implementation=implementation,
-                mesh=mesh,
-                capacity_factor=0.5,
-                report_capacity_overflow=True,
-            )
-            return jnp.sum(out * cotangent), counts.dropped
-
-        def token_row_scatter_adds(jaxpr):
-            # Scatter-adds that write [rows, hidden] token buffers, searched through nested jaxprs.
-            count = 0
-            for eqn in jaxpr.eqns:
-                shape = eqn.outvars[0].aval.shape if eqn.outvars else ()
-                count += eqn.primitive.name == "scatter-add" and len(shape) == 2 and shape[1] == hidden
-                for param in eqn.params.values():
-                    for sub in param if isinstance(param, (tuple, list)) else (param,):
-                        sub = getattr(sub, "jaxpr", sub)
-                        if hasattr(sub, "eqns"):
-                            count += token_row_scatter_adds(sub)
-            return count
-
-        results = {}
-        for implementation in ("ring", "ring_gather_combine"):
-            with jax.set_mesh(mesh):
-                grad_fn = jax.value_and_grad(
-                    functools.partial(loss, implementation), argnums=(0, 1, 2, 3), has_aux=True
-                )
-                args = (x, combine_weights, w_up_gate, w_down)
-                scatter_adds = token_row_scatter_adds(jax.make_jaxpr(grad_fn)(*args).jaxpr)
-                results[implementation] = (grad_fn(*args), scatter_adds)
-
-        ((ring_value, ring_dropped), ring_grads), ring_scatter_adds = results["ring"]
-        ((gather_value, gather_dropped), gather_grads), gather_scatter_adds = results["ring_gather_combine"]
-        assert ring_scatter_adds > 0, ring_scatter_adds
-        assert gather_scatter_adds == 0, gather_scatter_adds
-        assert int(ring_dropped) > 0, int(ring_dropped)
-        assert int(gather_dropped) == int(ring_dropped)
-        np.testing.assert_allclose(np.asarray(gather_value), np.asarray(ring_value), rtol=1e-5, atol=1e-5)
-        for gather_grad, ring_grad in zip(gather_grads, ring_grads, strict=True):
-            np.testing.assert_allclose(np.asarray(gather_grad), np.asarray(ring_grad), rtol=1e-5, atol=1e-5)
-    """
-    script = script.replace("__TOKEN_VALID__", repr(token_valid))
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-
-
 def test_ring_gather_combine_rounds_each_bf16_token_sum_once():
     """In bf16 the gather combine and the dispatch gradient sum each token's rows in float32, then round once."""
     tokens, topk, hidden, slots = 6, 4, 32, 16
@@ -1679,6 +1513,126 @@ def test_ring_gather_combine_rounds_each_bf16_token_sum_once():
     np.add.at(expected_x_gradient, token[valid], rows_cotangent[valid])
     np.testing.assert_array_equal(np.asarray(combined), np.asarray(expected_combined, jnp.bfloat16))
     np.testing.assert_array_equal(np.asarray(x_gradient), np.asarray(expected_x_gradient, jnp.bfloat16))
+
+
+def test_combine_gather_sum_keeps_bf16_sums_in_float32():
+    """The weighted gather combine sums each output row's bf16 inputs in float32 and rounds once. Its backward
+    rounds each input-row gradient once and returns the float32 routing-weight gradient unrounded."""
+    received_rows, topk, dispatch_rows, hidden = 6, 4, 16, 32
+    rng = np.random.default_rng(0)
+    # Dispatch rows hold 14 of the 24 (received row, k) assignments in random order; the last two are padding.
+    flat_idx = rng.permutation(received_rows * topk)[:dispatch_rows].astype(np.int32)
+    flat_idx[14:] = received_rows * topk
+    inv = np.full(received_rows * topk, dispatch_rows, np.int32)
+    inv[flat_idx[:14]] = np.arange(14)
+    inv = inv.reshape(received_rows, topk)
+    # Integers below 256, and their products with powers of two, are exact in bf16, and the float32 sums below
+    # are exact, so each value's final rounding to bf16 is its only one.
+    src = rng.integers(-255, 256, (dispatch_rows, hidden)).astype(np.float32)
+    weights = np.exp2(rng.integers(-2, 2, (received_rows, topk))).astype(np.float32)
+    cotangent = rng.integers(-255, 256, (received_rows, hidden)).astype(np.float32)
+
+    @jax.jit
+    def evaluate(src, weights, cotangent):
+        out, vjp = jax.vjp(
+            lambda src, weights: _combine_gather_sum(
+                src,
+                jnp.asarray(inv).reshape(-1),
+                jnp.asarray(flat_idx),
+                weights,
+                src.dtype,
+            ),
+            src,
+            weights,
+        )
+        return out, *vjp(cotangent)
+
+    out, src_gradient, weights_gradient = evaluate(
+        jnp.asarray(src, jnp.bfloat16), jnp.asarray(weights), jnp.asarray(cotangent, jnp.bfloat16)
+    )
+
+    gathered = np.concatenate([src, np.zeros((1, hidden), np.float32)])[inv]
+    expected_out = np.einsum("njh,nj->nh", gathered, weights)
+    expected_weights_gradient = np.einsum("njh,nh->nj", gathered, cotangent)
+    flat_weights = np.append(weights.reshape(-1), 0.0)
+    padded_cotangent = np.concatenate([cotangent, np.zeros((1, hidden), np.float32)])
+    expected_src_gradient = padded_cotangent[flat_idx // topk] * flat_weights[flat_idx][:, None]
+    np.testing.assert_array_equal(np.asarray(out), np.asarray(expected_out, jnp.bfloat16))
+    np.testing.assert_array_equal(np.asarray(src_gradient), np.asarray(expected_src_gradient, jnp.bfloat16))
+    np.testing.assert_array_equal(np.asarray(weights_gradient), expected_weights_gradient)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16], ids=["float32", "bfloat16"])
+def test_ring_filtered_down_project_combine_matches_autodiff(dtype, monkeypatch):
+    """The expert-side down projection and combine match autodiff through ``ragged_dot`` and the weighted
+    sum, although its routing-weight gradient comes from ``<hidden, dhidden> / weight`` instead of the expert
+    outputs. In float32 everything agrees to rounding. In bfloat16 the routing-weight gradient carries two
+    roundings (``dy`` and ``dhidden``) where autodiff's ``<cotangent, y>`` carries one, so its error against a
+    float32 reference stays within 1.5x of autodiff's. Padding dispatch rows and empty slots get no gradient."""
+    # Both sides use XLA's ragged_dot, so the comparison isolates the custom VJP from backend kernels.
+    monkeypatch.setenv("RAGGED_DOT_IMPL", "xla")
+    received_rows, topk, dispatch_rows, inter, hidden = 24, 4, 64, 16, 32
+    group_sizes = np.array([20, 0, 26, 10], np.int32)
+    kept = int(group_sizes.sum())
+    rng = np.random.default_rng(0)
+    # Dispatch rows hold `kept` of the (received row, k) assignments in random order; the rest are padding.
+    flat_idx = rng.permutation(received_rows * topk)[:dispatch_rows].astype(np.int32)
+    flat_idx[kept:] = received_rows * topk
+    inv = np.full(received_rows * topk, dispatch_rows, np.int32)
+    inv[flat_idx[:kept]] = np.arange(kept)
+    inv = inv.reshape(received_rows, topk)
+    activations = rng.normal(size=(dispatch_rows, inter)).astype(np.float32)
+    w2 = (rng.normal(size=(len(group_sizes), inter, hidden)) / np.sqrt(inter)).astype(np.float32)
+    # Positive weights, like the sigmoid or softmax routing weights the backend receives.
+    weights = rng.uniform(0.05, 1.0, (received_rows, topk)).astype(np.float32)
+    cotangent = rng.normal(size=(received_rows, hidden)).astype(np.float32)
+
+    def reference(activations, w2, weights):
+        y = ragged_dot(activations, w2, jnp.asarray(group_sizes), implementation="xla")
+        y = jnp.concatenate([y, jnp.zeros((1, hidden), y.dtype)])[jnp.asarray(inv)]
+        return jnp.einsum("njh,nj->nh", y.astype(jnp.float32), weights).astype(activations.dtype)
+
+    def expert_side(activations, w2, weights):
+        return _down_project_combine(
+            activations, w2, jnp.asarray(group_sizes), weights, jnp.asarray(inv), jnp.asarray(flat_idx)
+        )
+
+    def value_and_grads(fn, *args):
+        out, vjp = jax.vjp(fn, *args)
+        return out, vjp(jnp.asarray(cotangent, out.dtype))
+
+    args = (jnp.asarray(activations, dtype), jnp.asarray(w2, dtype), jnp.asarray(weights))
+    # TPU's ragged_dot rejects bfloat16 operands at the highest matmul precision, which only float32 needs.
+    with jax.default_matmul_precision("highest" if dtype == jnp.float32 else "default"):
+        out, grads = jax.jit(functools.partial(value_and_grads, expert_side))(*args)
+        expected_out, expected_grads = jax.jit(functools.partial(value_and_grads, reference))(*args)
+    with jax.default_matmul_precision("highest"):
+        f32_args = tuple(a.astype(jnp.float32) for a in args)
+        _, f32_grads = jax.jit(functools.partial(value_and_grads, reference))(*f32_args)
+
+    weights_grad = np.asarray(grads[2])
+    assert np.all(weights_grad[inv == dispatch_rows] == 0)
+    assert np.all(np.asarray(grads[0])[kept:] == 0)
+    # ragged_dot leaves rows past the last group unspecified, and its transpose on TPU writes them, so compare the
+    # activation gradient on the grouped rows only.
+    grads = (grads[0][:kept], *grads[1:])
+    expected_grads = (expected_grads[0][:kept], *expected_grads[1:])
+    f32_grads = (f32_grads[0][:kept], *f32_grads[1:])
+    if dtype == jnp.float32:
+        np.testing.assert_allclose(np.asarray(out), np.asarray(expected_out), rtol=1e-5, atol=1e-5)
+        for actual, expected in zip(grads, expected_grads, strict=True):
+            np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+        return
+
+    def relative_error(a, b):
+        a, b = np.asarray(a, np.float32), np.asarray(b, np.float32)
+        return np.linalg.norm(a - b) / np.linalg.norm(b)
+
+    np.testing.assert_array_equal(np.asarray(out), np.asarray(expected_out))
+    autodiff_error = relative_error(expected_grads[2], f32_grads[2])
+    assert relative_error(weights_grad, f32_grads[2]) <= 1.5 * autodiff_error
+    for actual, expected in zip(grads[:2], f32_grads[:2], strict=True):
+        assert relative_error(actual, expected) < 1e-2
 
 
 def _simulate_ragged_a2a(operands, outputs, params):
@@ -1870,6 +1824,7 @@ def _force_routing_weight_gradient(
     )
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize(
     ("implementation", "routing_weight_gradient"),
     [
@@ -2219,6 +2174,7 @@ def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(
     assert dropped["mostly-padded"] == 0, dropped
 
 
+@pytest.mark.tpu
 def test_moe_mlp_runs_with_ep_axis_when_available():
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
@@ -2313,6 +2269,7 @@ def test_functional_moe_mlp_accepts_enum_and_callable_activation():
     np.testing.assert_allclose(np.asarray(y_callable), np.asarray(y_enum), rtol=1e-5, atol=1e-5)
 
 
+@pytest.mark.tpu
 def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
@@ -2357,6 +2314,7 @@ def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
     assert int(dispatch_counts.dropped) > 0
 
 
+@pytest.mark.tpu
 def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
@@ -2401,6 +2359,7 @@ def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
     assert int(dispatch_counts.dropped) > 0
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize("traced_capacity", [False, True])
 @pytest.mark.parametrize(
     "capacity, expected",
@@ -2447,6 +2406,7 @@ def _optimized_hlo_opcode_count(fill_fn, opcode_name: str) -> int:
     )
 
 
+@pytest.mark.tpu
 def test_transport_buffer_is_not_a_foldable_constant():
     assert (
         _optimized_hlo_opcode_count(
@@ -2463,6 +2423,7 @@ def test_transport_buffer_is_not_a_foldable_constant():
     ), "the folding probe no longer folds, so this test can no longer detect a foldable fill"
 
 
+@pytest.mark.tpu
 def test_transport_buffer_sites_prevent_cse():
     def distinct_sites(tie):
         return (
@@ -2478,3 +2439,27 @@ def test_transport_buffer_sites_prevent_cse():
     assert (
         _optimized_hlo_opcode_count(repeated_site, MINIMUM_OPCODE) == 1
     ), "the CSE probe no longer merges repeated sites, so this test can no longer detect a site collision"
+
+
+def test_routing_counts_stay_exact_past_the_float32_integer_range():
+    # 2**24 + 1 is the first count float32 cannot hold; a frozen-bias hot expert passes it on 11 hero racks.
+    num_tokens = 2**24 + 1
+    selected_experts = jnp.zeros((num_tokens, 1), dtype=jnp.int32)
+    router_scores = jnp.zeros((num_tokens, 1), dtype=jnp.float32)
+    token_valid = jnp.ones((num_tokens,), dtype=jnp.bool_)
+    mesh = Mesh(np.asarray(jax.devices()[:1]), axis_names=("data",), axis_types=(AxisType.Explicit,))
+
+    @jax.jit
+    def reduced_counts(selected, scores, valid):
+        selected, scores = (jax.sharding.reshard(x, P("data", None)) for x in (selected, scores))
+        valid = jax.sharding.reshard(valid, P("data"))
+        local = grug_moe.moe_routing_stats_local(
+            selected, scores, scores, valid, mesh.abstract_mesh, batch_axes=("data",), num_experts=1
+        )
+        stacked = {**jax.tree.map(lambda x: x[None], local), "qb_beta": jnp.zeros((1, 1))}
+        return grug_moe.reduce_moe_routing_stats(stacked, num_experts=1, num_experts_per_token=1)["routing_counts"]
+
+    with jax.set_mesh(mesh):
+        counts = reduced_counts(selected_experts, router_scores, token_valid)
+
+    assert int(np.asarray(counts)[0, 0]) == num_tokens

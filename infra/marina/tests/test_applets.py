@@ -8,11 +8,16 @@ import shutil
 import subprocess
 import tarfile
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from html.parser import HTMLParser
 from pathlib import Path
+from threading import Barrier
+from typing import cast
 
 import pytest
 from click.testing import CliRunner
-from marina.applets import AppletForbidden, AppletMode, AppletStore, package_applet, read_applet_package
+from marina.applets import AppletManifest, AppletNotFound, AppletStore, applet_role, package_applet, read_applet_package
 from marina.cli import cli
 from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
 from marina.db import UrlDatabase, grant_read
@@ -22,9 +27,111 @@ from marina.table_load import read_table, table_statements
 from marina.testing import isolated_database
 from requests import Response as RequestsResponse
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from starlette.testclient import TestClient
 
-DEMO_APPLET = Path(__file__).parents[1] / "examples" / "problem-set-applet"
+DEMO_APPLET = Path(__file__).parents[1] / "examples" / "problem-set-app"
+
+
+class PageLinks(HTMLParser):
+    def __init__(self, body: str):
+        super().__init__()
+        self.links: list[dict[str, str | None]] = []
+        self.feed(body)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "a":
+            self.links.append(dict(attrs))
+
+
+def test_directory_lists_all_apps_and_paginates_sorted_releases(tmp_path: Path, database_url: str) -> None:
+    with isolated_database(database_url) as local_url:
+        client, store = applet_client_and_store(tmp_path, local_url)
+        package = read_applet_package(package_applet(DEMO_APPLET))
+        published = []
+        for index in range(53):
+            manifest = AppletManifest(title=f"App {52 - index:02}", description="A published app")
+            selected = store.publish(replace(package, manifest=manifest), "publisher")
+            published.append(selected)
+        paths = [f"/a/{selected.applet_id}/" for selected in published]
+
+        for endpoint, key in (("/api/marina/apps", "apps"), ("/api/marina/applets", "applets")):
+            response = client.get(endpoint)
+            assert {app["path"] for app in response.json()[key]} == set(paths)
+            assert response.headers["cache-control"] == "private, no-store"
+
+        first = client.get("/")
+        assert first.headers["cache-control"] == "private, no-store"
+        links = PageLinks(first.text).links
+        assert [link["href"] for link in links if link["href"] in paths] == paths[::-1][:50]
+        next_url = next(link["href"] for link in links if link.get("rel") == "next")
+        last = client.get(next_url)
+        last_links = PageLinks(last.text).links
+        assert [link["href"] for link in last_links if link["href"] in paths] == paths[::-1][50:]
+        assert not any(link.get("rel") == "next" for link in last_links)
+        previous = next(link["href"] for link in last_links if link.get("rel") == "prev")
+        assert client.get(previous).text == first.text
+        assert client.get("/?page=999").text == last.text
+
+        for sort, order, expected in (
+            ("name", "asc", paths[::-1]),
+            ("name", "desc", paths),
+            ("released", "asc", paths),
+        ):
+            actual = []
+            for page in (1, 2):
+                response = client.get("/", params={"sort": sort, "order": order, "page": page})
+                actual.extend(link["href"] for link in PageLinks(response.text).links if link["href"] in paths)
+            assert actual == expected
+
+        before = client.get("/api/marina/apps").json()["apps"]
+        selected = published[0]
+        store.publish(package, "new-publisher", selected.applet_id, base_version=1)
+        after = client.get("/api/marina/apps").json()["apps"]
+        old_release = next(app for app in before if app["path"] == paths[0])
+        new_release = next(app for app in after if app["path"] == paths[0])
+        assert new_release["published_at"] > old_release["published_at"]
+        assert new_release["published_by"] == "new-publisher"
+        first_link = next(link["href"] for link in PageLinks(client.get("/").text).links if link["href"] in paths)
+        assert first_link == paths[0]
+        store.rollback(selected.applet_id, 1, base_version=2)
+        restored = client.get("/api/marina/apps").json()["apps"]
+        restored_release = next(app for app in restored if app["path"] == paths[0])
+        assert restored_release["published_at"] == old_release["published_at"]
+        assert restored_release["published_by"] == old_release["published_by"]
+        assert restored_release["version"] == 1
+        store.archive(published[-1].applet_id)
+        listed = client.get("/api/marina/apps").json()["apps"]
+        assert {app["path"] for app in listed} == set(paths[:-1])
+        store.close()
+
+
+@pytest.mark.parametrize("invalid_graph", ["duplicate_id", "missing_parent", "cycle", "cooldown_mismatch"])
+def test_snowball_release_rejects_invalid_lineage_and_preserves_local_output(tmp_path: Path, invalid_graph: str) -> None:
+    source = Path(__file__).parents[1] / "apps" / "snowball_family_tree"
+    applet = tmp_path / "snowball"
+    shutil.copytree(source, applet, ignore=shutil.ignore_patterns("dist", "__pycache__"))
+    valid_release = CliRunner().invoke(cli, ["release", str(applet), "--dry-run", "--json"])
+    assert valid_release.exit_code == 0, valid_release.output
+    graph = json.loads((applet / "graph-data.json").read_text())
+    nodes = graph["nodes"]
+    if invalid_graph == "duplicate_id":
+        nodes.append(nodes[-1].copy())
+    elif invalid_graph == "missing_parent":
+        nodes[-1]["parents"] = ["missing-checkpoint"]
+    elif invalid_graph == "cycle":
+        nodes[-1]["parents"] = [nodes[-1]["id"]]
+    else:
+        nodes[-1]["lane"] = "2.7T"
+    (applet / "graph-data.json").write_text(json.dumps(graph))
+    (applet / "dist").mkdir()
+    previous_output = applet / "dist" / "index.html"
+    previous_output.write_text("previous local output")
+
+    result = CliRunner().invoke(cli, ["release", str(applet), "--dry-run", "--json"])
+
+    assert result.exit_code != 0
+    assert previous_output.read_text() == "previous local output"
 
 
 @pytest.fixture(params=["static", "build"])
@@ -378,6 +485,7 @@ def test_publish_demo_serves_files_schema_query_and_python_api(tmp_path: Path, d
     applet_id = published["id"]
 
     listed = client.get("/api/marina/apps").json()["apps"]
+    published_at = client.get(f"/api/marina/applets/{applet_id}").json()["versions"][0]["published_at"]
     assert listed == [
         {
             "name": applet_id,
@@ -386,6 +494,7 @@ def test_publish_demo_serves_files_schema_query_and_python_api(tmp_path: Path, d
             "path": f"/a/{applet_id}/",
             "kind": "applet",
             "published_by": "anonymous",
+            "published_at": published_at,
             "version": 1,
             "mode": "private",
         }
@@ -809,38 +918,70 @@ def test_host_migration_preserves_filer_and_does_not_restore_changed_bindings(da
     assert "filer.marina.oa.dev" not in store.host_bindings()
 
 
-def test_store_rejects_non_owner_and_allows_operator(tmp_path: Path, database_url: str) -> None:
-    _client, store = applet_client_and_store(tmp_path, database_url)
-    package = read_applet_package(package_applet(DEMO_APPLET))
-    published = store.publish(package=package, owner="owner@example")
-    updated = store.publish(
-        package=package,
-        owner="owner@example",
-        applet_id=published.applet_id,
-        base_version=1,
-    )
-    assert updated.version == 2
-    with pytest.raises(AppletForbidden):
-        store.rollback(published.applet_id, 1, "other@example", 2)
-    with pytest.raises(AppletForbidden):
-        store.set_mode(published.applet_id, AppletMode.PUBLIC, "other@example", 2)
-    assert store.current_version(published.applet_id) == 2
-    store.set_mode(
-        published.applet_id,
-        AppletMode.PUBLIC,
-        "operator@example",
-        2,
-        frozenset({"operator@example"}),
-    )
-    assert store.access_mode(published.applet_id) is AppletMode.PUBLIC
-    store.rollback(
-        published.applet_id,
-        1,
-        "operator@example",
-        2,
-        frozenset({"operator@example"}),
-    )
-    assert store.current_version(published.applet_id) == 1
+@pytest.mark.parametrize("named", [False, True])
+def test_authenticated_users_share_applet_lifecycle(
+    tmp_path: Path, database_url: str, monkeypatch: pytest.MonkeyPatch, named: bool
+) -> None:
+    # Replace only external signature verification; exercise Marina's real auth
+    # middleware and mutation routes with a remote peer and distinct identities.
+    def verify_assertion(assertion: str, *_args: object, **_kwargs: object) -> dict[str, str]:
+        return {"email": assertion}
+
+    monkeypatch.setattr("google.oauth2.id_token.verify_token", verify_assertion)
+    with isolated_database(database_url) as local_url:
+        database = UrlDatabase(local_url)
+        store = AppletStore(database)
+        ensure_applet_provisioning(store.engine)
+        store.migrate()
+        config = MarinaConfig(
+            data_root=str(tmp_path / "data"),
+            iap_audience="test-audience",
+            database=database,
+            applet_operators=frozenset({"first@example"}),
+        )
+        client = TestClient(create_app(config), client=("10.0.0.7", 40000))
+        source = tmp_path / "shared"
+        shutil.copytree(DEMO_APPLET, source)
+        if named:
+            with (source / "applet.toml").open("a") as manifest:
+                manifest.write('\nname = "shared-test"\n')
+        package = package_applet(source)
+        applet_id = str(uuid.uuid4())
+        endpoint = f"/api/marina/applets/{applet_id}"
+        first = {"x-goog-iap-jwt-assertion": "first@example"}
+        second = {"x-goog-iap-jwt-assertion": "second@example"}
+        created = client.post(endpoint, params={"base_version": 0}, headers=first, content=package)
+        assert created.status_code == 201, created.text
+        updated = client.post(endpoint, params={"base_version": 1}, headers=second, content=package)
+        assert updated.status_code == 201, updated.text
+        assert updated.json()["version"] == 2
+        assert [item.published_by for item in store.versions(uuid.UUID(applet_id))] == [
+            "second@example",
+            "first@example",
+        ]
+        listed = client.get("/api/marina/apps", headers=first).json()["apps"]
+        assert listed[0]["published_by"] == "second@example"
+
+        mode = "private" if named else "public"
+        mutations = [
+            ("POST", endpoint, {"params": {"base_version": 1}, "content": package}),
+            ("PUT", f"{endpoint}/mode", {"json": {"mode": mode, "base_version": 1}}),
+            ("PUT", f"{endpoint}/current", {"json": {"version": 1, "base_version": 1}}),
+        ]
+        for method, path, arguments in mutations:
+            assert client.request(method, path, headers=second, **arguments).status_code == 409
+            assert client.request(method, path, **arguments).status_code == 401
+        assert client.delete(endpoint).status_code == 401
+        assert store.current_version(uuid.UUID(applet_id)) == 2
+        assert client.put(f"{endpoint}/mode", headers=second, json={"mode": mode, "base_version": 2}).status_code == 200
+        assert store.access_mode(uuid.UUID(applet_id)).value == mode
+        assert (
+            client.put(f"{endpoint}/current", headers=second, json={"version": 1, "base_version": 2}).status_code == 200
+        )
+        assert store.current_version(uuid.UUID(applet_id)) == 1
+        assert client.delete(endpoint, headers=second).status_code == 204
+        assert store.active_applets() == []
+        store.engine.dispose()
 
 
 def test_publish_rejects_archive_escape(tmp_path: Path, database_url: str) -> None:
@@ -901,6 +1042,11 @@ def test_static_cache_encoding_and_html_fallback(tmp_path: Path, database_url: s
     assert unchanged.status_code == 304
     assert client.get(f"{prefix}/client-route", headers={"accept": "application/json"}).status_code == 404
     assert client.get(f"{prefix}/client-route", headers={"accept": "text/html"}).status_code == 200
+    browser = {"accept": "text/html,application/xhtml+xml,*/*;q=0.8"}
+    dotted_route = client.get(f"{prefix}/runs/model-v0.1-math500", headers=browser)
+    assert dotted_route.status_code == 200
+    assert dotted_route.content == (packaged / "dist" / "index.html").read_bytes()
+    assert client.get(f"{prefix}/assets/missing-chunk.js", headers={"accept": "*/*"}).status_code == 404
 
 
 def test_publish_prunes_old_revisions_and_allocates_after_rollback(tmp_path: Path, database_url: str) -> None:
@@ -918,7 +1064,7 @@ def test_publish_prunes_old_revisions_and_allocates_after_rollback(tmp_path: Pat
         current = revision
     assert [item.version for item in store.versions(published.applet_id)] == [6, 5, 4, 3, 2]
 
-    store.rollback(published.applet_id, 2, "owner@example", 6)
+    store.rollback(published.applet_id, 2, 6)
     next_revision = store.publish(package, "owner@example", published.applet_id, 2)
     assert next_revision.version == 7
     assert [item.version for item in store.versions(published.applet_id)] == [7, 6, 5, 4, 3]
@@ -977,6 +1123,62 @@ def test_query_limits_roll_back_and_timeout(tmp_path: Path, database_url: str, m
     monkeypatch.setattr("marina.applets.QUERY_TIMEOUT_MS", 20)
     timed_out = client.post(endpoint, json={"sql": "SELECT pg_sleep(0.2)", "parameters": {}})
     assert timed_out.status_code == 504
+
+
+def test_query_pool_reuses_connections_without_leaking_request_state(tmp_path: Path, database_url: str) -> None:
+    _client, store = applet_client_and_store(tmp_path, database_url)
+    try:
+        package = read_applet_package(package_applet(DEMO_APPLET))
+        first = store.publish(package, "owner").applet_id
+        second = store.publish(package, "owner").applet_id
+        store.query(first, "INSERT INTO problems VALUES (4, 'first app only', 17)", {})
+        identity_sql = "SELECT pg_backend_pid() AS pid, current_user AS role, count(*) AS count FROM problems"
+        before = cast(list[dict[str, object]], store.query(first, identity_sql, {})["rows"])[0]
+        store.query(first, "CREATE TEMP TABLE problems (id INTEGER)", {})
+        store.query(
+            first,
+            "SELECT set_config('search_path', 'public', false), set_config('role', :role, false)",
+            {"role": APPLET_READER_ROLE},
+        )
+        with pytest.raises(DBAPIError):
+            store.query(first, "SELECT 1 / 0", {})
+        after = cast(list[dict[str, object]], store.query(first, identity_sql, {})["rows"])[0]
+        assert after == before
+        assert after["role"] == applet_role(first)
+        assert after["count"] == 4
+        other = cast(list[dict[str, object]], store.query(second, identity_sql, {})["rows"])[0]
+        assert other["role"] == applet_role(second)
+        assert other["pid"] != after["pid"]
+        assert other["count"] == 3
+        store.archive(first)
+        with pytest.raises(AppletNotFound):
+            store.query(first, identity_sql, {})
+    finally:
+        store.close()
+
+
+def test_concurrent_applet_queries_keep_writes_in_each_schema(tmp_path: Path, database_url: str) -> None:
+    _client, store = applet_client_and_store(tmp_path, database_url)
+    try:
+        package = read_applet_package(package_applet(DEMO_APPLET))
+        applets = [store.publish(package, "owner").applet_id for _ in range(2)]
+        ready = Barrier(6)
+
+        def write(index: int) -> None:
+            ready.wait()
+            store.query(
+                applets[index % 2],
+                "INSERT INTO problems VALUES (:id, :prompt, :answer)",
+                {"id": index + 4, "prompt": f"problem {index}", "answer": index},
+            )
+
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            list(executor.map(write, range(6)))
+        for index, applet_id in enumerate(applets):
+            rows = store.query(applet_id, "SELECT answer FROM problems WHERE id > 3 ORDER BY id", {})["rows"]
+            assert rows == [{"answer": value} for value in range(index, 6, 2)]
+    finally:
+        store.close()
 
 
 def test_failed_migration_leaves_no_applet_or_schema(tmp_path: Path, database_url: str) -> None:
@@ -1091,7 +1293,7 @@ def test_mode_cli_updates_current_revision(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr("marina.client.requests.request", http_request)
     result = CliRunner().invoke(
         cli,
-        ["applets", "mode", "example", "public", "--url", "http://localhost:8080"],
+        ["apps", "mode", "example", "public", "--url", "http://localhost:8080"],
     )
 
     assert result.exit_code == 0

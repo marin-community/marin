@@ -7,7 +7,7 @@ guides and applicable skills before changing live infrastructure.
   when useful, and keep one durable session responsible for the incident arc.
 - Reply in the alert's routed Slack thread when an operator needs a conclusion,
   question, or action item.
-- Publish durable incident investigations through the `write-ops-log` workflow
+- Publish durable incident investigations through `use-echo`'s incident procedure
   and link the canonical record from any associated issue or pull request.
 - Do not restart or otherwise disrupt live infrastructure without the explicit
   authorization required by the owning repository's operational guide.

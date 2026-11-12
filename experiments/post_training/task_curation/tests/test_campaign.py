@@ -59,6 +59,7 @@ def test_dataset_campaign_retains_named_products_without_review_or_grader_depend
                     chunk_storage_prefix=str(tmp_path / "chunks"),
                 ),
                 report_path=str(tmp_path / "report.json"),
+                catalog_root=str(tmp_path / "published/catalog"),
                 source_ids={step.name: source.info.id},
                 mode=mode,
             )
@@ -73,6 +74,9 @@ def test_dataset_campaign_retains_named_products_without_review_or_grader_depend
         report = json.loads((tmp_path / "report.json").read_text())
         assert report["sources"][0]["result"]["stages"] == ["ingest", "multiply"]
         assert report["sources"][0]["result"]["outputs"] == result.outputs
+        recorded = ReadView(str(tmp_path / "published/catalog")).point("runs", run_id=report["run_id"])
+        assert recorded["report_path"] == str(tmp_path / "report.json")
+        assert not (tmp_path / "catalog/HEAD").exists()
         assert not (Path(outcomes[0].path) / "final").exists()
     finally:
         client.shutdown()
@@ -121,7 +125,14 @@ def test_campaign_shares_pool_preserves_peers_and_resumes(tmp_path, monkeypatch)
     try:
         with set_current_client(client):
             with pytest.raises(CampaignFailed):
-                run_campaign(steps, runtime=runtime, pool=pool, report_path=report, source_ids={})
+                run_campaign(
+                    steps,
+                    runtime=runtime,
+                    pool=pool,
+                    report_path=report,
+                    catalog_root=str(tmp_path / "catalog"),
+                    source_ids={},
+                )
             with pytest.raises(RuntimeError, match="active campaign"):
                 _ = runtime.context
             first = json.loads((tmp_path / "report.json").read_text())
@@ -131,7 +142,12 @@ def test_campaign_shares_pool_preserves_peers_and_resumes(tmp_path, monkeypatch)
             assert len({id(context) for context in contexts}) == 1
             failed.clear()
             outcomes = run_campaign(
-                steps, runtime=runtime, pool=replace(pool, concurrent_sources=1), report_path=report, source_ids={}
+                steps,
+                runtime=runtime,
+                pool=replace(pool, concurrent_sources=1),
+                report_path=report,
+                catalog_root=str(tmp_path / "catalog"),
+                source_ids={},
             )
             with pytest.raises(RuntimeError, match="active campaign"):
                 _ = runtime.context

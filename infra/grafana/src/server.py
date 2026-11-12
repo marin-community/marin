@@ -15,9 +15,10 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/{cluster}/v1/node/overview       bounded shared Node Details dataset
     GET /finelog/{cluster}/v1/training/overview   bounded shared Training dataset
     GET /finelog/{cluster}/v1/runs/overview       bounded shared multi-run dataset
-    GET /finelog/{cluster}/v1/rl/overview         bounded shared RL dataset
+    GET /finelog/{cluster}/v1/rl/overview         bounded shared RL core/engine dataset
+    GET /finelog/{cluster}/v1/rl/gpu              node-GPU detail for ranges up to 7h
     GET /finelog/{cluster}/v1/rl/recent           bounded recent RL runs
-    GET /finelog/{cluster}/v1/async-rl/overview   bounded shared async RL dataset
+    GET /finelog/{cluster}/v1/rl/execution        selected job's executions
     GET /finelog/{cluster}/v1/accelerator/overview bounded shared accelerator dataset
     GET /finelog/{cluster}/v1/jobs/overview       five namespace-bounded Jobs sources
     GET /finelog/{cluster}/v1/vllm/overview       bounded per-job/run vLLM telemetry
@@ -68,7 +69,6 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/alerts/arch_mismatch                 alert rows: cluster, node, image, value(count)
     GET /k8s/alerts/gpu_rack_trays                alert rows: cluster, rack_name, value(trays_ready)
     POST /alerts/loom                             firing Grafana groups become Loom automation runs
-    POST /alerts/slack                            Grafana groups announced in Slack, no Loom run
     GET /health                                  bridge liveness
 
 A dead controller or GitHub returns 5xx (not empty rows), and the failure is not
@@ -94,7 +94,6 @@ from http import HTTPStatus
 import pyarrow as pa
 import uvicorn
 from accelerator_observability import accelerator_overview_dataset
-from async_rl_observability import async_rl_overview_dataset
 from cache import TtlCache
 from config import (
     BRIDGE_PORT,
@@ -149,14 +148,13 @@ from loom_alerts import (
     LoomAlertDeliveryError,
     LoomAlertPayloadError,
     OperatorBehavior,
-    SlackAlertClient,
-    SlackAnnouncementError,
 )
 from loss_spikes import loss_spike_alert_rows, loss_window_query
 from nightly_config import NIGHTLY_LANES
 from node_observability import node_overview_dataset
 from relay_health import relay_alert_rows
-from rl_observability import recent_rl_runs_dataset, rl_overview_dataset
+from rl_execution_observability import rl_execution_dataset
+from rl_observability import recent_rl_runs_dataset, rl_gpu_dataset, rl_overview_dataset
 from rl_producers import check_window, collect_producers
 from runs_observability import runs_overview_dataset
 from starlette.applications import Starlette
@@ -217,6 +215,8 @@ _K8S_EVENTS_CACHE_KEY = "events"
 _K8S_FINELOG_CACHE_KEY = "finelog"
 _DATASET_SOURCE_CACHE_BYTES = 128 * 1024 * 1024
 _DATASET_CONCURRENCY = 2
+_DATASET_WINDOW_BUCKET_MS = 15_000
+_DATASET_LIVE_WINDOW_TOLERANCE_MS = 60_000
 _FINELOG_FILTER_TOKEN = "finelog"
 _FINELOG_HUB_CLUSTER = "marin"
 
@@ -551,6 +551,15 @@ def _iris_for(name: str, sources: Mapping[str, IrisSource]) -> IrisSource:
     return sources[name]
 
 
+def _aligned_dataset_window(start_ms: int, end_ms: int) -> tuple[int, int]:
+    if (
+        abs(round(time.time() * 1000) - end_ms) <= _DATASET_LIVE_WINDOW_TOLERANCE_MS
+        and end_ms - start_ms >= _DATASET_WINDOW_BUCKET_MS
+    ):
+        return start_ms - start_ms % _DATASET_WINDOW_BUCKET_MS, end_ms - end_ms % _DATASET_WINDOW_BUCKET_MS
+    return start_ms, end_ms
+
+
 def _dataset_source(
     source: MetricSource,
     cluster: str,
@@ -591,7 +600,6 @@ def create_app(
     k8s_fleet: K8sFleet,
     wandb_source: WandbSource,
     loom_alerts: LoomAlertClient | None = None,
-    slack_alerts: SlackAlertClient | None = None,
 ) -> Starlette:
     """Build the ASGI app serving Grafana's data sources and alert webhooks."""
     finelog_cache: TtlCache = TtlCache(config.cache_ttl)
@@ -616,9 +624,11 @@ def create_app(
         key = (target.name, dataset.name, *dataset.cache_key)
 
         def run() -> list[dict[str, object]]:
+            queued = time.monotonic()
             with dataset_execution_slots:
                 source_tables: dict[str, pa.Table] = {}
                 started = time.monotonic()
+                queue_ms = round((started - queued) * 1000)
                 for source_query in dataset.sources:
                     query_started = time.monotonic()
                     table = _dataset_source(
@@ -633,6 +643,7 @@ def create_app(
                         table.num_rows,
                         round((time.monotonic() - query_started) * 1000),
                     )
+                projection_started = time.monotonic()
                 rows = project_dataset(
                     dataset,
                     source_tables,
@@ -641,12 +652,15 @@ def create_app(
                     min(dataset.max_result_rows, config.max_rows),
                 )
                 logger.info(
-                    "dashboard dataset complete dataset=%s cluster=%s sources=%d rows=%d elapsed_ms=%d cache_key=%s",
+                    "dashboard dataset complete dataset=%s cluster=%s sources=%d rows=%d elapsed_ms=%d "
+                    "queue_ms=%d projection_ms=%d cache_key=%s",
                     dataset.name,
                     target.name,
                     len(dataset.sources),
                     len(rows),
                     round((time.monotonic() - started) * 1000),
+                    queue_ms,
+                    round((time.monotonic() - projection_started) * 1000),
                     dataset.cache_key,
                 )
                 return rows
@@ -666,6 +680,12 @@ def create_app(
             end_ms = round(_require_time(params, "to").timestamp() * 1000)
             try:
                 dataset = build(params, start_ms, end_ms)
+                # Validate the original bounds before aligning them. Grafana resolves
+                # each relative panel override separately; millisecond differences
+                # otherwise launch duplicate scans. Older ranges stay exact.
+                aligned_start, aligned_end = _aligned_dataset_window(start_ms, end_ms)
+                if (aligned_start, aligned_end) != (start_ms, end_ms):
+                    dataset = build(params, aligned_start, aligned_end)
             except ValueError as err:
                 raise _BadRequest(str(err)) from err
             if view and view not in dataset.views:
@@ -722,6 +742,7 @@ def create_app(
                 start_ms,
                 end_ms,
                 int(_require(params, "bucket_ms")),
+                params.get("view"),
             ),
         )
 
@@ -730,7 +751,7 @@ def create_app(
             request,
             "Accelerator overview",
             lambda params, start_ms, end_ms: accelerator_overview_dataset(
-                _csv_values(params, "clusters"), start_ms, end_ms, int(_require(params, "bucket_ms"))
+                _csv_values(params, "clusters"), start_ms, end_ms, int(_require(params, "bucket_ms")), params.get("view")
             ),
         )
 
@@ -744,6 +765,7 @@ def create_app(
                 start_ms,
                 end_ms,
                 int(_require(params, "bucket_ms")),
+                params.get("view"),
             ),
         )
 
@@ -757,6 +779,21 @@ def create_app(
                 start_ms,
                 end_ms,
                 int(_require(params, "bucket_ms")),
+                params.get("view"),
+            ),
+        )
+
+    def rl_gpu(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "RL GPU",
+            lambda params, start_ms, end_ms: rl_gpu_dataset(
+                _csv_values(params, "clusters"),
+                _require(params, "run"),
+                start_ms,
+                end_ms,
+                int(_require(params, "bucket_ms")),
+                params.get("view"),
             ),
         )
 
@@ -767,17 +804,19 @@ def create_app(
             lambda _params, start_ms, end_ms: recent_rl_runs_dataset(start_ms, end_ms),
         )
 
-    def async_rl_overview(request: Request) -> JSONResponse:
+    def rl_execution(request: Request) -> JSONResponse:
         return dashboard_dataset_response(
             request,
-            "async RL overview",
-            lambda params, start_ms, end_ms: async_rl_overview_dataset(
+            "RL execution",
+            lambda params, start_ms, end_ms: rl_execution_dataset(
                 _csv_values(params, "clusters"),
                 _require(params, "run"),
                 _require(params, "job"),
                 _csv_values(params, "executions"),
                 start_ms,
                 end_ms,
+                int(_require(params, "bucket_ms")),
+                params.get("view"),
             ),
         )
 
@@ -808,6 +847,11 @@ def create_app(
                     round(end.timestamp() * 1000),
                     requested_bucket_ms,
                 )
+                aligned_start, aligned_end = _aligned_dataset_window(overview.start_ms, overview.end_ms)
+                if (aligned_start, aligned_end) != (overview.start_ms, overview.end_ms):
+                    overview = vllm_overview_query(
+                        identity_field, identity, aligned_start, aligned_end, requested_bucket_ms
+                    )
             except ValueError as err:
                 raise _BadRequest(str(err)) from err
 
@@ -1380,28 +1424,10 @@ def create_app(
         logger.info("Grafana alert accepted by Loom: run=%s", result.get("id", "unknown"))
         return JSONResponse({"accepted": True, "run": result}, status_code=202)
 
-    async def slack_alert(request: Request) -> JSONResponse:
-        if slack_alerts is None:
-            return JSONResponse({"error": "Slack alert announcement is not configured"}, status_code=503)
-        try:
-            payload = await request.json()
-            thread = await slack_alerts.announce(payload)
-        except (json.JSONDecodeError, LoomAlertPayloadError) as err:
-            return JSONResponse({"error": str(err)}, status_code=400)
-        except SlackAnnouncementError as err:
-            # This receiver posts and stops, so a failed announcement is the whole
-            # notification. Fail so Grafana retries instead of counting it sent.
-            logger.warning("Slack alert announcement failed: %s", err)
-            return JSONResponse({"error": str(err)}, status_code=502)
-        if thread is None:
-            return JSONResponse({"announced": False, "reason": "no firing alerts"}, status_code=202)
-        return JSONResponse({"announced": True}, status_code=202)
-
     return Starlette(
         routes=[
             Route("/health", health),
             Route("/alerts/loom", loom_alert, methods=["POST"]),
-            Route("/alerts/slack", slack_alert, methods=["POST"]),
             Route("/github/ferries", github_ferries),
             Route("/github/builds", github_builds),
             Route("/github/nightlies", github_nightlies),
@@ -1414,7 +1440,8 @@ def create_app(
             Route("/finelog/{cluster}/v1/accelerator/overview", accelerator_overview),
             Route("/finelog/{cluster}/v1/jobs/overview", jobs_overview),
             Route("/finelog/{cluster}/v1/rl/overview", rl_overview),
-            Route("/finelog/{cluster}/v1/async-rl/overview", async_rl_overview),
+            Route("/finelog/{cluster}/v1/rl/gpu", rl_gpu),
+            Route("/finelog/{cluster}/v1/rl/execution", rl_execution),
             Route("/finelog/{cluster}/v1/rl/recent", recent_rl_runs),
             Route("/finelog/{cluster}/v1/runs/overview", runs_overview),
             Route("/finelog/{cluster}/v1/training/overview", training_overview),
@@ -1498,13 +1525,10 @@ def main() -> None:
                 ),
             ),
         )
-    slack_alerts = SlackAlertClient(config.loom_alerts) if config.loom_alerts is not None else None
     logger.info("grafana bridge serving %s on :%d", sorted(finelog_sources), BRIDGE_PORT)
     # Loopback only: Grafana fetches from the same container.
     uvicorn.run(
-        create_app(
-            config, finelog_sources, iris_sources, github_source, k8s_fleet, wandb_source, loom_alerts, slack_alerts
-        ),
+        create_app(config, finelog_sources, iris_sources, github_source, k8s_fleet, wandb_source, loom_alerts),
         host="127.0.0.1",
         port=BRIDGE_PORT,
         access_log=False,

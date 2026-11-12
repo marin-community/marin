@@ -5,8 +5,8 @@ retained Hyperdisk root disk, Artifact Registry repository, Secret Manager
 access, and Cloudflare DNS. The production host is an on-demand C4D VM with an
 AMD Turin CPU. It uses NVMe for its boot disk and gVNIC for networking, as
 required by the machine family. Hyperdisk performance is pinned to the included
-3,000 IOPS and 140 MB/s baseline. The runtime is built from the operator's local
-Loom worktree and runs as a Docker Compose application on the GCE host.
+3,000 IOPS and 140 MB/s baseline. The operator's workstation builds the release
+image, and the GCE host runs it as a Docker Compose application.
 
 ## Prerequisites
 
@@ -41,10 +41,11 @@ gcloud compute ssh loom --zone=us-central1-a --project=hai-gcp-models
 ## Deploy
 
 By default, Pulumi resolves the HEAD of Loom's default branch to its full commit
-SHA and uses that immutable Git context as the image input. When the resolved
-commit changes, preview reports an image update. `pulumi up` builds and pushes
-the changed image, places the provider-produced digest in VM metadata, and waits
-for `https://loom.oa.dev/api/ready` after activation.
+SHA and uses that immutable Git context as the image input. The build pulls
+current base images, so every update rebuilds the image, even for an unchanged
+commit. When preview skips that build, it shows the VM image as unknown.
+`pulumi up` builds and pushes the image, places the provider-produced digest in
+VM metadata, and waits for `https://loom.oa.dev/api/ready` after activation.
 
 ```sh
 cd /path/to/marin
@@ -91,7 +92,28 @@ pulumi config set --cwd /path/to/marin/infra/loom --stack marin-loom \
 Delete the local payload after upload. The startup script never reads `latest`,
 so uploading another secret version does not change the running service.
 
+The deployment's `browser.allowed_origins` permits credentialed agent-panel
+connections from `https://marina.oa.dev` and `https://applets.marina.oa.dev`,
+Marina's authenticated private applet origin. Public applets on
+`https://public.applets.marina.oa.dev` are excluded. Allowed origins must still
+authenticate with Loom, and profile permissions still apply.
+
 ## Automation identities
+
+Repository-owned task procedures live in `procedures/`:
+
+- [Lint reporting](procedures/lint-review.md), used by the `agentic-lint` profile.
+- [Canary triage](procedures/triage-canary.md), named by the canary failure action.
+- [Docs/code parity](procedures/scrub-docs-code-parity.md),
+  [experiment summaries](procedures/scrub-experiment-issue-tldrs.md), and
+  [self-improvement](procedures/scrub-reflection-self-improvement.md), for
+  explicitly assigned work. These scrubs are manual procedures; recurring
+  execution requires a Loom watch that names the procedure path. They retain
+  the harness result footer but register no schedule.
+
+The `pr-review` and `pr-holistic-review` profiles both use `review-pr`, selecting
+its correctness and holistic reporting contracts respectively. Profile
+permissions and automation behavior remain specific to each pass.
 
 Runtime profiles and workload federation mappings live in
 `Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
@@ -183,13 +205,48 @@ HTTP MCP headers in place.
 
 A profile's `env` block declares the environment every session of that profile
 receives. Each entry sets either an inline `value` for non-secret configuration
-or a same-project `secretRef` that the host resolves from Secret Manager at launch. Declare
-`roles/secretmanager.secretAccessor` for each reference in
-`infra/pulumi/src/iac/gcp/loom.py` before applying the profile. Profile
+or a same-project `secretRef` that the host resolves from Secret Manager at launch.
+Create the secret and upload its value before referencing it. The stack imports
+each referenced secret without managing its versions, so preview fails while one
+is missing, and removing the last reference leaves the secret in place. The VM
+account's project-level `roles/secretmanager.secretAccessor` grant in
+`infra/pulumi/src/iac/gcp/loom.py` covers every reference. Profile
 environment is applied after `envClear`, so strict automation profiles receive
 it too. All profiles set `IRIS_USER=loom`, which makes Iris jobs submitted from
 a session land under `/loom/<job>` instead of inheriting the session container's
 `app` OS account.
+
+The `belay` profile runs approved Marin Belay ideas through
+`experiments/belay/RUNBOOK.md` on the `marin_belay_v1_recipe` branch, one
+session at a time. It reads three Belay secrets: `BELAY_WANDB_API_KEY`, a
+`marin-community` W&B service-account key that the training launcher passes to
+each job, and `BELAY_CW_KEY_ID` and `BELAY_CW_KEY_SECRET`, a CoreWeave access
+key set as `CW_KEY_ID` and `CW_KEY_SECRET`. Iris attaches the submitter's keys
+to every CoreWeave job, so this key's access policy bounds what Belay runs can
+read and write. Replies on the intake issue use Loom's GitHub App token.
+
+Every profile that can run the `claude` agent sets `CLAUDE_CODE_OAUTH_TOKEN`
+from the `LOOM_CLAUDE_CODE_OAUTH_TOKEN` secret. That covers the interactive
+profiles, which accept a per-launch agent override, and the Claude automation
+profiles. Strict Codex profiles omit it. The value is a one-year token from
+`claude setup-token`, and the secret's `expires` annotation records its expiry.
+Claude Code prefers this variable to the login stored on the shared session home
+volume, so sessions do not depend on that login. An `ANTHROPIC_API_KEY` would
+take precedence over the token. Keep it out of `LOOM_DOTENV`, whose variables
+reach every session of a profile without `envClear`.
+
+Loom resolves `versions/latest` whenever it starts an agent, so rotation needs
+no deploy. New and resumed sessions use the new version; running agents keep the
+token they started with.
+
+```sh
+claude setup-token  # save the printed token to token.txt
+tr -d '[:space:]' < token.txt | gcloud secrets versions add \
+  LOOM_CLAUDE_CODE_OAUTH_TOKEN --project=hai-gcp-models --data-file=-
+gcloud secrets update LOOM_CLAUDE_CODE_OAUTH_TOKEN --project=hai-gcp-models \
+  --update-annotations=expires=YYYY-MM-DD
+rm token.txt
+```
 
 An interactive session always brokers the `loom-oa-dev` GitHub App for its own
 repository, and a stored personal token still takes precedence over it. The
@@ -262,6 +319,15 @@ Recreating the control-plane service preserves those containers, and the new
 control plane discovers and adopts them. Do not run `docker compose down` while
 sessions are live because it removes their shared network.
 
+The [startup script](startup-script.sh) disables MPTCP in the host network namespace and persists
+the setting in `/etc/sysctl.d/99-loom-mptcp.conf`. Compose disables MPTCP in
+Caddy's network namespace and sets `GODEBUG=multipathtcp=0`.
+Apply changes to Caddy's environment or sysctls by recreating only its service:
+
+```sh
+docker compose -f /opt/loom/docker-compose.yml up -d --no-deps --force-recreate caddy
+```
+
 To roll back an application release, check out the prior Loom tree, restore its
 numbered `dotenvSecretVersion` when necessary, and run the normal preview and
 update. The separately managed root disk is protected, retained if removed from
@@ -276,7 +342,75 @@ Declare scheduled agent or script watches under `marin-loom:watches` in
 `weekday-job-check` entry shows agent configuration. Use `promptFile` for prompts
 stored under `infra/loom`; Pulumi includes their contents in the manifest.
 
+The `goals` watch runs the `pm` profile ([instructions](profiles/pm/AGENTS.md)),
+which keeps the Marin high-level board and the goals document below its
+`Status` heading in line with the goals the document lists. It needs:
+
+- the `LOOM_PM_BOARD_TOKEN` secret in `hai-gcp-models`, holding a fine-grained
+  token with `marin-community` Projects read and write access, because Loom's
+  session tokens cannot write organization projects;
+- the document shared with `loom-vm@hai-gcp-models.iam.gserviceaccount.com` as
+  an editor;
+- the `marin` IAM stack applied first, for the `loom-vm` token-creator grant on
+  itself that mints a documents-scoped token.
+
+The `belay` watch runs the `belay` profile every 10 minutes
+([prompt](watches/belay.md)): a cheap check of the Belay app's queue, and a
+runbook session that drains the queue only when events wait. Turning dispatch off in the
+Belay app's admin page pauses it without a Loom deploy.
+
 Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/pull/378)
 before applying these declarations. See [Loom's watch documentation](https://github.com/marin-community/loom/blob/main/docs/ARCHITECTURE.md#scheduled-watches)
 for scheduling and execution behavior, and [WatchConfig](infrastructure.py) for
 the IaC fields. Custom script files must already exist on the Loom server.
+
+## Doc sessions
+
+The `doc` profile ([instructions](profiles/doc/AGENTS.md)) runs a session whose
+record of the work is the branch artifact `doc`, with progress updates in the
+artifact `progress`. The agent writes both with the `loom` MCP artifact tools.
+The profile sets `docArtifact: doc`. Loom's
+[session doc](https://github.com/marin-community/loom/blob/main/docs/artifacts.md#the-session-doc)
+describes the Doc tab, comments, and the message that a person's edit sends.
+
+## claude.ai connector
+
+The `connector.enabled` setting serves Loom's claude.ai connector, a Streamable
+HTTP MCP endpoint at `https://loom.oa.dev/mcp`. Through it, claude.ai launches,
+follows, messages, and archives Loom sessions for the signed-in person. A launch
+that names no profile uses the `claude` profile
+([instructions](profiles/claude/AGENTS.md)), which inherits the `default`
+runtime policy. Loom is the connector's OAuth 2.1 authorization server.
+Open-Athena members sign in with GitHub, as in the web UI, and keep connector
+access only while the one-hour organization lease described in
+[Automation identities](#automation-identities) keeps renewing.
+
+Claude.ai calls `/mcp`, `/oauth/*`, and `/.well-known/oauth-*` from its own
+servers, so these paths must stay publicly reachable. Do not put them behind IAP
+or an IP allowlist. Caddy blocks only `/metrics`. With the setting off, Loom
+returns 404 for all of these paths.
+
+The stack declares the connector's OAuth clients under `oauthClients` in
+`Pulumi.marin-loom.yaml`, and activation registers them in Loom. Both are public
+clients that prove themselves with PKCE, so there is no secret to hand out.
+`claude-ai` accepts claude.ai's callback on both `claude.ai` and `claude.com`,
+because Anthropic says it may move. `claude-code` accepts Claude Code's loopback
+callback on any port. Never rename a client: claude.ai cannot change a
+connector's OAuth settings after it is added. Because the stack prunes, removing
+a client from it revokes every token the client was issued.
+
+An organization admin adds a custom connector in claude.ai with the URL
+`https://loom.oa.dev/mcp`, selects **Use your own OAuth client** under
+**Advanced settings**, enters the client ID `claude-ai`, and leaves the secret
+blank. A Claude Code user adds the server with:
+
+```sh
+claude mcp add --transport http --scope user --client-id claude-code loom https://loom.oa.dev/mcp
+```
+
+Activation requires a Loom build with connector support. An older build,
+including a rollback to one, rejects the unknown `connector.enabled` setting and
+activation fails. A build without declared OAuth clients ignores
+`oauthClients`, so the clients exist only once Loom has that support. Pulumi
+builds the HEAD of Loom's default branch, so that support must be on the default
+branch before this configuration deploys.

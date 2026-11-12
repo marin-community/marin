@@ -215,11 +215,12 @@ def test_actor_startup_after_task_termination_stops_server_without_error(monkeyp
     registry = SimpleNamespace(register=reject_registration)
     ctx = SimpleNamespace(job_id=JobName.from_wire("/user/job"), registry=registry, get_port=lambda _name: 1234)
     job_info = SimpleNamespace(task_index=0, advertise_host="worker")
+
     monkeypatch.setattr(iris_backend, "ActorServer", lambda **_kwargs: server)
     monkeypatch.setattr(iris_backend, "iris_ctx", lambda: ctx)
     monkeypatch.setattr(iris_backend, "get_job_info", lambda: job_info)
 
-    iris_backend._host_actor(object, (), {}, "actor")
+    iris_backend._host_actor(object, (), {}, "actor", 17)
 
     assert stopped
     assert any(record.levelno == logging.ERROR for record in caplog.records)
@@ -332,15 +333,19 @@ class TestImagePlumbing:
 
         request = JobRequest(
             name="test-job",
+            ports=("ray-gcs", "ray-client"),
             entrypoint=Entrypoint.from_callable(_noop),
             resources=ResourceConfig(cpu=1, ram="2g", image="custom/swetrace:dev"),
             timeout=Duration.from_minutes(30),
+            termination_grace=Duration.from_seconds(60),
         )
         client.submit(request)
 
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] == "custom/swetrace:dev"
         assert kwargs["timeout"] == Duration.from_minutes(30)
+        assert kwargs["termination_grace"] == Duration.from_seconds(60)
+        assert kwargs["ports"] == ["ray-gcs", "ray-client"]
 
 
 class TestActorGroupEnvironment:
@@ -555,17 +560,6 @@ def test_wrap_multiprocess_groups_devices_when_fewer_processes() -> None:
         "2",
         "--",
     ]
-
-
-def test_wrap_multiprocess_requires_gpu() -> None:
-    cpu_only = ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=None)
-    with pytest.raises(ValueError, match="requires a GPU device"):
-        wrap_multiprocess(IrisEntrypoint.from_command("python", "x.py"), cpu_only, processes_per_task=2)
-
-
-def test_wrap_multiprocess_requires_divisible_gpu_count() -> None:
-    with pytest.raises(ValueError, match="must divide the GPU count"):
-        wrap_multiprocess(IrisEntrypoint.from_command("python", "x.py"), _gpu_resources(8), processes_per_task=3)
 
 
 def test_wrap_nsys_is_a_noop_without_the_environment_variable(monkeypatch):

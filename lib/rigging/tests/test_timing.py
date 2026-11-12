@@ -367,9 +367,16 @@ def test_token_bucket_available_refills():
     """available property triggers refill from elapsed time."""
     bucket = TokenBucket(capacity=10, refill_period=Duration.from_minutes(1))
 
-    # Drain the bucket using wall-clock time (available uses Timestamp.now()).
-    assert bucket.try_acquire(n=10)
-    assert bucket.available == 0
+    # available reads the wall clock, so drain the bucket at an explicit time in
+    # the past: half the refill period has elapsed by the time available is read.
+    # The int() floor tolerates several seconds of test runtime.
+    assert bucket.try_acquire(n=10, now=Timestamp.now().add_ms(-30_000))
+    assert bucket.available == 5
+
+    # A drain long ago refills all the way to capacity and no further.
+    old_bucket = TokenBucket(capacity=10, refill_period=Duration.from_minutes(1))
+    assert old_bucket.try_acquire(n=10, now=Timestamp.from_ms(1))
+    assert old_bucket.available == 10
 
 
 # --- retry_with_backoff tests ---

@@ -132,13 +132,20 @@ def _stage_weights(
     return sorted(stages.items())
 
 
+def validation_components(ctx: StepContext, validation: Sequence[ArtifactStep[TokenizedCache]]) -> dict:
+    """Return the held-out components, by name, which train at zero weight."""
+    if ctx.is_fingerprint:
+        return {item.name: _val_component(ctx.artifact_path(item)) for item in validation}
+    return {item.name: ctx.resolved(item).as_component() for item in validation}
+
+
 def harrier_mix_2026_08_18_data_config(
     *,
     ctx: StepContext,
     total_steps: int,
     batch_size: int,
     max_seq_len: int,
-    experiment_flops: float,
+    enable_simulated_epoching: bool,
     validation: Sequence[ArtifactStep[TokenizedCache]],
     prior_context_phases: Sequence[HarrierContextPhase] = (),
 ) -> LmDataConfig:
@@ -146,9 +153,8 @@ def harrier_mix_2026_08_18_data_config(
 
     Both transitions align to mixture blocks; the selected cooldown still starts around 80%.
 
-    Simulated epoching is on by default; it is dropped once ``experiment_flops`` (the run's analytic
-    training-FLOP budget) exceeds ``SIMULATED_EPOCHING_MAX_FLOPS``, so an expensive run trains on the
-    raw mixture rather than a simulated larger budget.
+    ``enable_simulated_epoching`` shrinks each component to its share of the run's token budget.
+    Disable it to retain the full component datasets.
 
     ``prior_context_phases`` lists earlier context lengths of a resumed run, oldest first. Each phase trained at
     ``batch_size * max_seq_len`` tokens per step. Each Harrier bucket then skips the unread rest of its current
@@ -168,10 +174,7 @@ def harrier_mix_2026_08_18_data_config(
         )
         for cell in available_tokens
     }
-    if ctx.is_fingerprint:
-        val_components = {item.name: _val_component(ctx.artifact_path(item)) for item in validation}
-    else:
-        val_components = {item.name: ctx.resolved(item).as_component() for item in validation}
+    val_components = validation_components(ctx, validation)
     collisions = components.keys() & val_components.keys()
     if collisions:
         raise ValueError(f"validation components collide with Harrier buckets: {sorted(collisions)}")
@@ -180,7 +183,7 @@ def harrier_mix_2026_08_18_data_config(
         batch_size=batch_size,
         max_seq_len=max_seq_len,
         target_budget=TOTAL_TOKENS,
-        enable_simulated_epoching=experiment_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
+        enable_simulated_epoching=enable_simulated_epoching,
     )
 
     val_zero_weights = {name: 0.0 for name in val_components}

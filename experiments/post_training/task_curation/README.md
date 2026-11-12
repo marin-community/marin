@@ -1,9 +1,22 @@
-# RL data curation
+# Task data curation
 
 [Dataset declarations](datasets/README.md) feed TaskSpec conversion and the RL
 Data Atlas through [all_sources()](sources.py). See the
 [reference](../../../docs/references/task-curation.md) for source fields, grading,
 reviewed SAMPLE/FULL campaigns and artifact outputs.
+
+## Final task selection
+
+Pass `--selection RECIPE.json` to a FULL campaign to append a
+`rl-data/task-selection/<name>/<version>` artifact after source admission.
+The recipe names the source IDs, assigns them to selection families, sets
+family quotas and pins the complete heldout source in retained storage.
+The step filters heldout overlap and cross-source duplicates before sampling,
+then writes canonical `task_spec` Parquet for training and evaluation.
+See the [quick RL loop](../../../docs/recipes/quick-rl-loop.md) for the current
+selection recipe and the training/evaluation handoff.
+See [task selection](../../../docs/references/task-curation.md#final-task-selection)
+for the recipe and resume commands.
 
 ## Local conversion loop
 
@@ -22,11 +35,22 @@ review, grader execution, resource admission and deduplication. Outputs are
 `normalize/*.parquet`, `manifest.json` and `campaign.json`, with no admitted
 `final/` view. Failed sources are recorded while the rest continue.
 
+Evaluation sources also use QUICK, with stricter publication checks that preserve
+the complete benchmark population. They publish canonical TaskSpec rows and
+evaluation protocol sidecars. See [evaluation tasks](../../../docs/references/evaluation-tasks.md)
+for declarations, outputs and the standard evaluation driver.
+`evaluation.py` binds `EvalDataset` recipes to
+`taskcompendium.pipeline.evaluation.publish_evaluation_corpus`. Evaluation
+protocols use schema version 3 from `taskcompendium.evaluation.spec`; source
+adapters live under `taskcompendium.importers` and `taskcompendium.convert`,
+including reusable benchmark modules in `taskcompendium.importers.evalchemy`.
+
 Select `--mode quick`, `sample` or `full`, or resume with `--corpus` as described
 below. Omit `--run` to print a plan without downloading, converting or starting
 workers. QUICK preserves named sources in request order, ignoring repeated names.
-SAMPLE/FULL select sources in catalog order. Omitting `--source` selects every
-runnable source. Local QUICK needs no review model, controller, worker image or
+SAMPLE/FULL select sources in catalog order. Omitting `--source` selects runnable
+training sources. Select evaluation sources explicitly with `--mode quick`.
+Local QUICK needs no review model, controller, worker image or
 coordinator settings.
 
 Remote artifacts default to `s3://marin-us-east-02a/marin` on CW, independently
@@ -70,9 +94,10 @@ catalog beside it. `--report-path` chooses another report
 location. Review requests are cached under `CACHE_DIR/review-cache` unless
 `--review-cache` selects another location. `GLM_BULK_TOKEN` supplies credentials.
 Package-backed and image graders retain their normal environment prerequisites.
-`--image-backend` and `--controller-url` can explicitly select a remote image
-grader while curation runs locally; worker-image and coordinator flags apply only
-to Iris execution.
+`--image-backend daytona` selects a remote image grader for local curation.
+`--image-backend gvisor` requires an authenticated Iris driver inside the
+execution cluster with Pod networking; a controller URL alone is insufficient.
+Worker-image and coordinator flags apply only to Iris execution.
 Use `--input-root`, `--input-file` or `--input` only when deliberately replacing
 the pinned inputs; the local rollout can use real sources without overrides.
 Keep the same `--quality-sample-size` and `--seed` when moving from SAMPLE to
@@ -133,6 +158,24 @@ Sources without pipelines remain inventory entries with a skip reason.
 Publication archives selected evidence in the data's storage region. Atlas data
 updates use the [explicit loader](../../../docs/references/rl-data-atlas.md#updating-atlas).
 
+For a production FULL campaign, add
+`--publish-catalog s3://marin-us-east-02a/marin/rl-data/catalog/production`.
+Enable assessment and omit `--cache-dir`, which selects local execution and a
+local artifact root. Production reuses the remote artifact cache under
+`--artifact-root` (default `s3://marin-us-east-02a/marin`) and model requests under
+the explicit `--review-cache`. Reuse those locations, pinned inputs, recipe
+versions, rubric and model revisions across campaigns. A new report directory or
+enabling assessment does not force recomputation of completed work. Switching
+artifact roots does not move cached work; verify artifact and model-cache reuse
+before executing a campaign from a new root. `--publish-catalog` alone does not
+change either cache location. The shared catalog retains run history
+and accumulates assessments. Omit the option for local previews and SAMPLE campaigns.
+Use `--source` to grade only new or changed sources; other production sources keep
+their declarations and grades without executing their pipelines. Inventory-only
+sources take their declarations from the current code at every publication. Older attempts
+are ignored per source, and removing a declaration does not retire its published entry.
+After publication, run the Atlas loader to refresh Postgres; no inference is repeated.
+
 ### Spiral rollout
 
 Start with AIME24 and SVAMP and a small SAMPLE panel in the local cache above.
@@ -169,10 +212,10 @@ recipes, files and execution settings; image tags and build-time downloads
 retain the source's reproducibility limits.
 The exporter does not install Harbor or validate every generated `task.toml`
 against Harbor's schema. The manifest records this limit. After extracting a
-`task.toml` from `task_binary`, check it with the pinned external Harbor runtime:
+`task.toml` from `task_binary`, check it with the vendored Harbor runtime:
 
 ```bash
-uv run --project config/external/harbor --frozen python -c \
+uv run --project vendor/harbor --extra runtime --frozen python -c \
   'from pathlib import Path; from harbor_config.models.task.config import TaskConfig; TaskConfig.model_validate_toml(Path("task.toml").read_text())'
 ```
 
@@ -301,7 +344,7 @@ Add `--run` to execute. List runnable source names with:
 uv run python -c 'from experiments.post_training.task_curation.sources import runnable_sources; print("\n".join(runnable_sources()))'
 ```
 
-Repeat `--source NAME` to select sources; omit it for every runnable source. QUICK skips grading and admission, preserves
+Repeat `--source NAME` to select sources; omit it for runnable training sources. QUICK skips grading and admission, preserves
 converter rejections, and writes `corpus.json` after all selected sources finish.
 Conversion artifacts retain their pinned acquisition graph and recipe identities.
 The manifest includes completed source roots, immutable source-manifest hashes,

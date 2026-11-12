@@ -30,12 +30,12 @@ uv run python -m experiments.<module> --version YYYY.MM.DD <selection-options>
 ```
 
 Treat a preflight failure as a recipe error. Fix the source config or role plan instead of weakening
-the validator. Check the printed runtime commit, physical allocation, role geometry, entrypoint,
+the validator. Check the Marin revision, physical allocation, role geometry, entrypoint,
 batch sizes, artifact identities, output paths, and terminal stage.
 
-Use a fresh RL artifact version whenever `SkyRLRuntime.commit` changes. The temporary checkpoint
+Use a fresh RL artifact version after runtime changes. The temporary checkpoint
 root follows the artifact name and version, so reusing a version can make `resume_mode=latest` load
-private Torch or distributed state written by the old runtime. Reuse an RL version across a repin
+private Torch or distributed state written by the old runtime. Reuse an RL version across runtime changes
 only when checkpoint compatibility has been established explicitly or resume points at a fresh
 checkpoint root.
 
@@ -55,7 +55,7 @@ Choose the terminal stage explicitly when a main offers one. For example, use `-
 request is only to train; a default evaluation stage may add downstream GPU work.
 
 For a live submission or inspection, use `use-iris`. Record the coordinator ID, child job ID,
-artifact version, runtime commit, and topology in the task's durable surface. Verify all expected
+artifact version, Marin provenance, and topology in the task's durable surface. Verify all expected
 tasks join, the configured model-loading path is active, optimizer steps advance, and terminal
 checkpoint/export metadata exists before calling the smoke successful.
 
@@ -64,4 +64,4 @@ checkpoint/export metadata exists before calling the smoke successful.
 If a failure was deterministic from the artifact inputs, add a construction-time check with a
 behavior-focused regression test. Diagnose service outages, hardware faults, and data-dependent
 failures operationally. Cancel or resubmit only with current-thread authorization; a retry uses a
-fresh artifact version when the runtime commit changed.
+fresh artifact version when the runtime changed.

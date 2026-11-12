@@ -47,6 +47,7 @@ from experiments.evaluation.models import models
 _ACCELERATOR_RUNTIME_ARG = "accelerator"
 _SUBMISSION_CLUSTER_RUNTIME_ARG = "submission_cluster"
 _FEDERATED_CLUSTER_RUNTIME_ARG = "federated_cluster"
+_INSTANCES_RUNTIME_ARG = "instances"
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,7 @@ class EvalStepConfig:
     submission_cluster: str
     federated_cluster: str | None
     version: str
+    instances: int = 1
 
 
 @dataclass(frozen=True)
@@ -95,6 +97,7 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
         accelerator=config.accelerator,
         limit=config.limit,
         max_concurrent=config.max_concurrent,
+        instances=config.instances,
         records_prefix=None,
         submission_cluster=config.submission_cluster,
         federated_cluster=config.federated_cluster,
@@ -125,6 +128,7 @@ def eval_step(
     resolve_model: Callable[[StepContext], ModelConfig] | None = None,
     limit: int | None = None,
     max_concurrent: int = DEFAULT_EVAL_CONCURRENCY,
+    instances: int = 1,
     accelerator: str | None = None,
     submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
     federated_cluster: str | None = None,
@@ -134,6 +138,7 @@ def eval_step(
     Experiments declare producer dependencies and resolve their paths in ``resolve_model``.
     Checked-in models use ``model`` directly without a producer step.
     ``max_concurrent`` caps concurrent evaluators sharing inference.
+    ``instances`` starts candidate serving workers behind one broker when greater than one.
     """
 
     def build_config(ctx: StepContext) -> EvalStepConfig | EvalStepFingerprint:
@@ -151,6 +156,7 @@ def eval_step(
             evals=evals,
             limit=limit,
             max_concurrent=max_concurrent,
+            instances=ctx.runtime_arg(_INSTANCES_RUNTIME_ARG),
             artifact_path=ctx.output_path,
             accelerator=ctx.runtime_arg(_ACCELERATOR_RUNTIME_ARG),
             submission_cluster=ctx.runtime_arg(_SUBMISSION_CLUSTER_RUNTIME_ARG),
@@ -169,6 +175,7 @@ def eval_step(
             _ACCELERATOR_RUNTIME_ARG: accelerator,
             _SUBMISSION_CLUSTER_RUNTIME_ARG: submission_cluster,
             _FEDERATED_CLUSTER_RUNTIME_ARG: federated_cluster,
+            _INSTANCES_RUNTIME_ARG: instances,
         },
     )
 

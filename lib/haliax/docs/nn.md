@@ -30,7 +30,7 @@ of the same module (e.g. transformer blocks), which is a common pattern in deep 
 ### Stacked
 
 See the full documentation of [Stacked](scan.md#stacked).
-For the non-named array-native stack container, see [ArrayStacked](array-stacked.md).
+For ordinary JAX arrays, use Levanter’s [ArrayStacked](https://github.com/marin-community/marin/blob/main/lib/levanter/docs/reference/Array-Stacked.md).
 
 ### Convolution
 

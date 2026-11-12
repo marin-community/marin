@@ -18,6 +18,7 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -25,6 +26,7 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass
 from functools import partial
+from importlib.metadata import requires
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -32,6 +34,8 @@ from typing import Any
 from marin.execution.artifact import Artifact, read_record
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
+from packaging.requirements import Requirement
+from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.runtime.local import (
     ENVIRONMENT_MANIFEST,
@@ -50,9 +54,7 @@ from taskcompendium.runtime.local import (
 
 from experiments.post_training.task_curation.environment import Archive, Environment, Placement, placement
 
-# New GHCR packages are created org-internal and the Iris workers pull anonymously, so built
-# images are tagged into the public iris-task package until a public task-curation package exists.
-DEFAULT_REPOSITORY = "ghcr.io/marin-community/iris-task"
+DEFAULT_REPOSITORY = "ghcr.io/marin-community/rollout-images"
 BASE_IMAGE = "ghcr.io/marin-community/iris-task@sha256:c646ef8b571571edfc96c75fd9c8cc712ad286b61b33781070bdc29ab9f9a6ab"
 """The image built environments start from: iris-task as of 2026-10-07, python:3.12-slim with uv."""
 PLATFORM = "linux/amd64"
@@ -92,6 +94,14 @@ class EnvironmentBuild:
     output_path: str
 
 
+def runtime_requirements() -> tuple[str, ...]:
+    """Base dependencies of the Verifyit source copied into every grader runtime."""
+    requirements = (Requirement(value) for value in requires("marin-verifyit") or ())
+    return tuple(
+        sorted(str(value) for value in requirements if value.marker is None or value.marker.evaluate({"extra": ""}))
+    )
+
+
 def environment_identity(environment: Environment) -> dict[str, Any]:
     """Everything that determines what building ``environment`` produces."""
     if environment.image is not None:
@@ -110,6 +120,7 @@ def environment_identity(environment: Environment) -> dict[str, Any]:
         "platform": PLATFORM,
         "base_image": BASE_IMAGE,
         "runtime": runtime_files(),
+        "runtime_requirements": runtime_requirements(),
         "placement": placement(environment).value,
     }
     if placement(environment) == Placement.BUILT_IMAGE:
@@ -262,7 +273,7 @@ def write_context(environment: Environment, directory: Path) -> None:
     The files lie under ``files/`` at their guest paths, so ``COPY files/ /`` places them.
     """
     directory.mkdir(parents=True, exist_ok=True)
-    compile_lock(environment.requirements, directory / LOCK_FILE)
+    compile_lock(tuple(sorted({*environment.requirements, *runtime_requirements()})), directory / LOCK_FILE)
     for path, archive in environment.files.items():
         materialize(archive, directory / FILES_DIRECTORY / path.removeprefix("/"))
     (directory / "Dockerfile").write_text(dockerfile(environment))
@@ -302,31 +313,10 @@ def _require_docker(repository: str) -> None:
     raise RuntimeError(f"Docker has no credentials for {host}; run `docker login {host}` before building")
 
 
-def _git_tracked(directory: Path, pathspec: str) -> set[str]:
-    listed = subprocess.run(
-        ["git", "ls-files", "-z", "--", pathspec], cwd=directory, check=True, capture_output=True, text=True
-    ).stdout
-    return {path for path in listed.split("\0") if path}
-
-
-def _require_tracked(environment: Environment) -> None:
-    """The fragment the identity hashes must be a git-tracked file, and package files have no exec bits.
-
-    Consumers recompute the identity from a workspace bundle that has no git metadata and no exec bits,
-    so an untracked or executable file here would give them a different identity.
-    """
-    fragment = environment.dockerfile
-    if fragment is not None and fragment.name not in _git_tracked(fragment.parent, fragment.name):
-        raise ValueError(f"{fragment} must be tracked by git")
+def _reject_executable_runtime_files() -> None:
+    """Reject runtime package files with executable permission bits."""
     for package in RUNTIME_PACKAGES:
         files = context_files(package)
-        found = {file.path for file in files}
-        expected = _git_tracked(package, ".")
-        if found != expected:
-            raise ValueError(
-                f"{package} must contain exactly its git-tracked files; "
-                f"untracked: {sorted(found - expected)}, missing: {sorted(expected - found)}"
-            )
         executable = [file.path for file in files if file.mode == EXECUTABLE_MODE]
         if executable:
             raise ValueError(f"{package} has executable files {executable}")
@@ -368,7 +358,7 @@ def build_environment(environment: Environment, build: EnvironmentBuild) -> Envi
     builds_image = placement(environment) == Placement.BUILT_IMAGE
     if builds_image:
         _require_docker(build.repository)
-    _require_tracked(environment)
+    _reject_executable_runtime_files()
     image = None
     with TemporaryDirectory() as directory:
         context = Path(directory)
@@ -402,7 +392,7 @@ def built_environment(environment: Environment) -> EnvironmentArtifact:
             identity = step.name.removeprefix("images/env-")
             raise MissingEnvironmentArtifact(
                 f"The environment {step.name} is not built ({path} has no artifact); "
-                f"run: {BUILD_COMMAND.format(identity=identity)}"
+                f"run: MARIN_PREFIX={shlex.quote(marin_prefix())} {BUILD_COMMAND.format(identity=identity)}"
             )
         _built_environments[path] = EnvironmentArtifact.raw_load(path)
     return _built_environments[path]

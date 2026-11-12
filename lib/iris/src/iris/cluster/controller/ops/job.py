@@ -30,6 +30,7 @@ from iris.cluster.controller.schema import (
     job_workdir_files_table,
     jobs_table,
 )
+from iris.cluster.egress import format_egress_rule
 from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto
@@ -176,6 +177,7 @@ def insert_job_and_config(
     stored verbatim. A child ignores it and inherits its root's stored value, so a
     federated subtree keeps the root's submitter no matter who spawns each child.
     """
+    assert request.HasField("termination_grace"), "termination_grace must be resolved before persistence"
     assert (
         priority_band != job_pb2.PRIORITY_BAND_INHERIT
     ), f"Job {job_id} would store an unresolved priority band; resolve it at ingestion"
@@ -287,12 +289,14 @@ def insert_job_and_config(
         max_retries_failure=int(request.max_retries_failure),
         max_retries_preemption=int(request.max_retries_preemption),
         timeout_ms=timeout_ms,
+        termination_grace_ms=int(request.termination_grace.milliseconds),
         preemption_policy=int(request.preemption_policy),
         existing_job_policy=int(request.existing_job_policy),
         priority_band=priority_band,
         task_image=request.task_image,
         container_profile=int(request.container_profile),
         egress_policy=int(request.egress_policy),
+        egress_allow_json=[format_egress_rule(rule) for rule in request.egress_allow],
         submit_argv_json=list(request.submit_argv),
         fail_if_exists=bool(request.fail_if_exists),
     )

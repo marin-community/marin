@@ -1,0 +1,215 @@
+from pathlib import Path
+from typing import Annotated
+
+from rich.console import Console
+from rich.table import Table
+from typer import Argument, Option, Typer
+
+from harbor.cli.utils import run_async
+
+datasets_app = Typer(
+    no_args_is_help=True, context_settings={"help_option_names": ["-h", "--help"]}
+)
+console = Console()
+
+
+@datasets_app.command(name="list")
+def list_datasets(
+    registry_url: Annotated[
+        str | None,
+        Option(
+            "--registry-url",
+            help="Registry URL for remote dataset listing",
+            show_default="The default legacy harbor registry.",
+        ),
+    ] = None,
+    registry_path: Annotated[
+        Path | None,
+        Option(
+            "--registry-path",
+            help="Path to local registry for dataset listing",
+            show_default=False,
+        ),
+    ] = None,
+):
+    """List the datasets available in a registry."""
+    from harbor.registry.client.factory import RegistryClientFactory
+
+    try:
+        if registry_url is not None and registry_path is not None:
+            console.print(
+                "[red]Error: Cannot specify both --registry-url and --registry-path[/red]"
+            )
+            return
+
+        if registry_path is not None:
+            console.print(f"[blue]Using local registry: {registry_path}[/blue]\n")
+        elif registry_url is not None:
+            console.print(f"[blue]Using remote registry: {registry_url}[/blue]\n")
+        else:
+            console.print("[blue]Using default Harbor registry[/blue]\n")
+
+        client = RegistryClientFactory.create(
+            registry_url=registry_url, registry_path=registry_path
+        )
+        datasets = run_async(client.list_datasets())
+
+        if not datasets:
+            console.print("[yellow]No datasets found in registry[/yellow]")
+            return
+
+        table = Table(title="Available Datasets", show_lines=True)
+        table.add_column("Name", style="cyan", no_wrap=True)
+        table.add_column("Version", style="magenta")
+        table.add_column("Tasks", style="green", justify="right")
+        table.add_column("Description", style="white")
+
+        total_tasks = 0
+        sorted_datasets = sorted(datasets, key=lambda d: (d.name, d.version or ""))
+
+        for dataset in sorted_datasets:
+            total_tasks += dataset.task_count
+
+            table.add_row(
+                dataset.name,
+                dataset.version or "",
+                str(dataset.task_count),
+                dataset.description,
+            )
+
+        console.print(table)
+        console.print(
+            f"\n[green]Total: {len(datasets)} dataset(s) with {total_tasks} task(s)[/green]"
+        )
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise
+
+
+@datasets_app.command()
+def init(
+    name: Annotated[str | None, Argument(help="Dataset name (org/name).")] = None,
+    output_dir: Annotated[
+        Path, Option("-o", "--output-dir", help="Output directory.")
+    ] = Path("."),
+    org: Annotated[str | None, Option("--org", help="Organization name.")] = None,
+    description: Annotated[str, Option("--description", help="Description.")] = "",
+    with_metric: Annotated[
+        bool, Option("--with-metric", help="Create metric.py template.")
+    ] = False,
+    author: Annotated[
+        list[str] | None,
+        Option(
+            "--author",
+            help="Author in 'Name <email>' or 'Name' format. Can be used multiple times.",
+        ),
+    ] = None,
+):
+    """Initialize a new dataset directory."""
+    from harbor.cli.init import _init_dataset, _parse_authors, _resolve_name
+
+    resolved_name = _resolve_name(name, org)
+    _init_dataset(
+        name=resolved_name,
+        output_dir=output_dir,
+        description=description,
+        with_metric=with_metric,
+        authors=_parse_authors(author),
+    )
+
+
+@datasets_app.command()
+def download(
+    dataset: Annotated[
+        str,
+        Argument(
+            help="Dataset to download in format 'name@version' or 'name' (defaults to @head)"
+        ),
+    ],
+    registry_url: Annotated[
+        str | None,
+        Option(
+            "--registry-url",
+            help="Legacy registry.json URL.",
+            show_default="The default legacy harbor registry.",
+        ),
+    ] = None,
+    registry_path: Annotated[
+        Path | None,
+        Option(
+            "--registry-path",
+            help="Legacy registry.json path.",
+            show_default=False,
+        ),
+    ] = None,
+    output_dir: Annotated[
+        Path | None,
+        Option(
+            "--output-dir",
+            "-o",
+            help="Directory to download tasks to. Defaults to current directory in export mode, or ~/.cache/harbor/tasks in cache mode.",
+            show_default=False,
+        ),
+    ] = None,
+    overwrite: Annotated[
+        bool,
+        Option(
+            "--overwrite",
+            help="Overwrite existing tasks.",
+        ),
+    ] = False,
+    export: Annotated[
+        bool,
+        Option(
+            "--export",
+            help="Export mode (default): <output-dir>/<dataset-name>/<task-name>/. Defaults output dir to current directory.",
+        ),
+    ] = False,
+    cache: Annotated[
+        bool,
+        Option(
+            "--cache",
+            help="Cache mode: content-addressable layout under ~/.cache/harbor/tasks.",
+        ),
+    ] = False,
+):
+    """Download a dataset from a registry.
+
+    This command downloads all tasks in a dataset to the current directory.
+    Tasks are fetched using shallow clones with sparse checkout for efficiency.
+
+    Examples:
+        harbor datasets download my-dataset
+        harbor datasets download my-dataset@v1.0
+        harbor datasets download my-dataset@head --overwrite
+    """
+    from harbor.cli.download import _download_dataset, _resolve_export_mode
+
+    export_mode = _resolve_export_mode(export, cache)
+
+    # Default to export mode
+    if export_mode is None:
+        export_mode = True
+
+    # In export mode, default output dir to current directory
+    if export_mode and output_dir is None:
+        output_dir = Path(".")
+
+    if "@" in dataset:
+        name, version = dataset.split("@", 1)
+    else:
+        name = dataset
+        version = None
+
+    run_async(
+        _download_dataset(
+            name=name,
+            version=version,
+            overwrite=overwrite,
+            output_dir=output_dir,
+            registry_url=registry_url,
+            registry_path=registry_path,
+            export=export_mode,
+        )
+    )

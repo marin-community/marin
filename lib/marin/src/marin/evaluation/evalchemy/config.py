@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 import yaml
@@ -18,12 +20,20 @@ RESERVED_ENDPOINT_MODEL_ARGS = frozenset(
 )
 
 
+class ChatTokenizerBackend(StrEnum):
+    """How Evalchemy counts prompts sent through the chat endpoint."""
+
+    SERVER = "none"
+    HUGGING_FACE = "huggingface"
+
+
 class EvalchemyJudgeConfig(BaseModel):
     """External judge endpoint and credential references for a supported task."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     base_url: str
+    protocol: Literal["default", "marin-10197"] = "default"
     model: str
     api_key: tuple[str, ...] = Field(min_length=1)
 
@@ -74,26 +84,30 @@ class EvalchemyConfig(BaseModel):
     tasks: tuple[str, ...] = Field(min_length=1)
     task_options: Mapping[str, EvalchemyTaskOptions] = Field(default_factory=dict)
     apply_chat_template: bool | None = None
+    chat_tokenizer_backend: ChatTokenizerBackend = ChatTokenizerBackend.SERVER
     debug: bool = False
+    # The task counts rendered prompts and owns per-example output/context selection.
+    prompt_budget_preflight: bool = False
     limit: int | None = None
     num_fewshot: int | None = None
     batch_size: str | None = None
     seed: int | None = None
     gen_kwargs: Mapping[str, str] = Field(default_factory=dict)
-    chat_template_kwargs: Mapping[str, bool] = Field(default_factory=dict)
     extra_model_args: Mapping[str, str | int | float | bool] = Field(default_factory=dict)
+    chat_template_kwargs: Mapping[str, bool] = Field(default_factory=dict)
     max_length: int | None = None
     max_tokens: int | None = None
+    runtime_memory: str | None = None
     runtime_extras: tuple[str, ...] = ()
     judge: EvalchemyJudgeConfig | None = None
 
     @model_validator(mode="after")
     def validate_judge_task(self) -> EvalchemyConfig:
-        financebench = self.tasks == ("FinanceBench",)
-        if self.judge is not None and not financebench:
-            raise ValueError("judge is supported only for a single FinanceBench task")
-        if financebench and self.judge is None:
-            raise ValueError("FinanceBench requires an explicit judge configuration")
+        judge_task = self.tasks in {("FinanceBench",), ("OlympiadBench",)}
+        if self.judge is not None and not judge_task:
+            raise ValueError("judge is supported only for a single FinanceBench or OlympiadBench task")
+        if judge_task and self.judge is None:
+            raise ValueError(f"{self.tasks[0]} requires an explicit judge configuration")
         return self
 
     @field_validator("tasks", "runtime_extras")

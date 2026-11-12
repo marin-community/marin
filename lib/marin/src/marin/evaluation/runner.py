@@ -11,14 +11,18 @@ from enum import StrEnum
 from functools import partial
 from typing import NoReturn, Protocol
 
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from fray.client import JobHandle
 from iris.client.client import Job, iris_ctx
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import SecretSpec
+from rigging.timing import retry_with_backoff
 
 from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE
+from marin.evaluation.evalchemy.client import EVALCHEMY_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.inference_metrics import InferenceMetricWindow
 from marin.evaluation.model_config import ModelConfig
@@ -45,7 +49,14 @@ from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.step_runner import StepRunner, check_cache
 from marin.execution.step_spec import StepSpec
 from marin.inference.backend import OPENAI_API_SUFFIX
-from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
+from marin.inference.config import RemoteInferenceConfig
+from marin.inference.iris import (
+    InferenceBackendState,
+    InferenceStartupPhase,
+    RemoteInferenceSession,
+    RemoteInferenceStartupError,
+    remote_inference,
+)
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 
 logger = logging.getLogger(__name__)
@@ -55,6 +66,80 @@ _ORCHESTRATOR_ROLE = "orchestrator"
 _JUDGE_ROLE = "judge"
 _UNCONSTRAINED = "unconstrained"
 _REPORT_TAIL_LINES = 15
+
+
+# Stop evaluator attempts before their HTTP retries exhaust during a model reload.
+BACKEND_POLL_SECONDS = 5.0
+
+
+class InferenceUnavailable(RuntimeError):
+    """An evaluator attempt must stop while its inference backends recover."""
+
+
+class InferenceBackendFinished(RuntimeError):
+    """Inference ended permanently while an evaluator depended on it."""
+
+
+def inference_backend_state(sessions: tuple[RemoteInferenceSession, ...]) -> InferenceBackendState:
+    """Combine session states, prioritizing FINISHED over RECOVERING over READY."""
+    states = tuple(session.backend_state() for session in sessions)
+    if InferenceBackendState.FINISHED in states:
+        return InferenceBackendState.FINISHED
+    if InferenceBackendState.RECOVERING in states:
+        return InferenceBackendState.RECOVERING
+    return InferenceBackendState.READY
+
+
+def check_inference_backend(state: InferenceBackendState) -> None:
+    """Interrupt an attempt on a recoverable outage; fail on a terminal backend."""
+    if state is InferenceBackendState.RECOVERING:
+        raise InferenceUnavailable("inference backends are not ready")
+    if state is InferenceBackendState.FINISHED:
+        raise InferenceBackendFinished("inference backend finished while evaluation was running")
+
+
+def inference_attempt_state(
+    sessions: tuple[RemoteInferenceSession, ...], before: tuple[int, ...]
+) -> InferenceBackendState:
+    """Include preemptions that recovered between evaluator health polls."""
+    state = inference_backend_state(sessions)
+    if state is InferenceBackendState.READY and before != tuple(session.preemption_count() for session in sessions):
+        return InferenceBackendState.RECOVERING
+    return state
+
+
+def run_with_inference_recovery[T](
+    attempt: Callable[[int], T],
+    sessions: tuple[RemoteInferenceSession, ...],
+) -> T:
+    """Wait for ready backends and retry attempts that raise InferenceUnavailable.
+
+    Each attempt receives a zero-based attempt number. It must monitor
+    dependencies and stop its work before raising InferenceUnavailable.
+    Other exceptions propagate.
+    """
+
+    def check_dependencies() -> None:
+        if inference_backend_state(sessions) is InferenceBackendState.FINISHED:
+            check_inference_backend(InferenceBackendState.FINISHED)
+
+    def wait_for_backends() -> None:
+        for session in sessions:
+            session.wait_until_ready(check_dependencies=check_dependencies)
+
+    attempt_number = 0
+    while True:
+        state = inference_backend_state(sessions)
+        if state is InferenceBackendState.RECOVERING:
+            wait_for_backends()
+        else:
+            check_inference_backend(state)
+        try:
+            return attempt(attempt_number)
+        except InferenceUnavailable:
+            logger.warning("pausing evaluation while inference recovers")
+            wait_for_backends()
+            attempt_number += 1
 
 
 @dataclass(frozen=True)
@@ -82,12 +167,17 @@ class EvaluationError(RuntimeError):
         self.jobs = jobs or {}
         self.log_tails = log_tails or {}
         self.coverage = coverage or {}
-        """Coverage measured before the failure, so a rejected run records why it was rejected as
-        structured counts rather than only as an error string."""
+        """Per-task coverage measured before the failure."""
 
 
 class EvalExecutor(Protocol):
-    """Execute one evaluation mechanism against an inference session."""
+    """Execute one resumable attempt using the supplied endpoint and output_dir.
+
+    Poll backend_state while child work runs. Stop all child work
+    before raising InferenceUnavailable so the runner can safely reuse output_dir.
+    Raise EvaluationError for evaluation failures; infrastructure failures can
+    be retried when the attempt's inference dependencies were interrupted.
+    """
 
     def __call__(
         self,
@@ -95,11 +185,14 @@ class EvalExecutor(Protocol):
         output_dir: str,
         env_vars: Mapping[str, str],
         *,
+        backend_state: Callable[[], InferenceBackendState],
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome: ...
 
 
 class EndpointRoute(StrEnum):
+    """DIRECT resolves the registered serving address; CAPABILITY preserves the session endpoint."""
+
     DIRECT = "direct"
     CAPABILITY = "capability"
 
@@ -110,7 +203,7 @@ class EvaluationIdentity:
     created_at: str
     output_dir: str
     eval_ref: EvalRef
-    eval_runtime: str
+    eval_runtime: str | None = None
 
 
 @dataclass(frozen=True)
@@ -155,8 +248,11 @@ class EvaluationBatch:
     provenance: LaunchProvenance
     submission_cluster: str
     max_concurrent: int
+    instances: int = 1
     judge: HostedJudge | None = None
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
+    egress_allow: tuple[str, ...] = ()
+    """Egress rules the orchestrator job and its children need beyond the cluster allowlist."""
     source_model_config: ModelConfigRef | None = None
 
 
@@ -198,7 +294,7 @@ def _record(
             tensor_parallel_size=serve.tensor_parallel_size,
             data_parallel_size=serve.data_parallel_size,
             pipeline_parallel_size=serve.pipeline_parallel_size,
-            task_count=serve.pipeline_parallel_size,
+            task_count=serve.pipeline_parallel_size * serve.instances,
             max_model_len=serve.max_model_len,
         )
     evalchemy = identity.eval_ref.evalchemy
@@ -247,6 +343,7 @@ def _record(
         eval=evaluation,
         hardware=HardwareRef(
             task_count=serving.task_count,
+            instances=batch.instances,
             platform=batch.accelerator.platform.value,
             accelerator=batch.accelerator.label,
             region_or_cluster=(batch.accelerator.target_cluster or batch.accelerator.region or _UNCONSTRAINED),
@@ -288,7 +385,8 @@ def _job_tail(handle: JobHandle) -> tuple[str, ...]:
         return ()
 
 
-def _job_diagnostics(handles: tuple[JobHandle, ...], role: str) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
+def job_diagnostics(handles: tuple[JobHandle, ...], role: str) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
+    """Collect job identities and available log tails for an inference role."""
     jobs = {_job_role(role, index): str(handle.job_id) for index, handle in enumerate(handles)}
     tails = {_job_role(role, index): _job_tail(handle) for index, handle in enumerate(handles)}
     return jobs, tails
@@ -296,6 +394,40 @@ def _job_diagnostics(handles: tuple[JobHandle, ...], role: str) -> tuple[dict[st
 
 def _session_tails(session: RemoteInferenceSession, role: str) -> dict[str, tuple[str, ...]]:
     return {_job_role(role, index): _job_tail(handle) for index, handle in enumerate(session.jobs)}
+
+
+def run_evaluation(
+    executor: EvalExecutor,
+    session: RemoteInferenceSession,
+    output_dir: str,
+    env_vars: Mapping[str, str],
+    *,
+    endpoint_route: EndpointRoute,
+    judge: RemoteInferenceSession | None = None,
+) -> EvaluationOutcome:
+    """Retry evaluator attempts in the same output directory after inference outages."""
+    sessions = (session,) if judge is None else (session, judge)
+
+    def attempt(_attempt_number: int) -> EvaluationOutcome:
+        before = tuple(inference.preemption_count() for inference in sessions)
+        backend_state = partial(inference_attempt_state, sessions, before)
+        execution_session = _local_endpoint_session(session) if endpoint_route is EndpointRoute.DIRECT else session
+        # Adapters stop child work before returning or raising EvaluationError.
+        try:
+            outcome = executor(execution_session, output_dir, env_vars, backend_state=backend_state, judge=judge)
+        except EvaluationError as error:
+            if error.status is RunStatus.INFRA_FAILED:
+                check_inference_backend(backend_state())
+            raise
+        transport_failures = any(
+            entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for entry in outcome.coverage.values()
+        )
+        interrupted = backend_state() is InferenceBackendState.RECOVERING
+        if transport_failures and interrupted:
+            raise InferenceUnavailable("inference interrupted before evaluator completion")
+        return outcome
+
+    return run_with_inference_recovery(attempt, sessions)
 
 
 def _run_one_evaluation(
@@ -323,15 +455,9 @@ def _run_one_evaluation(
         session.check_alive()
         if judge is not None:
             judge.check_alive()
-        if evaluation.endpoint_route is EndpointRoute.DIRECT:
-            execution_session = _local_endpoint_session(session)
-        else:
-            execution_session = session
         if session.metrics_url is not None and batch.max_concurrent == 1:
             try:
-                metric_session = execution_session
-                if evaluation.endpoint_route is EndpointRoute.CAPABILITY:
-                    metric_session = _local_endpoint_session(session)
+                metric_session = _local_endpoint_session(session)
                 metric_window = InferenceMetricWindow.start(
                     metric_session,
                     speculative=batch.model.serve.speculative is not None,
@@ -344,11 +470,13 @@ def _run_one_evaluation(
                 )
         allowed_env_keys = (*EVAL_RUNTIME_ENV_KEYS, *evaluation.secret_env_keys)
         evaluation_env = {key: env_vars[key] for key in allowed_env_keys if key in env_vars}
-        outcome = evaluation.executor(
-            execution_session,
+        outcome = run_evaluation(
+            evaluation.executor,
+            session,
             evaluation.identity.output_dir,
             evaluation_env,
             judge=judge,
+            endpoint_route=evaluation.endpoint_route,
         )
         metrics = outcome.metrics
         coverage = outcome.coverage
@@ -429,7 +557,7 @@ def _run_one_evaluation(
             job_id=orchestrator_job_id,
             attributes={
                 "eval_name": evaluation.identity.eval_ref.name,
-                "eval_runtime": evaluation.identity.eval_runtime,
+                **({"eval_runtime": evaluation.identity.eval_runtime} if evaluation.identity.eval_runtime else {}),
                 "group_id": batch.group_id,
             },
         )
@@ -449,7 +577,7 @@ def _record_startup_failure(
     role: str,
     existing_jobs: Mapping[str, str] | None = None,
 ) -> NoReturn:
-    failed_jobs, tails = _job_diagnostics(exc.jobs, role)
+    failed_jobs, tails = job_diagnostics(exc.jobs, role)
     jobs = {_ORCHESTRATOR_ROLE: orchestrator_job_id, **(existing_jobs or {}), **failed_jobs}
     error = f"{type(exc).__name__}: {exc}"
     _record(batch, evaluation.identity, RunStatus.INFRA_FAILED, error, {}, jobs, tails)
@@ -502,10 +630,23 @@ def run_evaluation_steps(
         capability_origin=batch.capability_origin,
         api_model=batch.api_model,
         priority=batch.priority_band,
+        instances=batch.instances,
+        request_timeout_seconds=max(
+            (
+                float(
+                    evaluation.identity.eval_ref.evalchemy.extra_model_args.get(
+                        "timeout", EVALCHEMY_REQUEST_TIMEOUT_SECONDS
+                    )
+                )
+                for evaluation in batch.evaluations
+                if evaluation.identity.eval_ref.evalchemy is not None
+            ),
+            default=EVALCHEMY_REQUEST_TIMEOUT_SECONDS,
+        ),
     )
     with ExitStack() as stack:
         try:
-            session = stack.enter_context(remote_inference(inference))
+            session = _inference_session(stack, inference)
         except RemoteInferenceStartupError as exc:
             run(
                 partial(
@@ -528,7 +669,7 @@ def run_evaluation_steps(
                 priority=batch.priority_band,
             )
             try:
-                judge = stack.enter_context(remote_inference(judge_inference))
+                judge = _inference_session(stack, judge_inference)
             except RemoteInferenceStartupError as exc:
                 run(
                     partial(
@@ -553,9 +694,26 @@ def run_evaluation_steps(
         )
 
 
+def _inference_session(stack: ExitStack, config: RemoteInferenceConfig) -> RemoteInferenceSession:
+    """Start an eval server, retrying readiness timeouts within its failure budget."""
+    return retry_with_backoff(
+        lambda: stack.enter_context(remote_inference(config)),
+        retryable=lambda error: isinstance(error, RemoteInferenceStartupError)
+        and error.phase is InferenceStartupPhase.SERVING
+        and isinstance(error.__cause__, TimeoutError),
+        max_attempts=config.iris.max_retries_failure + 1,
+        operation="evaluation inference startup",
+    )
+
+
 def _local_endpoint_session(session: RemoteInferenceSession) -> RemoteInferenceSession:
     """Return an eval session that reaches the serving endpoint directly."""
-    address = iris_ctx().client.resolve_endpoint(session.endpoint_name).rstrip("/")
+    try:
+        address = iris_ctx().client.resolve_endpoint(session.endpoint_name).rstrip("/")
+    except ConnectError as exc:
+        if exc.code != Code.NOT_FOUND:
+            raise
+        raise InferenceUnavailable("inference endpoint registration is unavailable") from exc
     endpoint = replace(session.model.endpoint, base_url=f"{address}{OPENAI_API_SUFFIX}")
     return replace(
         session,

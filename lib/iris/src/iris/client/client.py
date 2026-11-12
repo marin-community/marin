@@ -30,6 +30,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.rpc import logging_pb2
 from rigging.credentials import ClientCredentials
+from rigging.secrets import SecretBehavior, forwarded_secrets
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
@@ -56,6 +57,7 @@ from iris.cluster.constraints import (
     merge_constraints,
     region_constraint,
 )
+from iris.cluster.egress import parse_egress_rules
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -798,8 +800,10 @@ class IrisClient:
                 an IAP-fronted cluster, the IAP OIDC ID token. None sends neither
                 (a loopback-trusted tunnel).
             extra_bundle_includes: Glob patterns (relative to ``workspace``) for
-                gitignored files the caller needs in the task bundle — e.g. a package's
-                built frontend ``dist``. Bundled in addition to the git-tracked files.
+                required files excluded by default, such as validation tests or a
+                gitignored frontend ``dist``. Overrides ``[tool.iris.bundle].exclude``
+                in the workspace pyproject. Explicit ``bundle_exclude`` patterns and
+                exclusions for credentials, caches, and local builds still apply.
             bundle_exclude: Regex matched against each candidate bundle path
                 (POSIX, relative to ``workspace``); matching paths are dropped from
                 the bundle. Trims otherwise-tracked files that a job does not need,
@@ -925,6 +929,7 @@ class IrisClient:
         max_retries_preemption: int = 1000,
         max_task_failures: int = 0,
         timeout: Duration | None = None,
+        termination_grace: Duration | None = None,
         user: str | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
@@ -932,6 +937,7 @@ class IrisClient:
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
+        egress_allow: Sequence[str] = (),
         submit_argv: list[str] | None = None,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
@@ -954,6 +960,7 @@ class IrisClient:
                 it fails (default: 0 = fail on the first failure). Counts across retries,
                 so set this to allow a job to ride out a few inconsistent failures.
             timeout: Per-task timeout (None = no timeout)
+            termination_grace: Time for graceful SIGTERM shutdown (None uses the controller default)
             user: Optional explicit user override for top-level jobs
             task_image: Optional override for the task container image. When None,
                 the worker uses its cluster-configured default_task_image. Used for
@@ -961,14 +968,23 @@ class IrisClient:
                 for sandboxing untrusted child workloads).
             container_profile: Container security profile. UNSPECIFIED resolves to
                 DEFAULT. Elevated profiles (DOCKER_ACCESS, PRIVILEGED) require the
-                admin role at submission when auth is enabled. SANDBOX sends only
-                ``environment.env_vars`` and ``environment.setup_scripts``, no
-                workspace bundle, and skips parent env inheritance (see
+                admin role at submission when auth is enabled. SANDBOX sends
+                explicit env vars, secrets, and setup scripts without a workspace
+                bundle or parent environment inheritance (see
                 ``EnvironmentSpec.to_sandbox_proto``).
-            egress_policy: What the job's network reaches: CLUSTER, INTERNET
-                (public addresses only) or NONE. UNSPECIFIED resolves to
-                INTERNET for SANDBOX and CLUSTER otherwise; SANDBOX rejects
-                CLUSTER.
+            egress_policy: What the job's network reaches: CLUSTER, ALLOWLIST,
+                INTERNET (public addresses only) or NONE. UNSPECIFIED inherits
+                the parent job's policy, or takes the cluster's default:
+                INTERNET for SANDBOX, ALLOWLIST on a cluster whose
+                allowlist is the default, and CLUSTER otherwise. SANDBOX
+                rejects CLUSTER and ALLOWLIST. A cluster that cannot
+                enforce ALLOWLIST runs the job under CLUSTER.
+            egress_allow: Destinations the job needs beyond the cluster's
+                allowlist, such as ``"api.openai.com"``,
+                ``"*.anthropic.com:443"`` or ``"203.0.113.0/24"`` (syntax in
+                ``iris.cluster.egress``). They take effect when the job runs
+                under ALLOWLIST, so a launcher can declare them on every
+                cluster. An explicit ``egress_policy`` must be ALLOWLIST.
 
         Returns:
             Job handle for the submitted job
@@ -1026,6 +1042,8 @@ class IrisClient:
                     extras=environment.extras,
                     setup_scripts=environment.setup_scripts if child_owns_setup else parent_setup_scripts,
                     sync_packages=environment.sync_packages,
+                    secrets=environment.secrets,
+                    secret_behavior=environment.secret_behavior,
                 )
             else:
                 environment = EnvironmentSpec(env_vars=child_env, setup_scripts=parent_setup_scripts)
@@ -1057,7 +1075,11 @@ class IrisClient:
         if sandboxed:
             environment_proto = (environment or EnvironmentSpec()).to_sandbox_proto()
         else:
-            environment_proto = environment.to_proto() if environment else None
+            environment = environment or EnvironmentSpec()
+            environment_proto = environment.to_proto()
+            if environment.secret_behavior == SecretBehavior.INHERIT:
+                supplied = set(environment_proto.secrets) | set(environment_proto.env_vars)
+                environment_proto.secrets.update(forwarded_secrets(exclude=supplied))
         constraints_proto = [c.to_proto() for c in constraints or []]
         coscheduling_proto = coscheduling.to_proto() if coscheduling else None
 
@@ -1076,12 +1098,14 @@ class IrisClient:
                 max_retries_preemption=max_retries_preemption,
                 max_task_failures=max_task_failures,
                 timeout=timeout,
+                termination_grace=termination_grace,
                 preemption_policy=preemption_policy,
                 existing_job_policy=existing_job_policy,
                 task_image=task_image,
                 priority_band=priority_band,
                 container_profile=container_profile,
                 egress_policy=egress_policy,
+                egress_allow=parse_egress_rules(egress_allow),
                 submit_argv=submit_argv,
             )
         except ConnectError as e:

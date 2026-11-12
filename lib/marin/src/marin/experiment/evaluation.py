@@ -1,19 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reusable lazy evaluation steps built on endpoint-oriented mechanisms."""
+"""Build lazy evaluation and report artifacts."""
 
 import logging
-import tempfile
 import uuid
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from typing import cast
 
 from fray.cluster import ResourceConfig
 from iris.rpc import job_pb2
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.secrets import resolve_secret_spec
 
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.evalchemy.result import (
@@ -24,19 +24,18 @@ from marin.evaluation.evalchemy.result import (
     compile_eval_report,
 )
 from marin.evaluation.evalchemy.runner import (
+    EvalchemyExecutor,
     EvalchemyRunConfig,
-    run_evalchemy,
 )
 from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.lm_eval import LM_EVAL_UV_PACKAGES, LmEvalResults, LmEvalRun, run_lm_eval
 from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
+from marin.evaluation.runner import EndpointRoute, run_evaluation
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import result_type_name
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
-from marin.inference.config import RemoteInferenceConfig
 from marin.inference.iris import remote_inference
 from marin.training.training import LevanterCheckpoint
 
@@ -59,25 +58,9 @@ class EvalchemyEvalConfig:
 
 
 @dataclass(frozen=True)
-class ServedEvalchemyRun:
-    """Durable output and child jobs from one self-contained Evalchemy build."""
-
-    out_path: str
-    jobs: dict[str, str]
-
-
-@dataclass(frozen=True)
 class _EvalReportConfig:
     entries: tuple[ReportEntry, ...]
     out_path: str
-
-
-@dataclass(frozen=True)
-class _LmEvalStepConfig:
-    inference: RemoteInferenceConfig
-    packages: tuple[str, ...]
-    eval_run: LmEvalRun
-    results_path: str
 
 
 def _durable_output_dir(output_dir: str | None, run_id: str) -> str:
@@ -90,7 +73,7 @@ def _durable_output_dir(output_dir: str | None, run_id: str) -> str:
     return durable
 
 
-def run_served_evalchemy(config: EvalchemyEvalConfig) -> ServedEvalchemyRun:
+def run_served_evalchemy(config: EvalchemyEvalConfig) -> FineStoreEvalchemyResult:
     """Start inference, run one Evalchemy task group, and tear inference down."""
     if not config.run.tasks:
         raise ValueError("Evalchemy requires at least one task")
@@ -98,6 +81,11 @@ def run_served_evalchemy(config: EvalchemyEvalConfig) -> ServedEvalchemyRun:
     if config.model.tokenizer is None and "://" in config.model.location:
         raise ValueError(f"model {config.model.location!r} is an object-store path; set tokenizer to an HF tokenizer id")
     runtime_env = env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS)
+    evaluation_env = (
+        {**runtime_env, "JUDGE_API_KEY": resolve_secret_spec(config.run.judge.api_key).value}
+        if config.run.judge is not None
+        else runtime_env
+    )
     inference = inference_config_for_model(
         config.model,
         config.accelerator,
@@ -105,15 +93,16 @@ def run_served_evalchemy(config: EvalchemyEvalConfig) -> ServedEvalchemyRun:
         priority=job_pb2.PRIORITY_BAND_INHERIT,
     )
     with remote_inference(inference) as session:
-        outcome = run_evalchemy(
-            session.model,
-            config.run,
+        outcome = run_evaluation(
+            EvalchemyExecutor(config.run),
+            session,
             output_dir,
-            env_vars=runtime_env,
+            evaluation_env,
+            endpoint_route=EndpointRoute.DIRECT,
         )
         jobs = {f"serve-{index}" if index else "serve": str(job.job_id) for index, job in enumerate(session.jobs)}
         jobs |= outcome.jobs
-    return ServedEvalchemyRun(out_path=output_dir, jobs=jobs)
+    return FineStoreEvalchemyResult(path=output_dir, jobs=jobs)
 
 
 @dataclass(frozen=True)
@@ -244,70 +233,4 @@ def eval_report(
         run=run,
         build_config=build_config,
         deps=deps,
-    )
-
-
-def run_served_lm_eval(
-    inference: RemoteInferenceConfig,
-    eval_run: LmEvalRun,
-    output_path: str,
-) -> None:
-    """Serve a model for one lm-eval run and upload its durable result tree."""
-    with tempfile.TemporaryDirectory() as local_output:
-        with remote_inference(inference) as session:
-            run_lm_eval(session.model, eval_run, local_output)
-        StoragePath(output_path).upload_from(local_output + "/", recursive=True)
-
-
-def lm_eval_step(
-    inference: RemoteInferenceConfig,
-    eval_run: LmEvalRun,
-    *,
-    name: str,
-    version: str,
-    parent_env_vars: Mapping[str, str],
-) -> ArtifactStep[LmEvalResults]:
-    """Build an lm-eval artifact using the shared remote-inference lifecycle."""
-    worker_resources = inference.iris.worker_resources
-    if inference.broker is not None:
-        eval_run = replace(
-            eval_run,
-            extra_model_args={
-                "num_concurrent": inference.broker.worker.max_in_flight,
-                "timeout": int(inference.broker.proxy.request_timeout_seconds),
-                **eval_run.extra_model_args,
-            },
-        )
-    results_path = str(StoragePath("mirror://") / name / version)
-
-    def build_config(context: StepContext) -> _LmEvalStepConfig:
-        return _LmEvalStepConfig(
-            inference=replace(
-                inference,
-                iris=replace(inference.iris, worker_resources=context.runtime_arg("worker_resources")),
-            ),
-            packages=LM_EVAL_UV_PACKAGES,
-            eval_run=eval_run,
-            results_path=results_path,
-        )
-
-    def run_step(config: _LmEvalStepConfig) -> LmEvalResults:
-        if config.packages != LM_EVAL_UV_PACKAGES:
-            raise ValueError("artifact lm-eval packages must match the pinned runtime packages")
-        remote(
-            run_served_lm_eval,
-            name=name,
-            resources=ResourceConfig.with_cpu(cpu=1, regions=inference.iris.worker_resources.regions),
-            env_vars=dict(parent_env_vars),
-        )(config.inference, config.eval_run, config.results_path)
-        return LmEvalResults(results_path=config.results_path)
-
-    return ArtifactStep(
-        name=name,
-        version=version,
-        artifact_type=LmEvalResults,
-        run=run_step,
-        build_config=build_config,
-        deps=(),
-        runtime_args={"worker_resources": worker_resources},
     )

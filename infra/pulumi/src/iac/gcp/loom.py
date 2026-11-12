@@ -3,7 +3,13 @@
 
 """GCP IAM declarations required by the Loom deploy target."""
 
-from iac.gcp.iam import GcpArtifactRepositoryIam, GcpIamGrantSet, GcpRoleGrant, GcpSecretIam
+from iac.gcp.iam import (
+    GcpArtifactRepositoryIam,
+    GcpIamGrantSet,
+    GcpRoleGrant,
+    GcpSecretIam,
+    GcpServiceAccountIam,
+)
 
 _REGION = "us-central1"
 _RUNTIME_ACCOUNT_ID = "loom-vm"
@@ -13,7 +19,8 @@ _ARTIFACT_REPOSITORY = "loom"
 
 def iam_grants(project: str) -> GcpIamGrantSet:
     """Return Loom grants for composition into the global IAM stack."""
-    runtime_account = f"serviceAccount:{_RUNTIME_ACCOUNT_ID}@{project}.iam.gserviceaccount.com"
+    runtime_email = f"{_RUNTIME_ACCOUNT_ID}@{project}.iam.gserviceaccount.com"
+    runtime_account = f"serviceAccount:{runtime_email}"
     return GcpIamGrantSet(
         project_grants=tuple(
             GcpRoleGrant(role=role, members=(runtime_account,))
@@ -33,6 +40,13 @@ def iam_grants(project: str) -> GcpIamGrantSet:
             GcpSecretIam(
                 secret=_DOTENV_SECRET,
                 grants=(GcpRoleGrant(role="roles/secretmanager.secretAccessor", members=(runtime_account,)),),
+            ),
+        ),
+        # Sessions self-impersonate for a Docs-scoped token; the metadata token is cloud-platform only.
+        service_accounts=(
+            GcpServiceAccountIam(
+                email=runtime_email,
+                grants=(GcpRoleGrant(role="roles/iam.serviceAccountTokenCreator", members=(runtime_account,)),),
             ),
         ),
         artifact_repositories=(

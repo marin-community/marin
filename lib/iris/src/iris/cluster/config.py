@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import copy
 import ipaddress
+import json
 import logging
 import os
 from collections.abc import Collection, Iterator, Mapping
@@ -27,9 +28,14 @@ from typing import Annotated, Any, ClassVar, Literal
 
 import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, field_validator, model_validator
-from rigging.secrets import as_secret_spec, is_secret_reference, resolve_secret_spec
+from rigging.secrets import (
+    as_secret_spec,
+    is_secret_reference,
+    resolve_secret_spec,
+)
 from rigging.timing import Duration
 
+from iris.cluster.egress import parse_egress_rules
 from iris.cluster.platforms.k8s.coreweave_topology import TopologyMode
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
@@ -469,6 +475,8 @@ class WorkerConfig(_Config):
     storage_prefix: str = ""  # task-artifact prefix; empty disables profile upload
     task_outputs: TaskOutputPolicy | None = None
     auth_token: str = ""  # worker→controller bearer token; empty when auth disabled
+    # The cluster's additions to the base egress allowlist (defaults.egress_allowlist.allow).
+    egress_allow: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +518,7 @@ class CoreweaveControllerConfig(_Config):
     port: int = 0  # default: 10000
     service_name: str = ""  # K8s Service name for discovery
     scale_group: str = ""  # scale group whose NodePool runs the controller
+    hostname: str = ""  # pins node-local controller state across restarts
     # IngressClass the operator-managed federation ingress binds to; see
     # scripts/install_cw_network.py and docs/coreweave.md.
     ingress_class: str = "traefik"
@@ -540,12 +549,37 @@ class AutoscalerConfig(_Config):
     scale_down_delay: DurationField = Field(default_factory=lambda: Duration.from_seconds(600))
 
 
+class EgressAllowlistConfig(_Config):
+    """The cluster's ``EGRESS_POLICY_ALLOWLIST`` settings.
+
+    An ALLOWLIST task reaches Iris's base allowlist
+    (``iris.cluster.egress.BASE_EGRESS_ALLOWLIST``), ``allow``, its job's own
+    rules, and the cluster's internal services. Kubernetes enforces this with
+    Cilium policies (see ``KubernetesProviderConfig.cilium``). Docker workers
+    filter only DNS: names outside the allowlist do not resolve, but
+    connections to literal addresses are not blocked.
+    """
+
+    # Resolve an UNSPECIFIED egress policy to ALLOWLIST for every job except
+    # SANDBOX jobs. On Kubernetes, GPU jobs with more than one task keep host
+    # networking for InfiniBand, so the allowlist does not restrict them.
+    default: bool = False
+    # Cluster additions to the base allowlist, in egress rule syntax.
+    allow: list[str] = Field(default_factory=list)
+
+    @field_validator("allow")
+    @classmethod
+    def _valid_rules(cls, value: list[str]) -> list[str]:
+        parse_egress_rules(value)  # ValueError on a malformed rule — fail at load
+        return value
+
+
 class DefaultsConfig(_Config):
     ssh: SshConfig = Field(default_factory=SshConfig)
     autoscaler: AutoscalerConfig = Field(default_factory=AutoscalerConfig)
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     task_env: dict[str, str] = Field(default_factory=dict)  # injected into every task
-    inject_env: list[str] = Field(default_factory=list)  # operator-shell var names
+    egress_allowlist: EgressAllowlistConfig = Field(default_factory=EgressAllowlistConfig)
 
     @model_validator(mode="after")
     def _propagate_task_env(self) -> DefaultsConfig:
@@ -560,6 +594,10 @@ class DefaultsConfig(_Config):
 # ---------------------------------------------------------------------------
 
 
+PRINCIPAL_REFERENCE_PREFIX = "principal:"
+UserRole = Literal["admin", "user", "dashboard"]
+
+
 class IapAuthConfig(_Config):
     url: str = ""
     # Desktop OAuth client the CLI drives for the browser edge-login flow.
@@ -572,10 +610,9 @@ class IapAuthConfig(_Config):
     # this only to give machine callers an `aud` distinct from the desktop client.
     programmatic_audiences: list[str] = Field(default_factory=list)
     signed_header_audience: str = ""
-    # Role granted to an IAP-verified email the role policy does not match (not in
-    # admin_users); admin_users always resolve to admin. "admin" here makes IAP's
-    # own allowlist the sole gate.
-    unprovisioned_role: Literal["admin", "user", "dashboard"] = "dashboard"
+    # Role for an IAP identity absent from user_roles and admin_users.
+    # "admin" here makes IAP's own allowlist the sole gate.
+    unprovisioned_role: UserRole = "dashboard"
 
 
 class AuthConfig(_OneofConfig):
@@ -589,6 +626,10 @@ class AuthConfig(_OneofConfig):
     # no arm selected, a non-empty list alone enables auth (provider "cidr").
     trusted_cidrs: list[str] = Field(default_factory=list)
     admin_users: list[str] = Field(default_factory=list)
+    # Exact IAP identities; overrides admin_users and the provider default.
+    user_roles: dict[str, UserRole] = Field(default_factory=dict)
+    # JSON {principal ID: email}, loaded only by controllers and deploy operators.
+    principal_directory: SecretRefSpec = ""
     # Authenticate-but-not-require: valid tokens get their identity; tokenless
     # requests fall through as anonymous admin; invalid tokens still rejected.
     optional: bool = False
@@ -624,6 +665,11 @@ class AuthConfig(_OneofConfig):
 
     def provider_kind(self) -> str | None:
         return self._selected_arm()
+
+    def require_resolved_identities(self) -> None:
+        identities = (*self.user_roles, *self.admin_users, *self.allowed_submitters)
+        if any(user.startswith(PRINCIPAL_REFERENCE_PREFIX) for user in identities):
+            raise ValueError("Auth config contains unresolved principal references")
 
 
 # ---------------------------------------------------------------------------
@@ -671,6 +717,21 @@ class NodeHealthConfig(_Config):
     max_cordoned_nodes: int = Field(default=1, ge=0)
 
 
+class EgressEndpointsConfig(_Config):
+    """Pods outside the Iris namespace that ALLOWLIST tasks may reach, such as a node-local cache."""
+
+    namespace: str
+    labels: dict[str, str] = Field(default_factory=dict)  # empty selects every pod in the namespace
+
+
+class CiliumConfig(_Config):
+    """The cluster runs Cilium; Iris enforces ``EGRESS_POLICY_ALLOWLIST`` with CiliumNetworkPolicies."""
+
+    # In-cluster pods outside the Iris namespace that ALLOWLIST tasks may reach.
+    # Domain rules cannot admit them, even when a task addresses them by name.
+    egress_endpoints: list[EgressEndpointsConfig] = Field(default_factory=list)
+
+
 class KubernetesProviderConfig(_Config):
     namespace: str = ""  # default: "iris"
     kubeconfig: str = ""  # empty = in-cluster auth
@@ -687,6 +748,8 @@ class KubernetesProviderConfig(_Config):
     service_cidr: str = ""
     kueue: KueueConfig = Field(default_factory=KueueConfig)
     priority_classes: dict[str, str] = Field(default_factory=dict)  # band -> PriorityClass
+    # Absent on a cluster without Cilium, which then runs EGRESS_POLICY_ALLOWLIST jobs on the cluster network.
+    cilium: CiliumConfig | None = None
 
     @field_validator("service_cidr")
     @classmethod
@@ -824,6 +887,10 @@ class IrisClusterConfig(_OneofConfig):
     # through the parent, which relays it here. Empty keeps minted URLs on the local
     # origin. The parent recognizes the tag from its own ``peers`` map.
     federation_public_parent: str = ""
+    # Trusted parent whose policy governs direct and handed-off work.
+    budget_parent: str = ""
+    # Routing peers whose local usage counts against this cluster's budgets.
+    budget_peers: list[str] = Field(default_factory=list)
     # Infrastructure-as-code provisioning section (see infra/pulumi). Carried as an
     # opaque dict so `provisioning:` can live in the cluster config file without
     # Iris depending on the IaC schema; iac.config owns the typed validation.
@@ -854,6 +921,15 @@ def _validate_provider_platform_compat(config: IrisClusterConfig) -> None:
             "kubernetes_provider.controller_address is required. Task pods need it to fetch "
             "bundles from the controller. Set it to the in-cluster service URL, e.g. "
             "http://iris-controller-svc.<namespace>.svc.cluster.local:<port>"
+        )
+
+
+def _validate_egress_allowlist(config: IrisClusterConfig) -> None:
+    kubernetes = config.kubernetes_provider
+    if config.defaults.egress_allowlist.default and kubernetes is not None and kubernetes.cilium is None:
+        raise ValueError(
+            "defaults.egress_allowlist.default requires kubernetes_provider.cilium: Kubernetes clusters "
+            "enforce the allowlist with CiliumNetworkPolicies"
         )
 
 
@@ -1068,6 +1144,16 @@ def _validate_peers(config: IrisClusterConfig) -> None:
     peer id must stay disjoint from it and the sentinel never collides with a real
     cluster id.
     """
+    if not set(config.budget_peers) <= config.peers.keys():
+        raise ValueError("budget_peers must name configured federation peers")
+    if config.budget_parent:
+        trusted_parents = config.auth.federation_peers if config.auth is not None else {}
+        if trusted_parents and config.budget_parent not in trusted_parents:
+            raise ValueError("budget_parent must name a trusted auth.federation_peers entry")
+        if config.user_budgets:
+            raise ValueError("Configure user_budgets on the budget parent")
+        if config.peers:
+            raise ValueError("A budget child cannot also delegate to federation peers")
     for peer_id, peer in config.peers.items():
         if not peer_id.strip():
             raise ValueError("peers: peer id must be a non-empty string.")
@@ -1085,6 +1171,7 @@ def validate_config(config: IrisClusterConfig) -> None:
     _validate_cluster_name(config)
     _validate_peers(config)
     _validate_provider_platform_compat(config)
+    _validate_egress_allowlist(config)
     _validate_accelerator_types(config)
     validate_scale_group_resources(config.scale_groups)
     _validate_slice_templates(config)
@@ -1097,6 +1184,54 @@ def validate_config(config: IrisClusterConfig) -> None:
 # ===========================================================================
 # Secret references (SecretRefSpec fields)
 # ===========================================================================
+
+
+def resolve_principal_references(config: IrisClusterConfig) -> IrisClusterConfig:
+    """Resolve principal references in auth and budgets without mutating config.
+
+    Errors identify opaque references or fields without exposing directory contents.
+    """
+    directory = {}
+    if config.auth and config.auth.principal_directory:
+        payload = config.auth.principal_directory
+        if not isinstance(payload, str):
+            raise ValueError("auth.principal_directory must be resolved before resolving identities")
+        try:
+            directory = json.loads(payload)
+        except json.JSONDecodeError:
+            raise ValueError("auth.principal_directory must contain a JSON object of principal IDs to emails") from None
+        if not isinstance(directory, dict) or any(
+            not isinstance(email, str)
+            or email.count("@") != 1
+            or "*" in email
+            or any(char.isspace() for char in email)
+            or not all(email.split("@"))
+            for email in directory.values()
+        ):
+            raise ValueError("auth.principal_directory must contain a JSON object of principal IDs to emails")
+
+    def resolve_identity(user: str) -> str:
+        if not user.startswith(PRINCIPAL_REFERENCE_PREFIX):
+            return user
+        principal_id = user.removeprefix(PRINCIPAL_REFERENCE_PREFIX)
+        if principal_id not in directory:
+            raise ValueError(f"{user} is missing from auth.principal_directory")
+        return directory[principal_id]
+
+    resolved = config.model_copy(deep=True)
+    if resolved.auth is not None:
+        roles: dict[str, UserRole] = {}
+        for user, role in resolved.auth.user_roles.items():
+            email = resolve_identity(user)
+            if email in roles and roles[email] != role:
+                raise ValueError("auth.user_roles contains conflicting roles after principal resolution")
+            roles[email] = role
+        resolved.auth.user_roles = roles
+        resolved.auth.admin_users = [resolve_identity(user) for user in resolved.auth.admin_users]
+        resolved.auth.allowed_submitters = [resolve_identity(user) for user in resolved.auth.allowed_submitters]
+    for tier in resolved.user_budgets:
+        tier.user_ids = [resolve_identity(user) for user in tier.user_ids]
+    return resolved
 
 
 def iter_secret_ref_fields(config: BaseModel) -> Iterator[tuple[BaseModel, str]]:

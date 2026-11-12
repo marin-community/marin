@@ -1,10 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The RL data catalog: every dataset declaration, keyed by name."""
+"""The task catalog: training and evaluation dataset declarations, keyed by name."""
 
-from experiments.post_training.task_curation.datasets import unconverted
+from experiments.post_training.task_curation.datasets import (
+    campaign_releases,
+    structure_closure,
+    thoughtcrime,
+    unconverted,
+)
 from experiments.post_training.task_curation.datasets.arc import arc
+from experiments.post_training.task_curation.datasets.evalchemy import code as eval_code
+from experiments.post_training.task_curation.datasets.evalchemy import financebench as eval_financebench
+from experiments.post_training.task_curation.datasets.evalchemy import harness as eval_harness
+from experiments.post_training.task_curation.datasets.evalchemy import instructions as eval_instructions
+from experiments.post_training.task_curation.datasets.evalchemy import jee as eval_jee
+from experiments.post_training.task_curation.datasets.evalchemy import long_context as eval_long_context
+from experiments.post_training.task_curation.datasets.evalchemy import math as eval_math
+from experiments.post_training.task_curation.datasets.evalchemy import mmlu as eval_mmlu
+from experiments.post_training.task_curation.datasets.evalchemy import nupa as eval_nupa
+from experiments.post_training.task_curation.datasets.evalchemy import reasoning as eval_reasoning
+from experiments.post_training.task_curation.datasets.evalchemy import simpleqa as eval_simpleqa
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
 from experiments.post_training.task_curation.datasets.skyrl import code as skyrl_code
@@ -29,6 +45,17 @@ from experiments.post_training.task_curation.source import RlDataSource
 
 def all_sources() -> dict[str, RlDataSource]:
     sources = [
+        *eval_code.sources(),
+        *eval_harness.sources(),
+        *eval_instructions.sources(),
+        *eval_jee.sources(),
+        *eval_math.sources(),
+        *eval_reasoning.sources(),
+        *eval_mmlu.sources(),
+        *eval_financebench.sources(),
+        *eval_simpleqa.sources(),
+        *eval_long_context.sources(),
+        *eval_nupa.sources(),
         *skyrl_math.sources(),
         *skyrl_code.sources(),
         *skyrl_ifeval.sources(),
@@ -49,6 +76,9 @@ def all_sources() -> dict[str, RlDataSource]:
         *arc.sources(),
         *reasoning_gym.sources(),
         *nemotron_ultra.sources(),
+        *structure_closure.sources(),
+        *thoughtcrime.sources(),
+        *campaign_releases.sources(),
         *unconverted.sources(),
     ]
     identifiers = [source.info.id for source in sources]

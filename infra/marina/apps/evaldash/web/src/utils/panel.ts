@@ -1,7 +1,16 @@
 import { INTERVAL_KIND, type IntervalKind, type Meta, type PanelCell, type PanelRow } from '@/types/api'
+import { formatCoverage } from './formatting'
+import { compareCells } from './ranking'
+
+// Cohort query values that name no version label; the API reads them the same way.
+export const ALL_COHORTS = 'all'
+export const UNVERSIONED_COHORT = 'unversioned'
 
 export function cohortWarning(cohort: string, meta: Meta): string | null {
-  if (cohort === 'all') return 'All cohorts may mix evaluation settings. Check run configurations before comparing scores.'
+  if (cohort === ALL_COHORTS) return 'All cohorts may mix evaluation settings. Check run configurations before comparing scores.'
+  if (cohort === UNVERSIONED_COHORT) {
+    return 'Runs launched without a version label have no settings contract and may mix settings. Check run configurations before comparing scores.'
+  }
   if (!meta.verified_cohorts.includes(cohort)) {
     return 'This historical cohort has no verified settings contract. Check run configurations before comparing scores.'
   }
@@ -22,12 +31,6 @@ export function cellsByModel(rows: PanelRow[]): Record<string, Record<string, Pa
   const out: Record<string, Record<string, PanelCell>> = {}
   for (const row of rows) out[row.model] = row.cells
   return out
-}
-
-// Orders two cells on one benchmark: the higher score first, and on a tie the higher lower bound. The
-// panel's column sort and the fleet-best marker both use this rule, so they cannot disagree.
-export function compareCells(a: PanelCell, b: PanelCell): number {
-  return b.value - a.value || b.low - a.low
 }
 
 // For each benchmark, the model whose cell leads under compareCells across the given rows.
@@ -62,4 +65,20 @@ export interface Covered {
 // at all: that is unknown coverage, not partial coverage, and the interval kind already says so.
 export function isPartialCoverage(cell: Covered): boolean {
   return cell.interval_kind === INTERVAL_KIND.IDENTIFIED && cell.coverage !== null && cell.coverage < 1
+}
+
+export function scoredItemsLabel(cell: PanelCell): string {
+  const repeat = cell.repeat_aggregation
+  return repeat ? `${repeat.n_items} items × ${repeat.n_repeats} repeats` : `${cell.n_scored} items`
+}
+
+export function cellCoverageLabel(cell: PanelCell): string {
+  const coverage = formatCoverage(cell.coverage)
+  if (cell.repeat_aggregation?.coverage_basis === 'source') {
+    return coverage ? `${coverage} (source units)` : 'source coverage unreported'
+  }
+  if (cell.repeat_aggregation?.coverage_basis === 'item_lower_bound') {
+    return coverage ? `at least ${coverage}` : 'item coverage lower bound unreported'
+  }
+  return coverage
 }

@@ -15,7 +15,7 @@ import re
 import shlex
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
@@ -24,6 +24,15 @@ from typing import NamedTuple
 
 from finelog.client.log_client import Table
 from google.protobuf import json_format
+from rigging.secrets import (
+    AWS_CREDENTIALS_FILENAME,
+    COREWEAVE_SECRET_NAMES,
+    SECRETS_DIR,
+    SECRETS_DIR_ENV,
+    secret_file_contents,
+    secret_file_environment,
+    validate_secret_name,
+)
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.backends.k8s.output_contract import (
@@ -33,7 +42,7 @@ from iris.cluster.backends.k8s.output_contract import (
     OUTPUT_RELEASE_PATH,
     output_uploader_environment,
 )
-from iris.cluster.config import NodeHealthConfig, TaskOutputPolicy
+from iris.cluster.config import EgressAllowlistConfig, NodeHealthConfig, TaskOutputPolicy
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -44,6 +53,7 @@ from iris.cluster.controller.backend import (
     BackendRecoveryResult,
     DeviceCapacity,
     DirectReconcileRequest,
+    EgressAllowlistMode,
     JobFeasibilityRequest,
     ProviderError,
     ReconcileObservation,
@@ -64,6 +74,9 @@ from iris.cluster.platforms.k8s.constants import (
     NVIDIA_GPU_RESOURCE,
     NVIDIA_GPU_TOLERATION,
     RDMA_RESOURCE,
+    SECRET_FILE_MODE,
+    SECRET_GROUP,
+    STORAGE_SECRETS_DIR,
 )
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_LEAFGROUP,
@@ -78,6 +91,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     TopologyMode,
     gpu_gang_rack_slice_size,
 )
+from iris.cluster.platforms.k8s.egress_allowlist import task_policy_manifest
 from iris.cluster.platforms.k8s.kueue_manifests import WorkloadPriorityKind, workload_priority_class_name
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
@@ -123,6 +137,7 @@ from iris.cluster.runtime.profile import (
 )
 from iris.cluster.runtime.sandbox import TaskNetwork, task_isolation
 from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind, MountSpec
+from iris.cluster.secrets import task_secret_values
 from iris.cluster.stats.emitter import PeriodicEmitter
 from iris.cluster.stats.tables import (
     IrisProfile,
@@ -133,13 +148,28 @@ from iris.cluster.stats.tables import (
     stats_timestamp,
 )
 from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, get_gpu_count
+from iris.preemption import SHUTDOWN_MARGIN, resolve_termination_grace
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
+COREWEAVE_ACCESS_KEYS_URL = "https://console.coreweave.com/object-storage/access-keys"
+
 _ARM64_ARCHITECTURES = frozenset({b"aarch64", b"arm64"})
+
+
+def validate_coreweave_credentials(env: Mapping[str, str]) -> str | None:
+    """Check the submitted storage keys and explain how to supply missing credentials."""
+    missing = [name for name in COREWEAVE_SECRET_NAMES if not env.get(name)]
+    if not missing:
+        return None
+    return (
+        f"CoreWeave jobs require your own object-storage credentials. Missing: {', '.join(missing)}. "
+        f"Create an access key at {COREWEAVE_ACCESS_KEYS_URL}, "
+        "then export CW_KEY_ID and CW_KEY_SECRET before submitting, or supply both in EnvironmentSpec.secrets."
+    )
 
 
 class PodManifestError(ValueError):
@@ -162,9 +192,13 @@ _LABEL_ATTEMPT_ID = IRIS_ATTEMPT_ID_LABEL
 # Collision-resistant hash of the full (unsanitized) task_id; 16 hex chars (64 bits).
 _LABEL_TASK_HASH = "iris.task_hash"
 _LABEL_JOB_ID = "iris.job_id"
+# Unique per attempt, even when a resubmitted job reuses the task ID and attempt number.
+_LABEL_ATTEMPT_UID = "iris.attempt_uid"
 
 # Runtime identifier for pods created by K8sTaskProvider.
 _RUNTIME_LABEL_VALUE = IRIS_KUBERNETES_RUNTIME
+_JOB_SECRET_VOLUME_NAME = "job-secrets"
+_JOB_STORAGE_VOLUME_NAME = "job-storage-secrets"
 
 # Native log-shipping sidecar (initContainer + restartPolicy: Always). It reads
 # the task container's CRI log file from the node and pushes to finelog, so the
@@ -520,10 +554,8 @@ class PodConfig:
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
+    require_coreweave_credentials: bool = False
     task_outputs: TaskOutputPolicy | None = None
-    # Name of a Secret whose keys are projected into every task container via
-    # envFrom (operator-injected env, defaults.inject_env). Empty disables it.
-    env_secret_name: str = ""
     # Kueue LocalQueue for coscheduled gang admission. Coscheduled jobs REQUIRE
     # this: dispatching one with no LocalQueue configured raises (Kueue or
     # nothing — there is no non-Kueue colocation fallback).
@@ -535,6 +567,9 @@ class PodConfig:
     # UNSPECIFIED is treated as INTERACTIVE. Defaults to the iris-{band} classes
     # Iris creates at startup; override via kubernetes_provider.priority_classes.
     priority_class_names: dict[int, str] = field(default_factory=lambda: dict(_DEFAULT_PRIORITY_CLASS_NAMES))
+    # Enables EGRESS_POLICY_ALLOWLIST: the cluster's allowlist and whether it is
+    # the default. None rejects ALLOWLIST jobs.
+    egress_allowlist: EgressAllowlistConfig | None = None
 
 
 def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
@@ -677,14 +712,18 @@ def _build_output_uploader(
     image: str,
     policy: TaskOutputPolicy,
     source_prefix: str | None,
-    env_secret_name: str,
+    storage_file: str | None,
+    task_env: dict[str, str],
 ) -> dict:
     container: dict[str, object] = {
         "name": OUTPUT_CONTAINER_NAME,
         "image": image,
         "imagePullPolicy": "IfNotPresent",
         "command": [".venv/bin/python", "-m", "iris.cluster.backends.k8s.outputship"],
-        "env": output_uploader_environment(task_id_wire, attempt_uid, policy, source_prefix),
+        "env": [
+            *[{"name": name, "value": value} for name, value in task_env.items()],
+            *output_uploader_environment(task_id_wire, attempt_uid, policy, source_prefix),
+        ],
         "volumeMounts": [
             {"name": OUTPUT_MOUNT.name, "mountPath": OUTPUT_MOUNT.container_path},
             {"name": OUTPUT_CONTROL_VOLUME_NAME, "mountPath": OUTPUT_CONTROL_PATH},
@@ -692,8 +731,11 @@ def _build_output_uploader(
         "resources": {"requests": {"cpu": OUTPUT_UPLOADER_CPU_REQUEST, "memory": "128Mi"}},
         "terminationMessagePolicy": "File",
     }
-    if env_secret_name:
-        container["envFrom"] = [{"secretRef": {"name": env_secret_name}}]
+    if storage_file:
+        container["volumeMounts"].append(
+            {"name": _JOB_STORAGE_VOLUME_NAME, "mountPath": STORAGE_SECRETS_DIR, "readOnly": True}
+        )
+        container["env"].append({"name": "AWS_SHARED_CREDENTIALS_FILE", "value": storage_file})
     return container
 
 
@@ -711,6 +753,10 @@ def _is_coordinator_task(run_req: job_pb2.RunTaskRequest) -> bool:
 def _pdb_name(pod_name: str) -> str:
     """Derive a PDB name from a pod name."""
     return f"{pod_name}-pdb"
+
+
+def _task_secret_name(pod_name: str) -> str:
+    return f"{pod_name}-secrets"
 
 
 def _build_pdb_manifest(
@@ -818,6 +864,27 @@ def _topology_request_annotations(
     return {_KUEUE_PREFERRED_TOPOLOGY: node_label}
 
 
+def _uses_host_network(config: PodConfig, run_req: job_pb2.RunTaskRequest, network: TaskNetwork) -> bool:
+    """Whether the task pod joins its node's network, when the cluster enables host networking.
+
+    CLUSTER pods do. Legacy gVisor needs the CNI-created interface and routes
+    for cluster egress.
+    """
+    if not config.host_network or run_req.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR:
+        return False
+    return network is TaskNetwork.CLUSTER
+
+
+def _needs_infiniband(num_tasks: int, device: job_pb2.DeviceConfig) -> bool:
+    """Whether NCCL in a job needs its nodes' InfiniBand devices, which only host networking exposes."""
+    return num_tasks > 1 and get_gpu_count(device) > 0
+
+
+def _needs_task_policy(run_req: job_pb2.RunTaskRequest, network: TaskNetwork) -> bool:
+    """Whether the pod gets a per-attempt Cilium policy for its job's own egress rules."""
+    return network is TaskNetwork.ALLOWLIST and bool(run_req.egress_allow)
+
+
 def _build_pod_manifest(
     run_req: job_pb2.RunTaskRequest,
     config: PodConfig,
@@ -836,12 +903,13 @@ def _build_pod_manifest(
     managed_label = config.managed_label
     isolation = task_isolation(run_req.container_profile, run_req.egress_policy)
     service_account = config.service_account if isolation.include_service_account else ""
-    # Legacy gVisor needs the CNI-created interface and routes for cluster egress.
-    host_network = (
-        config.host_network
-        and isolation.network is TaskNetwork.CLUSTER
-        and run_req.container_profile != job_pb2.CONTAINER_PROFILE_GVISOR
-    )
+    network = isolation.network
+    if network is TaskNetwork.ALLOWLIST and config.egress_allowlist is None:
+        # Without Cilium nothing enforces the allowlist, so a stored ALLOWLIST job runs on the cluster network.
+        network = TaskNetwork.CLUSTER
+    host_network = _uses_host_network(config, run_req, network)
+
+    termination_grace = resolve_termination_grace(Duration.from_ms(run_req.termination_grace.milliseconds))
 
     # User env vars as base, then iris system env vars override.
     iris_env = build_common_iris_env(
@@ -856,9 +924,20 @@ def _build_pod_manifest(
         constraints=run_req.constraints,
         ports=run_req.ports,
         resources=run_req.resources if run_req.HasField("resources") else None,
+        termination_grace=termination_grace,
     )
     cluster_env = config.task_env if isolation.include_cluster_env else {}
-    combined = {**cluster_env, **dict(run_req.environment.env_vars), **iris_env}
+    job_secrets = task_secret_values(run_req.environment)
+    if config.require_coreweave_credentials and isolation.include_cluster_env:
+        storage_error = validate_coreweave_credentials(job_secrets)
+        if storage_error:
+            raise PodManifestError(storage_error)
+    job_env = dict(run_req.environment.env_vars)
+    combined = {**cluster_env, **job_env, **iris_env}
+    if job_secrets:
+        combined[SECRETS_DIR_ENV] = str(SECRETS_DIR)
+        for name, value in secret_file_environment(job_secrets).items():
+            combined.setdefault(name, value)
     env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]
     # Pod IP via downward API -- not expressible as a static value.
     env_list.append(
@@ -937,10 +1016,20 @@ def _build_pod_manifest(
         # message with the container's own tail log output instead.
         "terminationMessagePolicy": "FallbackToLogsOnError",
     }
-    # Operator-injected env (defaults.inject_env). envFrom is the lowest
-    # precedence in K8s, so explicit env entries above (user -e, iris vars) win.
-    if config.env_secret_name and isolation.include_cluster_env:
-        container["envFrom"] = [{"secretRef": {"name": config.env_secret_name, "optional": True}}]
+    if job_secrets or _needs_task_policy(run_req, network):
+        # The required volume also holds task startup until the pod's egress
+        # policy exists: the provider writes the Secret after the policy.
+        for name in job_secrets:
+            validate_secret_name(name)
+        volumes.append(
+            {
+                "name": _JOB_SECRET_VOLUME_NAME,
+                "secret": {"secretName": _task_secret_name(pod_name), "defaultMode": SECRET_FILE_MODE},
+            }
+        )
+        container["volumeMounts"].append(
+            {"name": _JOB_SECRET_VOLUME_NAME, "mountPath": str(SECRETS_DIR), "readOnly": True}
+        )
 
     # Raises for DOCKER_ACCESS, which this backend rejects (see _security_context).
     container["securityContext"] = _security_context(run_req.container_profile, has_tpu)
@@ -957,11 +1046,13 @@ def _build_pod_manifest(
         _LABEL_TASK_HASH: _task_hash(run_req.task_id),
         _LABEL_JOB_ID: job_id,
     }
+    if run_req.attempt_uid:
+        labels[_LABEL_ATTEMPT_UID] = run_req.attempt_uid
     node_selector = _constraints_to_node_selector(run_req.constraints)
     if managed_label:
         labels[managed_label] = "true"
-    if isolation.network is not TaskNetwork.CLUSTER:
-        labels[EGRESS_LABEL] = isolation.network.value
+    if network is not TaskNetwork.CLUSTER:
+        labels[EGRESS_LABEL] = network.value
     metadata: dict = {
         "name": pod_name,
         "namespace": namespace,
@@ -1031,7 +1122,7 @@ def _build_pod_manifest(
     # pod share its network, so the task can use any route a sidecar has: a
     # finelog route exposes every job's logs, and the uploader needs the env
     # Secret's object-store keys and a route to the object store.
-    sidecars = isolation.network is TaskNetwork.CLUSTER
+    sidecars = isolation.network in (TaskNetwork.CLUSTER, TaskNetwork.ALLOWLIST)
     init_containers: list[dict] = []
     if sidecars:
         init_containers.append(
@@ -1047,6 +1138,20 @@ def _build_pod_manifest(
     containers = [container]
     if config.task_outputs is not None and sidecars:
         volumes.append({"name": OUTPUT_CONTROL_VOLUME_NAME, "emptyDir": {}})
+        storage_file = None
+        if all(job_secrets.get(name) for name in COREWEAVE_SECRET_NAMES):
+            # The uploader receives only the submitter's storage credentials.
+            volumes.append(
+                {
+                    "name": _JOB_STORAGE_VOLUME_NAME,
+                    "secret": {
+                        "secretName": _task_secret_name(pod_name),
+                        "defaultMode": SECRET_FILE_MODE,
+                        "items": [{"key": AWS_CREDENTIALS_FILENAME, "path": AWS_CREDENTIALS_FILENAME}],
+                    },
+                }
+            )
+            storage_file = str(Path(STORAGE_SECRETS_DIR) / AWS_CREDENTIALS_FILENAME)
         containers.append(
             _build_output_uploader(
                 iris_env["IRIS_TASK_ID"],
@@ -1054,7 +1159,8 @@ def _build_pod_manifest(
                 config.logship_image,
                 config.task_outputs,
                 config.task_env.get("MARIN_PREFIX"),
-                config.env_secret_name,
+                storage_file,
+                config.task_env,
             )
         )
 
@@ -1063,6 +1169,7 @@ def _build_pod_manifest(
         "containers": containers,
         "initContainers": init_containers,
         "volumes": volumes,
+        **({"securityContext": {"fsGroup": SECRET_GROUP}} if job_secrets else {}),
     }
 
     # gVisor isolates the whole pod via a node RuntimeClass; the container
@@ -1071,6 +1178,7 @@ def _build_pod_manifest(
         spec["runtimeClassName"] = "gvisor"
     if not isolation.include_service_account:
         spec["automountServiceAccountToken"] = False
+        spec["enableServiceLinks"] = False
 
     if managed_label:
         node_selector[managed_label] = "true"
@@ -1102,6 +1210,9 @@ def _build_pod_manifest(
             (config.task_outputs.finalization_timeout.to_ms() + 999) // 1000 if config.task_outputs is not None else 0
         )
         spec["activeDeadlineSeconds"] = execution_deadline + finalization_grace
+
+    termination_timeout_ms = (termination_grace + SHUTDOWN_MARGIN).to_ms()
+    spec["terminationGracePeriodSeconds"] = (termination_timeout_ms + 999) // 1000
 
     # Stamp the native k8s PriorityClass so the scheduler knows how to preempt/queue this
     # pod relative to others. Dispatch resolves the band from job_config and re-stamps the
@@ -2449,6 +2560,20 @@ class K8sTaskProvider:
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
 
+    def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        if not self.pods.require_coreweave_credentials or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
+            return None
+        return validate_coreweave_credentials(task_secret_values(request.environment))
+
+    def egress_allowlist_mode(self, request: controller_pb2.Controller.LaunchJobRequest) -> EgressAllowlistMode:
+        allowlist = self.pods.egress_allowlist
+        # Pod policy cannot restrict a host-network pod.
+        if allowlist is None or (
+            self.pods.host_network and _needs_infiniband(request.replicas, request.resources.device)
+        ):
+            return EgressAllowlistMode.UNAVAILABLE
+        return EgressAllowlistMode.DEFAULT if allowlist.default else EgressAllowlistMode.OPT_IN
+
     def sync(self, request: DirectReconcileRequest) -> list[TaskUpdate]:
         """Sync task state: apply new pods, delete strays, poll running pods.
 
@@ -2734,6 +2859,19 @@ class K8sTaskProvider:
         if extra_volumes:
             manifest["spec"]["volumes"].extend(extra_volumes)
 
+        network = TaskNetwork(manifest["metadata"]["labels"].get(EGRESS_LABEL, TaskNetwork.CLUSTER.value))
+        task_policy = None
+        if _needs_task_policy(run_req, network):
+            # A stale policy can outlive its pod briefly; selecting on the attempt
+            # UID keeps it from granting its rules to a resubmitted job's pod.
+            assert run_req.attempt_uid, "a job's own egress rules need the attempt UID to select its pod"
+            task_policy = task_policy_manifest(
+                pod_name,
+                self.pods.namespace,
+                {_LABEL_ATTEMPT_UID: run_req.attempt_uid},
+                run_req.egress_allow,
+            )
+
         task_id = run_req.task_id
         if _is_coordinator_task(run_req):
             # Protect the retry as soon as its pod appears, even if GC removes the old PDB.
@@ -2748,11 +2886,46 @@ class K8sTaskProvider:
             logger.info("Applied PDB %s for coordinator task %s", pdb["metadata"]["name"], task_id)
 
         self.kubectl.apply_json(manifest)
+        job_secrets = task_secret_values(run_req.environment)
+        if job_secrets or task_policy is not None:
+            self._apply_pod_owned_resources(pod_name, task_policy, job_secrets)
         logger.info(
             "Applied pod %s for task %s attempt %d",
             manifest["metadata"]["name"],
             task_id,
             run_req.attempt_id,
+        )
+
+    def _apply_pod_owned_resources(self, pod_name: str, task_policy: dict | None, job_secrets: dict[str, str]) -> None:
+        """Apply the Pod's egress policy, if any, and then its Secret, both owned by the Pod.
+
+        Kubernetes deletes them with the Pod however it is removed. The Pod's
+        required Secret volume holds task startup until the Secret exists, and
+        the Secret comes last, so the task's first connections already see the
+        job's egress rules.
+        """
+        pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
+        if pod is None:
+            raise KubectlError(f"Pod {pod_name} disappeared before its Secret and policy were applied")
+        owner = [{"apiVersion": "v1", "kind": "Pod", "name": pod_name, "uid": pod["metadata"]["uid"]}]
+        if task_policy is not None:
+            task_policy["metadata"]["ownerReferences"] = owner
+            self.kubectl.apply_json(task_policy)
+        self.kubectl.apply_json(
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {
+                    "name": _task_secret_name(pod_name),
+                    "namespace": self.pods.namespace,
+                    "ownerReferences": owner,
+                },
+                "type": "Opaque",
+                "data": {
+                    name: base64.b64encode(value.encode()).decode()
+                    for name, value in secret_file_contents(job_secrets).items()
+                },
+            }
         )
 
     def _delete_stray_pods(self, cached_pods: list[dict], desired_keys: set[tuple[str, int]]) -> None:
@@ -2896,6 +3069,7 @@ class K8sTaskProvider:
             for pod_name in pending:
                 self.kubectl.delete(K8sResource.CONFIGMAPS, f"{pod_name}-wf", wait=False)
                 self.kubectl.delete(K8sResource.PDBS, _pdb_name(pod_name), wait=False)
+                self.kubectl.delete(K8sResource.SECRETS, _task_secret_name(pod_name), wait=False)
                 cleaned.add(pod_name)
         except KubectlError:
             # Keep failed cleanup queued without preventing the terminal-pod sweep.
@@ -3013,7 +3187,8 @@ class K8sTaskProvider:
                     self._released_output_attempts.add(entry)
                 else:
                     logger.warning("Failed to release task output uploader in pod %s: %s", pod_name, release.stderr)
-            except KubectlError:
+            except Exception:
+                # Output release is best effort; a failed pod must not block the rest of this scan.
                 logger.warning("Failed to release task output uploader in pod %s", pod_name, exc_info=True)
 
         if time.monotonic() - started < policy.finalization_timeout.to_seconds():

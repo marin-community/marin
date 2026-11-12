@@ -52,13 +52,14 @@ config:
         - marin-community/MarinSkyRL
         - marin-community/evalchemy
         - marin-community/harbor
+        - marin-community/marin
         - marin-community/marin-style
         - marin-community/tpu-inference
         - marin-community/vllm
       source_kind: manual
       source_ref: owner-recovery:loom-trigger-token
       disposition: keep
-      note: Consumed outside marin; MarinSkyRL has a default-branch workflow reference.
+      note: Consumed by fork failure reporters and the SkyRL nightly.
     - name: SLACK_WEBHOOK_URL
       scope: organization
       presence: present
@@ -93,6 +94,14 @@ config:
       source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-discord-webhook-code-review/versions/1
       disposition: remove-candidate
       note: No current workflow reference; the current shell value matches the GCP version.
+    - name: DISCORD_WEBHOOK_GCS_EGRESS
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: gcp-secret
+      source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-discord-webhook-gcs-egress/versions/1
+      disposition: keep
+      note: Consumed by .github/workflows/ops-egress-report.yaml.
     - name: DISCORD_WEBHOOK_INTERNAL_DISCUSS
       scope: repository
       repository: marin-community/marin

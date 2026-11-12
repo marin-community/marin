@@ -1,0 +1,7 @@
+# Saved generations for the 131k MiniMax replay; no model-generation rerun.
+models:
+  - model: open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05
+    benchmarks:
+      olympiadbench:
+        tracker_score: 0.233
+        source: s3://marin-us-east-02a/marin/evals/20261012-212847-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-olympiadbench-d4b0/results

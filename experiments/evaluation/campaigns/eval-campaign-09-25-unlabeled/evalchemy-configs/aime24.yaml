@@ -1,0 +1,13 @@
+tasks: [AIME24]
+task_options:
+  AIME24:
+    num_fewshot: 0
+    task_alias: aime24
+    generation: true
+# No max_tokens: Evalchemy sizes AIME24 responses from the served context window minus the
+# benchmark's longest prompt (evalchemy#132). An explicit cap truncated reasoning models' chains.
+runtime_extras: [aime24]
+seed: 42
+gen_kwargs: do_sample=true,temperature=0.7
+chat_template_kwargs:
+  enable_thinking: true

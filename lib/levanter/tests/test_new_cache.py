@@ -20,6 +20,7 @@ from levanter.data.sharded_datasource import TextUrlDataSource
 from levanter.store.cache import (
     CACHE_LAYOUT_SHARDED,
     CacheLedger,
+    CacheOptions,
     SerialCacheWriter,
     ShardedCacheLayout,
     TreeCache,
@@ -326,6 +327,13 @@ async def test_sharded_flat_field_offsets_share_in_flight_build(monkeypatch):
         ("gs://bucket/cache/", "gs://bucket/cache/train/shard_0", "train/shard_0"),
         # A doubled interior separator on either side collapses structurally.
         ("gs://bucket/cache", "gs://bucket/cache//train//shard_0", "train/shard_0"),
+        # A trailing slash in MARIN_PREFIX doubles a separator in the output path while
+        # shard writes normalize it away; both must name the same location.
+        (
+            "s3://marin-na/marin//slimpajama-6b/train",
+            "s3://marin-na/marin/slimpajama-6b/train/part-00000-of-00048",
+            "part-00000-of-00048",
+        ),
         # Local absolute paths.
         ("/tmp/cache", "/tmp/cache/shard_0", "shard_0"),
         # An object-store key may contain a literal `..` segment (keys are not
@@ -342,6 +350,8 @@ def test_relative_shard_path_structural(output_path, shard_path, expected):
     [
         # Sibling, not descendant.
         ("gs://bucket/cache", "gs://bucket/other/shard_0"),
+        # Local sibling, not descendant.
+        ("/tmp/output", "/tmp/source/part-00000"),
         # Different bucket.
         ("gs://bucket/cache", "gs://other/cache/shard_0"),
         # shard_path equals output_path — no relative key to emit.
@@ -397,16 +407,21 @@ def test_full_end_to_end_cache():
         check_datasets_equal(all_data, expected)
 
 
-def test_full_end_to_end_cache_with_groups():
+def test_full_end_to_end_cache_with_partial_processor_batches():
+    """Shards processed in several batches, ending in a short one, keep every row in order."""
+    rows_per_shard = 10
+    batch_size = 3
+    assert rows_per_shard % batch_size != 0
     td = tempfile.TemporaryDirectory()
     with td as tmpdir:
         cache = build_or_load_cache(
             tmpdir,
-            SimpleShardSource(num_shards=5),
+            SimpleShardSource(num_shards=5, rows_per_shard=rows_per_shard),
             TestProcessor(),
+            CacheOptions(batch_size=batch_size),
         )
 
-        expected = simple_process(TestProcessor(), SimpleShardSource(num_shards=5))
+        expected = simple_process(TestProcessor(), SimpleShardSource(num_shards=5, rows_per_shard=rows_per_shard))
 
         all_data = cache[:]
 
@@ -523,23 +538,6 @@ def test_shard_cache_fails_with_multiple_shards_with_the_same_name():
             build_or_load_cache(tmpdir, dataset, TestProcessor())
 
 
-@pytest.mark.asyncio
-async def test_shard_cache_fails_gracefully_with_unknown_file_type_async():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with open(f"{tmpdir}/data.not_a_real_extension", "w") as f:
-            f.write("")
-
-        dataset = TextUrlDataSource(
-            [f"{tmpdir}/data.not_a_real_extension"],
-        )
-
-        with pytest.raises(ZephyrWorkerError):
-            build_or_load_cache(tmpdir, dataset, TestProcessor())
-
-        with pytest.raises(ZephyrWorkerError):
-            build_or_load_cache(tmpdir, dataset, TestProcessor())
-
-
 def test_shard_cache_fails_gracefully_with_unknown_file_type():
     with tempfile.TemporaryDirectory() as tmpdir:
         with open(f"{tmpdir}/data.not_a_real_extension", "w") as f:
@@ -560,13 +558,16 @@ def _make_levanter_records(n: int) -> list[dict[str, list[int]]]:
     return [{"input_ids": [i, i + 100], "attention_mask": [1, 1]} for i in range(n)]
 
 
-def test_write_levanter_cache_end_to_end():
+@pytest.mark.parametrize("max_pending_batches", [1, 128])
+def test_write_levanter_cache_end_to_end(max_pending_batches):
     """Write records and verify they can be read back."""
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = str(Path(tmpdir) / "cache")
         records = _make_levanter_records(8)
 
-        result = write_levanter_cache(iter(records), output_path, metadata={})
+        result = write_levanter_cache(
+            iter(records), output_path, metadata={}, batch_size=2, max_pending_batches=max_pending_batches
+        )
 
         assert result["path"] == output_path
         assert result["count"] == len(records)

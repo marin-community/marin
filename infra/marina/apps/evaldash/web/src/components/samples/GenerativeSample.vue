@@ -2,13 +2,14 @@
 /**
  * Renders a free-form generative sample: the prompt (as a chat transcript when the row carries
  * `prompt_messages`, else a collapsed text block), the generated output with code fences split
- * out, an extracted-vs-target answer strip, and the raw row JSON as a fallback.
+ * out, an extracted-vs-reference answer strip, and the raw row JSON as a fallback.
  */
 import { computed } from 'vue'
 import type { SampleRow } from '@/types/api'
 import PromptBlock from '@/components/samples/PromptBlock.vue'
 import ChatTranscript from '@/components/samples/ChatTranscript.vue'
 import FencedText from '@/components/samples/FencedText.vue'
+import { gsm8kGradedReference } from '@/utils/samples'
 
 const props = defineProps<{ sample: SampleRow }>()
 
@@ -22,6 +23,7 @@ const targetClass = computed(() =>
 )
 
 const rawJson = computed(() => JSON.stringify(props.sample, null, 2))
+const gradedReference = computed(() => gsm8kGradedReference(props.sample))
 </script>
 
 <template>
@@ -45,9 +47,16 @@ const rawJson = computed(() => JSON.stringify(props.sample, null, 2))
         <p class="text-sm font-mono whitespace-pre-wrap">{{ sample.extracted || '—' }}</p>
       </div>
       <div class="rounded border p-3" :class="targetClass">
-        <h4 class="text-[10px] font-semibold uppercase tracking-wider text-text-muted mb-1">Target</h4>
-        <p class="text-sm font-mono whitespace-pre-wrap">{{ sample.target_text || '—' }}</p>
+        <h4 class="text-[10px] font-semibold uppercase tracking-wider text-text-muted mb-1">
+          {{ gradedReference === null ? 'Target' : 'Graded reference' }}
+        </h4>
+        <p class="text-sm font-mono whitespace-pre-wrap">{{ gradedReference ?? sample.target_text ?? '—' }}</p>
       </div>
+    </div>
+
+    <div v-if="gradedReference !== null">
+      <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1">Reference rationale</h3>
+      <div class="rounded border border-surface-border bg-surface-sunken p-3 text-[13px] font-mono whitespace-pre-wrap">{{ sample.target_text }}</div>
     </div>
 
     <details>

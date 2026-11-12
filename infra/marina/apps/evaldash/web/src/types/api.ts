@@ -61,6 +61,17 @@ export const FLAG_NOTES: Record<string, string> = {
   degenerate_stderr: 'the harness recorded a standard error of exactly zero, which no real sample supports',
 }
 
+export interface RepeatAggregate {
+  n_items: number
+  n_repeats: number
+  n_trials: number
+  n_scored_trials: number | null
+  coverage_basis: 'items' | 'item_lower_bound' | 'source'
+  stderr: number
+  stderr_basis: string
+  source_coverage: unknown
+}
+
 // One benchmark result: the rate over graded items, the interval around it, how much of the
 // attempted item set was graded, and the run it came from. `low` is the ranking key -- `value` is a
 // complete-case rate and is biased upward when a run lost items.
@@ -71,6 +82,7 @@ export interface PanelCell {
   interval_kind: IntervalKind
   metric: string
   metric_kind: string
+  repeat_aggregation: RepeatAggregate | null
   declared: boolean
   n_scored: number
   n_benchmark: number | null
@@ -85,7 +97,7 @@ export interface PanelCell {
   created_at: string
   version: string | null
   git_sha: string
-  eval_runtime: string
+  eval_runtime: string | null
 }
 
 // Why a (model, benchmark) has no cell: a rejected run (failed status, coverage below the gate, the
@@ -198,6 +210,7 @@ export interface EvalFamily {
 }
 
 export interface Meta {
+  run_facets: Record<string, string[]>
   models: string[]
   default_cohort: string
   verified_cohorts: string[]
@@ -272,6 +285,15 @@ export interface BenchmarkMetadata {
   n_attempted: number | null
 }
 
+// One row of a run's top metrics table: a declared protocol metric (resolved by the API) or an
+// undeclared task's raw metric.
+export interface RunMetricRow {
+  task: string
+  metric: string
+  value: number
+  declared: boolean
+}
+
 // The canonical record.json shape (records.EvalRunRecord). `headline` is not stored on the record --
 // the run-detail endpoint computes it (the rolled-up primary metric) and attaches it to the response.
 export interface EvalRecord {
@@ -291,9 +313,10 @@ export interface EvalRecord {
   results_path: string
   metrics: Record<string, Record<string, number>>
   canonical_metrics: Record<string, Record<string, number>>
+  metric_rows: RunMetricRow[]
   jobs: Record<string, string>
   log_tails: Record<string, string[]>
-  provenance: { git_sha: string; eval_runtime: string; launch_host: string }
+  provenance: { git_sha: string; eval_runtime?: string | null; launch_host: string }
   timing: { started_at: string; finished_at: string | null } | null
   serving: {
     tensor_parallel_size: number | null
@@ -414,8 +437,9 @@ export interface SampleGrading {
 // One evaluated question: the prompt, the model's answer, the gold answer, and its scores.
 // `prompt_text` and `prompt_messages` are mutually exclusive; `choices`/`model_choice`/
 // `target_choice` are set for `multiple_choice` samples, `output`/`extracted` for `generation`
-// samples, and `trajectory_uri` for `agentic` samples. The one unbounded payload, the agentic
-// trajectory, is referenced by URI and lazy-loaded on demand.
+// samples, and `trajectory_uri` for `agentic` samples. The unbounded agentic artifact is referenced
+// by URI and lazy-loaded on demand. SOTOPIA-hard runs can have a separate `summary_uri` when Harbor
+// archived no ATIF trajectory.
 export interface SampleRow {
   task: string
   doc_id: string
@@ -429,13 +453,14 @@ export interface SampleRow {
   extracted: string | null
   target_text: string | null
   trajectory_uri: string | null
+  summary_uri: string | null
   grading: SampleGrading | null
   metrics: Record<string, number>
   correct: boolean | null
   doc: string
 }
 
-// One sample-referenced artifact (a trajectory) resolved to text by the server's
+// One sample-referenced artifact resolved to text by the server's
 // artifact endpoint. `available` is false with a `reason` when the object is out of tree,
 // missing, unreadable, or over the size cap — mirroring the logs endpoint's degradation.
 export interface ArtifactResponse {
@@ -497,8 +522,8 @@ export interface Trajectory {
 // Unpaginated per-task outcome counts; `ungraded` is its own bucket, apart from `incorrect`.
 export interface SampleCounts {
   all: number
-  correct: number
-  incorrect: number
+  correct: number | null
+  incorrect: number | null
   ungraded: number
 }
 

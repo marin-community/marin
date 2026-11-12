@@ -28,7 +28,7 @@ def install_preview_sources(apps_dir: Path, database: DatabaseSpec) -> None:
                 if package.manifest.applet_id is not None
                 else uuid5(NAMESPACE_URL, f"marina-preview:{source.name}")
             )
-            owner = ANONYMOUS_ADMIN.user_id
-            store.publish(package, owner, applet_id, existing.get(applet_id, 0), frozenset({owner}))
+            publisher = ANONYMOUS_ADMIN.user_id
+            store.publish(package, publisher, applet_id, existing.get(applet_id, 0), frozenset({publisher}))
     finally:
         store.engine.dispose()

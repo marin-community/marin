@@ -1,12 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-mode token bookkeeping for the rollout turn loop."""
+"""Per-mode token bookkeeping for the recorder."""
 
 from typing import Protocol
 
-from rolloutengine.contracts import ModelTurn, RolloutContractError, Transition
-from rolloutengine.spec import TraceMode
+from rolloutengine.models import ModelTurn, RolloutContractError, TraceMode
 
 
 class _TokenTrace(Protocol):
@@ -30,42 +29,37 @@ class _TokenTrace(Protocol):
     @property
     def response_end(self) -> int: ...
 
-    def generation_limit_prompt(self, prompt_token_ids: tuple[int, ...]) -> tuple[int, ...]: ...
-
     def append(self, turn: ModelTurn) -> None: ...
-
-    def check_transition(self, turn: ModelTurn, transition: Transition) -> None: ...
-
-    def reset(self) -> None: ...
 
 
 class _ExactTokenTrace:
-    """Enforce the exact-token contract and accumulate served tokens, loss masks, and log probabilities."""
+    """Enforce the exact-token contract and accumulate served tokens, loss masks, and log probabilities.
+
+    Masks and log probabilities grow by each turn's new tokens; the tuples are built only when read.
+    """
 
     def __init__(self) -> None:
-        self.reset()
-
-    def reset(self) -> None:
         self.started = False
         self.prompt: tuple[int, ...] = ()
-        self.tokens: tuple[int, ...] = ()
-        self.loss_mask: tuple[int, ...] = ()
-        self.logprobs: tuple[float, ...] | None = ()
-
-    @property
-    def prefix(self) -> tuple[int, ...]:
-        return self.tokens
+        self.prefix: tuple[int, ...] = ()
+        self._loss_mask: list[int] = []
+        self._logprobs: list[float] | None = []
 
     @property
     def response(self) -> tuple[int, ...]:
-        return self.tokens[len(self.prompt) :]
+        return self.prefix[len(self.prompt) :]
+
+    @property
+    def loss_mask(self) -> tuple[int, ...]:
+        return tuple(self._loss_mask)
+
+    @property
+    def logprobs(self) -> tuple[float, ...] | None:
+        return None if self._logprobs is None else tuple(self._logprobs)
 
     @property
     def response_end(self) -> int:
-        return len(self.tokens) - len(self.prompt) - 1
-
-    def generation_limit_prompt(self, prompt_token_ids: tuple[int, ...]) -> tuple[int, ...]:
-        return prompt_token_ids
+        return len(self.prefix) - len(self.prompt) - 1
 
     def append(self, turn: ModelTurn) -> None:
         if turn.logprobs is not None and len(turn.logprobs) != len(turn.response_token_ids):
@@ -74,20 +68,16 @@ class _ExactTokenTrace:
             raise RolloutContractError("Model response contains no token evidence")
         if not self.started:
             self.started = True
-            self.prompt = turn.prompt_token_ids
-            self.tokens = self.prompt
-        if turn.prompt_token_ids[: len(self.tokens)] != self.tokens:
+            self.prompt = self.prefix = turn.prompt_token_ids
+        if turn.prompt_token_ids[: len(self.prefix)] != self.prefix:
             raise RolloutContractError("Model transport changed the served token prefix")
-        observation_count = len(turn.prompt_token_ids) - len(self.tokens)
-        self.loss_mask += (0,) * observation_count + (1,) * len(turn.response_token_ids)
-        if self.logprobs is not None:
-            self.logprobs = None if turn.logprobs is None else self.logprobs + (0.0,) * observation_count + turn.logprobs
-        self.tokens = turn.prompt_token_ids + turn.response_token_ids
-
-    def check_transition(self, turn: ModelTurn, transition: Transition) -> None:
-        for values in (transition.token_rewards, transition.token_credit):
-            if values is not None and len(values) != len(turn.response_token_ids):
-                raise RolloutContractError("Transition rewards and credit must align with model response tokens")
+        observation_count = len(turn.prompt_token_ids) - len(self.prefix)
+        self._loss_mask += [0] * observation_count + [1] * len(turn.response_token_ids)
+        if turn.logprobs is None:
+            self._logprobs = None
+        elif self._logprobs is not None:
+            self._logprobs += [0.0] * observation_count + list(turn.logprobs)
+        self.prefix = turn.prompt_token_ids + turn.response_token_ids
 
 
 class _MessageTrace:
@@ -103,9 +93,6 @@ class _MessageTrace:
     logprobs: tuple[float, ...] | None = None
 
     def __init__(self) -> None:
-        self.reset()
-
-    def reset(self) -> None:
         self.started = False
         self.prompt: tuple[int, ...] = ()
         self.tokens: tuple[int, ...] = ()
@@ -122,17 +109,11 @@ class _MessageTrace:
     def response_end(self) -> int:
         return len(self.tokens) - len(self.prompt) - 1
 
-    def generation_limit_prompt(self, prompt_token_ids: tuple[int, ...]) -> tuple[int, ...]:
-        return prompt_token_ids
-
     def append(self, turn: ModelTurn) -> None:
         if not self.started:
             self.started = True
             self.prompt = turn.prompt_token_ids
         self.tokens = turn.prompt_token_ids + turn.response_token_ids
-
-    def check_transition(self, turn: ModelTurn, transition: Transition) -> None:
-        pass
 
 
 def _token_trace(mode: TraceMode) -> _TokenTrace:

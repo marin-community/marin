@@ -3,9 +3,11 @@
 
 import math
 from dataclasses import replace
+from typing import get_args
 
 import equinox as eqx
 import jax
+import numpy as np
 from jax import shard_map
 from jax import numpy as jnp
 from jax.sharding import PartitionSpec as P
@@ -13,7 +15,7 @@ from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.cutlass_kernel_cache import gpu_compute_capability
-from levanter.grug.attention._core import AttentionMask
+from levanter.grug.attention._core import DEFAULT_CONTEXT_ATTENTION_LAYOUT, AttentionMask, ContextAttentionLayout
 from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
 from levanter.grug.attention._fa4_cute_config import (
     SM100_GQA_RATIOS,
@@ -49,6 +51,11 @@ def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: in
 
 def _replicate_sequence_axis(x: jax.Array) -> jax.Array:
     """Replicate a ``[B, S]`` metadata array over sequence, preserving batch sharding."""
+    # A singleton batch cannot be physically partitioned. Remove its unit-mesh
+    # labels before slicing: JAX drops them on [1, 1] slices but retains them on
+    # [1, S] slices, otherwise making adjacent-position concatenation ill-typed.
+    if x.shape[0] == 1:
+        return _replicate_metadata(x)
     spec = partition_spec_of(x)
     if spec is None or len(spec) < 2 or spec[1] is None:
         return x
@@ -218,6 +225,7 @@ def _fa4_cute_attention_forward_sharded(
     *,
     sm_scale: float,
     kernel_config: Flash4CuteKernelConfig,
+    context_layout: ContextAttentionLayout,
 ) -> jax.Array:
     # Check global lengths before shard_map replaces Q with one rank's query slice.
     if q.shape[1] != k.shape[1]:
@@ -262,6 +270,7 @@ def _fa4_cute_attention_forward_sharded(
         )
 
     sequence_axes = q_dims[1]
+    shards = math.prod(mesh.shape[axis] for axis in sequence_axes)
     # Return Q's own spec, including length-1 axes: explicit sharding compares axis names, so an
     # output that drops them cannot be combined with the caller's activations.
     q_spec = tuple(partition_spec_of(q))
@@ -277,23 +286,57 @@ def _fa4_cute_attention_forward_sharded(
         check_vma=False,
     )
     def _local_fa4_attention(q_local, k_local, v_local, lower_bounds_local, valid_local):
-        q_offset = jnp.zeros((1,), dtype=jnp.int32)
-        if sequence_axes:
-            # shard_map's transpose sums partial dK/dV for replicated K/V. Local fp32
-            # accumulators are cast to the K/V dtype before this sum, so gradient rounding
-            # error can grow with the context degree.
-            shard_index = jax.lax.axis_index(sequence_axes).astype(jnp.int32)
-            q_offset = jnp.reshape(shard_index * q_local.shape[1], (1,))
-        return fa4_cute_attention_forward(
-            q_local,
-            k_local,
-            v_local,
-            lower_bounds_local,
-            valid_local,
-            sm_scale=sm_scale,
-            kernel_config=kernel_config,
-            q_offset=q_offset,
+        def _run(q_rows, lower_bounds_rows, valid_rows, first_position):
+            return fa4_cute_attention_forward(
+                q_rows,
+                k_local,
+                v_local,
+                lower_bounds_rows,
+                valid_rows,
+                sm_scale=sm_scale,
+                kernel_config=kernel_config,
+                q_offset=jnp.reshape(first_position, (1,)).astype(jnp.int32),
+            )
+
+        if not sequence_axes:
+            return _run(q_local, lower_bounds_local, valid_local, 0)
+        shard_index = jax.lax.axis_index(sequence_axes).astype(jnp.int32)
+        local_len = q_local.shape[1]
+        if context_layout == "contiguous":
+            return _run(q_local, lower_bounds_local, valid_local, shard_index * local_len)
+        # shard_map's transpose sums partial dK/dV for replicated K/V. Each shard runs two kernels
+        # below, and each casts its fp32 accumulators to the K/V dtype before the local and
+        # cross-shard sums, so gradient rounding error grows with twice the context degree.
+        #
+        # Causal attention costs more for later queries, so the shard holding the end of the
+        # sequence would set the pace. Shard c holds positions [cL, (c+1)L); it keeps the first half
+        # of its queries and swaps the second half with the mirror shard N-1-c, whose second half is
+        # as late as shard c's first half is early. Every shard then attends one early and one
+        # matching late block, and the outputs swap back afterwards.
+        # Every shard splits at the same row, so the swapped halves match in shape even for odd L.
+        split = local_len - local_len // 2
+        # ppermute takes its axes, and numbers shards, in mesh order; sequence position follows Q's spec order.
+        permute_axes = tuple(sorted(sequence_axes, key=mesh.axis_names.index))
+
+        def _permute_index(shard: int) -> int:
+            coords = dict(zip(sequence_axes, np.unravel_index(shard, [mesh.shape[a] for a in sequence_axes])))
+            return int(np.ravel_multi_index([coords[a] for a in permute_axes], [mesh.shape[a] for a in permute_axes]))
+
+        mirror = [(_permute_index(shard), _permute_index(shards - 1 - shard)) for shard in range(shards)]
+
+        def _swap_late(x):
+            return jax.lax.ppermute(x[:, split:], permute_axes, mirror)
+
+        early = _run(
+            q_local[:, :split], lower_bounds_local[:, :split], valid_local[:, :split], shard_index * local_len
         )
+        late = _run(
+            _swap_late(q_local),
+            _swap_late(lower_bounds_local),
+            _swap_late(valid_local),
+            (shards - 1 - shard_index) * local_len + split,
+        )
+        return jnp.concatenate([early, jax.lax.ppermute(late, permute_axes, mirror)], axis=1)
 
     return _local_fa4_attention(q, k, v, lower_bounds, valid)
 
@@ -319,7 +362,10 @@ def _gpu_fa4_cute_attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     kernel_config: Flash4CuteKernelConfig,
+    context_layout: ContextAttentionLayout,
 ) -> Float[Array, "B Q Hq D"]:
+    if context_layout not in get_args(ContextAttentionLayout):
+        raise ValueError(f"context_layout must be one of {get_args(ContextAttentionLayout)}, got {context_layout!r}")
     _validate_head_layout(q, k, backend_name="gpu_fa4_cute_attention")
     if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
         # The caller precomputed and selected the per-token metadata outside any per-layer scan/cond
@@ -341,6 +387,7 @@ def _gpu_fa4_cute_attention(
         valid,
         sm_scale=1.0 / math.sqrt(q.shape[-1]),
         kernel_config=kernel_config,
+        context_layout=context_layout,
     )
 
 
@@ -349,11 +396,15 @@ def gpu_fa4_cute_attention(
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    context_layout: ContextAttentionLayout = DEFAULT_CONTEXT_ATTENTION_LAYOUT,
 ) -> Float[Array, "B Q Hq D"]:
     """Run causal self-attention through the segmented FA4/CuTe kernel."""
     if jax.default_backend() != "gpu":
         raise RuntimeError("gpu_fa4_cute_attention requires the JAX GPU backend.")
-    return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=_segmented_kernel_config(q.shape[-1]))
+    return _gpu_fa4_cute_attention(
+        q, k, v, mask, kernel_config=_segmented_kernel_config(q.shape[-1]), context_layout=context_layout
+    )
 
 
 def gpu_fa4_cute_sm100_attention(
@@ -361,6 +412,8 @@ def gpu_fa4_cute_sm100_attention(
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    context_layout: ContextAttentionLayout = DEFAULT_CONTEXT_ATTENTION_LAYOUT,
 ) -> Float[Array, "B Q Hq D"]:
     """Run native SM100 forward and one-block backward for BF16 D128 GQA.
 
@@ -377,7 +430,7 @@ def gpu_fa4_cute_sm100_attention(
     if q.shape[2] // k.shape[2] not in SM100_GQA_RATIOS:
         raise ValueError(f"gpu_fa4_cute_sm100 requires a GQA ratio in {SM100_GQA_RATIOS}.")
     config = sm100_flash4_cute_kernel_config()
-    return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=config)
+    return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=config, context_layout=context_layout)
 
 
 def fa4_cute_segment_bounds(

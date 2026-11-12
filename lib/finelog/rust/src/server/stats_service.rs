@@ -10,20 +10,18 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use buffa::MessageField;
-use connectrpc::{ConnectError, RequestContext, ServiceResult};
+use connectrpc::{ConnectError, RequestContext, ServiceRequest, ServiceResult};
 use datafusion::error::DataFusionError;
 
 use crate::errors::StatsError;
 use crate::policies::{managed_storage_policy_for, registration_namespace_for};
 use crate::proto::finelog::stats::{
-    AbortTableMigrationResponse, DropTableResponse, GetTableSchemaResponse, GetTableStatusResponse,
-    ListNamespacesResponse, ListRelayStatusResponse, NamespaceInfo,
-    OwnedAbortTableMigrationRequestView, OwnedDropTableRequestView, OwnedGetTableSchemaRequestView,
-    OwnedGetTableStatusRequestView, OwnedListNamespacesRequestView,
-    OwnedListRelayStatusRequestView, OwnedQueryRequestView, OwnedRegisterTableRequestView,
-    OwnedReportRelayStatusRequestView, OwnedWriteRowsRequestView, QueryResponse,
-    RegisterTableResponse, ReportRelayNamespaceStatus, ReportRelayStatusRequest,
-    ReportRelayStatusResponse, StatsService, WriteRowsResponse,
+    AbortTableMigrationRequest, AbortTableMigrationResponse, DropTableRequest, DropTableResponse,
+    GetTableSchemaRequest, GetTableSchemaResponse, GetTableStatusRequest, GetTableStatusResponse,
+    ListNamespacesRequest, ListNamespacesResponse, ListRelayStatusRequest, ListRelayStatusResponse,
+    NamespaceInfo, QueryRequest, QueryResponse, RegisterTableRequest, RegisterTableResponse,
+    ReportRelayNamespaceStatus, ReportRelayStatusRequest, ReportRelayStatusResponse, StatsService,
+    WriteRowsRequest, WriteRowsResponse,
 };
 use crate::query::{
     make_ctx, query_namespaces, query_timeout, run_query_over, run_within_query_timeout,
@@ -147,6 +145,9 @@ fn relay_cluster(ctx: &RequestContext) -> Result<String, ConnectError> {
 /// buried under context still classifies as `invalid_argument`.
 fn map_query_error(e: DataFusionError) -> ConnectError {
     let msg = format!("query failed: {e}");
+    if crate::query::is_read_deadline(&e) {
+        return ConnectError::deadline_exceeded(msg);
+    }
     match e.find_root() {
         DataFusionError::SQL(..)
         | DataFusionError::Plan(_)
@@ -164,7 +165,7 @@ impl StatsService for StatsServiceImpl {
     async fn register_table(
         &self,
         ctx: RequestContext,
-        request: OwnedRegisterTableRequestView,
+        request: ServiceRequest<'_, RegisterTableRequest>,
     ) -> ServiceResult<RegisterTableResponse> {
         let namespace = request
             .namespace
@@ -265,34 +266,34 @@ impl StatsService for StatsServiceImpl {
     async fn write_rows(
         &self,
         ctx: RequestContext,
-        request: OwnedWriteRowsRequestView,
+        request: ServiceRequest<'_, WriteRowsRequest>,
     ) -> ServiceResult<WriteRowsResponse> {
         let namespace = request
             .namespace
             .ok_or_else(|| ConnectError::invalid_argument("namespace required"))?
             .to_string();
-        // Copy the IPC bytes out of the borrowed request so the blocking decode
-        // owns them across the spawn_blocking boundary.
-        let arrow_ipc: Vec<u8> = request.arrow_ipc.unwrap_or(&[]).to_vec();
         // Resolve the origin cluster from the credential before the blocking
         // hop so a forwarding writer's rows are stamped with its cluster.
         let origin_cluster = write_origin_cluster(&ctx)?;
         let forwarded_telemetry =
             origin_cluster.is_some() && is_forwarded_telemetry_namespace(&namespace);
+        let request = request.to_owned_message();
 
         let store = Arc::clone(&self.store);
         let ns = namespace.clone();
         let outcome = run_blocking(move || {
+            // The bytes field shares the decoded request body across this blocking hop.
+            let arrow_ipc = request.arrow_ipc.as_deref().unwrap_or(&[]);
             if forwarded_telemetry {
                 return store.write_forwarded_telemetry_rows(
                     &ns,
-                    &arrow_ipc,
+                    arrow_ipc,
                     origin_cluster
                         .as_deref()
                         .expect("forwarded telemetry has an origin cluster"),
                 );
             }
-            store.write_ingestion_rows(&ns, &arrow_ipc, origin_cluster.as_deref())
+            store.write_ingestion_rows(&ns, arrow_ipc, origin_cluster.as_deref())
         })
         .await?;
         let ForwardedWrite {
@@ -337,21 +338,32 @@ impl StatsService for StatsServiceImpl {
     async fn query(
         &self,
         ctx: RequestContext,
-        request: OwnedQueryRequestView,
+        request: ServiceRequest<'_, QueryRequest>,
     ) -> ServiceResult<QueryResponse> {
         let request_started = Instant::now();
         let sql = request.sql.unwrap_or("").to_string();
-
-        // Hold the query-visibility READ guard across the WHOLE scan. DataFusion
-        // opens the snapshotted parquet files LAZILY during collect(), so the
-        // guard must outlive run_query_over (not just query_providers) to keep a
-        // concurrent drop_table / compaction from unlinking a file mid-scan.
-        let visibility_started = Instant::now();
-        let _read_guard = self.store.query_visibility().read().await;
-        let visibility_wait = visibility_started.elapsed();
-
         let query_ctx = make_ctx();
+        crate::query::bind_read_deadline(
+            &query_ctx,
+            ctx.time_remaining()
+                .map(|remaining| tokio::time::Instant::now() + remaining),
+        );
+        let admission = query_ctx
+            .copied_config()
+            .get_extension::<crate::store::object_store::QueryCacheAdmission>()
+            .unwrap();
         let names = query_namespaces(&query_ctx, &sql).map_err(map_query_error)?;
+
+        // DataFusion opens legacy Parquet files during collect(), so keep the
+        // visibility guard through the scan. Legacy replacement and drop_table
+        // can unlink those files after the guard is released.
+        let visibility_started = Instant::now();
+        let _read_guard = if names.is_empty() {
+            None
+        } else {
+            Some(self.store.query_visibility().read().await)
+        };
+        let visibility_wait = visibility_started.elapsed();
 
         // Plan only referenced namespaces from their pinned state (schema, bounds,
         // partitions, exact object references) on the blocking pool. Objects are
@@ -362,7 +374,9 @@ impl StatsService for StatsServiceImpl {
         let provider_elapsed = provider_started.elapsed();
         // Object-backed tables bound the read themselves; that bound cannot be
         // configured away.
-        let table_bound = self.store.object_query_bound();
+        let table_bound = crate::query::snapshot_deadline(&providers)
+            .map(|deadline| deadline.saturating_duration_since(tokio::time::Instant::now()));
+        let fills = admission.cancel_on_drop(query_timeout(ctx.time_remaining(), table_bound));
 
         // DataFusion schedules its own CPU tasks; await sql()/collect() directly
         // (no spawn_blocking). Errors map by variant: parse/plan/schema/catalog
@@ -421,6 +435,7 @@ impl StatsService for StatsServiceImpl {
                 "slow Query RPC stage breakdown",
             );
         }
+        fills.complete();
         connectrpc::Response::ok(
             QueryResponse::default()
                 .with_arrow_ipc(buf)
@@ -431,7 +446,7 @@ impl StatsService for StatsServiceImpl {
     async fn drop_table(
         &self,
         _ctx: RequestContext,
-        request: OwnedDropTableRequestView,
+        request: ServiceRequest<'_, DropTableRequest>,
     ) -> ServiceResult<DropTableResponse> {
         let namespace = request
             .namespace
@@ -449,7 +464,7 @@ impl StatsService for StatsServiceImpl {
     async fn list_namespaces(
         &self,
         _ctx: RequestContext,
-        _request: OwnedListNamespacesRequestView,
+        _request: ServiceRequest<'_, ListNamespacesRequest>,
     ) -> ServiceResult<ListNamespacesResponse> {
         let store = Arc::clone(&self.store);
         let entries = run_blocking(move || store.list_namespaces_with_stats()).await?;
@@ -479,7 +494,7 @@ impl StatsService for StatsServiceImpl {
     async fn get_table_schema(
         &self,
         _ctx: RequestContext,
-        request: OwnedGetTableSchemaRequestView,
+        request: ServiceRequest<'_, GetTableSchemaRequest>,
     ) -> ServiceResult<GetTableSchemaResponse> {
         let namespace = request
             .namespace
@@ -496,7 +511,7 @@ impl StatsService for StatsServiceImpl {
     async fn get_table_status(
         &self,
         _ctx: RequestContext,
-        request: OwnedGetTableStatusRequestView,
+        request: ServiceRequest<'_, GetTableStatusRequest>,
     ) -> ServiceResult<GetTableStatusResponse> {
         let namespace = request
             .namespace
@@ -528,7 +543,7 @@ impl StatsService for StatsServiceImpl {
     async fn abort_table_migration(
         &self,
         _ctx: RequestContext,
-        request: OwnedAbortTableMigrationRequestView,
+        request: ServiceRequest<'_, AbortTableMigrationRequest>,
     ) -> ServiceResult<AbortTableMigrationResponse> {
         let namespace = request
             .namespace
@@ -545,7 +560,7 @@ impl StatsService for StatsServiceImpl {
     async fn report_relay_status(
         &self,
         ctx: RequestContext,
-        request: OwnedReportRelayStatusRequestView,
+        request: ServiceRequest<'_, ReportRelayStatusRequest>,
     ) -> ServiceResult<ReportRelayStatusResponse> {
         let cluster = relay_cluster(&ctx)?;
         let namespaces = request
@@ -585,7 +600,7 @@ impl StatsService for StatsServiceImpl {
     async fn list_relay_status(
         &self,
         _ctx: RequestContext,
-        _request: OwnedListRelayStatusRequestView,
+        _request: ServiceRequest<'_, ListRelayStatusRequest>,
     ) -> ServiceResult<ListRelayStatusResponse> {
         connectrpc::Response::ok(ListRelayStatusResponse {
             senders: self.relay_status.list(),

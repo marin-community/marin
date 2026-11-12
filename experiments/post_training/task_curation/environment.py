@@ -92,7 +92,7 @@ class Environment:
     URL requirement whose URL names a commit; the build compiles them to a hash lock. ``apt`` names
     Debian packages. ``files`` places pinned archive members at absolute paths: the same path in a built
     image and in the worker, where bubblewrap binds each read-only, so a path cannot lie under the host
-    system directories (``/usr``, ``/etc``, ``/opt`` and the rest of ``SYSTEM_DIRECTORIES``), which are
+    system directories (``/usr``, ``/etc`` and the rest of ``SYSTEM_DIRECTORIES``), which are
     already bound read-only. ``env`` sets environment variables for graders in both placements. ``image``
     is a digest-pinned image used as-is and excludes every other field. ``dockerfile`` is a checked-in,
     self-contained Dockerfile fragment that installs a toolchain the packages cannot provide, such as

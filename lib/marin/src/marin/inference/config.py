@@ -186,6 +186,13 @@ class SpeculativeMethod(StrEnum):
     EAGLE3 = "eagle3"
 
 
+class ObjectStoreLoadMode(StrEnum):
+    """How an inference worker makes object-store weights available to its engine."""
+
+    STREAM = "stream"
+    STAGE_LOCAL = "stage_local"
+
+
 @dataclass(frozen=True)
 class SpeculativeServingConfig:
     """A resolved draft model and its vLLM speculative-decoding policy."""
@@ -228,6 +235,7 @@ class ServedModelConfig:
     max_model_len: int | None = None
     tensor_parallel_size: int | None = None
     chat_template_content: str | None = None
+    object_store_load_mode: ObjectStoreLoadMode = ObjectStoreLoadMode.STREAM
 
     def __post_init__(self) -> None:
         if not self.weights:
@@ -264,6 +272,7 @@ class VllmEngineConfig:
     launcher: VllmLauncherType = VllmLauncherType.PREINSTALLED
     source: VllmSource = VllmSource.UPSTREAM
     version: str | None = None
+    extra_requirements: tuple[str, ...] = ()
     compilation_cache: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED
     startup_timeout_seconds: int = 1800
     max_num_batched_tokens: int | None = None
@@ -409,7 +418,9 @@ class IrisConfig:
         if not isinstance(self.worker_resources, ResourceConfig):
             return
         geometry = self.serving_geometry
-        if geometry is None and self.worker_resources.replicas != 1:
+        if geometry is None and self.worker_resources.replicas != (
+            self.worker_resources.device.vm_count() if isinstance(self.worker_resources.device, TpuConfig) else 1
+        ):
             raise ValueError("Each inference instance must use exactly one Iris task")
         device = self.worker_resources.device
         if geometry is not None:
@@ -419,8 +430,6 @@ class IrisConfig:
                 raise ValueError("serving geometry requires matching GPU resources per task")
         if isinstance(device, CpuConfig):
             raise ValueError("Inference workers require an accelerator")
-        if isinstance(device, TpuConfig) and device.vm_count() != 1:
-            raise ValueError(f"Inference instances require a single-host TPU; got {device.variant}")
 
 
 @dataclass(frozen=True)
@@ -437,6 +446,15 @@ class RemoteInferenceConfig:
     def __post_init__(self) -> None:
         if self.instances <= 0:
             raise ValueError("instances must be positive")
+        resources = self.iris.worker_resources
+        device = resources.device if isinstance(resources, ResourceConfig) else None
+        if isinstance(device, TpuConfig) and device.vm_count() > 1:
+            if not isinstance(self.engine, VllmEngineConfig) or self.engine.launcher is not VllmLauncherType.TPU:
+                raise ValueError("multi-host TPU serving requires the isolated TPU vLLM backend")
+            if self.instances != 1 or self.broker is not None:
+                raise ValueError("multi-host TPU serving requires one instance and no broker")
+            if self.model.object_store_load_mode is not ObjectStoreLoadMode.STREAM:
+                raise ValueError("multi-host TPU serving requires shared weights with stream loading")
         geometry = self.iris.serving_geometry
         if geometry is not None and geometry.task_count > 1:
             if not isinstance(self.engine, VllmEngineConfig):

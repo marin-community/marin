@@ -139,7 +139,8 @@ def test_alert_rules_define_nodata_and_error_behavior():
     # Most alert endpoints return explicit zeros when healthy. The storage rules
     # stay normal until the optional CoreWeave collector writes its first rows.
     for rule in _rules():
-        expected_no_data = "OK" if rule["uid"].startswith("coreweave-storage-") else "Alerting"
+        optional_metrics = rule["uid"].startswith("coreweave-storage-") or rule["uid"] == "node-runtime-filesystem-full"
+        expected_no_data = "OK" if optional_metrics else "Alerting"
         assert rule["noDataState"] == expected_no_data, rule["uid"]
         assert rule["execErrState"] == "Alerting", rule["uid"]
         assert rule["labels"]["severity"] in VALID_SEVERITIES, rule["uid"]
@@ -182,6 +183,10 @@ class _FakeFinelog:
         )
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        if "node_filesystem_available_bytes" in sql:
+            return pa.table(
+                {"cluster": ["cw-a"], "node": ["n1"], "node_uid": ["uid1"], "mountpoint": ["/"], "value": [0.5]}
+            )
         if '"storage.usage"' in sql:
             return pa.table(
                 {
@@ -400,11 +405,8 @@ def test_coreweave_storage_alert_notifies_slack_when_collection_is_missing_for_2
         assert database.execute(sql).fetchall() == expected
 
 
-def test_every_slack_alert_goes_through_the_bridge_and_none_through_grafana():
-    """The bridge posts every Slack alert, not Grafana. For critical alerts that is
-    load-bearing — an incoming webhook never reveals the message ts that Loom needs
-    to route the thread — and routing the fallback the same way keeps one channel,
-    one credential, and one rendering."""
+def test_every_delivered_alert_uses_the_loom_bridge():
+    """Both receivers open a Loom session on the Slack thread they announce."""
     points = {point["name"]: point for point in _load(ALERTING / "contact-points.yaml")["contactPoints"]}
     assert {receiver["type"] for receiver in points["ops-critical"]["receivers"]} == {"email", "webhook"}
     assert {receiver["type"] for receiver in points["ops-slack"]["receivers"]} == {"webhook"}
@@ -414,7 +416,7 @@ def test_every_slack_alert_goes_through_the_bridge_and_none_through_grafana():
     (loom,) = [receiver for receiver in points["ops-critical"]["receivers"] if receiver["type"] == "webhook"]
     assert loom["settings"] == {"url": "http://127.0.0.1:8081/alerts/loom", "httpMethod": "POST"}
     (fallback,) = points["ops-slack"]["receivers"]
-    assert fallback["settings"] == {"url": "http://127.0.0.1:8081/alerts/slack", "httpMethod": "POST"}
+    assert fallback["settings"] == {"url": "http://127.0.0.1:8081/alerts/loom", "httpMethod": "POST"}
 
 
 def test_finelog_health_alert_pages_critical_after_five_minutes():
@@ -496,7 +498,7 @@ def test_run_health_alerts_split_paging_from_announcing():
     }
 
 
-def test_announcing_run_health_reaches_slack_without_a_triage_session():
+def test_announcing_run_health_reaches_slack_with_a_triage_session():
     # severity=warning alone is muted by dashboard-only, so the announcing rule
     # needs the notification=slack route, which is matched first and unmuted.
     (rule,) = [rule for rule in _rules() if rule["uid"] == "training-run-health-degraded"]

@@ -12,6 +12,7 @@ from levanter.grug.attention import (
     xla_flash_attention,
     AttentionMask,
     attention,
+    fa4_cute_segment_bounds,
     reference_attention,
     token_validity_from_attention_mask,
 )
@@ -47,6 +48,22 @@ def test_reference_attention_matches_manual_segment_mask():
     np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=2e-5)
 
 
+def test_reference_attention_applies_the_window_in_fa4_bounds():
+    # Grug layer scans pass a full-causal mask and carry each layer's window only in the bounds.
+    q, k, v = _make_qkv(batch=2, q_len=12, k_len=12, q_heads=2, kv_heads=1)
+    # The second row ends in padding, whose bounds hold a sentinel rather than a lower bound.
+    segment_ids = jnp.array([[0] * 7 + [1] * 5, [0] * 9 + [-1] * 3], dtype=jnp.int32)
+    windowed = AttentionMask.causal(sliding_window=4).with_segment_ids(segment_ids)
+    lower_bounds, valid = fa4_cute_segment_bounds(windowed, batch_size=2, seq_len=12, sliding_window=4)
+    bounds_mask = AttentionMask.causal().with_segment_ids(segment_ids).with_fa4_bounds(lower_bounds, valid)
+
+    actual = reference_attention(q, k, v, bounds_mask, logits_dtype=jnp.float32)
+    expected = reference_attention(q, k, v, windowed, logits_dtype=jnp.float32)
+
+    np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=2e-5)
+
+
+@pytest.mark.tpu
 def test_reference_attention_supports_model_sharded_head_dimension():
     q, k, v = _make_qkv(batch=1, q_len=5, k_len=5, q_heads=2, kv_heads=1)
     mask = AttentionMask.causal()
@@ -91,6 +108,7 @@ def test_reference_attention_eval_shape_supports_model_sharded_grouped_query_hea
     assert output.sharding == q_sharding
 
 
+@pytest.mark.tpu
 def test_real_tpu_splash_attention_matches_reference():
     if jax.default_backend() != "tpu":
         pytest.skip("Splash attention requires a TPU backend.")

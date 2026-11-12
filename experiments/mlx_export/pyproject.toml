@@ -1,0 +1,20 @@
+# Mac-only environment for the MLX half of experiments/mlx_export. MLX has no
+# Linux wheels, so this project is excluded from the root uv workspace.
+[project]
+name = "marin-mlx-export"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "huggingface-hub>=1.0",
+    # grug_moe_mlx.py patches mlx-lm internals; bump only after re-running parity.
+    "mlx-lm==0.32.2",
+    "mlx==0.32.4",
+    "pyarrow>=18",
+    "pytest>=8",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["."]

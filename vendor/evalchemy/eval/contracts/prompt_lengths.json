@@ -1,0 +1,227 @@
+{
+  "schema_version": 1,
+  "reference_tokenizer": "Qwen/Qwen3-8B",
+  "prompt_margin_tokens": 256,
+  "benchmarks": {
+    "AIME24": {
+      "distinct_prompt_count": 30,
+      "longest_prompt_chars": 1071,
+      "longest_prompt_tokens": 446,
+      "sha256": "5e9089f283358fc503925c4b2731ecab5ed49b8ad98105e7f476c60ba5c67b16"
+    },
+    "AIME25": {
+      "distinct_prompt_count": 30,
+      "longest_prompt_chars": 1076,
+      "longest_prompt_tokens": 272,
+      "sha256": "26a413914a4c67d12d66b813c079126a4931eb52ba132e145234ebc7728a5972"
+    },
+    "AIW": {
+      "distinct_prompt_count": 12,
+      "longest_prompt_chars": 578,
+      "longest_prompt_tokens": 132,
+      "sha256": "2c203051cf307bc961ed915075ced26982cf754a8d99d2903e3870a7c032705c"
+    },
+    "AMC23": {
+      "distinct_prompt_count": 40,
+      "longest_prompt_chars": 786,
+      "longest_prompt_tokens": 233,
+      "sha256": "9620fdea1bfebc57fb9ce4710527e9b96265fce30502cea574bfb6bb7aa5d422"
+    },
+    "BigCodeBench": {
+      "distinct_prompt_count": 2278,
+      "longest_prompt_chars": 3894,
+      "longest_prompt_tokens": 1397,
+      "sha256": "210e922cd84ae868a1cf36d5567e9ee251243c92e7959e5b02dca1f00a118d61"
+    },
+    "CodeElo": {
+      "distinct_prompt_count": 380,
+      "longest_prompt_chars": 4948,
+      "longest_prompt_tokens": 1789,
+      "sha256": "c37bdabad08694f85dd5ae7729cfacc4ad4405367470da1d0bb1da58325822fc"
+    },
+    "CodeForces": {
+      "distinct_prompt_count": 453,
+      "longest_prompt_chars": 17168,
+      "longest_prompt_tokens": 4618,
+      "sha256": "38e8f41dad9549df20385c784f39f5f58f1074fe31f25b03294a9521460bf1a3"
+    },
+    "CruxEval": {
+      "distinct_prompt_count": 1600,
+      "longest_prompt_chars": 1513,
+      "longest_prompt_tokens": 447,
+      "sha256": "5e4d8983d0b40e0f21be3d675f4c8a6c88238bfc6fd047cf38ef7aafc0545b8e"
+    },
+    "FinanceBench": {
+      "distinct_prompt_count": 50,
+      "longest_prompt_chars": 6313,
+      "longest_prompt_tokens": 1589,
+      "sha256": "dba0c3f81b8554123a20190844602077d6578d58a68c41132333b9a308e04966"
+    },
+    "GPQADiamond": {
+      "distinct_prompt_count": 198,
+      "longest_prompt_chars": 5820,
+      "longest_prompt_tokens": 2809,
+      "sha256": "c0248a669cdf0e313ce0d2515d371ffc5d9546b6a4468105aa71f5385c09bb31"
+    },
+    "GSM8KPerturbed": {
+      "distinct_prompt_count": 2584,
+      "longest_prompt_chars": 13256,
+      "longest_prompt_tokens": 3427,
+      "sha256": "daedf8c4cbb355d9c91e3601c3ee7da44d92be8a414fbd3ba2cf3294041532b8"
+    },
+    "HLE": {
+      "distinct_prompt_count": 513,
+      "longest_prompt_chars": 21322,
+      "longest_prompt_tokens": 12233,
+      "sha256": "b5ca8cbb74f5924ac0de5d24252bd1c51081352b6e112a31e4e14e56ef51bbeb"
+    },
+    "HMMT": {
+      "distinct_prompt_count": 30,
+      "longest_prompt_chars": 1650,
+      "longest_prompt_tokens": 653,
+      "sha256": "986c28d006597f7cf49080bd04836b23a53dadde5780d472cd2d35958be180ed"
+    },
+    "HumanEval": {
+      "distinct_prompt_count": 322,
+      "longest_prompt_chars": 1631,
+      "longest_prompt_tokens": 451,
+      "sha256": "ead74ec90a3b41b584d22b7f2eade8947bde96a19be84c0483cd2c49dcf173a3"
+    },
+    "HumanEvalPlus": {
+      "distinct_prompt_count": 164,
+      "longest_prompt_chars": 1631,
+      "longest_prompt_tokens": 443,
+      "sha256": "1d73ab1008579fd20fdd3d49e1d5d11f5d54dc890c604c45e3d6ed1ccdef44b3"
+    },
+    "IFBench": {
+      "distinct_prompt_count": 300,
+      "longest_prompt_chars": 954,
+      "longest_prompt_tokens": 286,
+      "sha256": "0a9b6809903f4fc38bc4e919bdfaac27c7945cbd22dd6b6e22c536d6a97909ae"
+    },
+    "IFEval": {
+      "distinct_prompt_count": 500,
+      "longest_prompt_chars": 1908,
+      "longest_prompt_tokens": 369,
+      "sha256": "45f574407ff5e8ceff437a78803ac631afd1dbabc0661bf364a802b4943d32d6"
+    },
+    "JEEBench": {
+      "distinct_prompt_count": 515,
+      "longest_prompt_chars": 1877,
+      "longest_prompt_tokens": 581,
+      "sha256": "e2c216de51da5e376f338c3dd14a7f88d2c4377da664e13c93b9fc76bef8a422"
+    },
+    "LiveCodeBench": {
+      "distinct_prompt_count": 511,
+      "longest_prompt_chars": 4180,
+      "longest_prompt_tokens": 1852,
+      "sha256": "cbcf067bbf92396725ab8de6f3d55312c30d2bed1316467f9b765bc3080267f2"
+    },
+    "LiveCodeBenchv5": {
+      "distinct_prompt_count": 369,
+      "longest_prompt_chars": 3842,
+      "longest_prompt_tokens": 1780,
+      "sha256": "2a652a79ecae73baf735d8d6462ae54bebf838b7190be8fb53159d08de13083f"
+    },
+    "LiveCodeBenchv5_official": {
+      "distinct_prompt_count": 279,
+      "longest_prompt_chars": 3842,
+      "longest_prompt_tokens": 1780,
+      "sha256": "c12055703ecc3ebe54a59a2fbf2f099609b4776e94b72618cca95ff5e6ee27e1"
+    },
+    "MATH500": {
+      "distinct_prompt_count": 500,
+      "longest_prompt_chars": 1831,
+      "longest_prompt_tokens": 810,
+      "sha256": "632f6c7c178d07ceec4d633694dc989edf23e4cff5fcd1f0f9ca621b6e8bccd4"
+    },
+    "MBPP": {
+      "distinct_prompt_count": 500,
+      "longest_prompt_chars": 5865,
+      "longest_prompt_tokens": 4270,
+      "sha256": "5650226af228a1e68a8ed40eba3819429aa1157e58577ef388a04aeb516c4f1e"
+    },
+    "MBPPPlus": {
+      "distinct_prompt_count": 378,
+      "longest_prompt_chars": 4473,
+      "longest_prompt_tokens": 1452,
+      "sha256": "1c562e0f8987dc72f27e6a86dec113f67e87c0f43708430acbf06df3907f1b65"
+    },
+    "MMLUPro": {
+      "distinct_prompt_count": 12032,
+      "longest_prompt_chars": 5565,
+      "longest_prompt_tokens": 1713,
+      "sha256": "b052d67c7cf19fcc2d558dea9a40ed1460df48e71b9c9f14e630f82136a880ed"
+    },
+    "MultiPLE": {
+      "distinct_prompt_count": 5477,
+      "longest_prompt_chars": 2521,
+      "longest_prompt_tokens": 799,
+      "sha256": "53a443baa46ffb97aede3097062eab4b07ddf1c9c7540c48cc556df902ddf45e"
+    },
+    "NUPA5K-Loose": {
+      "distinct_prompt_count": 4973,
+      "longest_prompt_chars": 612,
+      "longest_prompt_tokens": 399,
+      "sha256": "3d779ab5098a6e5c9c748cd30b28add6b549187def0a7b18f63c6ee1bf871dda"
+    },
+    "OlympiadBench": {
+      "distinct_prompt_count": 30,
+      "longest_prompt_chars": 11931,
+      "longest_prompt_tokens": 3392,
+      "sha256": "3b7b6c000c1f5fa424ff62782cbac6c7167e4315cba953021c47f723ca08c4b2"
+    },
+    "OlympiadBenchDeterministic": {
+      "distinct_prompt_count": 30,
+      "longest_prompt_chars": 11931,
+      "longest_prompt_tokens": 3392,
+      "sha256": "3b7b6c000c1f5fa424ff62782cbac6c7167e4315cba953021c47f723ca08c4b2"
+    },
+    "OlympiadBenchFull": {
+      "distinct_prompt_count": 911,
+      "longest_prompt_chars": 10137,
+      "longest_prompt_tokens": 3143,
+      "sha256": "389e0da355b9aad7e699101d8be2b257124ddd9d72df2fdd5ee79a88314f4896"
+    },
+    "SWEbench": {
+      "distinct_prompt_count": 300,
+      "longest_prompt_chars": 372130,
+      "longest_prompt_tokens": 110520,
+      "sha256": "83527f80747db50c658538f11297a19a94b56e2deec523f03a64caf87c86ce84"
+    },
+    "SimpleQA": {
+      "distinct_prompt_count": 4326,
+      "longest_prompt_chars": 431,
+      "longest_prompt_tokens": 119,
+      "sha256": "c99608c0d5ca823cecae0014934409d2bd7d01dfc9b90d9171dc92b49f681176"
+    },
+    "SimpleQAMini": {
+      "distinct_prompt_count": 500,
+      "longest_prompt_chars": 362,
+      "longest_prompt_tokens": 80,
+      "sha256": "9ca3a56eae147d5d144ffd7457bef8d4775c74bfd6064f3f43e69ca3317c9e45"
+    },
+    "alpaca_eval": {
+      "distinct_prompt_count": 805,
+      "longest_prompt_chars": 1967,
+      "longest_prompt_tokens": 491,
+      "sha256": "c68db615ed06d90aa8f4b677f196f8028da0cd64bcfdf62d4da2d82442b25c6a"
+    },
+    "zeroeval": {
+      "distinct_prompt_count": 3033,
+      "longest_prompt_chars": 5711,
+      "longest_prompt_tokens": 1457,
+      "sha256": "5f0b5acae2df5dc6ec82d6eebff61c0a8f3ef59eda2b47d287f15ef932502c88"
+    }
+  },
+  "unmeasured": {
+    "GraphWalks": "Context-selected pinned dataset; prompt tokens and gold-dependent output budgets are computed per example with the served model tokenizer.",
+    "LiveBench": "IndexError: list index out of range",
+    "MRCR": "MissingContextLengthError: MRCR requires an explicit max_length so unsupported examples can be excluded",
+    "MTBench": "FileNotFoundError: [Errno 2] No such file or directory: 'eval/chat_benchmarks/MTBench/fastchat/llm_judge/data/mt_bench/model_answer/Qwen/Qwen3-8B.jsonl'",
+    "MixEval": "IndexError: list index out of range",
+    "NUPA-Loose": "canonical prompt corpus contains 238926 remote-source examples",
+    "RepoBench": "TimeoutError: rendering exceeded 900s",
+    "WildBench": "AttributeError: 'WildBenchConfig' object has no attribute 'max_tokens'"
+  }
+}

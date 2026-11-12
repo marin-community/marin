@@ -43,7 +43,7 @@ from typing import Protocol
 import google.auth
 from fastapi import APIRouter, FastAPI
 from google.auth.transport.requests import AuthorizedSession
-from marin.evaluation.eval_policy import SEPTEMBER_24_VERSION, record_policy_violations
+from marin.evaluation.eval_policy import record_policy_violations
 from marin.evaluation.eval_stats import (
     DEFAULT_MIN_COVERAGE,
     Completeness,
@@ -51,17 +51,18 @@ from marin.evaluation.eval_stats import (
     SelectionRequest,
     declared_protocols,
 )
-from marin.evaluation.model_identity import comparison_model_name
 from marin.evaluation.records import (
     DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
     RecordParseFailure,
+    RepeatAggregate,
     list_record_paths,
     scan_records,
 )
+from marin.evaluation.repeat_aggregates import normalize_repeat_record
 from marina.apps import RegisteredApi, Services, registered_api
 from marina.mcp import OperationRisk, operation_extension
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.server_auth import get_verified_identity
 from sqlalchemy.engine import Connection, Engine
@@ -72,6 +73,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from . import review, samples
 from .db_migrations import apply_migrations
 from .metrics import (
+    ALL_COHORTS,
     RUN_FACETS,
     build_comparison,
     build_meta,
@@ -79,8 +81,10 @@ from .metrics import (
     build_panel,
     dashboard_measurements,
     display_status,
+    in_cohort,
     panel_request,
     record_headline,
+    run_metric_rows,
 )
 from .record_reconciliation import VerificationSchedule, inspect_record_paths, step_status_for_record
 from .results_db import (
@@ -134,6 +138,7 @@ class PanelCellResponse(BaseModel):
     interval_kind: str
     metric: str
     metric_kind: str
+    repeat_aggregation: RepeatAggregate | None = None
     declared: bool
     n_scored: int
     n_benchmark: int | None
@@ -148,7 +153,7 @@ class PanelCellResponse(BaseModel):
     created_at: str
     version: str | None
     git_sha: str
-    eval_runtime: str
+    eval_runtime: str | None
 
 
 class MissingCellResponse(BaseModel):
@@ -222,10 +227,22 @@ class PanelResponse(BaseModel):
     request: PanelRequestResponse
 
 
+class RunMetricRowResponse(BaseModel):
+    """One row of a run's top metrics table: a declared protocol metric or an undeclared raw one."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    task: str
+    metric: str
+    value: float
+    declared: bool
+
+
 class RunDetailResponse(EvalRunRecord):
     headline: PanelCellResponse | None
     comparison_model: str
     policy_violations: list[str]
+    metric_rows: list[RunMetricRowResponse]
 
 
 class LogEntryResponse(BaseModel):
@@ -349,7 +366,7 @@ def record_to_row(record: EvalRunRecord) -> dict:
         "created_at": record.created_at,
         "version": record.version,
         "user_name": record.user,
-        "model_name": comparison_model_name(record.model),
+        "model_name": record.model.name,
         "model_location": record.model.location,
         "eval_name": record.evaluation.name,
         "mechanism": record.evaluation.mechanism,
@@ -373,7 +390,7 @@ def _group_sibling_row(record: EvalRunRecord) -> dict:
     return {
         "run_id": record.run_id,
         "eval_name": record.evaluation.name,
-        "model_name": comparison_model_name(record.model),
+        "model_name": record.model.name,
         "status": display_status(record),
         "created_at": record.created_at,
     }
@@ -387,14 +404,17 @@ class RecordStore:
     def __init__(self) -> None:
         self._records: list[EvalRunRecord] = []
         self._by_id: dict[str, EvalRunRecord] = {}
+        self._metadata = build_meta([])
         self._archived: set[str] = set()
         self._lock = threading.Lock()
 
     def _set_snapshot(self, records: list[EvalRunRecord]) -> None:
         by_id = {record.run_id: record for record in records}
+        metadata = build_meta(records)
         with self._lock:
             self._records = records
             self._by_id = by_id
+            self._metadata = metadata
 
     def _snapshot(self) -> tuple[list[EvalRunRecord], dict[str, EvalRunRecord]]:
         with self._lock:
@@ -414,7 +434,7 @@ class RecordStore:
 
     def refresh(self, records: list[EvalRunRecord]) -> None:
         """Replace the direct-scan snapshot used by the local store."""
-        records = _deduplicate_records(records)
+        records = [normalize_repeat_record(record) for record in _deduplicate_records(records)]
         self._set_snapshot(records)
         logger.info("memory store refreshed: %d records", len(records))
 
@@ -434,7 +454,7 @@ class RecordStore:
         _records, by_id = self._snapshot()
         record = by_id.get(run_id)
         return (
-            {**record.model_dump(mode="json", by_alias=True), "comparison_model": comparison_model_name(record.model)}
+            {**record.model_dump(mode="json", by_alias=True), "comparison_model": record.model.name}
             if record is not None
             else None
         )
@@ -447,6 +467,8 @@ class RecordStore:
         user: str | None = None,
         status: str | None = None,
         group: str | None = None,
+        version: str | None = None,
+        accelerator: str | None = None,
         limit: int = DEFAULT_RUNS_LIMIT,
     ) -> list[dict]:
         records, _by_id = self._snapshot()
@@ -459,6 +481,8 @@ class RecordStore:
             and (user is None or row["user_name"] == user)
             and (status is None or row["status"] == status)
             and (group is None or row["group_id"] == group)
+            and (version is None or row["version"] == version)
+            and (accelerator is None or row["accelerator"] == accelerator)
         ]
         rows.sort(key=lambda row: row["created_at"] or "", reverse=True)
         return rows[:limit]
@@ -470,13 +494,10 @@ class RecordStore:
         ``archived: true`` so the UI can style them apart.
         """
         records, _by_id = self._snapshot()
+        records = [record for record in records if in_cohort(record, request)]
         archived = self.archived_models()
-        if not include_archived:
-            records = [
-                record
-                for record in records
-                if record.model.name not in archived and comparison_model_name(record.model) not in archived
-            ]
+        if archived and not include_archived:
+            records = [record for record in records if record.model.name not in archived]
         return build_panel(records, request, frozenset(archived), aggregate)
 
     def comparison(self, request: SelectionRequest, models: tuple[str, ...]) -> dict:
@@ -488,11 +509,22 @@ class RecordStore:
         return build_comparison(records, request, models)
 
     def meta(self) -> dict:
-        records, _by_id = self._snapshot()
-        return build_meta(records, frozenset(self.archived_models()))
+        self._snapshot()
+        with self._lock:
+            metadata = dict(self._metadata)
+        metadata["archived_models"] = sorted(self.archived_models())
+        return metadata
 
     def groups(
-        self, *, model: str | None = None, user: str | None = None, limit: int = DEFAULT_RUNS_LIMIT
+        self,
+        *,
+        model: str | None = None,
+        user: str | None = None,
+        eval_name: str | None = None,
+        status: str | None = None,
+        version: str | None = None,
+        accelerator: str | None = None,
+        limit: int = DEFAULT_RUNS_LIMIT,
     ) -> list[dict]:
         """Runs collapsed into launches (one per ``group_id``), newest first.
 
@@ -503,7 +535,7 @@ class RecordStore:
         records, _by_id = self._snapshot()
         by_group: dict[str, list[EvalRunRecord]] = {}
         for record in records:
-            if (model and comparison_model_name(record.model) != model) or (user and record.user != user):
+            if (model and record.model.name != model) or (user and record.user != user):
                 continue
             by_group.setdefault(record.group_id, []).append(record)
         groups: list[dict] = []
@@ -514,7 +546,7 @@ class RecordStore:
             groups.append(
                 {
                     "group_id": group_id,
-                    "model_name": comparison_model_name(newest.model),
+                    "model_name": newest.model.name,
                     "version": newest.version,
                     "description": newest.description,
                     "user_name": newest.user,
@@ -526,6 +558,14 @@ class RecordStore:
                     "evals": [_group_member(record) for record in ordered],
                 }
             )
+        groups = [
+            group
+            for group in groups
+            if (eval_name is None or any(member["eval_name"] == eval_name for member in group["evals"]))
+            and (status is None or group["status"] == status)
+            and (version is None or group["version"] == version)
+            and (accelerator is None or group["accelerator"] == accelerator)
+        ]
         groups.sort(key=lambda group: group["created_at"] or "", reverse=True)
         return groups[:limit]
 
@@ -539,9 +579,7 @@ class RecordStore:
         task_records = [
             record
             for record in records
-            if comparison_model_name(record.model) == model
-            and record.evaluation.name == task
-            and not record_policy_violations(record)
+            if record.model.name == model and record.evaluation.name == task and not record_policy_violations(record)
         ]
         protocol_records = [
             record for record in records if record.evaluation.name == task and not record_policy_violations(record)
@@ -628,11 +666,14 @@ class PgRecordStore(RecordStore):
         if generation <= current_generation:
             return
         snapshot = fetch_snapshot(self._engine)
+        by_id = {record.run_id: record for record in snapshot.records}
+        metadata = build_meta(snapshot.records)
         with self._lock:
             if snapshot.generation <= self._catalog_generation:
                 return
             self._records = snapshot.records
-            self._by_id = {record.run_id: record for record in snapshot.records}
+            self._by_id = by_id
+            self._metadata = metadata
             self._catalog_generation = snapshot.generation
             self._snapshot_updated_at = snapshot.updated_at
         logger.info("postgres store loaded generation %d with %d records", snapshot.generation, len(snapshot.records))
@@ -1111,6 +1152,8 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             user=params.get("user") or None,
             status=params.get("status") or None,
             group=params.get("group") or None,
+            version=params.get("version") or None,
+            accelerator=params.get("accelerator") or None,
             limit=_parse_limit(params.get("limit")),
         )
         return JSONResponse(rows)
@@ -1129,7 +1172,12 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
         parsed = EvalRunRecord.model_validate(record)
         return RunDetailResponse.model_validate(
-            {**record, "headline": _run_headline(parsed), "policy_violations": list(record_policy_violations(parsed))}
+            {
+                **record,
+                "headline": _run_headline(parsed),
+                "policy_violations": list(record_policy_violations(parsed)),
+                "metric_rows": run_metric_rows(parsed),
+            }
         )
 
     @router.get("/runs/{run_id}/jobs")
@@ -1197,6 +1245,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
         if not task:
             return JSONResponse({"error": "task is required"}, status_code=400)
         typed_record = EvalRunRecord.model_validate(record)
+        metric = samples.sample_metric(typed_record, task)
         payload = await asyncio.to_thread(
             samples.fetch_samples,
             record.get("results_path"),
@@ -1205,7 +1254,8 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             limit=_parse_int(limit, default=DEFAULT_SAMPLE_LIMIT, low=1, high=MAX_SAMPLE_LIMIT),
             correct=correct or "all",
             extraction_filter=extraction_filter or None,
-            primary_metric_name=samples.declared_primary_metric(typed_record, task),
+            primary_metric_name=metric.source_name if metric is not None else None,
+            primary_metric_kind=metric.kind if metric is not None else None,
         )
         return payload
 
@@ -1261,6 +1311,10 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             store.groups,
             model=params.get("model") or None,
             user=params.get("user") or None,
+            eval_name=params.get("eval") or None,
+            status=params.get("status") or None,
+            version=params.get("version") or None,
+            accelerator=params.get("accelerator") or None,
             limit=_parse_limit(params.get("limit")),
         )
         return JSONResponse(groups)
@@ -1270,10 +1324,9 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
 
 def _selection(params: Mapping[str, str]) -> SelectionRequest:
     """Return the panel selection requested by panel or comparison query parameters."""
-    cohort = params.get("cohort") or SEPTEMBER_24_VERSION
     return panel_request(
         benchmarks=_parse_names(params.get("benchmarks")),
-        cohort_version=None if cohort == "all" else cohort,
+        cohort=params.get("cohort") or ALL_COHORTS,
         completeness=Completeness.COMPLETE_PANEL if _parse_flag(params.get("complete")) else Completeness.ANY,
         min_coverage=_parse_coverage(params.get("min_coverage")),
         min_benchmark_coverage=_parse_coverage(params.get("min_benchmark_coverage"), "min_benchmark_coverage"),
@@ -1361,8 +1414,6 @@ def _analysis_router(store: RecordStore) -> APIRouter:
             selection = _selection(params)
         except BadRequest as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        if selection.cohort_version is None:
-            return JSONResponse({"error": "Choose one cohort before comparing models."}, status_code=400)
         payload = await asyncio.to_thread(store.comparison, selection, models)
         return JSONResponse(payload)
 
@@ -1382,7 +1433,7 @@ def _analysis_router(store: RecordStore) -> APIRouter:
 
     @router.get("/meta")
     async def api_meta() -> JSONResponse:
-        meta = store.meta()
+        meta = await asyncio.to_thread(store.meta)
         meta["current_user"] = _current_user()
         meta["store"] = store.backend
         return JSONResponse(meta)

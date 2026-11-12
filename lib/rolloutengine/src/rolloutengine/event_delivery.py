@@ -6,7 +6,7 @@
 import asyncio
 import logging
 
-from rolloutengine.contracts import RolloutEvent, RolloutEventPayload, RolloutObserver
+from rolloutengine.models import RolloutEvent, RolloutEventPayload, RolloutObserver
 
 logger = logging.getLogger(__name__)
 
@@ -17,15 +17,15 @@ EVENT_QUEUE_CAPACITY = 1024
 class _EventDelivery:
     """Queue one attempt's events and deliver them in order from a single task.
 
-    ``emit`` wraps each payload in a ``RolloutEvent`` with the attempt's ``run_key`` and ``task_id``
+    ``emit`` wraps each payload in a ``RolloutEvent`` with the attempt's ``run_id`` and ``task_id``
     and never blocks. When the queue is full, the event is dropped and counted. An observer
     exception is logged and ends delivery for the attempt; it never reaches the rollout. ``close``
     delivers what is queued within a deadline and returns the counts of events the observer did not
-    receive, keyed for ``RolloutData.metrics``.
+    receive, keyed for ``Rollout.metrics``.
     """
 
-    def __init__(self, observer: RolloutObserver | None, run_key: str, task_id: str):
-        self.run_key = run_key
+    def __init__(self, observer: RolloutObserver | None, run_id: str, task_id: str):
+        self.run_id = run_id
         self.task_id = task_id
         self.queue: asyncio.Queue[RolloutEvent] = asyncio.Queue(EVENT_QUEUE_CAPACITY)
         self.emitted = 0
@@ -42,7 +42,7 @@ class _EventDelivery:
         if self.failed:
             return
         try:
-            self.queue.put_nowait(RolloutEvent(self.run_key, self.task_id, payload))
+            self.queue.put_nowait(RolloutEvent(self.run_id, self.task_id, payload))
         except asyncio.QueueFull:
             self.dropped += 1
 

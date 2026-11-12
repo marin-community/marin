@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from fray.types import tpu_family, tpu_hbm_capacity_bytes
+from iris.cluster.tpu_topology import get_tpu_topology
 
 from marin.evaluation.model_config import ModelConfig, ServeConfig
 from marin.inference.config import ServingGeometry
@@ -208,7 +209,7 @@ def _parse_override(override: str, policy: HardwarePolicy) -> AcceleratorChoice:
             target_cluster=profile.cluster,
         )
     tpu_hbm_capacity_bytes(text)
-    if text not in policy.tpu_slices:
+    if text not in policy.tpu_slices and get_tpu_topology(text).vm_count == 1:
         raise ValueError(
             f"accelerator override {text!r} is not a servable single-host TPU; choose one of "
             f"{', '.join(policy.tpu_slices)}"

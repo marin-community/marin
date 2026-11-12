@@ -13,7 +13,8 @@ hourly Marina Cloud Run runner keeps the corpus current.
 - `wiki_entries` holds durable agent-authored notes and incident records: a title, a
   one-sentence `use_when` hint, lowercase kebab-case tags, a body, embeddings, and
   deliberate-reference counters.
-- `work_log` is an append-only agent logbook, one row per distilled milestone.
+- `work_log` is an append-only agent logbook, one row per distilled milestone. Project slugs
+  are stored in lowercase, and the project filter ignores case.
 - `search_executions` and `search_execution_results` record every API search and the ranked
   snapshot it returned; `search_feedback` and `search_feedback_grades` record the 0–10
   judgments a caller ties back to those rows.
@@ -33,7 +34,13 @@ uv run infra/marina/apps/echo/cli.py wiki search "grafana access" --tag ops
 uv run infra/marina/apps/echo/cli.py wiki add --file note.md   # OKF markdown
 uv run infra/marina/apps/echo/cli.py wiki show <id> > note.md  # edit, then `wiki edit`
 uv run infra/marina/apps/echo/cli.py history export > echo-search-history.jsonl
+uv run infra/marina/apps/echo/cli.py work-log projects --days 30
+uv run infra/marina/apps/echo/cli.py work-log recent --project <slug>
+uv run infra/marina/apps/echo/cli.py work-log add --project <slug> --title "..." --body - <<< "..."
 ```
+
+`work-log add` treats a refused write (no credentials, 401, or 403) as a warning and exits 0.
+Other errors still fail the command.
 
 Authentication reuses Marin's shared IAP login: run `iris login` once and the CLI mints
 Marina tokens from the same cached credential (`~/.config/marin/credentials`). Agents and CI
@@ -55,6 +62,33 @@ from stdin. Search history is retained indefinitely for search-quality work and 
 JSONL through `history export`.
 
 ## Sync job
+
+Activity chunks keep local Postgres IDs keyed by source, kind, canonical URL and
+part. MarinMirror's SQLite row numbers can change on every rebuild. A digest of
+all mirrored fields skips unchanged rows while detecting metadata changes and
+embeddings that arrive after their text. The first sync after the identity
+migration fills these digests once; later builds write only changed chunks.
+Both activity and repository chunk tables use a 5% autovacuum scale factor to
+keep cleanup batches smaller on their vector and text indexes.
+
+Before releasing the chunk-identity migration, pause `marina-hourly-trigger`,
+wait for every existing hourly execution to finish, and avoid manual sync starts.
+An older execution pins its package before downloading the corpus; its writer
+must finish before the identity migration. The migration fails after five
+seconds waiting for table locks, leaving the previous package selected.
+
+```bash
+gcloud scheduler jobs pause marina-hourly-trigger --location us-central1 --project hai-gcp-models
+gcloud run jobs executions list --job marina-hourly --region us-central1 --project hai-gcp-models
+uv run marina release infra/marina/apps/echo --base-version CURRENT_VERSION --json
+gcloud scheduler jobs resume marina-hourly-trigger --location us-central1 --project hai-gcp-models
+```
+
+Resume only after the release succeeds. Keep the trigger paused if rolling back
+to a revision whose sync still uses corpus row numbers. The migration keeps the
+lowest local ID for duplicate chunks and removes the other copies; links using
+those removed duplicate IDs no longer resolve, while saved search snapshots
+retain their URLs and snippets.
 
 The `marina-hourly` base-image runner loads `sync.main` from Echo's current
 Postgres package at the top of every hour. It pins that revision for the execution. It refreshes GitHub and Discord activity from marinmirror, then processes six
@@ -95,7 +129,7 @@ route is under `/echo/api/`, and `/echo/api/docs` serves the OpenAPI documentati
 `search`, `federated-search`, `search-configuration`, `repository-index`,
 `repository-files/{owner}/{repository}@main:{path}`, `grep`, `chunks/{id}`,
 `search-results/{id}`, `search-executions`, `wiki/search`, `wiki/{id}`, `wiki`,
-`wiki/{id}/references`, `feedback`, `work_log`, `work_log/{id}`, and `health`.
+`wiki/{id}/references`, `feedback`, `work_log`, `work_log/projects`, `work_log/{id}`, and `health`.
 
 The kernel authenticates every request and binds the caller, so the API attributes wiki
 writes, work-log entries, feedback, and search history to that identity; it reads no

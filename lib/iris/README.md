@@ -11,8 +11,9 @@ Distributed job orchestration for Marin.
 uv run iris --cluster=marin cluster start
 
 # Start a local cluster for testing (mimics the config without GCP)
-# Dashboard is available at the printed URL; press Ctrl+C to stop.
-uv run iris --cluster=marin cluster start --local
+# Dashboard is available at the printed URL; press Ctrl+C to stop. The local
+# controller embeds the native log server from the `controller` extra.
+uv run --package marin-iris --extra controller iris --cluster=marin cluster start --local
 
 # Check cluster status
 uv run iris --cluster=marin cluster status
@@ -71,6 +72,16 @@ python -m iris.jax.multigpu_main --nproc 8 -- python train.py
 
 The supervisor assigns each child a process index and local device IDs. Iris
 runs the submitted command as given, so callers must add the wrapper themselves.
+Set `termination_grace=Duration.from_seconds(60)` on `IrisClient.submit` or
+Fray's `JobRequest`, or pass `--termination-grace 60` to `iris job run`, to give a
+SIGTERM-aware command time to finish. The controller resolves the default to
+10 seconds, validates a range of 1 to 110 seconds, and persists the effective
+budget across retries and federation. The multi-GPU supervisor waits that long
+before sending SIGKILL; the Kubernetes task Pod and worker stop path allow five
+more seconds for teardown. Iris delivers the resolved budget to the supervisor
+as internal task metadata; application environment variables do not configure it.
+The GCP worker container permits 120 seconds for its own shutdown. A stalled
+command is still force-terminated at the deadline.
 
 ## Architecture
 
@@ -292,6 +303,34 @@ This enables JAX and other TPU-aware frameworks to initialize correctly inside j
 ## Bundle Storage (Required)
 
 Jobs can include a `bundle_blob` containing workspace files. The controller stores these in a shared location accessible to all workers.
+
+Workspace bundles have a 25 MiB limit on the compressed ZIP. Iris collects tracked
+and untracked files using `git ls-files --cached --others --exclude-standard`,
+then excludes these paths at any depth: `docs/`, `tests/`, `.agents/`, `.claude/`,
+`.codex/`, `.github/`, Rust `target/` directories, and `journeys-out/` directories.
+It also excludes notebooks, native `.so` files, and `AGENTS.md`, `TESTING.md`, and
+`OPS.md`. The same exclusions apply when Git is unavailable.
+Package metadata, lockfiles, runtime resources, and generated Iris RPC modules
+remain eligible for inclusion. Use `extra_bundle_includes` (or CLI `--include`)
+to add required files excluded by default, such as a validation job's tests and
+`conftest.py` files or a Git-ignored frontend `dist/`. Explicit `bundle_exclude`
+patterns (CLI `--exclude`) and build/cache exclusions, including Rust `target/`
+directories and native `.so` files, still apply to these includes.
+
+Workspace `pyproject.toml` can include runtime assets excluded by default and
+exclude tracked files from every submitted bundle:
+
+```toml
+[tool.iris.bundle]
+include = ["vendor/harbor/src/**/*", "lib/rigging/src/**/*", "lib/finestore/src/**/*"]
+exclude = ["^vendor/harbor/tests(/|$)"]
+```
+
+Include patterns are globs; exclude patterns are regular expressions matched
+against paths relative to the workspace. Repository exclusions apply after
+repository includes. For a validation job that needs excluded tests, pass globs
+through `IrisClient.remote(..., extra_bundle_includes=["vendor/harbor/tests/**/*.py"])`.
+Caller `bundle_exclude` patterns and build/cache exclusions still apply.
 
 **Configuration** (required):
 

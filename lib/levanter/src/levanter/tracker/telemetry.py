@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 _EVERY_STEP_METRICS = frozenset({"train_loss", "phase", "progress_time_seconds"})
 _STEP_METRICS = frozenset({"step", "global_step"})
+# Keep standard evaluation roots at off-interval steps. Custom roots use the detail interval.
+_EVAL_METRIC_PREFIXES = ("eval/", "labeled_eval/", "lm_eval/")
 _DETAIL_LOG_INTERVAL = 10
 _TELEMETRY_SERVICE = "levanter"
 
@@ -195,7 +197,13 @@ class TelemetryTracker(Tracker):
                 self._writer.scalar(metric_name, scalar, step=self._step)
 
     def _publish_every_step(self, metrics: Mapping[str, object]) -> None:
-        self._publish({key: value for key, value in metrics.items() if _metric_name(key) in _EVERY_STEP_METRICS})
+        self._publish(
+            {
+                key: value
+                for key, value in metrics.items()
+                if _metric_name(key) in _EVERY_STEP_METRICS or key.startswith(_EVAL_METRIC_PREFIXES)
+            }
+        )
 
     def log_hyperparameters(self, hparams: dict[str, Any]):
         pass

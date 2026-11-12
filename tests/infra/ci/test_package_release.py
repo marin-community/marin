@@ -159,13 +159,13 @@ def test_pull_request_plan_uses_one_declarative_build_matrix() -> None:
     assert plan.packages == ("dupekit", "finelog", "iris", "python-libs")
     expected_builds = {
         ("dupekit", "ubuntu-latest", "linux"),
-        ("dupekit", "macos-14", "macos"),
+        ("dupekit", "macos-15", "macos"),
         ("dupekit", "ubuntu-latest", "sdist"),
         ("finelog", "ubuntu-latest", "linux"),
-        ("finelog", "macos-14", "macos"),
+        ("finelog", "macos-15", "macos"),
         ("finelog", "ubuntu-latest", "sdist"),
         ("iris", "ubuntu-latest", "linux"),
-        ("iris", "macos-14", "macos"),
+        ("iris", "macos-15", "macos"),
         ("iris", "ubuntu-latest", "sdist"),
         ("python-libs", "ubuntu-latest", "python"),
     }

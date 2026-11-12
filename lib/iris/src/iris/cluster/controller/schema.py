@@ -44,6 +44,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.types import TypeDecorator
 
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId
+from iris.preemption import DEFAULT_TERMINATION_GRACE
 
 WORKER_ATTR_VALUE_TYPE_CHECK = "value_type IN ('str', 'int', 'float')"
 
@@ -250,7 +251,7 @@ jobs_table = Table(
     # The authenticated principal that submitted this job, distinct from the
     # friendly ``user_id`` owner: an IAP/JWT email, or ``local_admin`` for a
     # CIDR/loopback (null-auth) submission. Drives per-cluster federation
-    # authorization and budget accounting; a child inherits its root's value and
+    # authorization; a child inherits its root's value and
     # a federated handoff carries it as a signed claim the receiving peer re-checks.
     Column("submitting_user", String, nullable=False, server_default=""),
     Column("parent_job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE")),
@@ -303,6 +304,7 @@ job_config_table = Table(
     Column("max_retries_failure", Integer, nullable=False, server_default="0"),
     Column("max_retries_preemption", Integer, nullable=False, server_default="100"),
     Column("timeout_ms", Integer),
+    Column("termination_grace_ms", Integer, nullable=False, server_default=str(DEFAULT_TERMINATION_GRACE.to_ms())),
     Column("preemption_policy", Integer, nullable=False, server_default="0"),
     Column("existing_job_policy", Integer, nullable=False, server_default="0"),
     Column("priority_band", Integer, nullable=False, server_default="0"),
@@ -311,6 +313,8 @@ job_config_table = Table(
     Column("fail_if_exists", BoolIntType, nullable=False, server_default="0"),
     Column("container_profile", Integer, nullable=False, server_default="0"),
     Column("egress_policy", Integer, nullable=False, server_default="0"),
+    # An ALLOWLIST job's own egress rules, as rule strings (iris.cluster.egress).
+    Column("egress_allow_json", JSONList(), nullable=False, server_default="[]"),
     Index("idx_job_config_name", "name"),
 )
 

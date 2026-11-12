@@ -11,3 +11,5 @@ seed: 42
 # benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.
 max_length: 65536
 runtime_extras: [mmlupro]
+chat_template_kwargs:
+  enable_thinking: true

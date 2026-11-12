@@ -282,9 +282,9 @@ def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_pat
                     env="daytona",
                     task_limit=2,
                     config_digest="sha256:" + "a" * 64,
-                    harbor_config_commit="b" * 40,
                 ),
-            )
+            ),
+            "provenance": Provenance(git_sha="abc123", launch_host="dev-box"),
         }
     )
 
@@ -299,8 +299,8 @@ def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_pat
         "env": "daytona",
         "task_limit": 2,
         "config_digest": "sha256:" + "a" * 64,
-        "harbor_config_commit": "b" * 40,
     }
+    assert raw["provenance"] == {"git_sha": "abc123", "launch_host": "dev-box"}
 
 
 def test_record_json_includes_normalized_evalchemy_configuration(tmp_path):
@@ -338,6 +338,7 @@ def test_record_json_includes_normalized_evalchemy_configuration(tmp_path):
 
     assert raw["eval"]["evalchemy"] == {
         "apply_chat_template": True,
+        "chat_tokenizer_backend": "none",
         "max_gen_toks": 2048,
         "max_eval_instances": 64,
         "num_concurrent": 16,
@@ -345,6 +346,7 @@ def test_record_json_includes_normalized_evalchemy_configuration(tmp_path):
         "seed": 1234,
         "extra_gen_kwargs": {"temperature": "0"},
         "extra_model_args": {"timeout": 900},
+        "chat_template_kwargs": {},
         "max_length": 32768,
         "debug": False,
     }

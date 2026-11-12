@@ -1,0 +1,13 @@
+# @package trainer.algorithm
+# Understanding R1-Zero-Like Training, Dr. GRPO: https://arxiv.org/abs/2503.20783
+advantage_estimator: grpo
+policy_loss_type: regular
+loss_reduction: seq_mean_token_sum_norm
+grpo_norm_by_std: false
+advantage_batch_normalize: false
+eps_clip_low: 0.2
+eps_clip_high: 0.2
+use_kl_in_reward: false
+use_kl_loss: false
+dynamic_sampling:
+  type: null

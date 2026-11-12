@@ -16,7 +16,7 @@ from zephyr.readers import load_parquet
 from zephyr.stage_io import ZephyrWorkerError
 
 from taskcompendium.convert.answers import numeric_answer_task
-from taskcompendium.models import Source
+from taskcompendium.models import ConversationInput, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.curriculum import embedding
 from taskcompendium.pipeline.curriculum.alignment import (
     AnchorKind,
@@ -41,6 +41,7 @@ from taskcompendium.pipeline.semantics import (
     TaskInputFile,
     bounded_task_text,
     describe_tasks,
+    instruction_text,
     prepare_semantic_inputs,
     task_semantic_input,
 )
@@ -69,7 +70,7 @@ def spec():
     )
 
 
-def task(identifier, prompt="Count two apples.", answer="817", dataset="private-source-label"):
+def task(identifier, prompt="Count two apples.", answer="817", dataset="private-source-label") -> TaskSpec:
     result = numeric_answer_task(
         RawRow(
             id=identifier,
@@ -82,6 +83,7 @@ def task(identifier, prompt="Count two apples.", answer="817", dataset="private-
         tolerance_rel=0,
         evidence={"private": "PRIVATE_EVIDENCE"},
     )
+    assert isinstance(result, TaskSpec)
     return result
 
 
@@ -243,6 +245,25 @@ def test_instruction_projection_excludes_private_contract_and_ignores_source_ide
     assert "PRIVATE_EVIDENCE" not in first.public_input
     assert "private-source" not in first.public_input
     assert "817" not in first.public_input
+
+
+def test_prefilled_semantic_input_preserves_text_identity_and_excludes_private_contract():
+    original = task("prefilled")
+    context = ConversationInput(events=(*original.context.events, TextMessage(role="assistant", content='{"count":')))
+    source = TaskInputFile("source-a", "key-a", "unused", "train", "admitted")
+    projected = task_semantic_input(original.model_copy(update={"context": context}), source)
+    assert json.loads(projected.public_input)["context"]["events"][-1]["content"] == '{"count":'
+    changed = context.model_copy(
+        update={"events": (*context.events[:-1], TextMessage(role="assistant", content='{"total":'))}
+    )
+    assert (
+        task_semantic_input(original.model_copy(update={"context": changed}), source).content_hash
+        != projected.content_hash
+    )
+    rendered = instruction_text(projected.model_dump(mode="json"))
+    assert "Count two apples." in rendered["description"]
+    assert '{"count":' in rendered["description"]
+    assert "PRIVATE_EVIDENCE" not in rendered["description"]
 
 
 def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reuse_cache(context, tmp_path, spec):

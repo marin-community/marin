@@ -39,22 +39,22 @@ dependencies = [
     "marin-haliax",
     "marin-iris",
     "equinox>=0.11.7,!=0.12.0",
-    "jax>=0.9.2,<0.12",
+    "jax>=0.9.2,<0.13",
     "marin-fray",
     "marin-rigging",
     "marin-zephyr",
     "einops",
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
-    "transformers>=5.5.3,<6.0",
+    "transformers>=5.10.0,<6.0",
     "chex>=0.1.86",
     "optax>=0.1.9,<0.2.7",
     "wandb>0.24.0",
-    "gitpython>=3.1.50",
+    "gitpython>=3.2.1",
     "draccus>=0.11.6",
     "pyarrow>=23.0.0",
     "zstandard>=0.18.0",
-    "datasets>=3.1.0,<5.0",
+    "datasets>=5.0.1,<6",
     "gcsfs>=2024.2,<2027",
     "braceexpand>=0.1.7",
     "chex>=0.1.86",
@@ -67,7 +67,7 @@ dependencies = [
     "tblib>=1.7.0,<4.0.0",
     "dataclasses-json~=0.6.4",
     "pydantic<3",
-    "filelock~=3.13",
+    "filelock>=4.2.1,<5",
     "async-lru~=2.0",
     "tqdm-loggable>=0.2",
     "deepdiff>=8.6.2",
@@ -84,6 +84,8 @@ Homepage = "https://github.com/stanford-crfm/levanter"
 [project.optional-dependencies]
 gpu = [
   "jax[cuda13]==0.11.1",
+  # Scope Torch's cu128 source to Levanter too, so uv enables its CUDA runtime dependencies.
+  "torch==2.11.0; sys_platform == 'linux'",
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
@@ -108,6 +110,23 @@ deepep = [
   # come from the host GPU environment.
 ]
 tpu = ["jax==0.11.1", "jaxlib==0.11.1", "libtpu==0.0.46.*"]
+# AMD Instinct GPUs (MI300X gfx942, MI350X/MI355X gfx950). JAX 0.12 is the first
+# release whose ROCm plugin keeps jax_triton kernel files alive across concurrent
+# first launches (#9853). The ROCm runtime comes from AMD's TheRock wheels.
+rocm = [
+  "jax==0.12.0",
+  "jaxlib==0.12.0",
+  "jax-rocm10-plugin==0.12.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "rocm[libraries,device-gfx942,device-gfx950]==10.1.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  # uv applies index sources only to direct dependencies, so the packages the
+  # rocm metapackage pulls in are listed here to resolve from AMD's index.
+  "rocm-sdk-core==10.1.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "rocm-sdk-libraries==10.1.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "rocm-sdk-device-gfx942==10.1.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "rocm-sdk-device-gfx950==10.1.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "jax-triton==0.3.1; sys_platform == 'linux'",
+  "triton==3.6.0; sys_platform == 'linux'",
+]
 torch_test = [
   "torch>=2.7.0",
   "peft>=0.12.0",
@@ -142,6 +161,9 @@ gcp = [
 
 [dependency-groups]
 test = [
+  "fastapi>=0.100.0",
+  "uvicorn[standard]>=0.23.0",
+  "openai>=1.0.0",
   "pytest",
   "pytest-forked",
   "pytest-asyncio",
@@ -153,6 +175,7 @@ test = [
   "httpx>=0.28.1",
   "pytest-profiling>=1.8.1",
   "pytest-xdist",
+  "pytest-timeout",
   "trackio>=0.5.0",
   # need this or else the resolver gets a bad version
   "numba>=0.62.1"
@@ -160,7 +183,7 @@ test = [
 
 docs = [
   "mkdocs>=1.4.3",
-  "mkdocs-material>=7.3.3",
+  "mkdocs-material>=9.7.7",
   "mkdocstrings>=0.22.0",
   "mkdocs-literate-nav>=0.6.0",
   "mkdocs-macros-plugin>=0.7.0",
@@ -181,12 +204,23 @@ dev = [
 
 
 [tool.uv]
+# Each accelerator extra pins its own JAX stack; never solve two at once.
 conflicts = [
   [
     { extra = "gpu" },
     { extra = "tpu" },
+    { extra = "rocm" },
   ],
-]  # Never solve for both GPU and TPU at once
+]
+
+[tool.uv.sources]
+# PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
+torch = [{ index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [tool.ruff]
 line-length = 119
@@ -198,7 +232,7 @@ extend-exclude = ["scripts/"]
 # apply repo-wide: PLC0415 (no function-local imports), and the issue #6219
 # local-import hygiene pair TID252 (absolute over parent-relative imports) and
 # ICN001 (conventional import aliases, e.g. `import numpy as np`).
-extend-select = ["PLC0415", "TID252", "ICN001"]
+extend-select = ["PLC0415", "TID251", "TID252", "ICN001"]
 ignore = [
   "E203", "E501", "W605", "F821", "E266", "F722", "E731", "E741"
 ]
@@ -208,8 +242,9 @@ line-length = 119
 target-version = ["py312"]
 
 [tool.pytest.ini_options]
-addopts = "-n auto -m 'not slow and not torch' --import-mode=importlib"
-pythonpath = ["src", "tests"]
+timeout = 60
+addopts = "-p infra.ci.pytest_timeout_guard --session-timeout=600 -n auto -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual and not torch' --import-mode=importlib"
+pythonpath = ["src", "tests", "../.."]
 filterwarnings = [
     "ignore:Transparent hugepages are not enabled\\..*:UserWarning:jax._src.cloud_tpu_init",
     "ignore:Read the `app_url` setting from the appropriate Settings object\\.:DeprecationWarning:wandb.analytics.sentry",
@@ -220,7 +255,18 @@ filterwarnings = [
     "ignore:Passing 'msg' argument to Future\\.cancel\\(\\) is deprecated since Python 3\\.11, and scheduled for removal in Python 3\\.14\\.:DeprecationWarning",
 ]
 markers = [
+    "tpu: include in TPU CI; also run on CPU when supported",
+    "multidevice: exercise multi-device code in TPU CI and CPU CI",
+    "integration: tests that require cluster infrastructure",
+    "data_integration: tests that require external data fixtures",
+    "cluster: tests that submit a real job to a standing cluster",
+    "requires_cluster: tests that start or connect to a cluster",
+    "docker: tests that require a Docker daemon",
+    "manual: tests that are run by hand on demand",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "torch: mark tests that use Torch (deselect with '-m \"not torch\"')",
 ]
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"litellm" = { msg = "LiteLLM is blocked; use a provider SDK or an OpenAI-compatible endpoint." }

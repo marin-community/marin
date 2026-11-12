@@ -2,7 +2,7 @@
 /**
  * The panel: models by benchmark, every cell a score with the 95% interval behind it.
  *
- * There is no headline cross-benchmark mean. A mean over benchmarks has no interpretation without a
+ * There is no headline cross-benchmark score mean. A score mean over benchmarks has no interpretation without a
  * declared panel, a per-benchmark metric, and a rule for the benchmarks a model never ran, so it is
  * opt-in and renders those three things with it. Per-benchmark comparison is the primary surface.
  * A benchmark column sorts on the score, and the fleet-best marker and delta-best pick the leader
@@ -12,9 +12,10 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { formatCoverage, formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
+import { formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { cellsByModel, cohortWarning, compareCells, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
+import { UNVERSIONED_COHORT, cellCoverageLabel, cellsByModel, cohortWarning, fleetBest, isPartialCoverage, scoredItemsLabel, withVariant } from '@/utils/panel'
+import { compareCells, meanReciprocalRanks } from '@/utils/ranking'
 import { MAX_COMPARE, isSmokeEval } from '@/constants'
 import {
   FLAG_NOTES,
@@ -140,15 +141,14 @@ function clearFilters() {
 const selected = ref<string[]>([])
 
 function toggleModel(model: string) {
-  if (cohort.value === 'all') return
   const at = selected.value.indexOf(model)
   if (at >= 0) selected.value.splice(at, 1)
   else if (selected.value.length < MAX_COMPARE) selected.value.push(model)
 }
 function canSelect(model: string): boolean {
-  return cohort.value !== 'all' && (selected.value.includes(model) || selected.value.length < MAX_COMPARE)
+  return selected.value.includes(model) || selected.value.length < MAX_COMPARE
 }
-const comparing = computed(() => cohort.value !== 'all' && selected.value.length >= 2)
+const comparing = computed(() => selected.value.length >= 2)
 watch(selection, () => {
   selected.value = []
 })
@@ -272,12 +272,14 @@ const best = computed(() => fleetBest(data.value?.rows ?? [], visibleTasks.value
 
 // --- Ordering. Benchmark columns use compareCells: the score, then the lower bound. ---
 const MODEL_SORT = 'model'
+const MRR_SORT = 'mrr'
 const COVERAGE_SORT = 'coverage'
 const UPDATED_SORT = 'last_updated'
 type SortDirection = 'asc' | 'desc'
 
-const sortKey = ref<string>(COVERAGE_SORT)
+const sortKey = ref<string>(MRR_SORT)
 const sortDirection = ref<SortDirection>('desc')
+const meanRanks = computed(() => meanReciprocalRanks(data.value?.rows ?? [], visibleTasks.value))
 
 function defaultDirection(key: string): SortDirection {
   return key === MODEL_SORT ? 'asc' : 'desc'
@@ -299,9 +301,15 @@ function headerClass(key: string): string {
 }
 
 // A benchmark column orders its cells by compareCells, the rule the fleet-best marker uses. The model,
-// coverage and last-updated keys order on that field alone. Missing values sort last in both directions.
+// MRR, coverage and last-updated keys order on that field alone. Missing values sort last in both directions.
 function compareRows(a: PanelRow, b: PanelRow, direction: number): number {
   if (sortKey.value === MODEL_SORT) return a.model.localeCompare(b.model) * direction
+  if (sortKey.value === MRR_SORT) {
+    const rankA = meanRanks.value.get(a.model)
+    const rankB = meanRanks.value.get(b.model)
+    if (rankA === undefined || rankB === undefined) return Number(rankA === undefined) - Number(rankB === undefined)
+    return (rankA - rankB) * direction
+  }
   if (sortKey.value === COVERAGE_SORT) return (a.covered - b.covered) * direction
   if (sortKey.value === UPDATED_SORT) {
     if (a.last_updated === null || b.last_updated === null) {
@@ -410,18 +418,23 @@ function protocolLabel(task: string): string {
 function cellTitle(cell: PanelCell): string {
   const scope =
     cell.interval_kind === INTERVAL_KIND.IDENTIFIED
-      ? formatCoverage(cell.coverage)
+      ? cellCoverageLabel(cell)
       : 'attempted count not reported, so completeness is unknown'
   const shotSetting = cell.num_fewshot === null ? 'default shots' : `${cell.num_fewshot}-shot`
   return [
-    `${cell.metric} · ${shotSetting} · ${cell.n_scored} items graded`,
-    cell.n_benchmark === null
-      ? 'benchmark size unreported'
-      : `${cell.n_attempted ?? 'unknown'} of ${cell.n_benchmark} benchmark items attempted`,
+    `${cell.metric} · ${shotSetting} · ${scoredItemsLabel(cell)}`,
+    cell.repeat_aggregation?.coverage_basis === 'source'
+      ? 'source coverage retained; item count uncertain'
+      : cell.n_benchmark === null
+        ? 'benchmark size unreported'
+        : `${cell.n_attempted ?? 'unknown'} of ${cell.n_benchmark} benchmark items attempted`,
+    ...(cell.repeat_aggregation?.coverage_basis === 'item_lower_bound'
+      ? [`at least ${cell.n_scored} items scored`]
+      : []),
     `95% ${formatInterval(cell.low, cell.high)} · ${scope}`,
     ...cell.flags.filter((flag) => flag in FLAG_NOTES).map((flag) => FLAG_NOTES[flag]),
     `run ${cell.run_id} · ${formatTimestamp(cell.created_at)}`,
-    `cohort ${cell.version ?? 'unversioned'} · ${cell.eval_runtime}`,
+    `cohort ${cell.version ?? UNVERSIONED_COHORT}${cell.eval_runtime ? ` · ${cell.eval_runtime}` : ''}`,
     'click for history',
   ].join('\n')
 }
@@ -458,10 +471,10 @@ function goToModel(model: string) {
       <p class="text-xs text-text-muted mt-0.5">
         One row per model, one column per benchmark, each cell the newest valid result. A score is the rate over the
         items a run graded; its 95% interval covers sampling error and widens by whatever share of the attempted items
-        the run never graded. A benchmark column sorts on the score; Compare ranks on the interval.
+        the run never graded. Models start sorted by mean reciprocal rank (MRR) across their completed, selected
+        benchmarks. A benchmark column sorts on the score; Compare ranks on the interval.
       </p>
       <p v-if="comparabilityWarning" class="text-xs text-status-warning mt-2">* {{ comparabilityWarning }}</p>
-      <p v-if="cohort === 'all'" class="text-xs text-status-warning mt-2">Choose one cohort to compare models.</p>
     </div>
 
     <!-- Fleet readout -->
@@ -510,7 +523,6 @@ function goToModel(model: string) {
       <label class="flex flex-col text-xs text-text-secondary gap-1">
         Cohort
         <select v-model="cohort" class="rounded border border-surface-border bg-surface px-2 py-1 text-sm min-w-[9rem]">
-          <option value="">Default: {{ meta?.default_cohort ?? 'verified cohort' }}</option>
           <option value="all">Newest per benchmark (all cohorts)*</option>
           <option v-for="version in meta?.versions ?? []" :key="version" :value="version">
             {{ version }}{{ meta?.verified_cohorts.includes(version) ? '' : '*' }}
@@ -632,6 +644,14 @@ function goToModel(model: string) {
                   Model {{ sortGlyph(MODEL_SORT) }}
                 </th>
                 <th
+                  class="px-3 py-2 text-right cursor-pointer whitespace-nowrap"
+                  :class="headerClass(MRR_SORT)"
+                  title="Mean reciprocal rank across completed results on the selected benchmarks; missing results are omitted"
+                  @click="sortBy(MRR_SORT)"
+                >
+                  MRR {{ sortGlyph(MRR_SORT) }}
+                </th>
+                <th
                   class="px-3 py-2 text-left cursor-pointer"
                   :class="headerClass(COVERAGE_SORT)"
                   title="Sort by panel coverage"
@@ -663,6 +683,9 @@ function goToModel(model: string) {
                 </td>
                 <td class="px-3 py-2 whitespace-nowrap">
                   <span class="font-mono font-semibold text-[13px] text-accent">{{ row.model }}</span>
+                </td>
+                <td class="px-3 py-2 text-right font-mono text-xs tabular-nums" :title="`${row.covered} completed selected benchmarks`">
+                  {{ meanRanks.get(row.model)?.toFixed(3) ?? '—' }}
                 </td>
                 <td class="px-3 py-2">
                   <div class="flex items-center gap-2">
@@ -730,7 +753,7 @@ function goToModel(model: string) {
           makes no simultaneous claim across the table.
         </p>
         <p v-else class="text-xs text-text-muted mt-2 leading-relaxed">
-          No cross-benchmark mean is shown by default: it has no interpretation without a fixed benchmark panel, the
+          No cross-benchmark score mean is shown by default: it has no interpretation without a fixed benchmark panel, the
           metric each benchmark contributes, and a rule for the benchmarks a model never ran. Pick an Aggregate policy
           to choose that rule and see all three alongside the number.
         </p>
@@ -758,6 +781,14 @@ function goToModel(model: string) {
                   @click="sortBy(MODEL_SORT)"
                 >
                   Model {{ sortGlyph(MODEL_SORT) }}
+                </th>
+                <th
+                  class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider whitespace-nowrap cursor-pointer"
+                  :class="headerClass(MRR_SORT)"
+                  title="Mean reciprocal rank across completed results on the selected benchmarks; missing results are omitted"
+                  @click="sortBy(MRR_SORT)"
+                >
+                  MRR {{ sortGlyph(MRR_SORT) }}
                 </th>
                 <th
                   v-for="column in columns"
@@ -809,6 +840,9 @@ function goToModel(model: string) {
                     {{ row.model }}
                   </button>
                 </td>
+                <td class="px-3 py-2 text-right font-mono text-xs tabular-nums" :title="`${row.covered} completed selected benchmarks`">
+                  {{ meanRanks.get(row.model)?.toFixed(3) ?? '—' }}
+                </td>
                 <td v-for="{ task } in columns" :key="task" class="p-1 text-center align-middle">
                   <button
                     v-if="cellFor(row, task)"
@@ -831,7 +865,7 @@ function goToModel(model: string) {
                     <span
                       v-if="isPartialCoverage(cellFor(row, task)!)"
                       class="block text-[9px] font-mono leading-none text-status-warning"
-                      >{{ formatCoverage(cellFor(row, task)!.coverage) }}</span
+                      >{{ cellCoverageLabel(cellFor(row, task)!) }}</span
                     >
                     <span
                       v-else-if="deltaBest(row, task) !== null"

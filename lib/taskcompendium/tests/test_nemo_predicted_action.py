@@ -51,7 +51,12 @@ def test_pinned_nemo_row_keeps_expected_action_private():
     saved_specification = json.loads(specification.model_dump_json())
     assert set(saved_specification["context"]) == {"events"}
     assert saved_specification["answer_type"] == "native_action"
-    assert saved_specification["answer_format"] == {"kind": "final_action", "require_call": False, "max_calls": 1}
+    assert saved_specification["answer_format"] == {
+        "kind": "final_action",
+        "require_call": False,
+        "max_calls": 1,
+        "normal_submission": None,
+    }
     assert isinstance(saved_specification["final_tools"], list)
     assert saved_specification["final_tools"]
     public = render_instruction(specification) + specification.answer_format.model_dump_json()

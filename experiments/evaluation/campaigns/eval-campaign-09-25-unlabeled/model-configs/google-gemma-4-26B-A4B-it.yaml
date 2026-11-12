@@ -1,0 +1,29 @@
+# google/gemma-4-26B-A4B-it: the instruction-tuned Gemma 4 26B-A4B (the cohort list names the
+# pre-trained google/gemma-4-26B-A4B). Multimodal MoE served
+# text-only, 52 GB bf16, native context 262,144 tokens. Follows the vLLM Gemma 4 recipe
+# (docs.vllm.ai/projects/recipes/en/stable/Google/Gemma4.html): gemma4 reasoning and tool parsers,
+# thinking enabled by default; benchmark chat-template kwargs select the request mode.
+# The repo's own chat_template.jinja (Google's canonical template dated 2026-07-09) supersedes the
+# recipe's examples/tool_chat_template_gemma4.jinja and is served as shipped. generation_config.json
+# supplies temperature 1.0, top_p 0.95, top_k 64 for requests that omit sampling parameters.
+name: google-gemma-4-26B-A4B-it
+location: google/gemma-4-26B-A4B-it
+revision: 4d7ae4984b7db7de8f8457170b3f1a419ee76d52
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 2
+serve:
+  tensor_parallel_size: 2
+  max_model_len: 73728
+  limit_mm_per_prompt: '{"image":0,"video":0}'
+  reasoning_parser: gemma4
+  tool_call_parser: gemma4
+  vllm_extra_args:
+  - --enable-prefix-caching
+  - --default-chat-template-kwargs
+  - '{"enable_thinking":true}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

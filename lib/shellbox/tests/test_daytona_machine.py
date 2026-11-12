@@ -16,20 +16,137 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 
 pytest.importorskip("daytona")
 
-from daytona import CreateSandboxFromSnapshotParams, DaytonaNotFoundError
+from daytona import (
+    AsyncDaytona,
+    CreateSandboxFromSnapshotParams,
+    DaytonaConfig,
+    DaytonaNotFoundError,
+    Resources,
+)
 from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.machine import (
     DaytonaMachine,
     DaytonaMachineFactory,
     DaytonaNetworkMode,
     DaytonaNetworkPolicy,
+    _create_sandbox,
+    snapshot_identity,
 )
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec, UnsupportedMachineSpec
+
+
+@pytest.mark.parametrize("failure", ["rejected_post", "late_get", "prolonged_throttle", "deadline", "cancelled"])
+def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, failure):
+    async def scenario():
+        requests = []
+        delays = []
+        waiting = asyncio.Event()
+
+        async def wait(delay):
+            delays.append(delay)
+            waiting.set()
+            if failure in {"deadline", "cancelled"}:
+                await asyncio.Future()
+
+        monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
+
+        created = False
+
+        async def endpoint(request):
+            nonlocal created
+            if request.headers.get("Upgrade", "").lower() == "websocket":
+                websocket = web.WebSocketResponse()
+                await websocket.prepare(request)
+                async for _ in websocket:
+                    pass
+                return websocket
+            requests.append(request.method)
+            if request.method == "POST" and created:
+                return web.json_response({"message": "name already exists"}, status=409)
+            if (request.method == "GET" and created and requests.count("GET") > 1) or (
+                request.method == "POST"
+                and (
+                    failure == "late_get"
+                    or (failure == "rejected_post" and requests.count("POST") == 2)
+                    or (failure == "prolonged_throttle" and requests.count("POST") == 10)
+                )
+            ):
+                created = True
+                return web.json_response(
+                    {
+                        "id": "created-once",
+                        "organizationId": "fixture",
+                        "name": "fixture",
+                        "user": "root",
+                        "env": {},
+                        "labels": {},
+                        "public": False,
+                        "networkBlockAll": False,
+                        "target": "us",
+                        "cpu": 2,
+                        "gpu": 0,
+                        "memory": 4,
+                        "disk": 10,
+                        "state": "started",
+                        "toolboxProxyUrl": (
+                            ""
+                            if failure == "late_get" and request.method == "POST"
+                            else "https://fixture.invalid/toolbox"
+                        ),
+                    }
+                )
+            return web.json_response(
+                {"message": "rate limited"}, status=429, headers={"Retry-After-sandbox-create": "17"}
+            )
+
+        app = web.Application()
+        app.router.add_route("*", "/{path:.*}", endpoint)
+        async with TestServer(app) as server:
+            async with AsyncDaytona(
+                DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/"))
+            ) as client:
+                params = CreateSandboxFromSnapshotParams(name="fixture", snapshot="fixture")
+                if failure in {"rejected_post", "prolonged_throttle"}:
+                    sandbox = await _create_sandbox(client, params, 60)
+                    assert sandbox.id == "created-once"
+                    attempts = 2 if failure == "rejected_post" else 10
+                    assert requests == ["POST"] * attempts
+                    assert len(delays) == attempts - 1 and all(delay >= 17 for delay in delays)
+                elif failure == "deadline":
+                    with pytest.raises(TimeoutError):
+                        async with asyncio.timeout(None) as deadline:
+
+                            async def expire_when_waiting():
+                                await waiting.wait()
+                                deadline.reschedule(asyncio.get_running_loop().time())
+
+                            expiration = asyncio.create_task(expire_when_waiting())
+                            try:
+                                await _create_sandbox(client, params, 60)
+                            finally:
+                                await expiration
+                    assert requests == ["POST"]
+                elif failure == "cancelled":
+                    task = asyncio.create_task(_create_sandbox(client, params, 60))
+                    await waiting.wait()
+                    task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await task
+                    assert requests == ["POST"]
+                else:
+                    sandbox = await _create_sandbox(client, params, 60)
+                    assert sandbox.id == "created-once"
+                    assert requests == ["POST", "GET", "POST", "GET"]
+                    assert len(delays) == 1 and delays[0] >= 17
+
+    asyncio.run(scenario())
 
 
 class LocalFiles:
@@ -100,6 +217,11 @@ class LocalDaytona:
         self.timeout = timeout
         return self.sandbox
 
+    async def get(self, name):
+        if self.params is None or self.params.name != name:
+            raise DaytonaNotFoundError("Sandbox does not exist", status_code=404)
+        return self.sandbox
+
     async def delete(self, sandbox):
         assert sandbox is self.sandbox
         await sandbox.process.close()
@@ -110,6 +232,42 @@ class LocalDaytona:
 
     async def __aexit__(self, _exc_type, _exc, _traceback):
         self.closed = True
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, asyncio.CancelledError])
+def test_daytona_failed_creation_deletes_an_accepted_sandbox(error_type):
+    class AcceptedThenFailed(LocalDaytona):
+        async def create(self, params, *, timeout):
+            await super().create(params, timeout=timeout)
+            raise error_type("SDK failed after acceptance")
+
+    async def scenario():
+        client = AcceptedThenFailed()
+        factory = DaytonaMachineFactory(client_factory=lambda: client)
+        with pytest.raises(error_type):
+            await factory.create(MachineSpec(source=RegistryImage("fixture@sha256:" + "a" * 64), cpus=2))
+        assert client.deleted
+        assert client.closed
+
+    asyncio.run(scenario())
+
+
+def test_snapshot_preflight_builds_without_starting_sandbox_and_reuses_image():
+    client = LocalDaytona()
+    factory = DaytonaMachineFactory(client_factory=lambda: client)
+    spec = MachineSpec(source=RegistryImage("fixture@sha256:" + "a" * 64), cpus=2, memory_mb=2049)
+
+    async def scenario():
+        first = await factory.prepare(spec)
+        second = await factory.prepare(spec)
+        assert first == second
+        assert len(client.snapshot.snapshots) == 1
+        snapshot = await client.snapshot.get(first)
+        assert snapshot.state == SnapshotState.ACTIVE
+        assert snapshot.params.resources.memory == 3
+        assert client.params is None
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("policy", [None, DaytonaNetworkPolicy(DaytonaNetworkMode.DOMAIN_ALLOW_LIST, "example.org")])
@@ -168,18 +326,120 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
     asyncio.run(scenario())
 
 
-@pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
-def test_daytona_command_timeout_stops_descendants_and_preserves_next_command(tmp_path):
+def test_daytona_recreated_workdir_preserves_command_output(tmp_path: Path) -> None:
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    original_inode = workdir.stat().st_ino
+
+    class StaleWorkdirProcess(LocalProcess):
+        def __init__(self):
+            super().__init__()
+            self.workdir_replaced = False
+
+        async def exec(self, command, cwd=None, env=None, timeout=None):
+            if self.workdir_replaced and cwd is None:
+                raise OSError("Provider process retained the deleted working directory")
+            result = await super().exec(command, cwd=cwd, env=env, timeout=timeout)
+            self.workdir_replaced = workdir.stat().st_ino != original_inode
+            return result
+
     async def scenario():
         client = LocalDaytona()
+        client.sandbox.process = StaleWorkdirProcess()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(workdir))
+        )
+        try:
+            replaced = await machine.run(Command(("sh", "-c", 'rm -rf "$PWD" && mkdir -p "$PWD" && printf recreated')))
+            assert (replaced.exit_code, replaced.stdout) == (0, b"recreated")
+            following = await machine.run(Command(("printf", "ready")))
+            assert (following.exit_code, following.stdout) == (0, b"ready")
+            assert workdir.stat().st_ino != original_inode
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+def test_daytona_output_count_ignores_provider_diagnostics(tmp_path: Path) -> None:
+    class NoisyCountProcess(LocalProcess):
+        async def exec(self, command, **kwargs):
+            result = await super().exec(command, **kwargs)
+            result.result = "shell-init: getcwd failed\n" + result.result
+            return result
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = NoisyCountProcess()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            result = await machine.run(Command(("printf", "output"), output_limit_bytes=3))
+            assert (result.exit_code, result.stdout, result.stdout_truncated) == (0, b"out", True)
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
+@pytest.mark.parametrize("interruption", ["timeout", "cancel", "cancel_twice", "cancel_during_timeout_stop"])
+def test_daytona_command_interruption_stops_descendants_and_preserves_next_command(tmp_path, interruption):
+    async def scenario():
+        stopping, release_stop = asyncio.Event(), asyncio.Event()
+
+        class HeldStop(LocalProcess):
+            def __init__(self):
+                super().__init__()
+                self.cancellations = []
+
+            async def exec(self, command, **kwargs):
+                try:
+                    if "stop-command" in command and interruption in {"cancel_twice", "cancel_during_timeout_stop"}:
+                        stopping.set()
+                        await release_stop.wait()
+                    return await super().exec(command, **kwargs)
+                except asyncio.CancelledError as cancellation:
+                    self.cancellations.append(cancellation)
+                    raise
+
+        client = LocalDaytona()
+        client.sandbox.process = HeldStop()
         machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
         )
+        child = None
         try:
             await machine.run(Command(("sh", "-c", "echo 12 > answer")))
-            result = await machine.run(Command(("sh", "-c", "sleep 3600 & echo $! > child.pid; wait"), timeout=0.5))
-            assert result.reason is ExitReason.TIMED_OUT
+            pending = asyncio.create_task(
+                machine.run(
+                    Command(
+                        ("sh", "-c", "sleep 3600 & echo $! > child.pid; wait"),
+                        timeout=0.5 if interruption in {"timeout", "cancel_during_timeout_stop"} else None,
+                    )
+                )
+            )
+            async with asyncio.timeout(5):
+                while not (tmp_path / "child.pid").exists() or not (tmp_path / "child.pid").read_text().strip():
+                    # Wait for the real child to publish its PID before cancelling its parent.
+                    await asyncio.sleep(0)
             child = int((tmp_path / "child.pid").read_text())
+            if interruption == "timeout":
+                result = await pending
+                assert result.reason is ExitReason.TIMED_OUT
+            else:
+                if interruption == "cancel_during_timeout_stop":
+                    await asyncio.wait_for(stopping.wait(), timeout=5)
+                pending.cancel("agent deadline")
+                if interruption == "cancel_twice":
+                    await asyncio.wait_for(stopping.wait(), timeout=5)
+                    pending.cancel("second cancellation")
+                release_stop.set()
+                with pytest.raises(asyncio.CancelledError) as caught:
+                    await pending
+                assert caught.value.args == ("agent deadline",)
+                assert caught.value is client.sandbox.process.cancellations[-1]
             stopped = await machine.run(
                 Command(
                     (
@@ -197,22 +457,36 @@ def test_daytona_command_timeout_stops_descendants_and_preserves_next_command(tm
             assert (graded.exit_code, graded.stdout) == (0, b"1.0")
             assert not client.deleted and not client.closed
         finally:
+            release_stop.set()
             await machine.close()
+            if child is not None:
+                try:
+                    os.kill(child, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
         assert client.deleted and client.closed
 
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("interrupt_failure", ["exit", "timeout"])
-def test_daytona_failed_timeout_cleanup_is_infrastructure_failure(tmp_path, interrupt_failure):
+@pytest.mark.parametrize("interrupt_failure", ["exit", "timeout", "files"])
+@pytest.mark.parametrize("interruption", ["timeout", "cancel"])
+def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_failure, interruption):
+    entered = asyncio.Event()
+
     class FailedStop(LocalProcess):
         async def exec(self, command, **kwargs):
             if "candidate-block" in command:
+                entered.set()
                 await asyncio.Future()
             if "stop-command" in command:
                 if interrupt_failure == "timeout":
                     raise TimeoutError("Provider interruption timed out")
+                if interrupt_failure == "files":
+                    return SimpleNamespace(exit_code=0, result="")
                 return SimpleNamespace(exit_code=1, result="Cannot stop the process group")
+            if interrupt_failure == "files" and entered.is_set() and "rm -rf /tmp/.shellbox-" in command:
+                return SimpleNamespace(exit_code=1, result="Cannot remove command files")
             return await super().exec(command, **kwargs)
 
     async def scenario():
@@ -221,9 +495,19 @@ def test_daytona_failed_timeout_cleanup_is_infrastructure_failure(tmp_path, inte
         machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
         )
-        with pytest.raises(RuntimeError) as failure:
-            await machine.run(Command(("candidate-block",), timeout=0.5))
-        assert isinstance(failure.value.__cause__, TimeoutError if interrupt_failure == "timeout" else RuntimeError)
+        pending = asyncio.create_task(
+            machine.run(Command(("candidate-block",), timeout=0.5 if interruption == "timeout" else None))
+        )
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        if interruption == "cancel":
+            pending.cancel("agent deadline")
+            with pytest.raises(asyncio.CancelledError) as failure:
+                await pending
+            assert failure.value.args == ("agent deadline",)
+        else:
+            with pytest.raises(RuntimeError) as failure:
+                await pending
+            assert isinstance(failure.value.__cause__, TimeoutError if interrupt_failure == "timeout" else RuntimeError)
         assert client.deleted and client.closed
         with pytest.raises(RuntimeError, match="closed"):
             await machine.run(Command(("true",)))
@@ -704,6 +988,23 @@ def test_daytona_rejects_add_inputs_before_snapshot_creation(tmp_path, instructi
     assert not client.snapshot.snapshots
 
 
+@pytest.mark.parametrize("invalid_source", ["add", "outside_context"])
+def test_snapshot_preflight_rejects_unsupported_build_sources(tmp_path, invalid_source):
+    context = tmp_path / "context"
+    context.mkdir()
+    dockerfile = (tmp_path if invalid_source == "outside_context" else context) / "Dockerfile"
+    dockerfile.write_text("FROM ubuntu:24.04\nADD payload /opt/\n")
+    client = LocalDaytona()
+    with pytest.raises(UnsupportedMachineSpec):
+        asyncio.run(
+            DaytonaMachineFactory(client_factory=lambda: client).prepare(
+                MachineSpec(source=DockerfileSource(context, dockerfile), cpus=1)
+            )
+        )
+    assert not client.snapshot.snapshots
+    assert client.params is None
+
+
 @pytest.mark.parametrize("startup_timeout", [None, 0.01])
 def test_daytona_pending_snapshot_times_out_and_closes_client(startup_timeout) -> None:
     client = LocalDaytona()
@@ -738,3 +1039,33 @@ def test_daytona_failed_snapshot_closes_client_without_starting_sandbox() -> Non
         asyncio.run(DaytonaMachineFactory(lambda: client).create(MachineSpec(source=RegistryImage("ubuntu:24.04"))))
     assert client.params is None
     assert client.closed
+
+
+def test_snapshot_identity_names_the_snapshot_production_would_create(tmp_path: Path) -> None:
+    context = tmp_path / "context"
+    (context / "files").mkdir(parents=True)
+    (context / "Dockerfile").write_text("FROM ubuntu:24.04\nCOPY files/ /app/files\n")
+    (context / "files" / "data.csv").write_bytes(b"a,b\n1,2\n")
+    source = DockerfileSource(context, context / "Dockerfile")
+
+    name = snapshot_identity(source, Resources())
+
+    assert name.startswith("shellbox-") and len(name) == len("shellbox-") + 40
+    assert name == snapshot_identity(DockerfileSource(context, context / "Dockerfile"), Resources())
+
+
+def test_snapshot_identity_rejects_add_and_misplaced_dockerfiles(tmp_path: Path) -> None:
+    context = tmp_path / "context"
+    context.mkdir()
+    (context / "Dockerfile").write_text("FROM ubuntu:24.04\nADD files/ /app/files\n")
+    source = DockerfileSource(context, context / "Dockerfile")
+    with pytest.raises(UnsupportedMachineSpec, match="ADD"):
+        snapshot_identity(source, Resources())
+
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / "sub").mkdir()
+    (nested / "Dockerfile").write_text("FROM ubuntu:24.04\n")
+    misplaced = DockerfileSource(nested, nested / "sub" / "Dockerfile")
+    with pytest.raises(UnsupportedMachineSpec, match="context root"):
+        snapshot_identity(misplaced, Resources())

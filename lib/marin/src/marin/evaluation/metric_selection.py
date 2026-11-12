@@ -4,6 +4,27 @@
 """Select the lm-eval metric and extraction filter Marin presents as primary."""
 
 from collections.abc import Iterable, Mapping
+from types import MappingProxyType
+
+from marin.evaluation.records import BenchmarkMetricRef, MetricKind
+
+PUBLICATION_METRIC_POLICY = "marin-2026-10-16-v1"
+PUBLICATION_METRICS: Mapping[str, BenchmarkMetricRef] = MappingProxyType(
+    {
+        "piqa": BenchmarkMetricRef(
+            name="normalized_accuracy", source_name="acc_norm", kind=MetricKind.BINARY, higher_is_better=True
+        ),
+        "ifbench": BenchmarkMetricRef(
+            name="strict_prompt_accuracy",
+            source_name="strict_prompt_accuracy",
+            kind=MetricKind.BINARY,
+            higher_is_better=True,
+        ),
+        "truthfulqa": BenchmarkMetricRef(
+            name="accuracy", source_name="acc", kind=MetricKind.CONTINUOUS, higher_is_better=True
+        ),
+    }
+)
 
 # Headline metric for a task, matched after stripping lm-eval's ``,<filter>`` suffix.
 # ``acc_norm`` outranks ``acc`` where both exist; ``accuracy`` covers Evalchemy's chat-native tasks.
@@ -23,6 +44,9 @@ FILTER_PRIORITY = ("flexible-extract",)
 # MRCR reports ``mrcr_accuracy`` for the run and ``accuracy`` for each example.
 MRCR_RUN_METRIC = "mrcr_accuracy"
 MRCR_SAMPLE_METRIC = "accuracy"
+
+# Evalchemy's sandbox graders emit each item's pass rate separately from their aggregate names.
+PASS_AT_ONE_METRICS = frozenset({"pass@1", "pass_at_1", "input_pass@1", "output_pass@1"})
 
 
 def primary_filter(filters: Iterable[str]) -> str | None:
@@ -64,6 +88,10 @@ def declared_sample_metric(metrics: Mapping[str, float], declared: str | None) -
         return picked
     if declared == MRCR_RUN_METRIC:
         return declared_metric(metrics, MRCR_SAMPLE_METRIC)
+    if declared.endswith(REPEAT_MEAN_SUFFIX):
+        return declared_metric(metrics, declared.removesuffix(REPEAT_MEAN_SUFFIX))
+    if declared in PASS_AT_ONE_METRICS:
+        return declared_metric(metrics, "pass_rate")
     return None
 
 

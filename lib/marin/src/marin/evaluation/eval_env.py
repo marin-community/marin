@@ -5,8 +5,11 @@
 
 import os
 
+DAYTONA_RUNTIME_ENV_KEYS = ("DAYTONA_API_URL", "DAYTONA_TARGET")
+
 # Credentials and W&B metadata propagated from an eval orchestrator into its serve and mechanism children.
 EVAL_RUNTIME_ENV_KEYS: tuple[str, ...] = (
+    *DAYTONA_RUNTIME_ENV_KEYS,
     "WANDB_API_KEY",
     "WANDB_ENTITY",
     "WANDB_PROJECT",
@@ -31,6 +34,7 @@ EVAL_ENV_KEYS: tuple[str, ...] = (
     "MODAL_API_KEY",
     "TPU_CI",
     "MARIN_PREFIX",
+    "MARIN_TEMP_PREFIX",
     # Evalchemy FinanceBench grades with an external judge endpoint (marin-community/marin#9070).
     "JUDGE_API_KEY",
     "JUDGE_BASE_URL",

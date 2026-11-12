@@ -401,6 +401,7 @@ onBeforeUnmount(() => {
     </div>
     <div v-else-if="state === 'error'" class="agent-state">
       <p class="problem">{{ error }}</p>
+      <a class="button primary" :href="`${config.origin}/`" target="_blank" rel="noreferrer">Open Loom</a>
       <button type="button" @click="connect">Try again</button>
     </div>
 

@@ -37,7 +37,7 @@ from marina.database_setup import (
     MARINA_SCHEMA,
     PROVISION_APPLET_FUNCTION,
 )
-from marina.db import DatabaseSpec, engine_for, engine_for_role, grant_read_on_connection, schema_name
+from marina.db import DatabaseSpec, QueryEngineCache, engine_for, engine_for_role, grant_read_on_connection, schema_name
 from marina.host_bindings import migrate_host_bindings, normalize_hostname
 from marina.manifest import APP_NAME_PATTERN, KERNEL_PREFIXES, AgentPanelManifest, AppJob, agent_panel, app_jobs
 
@@ -127,6 +127,16 @@ class AppletMode(StrEnum):
     PUBLIC = "public"
 
 
+class IndexFallback(StrEnum):
+    """When a missing applet path is answered with the frontend's index page."""
+
+    NONE = "none"
+    EXTENSIONLESS = "extensionless"
+    """Any-type requests: a final segment with an extension is a missing asset, not a route."""
+    ANY_PATH = "any_path"
+    """Page navigations ask for HTML explicitly, so client routes such as `/runs/model-v0.1` load."""
+
+
 @dataclass(frozen=True)
 class AppletManifest:
     title: str
@@ -155,9 +165,10 @@ class AppletSummary:
     id: uuid.UUID
     title: str
     description: str
-    owner: str
+    published_by: str
     current_version: int
     mode: AppletMode
+    published_at: datetime
     name: str | None = None
 
     @property
@@ -423,6 +434,12 @@ class AppletStore:
     def __init__(self, database: DatabaseSpec):
         self.database = database
         self.engine = engine_for(database, MARINA_SCHEMA)
+        self._query_engines = QueryEngineCache(database)
+
+    def close(self) -> None:
+        """Dispose the registry pool and retire SQL-request pools."""
+        self._query_engines.close()
+        self.engine.dispose()
 
     def migrate(self) -> None:
         statements = (
@@ -430,7 +447,7 @@ class AppletStore:
                 id UUID PRIMARY KEY,
                 title TEXT NOT NULL,
                 description TEXT NOT NULL,
-                owner TEXT NOT NULL,
+                owner TEXT NOT NULL, -- Original publisher metadata; never used for authorization.
                 mode TEXT NOT NULL DEFAULT 'private' CHECK (mode IN ('private', 'public')),
                 current_version INTEGER,
                 archived_at TIMESTAMPTZ,
@@ -535,7 +552,7 @@ class AppletStore:
     def publish(
         self,
         package: AppletPackage,
-        owner: str,
+        publisher: str,
         applet_id: uuid.UUID | None = None,
         base_version: int | None = None,
         operators: frozenset[str] = frozenset(),
@@ -560,12 +577,12 @@ class AppletStore:
                 connection,
                 applet_id,
                 package.manifest,
-                owner,
+                publisher,
                 base_version,
                 operators,
                 mode,
             )
-            self._insert_version(connection, applet_id, version, package, owner)
+            self._insert_version(connection, applet_id, version, package, publisher)
             self._store_files(connection, applet_id, version, package.files)
             connection.execute(text(f'SET LOCAL ROLE "{applet_role(applet_id)}"'))
             schema = applet_schema(applet_id, package.manifest.name)
@@ -585,18 +602,16 @@ class AppletStore:
         connection.execute(text(APPLET_LOCK_SQL), {"id": str(applet_id)})
 
     @classmethod
-    def _authorize_versioned_mutation(
+    def _check_current_version(
         cls,
         connection: Connection,
         applet_id: uuid.UUID,
-        actor: str,
         base_version: int,
-        operators: frozenset[str],
     ) -> None:
         cls._lock_applet(connection, applet_id)
         applet = (
             connection.execute(
-                text("SELECT owner, current_version FROM applets WHERE id = :id AND archived_at IS NULL FOR UPDATE"),
+                text("SELECT current_version FROM applets WHERE id = :id AND archived_at IS NULL FOR UPDATE"),
                 {"id": applet_id},
             )
             .mappings()
@@ -604,8 +619,6 @@ class AppletStore:
         )
         if applet is None:
             raise AppletNotFound(str(applet_id))
-        if applet["owner"] != actor and actor not in operators:
-            raise AppletForbidden(str(applet_id))
         if int(applet["current_version"]) != base_version:
             raise AppletConflict(str(applet_id))
 
@@ -614,14 +627,14 @@ class AppletStore:
         connection: Connection,
         applet_id: uuid.UUID,
         manifest: AppletManifest,
-        owner: str,
+        publisher: str,
         base_version: int | None,
         operators: frozenset[str],
         mode: AppletMode | None,
     ) -> tuple[int, AppletMode]:
         existing = (
             connection.execute(
-                text("SELECT owner, mode, current_version, archived_at, name FROM applets WHERE id = :id FOR UPDATE"),
+                text("SELECT mode, current_version, archived_at, name FROM applets WHERE id = :id FOR UPDATE"),
                 {"id": applet_id},
             )
             .mappings()
@@ -630,8 +643,6 @@ class AppletStore:
         if existing is not None:
             if existing["archived_at"] is not None:
                 raise AppletNotFound(str(applet_id))
-            if existing["owner"] != owner and owner not in operators:
-                raise AppletForbidden(str(applet_id))
             if existing["name"] != manifest.name:
                 raise ValueError("An application's registered name cannot change")
             if base_version is None or existing["current_version"] != base_version:
@@ -646,7 +657,7 @@ class AppletStore:
             return version, effective_mode
         if base_version not in (None, 0):
             raise AppletNotFound(str(applet_id))
-        if manifest.name is not None and owner not in operators:
+        if manifest.name is not None and publisher not in operators:
             raise AppletForbidden("Only an operator may register a named application")
         if manifest.name is not None:
             connection.execute(text(APPLET_LOCK_SQL), {"id": f"marina:name:{manifest.name}"})
@@ -659,13 +670,13 @@ class AppletStore:
         connection.execute(
             text(
                 "INSERT INTO applets (id, title, description, owner, mode, name) "
-                "VALUES (:id, :title, :description, :owner, :mode, :name)"
+                "VALUES (:id, :title, :description, :publisher, :mode, :name)"
             ),
             {
                 "id": applet_id,
                 "title": manifest.title,
                 "description": manifest.description,
-                "owner": owner,
+                "publisher": publisher,
                 "mode": effective_mode.value,
                 "name": manifest.name,
             },
@@ -705,13 +716,13 @@ class AppletStore:
         applet_id: uuid.UUID,
         version: int,
         package: AppletPackage,
-        owner: str,
+        publisher: str,
     ) -> None:
         connection.execute(
             text(
                 "INSERT INTO applet_versions "
                 "(applet_id, version, manifest, package_digest, byte_size, published_by) "
-                "VALUES (:id, :version, CAST(:manifest AS jsonb), :digest, :byte_size, :owner)"
+                "VALUES (:id, :version, CAST(:manifest AS jsonb), :digest, :byte_size, :publisher)"
             ),
             {
                 "id": applet_id,
@@ -719,7 +730,7 @@ class AppletStore:
                 "manifest": _manifest_json(package.manifest),
                 "digest": package.digest,
                 "byte_size": package.byte_size,
-                "owner": owner,
+                "publisher": publisher,
             },
         )
 
@@ -835,8 +846,10 @@ class AppletStore:
         with self.engine.connect() as connection:
             rows = connection.execute(
                 text(
-                    "SELECT id, title, description, owner, current_version, mode, name FROM applets "
-                    "WHERE archived_at IS NULL AND current_version IS NOT NULL ORDER BY title, id"
+                    "SELECT a.id, a.title, a.description, v.published_by, v.published_at, "
+                    "a.current_version, a.mode, a.name "
+                    "FROM applets a JOIN applet_versions v ON v.applet_id = a.id AND v.version = a.current_version "
+                    "WHERE a.archived_at IS NULL ORDER BY a.title, a.id"
                 )
             ).mappings()
             return [
@@ -844,9 +857,10 @@ class AppletStore:
                     id=row["id"],
                     title=row["title"],
                     description=row["description"],
-                    owner=row["owner"],
+                    published_by=row["published_by"],
                     current_version=row["current_version"],
                     mode=AppletMode(row["mode"]),
+                    published_at=row["published_at"],
                     name=row["name"],
                 )
                 for row in rows
@@ -901,12 +915,10 @@ class AppletStore:
         self,
         applet_id: uuid.UUID,
         mode: AppletMode,
-        actor: str,
         base_version: int,
-        operators: frozenset[str] = frozenset(),
     ) -> None:
         with self.engine.begin() as connection:
-            self._authorize_versioned_mutation(connection, applet_id, actor, base_version, operators)
+            self._check_current_version(connection, applet_id, base_version)
             if (
                 mode is AppletMode.PUBLIC
                 and connection.execute(text("SELECT name FROM applets WHERE id = :id"), {"id": applet_id}).scalar_one()
@@ -975,12 +987,10 @@ class AppletStore:
         self,
         applet_id: uuid.UUID,
         version: int,
-        actor: str,
         base_version: int,
-        operators: frozenset[str] = frozenset(),
     ) -> None:
         with self.engine.begin() as connection:
-            self._authorize_versioned_mutation(connection, applet_id, actor, base_version, operators)
+            self._check_current_version(connection, applet_id, base_version)
             exists = connection.execute(
                 text("SELECT 1 FROM applet_versions WHERE applet_id = :id AND version = :version"),
                 {"id": applet_id, "version": version},
@@ -992,11 +1002,11 @@ class AppletStore:
                 {"id": applet_id, "version": version},
             )
 
-    def archive(self, applet_id: uuid.UUID, actor: str, operators: frozenset[str] = frozenset()) -> None:
+    def archive(self, applet_id: uuid.UUID) -> None:
         with self.engine.begin() as connection:
             applet = (
                 connection.execute(
-                    text("SELECT owner FROM applets WHERE id = :id AND archived_at IS NULL FOR UPDATE"),
+                    text("SELECT id FROM applets WHERE id = :id AND archived_at IS NULL FOR UPDATE"),
                     {"id": applet_id},
                 )
                 .mappings()
@@ -1004,8 +1014,6 @@ class AppletStore:
             )
             if applet is None:
                 raise AppletNotFound(str(applet_id))
-            if applet["owner"] != actor and actor not in operators:
-                raise AppletForbidden(str(applet_id))
             connection.execute(
                 text("UPDATE applets SET archived_at = now(), updated_at = now() WHERE id = :id"), {"id": applet_id}
             )
@@ -1033,14 +1041,17 @@ class AppletStore:
         version: int,
         path: str,
         accept_gzip: bool,
-        accept_html: bool,
+        index_fallback: IndexFallback,
     ) -> StoredFile:
         self.version(applet_id, version)
         requested = path.strip("/")
         candidates = [f"{DIST_PREFIX}{requested}" if requested else INDEX_FILE]
         if requested.endswith("/"):
             candidates.append(f"{DIST_PREFIX}{requested}index.html")
-        elif requested and "." not in PurePosixPath(requested).name and accept_html:
+        elif requested and (
+            index_fallback is IndexFallback.ANY_PATH
+            or (index_fallback is IndexFallback.EXTENSIONLESS and "." not in PurePosixPath(requested).name)
+        ):
             candidates.append(INDEX_FILE)
         for candidate in candidates:
             variants = [(candidate + ".gz", "gzip"), (candidate, None)] if accept_gzip else [(candidate, None)]
@@ -1078,8 +1089,7 @@ class AppletStore:
     def query(self, applet_id: uuid.UUID, sql: str, parameters: dict[str, object]) -> dict[str, object]:
         self.current_version(applet_id)
         command = validate_query(sql)
-        engine = engine_for_role(self.database, self.schema(applet_id), applet_role(applet_id))
-        try:
+        with self._query_engines.engine(self.schema(applet_id), applet_role(applet_id)) as engine:
             with engine.begin() as connection:
                 connection.execute(text(f"SET LOCAL statement_timeout = '{QUERY_TIMEOUT_MS}ms'"))
                 if command in {"SELECT", "WITH"}:
@@ -1110,8 +1120,6 @@ class AppletStore:
                 if result.returns_rows:
                     raise InvalidQuery(f"{command} statements may not return rows")
                 return {"columns": [], "rows": [], "row_count": result.rowcount}
-        finally:
-            engine.dispose()
 
 
 @dataclass(frozen=True)

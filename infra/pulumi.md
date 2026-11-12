@@ -19,7 +19,7 @@ This project provisions cluster prerequisites and shared GCP infrastructure.
 Cluster-scoped resources use one stack per cluster, with configuration in
 `Pulumi.<cluster>.yaml`. Shared GCP resources, including IAM grants, belong to
 the `marin` stack. Cross-cloud data
-buckets are the exception: `infra/buckets` owns the GCS, CoreWeave, and R2
+buckets are the exception: `infra/buckets` owns the GCS, CoreWeave, R2, and Hugging Face
 buckets in a manually operated project because its provider credentials are not
 available to CI. Bucket-scoped GCP IAM remains in `marin`.
 
@@ -62,7 +62,7 @@ configuration, and dependencies.
 
 A small internal web app (a browser UI over a database or an API, used by the
 team) does not need its own project at all: keep its source under
-`infra/marina/apps/` or `infra/marina/applets/` and release its package with
+`infra/marina/apps/` and release its package with
 `marina release`. The `marin-marina` stack deploys the shared base runtime; it
 does not publish application code (see `infra/marina/README.md`).
 
@@ -106,6 +106,14 @@ All projects share these conventions:
   recovery metadata without dereferencing it. The GitHub project may manage an
   environment-sealed Actions ciphertext together with its public-key ID; the
   plaintext must never enter Pulumi config, arguments, or state.
+
+  The `marin` stack publishes the `iris-principal-directory` secret in Secret Manager.
+  Its payload is marked with `pulumi.Output.secret`, so previews redact it and the
+  stack's KMS secrets provider encrypts the payload stored in Pulumi state. IAM
+  bindings already record principal email addresses in state as identity metadata.
+  Secret-level read grants are assigned to the Iris controller and deployment CI
+  accounts; project-level IAM permissions can also allow other principals to read
+  the secret.
 
 ## Picking a pattern for new work
 

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GLM-5.3 chat completions through the ``openai`` SDK, retried by the client's own loop.
+"""GLM-5.3 chat completions through the ``openai`` SDK, retried by one loop.
 
 ``GlmClient`` implements ``taskforge.llm.client.ModelClient``, with ``LLMProviderConfig`` supplying
 the model, the retry budget and backoff, the hold and stall timeouts and the connection pool. The
@@ -10,11 +10,11 @@ retries failed attempts itself. The SDK retries only before a response starts, w
 retrying a stall, an abort, a mid-stream error or a stream ending without usage. The SDK also cannot
 hold on an empty pool or a missing route and returns no record of the individual attempts.
 
-Every request streams. The SDK's read timeout abandons a connection after ``stall_timeout`` seconds
-without bytes, and the client's loop over chunks abandons a stream after as long without a token, so
-a slow reply still producing tokens runs without a wall-clock cap. The SDK's
-``ChatCompletionStreamState`` accumulates the chunks, and the client reads content, reasoning, tool
-calls, finish reason and usage from its snapshot.
+Every chat-completions request streams. The SDK's read timeout abandons a connection after
+``stall_timeout`` seconds without bytes, and the client's loop over chunks abandons a stream after
+as long without a token, so a slow reply still producing tokens runs without a wall-clock cap. The
+SDK's ``ChatCompletionStreamState`` accumulates the chunks, and the client reads content,
+reasoning, tool calls, finish reason and usage from its snapshot.
 
 After a failed attempt, the client handles the failure by kind:
 
@@ -32,8 +32,15 @@ After a failed attempt, the client handles the failure by kind:
 
 The client asks its ``EndpointSource`` for the endpoint when a hold starts, on each hold poll and
 after a connection error, since a moved relay shows up as a refused connection. When the answer
-changes, the client rebuilds the SDK client on the same connection pool and sends the next attempt to
-the new endpoint.
+changes, each event loop's SDK client is rebuilt on that loop's connection pool at its next request,
+which goes to the new endpoint.
+
+An httpx pool works only in the event loop that opened it, so the client opens one connection pool,
+with its SDK client, in each event loop that uses it, and drops the pools of loops that have closed.
+A pickled client holds only its endpoint source and provider config, so a copy in another process
+opens its own pools. After a stalled read the client replaces the running loop's pool, at most once
+per ``POOL_RESET_INTERVAL``, so the retry cannot reuse a connection that may be dead. Requests still
+streaming on the old pool keep it: the old pool is retired and closes when the last of them ends.
 
 vLLM's GLM tool parser reports a reply cut off by ``max_tokens`` inside a tool call as
 ``finish_reason == "tool_calls"`` with partial arguments (measured live). The client reports a
@@ -52,7 +59,8 @@ import json
 import logging
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import TracebackType
@@ -67,6 +75,7 @@ from pydantic import BaseModel
 from rigging.timing import ExponentialBackoff
 
 from taskforge.llm.client import (
+    RETRYABLE_STATUSES,
     Attempt,
     AttemptOutcome,
     Completion,
@@ -92,13 +101,17 @@ logger = logging.getLogger(__name__)
 
 API_ROOT = "/v1"
 """The path suffix of an OpenAI-compatible base URL. The router serves ``/health`` at the URL without it."""
-RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 CONTEXT_LIMIT_PATTERN = re.compile(r"maximum context length is (\d+) tokens")
 SDK_REQUEST_FIELDS = frozenset({"tools", "tool_choice", "response_format", "parallel_tool_calls"})
 """Fields the client passes to ``chat.completions.create`` as keyword arguments, putting the rest in ``extra_body``."""
 ERROR_BODY_LIMIT = 2000
-CONNECT_TIMEOUT = 30.0
-WRITE_TIMEOUT = 120.0
+CONNECT_TIMEOUT = 10.0
+WRITE_TIMEOUT = 30.0
+KEEPALIVE_EXPIRY = 30.0
+"""Seconds an idle pooled connection may be reused, so a connection idle through a long author turn is not
+reused blindly; a stalled read also replaces the whole pool (``_reset_pool``)."""
+POOL_RESET_INTERVAL = 30.0
+"""Least seconds between two pool resets, so a burst of stalls on one bad path replaces the pool once."""
 HEALTH_TIMEOUT = 20.0
 
 
@@ -198,15 +211,15 @@ def _retry_after(response: httpx.Response) -> float:
     return float(value) if value.replace(".", "", 1).isdigit() else 0.0
 
 
-def _status_failure(error: openai.APIStatusError) -> _AttemptFailed:
-    status = error.status_code
-    body = error.response.text[:ERROR_BODY_LIMIT]
+def _status_failure(response: httpx.Response) -> _AttemptFailed:
+    status = response.status_code
+    body = response.text[:ERROR_BODY_LIMIT]
     if status == 404 and "route" in body.lower():
         return _AttemptFailed(AttemptOutcome.ROUTE_MISSING, body, status)
     if status == 400 and CONTEXT_LIMIT_PATTERN.search(body):
         return _AttemptFailed(AttemptOutcome.CONTEXT_OVERFLOW, body, status)
     if status in RETRYABLE_STATUSES:
-        return _AttemptFailed(AttemptOutcome.RETRYABLE_STATUS, body, status, _retry_after(error.response))
+        return _AttemptFailed(AttemptOutcome.RETRYABLE_STATUS, body, status, _retry_after(response))
     return _AttemptFailed(AttemptOutcome.REJECTED, body, status)
 
 
@@ -228,7 +241,7 @@ def request_kwargs(
         "model": model,
         "messages": list(messages),
         "max_tokens": max_tokens,
-        "temperature": policy.temperature,
+        **policy.sampling_params(),
         "stream": True,
         "stream_options": {"include_usage": True},
         **sdk_fields,
@@ -236,8 +249,21 @@ def request_kwargs(
     }
 
 
+@dataclass(eq=False)
+class _LoopPool:
+    """The connection pool of one event loop, the SDK client on it for one endpoint, and its requests in flight."""
+
+    http: httpx.AsyncClient
+    sdk: openai.AsyncOpenAI
+    endpoint: GlmEndpoint
+    in_flight: int = 0
+
+
 class GlmClient:
     """Async GLM client. Use as ``async with GlmClient(source, provider) as client``.
+
+    The client opens one connection pool in each event loop that uses it, and a pickled client holds only
+    ``source`` and ``provider``.
 
     Args:
         source: Supplies the endpoint. The client asks it again during holds and after a connection
@@ -252,12 +278,13 @@ class GlmClient:
         self._backoff = ExponentialBackoff(
             initial=provider.backoff_initial, maximum=provider.backoff_maximum, factor=provider.backoff_factor
         )
-        connections = provider.max_connections
-        self._http = httpx.AsyncClient(
-            limits=httpx.Limits(max_connections=connections, max_keepalive_connections=connections)
-        )
         self._endpoint = source.current()
-        self._sdk = self._sdk_client(self._endpoint)
+        self._pools: dict[asyncio.AbstractEventLoop, _LoopPool] = {}
+        self._retired: dict[asyncio.AbstractEventLoop, list[_LoopPool]] = {}
+        self._pool_reset_at = -POOL_RESET_INTERVAL
+
+    def __reduce__(self) -> tuple[type[Self], tuple[EndpointSource, LLMProviderConfig]]:
+        return type(self), (self._source, self._provider)
 
     @property
     def model(self) -> str:
@@ -265,8 +292,8 @@ class GlmClient:
 
     @property
     def http(self) -> httpx.AsyncClient:
-        """The SDK client's connection pool, for requests to the router's other endpoints such as ``/health``."""
-        return self._http
+        """The running event loop's connection pool, for requests to the router's other endpoints such as ``/health``."""
+        return self._pool().http
 
     async def __aenter__(self) -> Self:
         return self
@@ -274,24 +301,99 @@ class GlmClient:
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
     ) -> None:
-        await self._http.aclose()
+        loop = asyncio.get_running_loop()
+        pools = self._retired.pop(loop, [])
+        current = self._pools.pop(loop, None)
+        if current is not None:
+            pools.append(current)
+        for pool in pools:
+            await pool.http.aclose()
 
-    def _sdk_client(self, endpoint: GlmEndpoint) -> openai.AsyncOpenAI:
+    def _open_pool(self) -> _LoopPool:
+        """A fresh connection pool for the running event loop, with an SDK client on it for the current endpoint."""
+        limit = self._provider.max_connections
+        http = httpx.AsyncClient(
+            limits=httpx.Limits(
+                max_connections=limit, max_keepalive_connections=limit, keepalive_expiry=KEEPALIVE_EXPIRY
+            )
+        )
+        return _LoopPool(http, self._sdk_client(self._endpoint, http), self._endpoint)
+
+    def _pool(self) -> _LoopPool:
+        """The running event loop's connection pool and SDK client, opened on first use there.
+
+        An httpx pool works only in the event loop that opened it. The pools of closed loops, retired ones
+        included, are dropped.
+        """
+        for closed in [loop for loop in self._pools.keys() | self._retired.keys() if loop.is_closed()]:
+            self._pools.pop(closed, None)
+            self._retired.pop(closed, None)
+        loop = asyncio.get_running_loop()
+        pool = self._pools.get(loop)
+        if pool is None:
+            pool = self._open_pool()
+            self._pools[loop] = pool
+        elif pool.endpoint != self._endpoint:
+            pool.sdk = self._sdk_client(self._endpoint, pool.http)
+            pool.endpoint = self._endpoint
+        return pool
+
+    async def _reset_pool(self) -> None:
+        """Open a fresh connection pool after a stalled read, so the retry cannot reuse a connection that may be dead.
+
+        A stall has other causes the reset does not touch, such as the relay refusing connections or this process's
+        own event loop blocking for longer than the connect timeout; the bounded retry with backoff carries the call
+        through those, and the reset interval keeps the two from compounding into a reconnect storm.
+
+        The reset replaces the running event loop's pool. Other calls in that loop may still be streaming on the old
+        pool's connections, so the old pool is retired and closes when the last request leased from it ends
+        (``_leased``). httpx drops an expired idle connection only when a request next uses its pool, so a retired
+        pool left open would hold its sockets until the client exits.
+        """
+        now = time.monotonic()
+        if now - self._pool_reset_at < POOL_RESET_INTERVAL:
+            return
+        self._pool_reset_at = now
+        loop = asyncio.get_running_loop()
+        old = self._pool()
+        logger.warning(
+            "GLM read stalled; replacing the connection pool (%d requests still on the old one)", old.in_flight
+        )
+        self._pools[loop] = self._open_pool()
+        if old.in_flight:
+            self._retired.setdefault(loop, []).append(old)
+        else:
+            await old.http.aclose()
+
+    @asynccontextmanager
+    async def _leased(self) -> AsyncIterator[tuple[openai.AsyncOpenAI, httpx.AsyncClient]]:
+        """The running event loop's SDK client and its pool, which stays open until the request using them ends."""
+        pool = self._pool()
+        pool.in_flight += 1
+        try:
+            yield pool.sdk, pool.http
+        finally:
+            pool.in_flight -= 1
+            retired = self._retired.get(asyncio.get_running_loop(), [])
+            if not pool.in_flight and pool in retired:
+                retired.remove(pool)
+                await pool.http.aclose()
+
+    def _sdk_client(self, endpoint: GlmEndpoint, http: httpx.AsyncClient) -> openai.AsyncOpenAI:
         timeout = httpx.Timeout(
             connect=CONNECT_TIMEOUT, read=self._provider.stall_timeout, write=WRITE_TIMEOUT, pool=None
         )
         return openai.AsyncOpenAI(
-            base_url=endpoint.base_url, api_key=endpoint.token, max_retries=0, timeout=timeout, http_client=self._http
+            base_url=endpoint.base_url, api_key=endpoint.token, max_retries=0, timeout=timeout, http_client=http
         )
 
     def _refresh_endpoint(self) -> None:
-        """Ask the source for the endpoint and rebuild the SDK client if it changed."""
+        """Ask the source for the endpoint. Each loop's SDK client moves to a new endpoint at its next request."""
         endpoint = self._source.current()
         if endpoint == self._endpoint:
             return
         logger.warning("GLM endpoint moved from %s to %s", self._endpoint.base_url, endpoint.base_url)
         self._endpoint = endpoint
-        self._sdk = self._sdk_client(endpoint)
 
     async def complete(
         self,
@@ -385,19 +487,40 @@ class GlmClient:
         segment: int,
         attempts: list[Attempt],
     ) -> _Segment:
-        """Send a request, retrying and holding as needed, and append each attempt to ``attempts``."""
+        """Stream a chat-completions request through ``_retrying``, appending each attempt to ``attempts``."""
+        kwargs = request_kwargs(self._provider.model, messages, policy.max_tokens, policy, request_fields)
+
+        async def send(events: list[str]) -> _Segment:
+            return await self._stream(kwargs, events)
+
+        result = await self._retrying(send, segment, policy.max_tokens, attempts)
+        if result.finish_reason is FinishReason.TOOL_CALLS and result.usage.completion_tokens >= policy.max_tokens:
+            return replace(result, finish_reason=FinishReason.LENGTH)
+        return result
+
+    async def _retrying[T](
+        self,
+        send: Callable[[list[str]], Awaitable[T]],
+        segment: int,
+        max_tokens: int,
+        attempts: list[Attempt],
+    ) -> T:
+        """Call ``send`` until an attempt succeeds, retrying and holding as needed, and return its result.
+
+        ``send(events)`` makes one request, appends the raw payloads it receives to ``events``, and
+        raises ``_AttemptFailed`` for a failure this loop handles. Each attempt, failed or not, is
+        appended to ``attempts``.
+        """
         # Retries and hold polls back off on separate schedules, so a hold leaves the next retry's delay as it was.
         retry_backoff = self._backoff.copy()
         hold_backoff = self._backoff.copy()
-        max_tokens = policy.max_tokens
         failures = 0
         hold_started: float | None = None
         while True:
-            kwargs = request_kwargs(self._provider.model, messages, max_tokens, policy, request_fields)
             events: list[str] = []
             started_wall, started = time.time(), time.monotonic()
             try:
-                result = await self._stream(kwargs, events)
+                result = await send(events)
             except _AttemptFailed as failure:
                 duration = time.monotonic() - started
                 status, detail = failure.http_status, failure.detail
@@ -411,6 +534,8 @@ class GlmClient:
                     raise ContextExhausted(failure.detail, attempts) from failure
                 if failure.outcome is AttemptOutcome.TRANSPORT_ERROR:
                     self._refresh_endpoint()
+                if failure.outcome is AttemptOutcome.STALLED:
+                    await self._reset_pool()
                 if failure.outcome is AttemptOutcome.ROUTE_MISSING or await self._pool_empty():
                     if hold_started is None:
                         hold_started = time.monotonic()
@@ -432,8 +557,6 @@ class GlmClient:
                 )
                 await asyncio.sleep(delay)
                 continue
-            if result.finish_reason is FinishReason.TOOL_CALLS and result.usage.completion_tokens >= max_tokens:
-                result = replace(result, finish_reason=FinishReason.LENGTH)
             duration = time.monotonic() - started
             attempts.append(
                 Attempt(segment, AttemptOutcome.COMPLETED, max_tokens, started_wall, duration, 200, "", tuple(events))
@@ -450,28 +573,36 @@ class GlmClient:
         started = time.monotonic()
         ttft: float | None = None
         try:
-            chunks = await self._sdk.chat.completions.create(**kwargs)
-            assert isinstance(chunks, openai.AsyncStream)
-            async with chunks:
-                last_token = time.monotonic()
-                while True:
-                    remaining = stall_timeout - (time.monotonic() - last_token)
-                    try:
-                        chunk = await asyncio.wait_for(anext(chunks), timeout=max(remaining, 0.0))
-                    except StopAsyncIteration:
-                        break
-                    events.append(chunk.model_dump_json())
-                    state.handle_chunk(chunk)
-                    if _carries_token(chunk):
-                        last_token = time.monotonic()
-                        if ttft is None:
-                            ttft = last_token - started
-                    if any(choice.finish_reason == FinishReason.ABORT for choice in chunk.choices):
-                        raise _AttemptFailed(AttemptOutcome.ABORTED, "server aborted the request")
+            async with self._leased() as (sdk, _):
+                chunks = await sdk.chat.completions.create(**kwargs)
+                assert isinstance(chunks, openai.AsyncStream)
+                async with chunks:
+                    last_token = time.monotonic()
+                    while True:
+                        remaining = stall_timeout - (time.monotonic() - last_token)
+                        try:
+                            chunk = await asyncio.wait_for(anext(chunks), timeout=max(remaining, 0.0))
+                        except StopAsyncIteration:
+                            break
+                        events.append(chunk.model_dump_json())
+                        try:
+                            state.handle_chunk(chunk)
+                        except IndexError as error:
+                            # The accumulator indexes tool-call deltas by their index and raises on one
+                            # whose earlier deltas never arrived; such a stream is the server's fault.
+                            raise _AttemptFailed(
+                                AttemptOutcome.STREAM_ERROR, f"tool-call delta without its earlier deltas: {error}"
+                            ) from error
+                        if _carries_token(chunk):
+                            last_token = time.monotonic()
+                            if ttft is None:
+                                ttft = last_token - started
+                        if any(choice.finish_reason == FinishReason.ABORT for choice in chunk.choices):
+                            raise _AttemptFailed(AttemptOutcome.ABORTED, "server aborted the request")
         except TimeoutError as error:
             raise _AttemptFailed(AttemptOutcome.STALLED, f"no token for {stall_timeout}s") from error
         except openai.APIStatusError as error:
-            raise _status_failure(error) from error
+            raise _status_failure(error.response) from error
         except openai.APITimeoutError as error:
             raise _AttemptFailed(AttemptOutcome.STALLED, f"no response within the timeout: {error}") from error
         except openai.APIConnectionError as error:
@@ -516,11 +647,12 @@ class GlmClient:
         """
         endpoint = self._endpoint
         try:
-            response = await self._http.get(
-                f"{endpoint.base_url.removesuffix(API_ROOT)}/health",
-                headers={"Authorization": f"Bearer {endpoint.token}"},
-                timeout=HEALTH_TIMEOUT,
-            )
+            async with self._leased() as (_, pool):
+                response = await pool.get(
+                    f"{endpoint.base_url.removesuffix(API_ROOT)}/health",
+                    headers={"Authorization": f"Bearer {endpoint.token}"},
+                    timeout=HEALTH_TIMEOUT,
+                )
         except httpx.TransportError:
             return False
         if response.status_code != 200:

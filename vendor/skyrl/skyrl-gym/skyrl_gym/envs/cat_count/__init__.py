@@ -1,0 +1,1 @@
+"""CatCountCanary environment and reward."""

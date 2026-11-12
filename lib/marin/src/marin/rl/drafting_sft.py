@@ -85,8 +85,6 @@ def draft_sft_plan(
         colocate_all=False,
         policy_num_nodes=policy.policy_num_nodes,
         policy_num_gpus_per_node=policy.gpus_per_node,
-        colocate_policy_ref=True,
-        reference_num_nodes=policy.policy_num_nodes,
         num_inference_engines=1,
         inference_engine_tensor_parallel_size=1,
         inference_engine_pipeline_parallel_size=1,
@@ -142,8 +140,6 @@ def draft_sft_plan(
             "enforce_eager": False,
             "run_engines_locally": True,
             "weight_sync_backend": "nccl",
-            "async_engine": True,
-            "batched": False,
             "engine_init_kwargs": {"async_scheduling": False},
             "speculative_decoding": {
                 "method": "eagle3",
