@@ -56,12 +56,10 @@
       </g>
       <!-- exits -->
       <g class="edge exit">
-        <path d="M460,152 H588" marker-end="url(#arrow)"/>
         <path d="M460,250 H524 V260 H588" marker-end="url(#arrow)"/>
         <path d="M460,296 H524 V340 H588" marker-end="url(#arrow)"/>
         <path d="M460,422 H588" marker-end="url(#arrow)"/>
         <path d="M460,562 H588" marker-end="url(#arrow)"/>
-        <path d="M460,680 H588" marker-end="url(#arrow)"/>
         <path d="M460,744 H524 V776 H588" marker-end="url(#arrow)"/>
         <path d="M460,1013 H524 V1002 H588" marker-end="url(#arrow)"/>
       </g>
@@ -84,7 +82,7 @@
       <g class="node"><rect x="30" y="116" width="430" height="72" rx="10"/>
         <text x="50" y="141" class="nt"><tspan class="step">1</tspan> Declare an RlDataSource</text>
         <text x="50" y="162" class="ns">Registered: stable ID, pinned input, origin, family</text>
-        <text x="50" y="179" class="ns">Registration alone is Inventory; pipelines enable QA</text></g>
+        <text x="50" y="179" class="ns">Every entry has a registered converter</text></g>
 
       <g class="node"><rect x="30" y="228" width="430" height="86" rx="10"/>
         <text x="50" y="253" class="nt"><tspan class="step">2</tspan> Task format gate (agentic only)</text>
@@ -102,7 +100,7 @@
 
       <g class="node"><rect x="30" y="530" width="430" height="72" rx="10"/>
         <text x="50" y="555" class="nt"><tspan class="step">4</tspan> Choose a curation mode</text>
-        <text x="50" y="576" class="ns">QUICK converts only; SAMPLE and FULL can admit</text>
+        <text x="50" y="576" class="ns">QUICK: converted without review</text>
         <text x="50" y="593" class="ns muted-text" data-fill="modes">Modes in this snapshot: loading…</text></g>
 
       <g class="node"><rect x="30" y="640" width="430" height="168" rx="10"/>
@@ -127,10 +125,6 @@
         <text x="50" y="1050" class="ns muted-text">qualified ≠ published ≠ loaded, three separate operations</text></g>
 
       <!-- outcome pills -->
-      <g class="pill inventory" data-leaf="inventory" tabindex="0" role="button" aria-label="Inventory only: list sources"><rect x="590" y="116" width="380" height="64" rx="10"/>
-        <text x="608" y="136" class="pc">No pipeline</text><text x="608" y="156" class="pt">Inventory only</text>
-        <text x="608" y="173" class="pn" data-count="inventory">…</text></g>
-
       <g class="pill rejected"><rect x="590" y="228" width="380" height="64" rx="10"/>
         <text x="608" y="248" class="pc">No declared format, or MarinSkyRL off the list</text><text x="608" y="268" class="pt">Rejected at selection</text>
         <text x="608" y="285" class="pn">Fails before any run; not cataloged as runnable</text></g>
@@ -143,13 +137,9 @@
         <text x="608" y="410" class="pc">Runtime differs from spec: class (c)</text><text x="608" y="430" class="pt">Task rejected, source continues</text>
         <text x="608" y="447" class="pn">Drop the task, keep the reason, survivors continue</text></g>
 
-      <g class="pill inventory" data-leaf="inventory" tabindex="0" role="button" aria-label="Inventory only: list sources"><rect x="590" y="530" width="380" height="64" rx="10"/>
-        <text x="608" y="550" class="pc">QUICK pass: oversight none</text><text x="608" y="570" class="pt">Inventory only, not admissible</text>
-        <text x="608" y="587" class="pn" data-count="inventory">…</text></g>
-
-      <g class="pill needs-qa" data-leaf="unreviewed" tabindex="0" role="button" aria-label="Oversight not recorded: list sources"><rect x="590" y="648" width="380" height="64" rx="10"/>
-        <text x="608" y="668" class="pc">Snapshots predating the oversight field</text><text x="608" y="688" class="pt">Oversight not recorded</text>
-        <text x="608" y="705" class="pn" data-count="unreviewed">…</text></g>
+      <g class="pill needs-qa" data-leaf="unreviewed" tabindex="0" role="button" aria-label="QUICK: list sources"><rect x="590" y="530" width="380" height="64" rx="10"/>
+        <text x="608" y="550" class="pc">QUICK: registered converter</text><text x="608" y="570" class="pt">Converted without review</text>
+        <text x="608" y="587" class="pn" data-count="unreviewed">…</text></g>
 
       <g class="pill excluded" data-leaf="excluded" tabindex="0" role="button" aria-label="Excluded: list sources"><rect x="590" y="744" width="380" height="64" rx="10"/>
         <text x="608" y="764" class="pc">QA finds a defect or a duplicate</text><text x="608" y="784" class="pt">Excluded, with the reason</text>
@@ -183,7 +173,7 @@
 
   <section aria-labelledby="leaves-title">
     <h2 id="leaves-title">What each outcome guarantees</h2>
-    <p>The <a href="./">By source</a> view labels every source with a <strong>Quality</strong> level — <code>QUICK</code>, <code>SAMPLE</code> or <code>FULL</code> — saying how much executed QA examined it, where independent QC by an upstream release also counts as <code>QUICK</code> because this repository did not execute it. Each source also carries a <strong>Result</strong> — <code>GOOD</code>, <code>SOME_ISSUES</code> or <code>BAD</code> — saying what that QA found. The rules live in <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#quality-and-result">Quality and result</a>. Each row links to an evidence page showing the recorded pointers behind those labels; evidence that was never recorded, or that lives in a private release you cannot open, shows as missing or restricted.</p>
+    <p>The <a href="./">By source</a> view labels every source with a <strong>Quality</strong> level — <code>QUICK</code>, <code>SAMPLE</code> or <code>FULL</code> — saying how much executed QA examined it, where independent QC by an upstream release also counts as <code>QUICK</code> because this repository did not execute it. Each source also carries a <strong>Result</strong> — <code>GOOD</code>, <code>SOME_ISSUES</code> or <code>BAD</code> — computed from the reviewed sample: GOOD means at least 90% clean; BAD means at least 50% with issues; SOME_ISSUES is between. Without a reviewed sample, Result is not assessed. QC never rejects a source; repair recommendations appear with the review evidence where recorded. The rules live in <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#quality-and-result">Quality and result</a>. Each row links to an evidence page showing the recorded pointers behind those labels; evidence that was never recorded, or that lives in a private release you cannot open, shows as missing or restricted.</p>
     <p>Being admitted is evidence, not eligibility. A training run can select only sources that are runnable, not deprecated or excluded, whose manifests record a <code>mode: full</code> artifact, and that a <a href="#selection">selection recipe</a> names. Oversight describes the execution evidence behind admission; <code>SAMPLE</code> oversight and a <code>FULL</code>-mode artifact are different axes, and selection requires the artifact. The Daytona label applies to admitted and runnable sources; it describes where a source can run, not whether it is admitted.</p>
     <div class="table-wrap">
     <table class="leaf-table" id="eligibility">
@@ -210,17 +200,13 @@
           <td>Nothing from it reaches training. A rejected agentic source fails <code>runnable_sources()</code>. A rejected task is a typed rejection whose reason the source <code>manifest.json</code> counts, and the surviving tasks continue.</td>
           <td>Seeing it as a row here. Task-level rejections appear only in the source manifest and its Atlas source details.</td>
           <td class="num muted">—</td></tr>
-        <tr><th scope="row"><span class="swatch inventory"></span>Inventory only</th>
-          <td>A pinned reference, a declared row count where known and any independent QC that the upstream release recorded.</td>
-          <td>Any execution evidence. Quality shows <code>QUICK</code> (or its independent QC verdict as the Result). The source cannot be selected for training; it can still qualify through a later SAMPLE or FULL pass.</td>
-          <td class="num"><button class="count" data-leaf="inventory" data-count="inventory-n">…</button></td></tr>
         <tr><th scope="row"><span class="swatch grandfathered"></span>Grandfathered blend</th>
           <td>Membership is exactly the frozen <code>GRANDFATHERED_MARINSKYRL_SOURCES</code> list: the Nemotron Ultra mixture components that predate the task-directory requirement. No new source can join the list.</td>
           <td>A measured environment, a snapshot count or the environment-fidelity rules; these blends predate them and sit outside the current audit. Their training eligibility follows the same FULL-artifact rule as any other source.</td>
           <td class="num"><button class="count" data-leaf="grandfathered" data-count="grandfathered-n">…</button></td></tr>
-        <tr><th scope="row"><span class="swatch needs-qa"></span>Oversight not recorded</th>
-          <td>The source passed the format gate and is runnable. A non-agentic row may rest on a campaign record you can open in its source details.</td>
-          <td>A declared oversight level or its evidence. This snapshot does not establish execution coverage: absent metadata does not prove either that QA passed or that it never ran. An agentic source here still owes its SAMPLE or FULL QA (class (b)) before it stays runnable.</td>
+        <tr><th scope="row"><span class="swatch needs-qa"></span>QUICK</th>
+          <td>Converted by a registered converter, without review. The source records converted tasks and typed conversion rejections.</td>
+          <td>Review, grader controls or training eligibility. A later SAMPLE or FULL pass can add review evidence.</td>
           <td class="num"><button class="count" data-leaf="unreviewed" data-count="unreviewed-n">…</button></td></tr>
         <tr><th scope="row"><span class="swatch excluded"></span>Excluded</th>
           <td>The source notes say which defect or duplicate the review found. Its history stays in the Atlas.</td>
@@ -262,12 +248,12 @@
     <article id="declare">
       <h3><span class="step-badge">1</span> Declare the source</h3>
       <p>Each dataset is one <code>RlDataSource</code> in a module under <a href="https://github.com/marin-community/marin/tree/main/experiments/post_training/task_curation/datasets"><code>datasets/</code></a>, collected by <code>all_sources()</code> in <a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py"><code>sources.py</code></a>. Its <code>SourceInfo</code> gives a stable ID, a title, an <code>origin</code> (where the rows came from, such as the Hugging Face organization), a <code>family</code> (the task family that selection quotas draw from), search tags and notes; the measured <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#coverage">curriculum coverage</a> is a separate record attached at load time, not another name for the family. Its input is pinned to an immutable revision.</p>
-      <p>A <em>pipeline</em> is the executable conversion procedure: one graph-building callable (usually <code>process_rows</code>) that reads the pinned rows and produces TaskSpecs and typed rejections. A source without a <code>pipeline</code> is <em>Inventory</em>: listed with its evidence, never admitted. The tag <code>deprecated</code> marks it Deprecated and <code>excluded</code> marks it Excluded; the notes carry the reason. Declaration, qualification and loading are independent: registering a source makes it visible; only a qualified release and an operator's load put its rows in the served snapshot.</p>
+      <p>A <em>pipeline</em> is the executable conversion procedure: one graph-building callable (usually <code>process_rows</code>) that reads the pinned rows and produces TaskSpecs and typed rejections. Every Atlas entry requires a registered converter; pipeline-less declarations are retired from the catalog. The tag <code>deprecated</code> marks it Deprecated and <code>excluded</code> marks it Excluded; the notes carry the reason. Declaration, qualification and loading are independent: registering a source makes it visible; only a qualified release and an operator's load put its rows in the served snapshot.</p>
 <pre><code>RlDataSource(
     info=SourceInfo(id="Task Trove:example-calendar-v1", title="Example calendar tasks",
                     origin="open-athena", family="calendar", tags=("agentic",)),
     config=CurationRecipe(...),   # pinned input, converter, controls
-    pipeline=process_rows,        # omitted = Inventory only
+    pipeline=process_rows,        # required registered converter
 )</code></pre>
       <p class="refs">Rule: <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#declarations">Declarations</a>. Code: <a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py"><code>source.py</code></a>.</p>
     </article>
@@ -293,7 +279,7 @@
 
     <article id="modes">
       <h3><span class="step-badge">4</span> Curation modes and oversight</h3>
-      <p>The curation driver requires <code>--mode quick|sample|full</code>. QUICK converts rows to TaskSpecs and records typed rejections; it reviews nothing and admits nothing, so a QUICK-only source has oversight <code>none</code> and stays inventory. SAMPLE reviews a bounded panel of at most 100 rows. FULL expands an accepted source to every row and verifies the kept tasks.</p>
+      <p>The curation driver requires <code>--mode quick|sample|full</code>. QUICK means converted by a registered converter, without review. It records TaskSpecs and typed conversion rejections; its oversight level is <code>none</code>. SAMPLE reviews a bounded panel of at most 100 rows. FULL expands an accepted source to every row and verifies the kept tasks.</p>
       <p>Mode and oversight are different axes. The <em>mode</em> is processing scope: how much of the source this pass examined. The <em>oversight level</em>, <code>none</code>, <code>sample</code> or <code>full</code>, is the weakest review the admission rests on, with evidence that points at the campaign, recipe revision and verification summary. A cohort whose setup ran on every task but whose verifier liveness ran on a sample is <code>sample</code>; a FULL-mode campaign can carry SAMPLE oversight. Independent QC by the upstream release does not raise the level.</p>
       <p><strong>Planned: oracle filtering.</strong> The policy this page is moving to runs an oracle agent over every task that ships an oracle, in both SAMPLE and FULL, and the admitted cohort becomes exactly the passing subset; execution routes through Harbor on DAYTONA when the task's snapshots fit the cap, or Harbor LOCAL otherwise. It is not implemented on this branch: today, executed controls sample at most 20 kept rows, and at a 95% control pass fraction the unsampled tasks skip validation.</p>
       <p class="refs">Rule: <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#curation-modes-and-oversight-levels">Curation modes and oversight levels</a>, <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#oracle-filtering-planned">oracle filtering (planned)</a>. Code: <code>CurationMode</code>, <code>OversightLevel</code> and <code>OversightEvidence</code> in <a href="https://github.com/marin-community/marin/blob/main/lib/finestore/src/finestore/rl/curation.py"><code>finestore.rl.curation</code></a>.</p>
@@ -464,7 +450,7 @@ uv run python -m scripts.iris.dev_cpu --name NAME release</code></pre>
       <h3>Lessons from earlier campaigns</h3>
       <ul>
         <li>Expect most first attempts to fail on job submission, credentials or grading before they touch the data. Use a new report directory for each attempt.</li>
-        <li>An inventory-only source reaches production only through a FULL campaign that publishes a snapshot containing it. Run it on a small runnable source if nothing else needs curating.</li>
+        <li>Publish a complete snapshot containing the converted source, then load that snapshot into the intended Atlas app.</li>
         <li>A failed campaign can move the catalog's <code>CURRENT</code> pointer. Read the report before loading.</li>
         <li>Credentials given to the driver pod do not always reach the worker pods its coordinator starts. Check that the workers receive them.</li>
         <li>Use an <code>iris</code> client that matches the deployed controller.</li>
@@ -486,7 +472,7 @@ uv run python -m scripts.iris.dev_cpu --name NAME release</code></pre>
       <div><dt>Oracle, golden</dt><dd>A reference solution. A golden control grades it and expects reward 1.</dd></div>
       <div><dt>Controls</dt><dd>Grader checks before admission: golden scores 1, empty or wrong scores 0.</dd></div>
       <div><dt>Oversight level</dt><dd>The weakest review an admission rests on: <code>none</code>, <code>sample</code> or <code>full</code>. Distinct from the curation mode, which is processing scope.</dd></div>
-      <div><dt>Quality, Result</dt><dd>Atlas labels. Quality (<code>QUICK</code>, <code>SAMPLE</code>, <code>FULL</code>) is how much executed QA examined the source; independent upstream QC counts as <code>QUICK</code>. Result (<code>GOOD</code>, <code>SOME_ISSUES</code>, <code>BAD</code>) is what that QA found.</dd></div>
+      <div><dt>Quality, Result</dt><dd>Atlas labels. Quality (<code>QUICK</code>, <code>SAMPLE</code>, <code>FULL</code>) is how much executed QA examined the source; independent upstream QC counts as <code>QUICK</code>. Result uses the reviewed sample: GOOD is at least 90% clean, BAD is at least 50% with issues, and SOME_ISSUES is between. QC never rejects.</dd></div>
       <div><dt>Lowering</dt><dd>Translating a supported environment recipe into setup commands on a digest-pinned base. Unsupported operations are refused; the declared recipe is preserved, not unpinned external dependency contents.</dd></div>
       <div><dt>Shared image</dt><dd>A base image reused by many tasks (for example the worker's <code>iris-task</code>). A task may declare it only with a mechanical no-op proof.</dd></div>
       <div><dt>Snapshot (catalog)</dt><dd>One published state of the curation catalog. The Atlas serves one at a time.</dd></div>

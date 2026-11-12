@@ -2,7 +2,7 @@
 // Fills the static ingestion guide with counts from the catalog snapshot Atlas serves.
 const number = new Intl.NumberFormat('en-US');
 const leafTitles = {
-  inventory: 'Inventory only', grandfathered: 'Grandfathered blends', unreviewed: 'Oversight not recorded',
+  grandfathered: 'Grandfathered blends', unreviewed: 'QUICK, converted without review',
   excluded: 'Excluded', deprecated: 'Deprecated', sample: 'Admitted, oversight SAMPLE', full: 'Admitted, oversight FULL',
 };
 const state = {sources: [], leaves: {}, loaded: false};
@@ -15,7 +15,6 @@ function grandfathered(row) {
 function leafOf(row) {
   if (row.status === 'Deprecated') return 'deprecated';
   if (row.status === 'Excluded') return 'excluded';
-  if (row.status === 'Inventory') return 'inventory';
   if (grandfathered(row)) return 'grandfathered';
   if (row.oversight === 'full') return 'full';
   if (row.oversight === 'sample') return 'sample';
@@ -70,10 +69,6 @@ function render(data) {
   for (const key of Object.keys(leafTitles)) {
     const rows = state.leaves[key] || [];
     let text = `${sources(rows.length)} in this snapshot`;
-    if (key === 'unreviewed') {
-      const agentic = rows.filter(row => (row.tags || []).includes('agentic')).length;
-      text = `${number.format(agentic)} agentic await QA; ${number.format(rows.length - agentic)} non-agentic rest on campaign records`;
-    }
     fill(`[data-count="${key}"]`, text);
     fill(`[data-count="${key}-n"]`, number.format(rows.length));
     fill(`[data-daytona="${key}"]`, daytonaSummary(rows));
