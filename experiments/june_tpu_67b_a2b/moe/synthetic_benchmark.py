@@ -141,9 +141,7 @@ def parse_args() -> argparse.Namespace:
         "--moe-gather-sum",
         choices=get_args(MoeGatherSum),
         default="xla",
-        help="ring_filtered only: run the backward's expert-side dispatch gather-sum and sender-side combine gather as "
-        "XLA fusions (xla) or in a Pallas-Triton row-gather kernel (pallas), with the same results bit for bit "
-        "(GrugModelConfig.moe_gather_sum).",
+        help="ring_filtered backward row gathers: XLA fusions (xla) or Pallas-Triton (pallas).",
     )
     parser.add_argument("--profile-steps", type=int, default=0, help="Profile this many steps (0 disables).")
     parser.add_argument("--profile-start", type=int, default=10, help="First profiled step.")

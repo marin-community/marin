@@ -118,9 +118,7 @@ class GrugModelConfig:
     num_expert_waves: int = 1
     """Static wave count for ``fixed_pooled_wave_all_to_all``; must divide the local expert count."""
     moe_gather_sum: MoeGatherSum = "xla"
-    """How ``ring_filtered`` runs the backward's expert-side dispatch gather-sum and sender-side combine gather: XLA
-    fusions ("xla") or a Pallas-Triton row-gather kernel ("pallas", GPU only). Both give the same values bit for bit.
-    Needs ``moe_implementation="ring_filtered"``."""
+    """Backward row gathers for ``ring_filtered``: XLA or Pallas-Triton (GPU, or the CPU interpreter)."""
     ce_implementation: str | None = None
     """Fused cross-entropy backend selection (levanter fused_cross_entropy_loss). None keeps the
     backend default (GPU: full-logits ``xla`` path). Set ``"batched_xla"`` to use the blocked-vocab

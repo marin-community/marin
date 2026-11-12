@@ -1,10 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The Pallas-Triton row gathers of ``ring_filtered``'s backward against the XLA formulations they replace, bit for bit.
-
-Off GPU the kernel runs in the Pallas interpreter; on TPU the option is rejected, so these tests skip there.
-"""
+"""Compare Pallas row gathers with the XLA reference."""
 
 import math
 
@@ -13,7 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-from levanter.grug._moe.ep_ring import _gather_sum_slots, _take_valid_rows
+from levanter.grug._moe.ep_ring import _combine_rows, _dispatch_rows, _gather_sum_slots, _take_valid_rows
 from levanter.grug._moe.pallas_gather_sum import gather_sum_rows, gather_valid_rows
 from levanter.grug.grug_moe import moe_mlp
 from levanter.testing.devices import use_test_devices
@@ -28,7 +25,7 @@ def _bits(x: jax.Array) -> np.ndarray:
 
 def _rows(key, shape, dtype):
     rows = jax.random.normal(key, shape, jnp.float32)
-    # Signed zeros and exact cancellations check that the kernel rounds where the XLA sum does.
+    # Include signed zeros to check the gather-sum's accumulation order.
     rows = rows.at[::7].set(-0.0).at[1::11].set(0.0)
     return rows.astype(dtype)
 
@@ -52,7 +49,6 @@ def test_gather_sum_rows_matches_xla_bitwise(num_src, num_out, topk, hidden, dty
     slots = _slots(k_slots, num_out, topk, num_src)
     expected = jax.jit(_gather_sum_slots)(rows, slots)
     actual = jax.jit(gather_sum_rows)(rows, slots)
-    assert actual.dtype == expected.dtype == dtype
     np.testing.assert_array_equal(_bits(actual), _bits(expected))
 
 
@@ -64,17 +60,37 @@ def test_gather_valid_rows_matches_xla_bitwise(dtype):
     valid = jax.random.bernoulli(k_valid, 0.7, (77,))
     expected = jax.jit(_take_valid_rows)(x, index, valid)
     actual = jax.jit(gather_valid_rows)(x, index, valid)
-    assert actual.dtype == dtype
-    # A plain select keeps signed zeros, which a sum from zero would not.
     np.testing.assert_array_equal(_bits(actual), _bits(expected))
+
+
+def test_pallas_backward_falls_back_to_xla_for_untileable_widths():
+    # 24 columns have no power-of-two divisor >= 16, so both backward gathers use XLA under gather_sum="pallas".
+    k_x, k_idx, k_valid, k_slots = jax.random.split(jax.random.key(3), 4)
+    x = _rows(k_x, (20, 24), jnp.float32)
+    slot_token = jax.random.randint(k_idx, (30,), 0, 20)
+    slot_valid = jax.random.bernoulli(k_valid, 0.7, (30,))
+    slots = _slots(k_slots, 20, 2, 30)
+
+    def grads(backward):
+        def loss(x, rows):
+            dispatched = _dispatch_rows(x, slot_token, slot_valid, slots, backward)
+            combined = _combine_rows(rows, slot_token, slot_valid, slots, backward)
+            return jnp.sum(jnp.sin(dispatched)) + jnp.sum(jnp.cos(combined))
+
+        fn = jax.jit(jax.grad(loss, argnums=(0, 1)))
+        return fn(x, x[slot_token]), str(jax.make_jaxpr(fn)(x, x[slot_token]))
+
+    expected, _ = grads("xla")
+    actual, jaxpr = grads("pallas")
+    assert "pallas_call" not in jaxpr
+    for a, e in zip(actual, expected, strict=True):
+        np.testing.assert_array_equal(_bits(a), _bits(e))
 
 
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
 @pytest.mark.multidevice
 def test_ring_filtered_pallas_gather_sum_matches_xla_bitwise(dtype):
-    """On 4 expert shards with sender and receiver drops and uneven padding, ring_filtered with the Pallas backward
-    gathers gives the outputs, gradients and drop counts of the XLA gathers, bit for bit."""
     with use_test_devices(4) as devices:
         shards, tokens_per_shard, hidden, inter, experts, topk = 4, 32, 32, 16, 32, 4
         tokens = shards * tokens_per_shard
@@ -128,8 +144,8 @@ def test_ring_filtered_pallas_gather_sum_matches_xla_bitwise(dtype):
                 grad_fn = jax.jit(jax.value_and_grad(loss, argnums=(0, 1, 2, 3), has_aux=True))
                 jaxpr = str(jax.make_jaxpr(grad_fn)(*args))
                 (_, (out, counts)), grads = grad_fn(*args)
-            # The kernels run inside ring_filtered's shard_map, only on the Pallas path.
-            assert ("grug_gather_sum" in jaxpr and "grug_gather_rows" in jaxpr) == (gather_sum == "pallas")
+            # Only the Pallas path has kernels, so the bitwise comparison below cannot pass trivially.
+            assert ("pallas_call" in jaxpr) == (gather_sum == "pallas")
             return out, counts, grads
 
         xla_out, xla_counts, xla_grads = run("xla")

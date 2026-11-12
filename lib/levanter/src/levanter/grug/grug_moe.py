@@ -500,9 +500,8 @@ def moe_mlp(
     (`ring_filtered`). `num_expert_waves` sets the static wave count for the
     fixed pooled-wave implementation.
 
-    `gather_sum="pallas"` runs `ring_filtered`'s expert-side dispatch backward and sender-side combine backward row
-    gathers in a Pallas-Triton kernel instead of XLA fusions, with the same results bit for bit (`ring_filtered` only;
-    GPU, or the Pallas interpreter on CPU).
+    `gather_sum="pallas"` uses Pallas-Triton for `ring_filtered`'s backward row gathers on GPU or in the CPU
+    interpreter. The default, `"xla"`, uses XLA fusions.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
     if gather_sum not in get_args(MoeGatherSum):

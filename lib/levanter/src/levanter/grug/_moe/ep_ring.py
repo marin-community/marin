@@ -23,7 +23,12 @@ from levanter.grug._moe.common import (
     CapacityDrops,
 )
 from levanter.grug._moe.ep_common import _assignment_sources, _prefix_cap_counts
-from levanter.grug._moe.pallas_gather_sum import MoeGatherSum, gather_sum_rows, gather_valid_rows
+from levanter.grug._moe.pallas_gather_sum import (
+    MoeGatherSum,
+    gather_sum_rows,
+    gather_valid_rows,
+    pallas_gather_supported,
+)
 
 
 def _select_local_assignments(
@@ -78,10 +83,14 @@ def _take_valid_rows(
     return jnp.where(slot_valid[:, None], rows, jnp.zeros_like(rows))
 
 
+def _use_pallas_gather(backward: MoeGatherSum, hidden: int) -> bool:
+    # Widths the kernel cannot tile fall back to the XLA gathers, which give the same bits.
+    return backward == "pallas" and pallas_gather_supported(hidden)
+
+
 # The dispatch gather and the combine are transposes of each other. Autodiff would turn the gather's transpose,
 # and the combine itself, into scatter-adds over the token buffer, which ROCm runs at about 1.2 TB/s. With the
-# inverse map `slots` both directions are gathers: one reads each token's (at most K) slot rows. `backward` picks how
-# the backward's gather runs: XLA fusions ("xla") or the Pallas-Triton kernel ("pallas"); both give the same bits.
+# inverse map `slots` both directions are gathers: one reads each token's (at most K) slot rows.
 @partial(jax.custom_vjp, nondiff_argnums=(4,))
 def _dispatch_rows(
     x: Float[Array, "T H"],
@@ -98,7 +107,7 @@ def _dispatch_rows_fwd(x, slot_token, slot_valid, slots, backward):
 
 
 def _dispatch_rows_bwd(backward, slots, g):
-    d_x = gather_sum_rows(g, slots) if backward == "pallas" else _gather_sum_slots(g, slots)
+    d_x = gather_sum_rows(g, slots) if _use_pallas_gather(backward, g.shape[-1]) else _gather_sum_slots(g, slots)
     return d_x, None, None, None
 
 
@@ -122,7 +131,7 @@ def _combine_rows_fwd(rows, slot_token, slot_valid, slots, backward):
 
 def _combine_rows_bwd(backward, residuals, g):
     slot_token, slot_valid = residuals
-    if backward == "pallas":
+    if _use_pallas_gather(backward, g.shape[-1]):
         d_rows = gather_valid_rows(g, slot_token, slot_valid)
     else:
         d_rows = _take_valid_rows(g, slot_token, slot_valid)

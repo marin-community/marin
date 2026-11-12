@@ -156,9 +156,8 @@ def _moe_mlp_ep_ring_filtered_local(
     runs at most ``capacity_factor * Tlocal * K`` assignments, allocated in local-expert order
     (receiver drops).
 
-    ``gather_sum`` picks how the backward's expert-side dispatch gather-sum and sender-side combine gather run: XLA
-    fusions ("xla") or the Pallas-Triton kernel of ``pallas_gather_sum`` ("pallas"), with the same results bit for bit.
-    The token-side gathers stay on XLA, which fuses them with the residual stream.
+    ``gather_sum`` selects the expert-side dispatch and sender-side combine backward gathers. Token-side gathers
+    remain XLA fusions.
     """
     tokens, topk = selected_experts_local.shape
     hidden_dim = x_local.shape[1]

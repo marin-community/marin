@@ -1,19 +1,9 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pallas-Triton row gathers for the Grug MoE exchange's backward passes.
+"""Pallas-Triton row gathers for ``ring_filtered``'s backward.
 
-XLA runs the ``ring_filtered`` backward's row gathers as loop fusions at about 2.5-2.9 TB/s on MI355X: the dispatch
-backward's gather-sum (each received row sums its at most ``K`` dispatch rows' cotangents) and the sender combine
-backward's masked gather (each send row takes its token's cotangent). The kernel here reads whole rows with indexed
-loads instead and writes each output tile once.
-
-It reproduces the XLA formulations bit for bit: :func:`gather_sum_rows` adds the ``K`` rows in float32 in slot order
-and rounds once, like ``ep_ring._gather_sum_slots`` after XLA drops its ``0 +``, and :func:`gather_valid_rows` selects rows
-without arithmetic, like ``ep_ring._take_valid_rows``.
-
-The kernel is Pallas-Triton: it runs on GPUs, and on CPU in the Pallas interpreter (for tests); other backends raise.
-``ring_filtered`` calls it on shard-local arrays inside its ``shard_map``, so the wrappers take local arrays only.
+The kernels read shard-local rows by index and write each output tile once. CPU uses the Pallas interpreter.
 """
 
 import functools
@@ -27,7 +17,6 @@ from jax.experimental.pallas import triton as plgpu
 from jaxtyping import Array, Bool, Float, Int
 
 MoeGatherSum = Literal["xla", "pallas"]
-"""How ``ring_filtered`` runs its backward row gathers: XLA fusions ("xla") or this module's kernel ("pallas")."""
 
 # Output rows and hidden columns per program, and warps: the best of a sweep at [119904, 2560] bf16 with K=4 on
 # MI355X (0.277 ms against 0.486 ms for XLA's fusion).
@@ -38,10 +27,14 @@ _NUM_WARPS = 4
 
 
 def _block_cols(hidden: int) -> int | None:
-    """The largest power of two up to ``_MAX_BLOCK_COLS`` that divides ``hidden``, or None below the minimum."""
     cols = math.gcd(hidden, _MAX_BLOCK_COLS)
     cols = 1 << (cols.bit_length() - 1)
     return cols if cols >= _MIN_BLOCK_COLS else None
+
+
+def pallas_gather_supported(hidden: int) -> bool:
+    """Whether the kernel can tile rows of width ``hidden`` (a power-of-two divisor of at least 16)."""
+    return _block_cols(hidden) is not None
 
 
 def resolve_interpret(interpret: bool | None) -> bool:
