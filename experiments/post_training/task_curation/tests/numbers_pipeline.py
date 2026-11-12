@@ -19,6 +19,7 @@ from experiments.post_training.task_curation.campaign import CampaignArtifact, P
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, SourceReference
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 NUMBERS_DATASET = SourceReference(
     "open-athena/numbers-fixture",
@@ -110,6 +111,7 @@ def numbers_pipeline(source: RlDataSource[NumbersConfig], options: PipelineOptio
 def number_source(path: Path, name: str = "numbers") -> RlDataSource[NumbersConfig]:
     return RlDataSource(
         info=SourceInfo(
+            within_source_dedup=deduplication_evidence(NUMBERS_DATASET.name, NUMBERS_DATASET.revision, "1"),
             id=f"Marin:{name}",
             upstream_dataset=name,
             upstream_name=name,

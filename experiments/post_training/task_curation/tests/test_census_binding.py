@@ -23,6 +23,7 @@ from experiments.post_training.task_curation.census_binding import (
     integrity_summary_for_actor,
 )
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
 def census_receipt(source) -> ActorCensusReceipt:
@@ -61,7 +62,13 @@ def test_bound_zero_actor_receipt_survives_catalog_arrow_roundtrip(tmp_path):
     assert restored.daytona_safety is DaytonaSafety.NOT_APPLICABLE
     assert restored.actor_census_input.converter_version == source.version
     assert restored.actor_census_input.measured_tasks == 1
-    changed = replace(bound, config=replace(bound.config, version="2"))
+    changed = replace(
+        bound,
+        config=replace(bound.config, version="2"),
+        info=replace(
+            bound.info, within_source_dedup=deduplication_evidence(bound.dataset.name, bound.dataset.revision, "2")
+        ),
+    )
     with pytest.raises(ValueError, match="Actor census input or converter"):
         _ = changed.declaration
 

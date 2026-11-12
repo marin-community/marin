@@ -21,11 +21,13 @@ from finestore.rl.curation import (
 from experiments.post_training.task_curation.source import SourceInfo, SourceReference
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
 def test_generated_identity_and_title_survive_catalog_serialization(tmp_path):
     source = number_source(tmp_path / "input", "math")
     info = SourceInfo(
+        within_source_dedup=source.info.within_source_dedup,
         origin=SourceOrigin.MARIN,
         upstream_dataset="math",
         upstream_name="Math",
@@ -61,7 +63,12 @@ def test_repaired_release_pin_is_separate_from_upstream_url(tmp_path):
     source = replace(
         source,
         config=replace(source.config, dataset=pin),
-        info=replace(source.info, upstream_url="https://example.org/upstream", lexical_contamination=None),
+        info=replace(
+            source.info,
+            upstream_url="https://example.org/upstream",
+            lexical_contamination=None,
+            within_source_dedup=deduplication_evidence(pin.name, pin.revision, source.version),
+        ),
     )
     declaration = source.declaration
     assert declaration.url == "https://example.org/upstream"
@@ -128,7 +135,13 @@ def test_current_release_follows_the_configured_remediated_pin(tmp_path):
     remediated = SourceReference(
         "open-athena/remediated", "b" * 40, "https://huggingface.co/datasets/open-athena/remediated/tree/" + "b" * 40
     )
-    source = replace(source, config=replace(source.config, dataset=remediated))
+    source = replace(
+        source,
+        config=replace(source.config, dataset=remediated),
+        info=replace(
+            source.info, within_source_dedup=deduplication_evidence(remediated.name, remediated.revision, source.version)
+        ),
+    )
     assert source.declaration.current_release.repo == "open-athena/remediated"
     assert source.declaration.current_release.revision == "b" * 40
     assert source.declaration.dataset_id == source.dataset.name

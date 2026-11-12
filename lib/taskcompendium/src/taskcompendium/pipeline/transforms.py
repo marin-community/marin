@@ -5,14 +5,13 @@
 
 import json
 from collections.abc import Iterator
-from tempfile import SpooledTemporaryFile
 from typing import Any
 
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_identity
 from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.conversion import ConvertedRow, convert_record
+from taskcompendium.pipeline.deduplication import DUPLICATE_WITHIN_SOURCE
 from taskcompendium.pipeline.filtering import task_decision
-from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
 from taskcompendium.pipeline.models import (
     REJECTING_CHECK_STATUSES,
     RESOURCES_OVER_BUDGET,
@@ -28,8 +27,6 @@ from taskcompendium.pipeline.models import (
     TaskAudit,
 )
 from taskcompendium.runtime.resources import resource_bytes
-
-GROUP_MEMORY_BYTES = 1024 * 1024
 
 
 def task_resource_bytes(task: TaskSpec) -> int:
@@ -87,7 +84,7 @@ def admit_converted_row(converted: ConvertedRow, recipe: SourceRecipe) -> dict[s
         decision=None,
         intended_use=recipe.intended_use,
     )
-    public_key, semantic_key = task_id, task_id
+    public_key = task_id
     if isinstance(converted.result, NormalizedTask):
         audit = audit.model_copy(update={"normalization_changes": converted.result.changes})
         result = _within_budget(converted.result.task, recipe.resource_budget_bytes)
@@ -108,12 +105,10 @@ def admit_converted_row(converted: ConvertedRow, recipe: SourceRecipe) -> dict[s
         )
     else:
         audit = audit.model_copy(update={"normalized": result})
-        public_key = deduplication_key(result)
-        semantic_key = semantic_digest(result, include_reference=True)
+        public_key = task_identity(result)
     return {
         "locator": source.row,
         "public_key": public_key,
-        "semantic_key": semantic_key,
         "audit": audit.model_dump(mode="json"),
     }
 
@@ -122,40 +117,26 @@ def public_group_key(record: dict[str, Any]) -> str:
     return record["public_key"]
 
 
-def source_locator_order(record: dict[str, Any]) -> str:
-    path, index = record["locator"].rsplit(":", 1)
-    return f"{path}:{int(index):020d}"
+def task_id_order(record: dict[str, Any]) -> str:
+    return record["audit"]["task_id"]
 
 
 def deduplicate_group(_: str, records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
-    """Cut every conflicting reference and keep the first identical row in source order."""
-    # Spooling prevents a frequently repeated prompt from filling worker memory.
-    references = set()
-    with SpooledTemporaryFile(max_size=GROUP_MEMORY_BYTES, mode="w+t") as spool:
-        for record in records:
-            if len(references) < 2:
-                references.add(record["semantic_key"])
-            spool.write(json.dumps(record) + "\n")
-        spool.seek(0)
-        first_id = None
-        for line in spool:
-            record = json.loads(line)
-            audit = record["audit"]
-            if audit["decision"] is None:
-                if len(references) > 1:
-                    audit["decision"] = Decision(
-                        task_id=audit["task_id"], disposition=Disposition.REJECT, reasons=["conflicting_references"]
-                    ).model_dump(mode="json")
-                elif first_id is not None:
-                    audit["decision"] = Decision(
-                        task_id=audit["task_id"],
-                        disposition=Disposition.REJECT,
-                        reasons=["exact_semantic_duplicate"],
-                        duplicate_of=first_id,
-                    ).model_dump(mode="json")
-                else:
-                    first_id = audit["task_id"]
-            yield audit
+    """Exclude exact copies, retaining the lowest task ID in the sorted group."""
+    first_id = None
+    for record in records:
+        audit = record["audit"]
+        if audit["decision"] is None:
+            if first_id is None:
+                first_id = audit["task_id"]
+            else:
+                audit["decision"] = Decision(
+                    task_id=audit["task_id"],
+                    disposition=Disposition.REJECT,
+                    reasons=[DUPLICATE_WITHIN_SOURCE],
+                    duplicate_of=first_id,
+                ).model_dump(mode="json")
+        yield audit
 
 
 def review_record(row: dict[str, Any]) -> ReviewRecord:
@@ -183,11 +164,7 @@ def review_record(row: dict[str, Any]) -> ReviewRecord:
 
 
 def filter_row(row: dict[str, Any]) -> dict[str, Any]:
-    if (
-        row["normalization_reason"] is not None
-        or row["duplicate_of"] is not None
-        or "conflicting_references" in row["filter_reasons"]
-    ):
+    if row["normalization_reason"] is not None or row["duplicate_of"] is not None:
         return row
     if row["quality_basis"] in (
         QualityBasis.UNREVIEWED,

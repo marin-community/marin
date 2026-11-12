@@ -27,11 +27,17 @@ from taskcompendium.evaluation.corpus import (
     validate_task_item,
 )
 from taskcompendium.evaluation.spec import EvaluationProtocol
+from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
 from taskcompendium.pipeline.inputs import SourceFileOverride
 from taskcompendium.pipeline.models import IntendedUse, SourceRecipe
 from taskcompendium.pipeline.source_processing import ConversionResult, SourceProcessingMode, run_source_pipeline
 
 ITEM_SCHEMA = pa.schema([("task_id", pa.string()), ("source_row", pa.string()), ("evaluation_json", pa.string())])
+
+
+def _source_order_key(row: dict) -> str:
+    file, index = source_order(row["source_row"])
+    return f"{file}:{index:020d}"
 
 
 def _publish_shard(
@@ -69,7 +75,7 @@ def _publish_shard(
 
     write_parquet_file(rows(), str(destination), schema=ITEM_SCHEMA)
     return EvaluationShard(
-        tasks=CorpusFile(path="normalize/" + source.name, sha256=file_sha256(source)),
+        tasks=CorpusFile(path="evaluation-tasks/" + source.name, sha256=file_sha256(source)),
         items=CorpusFile(path="evaluation/" + source.name, sha256=file_sha256(destination)),
         rows=count,
         first_source_row=first,
@@ -89,24 +95,27 @@ def publish_evaluation_corpus(
 ) -> EvaluationManifest:
     """Convert all selected rows and publish a manifest only after population and sidecar checks pass.
 
-    Conversion keeps duplicates at different source positions. Grader controls and old/new semantic
-    comparison are independent checks; this manifest certifies conversion integrity, not grader parity.
+    Conversion drops exact duplicates and preserves retained source order. The protocol pins the
+    raw input population; the manifest records unique tasks. Controls and semantic comparison
+    qualify grader behavior independently.
     """
     if recipe.intended_use is not IntendedUse.EVAL:
         raise ValueError("An evaluation corpus requires an evaluation source recipe")
     output = StoragePath(output_path)
     if (output / MANIFEST_FILENAME).exists():
         raise FileExistsError(f"Evaluation corpus already published: {output_path}")
-    # Without the release marker these are incomplete outputs from an earlier
-    # conversion or sidecar attempt. Keep executor bookkeeping and staged inputs.
-    for directory in ("normalize", "evaluation"):
-        path = output / directory
-        if path.exists():
-            path.rmtree()
-    for filename in ("manifest.json", PROTOCOL_FILENAME):
-        path = output / filename
-        if path.exists():
-            path.rm()
+    if any(
+        (output / name).exists()
+        for name in (
+            "normalize",
+            "evaluation",
+            "evaluation-tasks",
+            "within-source-dedup",
+            "manifest.json",
+            PROTOCOL_FILENAME,
+        )
+    ):
+        raise FileExistsError(f"Incomplete evaluation output requires a new artifact version: {output_path}")
     result = run_source_pipeline(
         recipe,
         context,
@@ -120,13 +129,21 @@ def publish_evaluation_corpus(
     if (
         result.rejections
         or result.input_rows != protocol.expected_population
-        or result.converted_rows != result.input_rows
+        or result.converted_rows + result.within_source_dedup["within_source_duplicates"] != result.input_rows
     ):
         raise ValueError(
             f"Evaluation population mismatch: expected {protocol.expected_population}, "
             f"read {result.input_rows}, converted {result.converted_rows}, rejections={result.rejections}"
         )
     paths = sorted(str(path) for path in (StoragePath(result.normalized_path) / "*.parquet").glob())
+    ordered = context.execute(
+        Dataset.from_list(paths)
+        .flat_map(lambda path: parquet_rows(StoragePath(path)))
+        .group_by(lambda _row: "source", reducer=lambda _key, rows: rows, sort_by=_source_order_key, num_output_shards=1)
+        .write_parquet(str(output / "evaluation-tasks/part-{shard:05d}.parquet"), schema=NORMALIZED_SCHEMA),
+        name="evaluation-source-order",
+    )
+    paths = [str(path) for path in ordered.results]
     published = context.execute(
         Dataset.from_list(paths).map(
             partial(
@@ -151,7 +168,7 @@ def publish_evaluation_corpus(
         importer_revision=recipe.version,
         protocol_hash=protocol.fingerprint,
         conversion_manifest_sha256=file_sha256(output / "manifest.json"),
-        rows=result.input_rows,
+        rows=result.converted_rows,
         shards=tuple(shards),
     )
     (output / PROTOCOL_FILENAME).write_text(protocol.model_dump_json(indent=2))
