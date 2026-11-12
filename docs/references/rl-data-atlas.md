@@ -66,6 +66,20 @@ no current grade; archived evidence remains available. Inventory-only sources
 carry a skip reason. Source details show the latest curation outcome; the
 assessment page shows the curation associated with its selected grade.
 
+## Getting started page
+
+**Getting started** (`guide.html`) explains, for a reader new to Marin, every
+path from a candidate dataset to an Atlas source: the task format gate,
+environment fidelity, curation modes, qualification, Daytona safety and
+publication. It states what each outcome guarantees and links each step to the
+normative section of the [task curation reference](task-curation.md) and to the
+enforcing code. Per-outcome counts, Daytona labels and oracle-validation counts
+are computed in the browser from the same `/sources` response as **By source**,
+so they follow each catalog load without a code release. Sources from snapshots
+published before declarations carried an oversight level count as *oversight
+not declared*. Edit the rules in the reference first, then the page text in
+`infra/marina/apps/rl_data_catalog/dist/guide.html`, and release the app.
+
 ## Browsing sources
 
 **By source** lists individual sources with their catalog, converted example

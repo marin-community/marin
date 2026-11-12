@@ -1,7 +1,10 @@
 # Task data curation
 
-To add a dataset to the RL Data Atlas, start with
-[Adding a dataset to the RL Data Atlas](GETTING_STARTED.md).
+To add a dataset to the RL Data Atlas, start with the Atlas
+[Getting started](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/guide.html)
+page. It shows every ingestion path, what each outcome guarantees and live
+per-outcome source counts. Its source is
+[`guide.html`](../../../infra/marina/apps/rl_data_catalog/dist/guide.html).
 
 [Dataset declarations](datasets/README.md) feed TaskSpec conversion and the RL
 Data Atlas through [all_sources()](sources.py). See the

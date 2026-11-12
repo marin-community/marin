@@ -472,6 +472,58 @@ Built environments export gzip layers, including inherited base-image layers,
 for Docker and OCI consumers. Compression enters built-image cache
 identity; lock-backed worker environments retain their existing identities.
 
+## Environment fidelity and repair
+
+An agentic task's environment specification is part of the task data. A converted
+task runs in exactly the environment its source specifies, in one of two forms:
+
+- **Built:** `environment_requirements.docker_build` carries the archive's own
+  Dockerfile and build context.
+- **Lowered:** `lower_environment` in
+  [`environment_fidelity.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/environment_fidelity.py)
+  expresses the recipe on a digest-pinned base from `PINNED_BASES`. Each `RUN`
+  becomes a setup command, the last `WORKDIR` becomes the working directory and
+  `ENV` assignments become environment variables. The lowering refuses a recipe
+  it cannot express, such as one with `COPY`, `ADD`, `USER` or `ENTRYPOINT`.
+
+A conversion never substitutes a shared image, such as `iris-task`, for a task's
+own environment. A task may declare the agent image in place of its Dockerfile
+only when `provably_no_op_against` proves that the Dockerfile changes nothing:
+exactly one `FROM` of that digest, no step other than `WORKDIR` and no copied
+fixtures. That change ships as a new dataset version. `missing_environment`
+rejects an agentic task that declares no environment, because it would otherwise
+run in the host image. A source declaration cannot supply the missing
+environment. `environment_unused` reports a converted task that ignores the
+environment its archive defines.
+
+A source is **repaired** when its published specification completely describes
+how its tasks run. A conversion may change how a task is delivered, for example
+by lowering its recipe or by a reply-only rewrite that grades the assistant
+response in place of `/app/answer.txt`. Such a change is acceptable only with
+SAMPLE or FULL [oversight](#curation-modes-and-oversight-levels) evidence.
+Audits classify each source:
+
+| Class | Specification | QA evidence | Action |
+|---|---|---|---|
+| (a) | Describes runtime behavior | SAMPLE or FULL | Record the evidence |
+| (b) | Describes runtime behavior | Missing | Run SAMPLE or FULL QA before the source stays runnable |
+| (c) | Differs from runtime: a substituted image, a missing environment resolved to the host or an ignored declared environment | Not applicable | Build or lower the true environment, publish a new version and qualify it |
+
+SAMPLE or FULL QA establishes these facts, and the oversight evidence points at each:
+
+- **Conversion fidelity:** converted TaskSpecs match the source archive's
+  instruction, answer contract, environment and grader.
+- **Controls:** a golden or reference answer scores 1 wherever the source has
+  one, and an empty or wrong answer scores 0 ([graders and controls](#graders-and-controls)).
+- **Verifier execution:** the grader actually ran. A zero reward alone is not
+  proof; [sources without oracle solutions](#sources-without-oracle-solutions)
+  defines the liveness check.
+- **Blinded review:** a review of a frozen sample, at least 20 tasks for SAMPLE,
+  finds no systematic mis-grading.
+- **Drop accounting:** every conversion drop has a count and a reason.
+- **Decontamination:** overlap with the tracked evaluation sets is checked where
+  a decontamination path exists, and reported as unchecked where none exists.
+
 ## Graders and controls
 
 A task's grader is one of three kinds:
