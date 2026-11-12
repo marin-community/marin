@@ -438,3 +438,10 @@ Before deploying a source release, retain its task-derived grading-environment
 census beside the backend capability evidence. Check that no admitted task has
 `grading_environment_mismatch`; repair and qualify a new dataset version before
 loading a source whose workspace grader requires SHARED execution.
+
+Check that every retained task declares CPU, memory, disk, agent timeout and
+verifier timeout, backed by its full-population resource-calibration receipt.
+Declared limits must match the production Harbor trial exactly; calibration-only
+solutions cannot serve as admission evidence. Publish the calibrated TaskSpecs
+and receipt together in a new private, pinned TaskCompendium release. A uniform
+source shape requires every task to have passed at that shape.

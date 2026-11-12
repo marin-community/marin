@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 from harbor.agents.base import BaseAgent
@@ -11,6 +12,7 @@ from harbor.utils.scripts import (
 )
 from harbor.models.task.task import Task
 from harbor.models.trial.paths import EnvironmentPaths, TrialPaths
+from harbor.resource_usage import resource_counters, write_resource_usage
 
 
 class OracleAgent(BaseAgent):
@@ -29,6 +31,7 @@ class OracleAgent(BaseAgent):
         model_name: str | None = None,
         extra_env: dict[str, str] | None = None,
         agent_timeout_sec: float | None = None,
+        resource_usage_filename: str | None = None,
         **kwargs,
     ):
         super().__init__(logs_dir=logs_dir, model_name=model_name, extra_env=extra_env, **kwargs)
@@ -36,6 +39,7 @@ class OracleAgent(BaseAgent):
         self._trial_paths = trial_paths
         self._agent_timeout_sec = agent_timeout_sec
         self._step_index = 0
+        self._resource_usage_filename = resource_usage_filename
 
     def version(self) -> str:
         return "1.0.0"
@@ -73,6 +77,8 @@ class OracleAgent(BaseAgent):
         context: AgentContext,
     ) -> None:
         env_paths = EnvironmentPaths.for_os(environment.os)
+        counters = await resource_counters(environment) if self._resource_usage_filename else {}
+        started = time.monotonic()
         try:
             host_oracle_path = self._trial_paths.agent_dir / self._ORACLE_LOG_FILE
             container_oracle_path = env_paths.agent_dir / self._ORACLE_LOG_FILE
@@ -124,5 +130,9 @@ class OracleAgent(BaseAgent):
             exit_code_path = self._trial_paths.agent_dir / "exit-code.txt"
             exit_code_path.write_text(str(result.return_code))
         finally:
+            if self._resource_usage_filename:
+                await write_resource_usage(
+                    environment, self._trial_paths.agent_dir / self._resource_usage_filename, counters, started
+                )
             if self._task.has_steps:
                 self._step_index += 1

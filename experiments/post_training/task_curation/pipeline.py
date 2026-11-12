@@ -47,6 +47,7 @@ from shellbox.machine import (
     PackageSpec,
     UnsupportedMachineSpec,
 )
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, require_resolved_environment
 from taskcompendium.pipeline.controls import GradingMachines, controls_identity
 from taskcompendium.pipeline.fingerprints import callable_identity, recipe_code_identity
@@ -674,6 +675,9 @@ def pipeline_identity(
         "filter_policy": asdict(config.filter_policy),
         "lexical_contamination": (
             config.lexical_contamination.model_dump(mode="json") if config.lexical_contamination else None
+        ),
+        "oracle_filter_sha256": (
+            canonical_sha256(config.oracle_filter.model_dump(mode="json")) if config.oracle_filter else None
         ),
         "revisions": {
             "procedure": SOURCE_PIPELINE_REVISION,

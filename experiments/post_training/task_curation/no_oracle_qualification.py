@@ -105,12 +105,7 @@ class SetupExecution:
 
     @property
     def passed(self) -> bool:
-        """Whether every expected file is present as written by the native recipe.
-
-        The comparison is on content. A mode difference is reported in ``changed``
-        because the native recipe's own ``chmod`` steps are replayed verbatim by the
-        rebuild, so a faithful rebuild legitimately differs from the source byte mode.
-        """
+        """Require an executed setup and every expected output file."""
         return self.outcome == "executed" and not self.missing
 
 

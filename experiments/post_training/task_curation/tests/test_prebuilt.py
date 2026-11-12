@@ -44,6 +44,20 @@ def _write(tmp_path, rows: list[dict]):
     path = tmp_path / "tasks.parquet"
     table = pa.Table.from_pylist(rows, schema=pa.schema([("path", pa.string()), ("lowered_task_spec", pa.string())]))
     pq.write_table(table, path)
+    specs = [TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"]) for row in rows]
+    receipt = oracle_receipt(specs)
+    for row, spec in zip(rows, specs, strict=True):
+        runtime_sha256 = canonical_sha256(json.loads(row["lowered_task_spec"]).get("runtime"))
+        liveness = receipt.tasks[spec.id].no_oracle_liveness
+        receipt.tasks[spec.id] = receipt.tasks[spec.id].model_copy(
+            update={
+                "runtime_sha256": runtime_sha256,
+                "no_oracle_liveness": (
+                    liveness.model_copy(update={"runtime_sha256": runtime_sha256}) if liveness else None
+                ),
+            }
+        )
+    (tmp_path / prebuilt.ORACLE_FILTER_FILENAME).write_text(receipt.model_dump_json())
     return path
 
 
@@ -79,7 +93,7 @@ def test_an_envelope_without_machine_shapes_is_refused(tmp_path, monkeypatch):
 @pytest.mark.parametrize("storage", ["local", "memory"])
 def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_path, monkeypatch, mode, storage):
     published = _write(tmp_path, [prebuilt_task("a"), prebuilt_task("b")])
-    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(published))
+    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(published.parent / kwargs["filename"]))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
     source = RlDataSource(
@@ -160,6 +174,7 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
     path = tmp_path / "tasks.parquet"
     pq.write_table(pa.Table.from_pylist([{"task_spec": serialized}]), path)
     (tmp_path / "controls.jsonl").write_text(json.dumps(receipt) + "\n")
+    (tmp_path / prebuilt.ORACLE_FILTER_FILENAME).write_text(oracle_receipt([task]).model_dump_json())
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(tmp_path / kwargs["filename"]))
     if change == "none":
         assert prebuilt.import_harbor_cohort(_cohort(1)) == str(path)
@@ -214,7 +229,7 @@ def test_prebuilt_workspace_cohort_rejects_missing_environment_without_capabilit
 @pytest.mark.parametrize("qualified", [False, True])
 def test_direct_prebuilt_admission_requires_oversight_but_allows_unsafe_tasks(tmp_path, monkeypatch, qualified):
     path = _write(tmp_path, [prebuilt_task("a")])
-    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
+    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(path.parent / kwargs["filename"]))
     config = prebuilt.PrebuiltCohort(
         name="unsafe-cohort", version="2026.11.12.1", repo="open-athena/repo", revision="a" * 40, expected_rows=1
     )
@@ -297,7 +312,8 @@ def test_canonical_judged_release_preserves_tasks_without_a_runtime_envelope(tmp
         row["task_spec"] = task.model_copy(update={"labels": {"changed": "after-publication"}}).model_dump_json()
     path = tmp_path / "tasks.parquet"
     pq.write_table(pa.Table.from_pylist(rows), path)
-    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
+    (tmp_path / prebuilt.ORACLE_FILTER_FILENAME).write_text(oracle_receipt([task]).model_dump_json())
+    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(tmp_path / kwargs["filename"]))
     if change != "none":
         with pytest.raises(ValueError, match=r"recorded hash|Duplicate published task|grading environment requires"):
             prebuilt.import_taskcompendium_cohort(_cohort(len(rows)))
@@ -332,6 +348,41 @@ def test_canonical_judged_release_preserves_tasks_without_a_runtime_envelope(tmp
     for view in ("normalize", "final"):
         admitted = pq.read_table(next((destination / view).glob("*.parquet"))).to_pylist()
         assert [r["task_json"] for r in admitted] == [serialized]
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+def test_prebuilt_rejects_calibration_only_success_without_no_oracle_liveness(tmp_path, monkeypatch, mode):
+    published = _write(tmp_path, [prebuilt_task("calibration-only")])
+    receipt_path = published.parent / prebuilt.ORACLE_FILTER_FILENAME
+    document = json.loads(receipt_path.read_text())
+    entry = document["tasks"]["calibration-only"]
+    entry["no_oracle_liveness"] = None
+    entry["exclusion_reason"] = "no_oracle_liveness_missing"
+    receipt_path.write_text(json.dumps(document))
+    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(published.parent / kwargs["filename"]))
+    source = RlDataSource(
+        config=_cohort(1),
+        pipeline=prebuilt.import_prebuilt,
+        info=SourceInfo(
+            id="Marin:calibration",
+            upstream_dataset="calibration",
+            upstream_name="calibration",
+            origin=SourceOrigin.MARIN,
+            build_path="test",
+            daytona_snapshot_count=0,
+            daytona_machine_slots=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture grader creates no actor.",
+            oversight=OversightEvidence(
+                level=OversightLevel.SAMPLE, verification="Fixture negative controls are tested locally."
+            ),
+            lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
+        ),
+    )
+    step = prebuilt.import_prebuilt(source, PipelineOptions(mode, CampaignRuntime()))
+    invocation = step.build_config(StepContext.for_run(str(tmp_path / "admitted"), str(tmp_path)))
+    with pytest.raises(ValueError, match="no-oracle liveness qualification"):
+        step.run(invocation)
 
 
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])

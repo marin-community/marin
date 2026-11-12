@@ -11,6 +11,7 @@ from taskcompendium.models import (
     CommandSemantics,
     ConversationInput,
     EnvironmentRequirements,
+    ExecutionRequirements,
     FileReward,
     PlainText,
     ResourceGroups,
@@ -65,6 +66,9 @@ def prebuilt_task(task_id: str, *, image: str | None = IMAGE, capabilities: tupl
         id=task_id,
         context=ConversationInput(events=(TextMessage(role="user", content="Do the task."),)),
         environment_requirements=requirements,
+        execution_requirements=ExecutionRequirements(
+            cpus=1, memory_mb=2048, storage_mb=2048, agent_timeout_sec=300, verifier_timeout_sec=60
+        ),
         answer_type=AnswerType.TEXT,
         answer_format=PlainText(),
         grader=grader,

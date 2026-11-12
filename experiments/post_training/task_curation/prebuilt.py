@@ -43,7 +43,7 @@ from taskcompendium.models import NoGrader, TaskSpec
 from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
 from taskcompendium.pipeline.conversion import normalization_columns
 from taskcompendium.pipeline.models import SourceStatus
-from taskcompendium.pipeline.oracle_filter import has_oracle_solution, load_oracle_filter, require_oracle_filter
+from taskcompendium.pipeline.oracle_filter import load_oracle_filter, require_oracle_filter
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -351,30 +351,34 @@ def prebuilt_artifact(
             count_grading_environment(grading, assessment.model_dump(mode="json"))
             if assessment.status is GradingEnvironmentStatus.MISMATCH:
                 raise ValueError(f"grading_environment_mismatch: {task.id}: {assessment.model_dump_json()}")
-            if has_oracle_solution(task):
-                if oracle_filter is None:
-                    receipt_path = hf_hub_download(
-                        repo_id=invocation.cohort.repo,
-                        repo_type=invocation.cohort.repo_type,
-                        revision=invocation.cohort.revision,
-                        filename=ORACLE_FILTER_FILENAME,
-                    )
-                    oracle_filter = load_oracle_filter(receipt_path)
-                    with (
-                        Path(receipt_path).open("rb") as source_file,
-                        (destination / ORACLE_FILTER_FILENAME).open("wb") as output_file,
-                    ):
-                        shutil.copyfileobj(source_file, output_file)
-                if not require_oracle_filter(
-                    task,
-                    oracle_filter,
-                    (
-                        json.loads(row["lowered_task_spec"])["runtime"]
-                        if invocation.encoding is PrebuiltEncoding.LOWERED
-                        else None
-                    ),
+            if task.execution_requirements is None:
+                raise ValueError(f"SAMPLE/FULL admission requires explicit execution requirements: {task.id}")
+            if oracle_filter is None:
+                receipt_path = hf_hub_download(
+                    repo_id=invocation.cohort.repo,
+                    repo_type=invocation.cohort.repo_type,
+                    revision=invocation.cohort.revision,
+                    filename=ORACLE_FILTER_FILENAME,
+                )
+                oracle_filter = load_oracle_filter(receipt_path)
+                with (
+                    Path(receipt_path).open("rb") as source_file,
+                    (destination / ORACLE_FILTER_FILENAME).open("wb") as output_file,
                 ):
-                    raise ValueError(f"Published cohort includes a failed oracle task: {task.id}")
+                    shutil.copyfileobj(source_file, output_file)
+            if not require_oracle_filter(
+                task,
+                oracle_filter,
+                (
+                    json.loads(row["lowered_task_spec"])["runtime"]
+                    if invocation.encoding is PrebuiltEncoding.LOWERED
+                    else None
+                ),
+            ):
+                raise ValueError(
+                    "Published cohort includes a failed oracle task or lacks no-oracle liveness qualification: "
+                    f"{task.id}"
+                )
             tasks.append(
                 {
                     **normalization_columns(task.id, task.source, task, None, (), original_path),

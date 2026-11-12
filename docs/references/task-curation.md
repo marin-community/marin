@@ -975,8 +975,50 @@ Oracle filtering is never sampled, even when the other checks use SAMPLE.
 
 ### Full-population oracle filter
 
+Every admitted TaskSpec must declare `execution_requirements`: `cpus`,
+`memory_mb`, `storage_mb`, `agent_timeout_sec` and `verifier_timeout_sec`.
+Sizes use MiB and deadlines use seconds. Conversion may leave this field absent;
+SAMPLE and FULL admission require it and a population-complete resource receipt.
+Harbor export writes these values into the task package. Trials must use them
+without resource overrides or timeout multipliers.
+
+Calibration runs inside the full-population oracle filter. Tasks with declared
+limits are validated at exactly those limits. For a task without declared limits,
+stage a new package at 1 CPU, 2 GiB memory, 2 GiB disk, a five-minute agent
+timeout and a one-minute verifier timeout. Preserve any limits already explicit
+in the native package; calibrate only missing dimensions. After a failed trial, double only the
+dimension identified by its failure: memory for an explicit OOM kill, disk for
+ENOSPC, agent timeout for an agent timeout, or verifier timeout for a verifier
+timeout. Also double CPU on an agent timeout when measured CPU use reaches 90%
+of its allocated capacity. A bare exit 137 does not establish OOM, and unavailable
+CPU counters do not establish CPU saturation.
+
+Stop increasing at 16 CPU, 64 GiB memory, 128 GiB disk, a four-hour agent timeout
+and a 30-minute verifier timeout. A failure at its applicable cap, or a
+non-resource failure, becomes an exclusion with its signal and trial evidence.
+The receipt retains every attempt and the final per-task shape. It reports a
+uniform source shape only when every task passed at that shape. A failure in an
+explicitly fixed dimension is excluded at its declared limit.
+Receipts retain actor and verifier measurements separately. A separate grader's
+failure at its declared memory or disk limit stops calibration without increasing
+the actor's allocation; a shared grader uses the task's container budget.
+
+For tasks without original solutions, write calibration-only `solve.sh` scripts
+under `CALIBRATION_SOLUTIONS/TASK_ID/` and supply `--calibration-solutions`.
+These scripts run through the same production Trial path but remain outside the
+TaskSpec's original oracle resources and cannot supply oracle admission evidence.
+For a task without an original oracle, admission additionally requires a separate
+`no_oracle_liveness` receipt from an empty-submission verifier run: exit zero,
+reward below one, and a positive executed-test count. The receipt binds the
+TaskSpec after its final shape is assigned and the runtime deployment settings;
+subsequent changes invalidate the proof.
+Calibration attempts and candidate submissions cannot supply this liveness proof.
+Pass the JSONL emitted by `no_oracle_liveness` to `collect --no-oracle-liveness`.
+Tasks without a receipt satisfying these conditions remain excluded. Prebuilt
+imports enforce the same requirement.
+
 For both SAMPLE and FULL, run the production Harbor Trial with the restored
-ORACLE agent on every task that ships a solution. The filter retains exactly
+ORACLE agent over the complete converted population. The filter retains exactly
 the tasks with a completed trial, solution exit zero, and structured scored
 reward one. Numeric reward files alone are insufficient. Retain failed oracles
 and unresolved infrastructure errors as exclusions with reasons and counts.
@@ -997,21 +1039,20 @@ uv run python -m experiments.post_training.task_curation.oracle_filter map \
   --tasks-dir /path/to/faithful-harbor-tasks --output /path/to/task-map.json
 
 # DAYTONA: use the RL organization credential and verify the snapshot cap first.
-uv run --isolated --project vendor/harbor --frozen --extra runtime harbor run \
-  --agent oracle --path /path/to/faithful-harbor-tasks --env daytona \
-  --n-concurrent 128 --max-retries 2 --jobs-dir /path/to/oracle-jobs
+uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
+  --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
+  --output-dir /path/to/oracle-run-v2 --environment daytona --concurrency 128
 
 # LOCAL: prepared digest-pinned images via umoci and shellbox-images.json,
 # on Iris CPU workers. This route supports only root commands.
-uv run --isolated --project vendor/harbor --frozen --extra runtime harbor run \
-  --agent oracle --path /path/to/faithful-harbor-tasks --env local \
-  --n-concurrent 4 --max-retries 2 --jobs-dir /path/to/oracle-jobs \
-  --environment-kwarg image_cache=/cache/shellbox-images \
-  --environment-kwarg cgroup_parent=/sys/fs/cgroup/marin-liveness
+uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
+  --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
+  --output-dir /path/to/oracle-local-v2 --environment local --concurrency 4 \
+  --environment-kwargs '{"image_cache":"/cache/shellbox-images","cgroup_parent":"/sys/fs/cgroup/marin-liveness"}'
 
 uv run python -m experiments.post_training.task_curation.oracle_filter collect \
-  --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
-  --jobs-dir /path/to/oracle-jobs --output /path/to/filtered/tasks.parquet \
+  --cohort /path/to/converted/tasks.parquet --task-map /path/to/oracle-run-v2/task-map.json \
+  --jobs-dir /path/to/oracle-run-v2 --output /path/to/filtered-v2/tasks.parquet \
   --conversion-manifest /path/to/quick/manifest.json
 ~~~
 
@@ -1021,10 +1062,16 @@ CPU workers, with the task's own prepared images. Concurrency does not waive
 snapshot or CPU capacity limits. LOCAL honors allow_internet and cannot run
 nonroot task commands; choose a supporting route when the task requires them.
 
-The collector requires every oracle task's trial, preserves its independent
+Use CPU Iris workers at production priority with a three-day job timeout.
+Run `collect` against the same calibrated run; there is no second oracle pass.
+Each attempt uses a fresh container and a fresh native package directory.
+Preserve the original packages, trials and published prefixes; select a new
+output version when rerunning.
+
+The collector requires every task's trial, preserves its independent
 solution exit code and structured verifier verdict, and emits oracle-filter.json
-plus oracle-filter-summary.json. It filters converted rows without rewriting
-their TaskSpecs. Publish the filtered tasks and receipt together at one private
+plus oracle-filter-summary.json. It writes the final calibrated requirements
+into each retained TaskSpec. Publish the filtered tasks and receipt together at one private
 immutable revision. Prebuilt admission checks every retained oracle TaskSpec
 against the receipt.
 
