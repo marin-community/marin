@@ -82,7 +82,7 @@ def sources() -> list[RlDataSource]:
     staged_v2 = _public_release("smartie-swesmith-staged-v2", PUBLIC_STAGED_REVISION)
     swesmith_repaired = PrebuiltCohort(
         name="swesmith-verifier-repaired-v5",
-        version="2026.11.12.1",
+        version="2026.11.12.2",
         repo="open-athena/swesmith-verifier-repaired-v5-20261112",
         revision="26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd",
         expected_rows=7016,

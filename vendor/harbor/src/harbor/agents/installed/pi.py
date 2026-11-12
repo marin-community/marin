@@ -66,10 +66,10 @@ class Pi(BaseInstalledAgent):
     _SUPPORTED_THINKING_FORMATS = frozenset({"chat-template", "qwen-chat-template"})
     _API_BASE_ENV = "HARBOR_PI_API_BASE"
     _API_KEY_ENV = "HARBOR_PI_API_KEY"
-    # Provider uploads are root-owned. The agent must unlink both files, so
-    # their parent must be agent-writable rather than the sticky shared /tmp.
-    _ENDPOINT_ENV_PATH = str(EnvironmentPaths.agent_dir / "harbor-pi-endpoint.env")
-    _CONTEXT_BUDGET_EXTENSION_PATH = str(EnvironmentPaths.agent_dir / "harbor-pi-context-budget.js")
+    # Root uploads must remain outside persisted logs, even if agent exec never starts.
+    _RUNTIME_DIR = Path("/run/harbor-pi")
+    _ENDPOINT_ENV_PATH = str(_RUNTIME_DIR / "harbor-pi-endpoint.env")
+    _CONTEXT_BUDGET_EXTENSION_PATH = str(_RUNTIME_DIR / "harbor-pi-context-budget.js")
     _MCP_EXTENSION_PATH = "/opt/harbor-pi/node_modules/pi-mcp-extension/src/index.ts"
     _MCP_CONFIGURE_PATH = "/installed-agent/pi_configure_mcp.cjs"
     _PROVIDER_CONFIG_RELATIVE_PATH = ".pi/agent/models.json"
@@ -580,6 +580,7 @@ export default function (pi) {
             f"export {self._API_BASE_ENV}={shlex.quote(self._api_base)}\n"
             f"export {self._API_KEY_ENV}={shlex.quote(self._api_key)}\n"
         )
+        await environment.ensure_dirs([self._RUNTIME_DIR], chmod=True)
         with tempfile.TemporaryDirectory() as temp_dir:
             local_path = Path(temp_dir) / "endpoint.env"
             local_path.write_text(contents)
@@ -599,6 +600,7 @@ export default function (pi) {
             ).replace("__CONTEXT_WINDOW__", str(self._model_limits.context_window))
             + "\n"
         )
+        await environment.ensure_dirs([self._RUNTIME_DIR], chmod=True)
         with tempfile.TemporaryDirectory() as temp_dir:
             local_path = Path(temp_dir) / "harbor-pi-context-budget.js"
             local_path.write_text(extension)

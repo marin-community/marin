@@ -172,8 +172,11 @@ def import_harbor_prebuilt(
 
 
 def prebuilt_artifact(
-    source: RlDataSource[PrebuiltCohort], options: PipelineOptions,
-    load: Callable[[PrebuiltCohort], str], *, task_format: TaskFormat,
+    source: RlDataSource[PrebuiltCohort],
+    options: PipelineOptions,
+    load: Callable[[PrebuiltCohort], str],
+    *,
+    task_format: TaskFormat,
 ) -> ArtifactStep[CampaignArtifact]:
     """Publish validated rows and corpus views while preserving their controlled package bytes."""
     if "excluded" in source.info.tags:
@@ -201,10 +204,12 @@ def prebuilt_artifact(
                 task = TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"])
                 serialized = task.model_dump_json()
                 original_path = row["path"]
-            tasks.append({
-                **normalization_columns(task.id, task.source, task, None, (), original_path),
-                "task_json": serialized,
-            })
+            tasks.append(
+                {
+                    **normalization_columns(task.id, task.source, task, None, (), original_path),
+                    "task_json": serialized,
+                }
+            )
         for view in ("normalize", "final"):
             folder = destination / view
             folder.mkdir()

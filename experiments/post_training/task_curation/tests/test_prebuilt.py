@@ -3,8 +3,8 @@
 
 """The prebuilt importer admits a cohort only as published and only when valid."""
 
-import json
 import hashlib
+import json
 from pathlib import Path
 
 import pyarrow as pa
@@ -171,7 +171,8 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
         monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
         monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
         source = RlDataSource(
-            config=_cohort(1), pipeline=prebuilt.import_harbor_prebuilt,
+            config=_cohort(1),
+            pipeline=prebuilt.import_harbor_prebuilt,
             info=SourceInfo(id="native", title="native", origin="fixture", task_format=TaskFormat.HARBOR),
         )
         artifact = run(prebuilt.import_harbor_prebuilt(source, PipelineOptions(mode, CampaignRuntime())))[0]
