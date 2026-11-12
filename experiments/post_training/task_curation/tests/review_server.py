@@ -41,6 +41,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     "object": "chat.completion",
                     "created": 0,
                     "model": body["model"],
+                    "usage": {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16},
                     "choices": [
                         {
                             "index": 0,

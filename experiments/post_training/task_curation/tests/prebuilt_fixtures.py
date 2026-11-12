@@ -4,6 +4,7 @@
 """Published cohort fixtures shared by importer and oracle receipt tests."""
 
 import json
+from dataclasses import replace
 
 from taskcompendium.models import (
     AnswerType,
@@ -21,7 +22,30 @@ from taskcompendium.models import (
     TextMessage,
 )
 
+from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_prebuilt
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
+
 IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
+
+
+def prebuilt_source(info: SourceInfo) -> RlDataSource[PrebuiltCohort]:
+    count = info.count if info.count is not None else 1
+    return RlDataSource(
+        info=replace(
+            info,
+            lexical_contamination=info.lexical_contamination
+            or decontamination_evidence("open-athena/fixture-tasks", "a" * 40, count),
+        ),
+        config=PrebuiltCohort(
+            name=info.id.rsplit(":", 1)[-1],
+            version="fixture-1",
+            repo="open-athena/fixture-tasks",
+            revision="a" * 40,
+            expected_rows=count,
+        ),
+        pipeline=import_taskcompendium_prebuilt,
+    )
 
 
 def prebuilt_task(task_id: str, *, image: str | None = IMAGE, capabilities: tuple[str, ...] = ()) -> dict:

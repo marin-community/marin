@@ -194,8 +194,8 @@ class PrebuiltImport:
     cohort: PrebuiltCohort
     mode: SourceProcessingMode
     task_format: TaskFormat
-    lexical_contamination: LexicalContaminationEvidence | None
     encoding: PrebuiltEncoding
+    lexical_contamination: LexicalContaminationEvidence | None
 
 
 def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
@@ -297,7 +297,7 @@ def prebuilt_artifact(
             raise ValueError(f"Decontamination receipt does not cover the published cohort: {source.name}")
 
     def build_config(context) -> PrebuiltImport:
-        return PrebuiltImport(context.output_path, config, options.mode, task_format, evidence, encoding)
+        return PrebuiltImport(context.output_path, config, options.mode, task_format, encoding, evidence)
 
     def run(invocation: PrebuiltImport) -> CampaignArtifact:
         if not quick:
@@ -306,9 +306,9 @@ def prebuilt_artifact(
         if quick:
             return _quick_view(config, local, invocation.output_path)
         assert invocation.lexical_contamination is not None
-        destination = Path(invocation.output_path)
-        destination.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(local, destination / TASKS_FILENAME)
+        destination = StoragePath(invocation.output_path)
+        with local.open("rb") as source_file, (destination / TASKS_FILENAME).open("wb") as output_file:
+            shutil.copyfileobj(source_file, output_file)
         tasks = []
         grading: Counter[str] = Counter()
         oracle_filter = None
@@ -334,13 +334,17 @@ def prebuilt_artifact(
                         filename=ORACLE_FILTER_FILENAME,
                     )
                     oracle_filter = load_oracle_filter(receipt_path)
-                    shutil.copyfile(receipt_path, destination / ORACLE_FILTER_FILENAME)
+                    with (
+                        Path(receipt_path).open("rb") as source_file,
+                        (destination / ORACLE_FILTER_FILENAME).open("wb") as output_file,
+                    ):
+                        shutil.copyfileobj(source_file, output_file)
                 if not require_oracle_filter(
                     task,
                     oracle_filter,
                     (
                         json.loads(row["lowered_task_spec"])["runtime"]
-                        if invocation.task_format is TaskFormat.TASKCOMPENDIUM
+                        if invocation.encoding is PrebuiltEncoding.LOWERED
                         else None
                     ),
                 ):
@@ -353,8 +357,8 @@ def prebuilt_artifact(
             )
         for view in ("normalize", "final"):
             folder = destination / view
-            folder.mkdir()
-            pq.write_table(pa.Table.from_pylist(tasks, schema=NORMALIZED_SCHEMA), folder / "part-00000.parquet")
+            with (folder / "part-00000.parquet").open("wb") as output_file:
+                pq.write_table(pa.Table.from_pylist(tasks, schema=NORMALIZED_SCHEMA), output_file)
         manifest = {
             "mode": invocation.mode.value,
             "task_format": invocation.task_format.value,

@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import DaytonaSafety, OversightEvidence, OversightLevel
 from marin.execution.lazy import StepContext, run
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grader import verifyit_package
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
@@ -75,7 +76,8 @@ def test_an_envelope_without_machine_shapes_is_refused(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
-def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize("storage", ["local", "memory"])
+def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_path, monkeypatch, mode, storage):
     published = _write(tmp_path, [prebuilt_task("a"), prebuilt_task("b")])
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(published))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
@@ -90,13 +92,19 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
             lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 2),
         ),
     )
-    artifact = run(prebuilt.import_prebuilt(source, PipelineOptions(mode, CampaignRuntime())))[0]
-    destination = Path(artifact.path)
+    step = prebuilt.import_prebuilt(source, PipelineOptions(mode, CampaignRuntime()))
+    if storage == "local":
+        artifact = run(step)[0]
+        destination = StoragePath(artifact.path)
+    else:
+        destination = StoragePath(f"memory://prebuilt/{tmp_path.name}/{mode.value}")
+        step.run(step.build_config(StepContext.for_run(str(destination), str(tmp_path))))
     manifest = json.loads((destination / "manifest.json").read_text())
     assert (manifest["mode"], manifest["intended_use"]) == (mode.value, "train")
     assert (destination / "tasks.parquet").read_bytes() == published.read_bytes()
     for view in ("normalize", "final"):
-        rows = pq.read_table(next((destination / view).glob("*.parquet"))).to_pylist()
+        with next(iter((destination / view / "*.parquet").glob())).open("rb") as handle:
+            rows = pq.read_table(handle).to_pylist()
         assert [TaskSpec.model_validate_json(row["task_json"]).id for row in rows] == ["a", "b"]
 
     _write_corpus({"fixture": str(destination)}, [], str(tmp_path / "report.json"), "converted")
@@ -279,8 +287,8 @@ def test_canonical_judged_release_preserves_tasks_without_a_runtime_envelope(tmp
             id="reply",
             title="reply",
             origin="fixture",
-            task_format=TaskFormat.TASKCOMPENDIUM,
             lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     )
     artifact = run(
@@ -295,7 +303,8 @@ def test_canonical_judged_release_preserves_tasks_without_a_runtime_envelope(tmp
 
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
 @pytest.mark.parametrize("state", ["missing", "failed", "passed"])
-def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, monkeypatch, mode, state):
+@pytest.mark.parametrize("encoding", list(prebuilt.PrebuiltEncoding))
+def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, monkeypatch, mode, state, encoding):
     row = prebuilt_task("oracle")
     envelope = json.loads(row["lowered_task_spec"])
     spec = TaskSpec.model_validate(envelope["task"])
@@ -307,9 +316,21 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
     envelope["task"] = spec.model_dump(mode="json")
     row["lowered_task_spec"] = json.dumps(envelope)
     cohort = _write(tmp_path, [row])
+    if encoding is prebuilt.PrebuiltEncoding.CANONICAL:
+        serialized = spec.model_dump_json()
+        pq.write_table(
+            pa.Table.from_pylist(
+                [{"task_spec": serialized, "task_sha256": hashlib.sha256(serialized.encode()).hexdigest()}]
+            ),
+            cohort,
+        )
     receipt = oracle_receipt([spec], failed=frozenset({spec.id}) if state == "failed" else frozenset())
     receipt.tasks[spec.id] = receipt.tasks[spec.id].model_copy(
-        update={"runtime_sha256": canonical_sha256(envelope["runtime"])}
+        update={
+            "runtime_sha256": (
+                canonical_sha256(envelope["runtime"]) if encoding is prebuilt.PrebuiltEncoding.LOWERED else None
+            )
+        }
     )
     receipt_path = tmp_path / prebuilt.ORACLE_FILTER_FILENAME
     receipt_path.write_text(receipt.model_dump_json())
@@ -324,9 +345,14 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
     monkeypatch.setattr(prebuilt, "hf_hub_download", download)
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
+    pipeline = (
+        prebuilt.import_prebuilt
+        if encoding is prebuilt.PrebuiltEncoding.LOWERED
+        else prebuilt.import_taskcompendium_prebuilt
+    )
     source = RlDataSource(
         config=_cohort(1),
-        pipeline=prebuilt.import_prebuilt,
+        pipeline=pipeline,
         info=SourceInfo(
             id="fixture:oracle",
             title="oracle",
@@ -335,7 +361,7 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     )
-    step = prebuilt.import_prebuilt(source, PipelineOptions(mode, CampaignRuntime()))
+    step = pipeline(source, PipelineOptions(mode, CampaignRuntime()))
     destination = tmp_path / "admitted"
     invocation = step.build_config(StepContext.for_run(str(destination), str(tmp_path)))
     if state == "missing":

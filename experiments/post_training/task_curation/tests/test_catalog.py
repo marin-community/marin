@@ -73,10 +73,7 @@ def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubr
     items = list(catalog.items(key))
     assert len(items) == 2 and all(item.verdict == "good" for item in items)
     assert source.curation.admission_counts.admitted == 3
-    inventories = [row for row in catalog.sources(snapshot.snapshot_id) if row.declaration.pipeline is None]
-    assert inventories and all(
-        row.assessment_key is None and row.latest_attempt_status == "skipped" for row in inventories
-    )
+    assert all(row.declaration.pipeline is not None for row in catalog.sources(snapshot.snapshot_id))
     packet = catalog.packet(key, items[0].task_id)
     assert packet["task"]["id"] == items[0].task_id
 

@@ -59,8 +59,16 @@ from experiments.post_training.task_curation.tests.review_server import JudgeRep
 FIXTURES = Path(__file__).parent / "fixtures"
 RECIPES = {
     source.name: cast(CurationRecipe, source.config)
-    for module in (math_sources, judged, qa, calendar_sources, instruction_following, multichallenge, puzzles)
-    for source in module.sources()
+    for candidates in (
+        math_sources.sources,
+        judged.candidate_sources,
+        qa.sources,
+        calendar_sources.sources,
+        instruction_following.sources,
+        multichallenge.sources,
+        puzzles.sources,
+    )
+    for source in candidates()
 }
 
 
