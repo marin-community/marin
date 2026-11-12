@@ -27,7 +27,7 @@ from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 
 def choice_source(
@@ -63,8 +63,11 @@ def choice_source(
     return RlDataSource(
         info=SourceInfo(
             id="Evalchemy:" + name,
-            title=name,
-            origin="Evalchemy",
+            upstream_dataset=name,
+            upstream_name=name,
+            subset=None,
+            build_path="Evalchemy",
+            origin=SourceOrigin.EVALCHEMY,
             family="likelihood-choice",
             tags=(
                 "eval",

@@ -63,7 +63,7 @@ from experiments.post_training.task_curation.pipeline import (
     process_rows,
     source_recipe,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 from experiments.post_training.task_curation.tests.image_builds import (
     COMPILED_LOCK,
     DATA_PATH,
@@ -105,7 +105,13 @@ def source_step(recipe: CurationRecipe, options: PipelineOptions):
             options, recipe_settings=replace(settings, config=replace(settings.config, lexical_contamination=evidence))
         )
     source = RlDataSource(
-        info=SourceInfo(id=f"fixture:{recipe.name}", title=recipe.name, origin="fixture"),
+        info=SourceInfo(
+            id=f"Marin:{recipe.name}",
+            upstream_dataset=recipe.name,
+            upstream_name=recipe.name,
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+        ),
         config=recipe,
         pipeline=process_rows,
     )

@@ -31,7 +31,7 @@ from verifyit.spec import DEFAULT_OUTPUT
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import livecodebench, text_to_sql_scoring
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
@@ -298,8 +298,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:apps",
-                title="codeparrot/apps",
-                origin="MarinSkyRL",
+                upstream_dataset="apps",
+                upstream_name="apps",
+                subset=None,
+                build_path="MarinSkyRL",
+                origin=SourceOrigin.CODEPARROT,
                 family="competitive-programming",
                 tags=("rlvr", "single-turn", "benchmark", "license:mit", "gym/lcb"),
             ),
@@ -320,8 +323,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:eurus2_code",
-                title="PRIME-RL/Eurus-2-RL-Data · code",
-                origin="MarinSkyRL",
+                upstream_dataset="eurus2_code",
+                upstream_name="eurus2_code",
+                subset=None,
+                build_path="MarinSkyRL",
+                origin=SourceOrigin.PRIME_RL,
                 family="competitive-programming",
                 tags=("rlvr", "single-turn", "license:mit", "gym/lcb"),
             ),
@@ -346,8 +352,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:verifiable_code",
-                title="open-r1/verifiable-coding-problems-python",
-                origin="MarinSkyRL",
+                upstream_dataset="verifiable_code",
+                upstream_name="verifiable_code",
+                subset=None,
+                build_path="MarinSkyRL",
+                origin=SourceOrigin.OPEN_R1,
                 family="competitive-programming",
                 tags=("rlvr", "single-turn", "gym/lcb"),
             ),
@@ -371,8 +380,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:gretel_text_to_sql",
-                title="gretelai/synthetic_text_to_sql",
-                origin="MarinSkyRL",
+                upstream_dataset="gretel_text_to_sql",
+                upstream_name="gretel_text_to_sql",
+                subset=None,
+                build_path="MarinSkyRL",
+                origin=SourceOrigin.GRETEL,
                 family="text-to-sql",
                 tags=("rlvr", "single-turn", "license:apache-2.0", "gym/text_to_sql"),
             ),

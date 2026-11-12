@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import shutil
+import sys
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -38,7 +39,7 @@ from experiments.post_training.task_curation.pipeline import (
     environment_requirements,
     process_rows,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 from experiments.post_training.task_curation.tests.image_builds import (
     DATA_PATH,
     REPOSITORY,
@@ -65,9 +66,11 @@ def catalog(monkeypatch, tmp_path):
                 name: RlDataSource(
                     pipeline=process_rows,
                     info=SourceInfo(
-                        id=f"fixture:{name}",
-                        title=name,
-                        origin="fixture",
+                        id=f"Marin:{name}",
+                        upstream_dataset=name,
+                        upstream_name=name,
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
                         lexical_contamination=decontamination_evidence(
                             pipeline.dataset.name, pipeline.dataset.revision, 1
                         ),
@@ -131,6 +134,7 @@ def test_local_canary_cannot_write_an_explicit_production_catalog(tmp_path, cata
     assert not production.exists()
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="The local bubblewrap backend requires Linux")
 def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_their_lock(tmp_path, monkeypatch, request):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
     install_fake_build_tools(tmp_path, monkeypatch)
@@ -309,6 +313,16 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
+    declared = replace(
+        declared,
+        info=replace(
+            declared.info,
+            daytona_machine_slots=0,
+            daytona_snapshot_count=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
+        ),
+    )
     source = replace(
         declared,
         config=replace(
@@ -395,6 +409,16 @@ def test_shell_only_campaign_does_not_load_ports_catalog(tmp_path):
 
 def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, monkeypatch, review_server):
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
+    declared = replace(
+        declared,
+        info=replace(
+            declared.info,
+            daytona_machine_slots=0,
+            daytona_snapshot_count=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
+        ),
+    )
     source = replace(
         declared,
         config=replace(
@@ -457,6 +481,16 @@ def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, 
 
 def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, review_server):
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
+    declared = replace(
+        declared,
+        info=replace(
+            declared.info,
+            daytona_machine_slots=0,
+            daytona_snapshot_count=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
+        ),
+    )
     source = replace(declared, config=replace(math500(), rubric=None, controls=None))
     source = replace(
         source,
@@ -517,8 +551,18 @@ def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, r
     assert len(review_server.requests) == 1
 
 
-def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_path, monkeypatch, review_server):
+def test_full_campaign_requires_qa_transport_availability(tmp_path, monkeypatch, review_server):
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
+    declared = replace(
+        declared,
+        info=replace(
+            declared.info,
+            daytona_machine_slots=0,
+            daytona_snapshot_count=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
+        ),
+    )
     source = replace(declared, config=replace(math500(), controls=None))
     source = replace(
         source,
@@ -567,7 +611,7 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
     )
     assert catalog_source.curation.status == "incomplete"
     assert [(item.cohort, item.status) for item in catalog.items(catalog_source.assessment_key)] == [
-        ("excluded", "reviewed")
+        ("excluded", "reviewed"),
     ]
     requests = list(review_server.requests)
     assert sum(request["tool_choice"]["function"]["name"] == "assess_task" for request in requests) == 1
@@ -593,3 +637,32 @@ def test_mutable_decontamination_receipt_cannot_plan_a_reviewed_campaign(tmp_pat
     assert isinstance(result.exception, ValueError)
     assert "dataset_revision" in str(result.exception)
     assert not (tmp_path / "report.json").exists()
+
+
+def test_quick_conversion_can_collect_actor_evidence_before_catalog_publication(tmp_path, monkeypatch):
+    input_path = tmp_path / "numbers.txt"
+    input_path.write_text("1\n2\n")
+    source = number_source(input_path)
+    source = replace(source, info=replace(source.info, daytona_machine_slots=None, daytona_count_basis=None))
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.all_sources", lambda: {source.info.id: source})
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {})
+    result = CliRunner().invoke(
+        main,
+        [
+            "--mode",
+            "quick",
+            "--source",
+            source.name,
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--output-root",
+            str(tmp_path / "output"),
+            "--max-workers",
+            "1",
+            "--run",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    output = tmp_path / "output" / source.name / "numbers.json"
+    assert json.loads(output.read_text()) == [2, 4]
+    assert source.catalog_declaration is None

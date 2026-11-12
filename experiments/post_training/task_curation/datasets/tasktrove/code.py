@@ -54,7 +54,7 @@ from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
     process_rows,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 EXECUTABLE_CONTROLS = Controls(golden=solve_script)
 SOURCE_VERIFIER_CONFIG = "taskcompendium-verifier.toml"
@@ -247,8 +247,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             grader=None,
             info=SourceInfo(
                 id="Task Trove:DCAgent__code-contests-noblock",
-                title="DCAgent/code-contests-noblock",
-                origin="Task Trove",
+                upstream_dataset="DCAgent__code-contests-noblock",
+                upstream_name="DCAgent__code-contests-noblock",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
                 tags=("agentic", "multi-turn", "language:python", "excluded"),
                 count=8728,
@@ -266,8 +269,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             CODEFORCES_RUBRIC,
             info=SourceInfo(
                 id="Task Trove:laion__codeforces-v3",
-                title="laion/codeforces-v3",
-                origin="Task Trove",
+                upstream_dataset="laion__codeforces-v3",
+                upstream_name="laion__codeforces-v3",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
                 tags=("agentic", "multi-turn", "language:python"),
                 count=10000,
@@ -286,8 +292,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             version="2",
             info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-competitive-coding-v2",
-                title="laion/nemotron-gym-competitive-coding-v2",
-                origin="Task Trove",
+                upstream_dataset="laion__nemotron-gym-competitive-coding-v2",
+                upstream_name="laion__nemotron-gym-competitive-coding-v2",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
                 tags=("agentic", "multi-turn", "language:python"),
                 count=15713,
@@ -304,8 +313,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             grader=None,
             info=SourceInfo(
                 id="Task Trove:laion__exp_rpt_taco-v2",
-                title="laion/exp_rpt_taco-v2",
-                origin="Task Trove",
+                upstream_dataset="laion__exp_rpt_taco-v2",
+                upstream_name="laion__exp_rpt_taco-v2",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="stdin-stdout",
                 tags=("agentic", "multi-turn", "language:python", "excluded"),
                 count=10000,

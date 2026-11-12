@@ -33,7 +33,7 @@ class OracleAgent(BaseAgent):
     ):
         super().__init__(logs_dir=logs_dir, model_name=model_name, extra_env=extra_env, **kwargs)
         self._task = Task(task_dir)
-        self._trial_paths = trial_paths  # For writing oracle.txt
+        self._trial_paths = trial_paths
         self._agent_timeout_sec = agent_timeout_sec
         self._step_index = 0
 

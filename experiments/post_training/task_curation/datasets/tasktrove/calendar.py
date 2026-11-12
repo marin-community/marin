@@ -47,7 +47,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     archive_script_grader,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 WITNESS_PATH = "solution/answer.json"
 GRADER_FILES = ("tests/verifier.py", VERIFIER_DATA)
@@ -167,8 +167,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             CALENDAR_RUBRIC,
             SourceInfo(
                 id="Task Trove:laion__nemotron-gym-agent-calendar-v2",
-                title="laion/nemotron-gym-agent-calendar-v2",
-                origin="Task Trove",
+                upstream_dataset="laion__nemotron-gym-agent-calendar-v2",
+                upstream_name="laion__nemotron-gym-agent-calendar-v2",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="tool-use",
                 tags=("agentic", "multi-turn"),
                 count=2699,
@@ -181,8 +184,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             IF_CALENDAR_RUBRIC,
             SourceInfo(
                 id="Task Trove:laion__nemotron-gym-instruction-following-calendar-v3",
-                title="laion/nemotron-gym-instruction-following-calendar-v3",
-                origin="Task Trove",
+                upstream_dataset="laion__nemotron-gym-instruction-following-calendar-v3",
+                upstream_name="laion__nemotron-gym-instruction-following-calendar-v3",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
                 tags=("agentic", "multi-turn"),
                 count=5673,

@@ -31,6 +31,7 @@ from finestore.rl.curation import (
     CurrentCatalog,
     SnapshotSource,
     SourceDeclaration,
+    SourceOrigin,
     register_catalog,
 )
 from finestore.store import DataStore
@@ -200,18 +201,27 @@ def catalog_query(catalog_database: Engine) -> AppletQuery:
     return query
 
 
-def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False, source_id: str = "math") -> None:
+def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False, source_id: str = "Marin:math") -> None:
     declaration = SourceDeclaration(
         id=source_id,
-        name="math",
+        name="Marin:math",
         display_name="Math",
-        origin="native",
-        family="math",
+        origin=SourceOrigin.MARIN,
+        build_path="test",
+        upstream_dataset=source_id.partition(":")[2],
+        upstream_name="Math",
+        current_release={"repo": "fixture", "revision": "1", "url": "https://example.org/pin"},
+        daytona_safety="not_applicable",
+        daytona_snapshot_count=0,
+        daytona_machine_slots=0,
+        daytona_execution_failures=0,
+        daytona_count_basis="Fixture tasks contain no actor environment.",
+        family="Marin:math",
         tags=[],
         task_count=3,
         notes="",
-        dataset_id=None,
-        dataset_revision=None,
+        dataset_id="fixture",
+        dataset_revision="1",
         url=None,
         type="RLVR",
         turns="Single-turn",
@@ -311,13 +321,22 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
             id=identifier,
             name=identifier,
             display_name=identifier.upper(),
-            origin="fixture",
+            origin=SourceOrigin.MARIN,
+            build_path="test",
+            upstream_dataset=identifier.partition(":")[2],
+            upstream_name=identifier.upper(),
+            current_release={"repo": "fixture", "revision": "1", "url": "https://example.org/pin"},
+            daytona_safety="not_applicable",
+            daytona_snapshot_count=0,
+            daytona_machine_slots=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture tasks contain no actor environment.",
             family="Numbers",
             tags=[],
             task_count=None,
             notes="",
-            dataset_id=None,
-            dataset_revision=None,
+            dataset_id="fixture",
+            dataset_revision="1",
             url=None,
             type="RLVR",
             turns="Single-turn",
@@ -326,14 +345,14 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
             status="Available",
             pipeline=None,
         )
-        for identifier in ("a", "b", "inventory")
+        for identifier in ("Marin:a", "Marin:b", "Marin:inventory")
     ]
     records = []
     for source_id, task_id, content, capability_score in (
-        ("a", "one", "h1", 0.9),
-        ("a", "two", "h2", 0.65),
-        ("a", "three", "h3", None),
-        ("b", "one", "h1", 0.9),
+        ("Marin:a", "one", "h1", 0.9),
+        ("Marin:a", "two", "h2", 0.65),
+        ("Marin:a", "three", "h3", None),
+        ("Marin:b", "one", "h1", 0.9),
     ):
         records.append(
             {
@@ -397,7 +416,7 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
                 "ready_count": ready,
                 "insufficient_context_count": count - ready if unavailable_status == "insufficient_context" else 0,
             }
-            for identifier, count, ready in (("a", 300, 200), ("b", 100, 100))
+            for identifier, count, ready in (("Marin:a", 300, 200), ("Marin:b", 100, 100))
         ],
         inventory=declarations,
         nodes=[
@@ -440,7 +459,10 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
     path = tmp_path / "release.json"
     path.write_text(release.model_dump_json())
     statistics = []
-    for source, denominator, assigned, subject_only, unavailable in (("a", 300, 100, 100, 100), ("b", 100, 100, 0, 0)):
+    for source, denominator, assigned, subject_only, unavailable in (
+        ("Marin:a", 300, 100, 100, 100),
+        ("Marin:b", 100, 100, 0, 0),
+    ):
         for metric, count in (
             ("denominator", denominator),
             ("assigned", assigned),
@@ -489,7 +511,7 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
     assert load_curriculum(str(path), str(coverage_path), query)["counts"]["tasks"] == 4
     assert load_curriculum(str(path), str(coverage_path), query)["changed"] is False
     catalog_root = str(tmp_path / "catalog")
-    publish_sample(catalog_root, "graded", source_id="a")
+    publish_sample(catalog_root, "graded", source_id="Marin:a")
     load_catalog(CurationCatalog(catalog_root), query)
     with TestClient(create_api(cast(AppletServices, CatalogServices(engine)))) as client:
         source = client.get("/sources").json()["sources"][0]
@@ -500,7 +522,7 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
             "basis": "matched",
             "top_area": {"subject_id": "D01", "node_id": "subject:D01", "name": "Mathematics", "instances": 200},
         }
-        assert source["assessment"]["admitted"]["grade"] == "unknown"
+        assert source["assessment"]["admitted"]["grade"] == "good"
         first = client.get("/curriculum").json()
         assert first["totals"] == {
             "denominator": 400,
@@ -510,8 +532,8 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
             "insufficient_context": 100 * int(unavailable_status == "insufficient_context"),
             "skipped": 100 * int(unavailable_status == "skipped"),
         }
-        assert {row["source_id"] for row in first["sources"]} == {"a", "b", "inventory"}
-        assert next(row for row in first["sources"] if row["source_id"] == "inventory")["alignment"] is None
+        assert {row["source_id"] for row in first["sources"]} == {"Marin:a", "Marin:b", "Marin:inventory"}
+        assert next(row for row in first["sources"] if row["source_id"] == "Marin:inventory")["alignment"] is None
         assert {(row["node_id"], row["count"]) for row in first["area_counts"]} == {
             ("subject:D01", 300),
             ("arithmetic", 200),
@@ -520,7 +542,7 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
         assert first["examples"]["sample_task_count"] == 4
         default = client.get("/curriculum", params={"subject_id": "D01"}).json()
         assert default["scope_summary"] == {"subject_members": 300, "capability_matches": 200}
-        source_view = client.get("/curriculum", params={"source_id": "a"}).json()
+        source_view = client.get("/curriculum", params={"source_id": "Marin:a"}).json()
         assert source_view["totals"]["denominator"] == 300
         assert {(row["node_id"], row["count"]) for row in source_view["area_counts"]} == {
             ("subject:D01", 200),
@@ -528,26 +550,28 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
             ("add", 100),
         }
         assert client.get("/curriculum", params={"intended_use": "eval"}).json()["totals"]["denominator"] == 0
-        source_tasks = client.get("/curriculum/tasks", params={"source_id": "b"}).json()
-        assert [(row["source_id"], row["task_id"]) for row in source_tasks["tasks"]] == [("b", "one")]
+        source_tasks = client.get("/curriculum/tasks", params={"source_id": "Marin:b"}).json()
+        assert [(row["source_id"], row["task_id"]) for row in source_tasks["tasks"]] == [("Marin:b", "one")]
         diverse = client.get("/curriculum/tasks", params={"limit": 2}).json()
         remainder = client.get("/curriculum/tasks", params={"limit": 2, "cursor": diverse["next_cursor"]}).json()
         assert [(row["source_id"], row["task_id"]) for row in diverse["tasks"] + remainder["tasks"]] == [
-            ("a", "one"),
-            ("b", "one"),
-            ("a", "three"),
-            ("a", "two"),
+            ("Marin:a", "one"),
+            ("Marin:b", "one"),
+            ("Marin:a", "three"),
+            ("Marin:a", "two"),
         ]
         assert not remainder["next_cursor"]
         params = {"node_id": "add", "subject_id": "D01", "limit": 1}
         page = client.get("/curriculum/tasks", params=params).json()
         next_page = client.get("/curriculum/tasks", params={**params, "cursor": page["next_cursor"]}).json()
         assert [(row["source_id"], row["task_id"]) for row in page["tasks"] + next_page["tasks"]] == [
-            ("a", "one"),
-            ("b", "one"),
+            ("Marin:a", "one"),
+            ("Marin:b", "one"),
         ]
         assert not next_page["next_cursor"]
-        assert client.get("/curriculum/task", params={"source_id": "a", "task_id": "one"}).json()["task"]["task_preview"]
+        assert client.get("/curriculum/task", params={"source_id": "Marin:a", "task_id": "one"}).json()["task"][
+            "task_preview"
+        ]
         manifest = json.loads(path.read_text())
         coverage = json.loads(coverage_path.read_text())
         path.write_text(json.dumps({**manifest, "release_id": "bad", "task_count": 401}))
@@ -620,15 +644,15 @@ def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(
         assert inventory["sources"][0]["coverage"] is None
         assessment = inventory["sources"][0]["assessment"]
         assert inventory["snapshot_id"] == "first"
-        assert assessment["admitted"]["grade"] == "unknown"
+        assert assessment["admitted"]["grade"] == "good"
         assert assessment["admitted"]["verdict_counts"] == {"good": 1, "some_issues": 0, "bad": 0, "unknown": 1}
         assert assessment["excluded"]["grade"] == "bad"
-        report = client.get("/assessment", params={"source_id": "math"}).json()["report"]
+        report = client.get("/assessment", params={"source_id": "Marin:math"}).json()["report"]
         assert report["assessment"]["admitted"]["missing_evidence"] == 1
         assert report["evidence"]["samples"][2]["exclusion_reason"] == "Reference contradiction"
-        packet = client.get("/evidence", params={"source_id": "math", "task_id": "one"}).json()
+        packet = client.get("/evidence", params={"source_id": "Marin:math", "task_id": "one"}).json()
         assert packet["packet"]["task"]["prompt"] == "Null: \u0000; Unicode: π"
-        assert client.get("/evidence", params={"source_id": "math", "task_id": "other"}).status_code == 404
+        assert client.get("/evidence", params={"source_id": "Marin:math", "task_id": "other"}).status_code == 404
         assert client.get("/assessment", params={"source_id": "absent"}).status_code == 404
         assert client.get("/archive").json()["reviews"][0]["id"] == "legacy"
         assert client.get("/archive/reviews/legacy").json()["collection"]["quality"] == "good"
@@ -637,12 +661,12 @@ def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(
         with pytest.raises(FileNotFoundError):
             load_catalog(CurationCatalog(root), query)
         assert client.get("/sources").json()["snapshot_id"] == "first"
-        assert client.get("/evidence", params={"source_id": "math", "task_id": "one"}).json() == packet
+        assert client.get("/evidence", params={"source_id": "Marin:math", "task_id": "one"}).json() == packet
         publish_sample(root, "next")
         assert load_catalog(CurationCatalog(root), query)["changed"] is True
         shutil.rmtree(root)
         assert client.get("/sources").json()["snapshot_id"] == "next"
-        assert client.get("/evidence", params={"source_id": "math", "task_id": "one"}).json() == packet
+        assert client.get("/evidence", params={"source_id": "Marin:math", "task_id": "one"}).json() == packet
         assert client.get("/archive/reviews/legacy/artifacts/nested/trace.txt").text == "saved trace"
 
 
@@ -732,14 +756,16 @@ def test_atlas_cleanup_preserves_a_load_started_after_its_cutover(catalog_query,
     "verdicts, curation_status, expected",
     [
         (["good"] * 99 + ["bad"], "completed", "good"),
-        (["good"] * 80 + ["bad"] * 20, "completed", "good"),
-        (["good"] * 79 + ["bad"] * 21, "completed", "bad"),
+        (["good"] * 90 + ["bad"] * 10, "completed", "good"),
+        (["good"] * 89 + ["bad"] * 11, "completed", "some_issues"),
+        (["good"] * 51 + ["some_issues"] * 49, "completed", "some_issues"),
+        (["good"] * 50 + ["some_issues"] * 50, "completed", "bad"),
         (["good"] * 79 + ["some_issues"] * 21, "completed", "some_issues"),
         (["good"] * 80 + ["unknown"] * 20, "completed", "good"),
-        (["good"] * 79 + ["unknown"] * 21, "completed", "unknown"),
-        (["good", "missing_task"], "completed", "unknown"),
-        ([], "completed", "bad"),
-        ([], "gated", "bad"),
+        (["good"] * 79 + ["unknown"] * 21, "completed", "good"),
+        (["good", "missing_task"], "completed", "good"),
+        ([], "completed", "unknown"),
+        ([], "gated", "unknown"),
         ([], "incomplete", "unknown"),
     ],
 )
@@ -774,7 +800,15 @@ def test_source_grade_uses_sample_fractions_and_zero_output(catalog_database, ve
                     "has_task": verdict != "missing_task",
                 },
             )
-        row = connection.execute(text("SELECT grade, good_fraction FROM atlas_cohort_summary")).mappings().one()
+        row = (
+            connection.execute(
+                text("SELECT grade, good_fraction, issue_count, issue_rate, result_reviewed FROM atlas_cohort_summary")
+            )
+            .mappings()
+            .one()
+        )
     assert row["grade"] == expected
+    assert row["issue_count"] == sum(v in {"bad", "some_issues"} for v in verdicts)
+    assert row["result_reviewed"] == sum(v not in {"unknown", "missing_task"} for v in verdicts)
     if verdicts == ["good"] * 99 + ["bad"]:
         assert row["good_fraction"] == 0.99

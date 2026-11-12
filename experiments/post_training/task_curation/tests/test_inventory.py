@@ -40,6 +40,7 @@ from experiments.post_training.task_curation.inventory import (
     task_selection_step,
     validation_task,
 )
+from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 
 FAMILIES = ("calendar", "competitive_coding", "reasoning_gym", "stem", "structural")
 
@@ -254,7 +255,14 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
     assert declared.config is not None
     source = replace(
-        declared, config=replace(declared.config, rubric=None, controls=None, intended_use=IntendedUse.TRAIN)
+        declared,
+        config=replace(
+            declared.config,
+            source=replace(declared.config.source, repo="open-athena/math500-fixture"),
+            rubric=None,
+            controls=None,
+            intended_use=IntendedUse.TRAIN,
+        ),
     )
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     staged = tmp_path / "input"
@@ -265,7 +273,11 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
     selection_file = tmp_path / "selection.json"
     selection_file.write_text(settings.model_dump_json())
     cache = tmp_path / "cache"
+    receipt = tmp_path / "decontamination.json"
+    receipt.write_text(decontamination_evidence(source.dataset.name, source.dataset.revision, 1).model_dump_json())
     options = [
+        "--decontamination-receipt",
+        str(receipt),
         "--mode",
         "full",
         "--skip-assessment",

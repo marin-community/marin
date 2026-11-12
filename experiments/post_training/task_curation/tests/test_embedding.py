@@ -3,7 +3,7 @@
 
 import json
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import cast
@@ -24,13 +24,31 @@ from taskcompendium.pipeline.semantics import DescriptionModel
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
+from experiments.post_training.task_curation import driver
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.embedding import DescriptionEndpoint, curation_embedding_pipeline
 from experiments.post_training.task_curation.local import artifact_prefix
-from experiments.post_training.task_curation.source import SourceInfo
-from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_source
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.tests.numbers_pipeline import NumbersConfig, numbers_pipeline
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
+
+
+@pytest.fixture(autouse=True)
+def numeric_actor_census(monkeypatch):
+    sources = driver.all_sources()
+    source = sources["MarinSkyRL:aime24"]
+    sources[source.info.id] = replace(
+        source,
+        info=replace(
+            source.info,
+            daytona_machine_slots=0,
+            daytona_snapshot_count=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
+        ),
+    )
+    monkeypatch.setattr(driver, "all_sources", lambda: sources)
 
 
 @pytest.fixture(autouse=True)
@@ -193,7 +211,7 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
             (directory / "curriculum.json").write_text(json.dumps(payload))
             stages.append(
                 curation_embedding_pipeline(
-                    curated={"source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
+                    curated={"Marin:source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
                     curriculum=ArtifactStep.adopt("curriculum-fixture", f"2026.10.14.{revision}", source=str(directory)),
                     runtime=runtime,
                     description_model=DescriptionModel("fixture", "1"),
@@ -204,7 +222,23 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
                     population="admitted",
                     sample_size=None,
                     seed=0,
-                    inventory=[prebuilt_source(SourceInfo(id="source", title="Fixture", origin="fixture")).declaration],
+                    inventory=[
+                        RlDataSource(
+                            config=NumbersConfig("source", tmp_path / "unused"),
+                            pipeline=numbers_pipeline,
+                            info=SourceInfo(
+                                id="Marin:source",
+                                upstream_dataset="source",
+                                upstream_name="source",
+                                build_path="test",
+                                origin=SourceOrigin.MARIN,
+                                daytona_snapshot_count=0,
+                                daytona_machine_slots=0,
+                                daytona_execution_failures=0,
+                                daytona_count_basis="Fixture numerical task requires no actor.",
+                            ),
+                        ).declaration
+                    ],
                 )
             )
         first, second = stages
@@ -297,7 +331,7 @@ def test_driver_converts_embeds_and_resumes_without_rereading_raw_inputs(
     assert tasks[0]["matches"]["subjects"][0]["subject_id"] == "D01"
 
 
-def test_publication_includes_registered_sources_without_placement(tmp_path, description_server):
+def test_publication_retains_registered_sources_without_placement(tmp_path, description_server):
     curated = tmp_path / "curated"
     (curated / "final").mkdir(parents=True)
     (curated / "manifest.json").write_text(json.dumps({"intended_use": "train", "revision": "fixture-1"}))
@@ -329,7 +363,7 @@ def test_publication_includes_registered_sources_without_placement(tmp_path, des
         runtime.activate(context),
     ):
         stages = curation_embedding_pipeline(
-            curated={"source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
+            curated={"Marin:source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
             curriculum=ArtifactStep.adopt("curriculum-fixture", "2026.10.14.1", source=str(directory)),
             runtime=runtime,
             description_model=DescriptionModel("fixture", "1"),
@@ -341,25 +375,66 @@ def test_publication_includes_registered_sources_without_placement(tmp_path, des
             sample_size=None,
             seed=0,
             inventory=[
-                prebuilt_source(SourceInfo(id="source", title="Fixture", origin="fixture")).declaration,
-                prebuilt_source(
-                    SourceInfo(id="Registered:release", title="Registered", origin="fixture", count=7)
+                RlDataSource(
+                    config=NumbersConfig("source", tmp_path / "unused"),
+                    pipeline=numbers_pipeline,
+                    info=SourceInfo(
+                        id="Marin:source",
+                        upstream_dataset="source",
+                        upstream_name="source",
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                        daytona_snapshot_count=0,
+                        daytona_machine_slots=0,
+                        daytona_execution_failures=0,
+                        daytona_count_basis="Fixture numerical task requires no actor.",
+                    ),
                 ).declaration,
-                prebuilt_source(SourceInfo(id="Registered:no-count", title="NoCount", origin="fixture")).declaration,
+                RlDataSource(
+                    config=NumbersConfig("source", tmp_path / "unused"),
+                    pipeline=numbers_pipeline,
+                    info=SourceInfo(
+                        id="Marin:release",
+                        upstream_dataset=("Marin:release").partition(":")[2],
+                        upstream_name=("Marin:release").partition(":")[2],
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                        daytona_snapshot_count=0,
+                        daytona_machine_slots=0,
+                        daytona_execution_failures=0,
+                        daytona_count_basis="Fixture numerical task requires no actor.",
+                        count=7,
+                    ),
+                ).declaration,
+                RlDataSource(
+                    config=NumbersConfig("source", tmp_path / "unused"),
+                    pipeline=numbers_pipeline,
+                    info=SourceInfo(
+                        id="Marin:no-count",
+                        upstream_dataset=("Marin:no-count").partition(":")[2],
+                        upstream_name=("Marin:no-count").partition(":")[2],
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                        daytona_snapshot_count=0,
+                        daytona_machine_slots=0,
+                        daytona_execution_failures=0,
+                        daytona_count_basis="Fixture numerical task requires no actor.",
+                    ),
+                ).declaration,
             ],
         )
         built = run(stages.publication, max_concurrent=1)[0]
     release = json.loads((Path(built.path) / "release.json").read_text())
     rows = {row["source_id"]: row for row in release["sources"]}
-    assert rows["source"]["basis"] == "matched"
-    assert rows["Registered:release"]["basis"] == "declared"
-    assert rows["Registered:release"]["task_count"] == 7
-    assert rows["Registered:release"]["intended_use"] is None
-    assert "Registered:no-count" not in rows
+    assert rows["Marin:source"]["basis"] == "matched"
+    assert rows["Marin:release"]["basis"] == "declared"
+    assert rows["Marin:release"]["task_count"] == 7
+    assert rows["Marin:release"]["intended_use"] is None
+    assert "Marin:no-count" not in rows
     assert release["task_count"] == 1
 
 
-def test_corpus_resume_refreshes_registered_sources(tmp_path, monkeypatch, description_server):
+def test_corpus_resume_refreshes_registered_source_metadata(tmp_path, monkeypatch, description_server):
     monkeypatch.setattr(
         "experiments.post_training.task_curation.driver.load_harrier",
         lambda config: EmbeddingEndpoint(str(tmp_path / "embeddings.jsonl"), config.dimensions),

@@ -4,6 +4,7 @@
 import json
 import shutil
 from collections import Counter
+from dataclasses import replace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -13,7 +14,9 @@ from finestore.rl.curation import CurationCatalog
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation.count_inputs import parquet_counts
+from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
+from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 
 
 def test_parquet_count_export_identifies_the_counted_input(tmp_path):
@@ -36,7 +39,27 @@ def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubr
         "\n".join(json.dumps({"problem": f"What is {value} plus one?", "answer": str(value + 1)}) for value in range(3))
     )
     cache = tmp_path / "cache"
+    source = next(s for s in skyrl_math.sources() if s.name == "math500")
+    source = replace(
+        source,
+        config=replace(source.config, source=replace(source.config.source, repo="open-athena/math500-fixture")),
+        info=replace(
+            source.info,
+            daytona_machine_slots=0,
+            daytona_snapshot_count=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
+        ),
+    )
+    monkeypatch.setattr(
+        "experiments.post_training.task_curation.driver.runnable_sources",
+        lambda declared_source=source: {declared_source.name: declared_source},
+    )
+    receipt = tmp_path / "decontamination.json"
+    receipt.write_text(decontamination_evidence(source.dataset.name, source.dataset.revision, 3).model_dump_json())
     args = [
+        "--decontamination-receipt",
+        str(receipt),
         "--mode",
         "full",
         "--cache-dir",
