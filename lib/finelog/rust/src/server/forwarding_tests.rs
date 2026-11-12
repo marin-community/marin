@@ -1551,11 +1551,11 @@ async fn a_non_log_table_is_registered_on_the_hub_and_stamped_with_its_origin() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_declared_cluster_column_forwards_only_rows_that_leave_it_empty() {
-    // The Iris controller's iris.controller_db__jobs / iris.controller_db__task_attempts rows declare `cluster`, so
-    // registration keeps it as the origin column. A row written with it set is taken as
-    // already relayed: the forwarder passes it by for good. A row that leaves it empty
-    // reaches the hub stamped with the forwarding cluster.
+async fn a_declared_cluster_column_forwards_own_and_unnamed_rows() {
+    // The Iris controller's iris.controller_db__* rows declare `cluster`, so registration
+    // keeps it as the origin column. A row named for the forwarding cluster, or left
+    // empty, reaches the hub under that name; a row naming another cluster is taken as
+    // already relayed and passed by for good.
     let fx = Fixture::new("declared_cluster").await;
     let namespace = "iris.controller_db__jobs";
     let schema = Schema::new(
@@ -1574,12 +1574,8 @@ async fn a_declared_cluster_column_forwards_only_rows_that_leave_it_empty() {
             Field::new("root_job_id", DataType::Utf8, false),
         ])),
         vec![
-            Arc::new(StringArray::from(vec!["", SOURCE_CLUSTER, ""])),
-            Arc::new(StringArray::from(vec![
-                "/u/empty-1",
-                "/u/set",
-                "/u/empty-2",
-            ])),
+            Arc::new(StringArray::from(vec!["", "other-cluster", SOURCE_CLUSTER])),
+            Arc::new(StringArray::from(vec!["/u/empty", "/u/other", "/u/own"])),
         ],
     )
     .unwrap();
@@ -1595,11 +1591,8 @@ async fn a_declared_cluster_column_forwards_only_rows_that_leave_it_empty() {
 
     assert_eq!(
         hub_column(fx.target_store(), namespace, "root_job_id").await,
-        vec![
-            Some("/u/empty-1".to_string()),
-            Some("/u/empty-2".to_string())
-        ],
-        "the row written with cluster set never reaches the hub"
+        vec![Some("/u/empty".to_string()), Some("/u/own".to_string())],
+        "the row naming another cluster never reaches the hub"
     );
     assert_eq!(
         hub_column(fx.target_store(), namespace, "cluster").await,
