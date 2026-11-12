@@ -626,32 +626,17 @@ explicit resolver (`--docker-dns 1.1.1.1`); package installation is real, becaus
 the rebuilt setup no longer installs task dependencies and the base image owns
 provisioning.
 
-**Verifier liveness (sandbox).** The task's own verifier runs in the task's
-graded environment against the untouched workspace. The verifier "actually ran"
-only when it executed and returned a well-formed negative verdict: exit code 0
-with a trailing numeric reward below 1. A crash, a nonzero exit, a timeout, an
-empty or unparsable report, or a positive reward on an unsolved workspace is an
-infrastructure error or a defect, never a pass. A solved submission is not
-needed; the rebuild changed the environment, not the grading contract.
+**Empty-submission grading (sandbox).** `no_oracle_liveness` samples tasks by
+base and calls `grade_empty_in_sandbox` on a fresh grading machine. The task
+machine's setup commands do not run in this path. A `GRADED` reward below 1 is
+recorded as `negative_verdict`, without checking a verifier test report or the
+verifier's exit code. This observation does not establish that tests executed.
 
-**Pass criteria.** A source reaches `verifier_executed` only when every phase ran
-and every sampled task passed (`minimum_rate` 1.0). Sampling is stratified
-per base reference, twenty tasks per base by default, and the report lists the
-pass rate per base and overall. A single infrastructure error blocks the status
-until it is explained, because the check's purpose is to prove the environment
-runs, not to estimate a rate.
-
-**Recording.** The qualification writes a JSON report with
-`preservation_rate`, `verifier_rate`, `by_base` and `verifier_failures`. Its
-verdict sets `oracle_validation` on the declaration:
-
-- `executed` — shipped oracle solutions ran and scored their expected reward;
-- `verifier_executed` — no oracle exists; both checks above passed;
-- `skipped` — neither ran, so execution is not certified.
-
-`skipped` is the default for a source without oracles, and absence of oracles is
-not evidence that execution works. The Atlas shows the value beside the catalog,
-and catalog publication carries it forward with the rest of the declaration.
+The offline report records payload preservation and setup execution rates. Its
+verifier result is not populated by the command below. `skipped` is the default
+`oracle_validation` for a source without oracles; a reward-only sample cannot
+establish `verifier_executed`. The Atlas shows the declared value beside the
+catalog, and catalog publication carries it forward.
 
 **Commands.** Run the offline phase over a rebuild output:
 
@@ -662,19 +647,20 @@ uv run python -m experiments.post_training.task_curation.no_oracle_qualification
     --output /path/to/qc-report.json
 ```
 
-The report's `summary` prints the rates and `oracle_validation`. Run the sandbox
-phase through Harbor's trial path (`harbor run --config`, see
-[harbor-integration](../harbor-integration.md)) over a packaged sample of the
-rebuilt tasks, with the task's own verifier as the final step:
-`no_oracle_qualification.classify_verifier_run` turns each trial's verifier exit
-code and trailing reward into the outcome the report records. The phase needs a
-Daytona credential, creates one sandbox per sampled task, and has no cleanup
-code path in this repository: hand the created snapshot names to an operator, as
-`.agents/ops/daytona.md` describes.
-The report's `summary` prints the rates and `oracle_validation`. The sandbox
-phase needs a Daytona credential, creates one sandbox per sampled task, and has
-no cleanup code path in this repository: hand the created snapshot names to an
-operator, as `.agents/ops/daytona.md` describes.
+The report's `summary` prints the offline rates. Run the empty-submission
+sample over lowered tasks with:
+
+```bash
+uv run python -m experiments.post_training.task_curation.no_oracle_liveness \
+    --lowered /path/to/lowered-tasks.parquet \
+    --manifest /path/to/manifest.json \
+    --output /path/to/liveness.jsonl \
+    --sample-per-base 20
+```
+
+This phase needs a Daytona credential for image-graded tasks. It records each
+sample's outcome and snapshot name in the JSONL file. Hand snapshot names to an
+operator for cleanup as `.agents/ops/daytona.md` describes.
 
 ## Conversion modes
 
@@ -923,14 +909,10 @@ setup fidelity ran on every task but whose verifier liveness ran on a sample is
 `sample`, not `full`. `independent_qc` stays separate evidence about the upstream
 release and does not raise the level.
 
-### Graders that declare a package lock cannot run on a sandbox backend
+### Package-lock graders use the worker's local runtime
 
-An environment that declares `packages_lock` resolves to a local runtime
-(`taskcompendium/runtime/environment.py`), and `rolloutengine.machines` maps it to the
-host image. The Daytona factory accepts only a registry image or a build context, so a
-task whose grader declares a lock cannot grade there — its snapshot count is irrelevant.
-
-Two honest options for such a cohort: resolve the lock into a digest-pinned grader image
-during the pipeline build (one identity per distinct grader environment) and declare that
-image, or record the cohort as inadmissible on Daytona. CalibForge is unaffected because
-its grader names an image; the TaskTrove families are all lock-graded.
+A grader that declares `packages_lock` runs in the worker's local bubblewrap
+runtime. It adds no Daytona snapshot identity. Daytona qualification still
+depends on the task machine's declared environment and execution requirements.
+The admitted TaskTrove cohorts use this local grader path; CalibForge names an
+image for its grader.

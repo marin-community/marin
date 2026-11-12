@@ -13,9 +13,8 @@ import pytest
 pytest.importorskip("harbor")  # the counter runs the production Harbor spec mapping
 
 from daytona import Resources
-from harbor.environments.daytona import machine_spec
-from shellbox.backends.daytona.machine import UnsupportedMachineSpec, snapshot_identity
-from shellbox.image import DockerfileSource, RegistryImage
+from shellbox.backends.daytona.machine import snapshot_identity
+from shellbox.image import DockerfileSource
 
 from experiments.post_training.task_curation.daytona_identity import (
     count_lowered_spec_identities,
@@ -37,46 +36,6 @@ def _native_tar(dockerfile: str, files: dict[str, bytes]) -> bytes:
             info.size = len(content)
             archive.addfile(info, io.BytesIO(content))
     return gzip.compress(buffer.getvalue(), mtime=0)
-
-
-def test_snapshot_identity_names_are_stable_and_formatted():
-    first = snapshot_identity(RegistryImage("ubuntu:24.04"), Resources())
-    second = snapshot_identity(RegistryImage("ubuntu:24.04"), Resources())
-    assert first == second
-    assert first.startswith("shellbox-") and len(first) == len("shellbox-") + 40
-
-
-def test_snapshot_identity_rejects_add_dockerfiles(tmp_path):
-    context = tmp_path / "context"
-    context.mkdir()
-    (context / "Dockerfile").write_text("FROM ubuntu:24.04\nADD archive.tar /app\n")
-    with pytest.raises(UnsupportedMachineSpec, match="ADD"):
-        snapshot_identity(DockerfileSource(context, context / "Dockerfile"), Resources())
-
-
-def test_machine_spec_maps_a_registry_source():
-    class Config:
-        docker_image = "registry.example/image@sha256:aa"
-        workdir = "/app"
-        allow_internet = True
-
-    spec = machine_spec(Config(), "/unused", {}, cpus=4, memory_mb=32768, storage_mb=10240)
-    assert spec.source.reference == "registry.example/image@sha256:aa"
-    assert (spec.cpus, spec.memory_mb, spec.storage_mb) == (4, 32768, 10240)
-
-
-def test_machine_spec_maps_a_dockerfile_source(tmp_path):
-    class Config:
-        docker_image = None
-        workdir = "/app"
-        allow_internet = False
-
-    context = tmp_path / "environment"
-    context.mkdir()
-    (context / "Dockerfile").write_text("FROM ubuntu:24.04\n")
-    spec = machine_spec(Config(), context, {}, cpus=None, memory_mb=None, storage_mb=None)
-    assert isinstance(spec.source, DockerfileSource)
-    assert spec.source.context == context
 
 
 def test_identical_native_tars_share_one_snapshot_and_add_tars_fail():

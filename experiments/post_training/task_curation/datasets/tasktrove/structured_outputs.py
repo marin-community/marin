@@ -4,7 +4,6 @@
 """TaskTrove structured extraction, graded for format and grounding in its source document."""
 
 import json
-from dataclasses import replace
 
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
@@ -114,17 +113,15 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             pipeline=process_rows,
-            info=replace(
-                SourceInfo(
-                    id="Task Trove:laion__nemotron-gym-structured-outputs-v4",
-                    title="laion/nemotron-gym-structured-outputs-v4",
-                    origin="Task Trove",
-                    family="instruction-following",
-                    tags=("agentic", "multi-turn"),
-                    count=53870,
-                    notes="All formats require both a format check and a source-grounding judge.",
-                    task_format=TaskFormat.TASKCOMPENDIUM,
-                )
+            info=SourceInfo(
+                id="Task Trove:laion__nemotron-gym-structured-outputs-v4",
+                title="laion/nemotron-gym-structured-outputs-v4",
+                origin="Task Trove",
+                family="instruction-following",
+                tags=("agentic", "multi-turn"),
+                count=53870,
+                notes="All formats require both a format check and a source-grounding judge.",
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
                 name="tasktrove-structured_outputs",

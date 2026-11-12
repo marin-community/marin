@@ -93,13 +93,7 @@ def _validated_source(source: RegistryImage | DockerfileSource) -> RegistryImage
 
 
 def snapshot_identity(source: RegistryImage | DockerfileSource, resources: Resources) -> str:
-    """The snapshot name :class:`DaytonaMachineFactory` would create for this pair.
-
-    Validates the source the way ``_prepare`` does (rejecting ADD and Dockerfiles
-    outside the context root) and derives the deterministic name from the build
-    context contents or registry reference plus the resource shape. Measurement
-    code calls this to count snapshots through the production naming path.
-    """
+    """Return the deterministic Daytona snapshot name for a validated source."""
     source = _validated_source(source)
     identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
     return f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"

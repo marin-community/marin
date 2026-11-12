@@ -6,7 +6,7 @@
 A source whose tasks carry no oracle solution (``has_solution`` false, or an
 empty ``solution_binary``) cannot be qualified by executing its oracle. This
 module checks payload preservation and setup execution for cohorts rebuilt onto
-shared environments. Verifier liveness runs separately through
+shared environments. Empty-submission grading runs separately through
 ``no_oracle_liveness``:
 
 1. **Payload preservation** (offline). Every file the native recipe copies into
@@ -18,14 +18,13 @@ shared environments. Verifier liveness runs separately through
    set. Preservation proves the bytes travel; this proves the script lands them.
    Package installation runs by default. ``--stub-apt`` skips installs for a
    payload-only diagnostic and does not establish dependency provisioning.
-3. **Verifier liveness** (separate command). The task's own verifier must execute and
-   return a well-formed negative verdict on the untouched workspace. A crash, a
-   timeout or unparsable output is an infrastructure error, not a pass.
+3. **Empty-submission grading** (separate command). ``no_oracle_liveness``
+   samples the grader on a fresh machine and records its reward. Its current
+   negative-verdict classification does not confirm that verifier tests ran.
 
-The report records the pass rate per base reference and overall, and its verdict
-becomes ``oracle_validation=verifier_executed`` on the declaration. Until the
-report exists the declaration must say ``skipped``: absence of oracle solutions
-is not evidence that execution works.
+The offline report records preservation and setup pass rates by base and
+overall. Its verifier result is unpopulated by the command below. A reward-only
+sample is insufficient to establish ``oracle_validation=verifier_executed``.
 
 Run the offline phase with::
 
@@ -35,8 +34,8 @@ Run the offline phase with::
         --output /path/to/qc-report.json
 
 The reserved ``--sandbox`` option exits without running verifier liveness.
-Use ``no_oracle_liveness`` through the reviewed procedure in
-``docs/references/task-curation.md`` for that separate qualification step.
+Use ``no_oracle_liveness`` through the procedure in
+``docs/references/task-curation.md`` for the separate reward sample.
 """
 
 import argparse
@@ -380,8 +379,7 @@ DOCKER_SETUP_TIMEOUT = 300
 """Seconds one rebuilt setup script may run in its base image."""
 
 APT_SHIM = """#!/bin/sh
-# The rebuilt setup no longer installs task dependencies; the base image owns
-# provisioning. This keeps the script's apt steps from reaching the network.
+# Skip package installation during payload-only diagnostics.
 exit 0
 """
 

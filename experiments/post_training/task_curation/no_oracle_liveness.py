@@ -1,19 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a lowered task's verifier in its real sandbox, with no agent.
+"""Sample empty-submission rewards on a fresh grading machine.
 
-The verifier-liveness phase of the no-oracle procedure. Each sampled task gets one
-machine through ``rolloutengine.task_machine``, the same path a rollout uses: the
-resources are installed and ``environment_requirements.setup_commands`` run before
-the body executes. The body then runs the task's own verifier against the
-workspace exactly as the setup left it, which is what makes the verdict mean
-"this environment can grade", not "this agent solved it".
+``grade_empty_in_sandbox`` stages grader resources and an empty submission. It
+does not run the task machine's setup commands. This script records a graded
+reward below 1 as a negative verdict but does not check a verifier test report or
+the verifier's exit code. A negative verdict alone does not establish liveness.
 
-A verifier that runs writes a reward below 1 for the unsolved workspace. A crash,
-timeout, missing reward or positive reward is not a pass.
-
-Run it with the RL Daytona credential installed::
+For image-graded tasks, run it with the RL Daytona credential installed::
 
     uv run python -m experiments.post_training.task_curation.no_oracle_liveness \
         --lowered /path/to/lowered-tasks.parquet \
@@ -21,8 +16,8 @@ Run it with the RL Daytona credential installed::
         --output /path/to/liveness.jsonl \
         --sample-per-base 20
 
-Snapshot names are written beside each result for cleanup; this repository has
-no code path that deletes Daytona snapshots (see ``.agents/ops/daytona.md``).
+Daytona snapshot names are written beside each result for cleanup; see
+``.agents/ops/daytona.md``.
 """
 
 import argparse

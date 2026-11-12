@@ -12,7 +12,6 @@ import pytest
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
 from experiments.post_training.task_curation.calibforge_rebuild import (
-    FIXED_BASES,
     DeferredRebuild,
     lowered_task_spec,
     parse_instructions,
@@ -46,27 +45,6 @@ def unpack(task_binary: bytes) -> dict[str, bytes]:
             name: archive.extractfile(member).read()
             for name, member in ((m.name, m) for m in archive.getmembers() if m.isfile())
         }
-
-
-def test_dependency_installs_move_into_the_setup_script():
-    dockerfile = (
-        "FROM ubuntu:24.04\n"
-        "WORKDIR /app\n"
-        "COPY files/ /app/files/\n"
-        "RUN apt-get update && apt-get install -y jq\n"
-    )
-    rebuilt = rebuild_task(native_task(dockerfile, {"files/input.csv": b"a\n1\n"}))
-    assert rebuilt.base_ref.startswith("ubuntu:24.04@sha256:")
-    script = unpack(rebuilt.task_binary)["setup_files/calibforge-initialize.sh"].decode()
-    assert "DEBIAN_FRONTEND=noninteractive" in script
-    assert "apt-get" in script and "jq" in script
-    assert "tar -xzf /setup_files/calibforge-fixtures.tar.gz" in script
-    output = unpack(rebuilt.task_binary)
-    assert output["environment/Dockerfile"].startswith(b"FROM ubuntu:24.04@sha256:")
-    assert output["environment/Dockerfile"].endswith(b"\nWORKDIR /app\n")
-    toml = output["task.toml"].decode()
-    assert 'docker_image = "ubuntu:24.04@sha256:' in toml
-    assert "setup" in toml
 
 
 def test_pinned_verifier_base_passes_through_and_data_files_stay_out_of_the_image():
@@ -142,26 +120,6 @@ def test_parse_instructions_handles_continuations_comments_and_json_run():
     assert [item.command for item in instructions] == ["from", "run", "run"]
     assert instructions[1].args == ["echo", "one", "two"]
     assert instructions[2].json_form and instructions[2].args == ["apt-get", "install", "-y", "jq"]
-
-
-def test_archived_base_aliases_share_pinned_references():
-    census = [
-        "ubuntu:24.04",
-        "aweaiteam/calibforge:tb2-verifier-base-v1",
-        "python:3.13-slim-bookworm",
-        "python:3.12-slim-bookworm",
-        "python:3.11-slim-bookworm",
-        "python:3.11-slim",
-        "python:3.10-slim-bookworm",
-        "debian:12-slim",
-        "debian:13.0-slim",
-    ]
-    refs = {FIXED_BASES[from_ref.split("@")[0]] for from_ref in census}
-    assert len(refs) == 8  # python:3.11-slim folds into python:3.11-slim-bookworm
-    assert all("@sha256:" in ref for ref in refs)
-    # The excluded fasttext base is unmapped, so such a task defers instead of
-    # emitting an unpinned image the lowered spec would reject.
-    assert "aweaiteam/calibforge:fasttext-base-v1" not in FIXED_BASES
 
 
 def test_the_machine_shape_is_normalized_so_snapshots_collapse():

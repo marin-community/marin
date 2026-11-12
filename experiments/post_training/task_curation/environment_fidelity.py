@@ -3,15 +3,9 @@
 
 """Keep a task's specified environment as part of its data.
 
-A task must run in the environment its archive specifies. Two mechanical checks
-enforce that, and neither is a judgement call:
-
-- ``provably_no_op_against`` proves that a Dockerfile changes nothing relative to
-  the agent image, so the task may declare that image directly. Anything it cannot
-  prove — an extra package, a version mismatch, a copied fixture — means the task
-  needs its own environment built.
-- ``environment_unused`` flags a task whose archive defines an environment its
-  spec does not carry, which happens when a conversion replaces it.
+A task must run in the environment its archive specifies.
+``environment_unused`` flags a task whose archive defines an environment its
+spec does not carry, which happens when a conversion replaces it.
 
 The rule applies to agentic tasks: a conversation-only task needs no machine.
 """
@@ -19,15 +13,13 @@ The rule applies to agentic tasks: a conversation-only task needs no machine.
 import base64
 import re
 import shlex
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
 FROM = re.compile(r"^\s*FROM\s+(\S+)", re.IGNORECASE | re.MULTILINE)
-STEP = re.compile(r"^\s*(RUN|COPY|ADD|ENV|ARG|USER|WORKDIR|VOLUME|ENTRYPOINT|CMD)\b", re.IGNORECASE | re.MULTILINE)
 ENVIRONMENT_DOCKERFILE = "environment/Dockerfile"
-SETUP_PREFIX = "setup_files/"
 
 
 def dockerfile_of(files: Mapping[str, bytes | str]) -> str | None:
@@ -42,28 +34,6 @@ def dockerfile_of(files: Mapping[str, bytes | str]) -> str | None:
     if isinstance(blob, str):
         blob = base64.b64decode(blob, validate=True)
     return blob.decode(errors="replace")
-
-
-def provably_no_op_against(dockerfile: str, files: Iterable[str], *, agent_image: str) -> tuple[bool, str]:
-    """Prove that ``dockerfile`` changes nothing relative to ``agent_image``.
-
-    ``agent_image`` is a digest-pinned reference. A no-op must start from exactly
-    that image and carry no step that could install, copy or configure anything.
-    A copied fixture is never a no-op, because the agent image cannot contain it.
-    """
-    froms = FROM.findall(dockerfile)
-    if len(froms) != 1:
-        return False, f"expected one FROM, found {len(froms)}"
-    if froms[0] != agent_image:
-        return False, f"FROM {froms[0]} is not the agent image"
-    steps = [match.group(1).upper() for match in STEP.finditer(dockerfile)]
-    blocking = [step for step in steps if step not in {"WORKDIR"}]
-    if blocking:
-        return False, f"steps change the image: {', '.join(sorted(set(blocking)))}"
-    fixtures = [name for name in files if name.startswith(SETUP_PREFIX)]
-    if fixtures:
-        return False, f"copies fixtures: {len(fixtures)} file(s)"
-    return True, "no changes relative to the agent image"
 
 
 def environment_unused(
