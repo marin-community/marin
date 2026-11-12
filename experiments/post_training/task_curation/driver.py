@@ -420,6 +420,7 @@ def _embedding_pass(
     show_default=True,
 )
 @click.option("--verification-sample-size", type=click.IntRange(min=1), default=20)
+@click.option("--oracle-filter-receipt", type=str)
 @click.option(
     "--curation-attempt",
     type=click.IntRange(min=0),
@@ -508,6 +509,7 @@ def main(
     seed: int,
     quality_sample_size: int,
     verification_sample_size: int,
+    oracle_filter_receipt: str | None,
     curation_attempt: int,
     assess: bool | None,
     assessment_sample_size: int,
@@ -729,6 +731,7 @@ def main(
         seed=seed,
         quality_sample_size=quality_sample_size,
         verification_sample_size=verification_sample_size,
+        oracle_filter_receipt=oracle_filter_receipt,
         curation_attempt=curation_attempt,
         execution=AuditExecution(max_workers=max_workers, worker_resources=worker_resources),
     )

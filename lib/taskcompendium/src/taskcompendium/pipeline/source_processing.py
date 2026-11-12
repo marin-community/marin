@@ -25,6 +25,7 @@ from zephyr.dataset import Dataset, ShardInfo, format_shard_path
 from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file
 
+from taskcompendium.grading_environment import count_grading_environment, grading_environment_census
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import Grader, NoGrader, TaskSpec, VerifyitGrader, grades_in_process
 from taskcompendium.pipeline.audit_schema import (
@@ -54,8 +55,15 @@ from taskcompendium.pipeline.models import (
     Disposition,
     FilterPolicy,
     GraderReadiness,
+    ImportRejection,
     SourceRecipe,
     SourceStatus,
+)
+from taskcompendium.pipeline.oracle_filter import (
+    OracleFilterReceipt,
+    has_oracle_solution,
+    oracle_recipe_identity,
+    require_oracle_filter,
 )
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.pipeline.shard_outputs import ShardOutput, write_shard_outputs
@@ -104,7 +112,7 @@ from taskcompendium.pipeline.stages import (
 )
 from taskcompendium.pipeline.transforms import admit_converted_row
 
-SOURCE_PIPELINE_REVISION = "14"
+SOURCE_PIPELINE_REVISION = "15"
 PANEL_ROWS_PER_SHARD = 16
 ROWS_PER_SHARD = 1000
 MAX_PREPARATION_SHARDS = 64
@@ -144,6 +152,7 @@ class SourcePipelineConfig:
     normalized_shards: int
     machines: GradingMachines | None
     judge_connection: JudgeConnection | None = None
+    oracle_filter: OracleFilterReceipt | None = None
 
 
 @dataclass(frozen=True)
@@ -154,6 +163,7 @@ class ConversionResult:
     converted_rows: int
     rejections: dict[str, int]
     elapsed_seconds: float
+    grading_environment: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -345,7 +355,19 @@ def row_admission(row: dict[str, Any], verification: SourceVerificationStatus) -
     return Admission.UNVERIFIED
 
 
-def _admit(row: dict[str, Any], *, verification: SourceVerificationStatus) -> dict[str, Any]:
+def _admit(
+    row: dict[str, Any], *, verification: SourceVerificationStatus, oracle_filter: OracleFilterReceipt | None = None
+) -> dict[str, Any]:
+    if row["task_json"] is not None:
+        task = TaskSpec.model_validate_json(row["task_json"])
+        if not require_oracle_filter(task, oracle_filter):
+            assert oracle_filter is not None
+            entry = oracle_filter.tasks[task.id]
+            row = {
+                **row,
+                "filter_status": Disposition.REJECT.value,
+                "filter_reasons": [*(row["filter_reasons"] or []), f"oracle_filter: {entry.exclusion_reason}"],
+            }
     admission = row_admission(row, verification)
     counters.current_stage().update_counter(f"source/admission/{admission.value}", 1)
     return {**row, "admission": admission.value}
@@ -663,9 +685,11 @@ def _write_download_manifest(run: _SourceRun, population_count: int) -> None:
     )
 
 
-def _export_row(row: dict[str, Any], *, verification: SourceVerificationStatus) -> dict[str, Any]:
+def _export_row(
+    row: dict[str, Any], *, verification: SourceVerificationStatus, oracle_filter: OracleFilterReceipt | None = None
+) -> dict[str, Any]:
     """Admit one checked audit row and carry its raw identity in place of the raw payload no view publishes."""
-    admitted = _admit(row, verification=verification)
+    admitted = _admit(row, verification=verification, oracle_filter=oracle_filter)
     raw = json.loads(admitted.pop("raw_json"))
     return {**admitted, **{name: raw[name] for name, _ in IDENTITY_FIELDS[1:]}}
 
@@ -676,10 +700,11 @@ class _CheckedAudit:
 
     path: str
     verification: SourceVerificationStatus
+    oracle_filter: OracleFilterReceipt | None
 
     def export_rows(self) -> Iterator[dict[str, Any]]:
         for row in load_parquet(self.path):
-            yield _export_row(row, verification=self.verification)
+            yield _export_row(row, verification=self.verification, oracle_filter=self.oracle_filter)
 
 
 @dataclass(frozen=True)
@@ -700,13 +725,21 @@ class _UnprocessedLocators:
         return iter(())
 
 
-def _write_export_shard(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, output: str) -> Iterator[Counter[str]]:
+@dataclass(frozen=True)
+class _ExportCounts:
+    admissions: Counter[str]
+    grading_environment: Counter[str]
+
+
+def _write_export_shard(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, output: str) -> Iterator[_ExportCounts]:
     """Write one shard of the normalize, review, verify and final views; return its admission counts."""
     admissions: Counter[str] = Counter()
+    grading: Counter[str] = Counter()
 
     def counted() -> Iterator[dict[str, Any]]:
         for row in rows:
             admissions[row["admission"]] += 1
+            count_grading_environment(grading, row.get("grading_environment"))
             yield row
 
     root = StoragePath(output)
@@ -719,7 +752,7 @@ def _write_export_shard(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, out
     outputs["final"] = ShardOutput(str(root / "final" / SIDECAR_SHARD), _sidecar_schema(NORMALIZED_COLUMNS), _final_row)
     for view, path in zip(outputs, write_shard_outputs(counted(), shard, list(outputs.values())), strict=True):
         _written_output(path, view)
-    yield admissions
+    yield _ExportCounts(admissions, grading)
 
 
 def _population_shard_count(population_count: int, maximum: int) -> int:
@@ -735,7 +768,7 @@ def _export_sidecars(
     verification: SourceVerificationStatus,
     *,
     expanded: bool,
-) -> dict[str, int]:
+) -> tuple[dict[str, int], dict[str, Any]]:
     """Publish the normalize, review, verify and final views in one execution; return admission counts.
 
     Every view takes its rows from one shuffle by task ID into the canonical normalized shards.
@@ -749,7 +782,9 @@ def _export_sidecars(
         if previous_output.exists():
             previous_output.rmtree()
     audits = sorted(str(path) for path in (checked / AUDIT_INPUT_PATTERN).glob())
-    inputs: list[_CheckedAudit | _UnprocessedLocators] = [_CheckedAudit(path, verification) for path in audits]
+    inputs: list[_CheckedAudit | _UnprocessedLocators] = [
+        _CheckedAudit(path, verification, run.config.oracle_filter) for path in audits
+    ]
     if not expanded and not panel.census:
         locators = sorted(str(path) for path in (output / "download/locators/*.parquet").glob())
         unprocessed = partial(
@@ -776,7 +811,11 @@ def _export_sidecars(
             telemetry=phase,
             operation="export",
         ).results
-    return dict(_merge_admissions(iter(shard_admissions)))
+    shards = list(shard_admissions)
+    return (
+        dict(_merge_admissions(iter(shard.admissions for shard in shards))),
+        grading_environment_census(_merge_admissions(iter(shard.grading_environment for shard in shards))),
+    )
 
 
 def _source_status(
@@ -802,6 +841,7 @@ def _write_manifest(
     decision: SourceQualityReport,
     verification: dict[str, Any],
     admissions: dict[str, int],
+    grading_environment: dict[str, Any],
     *,
     expanded: bool,
     unavailable_reviews: int,
@@ -830,6 +870,7 @@ def _write_manifest(
         "mode": config.mode.value,
         "source": recipe.name,
         "intended_use": recipe.intended_use.value,
+        "oracle_filter": config.oracle_filter.model_dump(mode="json") if config.oracle_filter else None,
         "raw_population_count": panel.sample.population_count,
         "raw_sample_count": len(panel.sample.rows),
         "raw_population_census": panel.census,
@@ -839,6 +880,7 @@ def _write_manifest(
         "verification": report,
         "admission": source_admission(admissions),
         "admission_counts": admissions,
+        "grading_environment": grading_environment,
         "processed_rows": verification["input_rows"],
         "unprocessed_rows": panel.sample.population_count - verification["input_rows"],
     }
@@ -901,6 +943,17 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
     if config.quality_policy.sample_size > MAX_SOURCE_QUALITY_SAMPLE_SIZE:
         raise ValueError(f"The initial raw task panel is capped at {MAX_SOURCE_QUALITY_SAMPLE_SIZE}")
     panel = _sample_panel(run)
+    oracle_filter = config.oracle_filter
+    has_oracles = run.recipe.oracle_solutions or any(
+        has_oracle_solution(row.result.task) for row in panel.converted if not isinstance(row.result, ImportRejection)
+    )
+    if has_oracles and oracle_filter is None:
+        raise ValueError("SAMPLE/FULL admission requires a full-population Harbor oracle filter receipt")
+    if oracle_filter is not None and (
+        oracle_filter.recipe_identity != oracle_recipe_identity(run.recipe)
+        or oracle_filter.input_rows != panel.sample.population_count
+    ):
+        raise ValueError("Oracle filter receipt belongs to a different recipe or input population")
     review = config.review if run.recipe.rubric is not None else None
     decision = _gate_quality(run, panel, review)
     expanded = config.mode == SourceProcessingMode.FULL and decision.status in EXPANDED_QUALITY
@@ -910,7 +963,9 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
     verification, checked = _verify(run)
     verification_status = SourceVerificationStatus(verification["verification"]["status"])
     _write_download_manifest(run, panel.sample.population_count)
-    admissions = _export_sidecars(run, panel, decision, checked, verification_status, expanded=expanded)
+    admissions, grading_environment = _export_sidecars(
+        run, panel, decision, checked, verification_status, expanded=expanded
+    )
     verification["verification"]["source_path"] = str(run.output / "normalize")
     verification["verification"]["review_path"] = str(run.output / "review")
     status = _source_status(
@@ -925,6 +980,7 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
         decision,
         verification,
         admissions,
+        grading_environment,
         expanded=expanded,
         unavailable_reviews=unavailable_reviews,
         status=status,
@@ -978,6 +1034,9 @@ def _write_conversion(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, outpu
 
     def counted() -> Iterator[dict[str, Any]]:
         for row in rows:
+            grading: Counter[str] = Counter()
+            count_grading_environment(grading, row.get("grading_environment"))
+            counts.update({"grading:" + key: value for key, value in grading.items()})
             counts["input_rows"] += 1
             if row["task_json"] is not None:
                 counts["converted_rows"] += 1
@@ -1022,6 +1081,9 @@ def write_conversion(
             key.removeprefix("rejection:"): count for key, count in counts.items() if key.startswith("rejection:")
         },
         elapsed_seconds=time.monotonic() - started,
+        grading_environment=grading_environment_census(
+            Counter({key.removeprefix("grading:"): value for key, value in counts.items() if key.startswith("grading:")})
+        ),
     )
     _write_json(output / "manifest.json", {**asdict(result), "reviewed": False, "verified": False})
     return result
@@ -1062,6 +1124,7 @@ def _run_quick(
                 "source_dataset": recipe.source.dataset,
                 "source_revision": recipe.source.revision,
                 "recipe_revision": recipe.version,
+                "oracle_recipe_identity": oracle_recipe_identity(recipe),
                 "intended_use": recipe.intended_use.value,
                 "source_input": source_input,
                 "source_file_overrides": {name: asdict(file) for name, file in (source_overrides or {}).items()},

@@ -423,6 +423,71 @@ uv run --isolated --project vendor/harbor --extra runtime --no-default-groups --
 
 ## Environments
 
+Every conversion assesses its grading boundary from the task specification.
+WORKSPACE_STATE, repository capabilities and directory captures require SHARED
+execution because the agent can change the state the grader reads. Submitted
+program/stdout and typed file-only contracts may use an independent SEPARATE
+grader. A declared SEPARATE boundary when SHARED is required is rejected as
+`grading_environment_mismatch`, before either SAMPLE or FULL admission.
+
+Normalized rows retain `grading_environment` with required mode, declared mode,
+status and reason. Conversion and admission manifests aggregate these fields;
+`SourceDeclaration.grading_environment` exposes that census and its evidence
+URL to catalog consumers. Native Harbor assessment reads the published task.toml;
+it never substitutes a source-level declaration for task configuration.
+
+Harbor's LOCAL environment runs prepared, digest-pinned task images through
+bubblewrap and umoci, using shellbox-images.json. It honors the task's
+allow_internet: allowed tasks share the backend's network; denied tasks keep
+the isolated network. LOCAL accepts only root commands (None, root, 0
+or 0:0). A task requiring another user needs a supporting environment rather
+than a user override.
+
+### Grading-environment trust model
+
+New SHARED SWE pytest packages use the versioned `SharedIntegrityContract` in
+TaskCompendium. The dependency-state field is explicitly `AGENT_MUTABLE`; it
+has no default. The agent runs as UID 10001 and may change dependencies and
+filesystem state outside the protected harness. Grading uses that same container,
+with its pytest child running as a separate UID, 10002.
+
+Before agent access, the harness captures the task-reference tests and conftests,
+pytest and its declared plugin implementations, the test interpreter and the
+control program. On every grading launch it kills agent-UID processes, overwrites
+the reference tests, removes added conftests, and supplies a protected pytest
+configuration with an explicit root directory. The runner imports protected
+pytest/plugins first, disables plugin autoload, and clears the test environment,
+including PYTHONPATH, PYTEST_ADDOPTS, LD_PRELOAD and user-site loading. Verifyit
+classifies missing candidate modules using its exception-provenance rules.
+
+The root controller owns the structured verdict directory. Test stdout is
+retained as diagnostic output and cannot serve as the verdict. Per-trial
+`site-packages-diff.json` and `startup-hooks-diff.json` compare dependency files
+and startup hooks to the pre-agent baseline. The contract records these audit
+probes and the known open `.pth` and `sitecustomize` hook gaps.
+
+This policy temporarily gives greater weight to avoiding bad RL signal from
+ignoring dependency changes than to preventing sophisticated tampering. It is
+subject to change. Planned LLM tamper audits will examine the dependency/hook
+diffs and the submitted changes; the present harness does not certify those
+open hooks against deliberate manipulation.
+
+Ingestion renders the agent-facing preamble from the same contract and prepends
+it to the task instruction. It explains the restored tests and pinned grading
+infrastructure, permits dependency and other filesystem changes, and takes
+precedence over contradictory later instructions. Auditor-only gaps do not
+appear in the preamble. The published TaskSpec records the contract ID, version
+and full configuration; native task.toml metadata carries the identical record.
+Changing the contract or preamble requires a new dataset version and renewed QA.
+
+The maintained Python SWE lowering is `harbor_payload` or `harbor_record` with
+`shared_policy=SharedGradingPolicy(dependency_state=SharedDependencyState.AGENT_MUTABLE)`.
+It moves the exact initial repository/dependency setup into Harbor's pre-agent
+setup and uses common actor images. Publish the resulting native package, copy
+its metadata integrity contract into the TaskSpec, then run full-population
+Harbor ORACLE filtering and SAMPLE/FULL QA. Legacy non-Python script runners
+remain unsupported until their language-specific contracts are qualified.
+
 An `Environment` declares grader build inputs. The converter records agent and
 grader requirements on each TaskSpec; execution selects suitable Shellbox machines.
 
@@ -808,9 +873,14 @@ for local overrides, Harbor export and pinned content comparison commands.
 
 ## Source procedure
 
-Sample and full modes run the reviewed procedure below.
+Sample and full modes run the reviewed procedure below. A source shipping oracle
+solutions must first run the full-population oracle filter described below.
+Oracle filtering is never sampled, even when the other checks use SAMPLE.
 
-1. Download the pinned files once per distinct pin
+1. Assess the required and declared grading environment on every converted task;
+   retain mismatches and their reasons in the census and reject them. A repair
+   requires a new published version and renewed QA.
+2. Download the pinned files once per distinct pin
    (`task-curation/download/<hash>`).
 2. Draw at most 100 raw rows with a seeded sample, convert them and run cheap
    checks.
@@ -830,7 +900,71 @@ Sample and full modes run the reviewed procedure below.
    the network-denied grader sandbox; credentials stay out of task specifications
    and persisted campaign evidence. This threshold is independent of sampled
    GLM quality grades.
-7. Admit rows and write the outputs.
+7. Join the full-population oracle-filter receipt by task ID and exact TaskSpec hash.
+   Exclude failed oracle tasks and unresolved infrastructure failures; a missing,
+   stale or incomplete receipt blocks admission. Admit the remaining rows and write
+   the outputs.
+
+### Full-population oracle filter
+
+For both SAMPLE and FULL, run the production Harbor Trial with the restored
+ORACLE agent on every task that ships a solution. The filter retains exactly
+the tasks with a completed trial, solution exit zero, and structured scored
+reward one. Numeric reward files alone are insufficient. Retain failed oracles
+and unresolved infrastructure errors as exclusions with reasons and counts.
+Retry infrastructure failures up to two times before excluding them.
+
+Keep the task's environment, network permission, setup and solution scripts.
+Export or acquire the cohort's faithful Harbor packages first; do not prebake
+network-dependent solution scripts or replace task images. Freeze the task map
+before launching. The map binds TaskSpec content hashes to native Harbor task
+names and complete directory checksums. If package directories use other names,
+write the same three map fields explicitly for each oracle TaskSpec:
+task_name, task_checksum and task_sha256. Lowered envelopes also include
+runtime_sha256, binding the deployment shape and settings.
+
+~~~bash
+uv run python -m experiments.post_training.task_curation.oracle_filter map \
+  --cohort /path/to/converted/tasks.parquet \
+  --tasks-dir /path/to/faithful-harbor-tasks --output /path/to/task-map.json
+
+# DAYTONA: use the RL organization credential and verify the snapshot cap first.
+uv run --isolated --project vendor/harbor --frozen --extra runtime harbor run \
+  --agent oracle --path /path/to/faithful-harbor-tasks --env daytona \
+  --n-concurrent 128 --max-retries 2 --jobs-dir /path/to/oracle-jobs
+
+# LOCAL: prepared digest-pinned images via umoci and shellbox-images.json,
+# on Iris CPU workers. This route supports only root commands.
+uv run --isolated --project vendor/harbor --frozen --extra runtime harbor run \
+  --agent oracle --path /path/to/faithful-harbor-tasks --env local \
+  --n-concurrent 4 --max-retries 2 --jobs-dir /path/to/oracle-jobs \
+  --environment-kwarg image_cache=/cache/shellbox-images \
+  --environment-kwarg cgroup_parent=/sys/fs/cgroup/marin-liveness
+
+uv run python -m experiments.post_training.task_curation.oracle_filter collect \
+  --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
+  --jobs-dir /path/to/oracle-jobs --output /path/to/filtered/tasks.parquet \
+  --conversion-manifest /path/to/quick/manifest.json
+~~~
+
+DAYTONA normally runs about 128 concurrent sandboxes in the RL organization
+when the cohort's snapshot identities fit the cap. Otherwise use LOCAL on Iris
+CPU workers, with the task's own prepared images. Concurrency does not waive
+snapshot or CPU capacity limits. LOCAL honors allow_internet and cannot run
+nonroot task commands; choose a supporting route when the task requires them.
+
+The collector requires every oracle task's trial, preserves its independent
+solution exit code and structured verifier verdict, and emits oracle-filter.json
+plus oracle-filter-summary.json. It filters converted rows without rewriting
+their TaskSpecs. Publish the filtered tasks and receipt together at one private
+immutable revision. Prebuilt admission checks every retained oracle TaskSpec
+against the receipt.
+
+For a recipe pass, supply --oracle-filter-receipt /path/to/oracle-filter.json
+to the driver. The QUICK manifest supplies the recipe identity and full input
+accounting; pass it to the collector. Recipes that can ship solutions declare
+oracle_solutions=True so an oracle-free sample cannot bypass the population
+requirement. The row gate also detects solution resources independently.
 
 For a standalone task batch, call
 `review_tasks(tasks, rubric, reviewer, cached=None)` from
@@ -1025,6 +1159,11 @@ examined: `QUICK` (inventory or a spot check), `SAMPLE` (a documented sample exe
 end to end, verifiers included) or `FULL` (every task executed end to end). Only
 `SAMPLE` and `FULL` admit tasks; a `QUICK` summary cannot record admitted counts
 (`CurationSummary` rejects it) and its corpus is not selectable for training.
+
+Oracle filtering covers the full population in both SAMPLE and FULL whenever
+solutions are supplied. Oversight still differs in its other quality checks,
+blinded review and negative controls. A sampled oracle run cannot qualify either
+mode.
 
 Every source also declares an `OversightLevel` — `none`, `sample` or `full` — with an
 `OversightEvidence` that points at the campaign, the recipe revision and the

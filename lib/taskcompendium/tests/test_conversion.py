@@ -18,7 +18,17 @@ from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 
 from taskcompendium.convert.answers import exact_answer_task, source_defect
-from taskcompendium.models import ResourceGroups, Source, TaskSpec, TextMessage
+from taskcompendium.models import (
+    AnswerType,
+    CommandSemantics,
+    EnvironmentRequirements,
+    ResourceGroups,
+    ScriptGrader,
+    Source,
+    TaskSpec,
+    TextMessage,
+    VerifyitGrader,
+)
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.conversion import convert_raw_row, convert_source_row
 from taskcompendium.pipeline.execution_telemetry import SourceTelemetry
@@ -48,7 +58,12 @@ def convert_answer(row: RawRow, _context: ConversionContext) -> TaskSpec | Impor
         return source_defect("missing_answer", "The source has no answer")
     task = exact_answer_task(row, prompt=row.data["prompt"], answers=(row.data["answer"],), ignore_case=False)
     return cast(TaskSpec, task).model_copy(
-        update={"resources": ResourceGroups(worker=(inline_resource("context.txt", b"color context"),))}
+        update={
+            "resources": ResourceGroups(worker=(inline_resource("context.txt", b"color context"),)),
+            "environment_requirements": EnvironmentRequirements(
+                docker_image="python@sha256:" + "a" * 64, command_semantics=CommandSemantics.LINUX_PROCESS
+            ),
+        }
     )
 
 
@@ -371,3 +386,51 @@ def test_conversion_retains_duplicate_tasks_and_rejections_without_review_or_con
     assert manifest["verified"] is False
     assert manifest["intended_use"] == "train"
     assert not (tmp_path / "output" / "final").exists()
+
+
+def environment_contract_task(row: RawRow, _context: ConversionContext) -> TaskSpec:
+    task = exact_answer_task(row, prompt="Repair the program", answers=("fixed",), ignore_case=False)
+    assert isinstance(task, TaskSpec)
+    environment = EnvironmentRequirements(
+        docker_image="python@sha256:" + "a" * 64, command_semantics=CommandSemantics.LINUX_PROCESS
+    )
+    workspace = row.data["workspace"]
+    grader = (
+        ScriptGrader(argv=("python", "/tests/grade.py"), environment=environment, answer_path=None)
+        if workspace
+        else VerifyitGrader(mode="stdio", parameters={"command": "python /app/solution.py"}, environment=environment)
+    )
+    return TaskSpec.model_validate(
+        {
+            **task.model_dump(),
+            "answer_type": AnswerType.WORKSPACE_STATE if workspace else AnswerType.FILE,
+            "environment_requirements": environment,
+            "output_paths": ("/app/solution.py",),
+            "grader": grader,
+        }
+    )
+
+
+def test_conversion_rejects_split_workspace_grading_and_retains_assessment(tmp_path: Path):
+    row = RawRow(
+        "repair", Source(dataset="repair", revision="pinned", row="0", importer_revision="1"), {"workspace": True}
+    )
+    converted = convert_raw_row(row, environment_contract_task, ConversionContext(inputs={}, grader_environment=None))
+    assert isinstance(converted.result, ImportRejection)
+    assert converted.result.reason == "grading_environment_mismatch"
+    with ZephyrContext(client=LocalClient(), max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+        result = write_conversion(Dataset.from_list([converted]), context, str(tmp_path / "output"))
+    (record,) = [row for shard in Path(result.normalized_path).glob("*.parquet") for row in load_parquet(str(shard))]
+    assert record["task_json"] is None
+    assert record["grading_environment"]["required"] == "shared"
+    assert record["grading_environment"]["declared"] == "separate"
+    assert result.grading_environment["status_counts"] == {"mismatch": 1}
+
+
+def test_conversion_accepts_independent_stdio_grading():
+    row = RawRow(
+        "stdio", Source(dataset="programs", revision="pinned", row="0", importer_revision="1"), {"workspace": False}
+    )
+    converted = convert_raw_row(row, environment_contract_task, ConversionContext(inputs={}, grader_environment=None))
+    assert isinstance(converted.result, NormalizedTask)
+    assert converted.result.task.answer_type is AnswerType.FILE

@@ -152,6 +152,7 @@ class SourceRecipe:
     inputs: Mapping[str, str] = field(default_factory=dict)
     grader_environment: EnvironmentRequirements | None = None
     resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
+    oracle_solutions: bool = False
 
 
 class CheckStatus(StrEnum):

@@ -2,6 +2,8 @@ from enum import Enum
 
 
 class AgentName(str, Enum):
+    NOP = "nop"
+    ORACLE = "oracle"
     TERMINUS_2 = "terminus-2"
     TERMINUS_KIRA = "terminus-kira"
     CODEX = "codex"
