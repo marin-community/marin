@@ -396,6 +396,33 @@ class EnvironmentRequirements(BaseModel):
         return self
 
 
+def missing_environment(spec: Mapping, *, agentic: bool = False) -> str | None:
+    """Explain a missing task environment before conversion or cohort admission.
+
+    Conversation-only tasks need no machine. Source admission can require an
+    environment even when a conversion removed the task's machine operations.
+    """
+    requirements = spec.get("environment_requirements") or {}
+    if any(
+        requirements.get(name) is not None for name in ("docker_image", "docker_build", "packages_lock", "package_spec")
+    ):
+        return None
+    needs_machine = (
+        agentic
+        or spec.get("answer_type") in {"file", "state", "workspace_state"}
+        or bool(requirements.get("capabilities"))
+        or requirements.get("command_semantics") is not None
+        or bool(requirements.get("tool_providers"))
+        or bool(requirements.get("setup_commands"))
+        or bool(requirements.get("working_directory"))
+        or bool(requirements.get("environment_variables"))
+        or bool(spec.get("tool_bindings"))
+        or bool(spec.get("output_paths"))
+        or bool((spec.get("resources") or {}).get("worker"))
+    )
+    return "agentic task declares no environment" if needs_machine else None
+
+
 def require_resolved_environment(requirements: EnvironmentRequirements) -> None:
     """Reject an unbuilt recipe before choosing or creating an execution environment."""
     if requirements.docker_build is not None:

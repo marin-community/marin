@@ -78,6 +78,124 @@ def sources() -> list[RlDataSource]:
     swesmith_evidence = f"https://huggingface.co/datasets/{swesmith_repaired.repo}/blob/{swesmith_repaired.revision}/"
     return [
         RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="code-contests-built-image",
+                version="2026.11.12",
+                repo="open-athena/tasktrove-code-contests-taskcompendium-20261112",
+                revision="5b43c6f4c2322a5808e4dbdfaf4f0052037d3607",
+                expected_rows=8222,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:tasktrove-code-contests-built-image",
+                title="TaskTrove CodeContests built-image cohort (TaskCompendium)",
+                origin="Task Trove",
+                family="competitive-programming",
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=8222,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production daytona_identity, Harbor machine_spec and Shellbox snapshot_identity over "
+                    "all 8222 specs: one identity across actor and grader, at 2 CPU / 4096 MB / 10240 MB. "
+                    "Zero identity failures and execution-requirement refusals; within the ten-identity budget"
+                ),
+                daytona_execution_failures=0,
+                daytona_run_evidence=(
+                    "https://huggingface.co/datasets/open-athena/tasktrove-code-contests-taskcompendium-20261112"
+                    "/blob/5b43c6f4c2322a5808e4dbdfaf4f0052037d3607/liveness.jsonl"
+                ),
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/code.py version 3; frozen VerifyIT @ d8cdda47f4",
+                    verification=(
+                        "all 8222 rows match their native archive's built context, including file bytes "
+                        "and modes; all rendered stdio configurations equal their original typed graders. "
+                        "The declared script invokes the image-installed VerifyIT CLI, preserving the "
+                        "candidate interpreter. The seed-0 Daytona RL sample graded 20 empty submissions: "
+                        "20 negative verdicts, reward 0.0, no infrastructure errors or timeouts. "
+                        "Evidence accompanies tasks.parquet at the pinned private revision"
+                    ),
+                    reviewed=8222,
+                    admitted=8222,
+                    level=OversightLevel.SAMPLE,
+                ),
+                notes=(
+                    "8222 tasks retain the exact built output of their archived environment for both "
+                    "actor and grader. Registry manifests were read back and pulled image IDs matched "
+                    "the local builds. The private release includes setup fidelity, stdio parity, "
+                    "sampled liveness, retained exclusions and frozen build contexts. "
+                    "No oracle solution or model-quality assessment ran"
+                ),
+                dataset=SourceReference(
+                    "open-athena/tasktrove-code-contests-taskcompendium-20261112",
+                    "5b43c6f4c2322a5808e4dbdfaf4f0052037d3607",
+                    "https://huggingface.co/datasets/open-athena/tasktrove-code-contests-taskcompendium-20261112"
+                    "/tree/5b43c6f4c2322a5808e4dbdfaf4f0052037d3607",
+                ),
+            ),
+        ),
+        RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="taco-built-image",
+                version="2026.11.12",
+                repo="open-athena/tasktrove-taco-taskcompendium-20261112",
+                revision="c96a95bc94e4824fae425811f246501f64abfadd",
+                expected_rows=5116,
+            ),
+            info=SourceInfo(
+                id="Campaign Release:tasktrove-taco-built-image",
+                title="TaskTrove TACO built-image cohort (TaskCompendium)",
+                origin="Task Trove",
+                family="competitive-programming",
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=5116,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production daytona_identity, Harbor machine_spec and Shellbox snapshot_identity over "
+                    "all 5116 specs: one identity across actor and grader, at 2 CPU / 4096 MB / 10240 MB. "
+                    "Zero identity failures and execution-requirement refusals; within the ten-identity budget"
+                ),
+                daytona_execution_failures=0,
+                daytona_run_evidence=(
+                    "https://huggingface.co/datasets/open-athena/tasktrove-taco-taskcompendium-20261112"
+                    "/blob/c96a95bc94e4824fae425811f246501f64abfadd/liveness.jsonl"
+                ),
+                oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/code.py version 3; frozen VerifyIT @ d8cdda47f4",
+                    verification=(
+                        "all 5116 rows match their native archive's built context, including file bytes "
+                        "and modes; all rendered stdio configurations equal their original typed graders. "
+                        "The declared script invokes the image-installed VerifyIT CLI, preserving the "
+                        "candidate interpreter. The seed-0 Daytona RL sample graded 20 empty submissions: "
+                        "20 negative verdicts, reward 0.0, no infrastructure errors or timeouts. "
+                        "Evidence accompanies tasks.parquet at the pinned private revision"
+                    ),
+                    reviewed=5116,
+                    admitted=5116,
+                    level=OversightLevel.SAMPLE,
+                ),
+                notes=(
+                    "5116 tasks retain the exact built output of their archived environment for both "
+                    "actor and grader. Registry manifests were read back and pulled image IDs matched "
+                    "the local builds. The private release includes setup fidelity, stdio parity, "
+                    "sampled liveness, retained exclusions and frozen build contexts. "
+                    "No oracle solution or model-quality assessment ran"
+                ),
+                dataset=SourceReference(
+                    "open-athena/tasktrove-taco-taskcompendium-20261112",
+                    "c96a95bc94e4824fae425811f246501f64abfadd",
+                    "https://huggingface.co/datasets/open-athena/tasktrove-taco-taskcompendium-20261112"
+                    "/tree/c96a95bc94e4824fae425811f246501f64abfadd",
+                ),
+            ),
+        ),
+        RlDataSource(
             info=SourceInfo(
                 id="Campaign Release:smartie-calibforge-admitted",
                 title="Snowball Smartie CalibForge admitted cohort",
@@ -115,7 +233,7 @@ def sources() -> list[RlDataSource]:
             pipeline=import_prebuilt,
             config=PrebuiltCohort(
                 name="calibforge-v1-rebuilt",
-                version="1",
+                version="2026.11.11.1",
                 repo="open-athena/calibforge-v1-rebuilt-taskcompendium-20261111",
                 revision="8f00c12884d6a68107b245e7c98711b6bd64f4af",
                 expected_rows=1357,
@@ -184,12 +302,11 @@ def sources() -> list[RlDataSource]:
                 count=1498,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
-                    "production snapshot_identity over the lowered task specs at the pinned revision: "
-                    "1,498 specs, one distinct agent identity (each task's archived ubuntu:24.04 recipe "
-                    "lowered onto the pinned base), zero execution-requirement failures. Graders are "
-                    "lock-placed and grade in the worker's local runtime, contributing no Daytona identity"
+                    "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
+                    "Offline Daytona factory validation refuses all 1,498 declared package-lock graders. The declared "
+                    "grader environments require local execution; this cohort is Daytona-unsafe."
                 ),
-                daytona_execution_failures=0,
+                daytona_execution_failures=1498,
                 oracle_validation=OracleValidation.VERIFIER_EXECUTED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
@@ -241,12 +358,11 @@ def sources() -> list[RlDataSource]:
                 count=9745,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
-                    "production snapshot_identity over the lowered task specs at the pinned revision: "
-                    "one distinct agent identity (each task's archived recipe lowered onto the pinned "
-                    "base), zero execution-requirement failures. Graders are lock-placed and grade in "
-                    "the worker's local runtime, contributing no Daytona identity"
+                    "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
+                    "Offline Daytona factory validation refuses all 9,745 declared package-lock graders. The declared "
+                    "grader environments require local execution; this cohort is Daytona-unsafe."
                 ),
-                daytona_execution_failures=0,
+                daytona_execution_failures=9745,
                 oracle_validation=OracleValidation.VERIFIER_EXECUTED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
@@ -299,12 +415,11 @@ def sources() -> list[RlDataSource]:
                 count=13973,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
-                    "production snapshot_identity over the lowered task specs at the pinned revision: "
-                    "one distinct agent identity (each task's archived recipe lowered onto the pinned "
-                    "base), zero execution-requirement failures. Graders are lock-placed and grade in "
-                    "the worker's local runtime, contributing no Daytona identity"
+                    "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
+                    "Offline Daytona factory validation refuses all 13,973 declared package-lock graders. The declared "
+                    "grader environments require local execution; this cohort is Daytona-unsafe."
                 ),
-                daytona_execution_failures=0,
+                daytona_execution_failures=13973,
                 oracle_validation=OracleValidation.VERIFIER_EXECUTED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
@@ -358,12 +473,11 @@ def sources() -> list[RlDataSource]:
                 count=505,
                 daytona_snapshot_count=2,
                 daytona_count_basis=(
-                    "production snapshot_identity over the lowered task specs at the pinned revision: "
-                    "2 distinct agent identity, zero execution-requirement failures. Graders are "
-                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
-                    "contributing no Daytona identity"
+                    "Production snapshot_identity over every pinned published TaskSpec: 2 distinct agent identities. "
+                    "Offline Daytona factory validation refuses all 505 declared package-lock graders. The declared "
+                    "grader environments require local execution; this cohort is Daytona-unsafe."
                 ),
-                daytona_execution_failures=0,
+                daytona_execution_failures=505,
                 oracle_validation=OracleValidation.VERIFIER_EXECUTED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
@@ -413,12 +527,11 @@ def sources() -> list[RlDataSource]:
                 count=488,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
-                    "production snapshot_identity over the lowered task specs at the pinned revision: "
-                    "1 distinct agent identity, zero execution-requirement failures. Graders are "
-                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
-                    "contributing no Daytona identity"
+                    "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
+                    "Offline Daytona factory validation refuses all 488 declared package-lock graders. The declared "
+                    "grader environments require local execution; this cohort is Daytona-unsafe."
                 ),
-                daytona_execution_failures=0,
+                daytona_execution_failures=488,
                 oracle_validation=OracleValidation.VERIFIER_EXECUTED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
@@ -468,11 +581,11 @@ def sources() -> list[RlDataSource]:
                 count=477,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
-                    "production snapshot_identity over all 477 lowered specs at the pinned revision: "
-                    "one distinct agent identity at 1 CPU / 4096 MB, zero identity or execution failures. "
-                    "The compiler package-lock grader runs in the worker's local runtime and adds no Daytona identity"
+                    "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
+                    "Offline Daytona factory validation refuses all 477 declared package-lock graders. The declared "
+                    "grader environments require local execution; this cohort is Daytona-unsafe."
                 ),
-                daytona_execution_failures=0,
+                daytona_execution_failures=477,
                 oracle_validation=OracleValidation.VERIFIER_EXECUTED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
@@ -524,12 +637,11 @@ def sources() -> list[RlDataSource]:
                 count=4993,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
-                    "production snapshot_identity over the lowered task specs at the pinned revision: "
-                    "1 distinct agent identity, zero execution-requirement failures. Graders are "
-                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
-                    "contributing no Daytona identity"
+                    "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
+                    "Offline Daytona factory validation refuses all 4,993 declared package-lock graders. The declared "
+                    "grader environments require local execution; this cohort is Daytona-unsafe."
                 ),
-                daytona_execution_failures=0,
+                daytona_execution_failures=4993,
                 oracle_validation=OracleValidation.VERIFIER_EXECUTED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
@@ -578,12 +690,11 @@ def sources() -> list[RlDataSource]:
                 count=4842,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
-                    "production snapshot_identity over the lowered task specs at the pinned revision: "
-                    "1 distinct agent identity, zero execution-requirement failures. Graders are "
-                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
-                    "contributing no Daytona identity"
+                    "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
+                    "Offline Daytona factory validation refuses all 4,842 declared package-lock graders. The declared "
+                    "grader environments require local execution; this cohort is Daytona-unsafe."
                 ),
-                daytona_execution_failures=0,
+                daytona_execution_failures=4842,
                 oracle_validation=OracleValidation.VERIFIER_EXECUTED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
@@ -632,12 +743,11 @@ def sources() -> list[RlDataSource]:
                 count=500,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
-                    "production snapshot_identity over the lowered task specs at the pinned revision: "
-                    "1 distinct agent identity, zero execution-requirement failures. Graders are "
-                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
-                    "contributing no Daytona identity"
+                    "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
+                    "Offline Daytona factory validation refuses all 500 declared package-lock graders. The declared "
+                    "grader environments require local execution; this cohort is Daytona-unsafe."
                 ),
-                daytona_execution_failures=0,
+                daytona_execution_failures=500,
                 oracle_validation=OracleValidation.VERIFIER_EXECUTED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
@@ -687,12 +797,11 @@ def sources() -> list[RlDataSource]:
                 count=4990,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
-                    "production snapshot_identity over the lowered task specs at the pinned revision: "
-                    "1 distinct agent identity, zero execution-requirement failures. Graders are "
-                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
-                    "contributing no Daytona identity"
+                    "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
+                    "Offline Daytona factory validation refuses all 4,990 declared package-lock graders. The declared "
+                    "grader environments require local execution; this cohort is Daytona-unsafe."
                 ),
-                daytona_execution_failures=0,
+                daytona_execution_failures=4990,
                 oracle_validation=OracleValidation.VERIFIER_EXECUTED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
@@ -742,12 +851,11 @@ def sources() -> list[RlDataSource]:
                 count=492,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
-                    "production snapshot_identity over the lowered task specs at the pinned revision: "
-                    "1 distinct agent identity, zero execution-requirement failures. Graders are "
-                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
-                    "contributing no Daytona identity"
+                    "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
+                    "Offline Daytona factory validation refuses all 492 declared package-lock graders. The declared "
+                    "grader environments require local execution; this cohort is Daytona-unsafe."
                 ),
-                daytona_execution_failures=0,
+                daytona_execution_failures=492,
                 oracle_validation=OracleValidation.VERIFIER_EXECUTED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
@@ -792,17 +900,16 @@ def sources() -> list[RlDataSource]:
                 title="TaskTrove unitsyn-python rebuilt cohort (TaskCompendium)",
                 origin="Task Trove",
                 family="python-tests",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted"),
+                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 count=4991,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
-                    "production snapshot_identity over the lowered task specs at the pinned revision: "
-                    "1 distinct agent identity, zero execution-requirement failures. Graders are "
-                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
-                    "contributing no Daytona identity"
+                    "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
+                    "Offline Daytona factory validation refuses all 4,991 declared package-lock graders. The declared "
+                    "grader environments require local execution; this cohort is Daytona-unsafe."
                 ),
-                daytona_execution_failures=0,
+                daytona_execution_failures=4991,
                 oracle_validation=OracleValidation.VERIFIER_EXECUTED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
@@ -818,12 +925,11 @@ def sources() -> list[RlDataSource]:
                     level=OversightLevel.SAMPLE,
                 ),
                 notes=(
-                    "4,991 unitsyn-python tasks converted to run in their archived environment, lowered onto "
-                    "the digest-pinned base, measured at the pinned upstream revision "
-                    "DCAgent__exp_rpt_unitsyn-python-v4 @ "
-                    "02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without "
-                    "oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a "
-                    "negative verdict on an empty submission. The repository is private pending release."
+                    "Quarantined: the pinned release contains 4,991 tasks from "
+                    "DCAgent__exp_rpt_unitsyn-python-large-v2, not the 491-task "
+                    "DCAgent__exp_rpt_unitsyn-python-v4 cohort named here. Use "
+                    "unitsyn-python-large-v1-rebuilt for that population. The small cohort awaits "
+                    "corrected publication and qualification."
                 ),
                 dataset=SourceReference(
                     "open-athena/tasktrove-unitsyn-python-v1-taskcompendium-20261112",
@@ -852,12 +958,11 @@ def sources() -> list[RlDataSource]:
                 count=4991,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
-                    "production snapshot_identity over the lowered task specs at the pinned revision: "
-                    "1 distinct agent identity, zero execution-requirement failures. Graders are "
-                    "lock-placed (the compiler grader lock) and grade in the worker's local runtime, "
-                    "contributing no Daytona identity"
+                    "Production snapshot_identity over every pinned published TaskSpec: 1 distinct agent identities. "
+                    "Offline Daytona factory validation refuses all 4,991 declared package-lock graders. The declared "
+                    "grader environments require local execution; this cohort is Daytona-unsafe."
                 ),
-                daytona_execution_failures=0,
+                daytona_execution_failures=4991,
                 oracle_validation=OracleValidation.VERIFIER_EXECUTED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",

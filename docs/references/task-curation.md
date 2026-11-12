@@ -936,6 +936,22 @@ setup fidelity ran on every task but whose verifier liveness ran on a sample is
 `sample`, not `full`. `independent_qc` stays separate evidence about the upstream
 release and does not raise the level.
 
+Runnable agentic sources require an accepted task format, a production snapshot-identity
+measurement and its basis, an execution-requirement failure count, and SAMPLE or FULL
+oversight with verification evidence. Sources missing these records remain visible as
+Inventory and cannot enter reviewed admission. QUICK conversion can still collect evidence.
+Deprecated sources retain their history and name their qualified replacement.
+
+Conversion rejects machine tasks without a declared image, build context, package lock
+or package spec, including workspace tasks with an empty capability list. Prebuilt agentic
+cohorts require an environment on every row. A source declaration cannot supply a missing
+task environment.
+
+The production identity census measures agent and grader machines independently, using
+their declared environments and resource shapes. Failed execution requirements make a
+cohort Daytona-unsafe even when its snapshot count fits the budget. Unsafe cohorts with
+valid task environments and admission evidence remain ingested with that label.
+
 ### Graders that declare a package lock cannot run on a sandbox backend
 
 An environment that declares `packages_lock` resolves to a local runtime

@@ -9,6 +9,7 @@ import json
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.rl.curation import DaytonaSafety, OversightEvidence, OversightLevel
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -25,9 +26,13 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
+from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation import prebuilt
+from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.config import PipelineOptions
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
 
@@ -42,7 +47,7 @@ def _task(task_id: str, *, image: str | None = IMAGE, capabilities: tuple[str, .
     )
     grader = ScriptGrader(
         argv=("true",),
-        environment=EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=image),
+        environment=EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=IMAGE),
         reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)),
     )
     spec = TaskSpec(
@@ -140,3 +145,56 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
     else:
         with pytest.raises(ValueError, match=r"differs from its control|controls do not admit"):
             prebuilt.import_harbor_cohort(_cohort(1))
+
+
+@pytest.mark.parametrize("answer_type", [AnswerType.TEXT, AnswerType.WORKSPACE_STATE])
+def test_prebuilt_agentic_cohort_rejects_missing_environment_without_capabilities(tmp_path, monkeypatch, answer_type):
+    row = _task("missing", image=None)
+    envelope = json.loads(row["lowered_task_spec"])
+    envelope["task"]["answer_type"] = answer_type.value
+    if answer_type is AnswerType.WORKSPACE_STATE:
+        envelope["task"]["grader"]["answer_path"] = None
+    row["lowered_task_spec"] = json.dumps(envelope)
+    path = _write(tmp_path, [row])
+    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
+    with pytest.raises(ValueError, match="declares no environment"):
+        prebuilt.import_cohort(_cohort(1))
+
+
+@pytest.mark.parametrize("qualified", [False, True])
+def test_direct_prebuilt_admission_requires_oversight_but_allows_unsafe_tasks(tmp_path, monkeypatch, qualified):
+    path = _write(tmp_path, [_task("a")])
+    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
+    config = prebuilt.PrebuiltCohort(
+        name="unsafe-cohort", version="2026.11.12.1", repo="org/repo", revision="rev", expected_rows=1
+    )
+    source = RlDataSource(
+        config=config,
+        pipeline=prebuilt.import_prebuilt,
+        info=SourceInfo(
+            id="fixture:unsafe",
+            title="Unsafe",
+            origin="fixture",
+            tags=("agentic",),
+            task_format=TaskFormat.TASKCOMPENDIUM,
+            daytona_snapshot_count=11,
+            daytona_count_basis="fixture production identity census",
+            daytona_execution_failures=0,
+            oversight=(
+                OversightEvidence(level=OversightLevel.SAMPLE, verification="fixture sampled controls")
+                if qualified
+                else None
+            ),
+        ),
+    )
+    options = PipelineOptions(mode=SourceProcessingMode.SAMPLE, runtime=CampaignRuntime())
+    if not qualified:
+        with pytest.raises(ValueError, match="cannot admit tasks"):
+            prebuilt.import_prebuilt(source, options)
+        return
+    # Snapshot-unsafe sources with oversight must still be admitted as data.
+    artifact = prebuilt.import_prebuilt(source, options)
+    result = artifact.run(str(tmp_path / "admitted"))
+    manifest = json.loads((tmp_path / "admitted" / "manifest.json").read_text())
+    assert result.status == "completed" and manifest["row_count"] == 1
+    assert source.declaration.daytona_safety is DaytonaSafety.UNSAFE

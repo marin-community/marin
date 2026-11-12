@@ -392,7 +392,6 @@ def harbor_payload(
     *,
     grader_image: str | None,
     family: str,
-    fallback_actor_image: str,
     verifyit_package_root: Path | None = None,
 ) -> HarborPayload:
     """Lower tasks to Harbor, retaining TaskTrove's shared actor and grader environment."""
@@ -444,7 +443,9 @@ def harbor_payload(
         if not dockerfile.endswith("\n"):
             dockerfile += "\n"
     else:
-        dockerfile = f"FROM {environment.docker_image or fallback_actor_image}\n"
+        if environment.docker_image is None:
+            raise UnsupportedHarborTask("Agentic task declares no environment")
+        dockerfile = f"FROM {environment.docker_image}\n"
     if public:
         dockerfile += "COPY files/ /\n"
     for resource in public:
@@ -572,7 +573,6 @@ def harbor_record(
     *,
     grader_image: str | None,
     family: str,
-    fallback_actor_image: str,
     verifyit_package_root: Path | None = None,
 ) -> HarborRecord:
     """Package the shared file assembly into the TaskTrove parquet record."""
@@ -580,7 +580,6 @@ def harbor_record(
         row,
         grader_image=grader_image,
         family=family,
-        fallback_actor_image=fallback_actor_image,
         verifyit_package_root=verifyit_package_root,
     )
     return HarborRecord(
@@ -596,7 +595,6 @@ def export_harbor(
     *,
     grader_image: str | None,
     source: HarborSourceMetadata,
-    fallback_actor_image: str,
     verifyit_package_root: Path,
 ) -> dict[str, Any]:
     """Write the legacy parquet view and account for normalization and lowering failures."""
@@ -630,7 +628,6 @@ def export_harbor(
                                     row,
                                     grader_image=grader_image,
                                     family=source.family,
-                                    fallback_actor_image=fallback_actor_image,
                                     verifyit_package_root=verifyit_package_root,
                                 )
                             except UnsupportedHarborTask as error:

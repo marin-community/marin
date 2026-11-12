@@ -38,8 +38,8 @@ from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import HostImage, MachineSpec, NetworkPolicy
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import TaskSpec
-from taskcompendium.runtime.grading import grade_empty_in_sandbox
+from taskcompendium.models import ConversationTrace, GradingAttempt, TaskSpec, TextMessage
+from taskcompendium.runtime.grading import grade_empty_in_sandbox, grade_in_sandbox
 
 
 def _resources(cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int):
@@ -95,34 +95,31 @@ def sample_by_base(specs: dict[str, dict], bases: dict[str, str], per_base: int,
 
 
 async def run_one(
-    spec: dict, base: str, factory=None, lock_url: str | None = None, cgroup_parent: Path | None = None
+    spec: dict,
+    base: str,
+    factory=None,
+    cgroup_parent: Path | None = None,
+    submission_files: dict[str, bytes] | None = None,
 ) -> LivenessResult:
     """Grade an empty submission with the task's own grader, on a fresh grading machine."""
     task = TaskSpec.model_validate(spec["task"])
-    if lock_url is not None and getattr(task.grader, "environment", None) is not None:
-        # Grade against the lock this run built, so the cohort is qualified on the artifact
-        # the pipeline produces rather than on a path recorded somewhere else.
-        task = task.model_copy(
-            update={
-                "grader": task.grader.model_copy(
-                    update={"environment": task.grader.environment.model_copy(update={"packages_lock": lock_url})}
-                )
-            }
-        )
     runtime = MachineRuntimeSpec.model_validate(
         {
-            **(spec["runtime"].get("verifier_machine") or {}),
             "backend": "daytona",
             "network": NetworkPolicy.ALLOW,
             "gpus": 0,
             "user": None,
             "startup_timeout": 900.0,
             "cleanup_timeout": 120.0,
+            **(spec["runtime"].get("verifier_machine") or {}),
         }
     )
-    requirements = task.environment_requirements
-    grader_environment = getattr(task.grader, "environment", None)
-    locked = grader_environment is not None and grader_environment.packages_lock is not None
+    requirements = getattr(task.grader, "environment", None)
+    if requirements is None:
+        return LivenessResult(task.id, base, "infra_error", None, None, "", "Grader declares no sandbox environment")
+    if runtime.gpus:
+        return LivenessResult(task.id, base, "infra_error", None, None, "", "CPU qualification cannot provision GPUs")
+    locked = requirements.packages_lock is not None
     if locked:
         # A packaged grader runs in the local bubblewrap runtime; no sandbox backend and
         # no snapshot identity are involved, so the Daytona pieces are never imported.
@@ -130,11 +127,10 @@ async def run_one(
         spec_machine = MachineSpec(
             source=HostImage(),
             workdir=requirements.working_directory or "/workspace",
-            network=NetworkPolicy.ALLOW,
+            network=runtime.network,
             cpus=runtime.cpus,
             memory_mb=runtime.memory_mb,
-            # The local backend provides no disk quota; declaring one is refused.
-            storage_mb=None,
+            storage_mb=runtime.storage_mb,
         )
         # A worker whose own cgroup is threaded cannot host the grading cgroups
         # (cgroup.procs is unwritable there), so an explicit parent overrides discovery.
@@ -169,6 +165,7 @@ async def run_one(
         spec_machine = machine_spec(
             EnvironmentConfig(
                 docker_image=requirements.docker_image,
+                allow_internet=runtime.network == NetworkPolicy.ALLOW,
                 workdir=requirements.working_directory,
                 cpus=runtime.cpus,
                 memory_mb=runtime.memory_mb,
@@ -182,7 +179,14 @@ async def run_one(
         )
         grading_factory = factory or DaytonaMachineFactory()
     try:
-        result = await grade_empty_in_sandbox(task, grading_factory, spec_machine, timeout=VERIFIER_TIMEOUT)
+        if submission_files is None:
+            result = await grade_empty_in_sandbox(task, grading_factory, spec_machine, timeout=VERIFIER_TIMEOUT)
+        else:
+            attempt = GradingAttempt(
+                ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))),
+                files=submission_files,
+            )
+            result = await grade_in_sandbox(task, attempt, grading_factory, spec_machine, timeout=VERIFIER_TIMEOUT)
     except TimeoutError as error:
         return LivenessResult(task.id, base, "timeout", None, None, snapshot, str(error))
     except Exception as error:
@@ -204,14 +208,11 @@ async def run(
     bases: dict[str, str],
     task_ids: list[str],
     output: Path,
-    lock_url: str | None = None,
     cgroup_parent: Path | None = None,
 ) -> None:
     with output.open("a") as handle:
         for index, task_id in enumerate(task_ids, start=1):
-            result = await run_one(
-                specs[task_id], bases.get(task_id, "<unknown>"), lock_url=lock_url, cgroup_parent=cgroup_parent
-            )
+            result = await run_one(specs[task_id], bases.get(task_id, "<unknown>"), cgroup_parent=cgroup_parent)
             handle.write(json.dumps(asdict(result)) + "\n")
             handle.flush()
             print(f"[{index}/{len(task_ids)}] {task_id}: {result.outcome}", flush=True)
@@ -225,7 +226,6 @@ def main() -> None:
     parser.add_argument("--sample-per-base", type=int, default=20)
     parser.add_argument("--limit", type=int, default=0, help="cap the sample for a pilot run")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--lock-url", help="grade packaged graders against this built lock")
     parser.add_argument(
         "--cgroup-parent",
         type=Path,
@@ -245,7 +245,7 @@ def main() -> None:
     if args.limit:
         task_ids = task_ids[: args.limit]
     print(f"sampled {len(task_ids)} of {len(specs)} tasks", flush=True)
-    asyncio.run(run(specs, bases, task_ids, args.output, args.lock_url, args.cgroup_parent))
+    asyncio.run(run(specs, bases, task_ids, args.output, args.cgroup_parent))
 
 
 if __name__ == "__main__":

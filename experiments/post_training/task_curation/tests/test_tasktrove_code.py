@@ -235,7 +235,6 @@ def test_python_directory_source_requires_building_setup_before_harbor_export():
     row = {"task_json": task.model_dump_json(), "source_row": "fixture/tasks.parquet:0", "original_path": "fixture"}
     options = {
         "grader_image": BASE_IMAGE,
-        "fallback_actor_image": BASE_IMAGE,
         "family": "python",
         "verifyit_package_root": VERIFYIT_PACKAGE,
     }
@@ -416,7 +415,6 @@ def test_source_stdio_keeps_shared_recipe_and_grades_single_hidden_case(name, tm
     record = harbor_record(
         {"task_json": task.model_dump_json(), "original_path": "fixture", "source_row": f"{name}/tasks.parquet:0"},
         grader_image=None,
-        fallback_actor_image=BASE_IMAGE,
         family="competitive-programming",
     )
     files = archive_files(

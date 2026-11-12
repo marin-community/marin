@@ -15,28 +15,29 @@ Daytona-safe. No Daytona API calls are made.
 import base64
 import gzip
 import io
-import json
 import math
 import tarfile
 import tempfile
 import tomllib
 from collections import Counter
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from daytona import Resources
 from harbor.environments.daytona import machine_spec
 from harbor_config.models.task.config import EnvironmentConfig
-from shellbox.backends.daytona.machine import UnsupportedMachineSpec, snapshot_identity
-from shellbox.image import RegistryImage
+from shellbox.backends.daytona.machine import DaytonaMachineFactory, UnsupportedMachineSpec, snapshot_identity
+from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
     LINUX_PROCESS_CAPABILITIES,
     CommandSemantics,
+    HostImage,
     MachineSpec,
     NetworkPolicy,
     check_execution_requirements,
 )
+from taskcompendium.models import EnvironmentRequirements, require_resolved_environment
 
 ENVIRONMENT_PREFIX = "environment/"
 DOCKERFILE = "Dockerfile"
@@ -134,25 +135,6 @@ def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentit
     return SnapshotIdentityCount(distinct=len(sizes), sizes=dict(sizes), failures=failures)
 
 
-def _decoded_source(source: Mapping) -> bytes:
-    if source.get("kind") == "inline_file":
-        return base64.b64decode(source.get("content_base64", ""))
-    return json.dumps(source, sort_keys=True).encode()
-
-
-def _verifier_files(spec: Mapping) -> Iterator[tuple[str, bytes, int]]:
-    resources = (spec.get("task") or {}).get("resources", {})
-    items = list(resources.get("verifier", [])) + list(resources.get("all", []))
-    for item in items:
-        path = item.get("path", "")
-        if path.startswith(ENVIRONMENT_PREFIX) and item.get("source", {}).get("kind") != "directory":
-            yield (
-                path[len(ENVIRONMENT_PREFIX) :],
-                _decoded_source(item["source"]),
-                int(item.get("mode") or "644", 8),
-            )
-
-
 @dataclass(frozen=True)
 class _DeclaredRequirements:
     """The slice of a lowered spec's environment that execution checks read."""
@@ -189,70 +171,81 @@ def daytona_execution_failure(requirements: Mapping) -> str | None:
 
 
 def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> SnapshotIdentityCount:
-    """Count snapshot identities for lowered Harbor task specs.
+    """Measure each declared agent and grader machine through production identities.
 
-    Each spec contributes a verifier identity — its registry image or its
-    materialized ``environment/`` context with the verifier machine shape —
-    and a task-machine identity on its declared registry image or archived
-    Dockerfile context with the task machine shape.
+    Package-lock graders require a local host and are recorded as execution
+    failures for Daytona. They never borrow the agent's image or contribute a
+    fabricated snapshot. Unbuilt contexts retain their identity but are refused
+    by the runtime's unresolved-environment check.
     """
     sizes: Counter[str] = Counter()
     failures: list[tuple[str, str]] = []
     execution_failures: list[tuple[str, str]] = []
+    factory = DaytonaMachineFactory()
     for task_id, spec in tasks:
         task = spec.get("task") or {}
         runtime = spec.get("runtime") or {}
-        requirements = task.get("environment_requirements") or {}
-        docker_image = requirements.get("docker_image")
-        with tempfile.TemporaryDirectory() as tmp:
-            try:
-                for name, content, mode in _verifier_files(spec):
-                    _write_context(Path(tmp), name, content, mode)
-                if not docker_image and not (Path(tmp) / DOCKERFILE).exists():
-                    raise UnsupportedMachineSpec(f"no docker_image and no {ENVIRONMENT_PREFIX}{DOCKERFILE}")
-                verifier_machine = runtime.get("verifier_machine") or {}
-                task_machine_spec = runtime.get("task_machine") or {}
-                verifier = machine_spec(
-                    EnvironmentConfig(
-                        docker_image=docker_image,
-                        workdir=requirements.get("working_directory"),
-                        cpus=verifier_machine.get("cpus"),
-                        memory_mb=verifier_machine.get("memory_mb"),
-                        storage_mb=verifier_machine.get("storage_mb"),
-                    ),
-                    Path(tmp),
-                    {},
-                    cpus=verifier_machine.get("cpus"),
-                    memory_mb=verifier_machine.get("memory_mb"),
-                    storage_mb=verifier_machine.get("storage_mb"),
+        grader = task.get("grader") or {}
+        mapping_errors = []
+        execution_errors = []
+        slots = (
+            ("agent", task.get("environment_requirements"), runtime.get("task_machine")),
+            ("grader", grader.get("environment"), runtime.get("verifier_machine")),
+        )
+        for role, declared, shape in slots:
+            if declared is None or shape is None:
+                continue
+            requirements = EnvironmentRequirements.model_validate(declared)
+            with tempfile.TemporaryDirectory() as tmp:
+                context = Path(tmp)
+                if requirements.docker_build is not None:
+                    for resource in requirements.docker_build.files:
+                        _write_context(
+                            context,
+                            resource.path,
+                            base64.b64decode(resource.source.content_base64, validate=True),
+                            int(resource.mode or "644", 8),
+                        )
+                    source = DockerfileSource(context, context / DOCKERFILE)
+                elif requirements.docker_image is not None:
+                    source = RegistryImage(requirements.docker_image)
+                elif requirements.packages_lock is not None:
+                    source = HostImage()
+                elif requirements.package_spec is not None:
+                    source = requirements.package_spec
+                else:
+                    mapping_errors.append(f"{role}: no declared environment")
+                    execution_errors.append(f"{role}: no declared environment")
+                    continue
+                machine = MachineSpec(
+                    source=source,
+                    workdir=requirements.working_directory or "",
+                    network=NetworkPolicy.ALLOW,
+                    cpus=shape.get("cpus"),
+                    memory_mb=shape.get("memory_mb"),
+                    storage_mb=shape.get("storage_mb"),
+                    gpus=shape.get("gpus", 0),
                 )
-                task_machine = machine_spec(
-                    EnvironmentConfig(
-                        docker_image=docker_image,
-                        workdir=requirements.get("working_directory"),
-                        cpus=task_machine_spec.get("cpus"),
-                        memory_mb=task_machine_spec.get("memory_mb"),
-                        storage_mb=task_machine_spec.get("storage_mb"),
-                    ),
-                    Path(tmp),
-                    {},
-                    cpus=task_machine_spec.get("cpus"),
-                    memory_mb=task_machine_spec.get("memory_mb"),
-                    storage_mb=task_machine_spec.get("storage_mb"),
-                )
-                failure = daytona_execution_failure(requirements)
-                if failure is not None:
-                    execution_failures.append((task_id, failure))
-                # Identities are derived while the context exists: the production hash
-                # reads the Dockerfile and every file of the staged tree.
-                for machine in (verifier, task_machine):
+                try:
+                    factory.check_environment(requirements, machine)
+                    require_resolved_environment(requirements)
+                except UnsupportedMachineSpec as error:
+                    execution_errors.append(f"{role}: {error}")
+                if not isinstance(source, RegistryImage | DockerfileSource):
+                    continue
+                try:
                     name = snapshot_identity(
-                        machine.source,
+                        source,
                         _machine_resources(machine.cpus, machine.memory_mb, machine.storage_mb, machine.gpus),
                     )
+                except UnsupportedMachineSpec as error:
+                    mapping_errors.append(f"{role}: {error}")
+                else:
                     sizes[name] += 1
-            except UnsupportedMachineSpec as error:
-                failures.append((task_id, str(error)))
+        if mapping_errors:
+            failures.append((task_id, "; ".join(mapping_errors)))
+        if execution_errors:
+            execution_failures.append((task_id, "; ".join(execution_errors)))
     return SnapshotIdentityCount(
         distinct=len(sizes), sizes=dict(sizes), failures=failures, execution_failures=execution_failures
     )

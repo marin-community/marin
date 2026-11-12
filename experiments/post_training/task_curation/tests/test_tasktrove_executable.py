@@ -326,7 +326,6 @@ def test_converter_language_survives_harbor_export_without_changing_payload(exec
                     "source_row": "source/tasks.parquet:0",
                 },
                 grader_image=IMAGE,
-                fallback_actor_image=IMAGE,
                 family="stdio",
             )
         )

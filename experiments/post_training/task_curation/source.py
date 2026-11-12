@@ -198,6 +198,29 @@ class RlDataSource[ConfigT: CatalogConfig]:
         return self.config.dataset if self.config is not None else self.info.dataset
 
     @property
+    def admission_blockers(self) -> tuple[str, ...]:
+        """Evidence missing before an agentic source can enter runnable selection."""
+        if "agentic" not in self.info.tags:
+            return ()
+        info = self.info
+        blockers = []
+        if info.task_format is None or (
+            info.task_format is TaskFormat.MARINSKYRL and info.id not in GRANDFATHERED_MARINSKYRL_SOURCES
+        ):
+            blockers.append("accepted agentic task format is missing")
+        if info.daytona_snapshot_count is None or not (info.daytona_count_basis or "").strip():
+            blockers.append("production snapshot identity measurement is missing")
+        if info.daytona_execution_failures is None:
+            blockers.append("execution requirement measurement is missing")
+        if (
+            info.oversight is None
+            or info.oversight.level not in {OversightLevel.SAMPLE, OversightLevel.FULL}
+            or not info.oversight.verification.strip()
+        ):
+            blockers.append("SAMPLE or FULL oversight with verification evidence is missing")
+        return tuple(blockers)
+
+    @property
     def declaration(self) -> SourceDeclaration:
         """Project a source declaration into catalog metadata without executing it."""
         info, pipeline = self.info, self.pipeline
@@ -225,7 +248,9 @@ class RlDataSource[ConfigT: CatalogConfig]:
             family=info.family,
             tags=list(tags),
             task_count=info.count,
-            notes=info.notes,
+            notes=" ".join(
+                (info.notes, *(f"Admission blocked: {reason}." for reason in self.admission_blockers))
+            ).strip(),
             dataset_id=dataset.name if dataset else None,
             dataset_revision=dataset.revision if dataset else None,
             url=dataset.url if dataset else None,
@@ -250,7 +275,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             kind="Generator" if "generator" in tags else "Dataset",
             status=next(
                 (label for tag, label in (("deprecated", "Deprecated"), ("excluded", "Excluded")) if tag in tags),
-                "Inventory" if pipeline is None else "Available",
+                "Inventory" if pipeline is None or self.admission_blockers else "Available",
             ),
             pipeline=invocation,
             independent_qc=info.independent_qc,

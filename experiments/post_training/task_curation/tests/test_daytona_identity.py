@@ -101,14 +101,15 @@ def test_data_baked_into_contexts_splits_identities():
 def test_lowered_specs_collapse_and_cite_the_registry_image():
     def spec(dockerfile: str, mode: str | None) -> dict:
         resource = {
-            "path": "environment/Dockerfile",
+            "path": "Dockerfile",
             "source": {"kind": "inline_file", "content_base64": base64.b64encode(dockerfile.encode()).decode()},
         }
         if mode is not None:
             resource["mode"] = mode
+        requirements = {"command_semantics": "linux_process", "docker_build": {"files": [resource]}}
         return {
-            "task": {"environment_requirements": {"docker_image": None}, "resources": {"verifier": [resource]}},
-            "runtime": {"task_machine": None, "verifier_machine": None},
+            "task": {"environment_requirements": requirements, "grader": {"environment": requirements}},
+            "runtime": {"task_machine": {}, "verifier_machine": {}},
         }
 
     shared = spec("FROM aweaiteam/calibforge:tb2-verifier-base-v1@sha256:0f61\nWORKDIR /app\n", "644")
@@ -169,3 +170,28 @@ def test_a_task_needing_a_container_runtime_is_refused_on_daytona():
     assert daytona_execution_failure(plain) is None
     assert daytona_execution_failure({**plain, "capabilities": ["docker"]}) == "Unsupported capabilities: docker"
     assert "linux_process" in daytona_execution_failure({**plain, "command_semantics": None})
+
+
+def test_grader_environment_is_counted_independently_and_lock_refusals_are_retained():
+    actor = "actor@sha256:" + "a" * 64
+    grader = "grader@sha256:" + "b" * 64
+    requirements = {"docker_image": actor, "command_semantics": "linux_process"}
+    spec = {
+        "task": {
+            "environment_requirements": requirements,
+            "grader": {"environment": {**requirements, "docker_image": grader}},
+        },
+        "runtime": {"task_machine": {}, "verifier_machine": {}},
+    }
+    separate = count_lowered_spec_identities([("separate", spec)])
+    assert set(separate.sizes) == {
+        snapshot_identity(RegistryImage(actor), Resources()),
+        snapshot_identity(RegistryImage(grader), Resources()),
+    }
+    spec["task"]["grader"]["environment"] = {
+        "packages_lock": "https://example.test/lock",
+        "command_semantics": "linux_process",
+    }
+    locked = count_lowered_spec_identities([("locked", spec)])
+    assert locked.distinct == 1
+    assert [task_id for task_id, _ in locked.execution_failures] == ["locked"]

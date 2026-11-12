@@ -63,9 +63,13 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     title="DCAgent2/nl2bash-tasks-cleaned-oracle-v2",
                     origin="Task Trove",
                     family="shell-cmd",
-                    tags=("agentic", "multi-turn", "language:bash"),
+                    tags=("agentic", "multi-turn", "language:bash", "deprecated"),
                     count=1498,
-                    notes="Semantic output comparison against an oracle command run in the same sandbox.",
+                    notes=(
+                        "Deprecated: superseded by the privately published, environment-qualified "
+                        "nl2bash-v1-rebuilt cohort; use its pinned release and oversight evidence."
+                    )
+                    + "Semantic output comparison against an oracle command run in the same sandbox.",
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
             ),

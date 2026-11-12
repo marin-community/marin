@@ -9,13 +9,26 @@ import sys
 from dataclasses import replace
 
 import pytest
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Source
+from taskcompendium.models import (
+    AnswerType,
+    CommandSemantics,
+    ConversationInput,
+    EnvironmentRequirements,
+    NoGrader,
+    PlainText,
+    Source,
+    TaskSpec,
+    TextMessage,
+)
+from taskcompendium.pipeline.conversion import AgenticConverter
+from taskcompendium.pipeline.conversion import convert_row as convert_mechanical_row
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, RawRow
 from verifyit.grade import Status
 from verifyit.modes import grade_pytest
 from verifyit.spec import PytestSpec
 
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import INSTRUCTION, SOLVE_SH
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.code_contests import convert_code_contests
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import convert_nl2bash
@@ -209,3 +222,32 @@ def test_a_conversion_lowers_the_archive_environment():
     # The fixture installs nothing; a recipe's RUN steps become setup commands, covered
     # by the lowering tests in test_environment_fidelity.
     assert requirements.setup_commands == ()
+
+
+@pytest.mark.parametrize("entrypoint", ["archive", "mechanical", "agentic_reply"])
+def test_archive_converter_rejects_an_agentic_task_without_a_declared_environment(entrypoint):
+    source = Source(dataset="fixture", revision="1", row="missing", importer_revision="1")
+    row = RawRow("missing", source, {"path": "missing", "files": {}})
+    task = TaskSpec(
+        id=row.id,
+        source=source,
+        context=ConversationInput(events=(TextMessage(role="user", content="Edit the workspace."),)),
+        environment_requirements=EnvironmentRequirements(),
+        answer_type=AnswerType.TEXT if entrypoint == "agentic_reply" else AnswerType.WORKSPACE_STATE,
+        answer_format=PlainText(),
+        grader=NoGrader(reason="fixture"),
+    )
+
+    def convert(_row, _context):
+        return task
+
+    context = ConversionContext({}, None)
+    result = (
+        TaskTroveConverter("fixture", convert)(row, context)
+        if entrypoint == "archive"
+        else convert_mechanical_row(
+            row, AgenticConverter(convert) if entrypoint == "agentic_reply" else convert, context
+        )
+    )
+    assert isinstance(result, ImportRejection)
+    assert result.reason == "missing_environment"

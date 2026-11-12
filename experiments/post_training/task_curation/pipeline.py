@@ -48,6 +48,7 @@ from shellbox.machine import (
 )
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, require_resolved_environment
 from taskcompendium.pipeline.controls import GradingMachines, controls_identity
+from taskcompendium.pipeline.conversion import AgenticConverter
 from taskcompendium.pipeline.fingerprints import callable_identity, recipe_code_identity
 from taskcompendium.pipeline.inputs import ConversionContext, FileParts, SourceFileOverride, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
@@ -446,8 +447,13 @@ def process_rows(source: RlDataSource[CurationRecipe], options: PipelineOptions)
     """Construct the reusable source processor's graph from this dataset's recipe."""
     recipe = source.config
     assert recipe is not None
+    if "agentic" in source.info.tags:
+        recipe = replace(recipe, convert=AgenticConverter(recipe.convert))
     if options.mode == SourceProcessingMode.QUICK:
         return _quick_step(recipe, options)
+    if source.declaration.status != "Available":
+        reasons = source.admission_blockers or (source.declaration.status,)
+        raise ValueError(f"Source {source.name} cannot admit tasks: {'; '.join(reasons)}")
     if options.recipe_settings is None:
         raise ValueError(f"Source processing requires recipe settings: {source.name}")
     config = _source_config(options.recipe_settings, options.mode, recipe.controls, recipe.rubric)

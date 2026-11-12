@@ -226,9 +226,13 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     title="DCAgent/code-contests-noblock",
                     origin="Task Trove",
                     family="competitive-programming",
-                    tags=("agentic", "multi-turn", "language:python"),
+                    tags=("agentic", "multi-turn", "language:python", "deprecated"),
                     count=8728,
-                    notes="Hidden test_data.json, only the first case is shown. Exact-line compare; fine.",
+                    notes=(
+                        "Deprecated: superseded by the privately published, environment-qualified "
+                        "code-contests-built-image cohort; use its pinned release and oversight evidence."
+                    )
+                    + "Hidden test_data.json, only the first case is shown. Exact-line compare; fine.",
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
             ),
@@ -244,10 +248,14 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     title="laion/codeforces-v3",
                     origin="Task Trove",
                     family="competitive-programming",
-                    tags=("agentic", "multi-turn", "language:python"),
+                    tags=("agentic", "multi-turn", "language:python", "deprecated"),
                     count=10000,
                     notes=(
-                        "Keep rows with at least 5 test files; drop the zero-test fallback (currently full "
+                        (
+                            "Deprecated: superseded by the privately published, environment-qualified "
+                            "codeforces-v1-rebuilt cohort; use its pinned release and oversight evidence."
+                        )
+                        + "Keep rows with at least 5 test files; drop the zero-test fallback (currently full "
                         "credit for not crashing)."
                     ),
                     task_format=TaskFormat.TASKCOMPENDIUM,
@@ -266,9 +274,14 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     title="laion/nemotron-gym-competitive-coding-v2",
                     origin="Task Trove",
                     family="competitive-programming",
-                    tags=("agentic", "multi-turn", "language:python"),
+                    tags=("agentic", "multi-turn", "language:python", "deprecated"),
                     count=15713,
-                    notes="50 hidden stdin/stdout cases per task. Best competitive source in the corpus.",
+                    notes=(
+                        "Deprecated: superseded by the privately published, environment-qualified "
+                        "competitive-coding-v1-rebuilt cohort; use its pinned release and oversight "
+                        "evidence."
+                    )
+                    + "50 hidden stdin/stdout cases per task. Best competitive source in the corpus.",
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
             ),
@@ -286,10 +299,14 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     title="laion/exp_rpt_taco-v2",
                     origin="Task Trove",
                     family="stdin-stdout",
-                    tags=("agentic", "multi-turn", "language:python"),
+                    tags=("agentic", "multi-turn", "language:python", "deprecated"),
                     count=10000,
                     notes=(
-                        "Hidden cases plus oracle. Filter to tasks with at least 5 cases and add tolerance-"
+                        (
+                            "Deprecated: superseded by the privately published, environment-qualified "
+                            "taco-built-image cohort; use its pinned release and oversight evidence."
+                        )
+                        + "Hidden cases plus oracle. Filter to tasks with at least 5 cases and add tolerance-"
                         "aware compare where the prompt promises one."
                     ),
                     task_format=TaskFormat.TASKCOMPENDIUM,

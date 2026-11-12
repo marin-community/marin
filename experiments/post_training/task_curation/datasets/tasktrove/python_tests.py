@@ -215,10 +215,14 @@ SOURCES = {
                 title="DCAgent/exp_rpt_curriculum-easy",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "language:python"),
+                tags=("agentic", "multi-turn", "language:python", "deprecated"),
                 count=509,
                 notes=(
-                    "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
+                    (
+                        "Deprecated: superseded by the privately published, environment-qualified "
+                        "curriculum-easy-v1-rebuilt cohort; use its pinned release and oversight evidence."
+                    )
+                    + "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                     "failed every task. Kept with the kata tag."
                 ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
@@ -236,10 +240,15 @@ SOURCES = {
                 title="DCAgent/exp_rpt_curriculum-medium-v2",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "language:python"),
+                tags=("agentic", "multi-turn", "language:python", "deprecated"),
                 count=492,
                 notes=(
-                    "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
+                    (
+                        "Deprecated: superseded by the privately published, environment-qualified "
+                        "curriculum-medium-v1-rebuilt cohort; use its pinned release and oversight "
+                        "evidence."
+                    )
+                    + "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                     "failed every task. Kept with the kata tag."
                 ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
@@ -257,10 +266,14 @@ SOURCES = {
                 title="DCAgent/exp_rpt_e2egit-v2",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "language:python", "language:javascript"),
+                tags=("agentic", "multi-turn", "language:python", "language:javascript", "deprecated"),
                 count=487,
                 notes=(
-                    "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
+                    (
+                        "Deprecated: superseded by the privately published, environment-qualified "
+                        "e2egit-v2-rebuilt cohort; use its pinned release and oversight evidence."
+                    )
+                    + "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
                     "tasks; exact instruction dedup handles overlap with the large cut."
                 ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
@@ -277,10 +290,14 @@ SOURCES = {
                 title="DCAgent/exp_rpt_e2egit-large",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "language:python"),
+                tags=("agentic", "multi-turn", "language:python", "deprecated"),
                 count=4998,
                 notes=(
-                    "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
+                    (
+                        "Deprecated: superseded by the privately published, environment-qualified "
+                        "e2egit-large-v1-rebuilt cohort; use its pinned release and oversight evidence."
+                    )
+                    + "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
                     "tasks; exact instruction dedup handles repeated katas."
                 ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
@@ -297,10 +314,14 @@ SOURCES = {
                 title="DCAgent/exp_rpt_multifile-v3",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "language:python"),
+                tags=("agentic", "multi-turn", "language:python", "deprecated"),
                 count=4843,
                 notes=(
-                    "Self-contained multi-file pytest tasks. In a 10-task sample, empty and trivial "
+                    (
+                        "Deprecated: superseded by the privately published, environment-qualified "
+                        "multifile-v1-rebuilt cohort; use its pinned release and oversight evidence."
+                    )
+                    + "Self-contained multi-file pytest tasks. In a 10-task sample, empty and trivial "
                     "submissions failed every task. Kept with the kata tag."
                 ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
@@ -317,10 +338,14 @@ SOURCES = {
                 title="DCAgent/exp_rpt_pymethods2test-v3",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "language:python"),
+                tags=("agentic", "multi-turn", "language:python", "deprecated"),
                 count=500,
                 notes=(
-                    "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
+                    (
+                        "Deprecated: superseded by the privately published, environment-qualified "
+                        "pymethods2test-v1-rebuilt cohort; use its pinned release and oversight evidence."
+                    )
+                    + "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                     "passed, while empty and trivial submissions failed."
                 ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
@@ -337,10 +362,15 @@ SOURCES = {
                 title="DCAgent/exp_rpt_pymethods2test-large-v2",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "language:python"),
+                tags=("agentic", "multi-turn", "language:python", "deprecated"),
                 count=4991,
                 notes=(
-                    "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
+                    (
+                        "Deprecated: superseded by the privately published, environment-qualified "
+                        "pymethods2test-large-v1-rebuilt cohort; use its pinned release and oversight "
+                        "evidence."
+                    )
+                    + "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                     "passed, while empty and trivial submissions failed."
                 ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
@@ -377,10 +407,15 @@ SOURCES = {
                 title="DCAgent/exp_rpt_unitsyn-python-large-v2",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "language:python"),
+                tags=("agentic", "multi-turn", "language:python", "deprecated"),
                 count=4991,
                 notes=(
-                    "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
+                    (
+                        "Deprecated: superseded by the privately published, environment-qualified "
+                        "unitsyn-python-large-v1-rebuilt cohort; use its pinned release and oversight "
+                        "evidence."
+                    )
+                    + "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                     "passed, while empty and trivial submissions failed."
                 ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
@@ -397,10 +432,14 @@ SOURCES = {
                 title="DCAgent/exp_rpt_stack-pytest-v2",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "language:python"),
+                tags=("agentic", "multi-turn", "language:python", "deprecated"),
                 count=500,
                 notes=(
-                    "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
+                    (
+                        "Deprecated: superseded by the privately published, environment-qualified "
+                        "stack-pytest-v1-rebuilt cohort; use its pinned release and oversight evidence."
+                    )
+                    + "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                     "failed every task. Kept with the kata tag."
                 ),
                 task_format=TaskFormat.TASKCOMPENDIUM,

@@ -23,6 +23,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
+from taskcompendium.models import missing_environment as missing_environment
 
 FROM = re.compile(r"^\s*FROM\s+(\S+)", re.IGNORECASE | re.MULTILINE)
 STEP = re.compile(r"^\s*(RUN|COPY|ADD|ENV|ARG|USER|WORKDIR|VOLUME|ENTRYPOINT|CMD)\b", re.IGNORECASE | re.MULTILINE)
@@ -100,26 +101,6 @@ def environment_unused(
     if "Dockerfile" not in paths:
         return "build context does not carry the archive's Dockerfile"
     return None
-
-
-def missing_environment(spec: Mapping) -> str | None:
-    """Why an agentic task cannot be admitted, if it declares no environment.
-
-    A task that declares nothing resolves to the host image at run time, which is
-    not the environment the task defines. It is rejected rather than run.
-    """
-    requirements = spec.get("environment_requirements") or {}
-    declared = (
-        requirements.get("docker_image"),
-        requirements.get("docker_build"),
-        requirements.get("packages_lock"),
-        requirements.get("package_spec"),
-    )
-    if any(item is not None for item in declared):
-        return None
-    if not any(requirements.get("capabilities") or ()):
-        return None
-    return "agentic task declares no environment"
 
 
 @dataclass(frozen=True)

@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from zephyr import counters
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import Source, TaskSpec
+from taskcompendium.models import Source, TaskSpec, missing_environment
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import (
     Converter,
@@ -23,6 +23,23 @@ from taskcompendium.pipeline.models import (
     SourceRecipe,
 )
 from taskcompendium.pipeline.sources import conversion_context, decode_staged_row
+
+
+@dataclass(frozen=True)
+class AgenticConverter:
+    """Require the source's agentic tasks to retain an environment after conversion."""
+
+    convert: Converter
+
+    def __call__(self, row: RawRow, context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
+        result = self.convert(row, context)
+        if isinstance(result, ImportRejection):
+            return result
+        task = result.task if isinstance(result, NormalizedTask) else result
+        missing = missing_environment(task.model_dump(mode="json"), agentic=True)
+        if missing is not None:
+            return ImportRejection(kind=ImportFailureKind.SOURCE_DEFECT, reason="missing_environment", detail=missing)
+        return result
 
 
 def row_source(recipe: SourceRecipe, locator: str) -> Source:
@@ -51,6 +68,9 @@ def convert_row(row: RawRow, convert: Converter, context: ConversionContext) -> 
     if isinstance(result, ImportRejection):
         return result
     normalized = result if isinstance(result, NormalizedTask) else NormalizedTask(result, ())
+    missing = missing_environment(normalized.task.model_dump(mode="json"))
+    if missing is not None:
+        return ImportRejection(kind=ImportFailureKind.SOURCE_DEFECT, reason="missing_environment", detail=missing)
     if normalized.task.id != row.id or normalized.task.source != row.source:
         raise ValueError("A converter must retain its supplied task identity and source provenance")
     return normalized

@@ -89,7 +89,7 @@ def import_cohort(config: PrebuiltCohort) -> str:
         if not envelope.get("runtime"):
             raise ValueError(f"{row['path']}: envelope carries no runtime machines")
         spec = TaskSpec.model_validate(task)
-        reason = missing_environment(spec.model_dump(mode="json"))
+        reason = missing_environment(spec.model_dump(mode="json"), agentic=True)
         if reason is not None:
             raise ValueError(f"{row['path']}: {reason}")
     return str(local)
@@ -165,6 +165,10 @@ def prebuilt_artifact(
     assert config is not None
     if options.mode is SourceProcessingMode.QUICK:
         raise ValueError(f"A published cohort is imported for admission, not for a quick pass: {source.name}")
+
+    if source.declaration.status != "Available":
+        reasons = source.admission_blockers or (source.declaration.status,)
+        raise ValueError(f"Source {source.name} cannot admit tasks: {'; '.join(reasons)}")
 
     def build_config(context) -> str:
         return context.output_path

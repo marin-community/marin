@@ -105,7 +105,6 @@ def test_harbor_rejects_unresolved_package_lock_despite_source_dockerfile(normal
     with pytest.raises(UnsupportedHarborTask, match="package locks"):
         harbor_record(
             {**row, "task_json": task.model_dump_json()},
-            fallback_actor_image=BASE_IMAGE,
             verifyit_package_root=VERIFYIT_PACKAGE,
             grader_image=GRADER_IMAGE,
             family="fixture",
@@ -116,7 +115,6 @@ def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(norm
     row, _ = normalized_row
     record = harbor_record(
         row,
-        fallback_actor_image=BASE_IMAGE,
         verifyit_package_root=VERIFYIT_PACKAGE,
         grader_image=GRADER_IMAGE,
         family="fixture",
@@ -142,14 +140,12 @@ def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(norm
 def test_source_recipe_provenance_does_not_override_other_datasets(normalized_row):
     row, converted = normalized_row
     task = converted.model_copy(update={"source": converted.source.model_copy(update={"dataset": "other"})})
-    record = harbor_record(
-        {**row, "task_json": task.model_dump_json()},
-        fallback_actor_image=BASE_IMAGE,
-        grader_image=GRADER_IMAGE,
-        family="fixture",
-    )
-    expected_image = task.environment_requirements.docker_image or BASE_IMAGE
-    assert archive_files(record.task_binary)["environment/Dockerfile"].decode().startswith(f"FROM {expected_image}\n")
+    with pytest.raises(UnsupportedHarborTask, match="declares no environment"):
+        harbor_record(
+            {**row, "task_json": task.model_dump_json()},
+            grader_image=GRADER_IMAGE,
+            family="fixture",
+        )
 
 
 @pytest.mark.parametrize(("letter", "reward"), [("B", 1.0), ("A", 0.0)])
@@ -166,7 +162,6 @@ def test_harbor_mcqa_file_format_matches_its_grader(normalized_row, tmp_path, le
             {**row, "task_json": task.model_dump_json()},
             grader_image=None,
             family="qa",
-            fallback_actor_image=BASE_IMAGE,
             verifyit_package_root=VERIFYIT_PACKAGE,
         ).task_binary
     )
@@ -186,7 +181,6 @@ def test_harbor_rejects_simulated_shell_semantics(normalized_row):
             {**row, "task_json": task.model_dump_json()},
             grader_image=GRADER_IMAGE,
             family="qa",
-            fallback_actor_image=BASE_IMAGE,
         )
 
 
@@ -210,7 +204,6 @@ def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(n
     with pytest.raises(UnsupportedHarborTask, match="Docker build contexts"):
         harbor_record(
             {**row, "task_json": task.model_dump_json()},
-            fallback_actor_image=BASE_IMAGE,
             verifyit_package_root=VERIFYIT_PACKAGE,
             grader_image=GRADER_IMAGE,
             family="fixture",
@@ -223,7 +216,14 @@ def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(n
 )
 def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_path, answer_type, output_path) -> None:
     row, converted = normalized_row
-    task = converted.model_copy(update={"source": converted.source.model_copy(update={"dataset": "generic"})})
+    task = converted.model_copy(
+        update={
+            "source": converted.source.model_copy(update={"dataset": "generic"}),
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=BASE_IMAGE
+            ),
+        }
+    )
     output = "app/answer.txt"
     if answer_type == AnswerType.FILE:
         output = "app/solution.py"
@@ -256,7 +256,6 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
     edited = task.model_copy(update={"resources": resources})
     record = harbor_record(
         {**row, "task_json": edited.model_dump_json()},
-        fallback_actor_image=BASE_IMAGE,
         verifyit_package_root=VERIFYIT_PACKAGE,
         grader_image=GRADER_IMAGE,
         family="fixture",
@@ -300,9 +299,15 @@ def test_harbor_emitted_wrapper_grades_text_and_private_resources(
     _, original = normalized_row
     source = original.source.model_copy(update={"dataset": "generic"})
     task = answer_task(RawRow("fixture", source, {}), prompt="Give the answer.", spec=spec, resources=resources)
+    task = task.model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=BASE_IMAGE
+            )
+        }
+    )
     record = harbor_record(
         {"task_json": task.model_dump_json(), "source_row": task.source.row, "original_path": "fixture-task"},
-        fallback_actor_image=BASE_IMAGE,
         grader_image=GRADER_IMAGE,
         family="fixture",
     )
@@ -407,7 +412,6 @@ def test_harbor_judge_receives_canonical_text_at_declared_path(tmp_path) -> None
     }
     record = harbor_record(
         row,
-        fallback_actor_image=BASE_IMAGE,
         verifyit_package_root=VERIFYIT_PACKAGE,
         grader_image=GRADER_IMAGE,
         family=source.info.family,
@@ -455,7 +459,6 @@ def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp
                 (arc.INDUCTIVE_CONFIG if mode == "inductive" else arc.TRANSDUCTIVE_CONFIG) + "/tasks.parquet:0"
             ),
         },
-        fallback_actor_image=BASE_IMAGE,
         verifyit_package_root=VERIFYIT_PACKAGE,
         grader_image=GRADER_IMAGE,
         family=source.info.family,
@@ -553,7 +556,6 @@ def test_harbor_source_image_supplies_grader_dependencies(
     )
     record = harbor_record(
         {**row, "task_json": task.model_dump_json()},
-        fallback_actor_image=BASE_IMAGE,
         verifyit_package_root=VERIFYIT_PACKAGE,
         grader_image=GRADER_IMAGE,
         family="fixture",
@@ -595,7 +597,6 @@ def test_harbor_stdout_failures_do_not_emit_a_reward(script, tmp_path):
     files = archive_files(
         harbor_record(
             {"task_json": task.model_dump_json(), "original_path": "arc.tar.gz", "source_row": "arc/tasks.parquet:0"},
-            fallback_actor_image=BASE_IMAGE,
             verifyit_package_root=VERIFYIT_PACKAGE,
             grader_image=GRADER_IMAGE,
             family=source.info.family,
@@ -678,9 +679,7 @@ def test_harbor_repository_uses_shared_actor_state(repository_task, tmp_path):
         "source_row": "swesmith/tasks.parquet:0",
     }
     files = archive_files(
-        harbor_record(
-            row, fallback_actor_image=BASE_IMAGE, verifyit_package_root=VERIFYIT_PACKAGE, grader_image=None, family="swe"
-        ).task_binary
+        harbor_record(row, verifyit_package_root=VERIFYIT_PACKAGE, grader_image=None, family="swe").task_binary
     )
     config = tomllib.loads(files["task.toml"].decode())
     assert config["verifier"]["environment_mode"] == "shared"
@@ -724,9 +723,7 @@ def test_harbor_repository_retains_old_environment_exclusions(repository_task, l
         "source_row": "swesmith/tasks.parquet:0",
     }
     with pytest.raises(UnsupportedHarborTask):
-        harbor_record(
-            row, fallback_actor_image=BASE_IMAGE, verifyit_package_root=VERIFYIT_PACKAGE, grader_image=None, family="swe"
-        )
+        harbor_record(row, verifyit_package_root=VERIFYIT_PACKAGE, grader_image=None, family="swe")
 
 
 def test_openqa_keeps_conversion_but_filters_disclosed_reference():
@@ -748,7 +745,6 @@ def test_openqa_keeps_conversion_but_filters_disclosed_reference():
             {"task_json": task.model_dump_json(), "source_row": task.source.row, "original_path": "leaked-reference"},
             grader_image=GRADER_IMAGE,
             family=source.info.family,
-            fallback_actor_image=BASE_IMAGE,
         )
 
 
@@ -780,7 +776,6 @@ print(float(answer == actor_dependency.expected))
     files = archive_files(
         harbor_record(
             {**row, "task_json": task.model_dump_json()},
-            fallback_actor_image=BASE_IMAGE,
             verifyit_package_root=VERIFYIT_PACKAGE,
             grader_image=None,
             family="fixture",

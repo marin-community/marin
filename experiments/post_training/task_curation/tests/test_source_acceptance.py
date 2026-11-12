@@ -3,8 +3,10 @@
 
 """Agentic sources are admitted only in an accepted task format."""
 
+from dataclasses import replace
+
 import pytest
-from finestore.rl.curation import DaytonaSafety
+from finestore.rl.curation import DaytonaSafety, OversightEvidence, OversightLevel
 
 from experiments.post_training.task_curation.source import (
     GRANDFATHERED_MARINSKYRL_SOURCES,
@@ -87,3 +89,30 @@ def test_pipeline_less_pointers_are_inventory_never_admitted():
 def test_every_runnable_source_reads_available():
     for source in runnable_sources().values():
         assert source.declaration.status == "Available"
+
+
+@pytest.mark.parametrize("missing", ["count", "basis", "oversight", "verification"])
+def test_unqualified_agentic_pipeline_stays_visible_but_cannot_be_selected(monkeypatch, missing):
+    info = replace(
+        _agentic(TaskFormat.TASKCOMPENDIUM).info,
+        daytona_snapshot_count=1,
+        daytona_execution_failures=0,
+        daytona_count_basis="production snapshot identities over pinned tasks",
+        oversight=OversightEvidence(
+            level=OversightLevel.SAMPLE, campaign="fixture", verification="20/20 negative controls"
+        ),
+    )
+    if missing == "count":
+        info = replace(info, daytona_snapshot_count=None)
+    elif missing == "basis":
+        info = replace(info, daytona_count_basis=None)
+    elif missing == "oversight":
+        info = replace(info, oversight=None)
+    else:
+        info = replace(
+            info, oversight=OversightEvidence(level=OversightLevel.SAMPLE, campaign="fixture", verification="")
+        )
+    source = RlDataSource(info=info, pipeline=lambda _source, _options: None)
+    monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: {info.id: source})
+    assert source.name not in runnable_sources()
+    assert source.declaration.status == "Inventory"
