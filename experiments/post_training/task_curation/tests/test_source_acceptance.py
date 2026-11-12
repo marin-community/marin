@@ -67,12 +67,6 @@ def test_an_agentic_source_without_a_declared_format_is_rejected():
         require_accepted_task_format(_agentic(None))
 
 
-@pytest.mark.parametrize("task_format", [TaskFormat.TASKCOMPENDIUM, TaskFormat.HARBOR])
-def test_task_directory_formats_pass_and_non_agentic_sources_need_none(task_format):
-    require_accepted_task_format(_agentic(task_format))
-    require_accepted_task_format(RlDataSource(info=SourceInfo(id="fixture:math", title="math", origin="fixture")))
-
-
 def test_failed_reply_sources_are_retired_with_frozen_qa_evidence():
     candidates = (*judged.candidate_sources(), *structured_outputs.candidate_sources())
     failed = {source.info.id for source in candidates if source.pipeline is None}

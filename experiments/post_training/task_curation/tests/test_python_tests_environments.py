@@ -3,6 +3,9 @@
 
 """Python-test sources retain their archived agent environments and separate graders."""
 
+import os
+import subprocess
+
 import pytest
 
 from experiments.post_training.task_curation.datasets.tasktrove import python_tests
@@ -25,7 +28,7 @@ def python_archive(dockerfile: bytes) -> dict:
 
 
 @pytest.mark.parametrize("source", SOURCES, ids=lambda source: source.name)
-def test_python_test_sources_keep_recipe_steps_and_runtime_variables(source):
+def test_python_test_sources_keep_recipe_steps_and_runtime_variables(source, tmp_path):
     recipe = source.config
     task = converted_task(
         recipe,
@@ -39,11 +42,16 @@ def test_python_test_sources_keep_recipe_steps_and_runtime_variables(source):
     environment = task.environment_requirements
     assert environment.docker_image == PINNED_BASES["python:3.11-slim-bookworm"]
     assert environment.working_directory == "/app"
-    assert environment.setup_commands == (
-        "(cd / && export PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1; "
-        "pip install --no-cache-dir pytest==8.3.5 numpy==2.1.3)",
-        "mkdir -p /app",
+    capture = tmp_path / "pip-call.txt"
+    pip = tmp_path / "pip"
+    pip.write_text('#!/bin/sh\nprintf "%s\\n" "$PYTHONDONTWRITEBYTECODE|$PYTHONUNBUFFERED|$PWD|$*" > "$PIP_CAPTURE"\n')
+    pip.chmod(0o755)
+    subprocess.run(
+        ["sh", "-c", environment.setup_commands[0]],
+        env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "PIP_CAPTURE": str(capture)},
+        check=True,
     )
+    assert capture.read_text().strip() == "1|1|/|install --no-cache-dir pytest==8.3.5 numpy==2.1.3"
     assert environment.environment_variables == {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1"}
 
 
