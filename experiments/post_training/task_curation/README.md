@@ -39,8 +39,11 @@ Evaluation sources also use QUICK, with stricter publication checks that preserv
 the complete benchmark population. They publish canonical TaskSpec rows and
 evaluation protocol sidecars. See [evaluation tasks](../../../docs/references/evaluation-tasks.md)
 for declarations, outputs and the standard evaluation driver.
-`evaluation.py` binds `EvalDataset` recipes to
+`experiments.evaluation.preparation` binds `EvaluationCorpusRecipe` inputs to
 `taskcompendium.pipeline.evaluation.publish_evaluation_corpus`. Evaluation
+configuration and prompt compilation belong to `experiments/evaluation/`;
+shot counts are recorded with the resulting immutable tasks. Shared curation
+provides acquisition and inventory/catalog integration. Evaluation
 protocols use schema version 3 from `taskcompendium.evaluation.spec`; source
 adapters live under `taskcompendium.importers` and `taskcompendium.convert`,
 including reusable benchmark modules in `taskcompendium.importers.evalchemy`.
@@ -171,7 +174,8 @@ before executing a campaign from a new root. `--publish-catalog` alone does not
 change either cache location. The shared catalog retains run history
 and accumulates assessments. Omit the option for local previews and SAMPLE campaigns.
 Use `--source` to grade only new or changed sources; other production sources keep
-their declarations and grades without executing their pipelines. Older attempts
+their declarations and grades without executing their pipelines. Inventory-only
+sources take their declarations from the current code at every publication. Older attempts
 are ignored per source, and removing a declaration does not retire its published entry.
 After publication, run the Atlas loader to refresh Postgres; no inference is repeated.
 

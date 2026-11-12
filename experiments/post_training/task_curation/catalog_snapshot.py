@@ -215,7 +215,17 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                         reason = "; ".join(
                             part for part in (reason, f"Ignored superseded attempt from campaign {run_id}") if part
                         )
-                    rows.append(prior.model_copy(update={"snapshot_id": run_id, "reason": reason}))
+                    update = {"snapshot_id": run_id, "reason": reason}
+                    # No assessment pins an inventory-only declaration, so the code's current one wins.
+                    if attempt is None and declaration.pipeline is None and prior.declaration.pipeline is None:
+                        update["declaration"] = declaration
+                    elif declaration.id in by_id:
+                        # The verdict describes runtime cost, not what the pinned assessment graded, so an
+                        # unselected source still picks up the current code's safety assessment.
+                        update["declaration"] = prior.declaration.model_copy(
+                            update={"daytona_safety": declaration.daytona_safety}
+                        )
+                    rows.append(prior.model_copy(update=update))
                     continue
                 unchanged = (
                     prior is not None

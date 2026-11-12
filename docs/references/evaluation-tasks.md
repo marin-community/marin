@@ -20,10 +20,14 @@ remain separate work; this path produces no headline score or legacy
 | `experiments.evaluation.task_driver` | CLI, endpoint and credential binding, retry/backoff, Shellbox factories, and Iris submission |
 | Shellbox | Machine isolation, resource access, and outer execution deadlines |
 
-`EvalDataset` in `experiments.post_training.task_curation.evaluation` binds a
-`CurationRecipe`, an `EvaluationProtocol`, and an item builder. Leaf declarations
-live in `datasets/evalchemy/`; the shared catalog is
-`experiments.post_training.task_curation.sources.all_sources()`.
+`EvaluationCorpusRecipe` in `experiments.evaluation.preparation` binds source
+acquisition, prompt compilation, an `EvaluationProtocol`, and an item builder.
+Benchmark data and evaluation choices live under `experiments/evaluation/benchmarks/`;
+`experiments.evaluation.catalog` assembles their supported configurations.
+Shot count and request format are evaluation settings. Preparation compiles their
+final prompts before publication, preserving source-order sampling and immutable
+TaskSpec identities. The shared curation inventory registers default evaluation
+recipes alongside training sources.
 
 Import `EvaluationProtocol`, `EvaluationItem`, `OperationKind`, and `SummaryKind`
 from `taskcompendium.evaluation.spec`. The protocol's `schema_version` is `3`,
@@ -199,7 +203,9 @@ snapshots and execution settings. Raw evidence retains named metrics, weights,
 extractions, token likelihoods, and eligibility decisions. Infrastructure
 failures remain unscored; they do not become synthetic zero scores.
 
-Repeat the same command and output root to resume. Completed logical attempts,
+Repeat the same command and output root to resume. Request concurrency may change
+without invalidating completed observations; model, source, selection and scoring
+settings must remain identical. Completed logical attempts,
 including zero grades, are skipped. Infrastructure failures retry with the same
 row, trial, and seed and a new physical retry index. A completed model response
 is reused if only grading failed. Model failures make a fresh request. The CLI
@@ -242,12 +248,51 @@ headline. NUPA uses ordinary means; task/bucket stratification constructs the
 population and supplies group labels. FinanceBench uses means. SimpleQA and
 SimpleQAMini use classification summaries.
 
-See [task curation](task-curation.md) for acquisition and publication and
-[task rollouts](task-rollouts.md) for single-task execution. Legacy evaluation
-launchers and checkpoint menus still use Evalchemy. Their cutover requires the
-remaining protocol variants, consumer summaries and retry-aware sample reads;
-`vendor/evalchemy` remains until those callers migrate. Harbor execution and
-Evaldash's raw-archive importer remain separate migrations.
+The shared evaluation CLI and checkpoint menus now select these curated corpora.
+Corpus artifacts are explicit dependencies that finish before inference starts;
+executors receive their resolved roots. Catalog publication remains in the curation
+workflow. Native generation menus publish
+raw and chat variants separately; no runtime task registry is loaded.
+
+Evaldash imports raw FineStore stores, selects one latest finished retry per logical
+trial, and applies these reductions. Its sample browser uses the same trial selection.
+The PostgreSQL reconciler checks both the producer record and the raw store version.
+Curation identities and the summary revision participate in dashboard protocol
+comparison when both records carry identities. The canonical curation graph records
+the source, compiler, grader build, protocol and input overrides as `curation_identity`
+in the manifest. It excludes regional output paths, lock URLs and conversion timing.
+Physical manifest hashes still identify raw attempts and protect resume. Callers of
+`publish_evaluation_corpus` can supply the same semantic identity explicitly.
+Historical results without corpus
+identities can share a column with curated scores when canonical metric names,
+statistical kinds and known shot counts agree. Saved historical scores and their
+coverage remain unchanged; this compatibility rule requires no model rerun or
+archive rewrite. The newest identified declaration governs known corpus differences;
+a newer unidentified record cannot erase them. Producer records keep their metric maps empty.
+
+Dashboard measurements use shared normalization rules for historical and native records:
+
+| Source metric | Canonical metric | Scope |
+| --- | --- | --- |
+| `acc`, `em`, `exact_match`, `exact-match`, `accuracy_avg` | `accuracy` | All benchmarks |
+| `acc_norm`, `acc_norm_nospace` | `normalized_accuracy` | All benchmarks |
+| `pass@1`, `pass_at_1` | `accuracy` | HumanEval, HumanEvalPlus, MBPPPlus and CRUXEval |
+| `pass@1` | `pass_at_1` | Other benchmarks |
+| `mrcr_accuracy` | `accuracy` | MRCR |
+| `mean_reward` | `reward` | All benchmarks |
+
+The rules strip extraction-filter suffixes such as `,none` from the selected metric.
+Selection still uses the recorded primary metric and existing filter priority.
+Raw metric maps retain all source spellings and filter results. Unknown metric names
+remain unchanged; F1, normalized accuracy and pass rates for larger values of k are
+not converted to ordinary accuracy. Normalization changes names, never score values,
+coverage or recorded uncertainty.
+
+See [task curation](task-curation.md) for acquisition and publication,
+[running evaluations](../tutorials/run-lm-evals.md) for the shared launcher, and
+[task rollouts](task-rollouts.md) for single-task execution. Harbor execution remains
+separate. Historical Evalchemy archives remain readable; reproducing their runs
+requires the recorded checkout.
 
 ## GenomeQA
 
@@ -277,7 +322,7 @@ Each verdict carries `accuracy`, `genomeqa_macro`, and parsing diagnostics. The
 macro metric gives motif questions weight 5 and other questions weight 1, so
 each of the six biological subtasks and its two formats contributes equally.
 Accuracy remains unweighted for actual correct counts. Evaluation items retain
-subtask, format, and cell groups for reporting. The common summary and ingestion
-limitations described above apply; this adapter does not add a reducer or public
-launcher registration. Keep question, prompt, and response artifacts in restricted
+subtask, format, and cell groups for reporting. The shared reducer consumes these
+weights and groups; this adapter does not add public launcher registration. Keep
+question, prompt, and response artifacts in restricted
 storage pending sample-access controls.

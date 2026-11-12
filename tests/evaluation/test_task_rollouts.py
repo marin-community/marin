@@ -13,12 +13,12 @@ import pytest
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
+from marin.evaluation.records import JudgeIdentity
 from marin.rollouts.evaluation import (
     ATTEMPTS_TABLE,
     RUN_OBJECT,
     EvaluationInfrastructureError,
     EvaluationRunConfig,
-    JudgeIdentity,
     ModelIdentity,
     run_evaluation,
 )
@@ -30,7 +30,7 @@ from rolloutengine.test_support import machine_runtime
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import PackageSpec
 from taskcompendium.convert.answers import answer_task, exact_answer_task, source_evidence
-from taskcompendium.evaluation.corpus import chat_item
+from taskcompendium.evaluation.corpus import chat_item, evaluation_protocol
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE
 from taskcompendium.evaluation.spec import (
     ChatGeneration,
@@ -177,6 +177,37 @@ async def test_driver_resume_rejects_a_different_model_or_selection(tmp_path, pu
         await run_evaluation(
             published_corpora, output, run_config.model_copy(update={"source_limit": 1}), model, machine_factories={}
         )
+
+
+@pytest.mark.asyncio
+async def test_driver_resumes_partial_archive_after_request_concurrency_changes(tmp_path, published_corpora, run_config):
+    calls = 0
+    recovered = False
+
+    async def model(_request):
+        nonlocal calls
+        calls += 1
+        if not recovered and calls > 1:
+            raise RuntimeError("interrupted transport")
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+    output = str(tmp_path / "results")
+    with pytest.raises(ExceptionGroup):
+        await run_evaluation(
+            published_corpora, output, run_config.model_copy(update={"concurrency": 1}), model, machine_factories={}
+        )
+    saved = list(ReadView(output).iter_rows(ARCHIVE_SAMPLES_TABLE))
+    successful = [row for row in saved if row["grading"]["score"] == 1]
+    assert len(successful) == 1
+    completed = successful[0]
+    recovered = True
+    await run_evaluation(
+        published_corpora, output, run_config.model_copy(update={"concurrency": 3}), model, machine_factories={}
+    )
+    samples = list(ReadView(output).iter_rows(ARCHIVE_SAMPLES_TABLE))
+    assert sum(row["grading"]["score"] == 1 for row in samples) == 8
+    assert sum((row["doc_id"], row["trial_id"]) == (completed["doc_id"], completed["trial_id"]) for row in samples) == 1
+    assert calls == 9
 
 
 def convert_mixed_row(row: RawRow, _context: ConversionContext):
@@ -1001,3 +1032,39 @@ async def test_generation_failure_archives_provider_body_and_resumes_only_failed
         assert requests[-1] == requests[0]
         await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
         assert len(requests) == 9
+
+
+@pytest.mark.asyncio
+async def test_model_rendering_overrides_preserve_published_corpus_identity(tmp_path, mixed_corpora, run_config):
+    corpus = next(root for root in mixed_corpora if evaluation_protocol(root)[0].operation == "chat_generation")
+    published, _ = evaluation_protocol(corpus)
+    template_options = []
+    requests = []
+
+    class Tokenizer(CharacterTokenizer):
+        def apply_chat_template(self, conversation, **kwargs):
+            template_options.append(kwargs)
+            return super().apply_chat_template(conversation, **kwargs)
+
+    async def model(request):
+        requests.append(request)
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+    config = run_config.model_copy(
+        update={
+            "chat_template_kwargs": {"reasoning_effort": "low"},
+            "thinking_off_template_kwargs": {"reasoning_effort": "none"},
+        }
+    )
+    output = str(tmp_path / "rendering")
+    await run_evaluation((corpus,), output, config, model, machine_factories={}, tokenizer=Tokenizer())
+    assert requests
+    assert all(
+        request.options["extra_body"]["chat_template_kwargs"] == {"reasoning_effort": "none"} for request in requests
+    )
+    assert template_options
+    assert all(
+        options["reasoning_effort"] == "none" and "enable_thinking" not in options for options in template_options
+    )
+    saved = json.loads(ReadView(output).read_blob(RUN_OBJECT))
+    assert saved["datasets"][0]["protocol"] == published.model_dump(mode="json")

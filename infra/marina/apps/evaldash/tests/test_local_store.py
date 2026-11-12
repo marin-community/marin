@@ -201,15 +201,32 @@ def test_aime_fixture_orders_differently_by_score_and_by_lower_bound(client):
     assert by_lower_bound == ["qwen3-8b", "llama3-8b", "snowball"]
 
 
-def test_aime24_fixture_reads_the_evalchemy_repeat_standard_error(client):
-    """aime24 records carry ``accuracy_avg`` with ``accuracy_std_err``, the Evalchemy repeated-sample
-    spelling. The panel's interval comes from that standard error rather than falling to [0, 1]."""
+def test_aime24_fixture_uses_item_level_uncertainty(client):
     rows = client.get("/panel", params={"cohort": "all"}).json()["rows"]
     cell = next(row for row in rows if row["model"] == "snowball")["cells"]["aime24"]
 
     assert cell["metric"] == "accuracy"  # the legacy alias for accuracy_avg
     assert "no_dispersion" not in cell["flags"]
-    assert 0.35 < cell["low"] < cell["value"] < cell["high"] < 0.5
+    assert cell["repeat_aggregation"]["n_items"] == 30
+    assert cell["repeat_aggregation"]["n_trials"] == 300
+    assert cell["repeat_aggregation"]["stderr_basis"] == "item_bernoulli_n_minus_1"
+    assert cell["low"] < cell["value"] < cell["high"]
+    assert cell["high"] - cell["low"] > 0.2
+
+    detail = client.get(f"/runs/{cell['run_id']}").json()["headline"]
+    assert detail["repeat_aggregation"]["n_repeats"] == 10
+    assert detail["low"] == pytest.approx(cell["low"])
+
+    model = client.get("/models/snowball").json()
+    history = model["history"]["aime24"]
+    assert any(point["run_id"] == cell["run_id"] and point["low"] == pytest.approx(cell["low"]) for point in history)
+
+    comparison = client.get(
+        "/compare", params={"models": "snowball,tootsie-8b", "cohort": "2026.07.20", "benchmarks": "aime24"}
+    ).json()
+    compared = next(row for row in comparison["rows"] if row["benchmark"] == "aime24")
+    assert compared["cells"]["snowball"]["repeat_aggregation"]["n_trials"] == 300
+    assert (gap := next(iter(compared["differences"].values())))["high"] - gap["low"] > 0.2
 
 
 def test_api_surface_over_fixtures(client):
@@ -324,6 +341,14 @@ def test_api_compare_spans_cohorts_when_all_cohorts_are_selected(client):
     assert comparison["shared"]
     versions = {cell["version"] for row in comparison["rows"] for cell in row["cells"].values()}
     assert versions >= {"2026.07.20", "2026.07.21"}
+
+    panel = client.get("/panel", params={"cohort": "all"}).json()
+    panel_cells = {row["model"]: row["cells"] for row in panel["rows"]}
+    assert "mmlu" in comparison["shared"]
+    mmlu = next(row for row in comparison["rows"] if row["benchmark"] == "mmlu")
+    for model in ("snowball", "qwen3-8b"):
+        assert mmlu["cells"][model]["run_id"] == panel_cells[model]["mmlu"]["run_id"]
+    assert {cell["version"] for cell in mmlu["cells"].values()} == {"2026.07.20", "2026.07.21"}
 
 
 def test_api_selects_unversioned_records_by_name(client):

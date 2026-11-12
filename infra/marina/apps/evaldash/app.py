@@ -55,9 +55,11 @@ from marin.evaluation.records import (
     DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
     RecordParseFailure,
+    RepeatAggregate,
     list_record_paths,
     scan_records,
 )
+from marin.evaluation.repeat_aggregates import normalize_repeat_record
 from marina.apps import RegisteredApi, Services, registered_api
 from marina.mcp import OperationRisk, operation_extension
 from pydantic import BaseModel, ConfigDict
@@ -69,6 +71,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import review, samples
+from .curated import import_curated_record
 from .db_migrations import apply_migrations
 from .metrics import (
     ALL_COHORTS,
@@ -79,7 +82,6 @@ from .metrics import (
     build_panel,
     dashboard_measurements,
     display_status,
-    in_cohort,
     panel_request,
     record_headline,
     run_metric_rows,
@@ -136,6 +138,7 @@ class PanelCellResponse(BaseModel):
     interval_kind: str
     metric: str
     metric_kind: str
+    repeat_aggregation: RepeatAggregate | None = None
     declared: bool
     n_scored: int
     n_benchmark: int | None
@@ -431,7 +434,7 @@ class RecordStore:
 
     def refresh(self, records: list[EvalRunRecord]) -> None:
         """Replace the direct-scan snapshot used by the local store."""
-        records = _deduplicate_records(records)
+        records = [normalize_repeat_record(record) for record in _deduplicate_records(records)]
         self._set_snapshot(records)
         logger.info("memory store refreshed: %d records", len(records))
 
@@ -491,7 +494,6 @@ class RecordStore:
         ``archived: true`` so the UI can style them apart.
         """
         records, _by_id = self._snapshot()
-        records = [record for record in records if in_cohort(record, request)]
         archived = self.archived_models()
         if archived and not include_archived:
             records = [record for record in records if record.model.name not in archived]
@@ -826,7 +828,7 @@ class Ingestor:
                 try:
                     scan = await asyncio.to_thread(scan_records, prefix, self._record_cache[prefix])
                     found = [
-                        record.model_copy(update={"step_status": step_status_for_record(path)})
+                        import_curated_record(record.model_copy(update={"step_status": step_status_for_record(path)}))
                         for path, record in scan.records_by_path.items()
                     ]
                     failures = list(scan.failures)

@@ -242,6 +242,8 @@ class EvaluationProtocol(EvaluationModel):
     trials: TrialPolicy
     metrics: tuple[Metric, ...]
     primary_metric: str
+    num_fewshot: int | None = Field(default=None, ge=0)
+    requires_judge: bool = False
     summary: SummaryKind
     expected_population: int = Field(gt=0)
     context_window: int | None = Field(default=None, gt=0)

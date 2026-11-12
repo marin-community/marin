@@ -1,251 +1,87 @@
-# Evaluation Overview
+# Evaluation overview
 
-This document explains how Marin evaluates models and where to find runnable workflows.
+Marin separates evaluation data, execution and score computation. A curated eval
+is an immutable TaskSpec population with a protocol and execution sidecars. The
+launcher chooses corpora and serving hardware. The standard driver records raw
+attempts. Evaldash reduces those observations into dashboard measurements.
 
-For step-by-step usage, start with:
-
-- [Running Evaluations with Marin](../tutorials/run-lm-evals.md) for command lines covering
-  Evalchemy and Harbor across registered models.
-- [Harbor Framework Integration](../harbor-integration.md) for Harbor dataset, agent, endpoint, and
-  result details.
-
-## Evaluation modes
-
-Marin supports three evaluation paths:
-
-- **In-loop training evals**: [`train_lm`][marin.experiment.train.train_lm] runs periodic multiple-choice evaluations through Levanter's lm-evaluation-harness integration and logs to W&B when an `EvalSuite` is provided.
-- **Post-hoc evals**: the shared launcher or composable `EvalGroup`s evaluate multiple-choice and
-  generation tasks with the vendored Evalchemy package.
-- **Harbor tasks**: the shared launcher runs containerized agent benchmarks and registry datasets
-  through Marin's Harbor integration.
-
-## Post-hoc evaluation (evalchemy over a served endpoint)
-
-A post-hoc eval is decoupled from the model backend by an OpenAI-compatible URL. Each `EvalGroup` is
-run inside one `remote_inference` context. The generic group runner passes its `RunningModel` to
-`run_evalchemy`, then inference is torn down.
-Multiple-choice tasks use the served backend's logprob API, so they run the same way as generation —
-no separate JAX-logprob backend.
-
-The lifecycle and the evaluator are separate APIs:
-
-```python
-with remote_inference(model, engine, iris) as session:
-    run_evalchemy(session.model, eval_config, output_path, env_vars=env)
+```mermaid
+flowchart LR
+  Source["Pinned source and recipe"] --> Curation["TaskCompendium curation"]
+  Curation --> Corpus["TaskSpec shards, protocol, sidecars, manifest"]
+  Corpus --> Launcher["Named selection and model policy"]
+  Launcher --> Driver["Marin evaluation driver"]
+  Driver --> Model["Shared model endpoint"]
+  Driver --> Grader["Verifyit and isolated Shellbox graders"]
+  Driver --> Raw["FineStore raw attempts and samples"]
+  Raw --> Dashboard["Evaldash summaries and comparisons"]
 ```
 
-`remote_inference` owns startup, liveness, Iris link registration, and teardown. Endpoint-oriented
-mechanisms such as `run_evalchemy`, `run_lm_eval`, and `run_harbor_driver` own only their native task and
-result contracts. This keeps the lifecycle common without hiding mechanism-specific configuration
-or outcomes behind a universal `do_eval` interface.
+## Curation
 
-Evalchemy lives in `vendor/evalchemy`, outside Marin's uv workspace. Its own
-`uv.lock` isolates evaluator dependencies from training and serving dependencies.
-Local path sources bind FineStore and Rigging to the same checkout. An evaluation
-child installs the frozen project in its own virtual environment and calls its
-`evalchemy` console script; Marin does not import the vendored package.
+Experiments own dataset pins, protocol variants, population declarations and
+artifact graphs. TaskCompendium compiles prompts and private grader inputs, then
+publishes complete evaluation populations. Shot counts and raw/chat transports
+are separate corpus variants. Evaluation tags keep these sources out of default
+training curation.
 
-Evalchemy and Harbor write their results directly into FineStore. Evalchemy owns the
-`evalchemy_results` and `samples` tables. Harbor preserves its native files as source objects and
-writes the normalized `samples` and `steps` tables consumed by Evaldash.
-After the evaluator seals those tables, Marin derives the shared `rollouts_v1` table from `samples` and
-`steps`, then records provenance and aggregate results.
+A completion manifest commits the TaskSpec shards, operation sidecars and protocol
+hash. Source order and duplicate positions survive publication. Catalog and grader
+changes alter corpus identities, which participate in launcher cache identity.
+See [evaluation tasks](../references/evaluation-tasks.md).
 
-### Policy score finalization
+## Execution
 
-The policy campaign launcher enables the score corrections required by
-[Marin eval policy #10197](https://github.com/marin-community/marin/issues/10197).
-FinanceBench and OlympiadBench use the pinned MiniMax judge for first-pass grading on eight
-H100s, using its 262,144-token context. SOTOPIA fits the length correction over the frozen
-13-model baseline cohort plus the evaluated model’s current run. A baseline model’s rerun
-replaces its prior source in the fit. Each launch preserves its exact cohort sources and judge
-configuration.
+The shared CLI and checkpoint menus bind curation graphs before starting inference.
+The model and tokenizer have recorded revisions. The launcher selects the intended
+raw or chat corpus variant, and the driver applies protocol cohorts, context and
+output budgets. Trials expand after source-row selection.
 
-A run is marked successful only after finalization succeeds. Its canonical metrics contain
-native judge accuracy or length-controlled SOTOPIA scores. Evalchemy
-preserves judge verdicts with each sample. SOTOPIA preserves raw rewards in its FineStore
-archive and saves cohort-fit evidence under `metric_evidence` in Harbor's `result.json`.
-A SOTOPIA correction failure fails the Harbor job and is recorded as `failed`. Judge configuration changes invalidate only FinanceBench and OlympiadBench;
-baseline source changes invalidate only SOTOPIA.
+RolloutEngine performs one attempt through a chat, completion or likelihood
+transport. Verifyit supplies shared grading; executable graders run through
+Shellbox bubblewrap. Judge identities and connections are explicit, and credentials
+stay outside persisted run metadata. An inference interruption cancels the active
+evaluator before resuming the same archive.
 
-### Publication metric view
+Each attempt has a start and a finish. Terminal grades, including zeros, survive
+resume. A verifier failure can reuse the completed model response; model transport
+failures require another request. FineStore retains selection decisions, attempts,
+samples, rollouts and raw evidence. The driver computes no benchmark summaries.
 
-The shared measurement reader and Evaldash apply metric policy `marin-2026-10-16-v1`:
-PIQA uses normalized accuracy (`acc_norm`), IFBench uses strict prompt accuracy, and
-TruthfulQA MC2 uses continuous accuracy (`acc`). Evaldash exposes the policy version as
-`metric_policy`. Source records, sample archives, and resume identity remain unchanged.
-A missing selected metric leaves the result unavailable. Binary pass counts are derived
-from the selected score and recorded scored-item count; continuous scores have no
-pass/fail counts. The sample browser applies the same selection to scores and grades.
+## Score computation
 
-### Dataset caching
+Evaldash imports each raw store from a single committed snapshot. It chooses the
+latest finished attempt per dataset, source row and trial, so retries do not inflate
+scores or sample counts. Unfinished attempts and infrastructure failures contribute
+to missing coverage rather than incorrect answers.
 
-Evalchemy's `eval.data_sources` caches immutable benchmark files from Hugging Face
-or direct HTTP(S) URLs. `fetch_hf` requires a full commit SHA; `fetch_url` requires
-an immutable publisher release, commit, or date as `version`, plus an explicit
-cache prefix. Both return a local path or object-store URL. Rigging's guarded
-`open_url` opens that returned path; it does not cache an arbitrary HTTP URL.
+Policy answer-equivalence runs also use these coverage counts at finalization.
+They fail with `artifact_failed` when fewer than 90% of selected trials have valid
+scores. The judge is served and recorded under its own model identity.
 
-```python
-from eval.data_sources import fetch_hf, fetch_url
-from rigging.filesystem.factory import open_url
+Protocols declare mean, weighted mean, classification or perplexity reductions.
+Grouped observations use the same reduction. MMLU subjects share a benchmark name
+and combine by item count, while subject summaries remain available. Semantic curation
+identities and summary revisions distinguish dashboard protocols, including changes
+to prompts or graders. Regional output paths, grader lock URLs and conversion timing
+do not change these identities. Physical manifest hashes still bind archive integrity
+and resume. PostgreSQL ingest also checks the raw store version, so a
+resume can refresh scores without changing the producer record.
 
-hf_file = fetch_hf(
-    "evalplus/humanevalplus", "test.jsonl",
-    revision="d32357cf319e50e9c8d8dab5ea876c72b0fd321b",
-    cache_prefix="s3://bucket/evalchemy-datasets",
-)
-url_file = fetch_url(
-    "https://example.org/releases/2026-01-15/benchmark.jsonl", version="2026-01-15",
-    cache_prefix="/path/to/datasets",
-)
-with open_url(url_file, "rb") as source:
-    benchmark_bytes = source.read()
-```
+Producer `record.json` files retain execution identity and status. Derived summaries
+live in Evaldash's catalog. Checkpoint report artifacts link the same records and
+archives. Historical Evalchemy scores remain eligible alongside curated scores without
+rerunning models. Comparison uses canonical metric names and statistical kinds;
+recorded shot counts must agree when both are known. Missing historical corpus
+identities do not exclude scores. Two runs with recorded, differing corpus identities
+remain separate, even when an unidentified record is newer. Stored scores, uncertainty, coverage and cohort provenance are
+preserved. Reproduction uses the recorded historical checkout and cohort.
 
-HF files are staged under `{prefix}/{repo_id}/{sha}/{filename}`; URL files use
-`{prefix}/urls/{url_key}/{version}/content`. The short URL hash in `url_key`
-identifies the source without storing URL credentials or query strings in paths.
-It does not hash or verify downloaded content. Use a new version when the
-publisher changes the file.
+## Other evaluation paths
 
-A shared lease serializes writers. Temporary files and completion markers keep
-failed downloads and interrupted uploads out of readers. HTTP downloads stream
-with a finite network timeout. Completed entries need no origin request.
+Levanter's in-loop training evaluation remains independent. Harbor continues to run
+agentic benchmarks through its own runtime, using the shared inference lifecycle
+and record catalog. See [Harbor integration](../harbor-integration.md).
 
-Marin sets the prefix to its configured 30-day scratch store, using the evaluation
-output path to choose the existing scratch-storage routing. The existing
-`MARIN_TEMP_PREFIX` override applies. Set `EvalchemyRuntimeConfig(dataset_cache=...)`
-to choose a shared prefix or a local directory explicitly. The 30-day lifecycle
-applies to Marin's default scratch store; explicit destinations keep their own
-retention policies. Missing cache entries are fetched again from the pinned HF revision.
-
-The independent `evalchemy` CLI uses the native local HF cache by default, looking
-up pinned snapshots before making any HF request. Pass
-`--dataset_cache s3://bucket/evalchemy-datasets` or
-`--dataset_cache /path/to/datasets` to stage files elsewhere. Existing HF cache and
-authentication settings still apply to downloads.
-
-### Normalized rollout table
-
-The versioned `rollouts_v1` table stores one ordered conversation part per row. Its primary key is
-`(task, doc_id, trial_id, turn_id, part_id)`. `task`, `doc_id`, and `trial_id` identify one model
-attempt; `turn_id` orders turns; and `part_id` orders content within a turn.
-
-The remaining columns have the same meaning for both evaluators:
-
-- `conversation_type` is `chat` when an Evalchemy sample has structured `prompt_messages`,
-  `completion` when it has `prompt_text`, and `agentic` for Harbor steps.
-- `participant_type` is the normalized role: `system`, `user`, `assistant`, `tool`, `environment`,
-  or `other`. Evalchemy uses the message role as `participant_id`. Harbor uses an assistant step's
-  model name when available and otherwise uses the ATIF source role.
-- `content_type` is `message`, `reasoning`, `tool_call`, or `tool_result`. Structured tool content is
-  JSON in `content`; `metadata_json` holds small type-specific annotations.
-- Token counts, token IDs, log probabilities, and cost are attached to the first model-produced part
-  of a Harbor turn when the trajectory provides them.
-
-Evalchemy prompt messages and model responses become `completion` or `chat` rows. Multiple grading
-filters for one Evalchemy response share one rollout. Harbor's normalized `steps` rows supply the
-`agentic` messages, reasoning, tool calls, and observations. Harbor's native files and complete
-trajectories remain source objects and blobs. Evalchemy retains its result documents and normalized samples.
-
-### Speculative serving
-
-Pipeline evaluations declare their target and optional draft producer steps as dependencies. The
-evaluation step resolves their paths into a plain `ModelConfig` before submitting the shared
-Evalchemy or Harbor runner. Checked-in model configurations need no producer step. The inference
-worker resolves the draft URI through Marin's model-preparation path before it starts vLLM.
-Evaluation and inference library code receives resolved model URIs and serving settings.
-
-The target `ModelConfig` records its model identity, tokenizer URI, and tokenizer revision. The
-optional `ServeConfig.speculative` records the draft URI, artifact identity, method, and proposal
-length. EAGLE-3 serving requires the GPU vLLM backend.
-
-Each Evalchemy or Harbor run measures a separate window of the shared server's cumulative counters.
-`record.json.inference_metrics` stores prompt and generation token totals, elapsed wall time, and
-generation throughput. Drafted runs also store the number of verification steps, proposed draft
-tokens, accepted draft tokens, mean acceptance length, and draft acceptance rate. FineStore stores
-the normalized rollout rows; the record stores the bounded run summary. A pipeline
-`EvaluationResult` exposes each sealed FineStore archive through `results_paths`, so a downstream
-offline training step can consume the normalized rollouts directly.
-
-### Rollout run catalog
-
-Completed and failed attempts are discoverable in Finelog's `marin.rollout_runs` table. Each row
-identifies the logical run and concrete attempt, its producer and terminal status, the model and Iris
-job when known, and the URI and format of the retained rollouts. Harbor and Evalchemy rows point to
-the FineStore archive that contains `rollouts_v1` alongside the evaluator-owned tables and raw source
-objects. SkyRL rows point to the retained trajectory directory and terminal model manifest; the
-catalog contract does not depend on the trajectory storage format.
-
-For example, list the newest successful rollout attempts with:
-
-```sql
-SELECT timestamp_ms, run_kind, producer, run_id, attempt_id, model,
-       rollout_uri, storage_format
-FROM "marin.rollout_runs"
-WHERE status = 'succeeded'
-ORDER BY timestamp_ms DESC
-```
-
-The table is an append-only discovery index, not the source of truth for rollout contents. Writers
-emit one terminal row per attempt from Marin's evaluation orchestrator or SkyRL adapter. Evalchemy
-and Harbor do not need to depend on Marin's Finelog schema: they continue to own their native
-FineStore output, and Marin catalogs and normalizes it after the evaluator finishes.
-Regional writers register the object-native table with their local Finelog server. The forwarder
-then registers it on the hub before forwarding its first row, so operators do not pre-register the
-table when enabling it on a new cluster.
-
-- [`eval_step`][marin.experiment.evaluation.eval_step] builds one post-hoc eval artifact from an
-  `EvalGroup`; combine groups and aggregate them with
-  [`eval_report`][marin.experiment.evaluation.eval_report]. Concrete task menus remain in
-  `experiments/evals/evals.py`. See [Running Evaluations with Marin](../tutorials/run-lm-evals.md).
-
-One `EvalGroup` (a task set) becomes one `FineStoreEvalchemyResult` artifact addressed by
-`evaluation/evalchemy/{model}/{group_id}`, so a pipeline picks up exactly the evals it needs and each
-is cached and reused. The in-loop `EvalSuite` and the post-hoc `EvalGroup`s draw from the same task
-menu.
-
-### Task sets
-
-Task sets are configured in [`task_configs.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/task_configs.py).
-
-- `CORE_TASKS` is the default for in-loop and post-hoc multiple-choice evals.
-- `CORE_TASKS_PLUS_MMLU` extends `CORE_TASKS` with MMLU.
-- Named menus (`core_evals`, `key_evals`, `base_model_evals`) bundle task sets into `EvalGroup`s; you can also define custom task lists in `task_configs.py` and pass them to your own `EvalGroup`s.
-
-### In-loop metrics
-
-Beyond task accuracy, the in-loop Levanter evaluator tracks these multiple-choice metrics:
-
-1. **Bits per byte (`bpb`)**: `bpb = -log_prob / byte_length * ln(2)`
-2. **Log probability (`logprob`)**: raw log probability of the correct answer.
-3. **Choice log probability (`choice_logprob`)**: `log_prob_correct - log(sum(exp(log_prob_i)))`
-4. **Length-normalized choice probability (`choice_prob_norm`)**:
-   `exp(log_prob_correct / (byte_length_correct * ln(2))) / sum(exp(log_prob_i / (byte_length_i * ln(2))))`
-
-## Generation tasks
-
-Generation tasks (for example HumanEval, GSM8K, and MATH) run through the same post-hoc evalchemy
-path as multiple-choice tasks: the served endpoint answers completion requests, and evalchemy scores
-them.
-
-- Task and suite definitions are in [`task_configs.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/task_configs.py).
-- A common entrypoint is [`run_key_evals.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/run_key_evals.py).
-
-## Harbor-based evaluation
-
-Agentic launcher runs pass the same `RunningModel` boundary to
-`run_harbor_driver`. Off-cluster sandboxes receive a scoped capability route resolved by the
-inference session.
-
-- Harbor supports agent-style benchmarks such as AIME, Terminal-Bench, SWE-bench Verified, and other registry datasets.
-- Marin's Harbor integration executes through Shellbox adapters for Iris, local bubblewrap, Daytona, QEMU and ShellSim.
-- Setup, examples, and environment requirements are documented in [Harbor Framework Integration](../harbor-integration.md).
-
-## Where to go next
-
-- [Running Evaluations with Marin](../tutorials/run-lm-evals.md)
-- [Harbor Framework Integration](../harbor-integration.md)
-- [`experiments/evals/evals.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/evals.py)
-- [`experiments/evals/task_configs.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/task_configs.py)
+Start with [running evaluations](../tutorials/run-lm-evals.md) for commands and
+[task rollouts](../references/task-rollouts.md) for single-task execution.
