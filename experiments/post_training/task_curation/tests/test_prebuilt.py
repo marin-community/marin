@@ -35,6 +35,7 @@ from experiments.post_training.task_curation.driver import _write_corpus
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 from lib.taskcompendium.tests.oracle_filter_fixtures import oracle_receipt
 
 from .prebuilt_fixtures import prebuilt_task
@@ -102,6 +103,7 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
         config=_cohort(2),
         pipeline=prebuilt.import_prebuilt,
         info=SourceInfo(
+            within_source_dedup=deduplication_evidence("open-athena/repo", "a" * 40, "2026.11.12.1"),
             id="Marin:fixture",
             upstream_dataset="fixture",
             upstream_name="fixture",
@@ -126,15 +128,17 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
         step.run(step.build_config(StepContext.for_run(str(destination), str(tmp_path))))
     manifest = json.loads((destination / "manifest.json").read_text())
     assert (manifest["mode"], manifest["intended_use"]) == (mode.value, "train")
-    assert (destination / "tasks.parquet").read_bytes() == published.read_bytes()
+    with (destination / "tasks.parquet").open("rb") as stream:
+        assert pq.read_table(stream).to_pylist() == pq.read_table(published).to_pylist()[:1]
     for view in ("normalize", "final"):
         with next(iter((destination / view / "*.parquet").glob())).open("rb") as handle:
             rows = pq.read_table(handle).to_pylist()
-        assert [TaskSpec.model_validate_json(row["task_json"]).id for row in rows] == ["a", "b"]
+        assert [TaskSpec.model_validate_json(row["task_json"]).id for row in rows] == ["a"]
 
     _write_corpus({"fixture": str(destination)}, [], str(tmp_path / "report.json"), "converted")
     corpus = json.loads((tmp_path / "corpus.json").read_text())
-    assert corpus["sources"][0]["converted_rows"] == 2
+    assert corpus["sources"][0]["converted_rows"] == 1
+    assert manifest["within_source_dedup"]["within_source_duplicates"] == 1
 
 
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
@@ -195,6 +199,7 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
             config=_cohort(1),
             pipeline=prebuilt.import_harbor_prebuilt,
             info=SourceInfo(
+                within_source_dedup=deduplication_evidence("open-athena/repo", "a" * 40, "2026.11.12.1"),
                 id="Marin:native",
                 upstream_dataset="native",
                 upstream_name="native",
@@ -219,7 +224,7 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
             return
         artifact = run(step)[0]
         destination = Path(artifact.path)
-        assert (destination / "tasks.parquet").read_bytes() == path.read_bytes()
+        assert pq.read_table(str(destination / "tasks.parquet")).to_pylist() == pq.read_table(path).to_pylist()
         for view in ("normalize", "final"):
             rows = pq.read_table(next((destination / view).glob("*.parquet"))).to_pylist()
             assert rows[0]["task_json"] == serialized
@@ -254,6 +259,7 @@ def test_direct_prebuilt_admission_requires_oversight_but_allows_unsafe_tasks(tm
         config=config,
         pipeline=prebuilt.import_prebuilt,
         info=SourceInfo(
+            within_source_dedup=deduplication_evidence("open-athena/repo", "a" * 40, "2026.11.12.1"),
             id="Marin:unsafe",
             upstream_dataset=("Marin:unsafe").partition(":")[2],
             upstream_name=("Marin:unsafe").partition(":")[2],
@@ -341,6 +347,7 @@ def test_canonical_judged_release_preserves_tasks_without_a_runtime_envelope(tmp
         config=_cohort(1),
         pipeline=prebuilt.import_taskcompendium_prebuilt,
         info=SourceInfo(
+            within_source_dedup=deduplication_evidence("open-athena/repo", "a" * 40, "2026.11.12.1"),
             id="Marin:reply",
             upstream_dataset="reply",
             upstream_name="reply",
@@ -361,7 +368,7 @@ def test_canonical_judged_release_preserves_tasks_without_a_runtime_envelope(tmp
         prebuilt.import_taskcompendium_prebuilt(source, PipelineOptions(SourceProcessingMode.SAMPLE, CampaignRuntime()))
     )[0]
     destination = Path(artifact.path)
-    assert (destination / "tasks.parquet").read_bytes() == path.read_bytes()
+    assert pq.read_table(str(destination / "tasks.parquet")).to_pylist() == pq.read_table(path).to_pylist()
     for view in ("normalize", "final"):
         admitted = pq.read_table(next((destination / view).glob("*.parquet"))).to_pylist()
         assert [r["task_json"] for r in admitted] == [serialized]
@@ -381,6 +388,7 @@ def test_prebuilt_rejects_calibration_only_success_without_no_oracle_liveness(tm
         config=_cohort(1),
         pipeline=prebuilt.import_prebuilt,
         info=SourceInfo(
+            within_source_dedup=deduplication_evidence("open-athena/repo", "a" * 40, "2026.11.12.1"),
             id="Marin:calibration",
             upstream_dataset="calibration",
             upstream_name="calibration",
@@ -455,6 +463,7 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
         config=_cohort(1),
         pipeline=pipeline,
         info=SourceInfo(
+            within_source_dedup=deduplication_evidence("open-athena/repo", "a" * 40, "2026.11.12.1"),
             id="Marin:oracle",
             upstream_dataset=("Marin:oracle").partition(":")[2],
             upstream_name=("Marin:oracle").partition(":")[2],
@@ -505,6 +514,7 @@ def test_atlas_private_release_policy_blocks_prebuilt_download(monkeypatch, poli
         config=config,
         pipeline=prebuilt.import_prebuilt,
         info=SourceInfo(
+            within_source_dedup=deduplication_evidence("open-athena/repo", "a" * 40, "2026.11.12.1"),
             id="Marin:policy",
             upstream_dataset="policy",
             upstream_name="policy",
@@ -535,6 +545,7 @@ def test_quick_pass_writes_the_validated_cohort_as_converted_tasks(tmp_path, mon
         config=_cohort(2),
         pipeline=prebuilt.import_prebuilt,
         info=SourceInfo(
+            within_source_dedup=deduplication_evidence("open-athena/repo", "a" * 40, "2026.11.12.1"),
             id="Marin:quick",
             upstream_dataset="quick",
             upstream_name="quick",
@@ -551,8 +562,9 @@ def test_quick_pass_writes_the_validated_cohort_as_converted_tasks(tmp_path, mon
         for item in pq.read_table(output / "normalize").column("task_json").to_pylist()
     ]
     assert artifact.status == "completed"
-    assert [task.id for task in tasks] == ["a", "b"]
-    assert manifest["input_rows"] == manifest["converted_rows"] == 2
+    assert [task.id for task in tasks] == ["a"]
+    assert manifest["input_rows"] == 2 and manifest["converted_rows"] == 1
+    assert manifest["within_source_dedup"]["within_source_duplicates"] == 1
     assert manifest["rejections"] == {} and manifest["intended_use"] == "train"
     assert manifest["mode"] == "quick"
     assert not (output / "final").exists()

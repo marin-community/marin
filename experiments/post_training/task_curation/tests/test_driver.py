@@ -50,6 +50,7 @@ from experiments.post_training.task_curation.tests.image_builds import (
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from experiments.post_training.task_curation.tests.resource_receipts import resource_recipe, write_fixture_receipt
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
 def math500() -> CurationRecipe:
@@ -67,6 +68,9 @@ def catalog(monkeypatch, tmp_path):
                 name: RlDataSource(
                     pipeline=process_rows,
                     info=SourceInfo(
+                        within_source_dedup=deduplication_evidence(
+                            pipeline.dataset.name, pipeline.dataset.revision, pipeline.version
+                        ),
                         id=f"Marin:{name}",
                         upstream_dataset=name,
                         upstream_name=name,
@@ -255,6 +259,13 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
             source.info, lexical_contamination=decontamination_evidence(source.dataset.name, source.dataset.revision, 1)
         ),
     )
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, source.version),
+        ),
+    )
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     options = [
         "--mode",
@@ -344,6 +355,13 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
     evidence = decontamination_evidence(source.dataset.name, source.dataset.revision, 1)
     decontamination_path = tmp_path / "decontamination.json"
     decontamination_path.write_text(evidence.model_dump_json())
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, source.version),
+        ),
+    )
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     report = tmp_path / "report.json"
     options = [
@@ -435,6 +453,13 @@ def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, 
             source.info, lexical_contamination=decontamination_evidence(source.dataset.name, source.dataset.revision, 1)
         ),
     )
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, source.version),
+        ),
+    )
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
     staged = tmp_path / "input"
@@ -499,6 +524,13 @@ def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, r
         source,
         info=replace(
             source.info, lexical_contamination=decontamination_evidence(source.dataset.name, source.dataset.revision, 1)
+        ),
+    )
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, source.version),
         ),
     )
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
@@ -572,6 +604,13 @@ def test_full_campaign_requires_qa_transport_availability(tmp_path, monkeypatch,
         source,
         info=replace(
             source.info, lexical_contamination=decontamination_evidence(source.dataset.name, source.dataset.revision, 1)
+        ),
+    )
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, source.version),
         ),
     )
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})

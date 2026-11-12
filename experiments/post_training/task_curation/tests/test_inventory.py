@@ -44,6 +44,7 @@ from experiments.post_training.task_curation.inventory import (
 )
 from experiments.post_training.task_curation.tests.resource_receipts import resource_recipe, write_fixture_receipt
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 FAMILIES = ("calendar", "competitive_coding", "reasoning_gym", "stem", "structural")
 
@@ -274,6 +275,13 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
             daytona_snapshot_count=0,
             daytona_execution_failures=0,
             daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
+        ),
+    )
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, source.version),
         ),
     )
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})

@@ -29,6 +29,7 @@ from experiments.post_training.task_curation.datasets import native_releases
 from experiments.post_training.task_curation.datasets.native_harbor import native_task, unpack_native
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
 
 
 @pytest.mark.parametrize("separate_solution", [False, True])
@@ -180,6 +181,8 @@ def test_native_registration_requires_actor_receipt_for_its_private_pin(source_i
     measurement["dataset_revision"] = release["revision"]
     ledger.write_text(json.dumps({"entries": [entry]}))
     (source,) = native_releases.sources()
+    receipts = read_dedup_receipts(Path(__file__).parents[1] / "datasets/within_source_dedup.json")
+    source = bind_within_source_dedup(source, receipts[source.info.id])
     declaration = source.declaration
     assert declaration.id == source_id
     assert declaration.current_release.repo == release["repo"]

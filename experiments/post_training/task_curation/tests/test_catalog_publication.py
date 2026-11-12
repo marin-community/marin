@@ -42,6 +42,7 @@ from experiments.post_training.task_curation.catalog_snapshot import (
 from experiments.post_training.task_curation.curation_catalog import RUNS
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, SourceReference
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
 def record_attempt(root, source, run_id, started_at, key, status=AssessmentStatus.COMPLETE, *, source_count=1):
@@ -177,6 +178,13 @@ def test_selected_new_pin_invalidates_the_prior_grade(tmp_path):
         config=replace(
             source.config,
             dataset=replace(source.dataset, revision="b" * 40, url=source.dataset.url.replace("a" * 40, "b" * 40)),
+        ),
+    )
+    changed = replace(
+        changed,
+        info=replace(
+            changed.info,
+            within_source_dedup=deduplication_evidence(changed.dataset.name, changed.dataset.revision, changed.version),
         ),
     )
     record_attempt(root, changed, "failed", "2026-10-16T12:00:00Z", "key-b", AssessmentStatus.FAILED)

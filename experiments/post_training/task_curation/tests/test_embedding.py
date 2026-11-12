@@ -30,8 +30,13 @@ from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.embedding import DescriptionEndpoint, curation_embedding_pipeline
 from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from experiments.post_training.task_curation.tests.numbers_pipeline import NumbersConfig, numbers_pipeline
+from experiments.post_training.task_curation.tests.numbers_pipeline import (
+    NUMBERS_DATASET,
+    NumbersConfig,
+    numbers_pipeline,
+)
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
 @pytest.fixture(autouse=True)
@@ -227,6 +232,9 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
                             config=NumbersConfig("source", tmp_path / "unused"),
                             pipeline=numbers_pipeline,
                             info=SourceInfo(
+                                within_source_dedup=deduplication_evidence(
+                                    NUMBERS_DATASET.name, NUMBERS_DATASET.revision, "1"
+                                ),
                                 id="Marin:source",
                                 upstream_dataset="source",
                                 upstream_name="source",
@@ -379,6 +387,7 @@ def test_publication_retains_registered_sources_without_placement(tmp_path, desc
                     config=NumbersConfig("source", tmp_path / "unused"),
                     pipeline=numbers_pipeline,
                     info=SourceInfo(
+                        within_source_dedup=deduplication_evidence(NUMBERS_DATASET.name, NUMBERS_DATASET.revision, "1"),
                         id="Marin:source",
                         upstream_dataset="source",
                         upstream_name="source",
@@ -394,6 +403,9 @@ def test_publication_retains_registered_sources_without_placement(tmp_path, desc
                     config=NumbersConfig("source", tmp_path / "unused"),
                     pipeline=numbers_pipeline,
                     info=SourceInfo(
+                        within_source_dedup=deduplication_evidence(
+                            NUMBERS_DATASET.name, NUMBERS_DATASET.revision, "1", 7
+                        ),
                         id="Marin:release",
                         upstream_dataset=("Marin:release").partition(":")[2],
                         upstream_name=("Marin:release").partition(":")[2],
@@ -410,6 +422,7 @@ def test_publication_retains_registered_sources_without_placement(tmp_path, desc
                     config=NumbersConfig("source", tmp_path / "unused"),
                     pipeline=numbers_pipeline,
                     info=SourceInfo(
+                        within_source_dedup=deduplication_evidence(NUMBERS_DATASET.name, NUMBERS_DATASET.revision, "1"),
                         id="Marin:no-count",
                         upstream_dataset=("Marin:no-count").partition(":")[2],
                         upstream_name=("Marin:no-count").partition(":")[2],
@@ -430,7 +443,8 @@ def test_publication_retains_registered_sources_without_placement(tmp_path, desc
     assert rows["Marin:release"]["basis"] == "declared"
     assert rows["Marin:release"]["task_count"] == 7
     assert rows["Marin:release"]["intended_use"] is None
-    assert "Marin:no-count" not in rows
+    assert rows["Marin:no-count"]["basis"] == "declared"
+    assert rows["Marin:no-count"]["task_count"] == 1
     assert release["task_count"] == 1
 
 
