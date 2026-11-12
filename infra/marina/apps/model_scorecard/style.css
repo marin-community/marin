@@ -1,0 +1,108 @@
+:root {
+  --text: #1f2328;
+  --muted: #656d76;
+  --border: #d0d7de;
+  --header: #f6f8fa;
+  --link: #0969da;
+  --official: #1a7f37;
+  --unofficial: #9a6700;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--text);
+}
+
+body {
+  margin: 0;
+  padding: 24px;
+}
+
+header p,
+.source {
+  max-width: 72ch;
+  color: var(--muted);
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+table {
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+th,
+td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+  white-space: nowrap;
+}
+
+thead th {
+  position: sticky;
+  top: 0;
+  background: var(--header);
+  font-weight: 600;
+}
+
+th.model {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--header);
+  text-align: left;
+}
+
+td .score {
+  font-variant-numeric: tabular-nums;
+}
+
+td.missing,
+.missing {
+  color: var(--muted);
+  text-align: center;
+}
+
+.note-mark {
+  color: var(--unofficial);
+  font-weight: 600;
+}
+
+.chip {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 15px;
+  vertical-align: middle;
+}
+
+.chip.official {
+  color: var(--official);
+}
+
+.chip.unofficial {
+  color: var(--unofficial);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}

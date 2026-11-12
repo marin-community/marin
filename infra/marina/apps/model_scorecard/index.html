@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Model Scorecard</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Model Scorecard</h1>
+      <p>
+        Scores on the eval-policy chat benchmarks (<a href="https://github.com/marin-community/marin/issues/10197">#10197</a>),
+        0&ndash;100. Each score links to the run behind it: EvalDash when the result is an eval run, otherwise the raw
+        files in Filer.
+      </p>
+    </header>
+    <main>
+      <div class="table-wrap">
+        <table id="scorecard"></table>
+      </div>
+      <section class="legend">
+        <span><span class="chip official">Official</span> run under the eval-policy pin</span>
+        <span><span class="chip unofficial">Unofficial</span> run from Marin main, outside the policy pin</span>
+        <span><span class="note-mark">*</span> has a note; hover for details</span>
+        <span><span class="missing">&ndash;</span> no score; hover for the reason</span>
+      </section>
+      <p class="source">
+        Rows, columns and run IDs come from
+        <a href="https://github.com/marin-community/marin/blob/main/infra/marina/apps/model_scorecard/scorecard.yaml">scorecard.yaml</a>.
+      </p>
+    </main>
+    <script id="scorecard-data" type="application/json">__DATA__</script>
+    <script src="app.js" defer></script>
+  </body>
+</html>
