@@ -6,6 +6,7 @@
 import asyncio
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
+from enum import StrEnum
 from functools import partial
 from pathlib import Path
 
@@ -35,6 +36,7 @@ from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
 from shellbox.backends.daytona.machine import (
     DEFAULT_SANDBOX_TTL_MINUTES,
+    DaytonaDeclarativeMachineFactory,
     DaytonaMachine,
     DaytonaMachineFactory,
     DaytonaNetworkMode,
@@ -48,6 +50,11 @@ from shellbox.process_session import (
     finish_owned,
     own_cleanup,
 )
+
+
+class DaytonaProvisioning(StrEnum):
+    SNAPSHOT = "snapshot"
+    DECLARATIVE = "declarative"
 
 
 def machine_spec(task_env_config, environment_dir: Path, env: dict[str, str], *, cpus: int | None, memory_mb: int | None, storage_mb: int | None) -> MachineSpec:
@@ -83,6 +90,7 @@ class DaytonaEnvironment(BaseEnvironment):
         network_policy: dict[str, str] | None = None,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
+        provisioning: DaytonaProvisioning = DaytonaProvisioning.SNAPSHOT,
         model_endpoint: str | None = None,
         model_name: str | None = None,
         judge_access: JudgeAccess = JudgeAccess.VERIFIER,
@@ -122,7 +130,11 @@ class DaytonaEnvironment(BaseEnvironment):
                     target=connection.target,
                 ),
             )
-        self.factory = DaytonaMachineFactory(
+        factory_type = {
+            DaytonaProvisioning.SNAPSHOT: DaytonaMachineFactory,
+            DaytonaProvisioning.DECLARATIVE: DaytonaDeclarativeMachineFactory,
+        }[DaytonaProvisioning(provisioning)]
+        self.factory = factory_type(
             client_factory,
             ttl_minutes=ttl_minutes,
             create_timeout=create_timeout,

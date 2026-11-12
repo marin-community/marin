@@ -42,7 +42,7 @@ rl:
   sha256: e18bcac33394c0667d3c42bd3e24e967498ea5f2211f04ef480b54c3753c5551
 evaluation:
   path: evaluation.yaml
-  sha256: a8ad92b2014deeab669c7d87096a62ecc2ff8dc1521d89248aaba0dea43da7e2
+  sha256: f2c28a45f34383dc7c9fffe378b7cacfc76381ab82405893f885ab426081e5d5
 smoke_overrides:
   sft_steps: 2
   rl_steps: 5

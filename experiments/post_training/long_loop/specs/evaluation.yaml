@@ -117,6 +117,7 @@ config:
   terminal_bench:
     harbor:
       environment_type: daytona
+      daytona_provisioning: declarative
       daytona_api_key_env: DAYTONA_EVAL_API_KEY
       eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY
       verifier_override_timeout_sec: 300

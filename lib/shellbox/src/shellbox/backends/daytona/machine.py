@@ -24,6 +24,7 @@ from pathlib import Path, PurePosixPath
 from daytona import (
     AsyncDaytona,
     AsyncSandbox,
+    CreateSandboxFromImageParams,
     CreateSandboxFromSnapshotParams,
     CreateSnapshotParams,
     DaytonaConflictError,
@@ -144,7 +145,9 @@ async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSour
     return name
 
 
-async def _create_sandbox(client: AsyncDaytona, params: CreateSandboxFromSnapshotParams, timeout: float) -> AsyncSandbox:
+async def _create_sandbox(
+    client: AsyncDaytona, params: CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams, timeout: float
+) -> AsyncSandbox:
     """Retry throttling using a caller-owned name to recover an accepted creation."""
     assert params.name is not None
     backoff = ExponentialBackoff(initial=1, maximum=30, factor=2, jitter=0.5)
@@ -619,36 +622,34 @@ class DaytonaMachineFactory:
             assert self.snapshot_leaser is not None
             await self.snapshot_leaser.release(lease)
 
-    async def create(self, spec: MachineSpec) -> DaytonaMachine:
+    def _sandbox_parameters(self, spec: MachineSpec, name: str) -> dict:
         network = (
             {"network_block_all": spec.network is NetworkPolicy.DENY}
             if self.network_policy is None
             else self.network_policy.parameters()
         )
+        return dict(name=name, os_user="root", env_vars=spec.env, ttl_minutes=self.ttl_minutes, **network)
+
+    async def _create_parameters(
+        self, client: AsyncDaytona, spec: MachineSpec, name: str
+    ) -> tuple[CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams, SnapshotLease | None]:
+        lease = None
+        if self.snapshot_leaser is not None and isinstance(spec.source, RegistryImage):
+            lease = await self.snapshot_leaser.acquire(spec)
+            snapshot = lease.name
+        else:
+            snapshot = await self._prepare(client, spec)
+        return CreateSandboxFromSnapshotParams(snapshot=snapshot, **self._sandbox_parameters(spec, name)), lease
+
+    async def create(self, spec: MachineSpec) -> DaytonaMachine:
         async with AsyncExitStack() as lifetime:
             client = await lifetime.enter_async_context(self.client_factory())
             timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
             async with asyncio.timeout(timeout):
-                lease = None
-                if self.snapshot_leaser is not None and isinstance(spec.source, RegistryImage):
-                    lease = await self.snapshot_leaser.acquire(spec)
-                    snapshot = lease.name
-                else:
-                    snapshot = await self._prepare(client, spec)
                 name = f"shellbox-{uuid.uuid4().hex}"
+                params, lease = await self._create_parameters(client, spec, name)
                 lifetime.push_async_callback(self._delete_and_release, client, name, lease)
-                sandbox = await _create_sandbox(
-                    client,
-                    CreateSandboxFromSnapshotParams(
-                        name=name,
-                        snapshot=snapshot,
-                        os_user="root",
-                        env_vars=spec.env,
-                        **network,
-                        ttl_minutes=self.ttl_minutes,
-                    ),
-                    timeout=timeout,
-                )
+                sandbox = await _create_sandbox(client, params, timeout=timeout)
                 # Resolve the image WORKDIR before setup can replace its inode.
                 # An omitted API cwd can retain the provider's deleted directory.
                 workdir = spec.workdir or await sandbox.get_work_dir()
@@ -666,3 +667,28 @@ class DaytonaMachineFactory:
                     raise RuntimeError(f"Failed to create workdir {spec.workdir}: {result.stderr!r}")
             machine.resources = lifetime.pop_all()
             return machine
+
+
+class DaytonaDeclarativeMachineFactory(DaytonaMachineFactory):
+    """Create directly from the task image without creating or leasing named snapshots."""
+
+    async def prepare(self, spec: MachineSpec) -> str:
+        raise UnsupportedMachineSpec("Declarative builds run during sandbox creation; no snapshot can be prepared")
+
+    async def _create_parameters(
+        self, client: AsyncDaytona, spec: MachineSpec, name: str
+    ) -> tuple[CreateSandboxFromImageParams, None]:
+        if self.snapshot_leaser is not None:
+            raise ValueError("Declarative Daytona builds cannot use a snapshot leaser")
+        source = _validated_source(self._check_spec(spec))
+        image = source.reference if isinstance(source, RegistryImage) else Image.from_dockerfile(source.dockerfile)
+        resources = Resources(
+            cpu=spec.cpus,
+            memory=math.ceil(spec.memory_mb / 1024) if spec.memory_mb is not None else None,
+            disk=math.ceil(spec.storage_mb / 1024) if spec.storage_mb is not None else None,
+            gpu=spec.gpus or None,
+        )
+        return (
+            CreateSandboxFromImageParams(image=image, resources=resources, **self._sandbox_parameters(spec, name)),
+            None,
+        )

@@ -488,3 +488,13 @@ The guest has persistent files for a trial. A minimal bundle uses BusyBox `ash` 
 The QEMU image must contain the task tools and verifier dependencies needed without guest internet. `Bash` runs through a guest PTY on a separate virtio-serial channel. One `Bash` tool returns JSON with `output`, `status`, `exit_code`, and `truncated`. Pass `command` to start a command; omit it to read a running command, pass `input` to send text, or set `signal` to `interrupt` to send Ctrl-C. Use at most one of `command`, `input`, and `signal` per call. `Bash` waits at most 30 seconds per call; a longer command remains active for later reads or interruption. PTY stdout and stderr are combined. A tool result retains at most 128 KiB and marks excess output as truncated; excess output cannot be retrieved later. Agents can redirect large output to a file and inspect a smaller excerpt. `exit` or shell failure resets Bash while files remain. The one-shot serial protocol still buffers setup and verifier output in guest files. Each machine writes to a private temporary overlay over the read-only ext4 base; writes persist until close and are then discarded. Extended attributes, Linux capabilities, device nodes outside `/dev`, and volume semantics have not been checked against an OCI runtime.
 
 The guest is isolated by QEMU's emulated machine boundary, but this prototype has not been security audited. It is intended for nonhostile agents on an already controlled compute node.
+
+For the dedicated [Daytona Eval account](../../.agents/ops/daytona.md#credentials-and-account-selection), select
+`provisioning: declarative` in Harbor's environment kwargs. Harbor creates a
+sandbox directly from the task's registry image or Dockerfile with
+`CreateSandboxFromImageParams`, without creating or leasing named snapshots.
+`DaytonaMachineFactory` remains snapshot-backed;
+`DaytonaDeclarativeMachineFactory` uses the same command and cleanup behavior.
+SkyRL exposes this choice as `terminal_bench.harbor.daytona_provisioning`. The
+long-loop Micro210 recipe selects `declarative` with `DAYTONA_EVAL_API_KEY`;
+training keeps its existing snapshot policy.

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from daytona import CreateSandboxFromImageParams
 from daytona._utils.env import DaytonaEnvReader
 from openai import (
     AsyncOpenAI,
@@ -31,6 +32,8 @@ from harbor.agents.terminus_2.tmux_session import (
 )
 from harbor.environments import model_relay
 from harbor.environments.daytona import DaytonaEnvironment
+from harbor.environments.factory import EnvironmentFactory
+from harbor.models.environment_type import EnvironmentType
 from harbor.environments.local import LocalEnvironment
 from harbor.environments.model_relay import ModelRelay
 from harbor.environments.qemu import QemuEnvironment
@@ -654,3 +657,56 @@ def test_host_connection_prevents_sdk_ambient_auth_and_destination_fallback(
             await client.close()
 
     asyncio.run(run())
+
+
+async def test_declarative_harbor_starts_and_deletes_without_a_snapshot_service(tmp_path):
+    class Provider:
+        def __init__(self):
+            self.created = None
+            self.deleted = False
+            self.process = SimpleNamespace(exec=self.exec)
+
+        async def exec(self, *args, **kwargs):
+            return SimpleNamespace(exit_code=0, result="/usr/bin/setsid")
+
+        async def get_work_dir(self):
+            return "/testbed"
+
+        async def create(self, params, *, timeout):
+            self.created = params
+            return self
+
+        async def get(self, name):
+            assert name == self.created.name
+            return self
+
+        async def delete(self, sandbox):
+            assert sandbox is self
+            self.deleted = True
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    provider = Provider()
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM python:3.12-slim\nWORKDIR /testbed\n")
+    environment = EnvironmentFactory.create_environment(
+        type=EnvironmentType.DAYTONA,
+        environment_dir=tmp_path,
+        environment_name="eval-task",
+        session_id="eval-trial",
+        trial_paths=TrialPaths(tmp_path / "trial"),
+        task_env_config=EnvironmentConfig(cpus=2, memory_mb=4096, storage_mb=10240),
+        provisioning="declarative",
+        client_factory=lambda: provider,
+    )
+    async with asyncio.TaskGroup() as service_tasks:
+        await environment.start(False, service_tasks=service_tasks)
+        assert isinstance(provider.created, CreateSandboxFromImageParams)
+        assert provider.created.image.dockerfile() == dockerfile.read_text()
+        assert provider.created.resources.cpu == 2
+        await environment.stop(True)
+    assert provider.deleted
