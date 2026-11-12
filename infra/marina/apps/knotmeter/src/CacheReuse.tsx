@@ -247,6 +247,12 @@ export function CacheReuse({ runs }: { runs: Run[] }) {
       </div>
       <section className="panel table-scroll">
         <h2>Measured profiling totals</h2>
+        <p className="muted">
+          Calibration token totals use the saved worker-endpoint counters.
+          Server output includes work on unfinished requests; benchmark
+          throughput uses completed client requests. The original aggregates
+          retain the mirrored router and worker sums in provenance.
+        </p>
         <table>
           <thead>
             <tr>
@@ -258,12 +264,18 @@ export function CacheReuse({ runs }: { runs: Run[] }) {
           </thead>
           <tbody>
             {filtered.map((r) => {
-              const tokens = r.aggregate.server_metrics?.tokens;
+              const tokens = r.calibration
+                ? r.diagnostic_totals
+                : r.aggregate.server_metrics?.tokens;
               return (
                 <tr key={r.key}>
                   <td>
                     <a href={`#/run/${r.key}`}>
                       {modelName(r)} · {r.hardware} C{r.concurrency} · {r.date}
+                      <small>
+                        {topologyLabel(r)} · {sourceLabel(r)} ·{" "}
+                        {measurementLabel(r)}
+                      </small>
                     </a>
                   </td>
                   <td>

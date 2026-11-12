@@ -62,6 +62,20 @@ def curve_controls(attempt: dict[str, Any], duration: int) -> dict[str, Any]:
     }
 
 
+def worker_totals(aggregate: dict[str, Any], endpoint: str) -> dict[str, Any]:
+    """Select saved per-engine counters without adding mirrored router copies."""
+    server = aggregate.get("server_metrics", {})
+    sources = [s for s in server.get("sources", []) if s["id"].split("|", 2)[1] == endpoint]
+    totals: dict[str, Any] = {
+        "endpoint": endpoint,
+        "requests_completed": server.get("tokens", {}).get("requests_completed"),
+    }
+    for name, field in [("prompt_total", "prompt_tokens"), ("generation_total", "generation_tokens")]:
+        values = [s.get(field) for s in sources]
+        totals[name] = sum(values) if values and all(isinstance(v, (float, int)) for v in values) else None
+    return totals
+
+
 def prepare_calibrations(root: Path, job: str | None = None) -> Iterator[ImportRun]:
     """Validate native receipts and stream valid 15-minute observations one at a time."""
     index = root / "curve-summary.json"
@@ -209,6 +223,7 @@ def prepare_calibrations(root: Path, job: str | None = None) -> Iterator[ImportR
                 "prefixCacheHitRate": None,
             },
             "configuration": config,
+            "diagnostic_totals": worker_totals(aggregate, attempt["worker_metrics_url"]),
             "manifest": attempt,
             "validation": validation,
             "source_files": {str(path.relative_to(root)): file_digest(path) for path in files},

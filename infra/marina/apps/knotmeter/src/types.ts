@@ -104,6 +104,12 @@ export interface Run {
     "isl" | "osl" | "kvCacheUtil" | "prefixCacheHitRate",
     Record<string, number> | null
   >;
+  diagnostic_totals?: {
+    endpoint: string;
+    prompt_total: number | null;
+    generation_total: number | null;
+    requests_completed: number | null;
+  };
   configuration: Record<string, unknown>;
   manifest: unknown;
   validation: unknown;

@@ -28,6 +28,8 @@ import {
   sourceCommit,
   measurementLabel,
   topologyLabel,
+  submissionIdentity,
+  sourceLabel,
 } from "./types";
 import { seriesKey } from "./metrics";
 import { requestTimeline, requestChartData, type RunData } from "./data";
@@ -98,7 +100,13 @@ export function RunView({ run: listedRun, runs }: { run: Run; runs: Run[] }) {
     [server, sourceSeries, chartData, phase],
   );
   const siblings = runs
-    .filter((r) => seriesKey(r) === seriesKey(run) && r.model === run.model)
+    .filter(
+      (r) =>
+        (run.calibration
+          ? seriesKey(r) === seriesKey(run)
+          : submissionIdentity(r) === submissionIdentity(run)) &&
+        r.model === run.model,
+    )
     .toSorted((a, b) => a.concurrency - b.concurrency);
   const pool =
     typeof run.aggregate.kv_cache_pool_tokens === "number"
@@ -156,6 +164,11 @@ export function RunView({ run: listedRun, runs }: { run: Run; runs: Run[] }) {
             href={`#/run/${r.key}?view=${view}`}
           >
             {r.hardware} C{r.concurrency}
+            {r.calibration && (
+              <small>
+                {r.date} · {sourceLabel(r)}
+              </small>
+            )}
           </a>
         ))}
       </div>

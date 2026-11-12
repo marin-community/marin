@@ -92,6 +92,12 @@ reads `curve-summary.json` and `window-effects.json`, then checks native validit
 900-second coverage, attempt identity, topology, request accounting and saved
 aggregate normalization. Invalid screens are excluded. Points load sequentially;
 adjacent server exports can be JSON or `.json.zst`. Original artifacts stay unchanged.
+Calibration diagnostics select the receipt's worker metrics endpoint before
+reduction because the router mirrors the same engine counters. The cache key
+includes that endpoint. Profiling token totals sum the saved per-engine worker
+aggregates; the original combined router/worker aggregates remain in provenance.
+Server output can include tokens from unfinished requests, while benchmark
+throughput uses completed client requests.
 
 The inventory's calibration link selects all dates and includes dominated points.
 For the retained Hero data, its chart fragment is

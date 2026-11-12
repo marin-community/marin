@@ -42,8 +42,15 @@ def attach_series(prepared: ImportRun, bundle: Path, cache: Path) -> ImportRun:
     with source.open("rb") as stream:
         source_digest = hashlib.file_digest(stream, "sha256").hexdigest()
     reducer = Path(__file__).resolve().parent.parent / ".build/reduce-series.mjs"
+    endpoint = (
+        prepared.run["manifest"]["worker_metrics_url"]
+        if prepared.run["source"]["kind"] == "private-calibration"
+        else None
+    )
     reducer_digest = hashlib.sha256(
-        reducer.read_bytes() + Path(__file__).with_name("collect_series.py").read_bytes()
+        reducer.read_bytes()
+        + Path(__file__).with_name("collect_series.py").read_bytes()
+        + json.dumps({"endpoint": endpoint}, sort_keys=True).encode()
     ).hexdigest()
     cache.mkdir(parents=True, exist_ok=True)
     profile_digest = prepared.run["source_files"][profile]
@@ -59,6 +66,7 @@ def attach_series(prepared: ImportRun, bundle: Path, cache: Path) -> ImportRun:
                 "--framework",
                 prepared.run["framework"],
             ]
+            + (["--endpoint", endpoint] if endpoint is not None else [])
         )
         series = json.loads(output)
         temporary = cached.with_suffix(f".{uuid.uuid4().hex}.tmp")
@@ -67,7 +75,11 @@ def attach_series(prepared: ImportRun, bundle: Path, cache: Path) -> ImportRun:
     series = read_json(cached)
     run = prepared.run | {
         "source_files": prepared.run["source_files"] | {str(source.relative_to(bundle)): source_digest},
-        "series_reducer": {"upstream": "315128ce4e49c8a1ec1aa67eafa8f2de26e4c1f9", "sha256": reducer_digest},
+        "series_reducer": {
+            "upstream": "315128ce4e49c8a1ec1aa67eafa8f2de26e4c1f9",
+            "sha256": reducer_digest,
+            "endpoint": endpoint,
+        },
         "diagnostic_aggregates": series["aggregates"],
     }
     run.pop("content_sha256", None)

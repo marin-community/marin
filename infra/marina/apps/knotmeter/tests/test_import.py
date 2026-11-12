@@ -57,6 +57,13 @@ def test_calibration_repeats_survive_native_import_and_keep_baselines_separate(c
             assert run["aggregate"]["tp"] == run["physical_gpus"] == 12
             assert run["metrics"]["throughput"]["per_gpu"]["output_tput_tps"] == 40.5
             assert run["calibration"]["profiling_cancelled"] == 1
+            assert run["diagnostic_totals"] == {
+                "endpoint": "http://127.0.0.1:9000/metrics",
+                "prompt_total": 300,
+                "generation_total": 30,
+                "requests_completed": 2,
+            }
+            assert run["aggregate"]["server_metrics"]["tokens"]["generation_total"] == 60
             assert saved["requests"] == point.requests
             assert not load_run(point, query)["changed"]
         assert client.get(f"/runs/{baseline.key}").json()["measurement_seconds"] == 3600

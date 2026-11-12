@@ -174,6 +174,15 @@ def calibration(bundle, tmp_path: Path):
     config = collector["points"][0]["receipt"]["configuration"]["series"] | {"duration": 900}
     workload = collector["points"][0]["manifest"]["workload"]
     aggregate = json.loads((original / "bmk_point/agg.json").read_text()) | {"tp": 12}
+    worker = "http://127.0.0.1:9000/metrics"
+    aggregate["server_metrics"] = {
+        "tokens": {"prompt_total": 600, "generation_total": 60, "requests_completed": 2},
+        "sources": [
+            {"id": f"combined|{endpoint}|engine={engine}", "prompt_tokens": prompt, "generation_tokens": generated}
+            for endpoint in [worker, "http://127.0.0.1:9001/metrics"]
+            for engine, prompt, generated in [(0, 100, 10), (1, 200, 20)]
+        ],
+    }
     topology = {"tp": 6, "dp": 2, "ep": 12, "pp": 1}
     rows, windows = [], []
     for index in range(2):
@@ -218,6 +227,7 @@ def calibration(bundle, tmp_path: Path):
             "workload": workload,
             "server_command": ["vllm", "serve", "example/model", "--max-num-seqs", "128", "--port", str(8000 + index)],
             "server_environment": {},
+            "worker_metrics_url": worker,
             "private_runtime": {"wheel": {"sha256": "runtime-pin"}},
         }
         files = {

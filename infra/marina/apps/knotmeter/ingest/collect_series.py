@@ -65,7 +65,7 @@ def export_stream(source: Path) -> Iterator[IO[bytes]]:
             raise subprocess.CalledProcessError(process.returncode, process.args)
 
 
-def collect(source: Path, reducer: Path, framework: str) -> bytes:
+def collect(source: Path, reducer: Path, framework: str, endpoint: str | None) -> bytes:
     wanted = set(json.loads(subprocess.check_output(["node", str(reducer), "--keys"])))
     phases = {"metrics": {}, "warmup_metrics": {}}
     with export_stream(source) as stream:
@@ -73,7 +73,10 @@ def collect(source: Path, reducer: Path, framework: str) -> bytes:
         for prefix, event, key in events:
             if prefix not in phases or event != "map_key" or key not in wanted:
                 continue
-            phases[prefix][key] = chart_metric(events, f"{prefix}.{key}")
+            metric = chart_metric(events, f"{prefix}.{key}")
+            if endpoint is not None:
+                metric["series"] = [s for s in metric.get("series", []) if s.get("endpoint_url") == endpoint]
+            phases[prefix][key] = metric
     profile = {"isl": [], "osl": []}
     with source.with_name("profile_export.jsonl").open() as stream:
         for line in stream:
@@ -104,11 +107,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("--framework", required=True)
+    parser.add_argument("--endpoint", help="Use the recorded worker endpoint when the router mirrors its counters")
     args = parser.parse_args()
     reducer = Path(__file__).resolve().parent.parent / ".build/reduce-series.mjs"
     if not reducer.is_file():
         raise FileNotFoundError("Build Knotmeter before ingestion: npm ci && npm run build")
-    print(collect(args.source, reducer, args.framework).decode())
+    print(collect(args.source, reducer, args.framework, args.endpoint).decode())
 
 
 if __name__ == "__main__":
