@@ -4,6 +4,8 @@ from pathlib import Path
 from upath import UPath
 
 from harbor.agents.base import BaseAgent
+from harbor.agents.nop import NopAgent
+from harbor.agents.oracle import OracleAgent
 from harbor.agents.installed.codex import Codex
 from harbor.agents.installed.mini_swe_agent import MiniSweAgent
 from harbor.agents.installed.opencode import OpenCode
@@ -19,7 +21,7 @@ from harbor.utils.env import resolve_env_vars
 class AgentFactory:
     _AGENT_MAP: dict[str, type[BaseAgent]] = {
         agent.name(): agent
-        for agent in (Pi, MiniSweAgent, Codex, OpenCode, Terminus2, TerminusKira)
+        for agent in (Pi, MiniSweAgent, Codex, OpenCode, Terminus2, TerminusKira, OracleAgent, NopAgent)
     }
 
     @classmethod

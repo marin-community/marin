@@ -501,7 +501,6 @@ def test_archived_build_pin_requires_matching_recipe_and_permissions(name, docke
     record = harbor_record(
         {"task_json": task.model_dump_json(), "original_path": "fixture", "source_row": f"{name}/tasks.parquet:0"},
         grader_image=None,
-        fallback_actor_image=BASE_IMAGE,
         family="competitive-programming",
     )
     exported = archive_files(

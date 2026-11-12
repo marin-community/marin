@@ -392,6 +392,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 intended_use=IntendedUse.TRAIN,
                 rubric=source.rubric,
                 controls=PYTHON_TESTS_CONTROLS,
+                oracle_solutions=True,
                 grader=GRADER_PACKAGES,
             ),
         )

@@ -71,7 +71,8 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.models import CheckStatus
+from taskcompendium.pipeline.controls import _oracle_attempt
+from taskcompendium.pipeline.models import CheckStatus, OracleCommand
 from taskcompendium.pipeline.verification import verify_task
 from taskcompendium.runtime.episode import ScriptedActor, run_episode
 from taskcompendium.runtime.grading import SPEC_PATH, STAGING_ARCHIVE, grade_empty_in_sandbox, grade_in_sandbox
@@ -277,9 +278,15 @@ class LocalGradingMachine:
                 self.local(path).unlink(missing_ok=True)
             return EXITED
         if command.argv[:2] == ("mkdir", "-p"):
-            for path in command.argv[2:]:
-                self.local(path).mkdir(parents=True, exist_ok=True)
-            return EXITED
+            process = await asyncio.create_subprocess_exec(
+                "mkdir",
+                "-p",
+                *(str(self.local(path)) if path else path for path in command.argv[2:]),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate()
+            return Result(process.returncode, stdout, stderr, False, False, ExitReason.EXITED)
         if command.argv[:2] == ("tar", "-xf"):
             with tarfile.open(self.local(command.argv[2])) as archive:
                 archive.extractall(self.root, filter="data")
@@ -296,7 +303,8 @@ class LocalGradingMachine:
                     spec_path.write_text(render_spec(replace(spec, workspace=str(self.local("/app")))))
                 argv.extend(("--logs-dir", str(self.local("/logs/verifier"))))
         else:
-            assert program in {"bash", "sh"}, command.argv
+            assert Path(program).name in {"bash", "sh", "cat"}, command.argv
+            argv[0] = program
         process = await asyncio.create_subprocess_exec(
             *argv,
             cwd=self.local(command.cwd or self.workdir),
@@ -925,3 +933,18 @@ async def test_grader_setup_cannot_overwrite_captured_candidate_files(shell_task
         GRADER_MACHINE,
     )
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
+
+
+@pytest.mark.asyncio
+async def test_oracle_preserves_an_images_default_working_directory(shell_task, tmp_path):
+    task = shell_task.model_copy(update={"resources": ResourceGroups()})
+    machines = LocalGradingMachines(tmp_path)
+    attempt = await _oracle_attempt(
+        task,
+        OracleCommand("printf 7 > answer.txt", answer_file="answer.txt"),
+        machines,
+        replace(GRADER_MACHINE, workdir=""),
+        GRADER_ENVIRONMENT,
+    )
+    assert attempt.conversation.events[-1].content == "7"
+    assert all(machine.closed for machine in machines.machines)

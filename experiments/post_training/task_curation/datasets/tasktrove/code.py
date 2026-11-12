@@ -230,6 +230,7 @@ def stdio_source(
             intended_use=IntendedUse.TRAIN,
             rubric=rubric,
             controls=EXECUTABLE_CONTROLS,
+            oracle_solutions=True,
             grader=grader,
         ),
     )
@@ -299,7 +300,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "laion__exp_rpt_taco-v2",
             convert_taco_task,
             TACO_RUBRIC,
-            version="4",
+            version="5",
             grader=None,
             info=SourceInfo(
                 id="Task Trove:laion__exp_rpt_taco-v2",
@@ -309,7 +310,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn", "language:python", "excluded"),
                 count=10000,
                 notes=(
-                    "Excluded pending SAMPLE/FULL QA of converter version 4. "
+                    "Excluded pending SAMPLE/FULL QA of converter version 5. "
                     "Hidden cases plus oracle. Filter to tasks with at least 5 cases and add tolerance-"
                     "aware compare where the prompt promises one."
                 ),

@@ -74,6 +74,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 intended_use=IntendedUse.TRAIN,
                 rubric=NL2BASH_RUBRIC,
                 controls=Controls(golden=solve_script),
+                oracle_solutions=True,
                 grader=GRADER_PACKAGES,
             ),
         )

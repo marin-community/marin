@@ -179,7 +179,7 @@ def _machine(
     return MachineSpec(
         source=RegistryImage(image_reference),
         workdir=workdir,
-        network=NetworkPolicy.DENY,
+        network=NetworkPolicy.ALLOW if task.allow_internet else NetworkPolicy.DENY,
         env=(
             {
                 **resolve_env_vars(
@@ -242,8 +242,6 @@ def import_prepared_task(
     protected_values: frozenset[str] = frozenset(),
 ) -> ImportedTask:
     """Translate the supported Compose subset without building images or reading host variables."""
-    if task.allow_internet:
-        raise ValueError("Prepared service groups require allow_internet=false")
     if task.os is not TaskOS.LINUX:
         raise ValueError("Prepared service groups require Linux images")
     if task.gpus or task.gpu_types or task.tpu is not None:

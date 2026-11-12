@@ -39,6 +39,7 @@ class ProcessMachine:
             "/workspace",
             "/tests",
             "/setup_files",
+            "/solution",
         ):
             value = value.replace(prefix, str(self.path(prefix)))
         return value.replace("tau3-runtime", "127.0.0.1")

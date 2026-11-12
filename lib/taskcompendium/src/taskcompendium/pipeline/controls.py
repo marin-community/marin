@@ -295,7 +295,7 @@ async def _oracle_attempt(
             ORACLE_TIMEOUT,
             user=setup_user(factory.backend),
         )
-        commands = [Command(("mkdir", "-p", workspace), timeout=ORACLE_TIMEOUT)]
+        commands = [Command(("mkdir", "-p", workspace), timeout=ORACLE_TIMEOUT)] if workspace else []
         commands.extend(
             Command(("sh", "-c", setup), cwd=workspace, timeout=ORACLE_TIMEOUT, user=setup_user(factory.backend))
             for setup in environment.setup_commands
