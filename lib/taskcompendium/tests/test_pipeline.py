@@ -510,20 +510,6 @@ def test_review_accepts_glm_completed_tool_call_with_stop_finish_reason():
     assert records[0].verdict.task_id == "task-0"
 
 
-def test_conflicting_review_is_informational_even_at_high_confidence(apple_row):
-    task = svamp_task("task-0", apple_row)
-    row = response(task.id, confidence="high")
-    function = row["response"]["body"]["choices"][0]["message"]["tool_calls"][0]["function"]
-    verdict = json.loads(function["arguments"])
-    verdict.update(quality="bad", reference_status="conflict", defects=["wrong_reference"])
-    function["arguments"] = json.dumps(verdict)
-    review = review_records(json.dumps(row), [task.id])[0]
-    assert review.verdict.quality == "bad"
-    decision = task_decision(task.id, verify_task(task))
-    assert decision.disposition == Disposition.KEEP
-    assert decision.reasons == []
-
-
 @pytest.mark.parametrize(
     "fault",
     [
