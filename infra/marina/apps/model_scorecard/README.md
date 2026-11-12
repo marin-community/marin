@@ -21,7 +21,9 @@ a release never reads object storage.
    uv run python infra/marina/apps/model_scorecard/build_data.py
    ```
 
-   The script rejects runs that did not succeed and runs whose eval does not match the column.
+   The script uses the published EvalDash measurement, including the eval-policy metric selection.
+   It rejects incomplete runs, runs whose eval does not match the column, and runs whose model or
+   revision does not match the row.
 3. Run the tests and open a PR with both files:
 
    ```bash

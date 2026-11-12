@@ -18,7 +18,9 @@ from typing import Any
 from urllib.parse import quote
 
 import yaml
+from marin.evaluation.eval_measurements import measurement_from_record
 from marin.evaluation.records import CW_RECORDS_PREFIX, EvalRunRecord, RunStatus, read_record, record_path
+from marin.execution.step_status import STATUS_SUCCESS
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 ROOT = Path(__file__).resolve().parent
@@ -83,20 +85,20 @@ def source_link(uri: str) -> Link:
 
 
 def headline_score(record: EvalRunRecord) -> float:
-    """The record's primary metric on a 0-100 scale."""
+    """The published benchmark measurement on a 0-100 scale."""
     if record.status != RunStatus.SUCCEEDED:
         raise ValueError(f"Run {record.run_id} has status {record.status.value!r}")
-    tasks = record.evaluation.tasks
-    if len(tasks) != 1 or len(record.canonical_metrics) != 1 or tasks[0].benchmark is None:
-        raise ValueError(f"Run {record.run_id} must report exactly one task with benchmark metadata")
-    primary = tasks[0].benchmark.primary_metric
-    (task_metrics,) = record.canonical_metrics.values()
-    if primary not in task_metrics:
-        raise ValueError(f"Run {record.run_id} has no canonical value for primary metric {primary!r}")
-    return round(100 * task_metrics[primary], SCORE_DECIMALS)
+    if record.step_status not in (None, STATUS_SUCCESS):
+        raise ValueError(f"Run {record.run_id} has step status {record.step_status!r}")
+    measurement = measurement_from_record(record)
+    if measurement is None:
+        raise ValueError(f"Run {record.run_id} has no published measurement")
+    return round(100 * measurement.value, SCORE_DECIMALS)
 
 
-def resolve_cell(eval_name: str, spec: Mapping[str, Any] | None, fetch_record: FetchRecord) -> Cell:
+def resolve_cell(
+    eval_name: str, spec: Mapping[str, Any] | None, model: Mapping[str, Any], fetch_record: FetchRecord
+) -> Cell:
     if spec is None:
         return MissingCell("")
     if "missing" in spec:
@@ -107,6 +109,12 @@ def resolve_cell(eval_name: str, spec: Mapping[str, Any] | None, fetch_record: F
         record = fetch_record(spec["run_id"])
         if record.evaluation.name != eval_name:
             raise ValueError(f"Run {record.run_id} evaluates {record.evaluation.name!r}, not {eval_name!r}")
+        revision = record.model.config.revision if record.model.config is not None else None
+        if (record.model.location, revision) != (model["hf_repo"], model["revision"]):
+            raise ValueError(
+                f"Run {record.run_id} evaluates {record.model.location!r}@{revision!r}, "
+                f"not {model['hf_repo']!r}@{model['revision']!r}"
+            )
         return ScoredCell(headline_score(record), label, run_link(record.run_id), record.run_id, note)
     if "source" in spec:
         score = float(spec["score"])
@@ -138,7 +146,7 @@ def build_scorecard(manifest: Mapping[str, Any], fetch_record: FetchRecord) -> d
                 "name": model["name"],
                 "hf_repo": model["hf_repo"],
                 "url": HF_URL.format(repo=model["hf_repo"], revision=model["revision"]),
-                "cells": {name: cell_json(resolve_cell(name, cells.get(name), fetch_record)) for name in evals},
+                "cells": {name: cell_json(resolve_cell(name, cells.get(name), model, fetch_record)) for name in evals},
             }
         )
     return {"evals": evals, "models": models}

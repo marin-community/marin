@@ -71,7 +71,7 @@
           "run_id": "20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-gsm8k-0shot-06ccc4081cc75e6095125c9c05a96850"
         },
         "piqa": {
-          "score": 84.11,
+          "score": 85.64,
           "label": "unofficial",
           "link": {
             "kind": "evaldash",
@@ -217,7 +217,7 @@
           "run_id": "20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-gsm8k-0shot-ea2125823e165c92874ae47597f77cbe"
         },
         "piqa": {
-          "score": 82.26,
+          "score": 84.33,
           "label": "unofficial",
           "link": {
             "kind": "evaldash",
