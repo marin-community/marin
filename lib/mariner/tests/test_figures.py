@@ -200,7 +200,7 @@ OWN_BEST_PREDICTORS = {
     "obe_easy": {Method.MARINER, Method.SPLINE, Method.OLMIX},
 }
 # Figure 7's caption: each bar is the measured loss's "mean $\pm$ std over three trainer seeds", the values that
-# tab:a-baseline-validation prints for these four proposals (sections/appendix.tex:342-350).
+# tab:a-baseline-validation prints for these four proposals (sections/appendix.tex:344-352).
 PRINTED_VALIDATION_LOSSES = {
     ("uncheatable", "mariner"): ("0.9825", "0.0010"),
     ("uncheatable", "olmix"): ("1.0022", "0.0014"),
@@ -219,28 +219,28 @@ PRINTED_VALIDATION_LOSSES = {
 # (sections/introduction.tex:17: "its trees cannot predict additional harm from repeating a bucket beyond its sampled
 # range").
 MARKED_MARINER_OPTIMUM = "0.578"
-# Figures 18 and 19 (their captions, sections/appendix.tex:370 and :380): "Bands are 95% t-intervals over ten
+# Figures 18 and 19 (their captions, sections/appendix.tex:372 and :382): "Bands are 95% t-intervals over ten
 # subset/fold draws", and Figure 19's "Hollow diamonds mark swarm sizes at which released RegMix's fits are constant":
 # its fits are constant at the five smallest swarms, of 21 to 61 mixtures, on both objectives.
 LEARNING_CURVE_DRAWS = 10
 CONSTANT_FIT_MIXTURES = [21, 31, 41, 51, 61]
-# Figure 18's caption (sections/appendix.tex:370): "MARINER's ablations select mixtures with similar regret, although
+# Figure 18's caption (sections/appendix.tex:372): "MARINER's ablations select mixtures with similar regret, although
 # they rank mixtures with different accuracy." On the full swarm every ablation's regret interval overlaps MARINER's,
 # and these two ablations' Spearman intervals lie below MARINER's.
 WORSE_RANKING_ABLATIONS = (Method.MARINER_CONVEX, Method.MARINER_ADDITIVE)
-# sections/appendix.tex:263: the natural cubic spline "needs more runs than MARINER to reach the same out-of-fold rank
+# sections/appendix.tex:265: the natural cubic spline "needs more runs than MARINER to reach the same out-of-fold rank
 # correlation". The smallest swarm, in mixtures, at which each model's pooled Spearman reaches a level, 0.9 on
 # Uncheatable and 0.8 on OlmoBaseEval Easy; and the same line's "The natural cubic spline ranks the full Qwen3
 # 360M/1.6B swarm slightly better than MARINER".
 SPEARMAN_LEVELS = {"uncheatable": 0.9, "obe_easy": 0.8}
 FIRST_MIXTURES_AT_LEVEL = {Method.MARINER: 101, Method.SPLINE: 161}
-# sections/appendix.tex:388: "At every baseline's endpoint except Olmix's, and at all ten midpoints, MARINER's
-# prediction is closer to the measured loss than the baseline's own."
+# sections/appendix.tex:390: "MARINER's prediction is closer to the measured loss than the baseline's own at every
+# baseline's endpoint except Olmix's and at all ten midpoints".
 BLEND_MIDPOINTS = 10
 # Olmix's released curves are its released per-task laws at each blend of the two proposals (measured 2.2e-16 BPB).
 OLMIX_CURVE_TOLERANCE = 1e-12
 # sections/appendix_analysis.tex:103: "Only two of the 39 removals change the OlmoBaseEval Easy mean detectably,
-# although that mean varies across the swarm by 12.6 times its repeat standard deviation". The paper's Figure 23
+# even though that mean varies across the swarm by 12.6 times its repeat standard deviation". The paper's Figure 23
 # annotates the two, Stack-Edu and Stack-Edu FIM, 11 and 8, and 24 cells in all, 20 of them red.
 REMOVALS = 39
 PRINTED_MEAN_REMOVALS = {"Stack-Edu": "11", "Stack-Edu FIM": "8"}
@@ -268,7 +268,7 @@ SWARM_BUCKETS = 39  # sections/experimental_setup.tex:38: "The partition draws 3
 ZERO_EPOCH_CELLS = 40
 # Figure 22's legends print each token budget's minimizing StarCoder epochs, by the StarCoder subset's repetition
 # relative to the target run's, from the smallest budget (1.00B tokens) to the largest (7.41B).
-# sections/appendix.tex:400: "With the token budget fixed, the full pool and the subsets at up to a quarter of the
+# sections/appendix.tex:404: "With the token budget fixed, the full pool and the subsets at up to a quarter of the
 # target's repetition put the minimum at StarCoder fractions of 0.8 to 1."
 MILD_REPETITION = 0.25
 MILD_MINIMUM_SHARES = (0.8, 1.0)
@@ -280,7 +280,7 @@ PRINTED_REPLAY_EPOCHS = {
     2.0: ["9.0", "13.2", "15.9", "21.2"],
     4.0: ["10.6", "14.9", "15.9", "21.2"],
 }
-# Its caption (sections/appendix.tex:414): "the shift is not monotone at every degree of downsampling". The minimizing
+# Its caption (sections/appendix.tex:418): "the shift is not monotone at every degree of downsampling". The minimizing
 # epochs fall from one budget to the next only at 1/4x, from the smallest budget to the second: (repetition, step).
 REPLAY_EPOCH_FALLS = [(0.25, 0)]
 # Figure 25's caption (sections/appendix_analysis.tex:307): Holm correction "over the 28 blocks" of token budget and
@@ -295,8 +295,8 @@ CONFIRMATION_INTERVAL = ("6.101", "5.269", "6.933")
 # sections/appendix_analysis.tex:302: "A cell went to a fresh-seed test only if its first 23 schedules gave a
 # single-seed gain of at least 0.005 BPB."
 FRESH_SEED_GAIN = 0.005
-# Figure 26's caption (sections/appendix_analysis.tex:358): panel A's switch "from 0.02 to 0.82 StarCoder when the
-# learning-rate decay begins", its gaps "relative to the same gap 64 steps before the switch" over "eight seeds", and
+# Figure 26's caption (sections/appendix_analysis.tex:362): panel A's switch "raises StarCoder from 0.02 to 0.82 when
+# the learning-rate decay begins", its gaps "relative to their values 64 steps before it" over "eight seeds", and
 # panel B's "five paired seeds".
 SWITCH_SHARES = (0.02, 0.82)
 SWITCH_LR_STATE = "decay onset"  # starcoder_transition's name for the start of the learning-rate decay
@@ -307,19 +307,19 @@ SWITCH_POOL = "m100a"
 SWITCH_BASELINE_LEAD = 64
 SWITCH_PAIRS = 8
 RAMP_PAIRS = 5
-# sections/appendix_analysis.tex:362: "Smoothing gave no detectable improvement in final programming-languages BPB, and
+# sections/appendix_analysis.tex:366: "Smoothing gave no detectable improvement in final programming-languages BPB, and
 # three of the five tested ramps increased it ... Ramps of up to 512 steps changed the mean final programming-languages
 # BPB by at most 0.0005. The 128-, 2,048-, and 5,632-step ramps raised it in every seed."
 TESTED_RAMPS = 5
 NARROW_RAMP_WIDTH = 512
 NARROW_RAMP_CHANGE = 0.0005
 RAISING_RAMP_WIDTHS = (128, 2048, 5632)
-# Figure 27's caption (sections/appendix_analysis.tex:368): "each mixture block of 2,048 sequences (16 training steps)",
-# and "All ramps are centred on the start of the decay, 80% of the way through training."
+# Figure 27's caption (sections/appendix_analysis.tex:372): "each mixture block of 2,048 sequences (16 training steps)",
+# and "All ramps are centered on the start of the decay, 80% of the way through training."
 BLOCK_SEQUENCES = 2048
 BLOCK_STEPS = 16
 DECAY_START = 0.8
-# sections/appendix_analysis.tex:362: the selected schedule "raises StarCoder from 0 to 0.28 when the decay begins".
+# sections/appendix_analysis.tex:366: the selected schedule "raises StarCoder from 0 to 0.28 when the decay begins".
 PRINTED_DECAY_SHARE = "0.28"
 
 
@@ -806,9 +806,9 @@ def check_extrapolation_residuals(values: dict[str, pd.DataFrame]) -> None:
 
 
 def check_downsampling_by_budget(values: dict[str, pd.DataFrame]) -> None:
-    """Figure 21's caption (sections/appendix.tex:405): "At every token budget $D$, the minimum moves to a smaller
+    """Figure 21's caption (sections/appendix.tex:409): "At every token budget $D$, the minimum moves to a smaller
     StarCoder fraction at each step of downsampling from half the target's repetition to four times it", with the full
-    StarCoder pool added; and sections/appendix.tex:400: "the full pool and the subsets at up to a quarter of the
+    StarCoder pool added; and sections/appendix.tex:404: "the full pool and the subsets at up to a quarter of the
     target's repetition put the minimum at StarCoder fractions of 0.8 to 1" (``MILD_MINIMUM_SHARES``)."""
     minima = values["minima"]
     assert minima.groupby("train_tokens").size().tolist() == [7, 7, 7, 7]
@@ -823,7 +823,7 @@ def check_downsampling_by_budget(values: dict[str, pd.DataFrame]) -> None:
 
 def check_downsampling_by_repetition(values: dict[str, pd.DataFrame]) -> None:
     """Figure 22: its legends' minimizing StarCoder epochs (``PRINTED_REPLAY_EPOCHS``), and its caption
-    (sections/appendix.tex:414): "Larger token budgets generally favor more repetition, although the shift is not
+    (sections/appendix.tex:418): "Larger token budgets generally favor more repetition, although the shift is not
     monotone at every degree of downsampling" (``REPLAY_EPOCH_FALLS``)."""
     printed, falls = {}, []
     for multiplier, rows in values["minima"].groupby("epoch_multiplier"):
@@ -878,8 +878,8 @@ def check_curricula_sweeps(values: dict[str, pd.DataFrame]) -> None:
 
 def check_switch_smoothing(values: dict[str, pd.DataFrame]) -> None:
     """Figure 26: its caption's switch, baseline step and seeds (``SWITCH_SHARES`` to ``RAMP_PAIRS``);
-    sections/appendix_analysis.tex:353: the PL and C4 gaps "move monotonically to their new levels", each step up to
-    the 95% interval of the point it reaches; and sections/appendix_analysis.tex:362: no ramp's interval lies above
+    sections/appendix_analysis.tex:357: the PL and C4 gaps "move monotonically to their new levels", each step up to
+    the 95% interval of the point it reaches; and sections/appendix_analysis.tex:366: no ramp's interval lies above
     zero, ramps of up to 512 steps change the mean by at most 0.0005, and the three ramps of ``RAISING_RAMP_WIDTHS``
     raise final programming-languages BPB in every seed, with intervals below zero."""
     switch = values["switch"].iloc[0]
@@ -906,12 +906,12 @@ def check_switch_smoothing(values: dict[str, pd.DataFrame]) -> None:
 
 
 def check_ramp_schedules(values: dict[str, pd.DataFrame]) -> None:
-    """Figure 27's caption (sections/appendix_analysis.tex:368): "Smoothing keeps StarCoder's total exposure and moves
+    """Figure 27's caption (sections/appendix_analysis.tex:372): "Smoothing keeps StarCoder's total exposure and moves
     some of it from just after the start of the learning-rate decay to just before it"; each line gives "the StarCoder
     share of each mixture block of 2,048 sequences (16 training steps), as the data loader allocated it", a whole number
-    of sequences per block, which the design's weights are not; "All ramps are centred on the start of the decay, 80%
+    of sequences per block, which the design's weights are not; "All ramps are centered on the start of the decay, 80%
     of the way through training." Every plotted schedule puts the same number of StarCoder sequences in its full
-    blocks and rises from 0 to the 0.28 of sections/appendix_analysis.tex:362. At every data seed each ramp's StarCoder
+    blocks and rises from 0 to the 0.28 of sections/appendix_analysis.tex:366. At every data seed each ramp's StarCoder
     total equals the abrupt switch's, and a wider ramp draws more of it before the decay. Each plotted ramp runs from
     half its width before the decay to half its width after it."""
     training = values["training"].iloc[0]
@@ -951,7 +951,7 @@ def learning_curve_cells(values: dict[str, pd.DataFrame], objective: str, model:
 
 
 def check_learning_ablations(values: dict[str, pd.DataFrame]) -> None:
-    """Figure 18's caption (sections/appendix.tex:370): ten draws per band, and "MARINER's ablations select mixtures
+    """Figure 18's caption (sections/appendix.tex:372): ten draws per band, and "MARINER's ablations select mixtures
     with similar regret, although they rank mixtures with different accuracy" (``WORSE_RANKING_ABLATIONS``)."""
     curves = values["learning_curves"]
     assert (curves["draws"] == LEARNING_CURVE_DRAWS).all()
@@ -969,7 +969,7 @@ def check_learning_ablations(values: dict[str, pd.DataFrame]) -> None:
 
 def check_learning_baselines(values: dict[str, pd.DataFrame]) -> None:
     """Figure 19: ten draws per band; released RegMix's constant fits (``CONSTANT_FIT_MIXTURES``), whose correlation
-    is undefined; and sections/appendix.tex:263 on the natural cubic spline (``FIRST_MIXTURES_AT_LEVEL``)."""
+    is undefined; and sections/appendix.tex:265 on the natural cubic spline (``FIRST_MIXTURES_AT_LEVEL``)."""
     curves = values["learning_curves"]
     assert (curves["draws"] == LEARNING_CURVE_DRAWS).all()
     constant = curves[curves["constant_fit"]]
@@ -989,7 +989,7 @@ def check_learning_baselines(values: dict[str, pd.DataFrame]) -> None:
 
 
 def check_comparator_paths(values: dict[str, pd.DataFrame]) -> None:
-    """sections/appendix.tex:388: at the endpoint of every baseline but Olmix, by the mean of its three trainer seeds,
+    """sections/appendix.tex:390: at the endpoint of every baseline but Olmix, by the mean of its three trainer seeds,
     and at all ten midpoints, MARINER's prediction lies closer to the measured loss than the baseline's own."""
     curves = values["curves"].set_index(["objective", "path", "predictor", "position"])["predicted_bpb"]
     endpoints = values["endpoints"]
