@@ -18,6 +18,7 @@ import hashlib
 import json
 import shutil
 import tomllib
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
@@ -29,6 +30,12 @@ from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
+from taskcompendium.grading_environment import (
+    GradingEnvironmentStatus,
+    assess_grading_environment,
+    count_grading_environment,
+    grading_environment_census,
+)
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
 from taskcompendium.pipeline.conversion import normalization_columns
@@ -193,6 +200,7 @@ def prebuilt_artifact(
         destination.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(local, destination / TASKS_FILENAME)
         tasks = []
+        grading: Counter[str] = Counter()
         oracle_filter = None
         for row in pq.read_table(local).to_pylist():
             if invocation.task_format is TaskFormat.HARBOR:
@@ -203,6 +211,10 @@ def prebuilt_artifact(
                 task = TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"])
                 serialized = task.model_dump_json()
                 original_path = row["path"]
+            assessment = assess_grading_environment(task)
+            count_grading_environment(grading, assessment.model_dump(mode="json"))
+            if assessment.status is GradingEnvironmentStatus.MISMATCH:
+                raise ValueError(f"grading_environment_mismatch: {task.id}: {assessment.model_dump_json()}")
             if has_oracle_solution(task):
                 if oracle_filter is None:
                     receipt_path = hf_hub_download(
@@ -241,6 +253,7 @@ def prebuilt_artifact(
             "converted_rows": len(tasks),
             "admitted_rows": len(tasks),
             "rejections": {},
+            "grading_environment": grading_environment_census(grading),
             "status": "completed",
             "repo": config.repo,
             "revision": config.revision,

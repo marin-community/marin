@@ -423,6 +423,19 @@ uv run --isolated --project vendor/harbor --extra runtime --no-default-groups --
 
 ## Environments
 
+Every conversion assesses its grading boundary from the task specification.
+WORKSPACE_STATE, repository capabilities and directory captures require SHARED
+execution because the agent can change the state the grader reads. Submitted
+program/stdout and typed file-only contracts may use an independent SEPARATE
+grader. A declared SEPARATE boundary when SHARED is required is rejected as
+`grading_environment_mismatch`, before either SAMPLE or FULL admission.
+
+Normalized rows retain `grading_environment` with required mode, declared mode,
+status and reason. Conversion and admission manifests aggregate these fields;
+`SourceDeclaration.grading_environment` exposes that census and its evidence
+URL to catalog consumers. Native Harbor assessment reads the published task.toml;
+it never substitutes a source-level declaration for task configuration.
+
 Harbor's LOCAL environment runs prepared, digest-pinned task images through
 bubblewrap and umoci, using shellbox-images.json. It honors the task's
 allow_internet: allowed tasks share the backend's network; denied tasks keep
@@ -819,7 +832,10 @@ Sample and full modes run the reviewed procedure below. A source shipping oracle
 solutions must first run the full-population oracle filter described below.
 Oracle filtering is never sampled, even when the other checks use SAMPLE.
 
-1. Download the pinned files once per distinct pin
+1. Assess the required and declared grading environment on every converted task;
+   retain mismatches and their reasons in the census and reject them. A repair
+   requires a new published version and renewed QA.
+2. Download the pinned files once per distinct pin
    (`task-curation/download/<hash>`).
 2. Draw at most 100 raw rows with a seeded sample, convert them and run cheap
    checks.
