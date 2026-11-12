@@ -4,7 +4,7 @@ name: lm_head tanh soft-cap
 category: Output head and loss
 summary: Cap output logits with c*tanh(z/c) before the loss; eval scores capped logits.
 source: agent
-status: running
+status: done
 first_batch: 32
 tags:
 - soft-cap
@@ -472,6 +472,13 @@ trials:
     logit_soft_cap: '10'
   commit: 89f287ed4a
   priority: batch
+  loss:
+  - 2.8509
+  delta:
+  - -0.0172
+  steps: 10767
+  baseline: s7n-d512 2.8681 (same commit, seed 0)
+  step_time_change: +1%
 - id: t026
   variant: lm_head tanh soft-cap 10
   rung: competitive-d768
@@ -525,6 +532,12 @@ trials:
   commit: fb7d824cc4
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.8509
+  delta:
+  - -0.0172
+  steps: 10767
+  baseline: s7n-d512 2.8681 (same commit, seed 0)
 - id: t030
   variant: lm_head tanh soft-cap 10
   rung: competitive-d768
