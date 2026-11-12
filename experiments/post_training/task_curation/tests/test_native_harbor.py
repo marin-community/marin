@@ -121,6 +121,26 @@ def test_native_package_round_trip_keeps_state_boundary_private_files_and_modes(
     assert manifest["mode"] == "quick"
     assert manifest["grading_environment"]["assessed_tasks"] == manifest["converted_rows"] == 1
 
+    incomplete = task.model_copy(
+        update={
+            "resources": task.resources.model_copy(
+                update={"verifier": tuple(r for r in task.resources.verifier if r.path != "tests/test.sh")}
+            )
+        }
+    ).model_dump_json()
+    pq.write_table(
+        pa.table(
+            {
+                "path": ["native"],
+                "task_spec": [incomplete],
+                "task_sha256": [hashlib.sha256(incomplete.encode()).hexdigest()],
+            }
+        ),
+        published / "tasks.parquet",
+    )
+    with pytest.raises(ValueError, match="Incomplete native Harbor package"):
+        native_release.run_native_import(native_release.NativeQuickImport(str(tmp_path / "incomplete"), source.config))
+
 
 @pytest.mark.parametrize(
     "source_id",

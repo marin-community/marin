@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Import private native Harbor inspection releases without claiming admission."""
+"""Stream native QUICK views with their original cohort and conversion evidence."""
 
 import hashlib
 import json
@@ -20,7 +20,7 @@ from taskcompendium.grading_environment import (
     count_grading_environment,
     grading_environment_census,
 )
-from taskcompendium.models import TaskSpec, missing_environment
+from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
 from taskcompendium.pipeline.conversion import normalization_columns
 from taskcompendium.pipeline.models import SourceStatus
@@ -28,7 +28,8 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
-from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
+from experiments.post_training.task_curation.environment_fidelity import missing_environment
+from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, validate_native_package
 from experiments.post_training.task_curation.source import RlDataSource
 
 
@@ -50,6 +51,7 @@ def run_native_import(invocation: NativeQuickImport) -> CampaignArtifact:
     normalized.parent.mkdir(parents=True)
     seen = set()
     counts: Counter[str] = Counter()
+    # Native payloads span multiple GB; retain published JSON while normalizing bounded batches.
     with pq.ParquetWriter(normalized, NORMALIZED_SCHEMA) as writer:
         for batch in parquet.iter_batches(batch_size=32):
             records = []
@@ -58,10 +60,11 @@ def run_native_import(invocation: NativeQuickImport) -> CampaignArtifact:
                 if hashlib.sha256(serialized.encode()).hexdigest() != row["task_sha256"]:
                     raise ValueError("Native TaskSpec differs from its published content hash")
                 task = TaskSpec.model_validate_json(serialized)
+                validate_native_package(task)
                 if task.id in seen:
                     raise ValueError(f"Duplicate native task ID: {task.id}")
                 seen.add(task.id)
-                if "harbor" not in task.tags or missing_environment(task.model_dump(mode="json")):
+                if missing_environment(task.model_dump(mode="json")):
                     raise ValueError(f"Incomplete native TaskSpec: {task.id}")
                 assessment = assess_grading_environment(task)
                 if assessment.status is GradingEnvironmentStatus.MISMATCH:
