@@ -44,6 +44,29 @@ function filtered() {
     return order * state.direction || a.id.localeCompare(b.id);
   });
 }
+// Field contract (served by the duplicate-detection loader): each source row may carry
+// duplicate_group = {id, canonical_id, overlap}, where overlap is the fraction (0 to 1) of this
+// source's tasks that also occur in the canonical member, 1 for the canonical itself. Rows without
+// the field, or with null, stay ungrouped.
+function collapsed(rows) {
+  const groups = new Map(), entries = [];
+  for (const row of rows) {
+    const group = row.duplicate_group;
+    if (!group?.id) { entries.push({row, others: []}); continue; }
+    if (!groups.has(group.id)) { const entry = {row: null, members: []}; groups.set(group.id, entry); entries.push(entry); }
+    groups.get(group.id).members.push(row);
+  }
+  for (const entry of entries) {
+    if (!entry.members) continue;
+    const canonical = entry.members.find(row => row.id === row.duplicate_group.canonical_id) || entry.members[0];
+    entry.row = canonical;
+    entry.others = entry.members.filter(row => row !== canonical).sort((a, b) => (b.duplicate_group.overlap ?? 0) - (a.duplicate_group.overlap ?? 0));
+    delete entry.members;
+  }
+  return entries;
+}
+const expandedGroups = new Set();
+
 function curriculumLink(row, area) {
   const params = new URLSearchParams({source_id: row.id});
   if (area) { params.set('subject_id', area.subject_id); params.set('parent_id', area.node_id); }
@@ -88,11 +111,32 @@ function render() {
     th.append(button); return th;
   }));
   const rows = filtered();
-  $('rows').replaceChildren(...rows.map(row => {
-    const tr = node('tr'); tr.dataset.sourceId = row.id;
+  const entries = collapsed(rows);
+  $('rows').replaceChildren(...entries.flatMap(({row, others}) => {
+    const groupId = row.duplicate_group?.id;
+    const open = groupId && expandedGroups.has(groupId);
+    return [sourceRow(row, others), ...(open ? others.map(other => sourceRow(other, [], row)) : [])];
+  }));
+  $('empty').hidden = rows.length > 0;
+  const hidden = state.sources.length - state.sources.filter(row => $('show-all').checked || shownByDefault(row)).length;
+  const folded = rows.length - entries.length;
+  $('visible-count').textContent = `${number.format(entries.length)} entries for ${number.format(rows.length)} of ${number.format(state.sources.length)} sources` +
+    (folded ? ` · ${number.format(folded)} likely duplicates folded` : '') + (hidden ? ` · ${number.format(hidden)} QUICK or BAD hidden` : '');
+}
+function sourceRow(row, others, canonical) {
+    const tr = node('tr', undefined, canonical ? 'duplicate-member' : ''); tr.dataset.sourceId = row.id;
     const name = node('td'), open = node('button', row.display_name, 'source-name');
     open.title = row.display_name; open.addEventListener('click', () => details(row));
     name.append(open, node('span', row.origin, 'source-subtitle'));
+    if (canonical) {
+      name.append(node('span', `${Math.round(100 * (row.duplicate_group.overlap ?? 0))}% of its tasks overlap ${canonical.display_name}`, 'source-subtitle duplicate-note'));
+    } else if (others.length) {
+      const groupId = row.duplicate_group.id, expanded = expandedGroups.has(groupId);
+      const toggle = node('button', `${expanded ? '▾' : '▸'} ${others.length} likely duplicate${others.length === 1 ? '' : 's'}`, 'text-button duplicate-toggle');
+      toggle.setAttribute('aria-expanded', String(expanded));
+      toggle.addEventListener('click', () => { expanded ? expandedGroups.delete(groupId) : expandedGroups.add(groupId); render(); });
+      name.append(toggle);
+    }
     const examples = node('td', row.coverage?.example_count != null ? number.format(row.coverage.example_count) : '—', 'num');
     examples.title = row.coverage?.basis || 'No coverage measurement in this catalog';
     const use = node('td', useLabels[value(row, 'use')], 'use-cell');
@@ -116,11 +160,6 @@ function render() {
     updated.title = row.updated_at ? 'Start of the latest published campaign that processed this source' : 'No published campaign has processed this source';
     const evidence = node('td'), link = node('a', 'Evidence →', 'evidence-link'); link.href = evidenceLink(row); evidence.append(link);
     tr.append(name, examples, use, quality, result, daytonaCell(row), area, updated, evidence); return tr;
-  }));
-  $('empty').hidden = rows.length > 0;
-  const hidden = state.sources.length - state.sources.filter(row => $('show-all').checked || shownByDefault(row)).length;
-  $('visible-count').textContent = `${number.format(rows.length)} of ${number.format(state.sources.length)} sources` +
-    (hidden ? ` · ${number.format(hidden)} QUICK or BAD hidden` : '');
 }
 function details(row) {
   $('detail-name').textContent = row.display_name; $('detail-notes').textContent = row.notes;
@@ -134,6 +173,8 @@ function details(row) {
     ['Last updated', row.updated_at ? day(row.updated_at) : null], ['Input rows', row.task_count], ['Source ID', row.id],
     ['Dataset revision', row.dataset_revision], ['Pipeline', row.pipeline?.name], ['Curation', row.curation?.status],
     ['Admission counts', row.curation?.admission_counts], ['Control status', controls?.status], ['Control counts', controls?.counts],
+    ['Duplicate group', row.duplicate_group && `${row.duplicate_group.id}; canonical ${row.duplicate_group.canonical_id}; overlap ${Math.round(100 * (row.duplicate_group.overlap ?? 0))}%`],
+    ['Backend capabilities', row.backend_capabilities],
   ];
   $('detail-fields').replaceChildren(...fields.filter(([, item]) => item !== null && item !== undefined).map(([title, item]) => {
     const field = node('dl', undefined, 'field');
