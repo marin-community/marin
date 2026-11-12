@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Package the scorecard: embed the checked-in scorecard.json into the page and copy assets."""
-
 import json
 import shutil
 from pathlib import Path

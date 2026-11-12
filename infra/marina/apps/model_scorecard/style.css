@@ -59,7 +59,6 @@ a:focus-visible {
   box-shadow: 0 1px 0 rgb(255 255 255 / 3%) inset, 0 8px 24px rgb(0 0 0 / 35%);
 }
 
-/* Fixed layout: the model column has a set width and the score columns share the rest equally. */
 table {
   width: 100%;
   min-width: 1500px;
@@ -130,7 +129,6 @@ td.scored a {
   font-weight: 500;
 }
 
-/* Provenance: a top bar on every scored cell, green for official and amber for unofficial. */
 td.official {
   box-shadow: inset 0 3px 0 var(--official);
 }
@@ -149,7 +147,6 @@ td.missing {
   font-weight: 700;
 }
 
-/* Hover: outline the cell, tint its row and column header. */
 tbody tr.active th.model,
 thead th.active {
   color: var(--text-primary);

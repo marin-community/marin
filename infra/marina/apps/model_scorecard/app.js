@@ -1,5 +1,3 @@
-// Render the scorecard table from the JSON embedded by build.py, with one delegated hover layer.
-
 const LABEL_TEXT = { official: "Official", unofficial: "Unofficial" };
 const LINK_TEXT = { evaldash: "Click to open the run in EvalDash", storage: "Click to open the raw results in Filer" };
 
@@ -70,7 +68,6 @@ function renderBody(table, data) {
   return body;
 }
 
-// One delegated listener drives the tooltip and the row/column highlight for every cell.
 function attachHover(body, headers, data) {
   const tooltip = document.getElementById("tooltip");
   let active = null;

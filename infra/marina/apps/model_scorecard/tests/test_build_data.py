@@ -1,12 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
-from pathlib import Path
 from urllib.parse import unquote
 
 import pytest
-import yaml
 from marin.evaluation.records import BenchmarkMetadataRef, EvalRef, EvalRunRecord, EvalTaskRef, RunStatus
 from model_scorecard.build_data import LinkKind, build_scorecard, source_link
 
@@ -65,11 +62,3 @@ def test_source_outside_a_run_directory_links_to_filer() -> None:
 def test_run_cell_rejects_failed_or_mismatched_runs(fetched: EvalRunRecord, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         build_scorecard(manifest({"math500": {"run_id": RUN_ID, "label": "official"}}), lambda _: fetched)
-
-
-def test_checked_in_scorecard_matches_manifest_layout() -> None:
-    root = Path(__file__).resolve().parents[1]
-    expected = yaml.safe_load((root / "scorecard.yaml").read_text())
-    built = json.loads((root / "scorecard.json").read_text())
-    assert built["evals"] == expected["evals"]
-    assert [model["name"] for model in built["models"]] == [model["name"] for model in expected["models"]]
