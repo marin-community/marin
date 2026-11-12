@@ -23,3 +23,5 @@
   .assessment-card { background: #1d2922; }
   .assessment-page pre { background: #24352a; }
 }
+
+.assessment-page { overflow-wrap: anywhere; }
