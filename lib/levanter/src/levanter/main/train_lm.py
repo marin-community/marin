@@ -4,6 +4,8 @@
 import dataclasses
 import functools
 import logging
+import math
+import jax
 import os
 from dataclasses import dataclass, field, replace
 from typing import Optional
@@ -37,6 +39,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig, OptimizerConfig
+from levanter.optim.rmnph import RMNPHConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
 from levanter.training_control import TrainingDashboard
@@ -52,6 +55,8 @@ class TrainLmConfig:
     model: LmConfig = field(default_factory=LlamaConfig)
     train_seq_len: int | None = None
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
+    hyperball_radius_scale: float = 1.0
+    """Scale fresh RMNPH hidden matrices and AdamH head relative to initialization."""
 
     # config related to continued pretraining
     initialize_from_hf: bool | str = False
@@ -101,6 +106,34 @@ class TrainLmConfig:
 
     # TODO: really need to add callback framework
     log_entropy: bool = False
+
+    def __post_init__(self):
+        if not math.isfinite(self.hyperball_radius_scale) or self.hyperball_radius_scale <= 0:
+            raise ValueError("hyperball_radius_scale must be finite and positive")
+        if self.hyperball_radius_scale != 1.0:
+            if not isinstance(self.optimizer, RMNPHConfig):
+                raise ValueError("hyperball_radius_scale requires RMNPH")
+            if not isinstance(self.adapter, NoAdaptorConfig):
+                raise ValueError("hyperball_radius_scale requires full-model training")
+            if self.initialize_from_hf or self.initialize_model_from_checkpoint_path:
+                raise ValueError("hyperball_radius_scale applies only to fresh initialization")
+
+
+def initialize_rmnph_model(config: TrainLmConfig, Vocab: Axis, *, key):
+    """Scale fresh Hyperball matrices once; checkpoint restoration keeps saved radii."""
+    model = config.model.build(Vocab, key=key)
+    if config.hyperball_radius_scale == 1.0:
+        return model
+    labels = config.optimizer.create_mask(model)
+    return jax.tree.map(
+        lambda label, param: (
+            jax.tree.map(lambda leaf: leaf * config.hyperball_radius_scale, param)
+            if label in ("rmnph", "adamh")
+            else param
+        ),
+        labels,
+        model,
+    )
 
 
 def _restore_lm_model_from_partial_checkpoint(
@@ -318,7 +351,9 @@ def main(config: TrainLmConfig):
                 is_trainable=config.adapter.trainable_filter(initial_model),
             )
         elif isinstance(config.adapter, NoAdaptorConfig):
-            state = trainer.initial_state(training_key, model_init=lambda: config.model.build(Vocab, key=model_key))
+            state = trainer.initial_state(
+                training_key, model_init=lambda: initialize_rmnph_model(config, Vocab, key=model_key)
+            )
         else:
             initial_model = config.adapter.apply(
                 config.model.build(Vocab, key=model_key),

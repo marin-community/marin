@@ -1,0 +1,85 @@
+# Pure RMNPH Qwen3-130M recipe with four independent peak learning rates.
+data:
+  tokenizer: marin-community/marin-tokenizer
+  cache_dir: null
+  auto_build_caches: false
+  components:
+    fineweb_edu_10b:
+      cache_dir: datasets/fineweb-edu-pretokenized-10B
+      source:
+        type: url
+        train_urls: []
+        validation_urls: []
+    paloma/c4_en:
+      cache_dir: datasets/paloma-c4-en-tokenized-marin
+      source:
+        type: url
+        train_urls: []
+        validation_urls: []
+  train_weights:
+    fineweb_edu_10b: 1.0
+    paloma/c4_en: 0.0
+model:
+  type: qwen3
+  activation_function: silu
+  attn_backend: null
+  flash_attention_block_size: null
+  gradient_checkpointing: true
+  head_dim: null
+  hidden_dim: 512
+  hybrid_norm: true
+  initializer_range: 0.02
+  input_embedding_norm: false
+  intermediate_dim: 1792
+  layer_norm_epsilon: 1.0e-05
+  max_seq_len: 4096
+  num_heads: 8
+  num_kv_heads: 8
+  num_layers: 6
+  reference_checkpoint: NousResearch/Llama-2-7b-hf
+  rope:
+    type: default
+    factor: 1.0
+    theta: 10000
+  scan_layers: true
+  sliding_window: 4096
+  tie_word_embeddings: false
+  tokenizer: null
+  upcast_attn: false
+  use_bias: false
+  use_layer_norm_weight: true
+  use_qk_norm: false
+  use_sliding_window: false
+train_seq_len: 4096
+data_seed: 42
+hyperball_radius_scale: 0.8
+trainer:
+  seed: 0
+  mp: p=f32,c=bfloat16
+  tracker:
+  - type: json_logger
+  train_batch_size: 128
+  per_device_parallelism: 1
+  num_train_steps: 4959
+  steps_per_eval: 1000
+  checkpointer:
+    save_interval: 10m
+optimizer:
+  type: rmnpH
+  learning_rate: 0.015
+  embedding_lr: 0.012
+  vector_lr: 0.060
+  matrix_lr: 0.015
+  output_lr: 0.015
+  rmnp_epsilon: 1e-10
+  momentum: 0.95
+  nesterov: true
+  beta1: 0.8
+  beta2: 0.98
+  epsilon: 1.0e-15
+  weight_decay: 0.1
+  max_grad_norm: 1
+  warmup: 1000
+  decay: 1.0
+  lr_schedule: cosine
+  min_lr_ratio: 0

@@ -17,6 +17,7 @@ from optax._src.base import init_empty_state
 import haliax as hax
 from haliax.nn import Linear
 
+from levanter.utils.jax_utils import leaf_key_paths
 from levanter.models.linear import has_linear_like_marker
 import levanter.tracker
 from levanter.utils.tree_utils import scan_aware_tree_map
@@ -320,3 +321,59 @@ def norm_preserving_update(param, update, learning_rate: jax.Array | float):
     new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, _NORM_FLOOR)
     new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
     return new_param / jnp.maximum(new_param_norm, _NORM_FLOOR) * param_norm - param
+
+
+def matrix_optimizer_mask(
+    params,
+    *,
+    matrix_label: str,
+    head_label: str,
+    embedding_label: str,
+    fallback_label: str,
+    require_out_first: bool = False,
+):
+    """Route head and embedding weights independently; keep biases and norms on the fallback optimizer."""
+    config = getattr(params, "config", None)
+    if getattr(config, "tie_word_embeddings", False) and head_label != embedding_label:
+        raise ValueError("Tied embeddings and lm_head must use the same optimizer group")
+
+    def is_leaf(node):
+        return isinstance(node, (hax.nn.Linear, hax.nn.Embedding))
+
+    paths = leaf_key_paths(params, is_leaf=is_leaf)
+
+    def label(node, path):
+        if isinstance(node, hax.nn.Embedding):
+            return dataclasses.replace(node, weight=embedding_label)
+        if isinstance(node, hax.nn.Linear):
+            weight_label = head_label if "lm_head" in path.split(".") else matrix_label
+            if require_out_first and weight_label == matrix_label:
+                assert node._out_first, "Muon without Kimi scaling requires output-first weights"
+            return label_linear_like_module(node, weight_label=weight_label, bias_label=fallback_label)
+        return fallback_label
+
+    return hax.tree_util.tree_map(label, params, paths, is_leaf=is_leaf)
+
+
+def map_flattened_matrix_layers(f: Callable[[hax.nn.Linear], hax.nn.Linear], params: PyTree):
+    """Transform linear and embedding matrices with logical output/input axes, including scanned layers."""
+
+    def transform_linear(node):
+        # multi_transform replaces weights outside this group with MaskedNode.
+        if not isinstance(node.weight, hax.NamedArray) or node.weight.array is None:
+            return node
+        return f(node)
+
+    def transform_embedding(node):
+        if not isinstance(node, hax.nn.Embedding) or not isinstance(node.weight, hax.NamedArray):
+            return node
+        # Embedding rows are vocabulary entries, matching a PyTorch [vocab, hidden] matrix.
+        linear = hax.nn.Linear(
+            weight=node.weight.rearrange((node.Vocab, ...)), bias=None, In=node.Embed, Out=node.Vocab
+        )
+        transformed = map_flattened_linear_layers(transform_linear, linear)
+        return dataclasses.replace(node, weight=transformed.weight.rearrange(node.weight.axes))
+
+    return map_flattened_linear_layers(
+        transform_linear, params, or_else=transform_embedding, is_leaf=lambda node: isinstance(node, hax.nn.Embedding)
+    )
