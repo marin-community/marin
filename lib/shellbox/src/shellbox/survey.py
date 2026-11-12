@@ -185,8 +185,8 @@ def _runtime_cell(backend: str, requirement: Requirement) -> RuntimeSupport:
     if requirement == Requirement.SETUP:
         return RuntimeSupport(
             Support.PARTIAL,
-            "lib/rolloutengine/src/rolloutengine/machines.py:_prepare_machine",
-            "Runtime executes sh commands as root after creation; commands must be supported by the image or simulator.",
+            "lib/shellbox/src/shellbox/machine.py:Machine.run",
+            "Setup commands require caller orchestration and an execution environment that supports the commands.",
         )
     if requirement == Requirement.CLEANUP_TIMEOUT:
         return RuntimeSupport(

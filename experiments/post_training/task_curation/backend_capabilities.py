@@ -41,7 +41,7 @@ RESOURCE_FIELDS = ("cpus", "memory_mb", "storage_mb", "gpus")
 
 
 def production_matrix(checkers: dict[str, Checker]) -> list[CapabilityCell]:
-    """Combine factory evidence with the consumer's cleanup guarantee."""
+    """Combine factory evidence with production setup and cleanup orchestration."""
     return [
         (
             cell.model_copy(
@@ -52,7 +52,19 @@ def production_matrix(checkers: dict[str, Checker]) -> list[CapabilityCell]:
                 }
             )
             if cell.requirement == Requirement.CLEANUP_TIMEOUT
-            else cell
+            else (
+                cell.model_copy(
+                    update={
+                        "evidence": (*cell.evidence, "lib/rolloutengine/src/rolloutengine/machines.py:_prepare_machine"),
+                        "note": (
+                            "Rolloutengine runs setup as root through sh; "
+                            "the image or simulator must support each command."
+                        ),
+                    }
+                )
+                if cell.requirement == Requirement.SETUP
+                else cell
+            )
         )
         for cell in capability_matrix(checkers)
     ]

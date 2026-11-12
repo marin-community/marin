@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 from finestore.rl.curation import OversightEvidence, OversightLevel
+from finestore.rl.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 
 from experiments.post_training.task_curation.source import (
-    GRANDFATHERED_MARINSKYRL_SOURCES,
     RlDataSource,
     SourceInfo,
     SourceOrigin,

@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from .curriculum import register_curriculum_routes, source_coverage
+from .daytona import daytona
 from .schema import SCHEMA_SQL
 
 
@@ -142,6 +143,7 @@ def create_api(services: AppletServices) -> FastAPI:
                         **row["declaration"],
                         "task_count": row["task_count"],
                         "curation": row["curation"],
+                        "daytona": daytona(row["declaration"], DAYTONA_SAFE_SNAPSHOT_LIMIT),
                         "coverage": coverage.get(row["id"]),
                         "backend_capabilities": row["backend_capabilities"],
                         "source_fingerprint": (
