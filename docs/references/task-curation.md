@@ -614,6 +614,69 @@ each host. On Iris, they use the executable `/cache/task-curation` mount because
 Build locks and completion markers let concurrent workers reuse finished
 environments; uv retains its configured package cache.
 
+## LLM-judged sources
+
+An LLM judge is part of a task's grading semantics. A judged TaskSpec whose
+`JudgeSpec.model` is empty, or whose rubric and judge settings are unstated, does
+not describe what grades the task. Such a source is unrepaired, whatever its
+sample review found, and stays at oversight `none`.
+
+### Choose a judge tier
+
+When a repair meets a judged source without a specified judge, the repairer
+works out the judge it needs:
+
+1. Judge ten tasks from the frozen sample yourself, under the source's rubric if
+   it has one. For each task, record the verdict, the evidence the judgment
+   needed and how hard the judgment was.
+2. Estimate the tier the source needs:
+
+   | Tier | Judgment it supports | Example | Historical model |
+   |---|---|---|---|
+   | `LIGHT` | Surface checks with a clear contract | format compliance, schema adherence | GPT OSS 120B |
+   | `MEDIUM` | Comparing content with a reference or checklist | open QA against references | MiniMax M3 |
+   | `HEAVY` | Multi-step verification that needs deep domain reasoning | Lean proof validation | GLM 5.3 |
+
+3. Pin the source's `JudgeSpec` to that tier's instantiable judge definition in
+   `JUDGE_TIERS` (`experiments/post_training/task_curation/judges.py`). Record the
+   ten verdicts and the tier rationale in the source's QA evidence.
+
+### What a judge specification must state
+
+A judge specification names the model and every setting that changes a verdict:
+
+- the rubric, written well enough for a reviewer to apply it by hand;
+- what the judge sees: the question, the candidate answer and any references,
+  checklist criteria or conversation context, and whether reasoning blocks are
+  removed;
+- the context length, maximum completion tokens and reasoning effort;
+- the harness: the API (`chat_completions` or another), the system prompt and
+  prompt template, and the label parsing and scores;
+- the turns allowed, the request timeout and the transport retry budget.
+
+The specification says nothing about how its OpenAI-compatible endpoint is
+reached. A hosted provider, a relay or a co-hosted local server serving the named
+model are interchangeable for curation. `JudgeConnection` supplies the base URL
+and key at run time. A specification may not depend on a particular endpoint's
+defaults; if a verdict changes with an unstated setting, state the setting.
+
+### Validate the judge end to end
+
+A judged source is repaired and quality-checked only after its pinned judge has
+graded real tasks end to end through the production grader:
+
+- a reference or known-good answer scores 1 wherever one exists;
+- an empty, unrelated or known-wrong answer scores 0;
+- on the frozen sample, the judge's verdicts agree with the repairer's own ten
+  verdicts and with a blinded review. Report the disagreements and an estimated
+  error rate, using the `audit-grader` method;
+- verdict coverage is complete: every request returns a parsed verdict within
+  the stated budgets.
+
+Record the judge definition, its endpoint at validation time, the verdicts and
+the agreement in the source's oversight evidence. A judge that cannot be reached
+or validated leaves the source at oversight `none`.
+
 ## Sources without oracle solutions
 
 Some sources ship no oracle solution: every row has `has_solution` false, or its
