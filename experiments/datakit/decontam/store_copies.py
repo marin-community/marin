@@ -6,7 +6,8 @@
 The hero store ``store_4d2e363d`` holds tokens, so its text is read from each source's
 normalized documents, and a document counts as kept unless the store dropped it: its
 decontamination mark is set, or the exact or verified fuzzy dedup attributes list it.
-``hero_store_sources.json`` holds those four directories for each of the store's sources.
+The four directories of each source are resolved from the store's record (its sources
+and fuzzy-exempt sources) and the pinned ``hero_data`` steps the store was built from.
 
 A field of a record is found in a document when the field's text occurs in the document,
 both lowercased with whitespace collapsed; the document is also searched after undoing
@@ -20,9 +21,9 @@ Input is a Hugging Face dataset (``--hf REPO --revision SHA --config NAME --spli
 or Parquet files (``--parquet GLOB``), with the string fields to search (``--fields``).
 Writes under OUT_PREFIX:
 
-* ``targets.json``: the searched fields of each record;
-* ``matches/<file>.parquet``: one row per matching record field in a normalized
-  document, with the store's drop flags;
+* ``matches/<targets digest>/targets.json``: the searched fields of each record;
+* ``matches/<targets digest>/<file digest>.parquet``: one row per matching record field in
+  a normalized document, with the store's drop flags;
 * ``records.parquet``: per record, whether one document (kept or not) holds every searched
   field, and the kept documents and sources that do;
 * ``report.md``: the summary.
@@ -39,21 +40,31 @@ import logging
 import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
-from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from datasets import load_dataset
 from fray.types import ResourceConfig
+from marin.datakit.decon import DeconAttributes
+from marin.datakit.normalize import NormalizedData
+from marin.datakit.source_key import datakit_source_key
+from marin.execution.artifact import read_artifact, read_record
+from marin.processing.classification.deduplication.cluster_verify import VerifiedFuzzyDupsArtifact
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from experiments.datakit import hero_data
+from experiments.datakit.global_exact_dedup import GlobalExactDedupData
+
 logger = logging.getLogger(__name__)
 
-STORE_ROOT = "s3://marin-us-east-02a/marin"
-SOURCES_FILE = Path(__file__).with_name("hero_store_sources.json")
+STORE = "s3://marin-us-east-02a/marin/datakit/store_4d2e363d"
+# Global exact dedup read this source's 4,573-shard extraction, before normalization
+# split it into 333 shards, so none of its exact attributes line up with a store shard.
+EXACT_UNALIGNED_SOURCES = frozenset({"common-crawl-focus-2026-22"})
 DEFAULT_MIN_WORDS = 8
 READ_BATCH_ROWS = 64
 # Repository documents reach GBs, and a Python string costs up to 4 bytes per character.
@@ -217,17 +228,40 @@ class Matcher:
 
 @dataclass(frozen=True)
 class StoreSource:
-    """A store source's normalized directory and the attribute directories the store joined, under ``STORE_ROOT``."""
+    """A store source's normalized directory and the attribute directories the store joined."""
 
     dir: str
     decon: str
-    exact: str
+    exact: str | None
+    """None for sources whose exact attributes do not line up with their normalized files."""
     fuzzy: str | None
     """None for sources the store exempts from fuzzy dedup."""
 
 
-def store_sources() -> dict[str, StoreSource]:
-    return {name: StoreSource(**dirs) for name, dirs in json.loads(SOURCES_FILE.read_text()).items()}
+def store_sources(store_path: str) -> dict[str, StoreSource]:
+    """Resolve the directories of each source of the store at ``store_path``, as the store build did."""
+    # The record, not ``ClusteredStoreData``: the store's v5 payload no longer validates
+    # against that model, and the fuzzy-exempt sources are only in the step's config.
+    store = read_record(store_path)
+    if store is None or store.result is None or store.config is None:
+        raise FileNotFoundError(f"no store record at {store_path}")
+    source_names: list[str] = store.result["source_names"]
+    exempt = set(store.config["fuzzy_dedup_exempt"])
+    exact = read_artifact(hero_data.exact_dups().output_path, GlobalExactDedupData)
+    fuzzy = read_artifact(hero_data.verified_fuzzy_dups().output_path, VerifiedFuzzyDupsArtifact)
+
+    def resolve(name: str) -> tuple[str, StoreSource]:
+        text_dir = read_artifact(hero_data.normalized(name).output_path, NormalizedData).main_output_dir
+        decon_dir = read_artifact(hero_data.decontaminated(name).output_path, DeconAttributes).main_output_dir
+        return name, StoreSource(
+            dir=text_dir,
+            decon=decon_dir,
+            exact=None if name in EXACT_UNALIGNED_SOURCES else exact.sources[datakit_source_key(text_dir)].attr_dir,
+            fuzzy=None if name in exempt else fuzzy.attr_dir_for_source(text_dir),
+        )
+
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        return dict(pool.map(resolve, source_names))
 
 
 @dataclass(frozen=True)
@@ -235,7 +269,8 @@ class SourceFile:
     source: str
     path: str
     decon: str
-    exact: str
+    exact: str | None
+    """None for sources whose exact attributes do not line up with their normalized files."""
     fuzzy: str | None
     """None for sources the store exempts from fuzzy dedup."""
 
@@ -248,14 +283,14 @@ def store_files(sources: dict[str, StoreSource], names: list[str] | None, every:
     files = []
     for name in sorted(names or sources):
         source = sources[name]
-        root = StoragePath(STORE_ROOT)
-        paths = sorted((root / source.dir / "*.parquet").glob(), key=str)
+        paths = sorted((StoragePath(source.dir) / "*.parquet").glob(), key=str)
         if not paths:
-            raise ValueError(f"{name}: no Parquet files in {root / source.dir}")
+            raise ValueError(f"{name}: no Parquet files in {source.dir}")
         for file_path in paths[::every]:
             path, base = str(file_path), file_path.name
-            fuzzy = str(root / source.fuzzy / base) if source.fuzzy else None
-            files.append(SourceFile(name, path, str(root / source.decon / base), str(root / source.exact / base), fuzzy))
+            exact = str(StoragePath(source.exact) / base) if source.exact else None
+            fuzzy = str(StoragePath(source.fuzzy) / base) if source.fuzzy else None
+            files.append(SourceFile(name, path, str(StoragePath(source.decon) / base), exact, fuzzy))
     return files
 
 
@@ -296,7 +331,7 @@ def file_matches(file: SourceFile, matcher: Matcher) -> list[dict]:
         return []
     wanted = {doc_id for doc_id, _ in found}
     contaminated = _contaminated(file.decon, wanted)
-    exact = _ids_in(file.exact, wanted)
+    exact = _ids_in(file.exact, wanted) if file.exact else set()
     fuzzy = _ids_in(file.fuzzy, wanted) if file.fuzzy else set()
     return [
         {
@@ -314,20 +349,34 @@ def file_matches(file: SourceFile, matcher: Matcher) -> list[dict]:
     ]
 
 
-def targets_path(out_prefix: str) -> StoragePath:
-    return StoragePath(out_prefix) / "targets.json"
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:20]
 
 
-def match_path(out_prefix: str, path: str) -> StoragePath:
-    return StoragePath(out_prefix) / "matches" / f"{hashlib.sha256(path.encode()).hexdigest()[:20]}.parquet"
+def write_targets(out_prefix: str, targets: list[Target]) -> str:
+    """Write ``targets`` to a directory named by their digest, and return that directory.
+
+    Matches are cached per searched file inside it, so a rerun with other targets under the
+    same prefix searches again instead of reusing matches made for the old ones.
+    """
+    serialized = json.dumps([asdict(t) for t in targets])
+    run = StoragePath(out_prefix) / "matches" / _digest(serialized)
+    (run / "targets.json").write_text(serialized)
+    return str(run)
 
 
-def _search_shard(out_prefix: str):
-    def run(items: Iterator[dict], _) -> Iterator[str]:
-        with targets_path(out_prefix).open("r") as f:
+def match_path(run: str, path: str) -> StoragePath:
+    return StoragePath(run) / f"{_digest(path)}.parquet"
+
+
+def search_shard(run: str):
+    """A ``map_shard`` function that searches each file for the targets in ``run``."""
+
+    def search(items: Iterator[dict], _) -> Iterator[str]:
+        with (StoragePath(run) / "targets.json").open("r") as f:
             matcher = Matcher([Target(**t) for t in json.load(f)])
         for item in items:
-            out = match_path(out_prefix, item["path"])
+            out = match_path(run, item["path"])
             # A finished file's output is written whole, so a rerun skips it.
             if out.exists():
                 continue
@@ -336,7 +385,7 @@ def _search_shard(out_prefix: str):
                 pq.write_table(pa.Table.from_pylist(rows, schema=MATCH_SCHEMA), f)
             yield str(out)
 
-    return run
+    return search
 
 
 def record_summary(targets: list[Target], matches: list[dict]) -> list[dict]:
@@ -453,18 +502,18 @@ def main() -> None:
     targets = targets_for(rows, args.id_field, args.fields, args.min_words)
     if not targets:
         raise ValueError(f"no field of any record has {args.min_words} or more words")
-    targets_path(args.out_prefix).write_text(json.dumps([asdict(t) for t in targets]))
-    files = store_files(store_sources(), args.sources, args.every)
+    run = write_targets(args.out_prefix, targets)
+    files = store_files(store_sources(STORE), args.sources, args.every)
     logger.info("%s: %d records, %d targets, %d files", title, len(rows), len(targets), len(files))
 
     ctx = ZephyrContext(
         name="store-copies", resources=ResourceConfig(cpu=1, ram=args.worker_ram), max_workers=args.max_workers
     )
-    ctx.execute(Dataset.from_list([vars(f) for f in files]).map_shard(_search_shard(args.out_prefix)))
+    ctx.execute(Dataset.from_list([vars(f) for f in files]).map_shard(search_shard(run)))
 
     matches = []
     for f in files:
-        out = match_path(args.out_prefix, f.path)
+        out = match_path(run, f.path)
         if not out.exists():
             raise ValueError(f"{f.path} was not searched: {out} is missing")
         with out.open("rb") as fh:

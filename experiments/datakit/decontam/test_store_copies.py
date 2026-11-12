@@ -12,9 +12,12 @@ from experiments.datakit.decontam.store_copies import (
     Matcher,
     SourceFile,
     file_matches,
+    match_path,
     normalized,
     record_summary,
+    search_shard,
     targets_for,
+    write_targets,
 )
 
 QUESTION = "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May."
@@ -113,6 +116,26 @@ def test_file_matches_treat_a_missing_dedup_file_as_listing_no_documents(tmp_pat
     )
 
     assert [r["kept"] for r in file_matches(file, Matcher(_targets()))] == [True]
+
+
+def test_a_rerun_with_other_targets_under_the_same_prefix_searches_again(tmp_path: Path):
+    file = SourceFile(
+        source="src",
+        path=_write(tmp_path / "docs.parquet", [{"id": "d", "text": QUESTION}]),
+        decon=_write(tmp_path / "decon.parquet", [{"id": "d", "contaminated": False}]),
+        exact=str(tmp_path / "absent.parquet"),
+        fuzzy=None,
+    )
+    prefix = str(tmp_path / "out")
+
+    def matched_records(records: list[dict]) -> set[str]:
+        run = write_targets(prefix, targets_for(records, "id", ["question"], min_words=8))
+        list(search_shard(run)(iter([vars(file)]), None))
+        return {r["record_id"] for r in pq.read_table(str(match_path(run, file.path))).to_pylist()}
+
+    absent = "A question about the rainfall in the valley that occurs in no document at all."
+    assert matched_records([{"id": "q1", "question": QUESTION}]) == {"q1"}
+    assert matched_records([{"id": "q1", "question": absent}]) == set()
 
 
 def test_a_record_is_copied_only_when_one_kept_document_holds_every_field():
