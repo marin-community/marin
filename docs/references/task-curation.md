@@ -667,6 +667,41 @@ each host. On Iris, they use the executable `/cache/task-curation` mount because
 Build locks and completion markers let concurrent workers reuse finished
 environments; uv retains its configured package cache.
 
+## LLM-judged sources
+
+An LLM judge can be part of a task's grading semantics. It is distinct from the
+GLM reviewer that grades a curation panel: the reviewer produces QA evidence,
+while a task's judge produces the reward the task trains on. A judged task
+whose judge model is empty, or whose rubric and settings are unstated, does not
+describe what grades it.
+
+The implemented judge contract lives in
+[`verifyit.modes.grade_judge`](https://github.com/marin-community/marin/blob/main/lib/verifyit/src/verifyit/modes/grade_judge.py).
+A judge specification states the rubric (`reference`, `checklist` or `labels`),
+what the judge sees (question, answer, references, context and whether
+reasoning is removed), the context and completion budgets, the reasoning
+effort, the harness (API, prompts, label parsing), and the request timeout and
+retry budget. It deliberately says nothing about the endpoint:
+`JudgeConnection` supplies the URL and key at run time, so the connection can
+change independently of the specification. Revalidate grading behavior when the
+serving implementation or the effective model revision changes; matching a
+model name does not establish equal weights, revisions or verdicts. Judge
+controls pass only after a remote verdict, and remote verdicts are not reused
+across verification runs
+([graders and controls](#graders-and-controls)).
+
+**Judge tiers (planned).** The policy under development pins each judged source
+to a tier in `JUDGE_TIERS`: `LIGHT` for surface checks with a clear contract,
+`MEDIUM` for comparison with a reference or checklist, and `HEAVY` for
+multi-step verification that needs deep domain reasoning. The repairer judges
+ten tasks from the frozen sample by hand, then pins the tier; every tier sets
+temperature 0.7, or records *API default* where the API cannot take a
+temperature. A judged task whose model or rubric stays unstated holds its
+source at oversight `none` until repaired. End-to-end validation through the
+production grader must show a reference scores 1, a wrong or empty answer
+scores 0, agreement with the hand verdicts and a blinded review, and a parsed
+verdict for every request.
+
 ## Sources without oracle solutions
 
 Some sources ship no oracle solution: every row has `has_solution` false, or its
@@ -786,6 +821,17 @@ Sample and full modes run the reviewed procedure below.
    and persisted campaign evidence. This threshold is independent of sampled
    GLM quality grades.
 7. Admit rows and write the outputs.
+
+### Oracle filtering (planned)
+
+Not implemented on branches that still sample controls. The target policy runs
+an oracle agent over **every** task that ships an oracle, in both SAMPLE and
+FULL, and the admitted cohort becomes exactly the passing subset — no pass
+fraction lets unsampled tasks skip validation. Execution routes through Harbor
+on DAYTONA when the task's snapshot identities fit the Daytona cap, or through
+Harbor LOCAL otherwise. Until that lands, the sampled procedure above is the
+admission contract, and `oracle_validation` records how execution was
+qualified.
 
 For a standalone task batch, call
 `review_tasks(tasks, rubric, reviewer, cached=None)` from
