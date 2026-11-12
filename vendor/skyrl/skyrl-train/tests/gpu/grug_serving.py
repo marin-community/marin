@@ -79,7 +79,6 @@ def grug_engine_client(
             require_verified_placements=require_verified_placements,
             max_num_batched_tokens=MAX_MODEL_LEN * cfg.generator.inference_engine_data_parallel_size,
             max_num_seqs=cfg.trainer.train_batch_size,
-            tokenizer=tokenizer,
             backend="vllm",
             engine_init_kwargs=engine_init_kwargs,
         )
