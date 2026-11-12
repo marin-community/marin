@@ -8,6 +8,7 @@ import pytest
 from finestore.rl.curation import (
     ASSESSMENTS,
     ATTEMPTS,
+    DAYTONA_SAFE_SNAPSHOT_LIMIT,
     ITEMS,
     POPULATIONS,
     Assessment,
@@ -200,13 +201,21 @@ def test_publication_round_trips_daytona_safety_to_the_inventory(tmp_path):
     root = str(tmp_path / "production")
     runnable = number_source(tmp_path / "input")
     agent = RlDataSource(
-        info=replace(runnable.info, id="fixture:agent", tags=("agentic",), daytona_safety=DaytonaSafety.UNSAFE)
+        info=replace(
+            runnable.info,
+            id="fixture:agent",
+            tags=("agentic",),
+            daytona_safety=DaytonaSafety.UNSAFE,
+            daytona_snapshot_count=25,
+            daytona_count_basis="shellbox-identity over pinned payloads",
+        )
     )
     record_attempt(root, runnable, "first", "2026-10-16T10:00:00Z", "key-a")
     publish_catalog(root, "first", [runnable, agent])
     rows = selected_sources(root)
     assert rows[runnable.info.id].declaration.daytona_safety is DaytonaSafety.SAFE
     assert rows["fixture:agent"].declaration.daytona_safety is DaytonaSafety.UNSAFE
+    assert rows["fixture:agent"].declaration.daytona_snapshot_threshold == DAYTONA_SAFE_SNAPSHOT_LIMIT
 
 
 def test_an_unselected_runnable_source_picks_up_the_current_safety_verdict(tmp_path):
@@ -219,7 +228,14 @@ def test_an_unselected_runnable_source_picks_up_the_current_safety_verdict(tmp_p
     publish_catalog(root, "first", [first, agent])
     reassessed = replace(first, config=replace(first.config, name="numbers-second"))
     record_attempt(root, reassessed, "second", "2026-10-16T11:00:00Z", "key-a")
-    repaired = RlDataSource(info=replace(agent.info, daytona_safety=DaytonaSafety.SAFE))
+    repaired = RlDataSource(
+        info=replace(
+            agent.info,
+            daytona_safety=DaytonaSafety.SAFE,
+            daytona_snapshot_count=5,
+            daytona_count_basis="shellbox-identity over pinned payloads",
+        )
+    )
     publish_catalog(root, "second", [reassessed, repaired])
     rows = selected_sources(root)
     assert rows["fixture:agent"].declaration.daytona_safety is DaytonaSafety.SAFE
