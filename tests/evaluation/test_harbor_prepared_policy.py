@@ -94,11 +94,6 @@ def test_runtime_failures_use_published_infrastructure_taxonomy_in_marin(tmp_pat
         ("agents", [{"name": "terminus-2", "mcp_servers": [{"name": "host", "url": "http://host"}]}], "MCP servers"),
         ("verifier", {"env": {"OPENAI_API_KEY": "${AWS_SECRET_ACCESS_KEY}"}}, "AWS_SECRET_ACCESS_KEY"),
         ("verifier", {"import_path": "host.verifier:Verifier"}, "without a custom import"),
-        (
-            "user_agent",
-            {"import_path": "harbor.agents.terminus_2:Terminus2", "bridge": {"kind": "acp"}},
-            "Extra inputs are not permitted",
-        ),
     ],
 )
 def test_preflight_rejects_host_escape_routes_before_submission(

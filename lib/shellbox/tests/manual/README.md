@@ -6,5 +6,5 @@ These scripts exercise installed runtime assets that the test suite cannot bundl
 - `check_shell.py` checks persistent Bash state, stdin, interruption, jobs, output limits, and reset in a PTY-enabled QEMU bundle.
 - `check_prepared_image.py` runs one registry image in Docker and QEMU and compares its command output. It needs `docker` and `skopeo` on `PATH`, `umoci`, guest assets, and registry access.
 
-Use the machine and shell checks directly. Marin's vendored Harbor rejects the
-legacy `harbor.agents.shellbox:BashAgent` adapter; rollout execution uses `ShellHarness`.
+Harbor's [ShellSim integration tests](../../../../vendor/harbor/tests/unit/environments/test_shellsim.py)
+run a complete local trial. See the package README for commands and asset requirements.

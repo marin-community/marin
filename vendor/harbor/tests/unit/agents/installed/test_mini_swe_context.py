@@ -429,6 +429,9 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
         async def process_scope(self):
             return ProcessScope()
 
+        def track_process_scope(self, scope, transport):
+            pass
+
         def scoped_command(self, command):
             return contextlib.nullcontext()
 

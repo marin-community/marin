@@ -20,24 +20,28 @@ from safetensors.numpy import load_file
 
 import experiments.grug.moe_hero_ep.ops.export_cpu as cpu_export
 import experiments.grug.moe_hero_ep.ops.export_vllm as hero_export
-from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
+from experiments.grug.moe_hero_ep.model import GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 
 
-def test_export_refuses_log_scaling_before_writing(tmp_path):
-    destination = tmp_path / "export"
-    request = ExportConfig(
-        checkpoint="unused",
-        metadata_digest="unused",
-        model=GrugModelConfig(vocab_size=32, log_scaling_n_floor=16),
-        destination=str(destination),
-        source_revision="unused",
-    )
+@pytest.mark.parametrize(
+    "log_scaling",
+    [
+        {"log_scaling_n_floor": 16, "log_scaling_alpha": 0.1, "log_scaling_power": 2.0},
+        {"log_scaling_n_floor": None, "log_scaling_alpha": None, "log_scaling_power": None},
+    ],
+)
+def test_hf_config_round_trips_log_scaling_at_schema_3(log_scaling):
+    model = GrugModelConfig(vocab_size=32, **log_scaling)
 
-    with pytest.raises(ValueError, match="log_scaling_n_floor"):
-        export(request)
-    assert not destination.exists()
+    hf_config = model.to_hf_config(model.vocab_size)
+    loaded = GrugModelConfig.from_hf_config(hf_config)
+
+    serialized = hf_config.to_dict()
+    assert serialized[GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] == 3
+    assert {name: serialized[name] for name in log_scaling} == log_scaling
+    assert {name: getattr(loaded, name) for name in log_scaling} == log_scaling
 
 
 def native_fixture(root: str, *, master: bool = False) -> tuple[ExportConfig, Transformer]:

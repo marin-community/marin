@@ -31,13 +31,12 @@ from harbor.models.task.config import (
 )
 from harbor.models.trial.config import ResourceMode, ServiceVolumeConfig
 from harbor.models.trial.paths import TrialPaths
-from harbor.trial.errors import PhaseCancellationError
 from harbor.utils.env import resolve_env_vars, validate_task_environment
 from harbor.utils.logger import logger as global_logger
 from harbor.utils.scripts import quote_shell_arg
 from pydantic import BaseModel
-from shellbox.lifecycle import finish_cleanup
 from shellbox.process import CLEANUP_TIMEOUT, ProcessScope, private_supervisor_runtime
+from shellbox.process_session import await_cleanup, own_cleanup
 
 EnvironmentPath = str | PurePath
 EXEC_OUTPUT_LIMIT_BYTES = 128 * 1024 * 1024
@@ -87,6 +86,14 @@ class SandboxDiskFullError(RuntimeError):
     """A sandbox command failed because its filesystem has no space left."""
 
 
+class AgentProcessScopeStartError(RuntimeError):
+    """The agent command scope did not start."""
+
+
+class AgentProcessCleanupError(RuntimeError):
+    """An agent command tree could not be stopped and confirmed."""
+
+
 class ExecResult(BaseModel):
     stdout: str | None = None
     stderr: str | None = None
@@ -100,6 +107,10 @@ class BaseEnvironment(ABC):
 
     _supervisor_python: str | None = None
     _process_scopes: tuple[tuple[ProcessScope, str | int | None], ...] = ()
+
+    def track_process_scope(self, scope: ProcessScope, transport: asyncio.Task[ExecResult]) -> None:
+        """Retain the host-owned command outcome for cleanup confirmation."""
+        self._scope_transports[scope.directory] = transport
 
     async def prepare_process_supervisor(self) -> str:
         """Resolve the supervisor interpreter without changing the task environment."""
@@ -134,13 +145,16 @@ class BaseEnvironment(ABC):
 
     async def start_process_scope(
         self, command: str, *, env: dict[str, str], user: str | int | None = None
-    ) -> None:
+    ) -> ProcessScope:
         """Keep a foreground service and all descendants owned until phase end."""
         scope = await self.process_scope(user)
         launch = shlex.join(scope.command(("/bin/sh", "-c", command), None))
         directory = shlex.quote(scope.directory)
+        transport = asyncio.create_task(
+            self.exec(f"{launch} </dev/null >{directory}.log 2>&1", env=env, user=user)
+        )
+        self.track_process_scope(scope, transport)
         result = await self.exec(
-            f"{launch} </dev/null >{directory}.log 2>&1 & "
             f"for attempt in $(seq 1 1000); do "
             f"[ ! -f {directory}/failed ] || exit 1; "
             f"[ ! -f {directory}/done ] || exit 1; "
@@ -148,27 +162,35 @@ class BaseEnvironment(ABC):
             env=env,
             user=user,
         )
-        if result.return_code:
-            raise PhaseCancellationError("Cannot start the agent process scope")
+        if result.return_code or transport.done():
+            raise AgentProcessScopeStartError("Cannot start the agent process scope")
+        return scope
 
     async def kill_processes(self) -> None:
         """Stop agent-owned trees while retaining files, sidecars and model relays."""
-        try:
+        async def cancel_all() -> None:
+            failures: list[Exception] = []
             for scope, user in self._process_scopes:
-                result = await finish_cleanup(
-                    self.exec(
-                        scope.cancel_command(),
-                        user=user,
-                        timeout_sec=CLEANUP_TIMEOUT,
-                    )
+                try:
+                    result = await self.exec(scope.cancel_command(), user=user, timeout_sec=CLEANUP_TIMEOUT)
+                    if result.return_code:
+                        raise AgentProcessCleanupError("Agent process cleanup could not be confirmed")
+                    transport = self._scope_transports.get(scope.directory)
+                    if transport is None:
+                        raise AgentProcessCleanupError("Agent process has no host-owned completion")
+                    outcome = await asyncio.wait_for(asyncio.shield(transport), CLEANUP_TIMEOUT)
+                    if outcome.return_code is None or (outcome.return_code >= 125 and outcome.return_code != 143):
+                        raise AgentProcessCleanupError("Agent process transport did not confirm clean exit")
+                except Exception as error:
+                    failures.append(error)
+            if failures:
+                raise AgentProcessCleanupError("Agent process cleanup could not be confirmed") from ExceptionGroup(
+                    "Process scopes that failed cleanup", failures
                 )
-                if result.return_code:
-                    raise RuntimeError("Agent process cleanup could not be confirmed")
-        except Exception as error:
-            raise PhaseCancellationError(
-                "Agent process cleanup could not be confirmed"
-            ) from error
+
+        await await_cleanup(own_cleanup(cancel_all()))
         self._process_scopes = ()
+        self._scope_transports.clear()
 
     environment_dir: Path
     environment_name: str
@@ -243,6 +265,7 @@ class BaseEnvironment(ABC):
         self.trial_paths = trial_paths
         self.default_user = None
         self.agent_timeout_sec = None
+        self._scope_transports: dict[str, asyncio.Task[ExecResult]] = {}
         self.task_env_config = task_env_config
         self.host_capabilities = host_capabilities
         self.guest_environment = dict(guest_environment)
@@ -455,13 +478,11 @@ class BaseEnvironment(ABC):
             yield
         finally:
             try:
-                await finish_cleanup(
-                    asyncio.wait_for(self.reap_command(command), CLEANUP_TIMEOUT)
+                await await_cleanup(
+                    own_cleanup(asyncio.wait_for(self.reap_command(command), CLEANUP_TIMEOUT))
                 )
             except Exception as error:
-                raise PhaseCancellationError(
-                    "Remote command teardown could not be confirmed"
-                ) from error
+                raise AgentProcessCleanupError("Remote command teardown could not be confirmed") from error
 
     async def reap_command(self, command: str) -> None:
         """Run cleanup independently of the cancelled execution transport."""

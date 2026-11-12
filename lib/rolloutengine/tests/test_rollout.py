@@ -163,7 +163,7 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
         backend = Backend.DOCKER
 
         async def create(self, spec):
-            machine = await DockerMachineFactory().create(replace(spec, source=DockerImage("python:3.12-alpine")))
+            machine = await DockerMachineFactory().create(replace(spec, source=DockerImage("busybox:1.36")))
             machines.append(machine)
             if spec.env.get("ARTIFACT_TASK_MACHINE") != "1":
                 return machine
@@ -218,7 +218,7 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
             GradingFailure.EXECUTION,
         )
     else:
-        assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0), record.grade
+        assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     for machine in machines:
         assert (await docker("inspect", machine.name)).exit_code != 0
 

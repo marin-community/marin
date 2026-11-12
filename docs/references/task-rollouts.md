@@ -152,8 +152,10 @@ Final tool schemas can condition the continuation. Interactive tools, tool provi
 capabilities are rejected during preflight. The grader can have its own verifier environment and private
 resources. The model must return the continuation as assistant text: parsed reasoning or tool-call
 channels make the attempt invalid, so parser behavior cannot silently turn a continuation into a normal
-zero reward. Structural-closure grading concatenates its fixed text prefix with this continuation and
-scores the first completed outer structure.
+zero reward. When the last token of a continuation is the tokenizer's EOS, `<|eot_id|>` or `<|im_end|>`,
+SkyRL's model client cuts that token from this text, except after a `length` stop. Response token IDs keep it.
+Structural-closure grading concatenates its fixed text prefix with this continuation and scores the first
+completed outer structure.
 
 The selected model tokenizes the conversation and prefill. Training records its actual prompt and sampled
 response tokens with their logprobs through the normal model session. Historical token IDs do not constrain

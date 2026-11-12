@@ -13,7 +13,7 @@ from typing import Any
 from harbor_config.errors import ErrorCategory, error_category
 
 from harbor.agents.factory import AgentFactory
-from harbor.environments.base import BaseEnvironment, SandboxDiskFullError
+from harbor.environments.base import AgentProcessCleanupError, BaseEnvironment, SandboxDiskFullError
 from harbor.environments.factory import EnvironmentFactory
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.agent.context import AgentContext
@@ -66,9 +66,15 @@ from harbor.utils.logger import logger as global_logger
 from harbor.utils.scripts import quote_shell_arg
 from harbor.verifier.factory import VerifierFactory
 from harbor.verifier.base import BaseVerifier
-from shellbox.lifecycle import finish_cleanup
 
 TrialHookCallback = Callable[[TrialHookEvent], Awaitable[None]]
+
+# Terminal-Bench 2.1 ref 6 resolves to these task content digests.
+_SERVER_DEPENDENT_DATASET = "terminal-bench/terminal-bench-2-1"
+_SERVER_DEPENDENT_TASKS = {
+    "terminal-bench/qemu-alpine-ssh": "sha256:60b7050b0e0aa51641208cf65766743d340e59575db2c4d2f8628240846c2a28",
+    "terminal-bench/git-multibranch": "sha256:7759a92a373c967dd31535975bad8659410644025673fe62385444fd2605c5fa",
+}
 
 _MAX_VERIFIER_ENV_SESSION_ID_LEN = 63
 
@@ -636,35 +642,44 @@ class Trial(ABC):
         except SandboxDiskFullError as exc:
             primary = exc
             raise AgentDiskFullError(str(exc)) from exc
+        except AgentProcessCleanupError as exc:
+            primary = exc
+            raise PhaseCancellationError("Agent process cleanup could not be confirmed") from exc
         except BaseException as exc:
             primary = exc
             raise
         finally:
-            try:
-                await self._cleanup_agents()
-                if self.agent_environment.requires_agent_quiescence_for_verifier:
-                    await self._await_phase(
-                        self.agent_environment.quiesce_agent_commands(),
-                        timeout_sec=self.config.trial_cleanup_grace_sec,
-                        timeout_error=TimeoutError(
-                            "Agent commands did not stop before verifier model access"
-                        ),
-                    )
-            except Exception as exc:
-                if isinstance(primary, asyncio.CancelledError):
-                    primary.add_note(f"Agent cleanup failed: {exc}")
-                    self.result.secondary_exception_info.append(
-                        ExceptionInfo.from_exception(exc)
-                    )
-                else:
-                    raise PhaseCancellationError(
-                        "Could not confirm agent commands stopped"
-                    ) from exc
-            finally:
+            if primary is None and self._keep_agent_services_for_verifier():
+                target.agent_execution.finished_at = self._now()
+            else:
                 try:
-                    await finish_cleanup(self.agent_environment.kill_processes())
+                    await self._cleanup_agents()
+                    if self.agent_environment.requires_agent_quiescence_for_verifier:
+                        await self._await_phase(
+                            self.agent_environment.quiesce_agent_commands(),
+                            timeout_sec=self.config.trial_cleanup_grace_sec,
+                            timeout_error=TimeoutError(
+                                "Agent commands did not stop before verifier model access"
+                            ),
+                        )
+                except Exception as exc:
+                    if isinstance(primary, asyncio.CancelledError):
+                        primary.add_note(f"Agent cleanup failed: {exc}")
+                        self.result.secondary_exception_info.append(ExceptionInfo.from_exception(exc))
+                    else:
+                        raise PhaseCancellationError("Could not confirm agent commands stopped") from exc
                 finally:
-                    target.agent_execution.finished_at = self._now()
+                    try:
+                        try:
+                            await self.agent_environment.kill_processes()
+                        except AgentProcessCleanupError as exc:
+                            raise PhaseCancellationError("Agent process cleanup could not be confirmed") from exc
+                    finally:
+                        target.agent_execution.finished_at = self._now()
+
+    def _keep_agent_services_for_verifier(self) -> bool:
+        task = self.config.task
+        return task.source == _SERVER_DEPENDENT_DATASET and task.ref == _SERVER_DEPENDENT_TASKS.get(task.name)
 
     async def _cleanup_agents(self) -> None:
         try:
@@ -1342,8 +1357,7 @@ class Trial(ABC):
         ):
             raise RuntimeError(
                 f"Agent '{self.agent.name()}' does not support Windows containers. "
-                "Only agents with SUPPORTS_WINDOWS = True can run Windows tasks "
-                "(currently: oracle, nop)."
+                "Only agents with SUPPORTS_WINDOWS = True can run Windows tasks."
             )
 
         self.result.agent_setup = TimingInfo(started_at=self._now())

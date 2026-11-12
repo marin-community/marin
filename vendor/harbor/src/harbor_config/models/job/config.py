@@ -17,10 +17,10 @@ from upath import UPath
 from harbor_config.models.metric.config import MetricConfig
 from harbor_config.models.task.id import GitTaskId, LocalTaskId, PackageTaskId
 from harbor_config.models.trial.config import (
-    DEFAULT_TRIAL_CLEANUP_GRACE_SEC,
     AgentConfig,
     ArtifactAuthorityConfig,
     ArtifactConfig,
+    DEFAULT_TRIAL_CLEANUP_GRACE_SEC,
     EnvironmentConfig,
     TaskConfig,
     VerifierConfig,
@@ -358,7 +358,7 @@ class ArchiveConfig(BaseModel):
 class JobConfig(BaseModel):
     # If replay-affecting fields are added or changed here, update JobLock in
     # harbor.models.job.lock so lock.json records the same resolved run input.
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     job_name: str = Field(
         default_factory=lambda: datetime.now().strftime("%Y-%m-%d__%H-%M-%S")

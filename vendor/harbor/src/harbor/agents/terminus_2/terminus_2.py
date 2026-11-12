@@ -1724,9 +1724,7 @@ so ask everything you need to know."""
                 reasoning_content=summary_response.reasoning_content,
                 is_copied_context=True,
                 extra={
-                    "note": (
-                        "Copied from summary subagent - metrics already recorded there"
-                    )
+                    "note": "Copied from summary subagent - metrics already recorded there"
                 },
             )
         )

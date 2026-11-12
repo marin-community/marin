@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from harbor.agents.base import TurnCapExhaustedError
-from harbor.environments.base import BaseEnvironment, SandboxDiskFullError
+from harbor.environments.base import AgentProcessCleanupError, BaseEnvironment, SandboxDiskFullError
 from harbor.models.job.config import RetryConfig
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.paths import TrialPaths
@@ -1153,7 +1153,8 @@ async def test_unconfirmed_remote_teardown_is_not_a_scoreable_timeout(ending):
             if ending == "timeout":
                 await asyncio.Future()
 
-    with pytest.raises(PhaseCancellationError):
+    failure = AgentProcessCleanupError if ending == "complete" else PhaseCancellationError
+    with pytest.raises(failure):
         await trial._await_phase(
             phase(),
             timeout_sec=0.01,

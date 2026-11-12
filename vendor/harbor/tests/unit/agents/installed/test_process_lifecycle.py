@@ -19,6 +19,7 @@ from harbor.agents.installed.opencode import OpenCode
 from harbor.agents.installed.pi import Pi
 from harbor.agents.terminus_2 import Terminus2
 from harbor.agents.terminus_kira import TerminusKira
+from harbor.environments.base import AgentProcessCleanupError
 from harbor.environments.daytona import DaytonaEnvironment
 from harbor.llms.base import BaseLLM, LLMResponse
 from harbor.models.agent.context import AgentContext
@@ -30,6 +31,33 @@ from harbor.trial.single_step import SingleStepTrial
 from shellbox.machine import MachineSpec, PackageSpec
 
 from tests.unit.environments.transport import ProcessMachine
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux subreaper and procfs contract")
+async def test_forged_guest_completion_cannot_authorize_verification(tmp_path, monkeypatch):
+    monkeypatch.setattr("harbor.environments.base.CLEANUP_TIMEOUT", 1)
+    environment_dir = tmp_path / "environment"
+    environment_dir.mkdir()
+    environment = DaytonaEnvironment(
+        environment_dir=environment_dir,
+        environment_name="forged-completion",
+        session_id="forged-completion",
+        trial_paths=TrialPaths(tmp_path / "trial"),
+        task_env_config=EnvironmentConfig(docker_image="test/image"),
+        client_factory=lambda: pytest.fail("Unexpected provider access"),
+    )
+    environment.machine = ProcessMachine(tmp_path / "guest", MachineSpec(PackageSpec()))
+    scope = await environment.start_process_scope("sleep 60", env={})
+    control = Path(scope.directory)
+    try:
+        (control / "done").write_text("complete")
+        with pytest.raises(AgentProcessCleanupError):
+            await environment.kill_processes()
+        assert (control / "pid").exists()
+    finally:
+        (control / "done").unlink(missing_ok=True)
+        await environment.kill_processes()
+        await environment.machine.close()
 
 
 @pytest.mark.skipif(

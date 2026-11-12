@@ -17,6 +17,7 @@ from types import FrameType
 
 PR_SET_CHILD_SUBREAPER = 36
 CLEANUP_TIMEOUT = 8
+CANCEL_CONFIRMATION_GRACE = 2
 POLL_INTERVAL = 0.01
 TIMEOUT_MARKER = "SHELLBOX_COMMAND_TIMEOUT"
 FAILURE_MARKER = "SHELLBOX_CLEANUP_FAILED"
@@ -67,7 +68,7 @@ def cancel(control: Path) -> None:
                 raise RuntimeError("Command supervisor identity is missing")
             return  # A queued launch observes cancel before creating children.
         os.kill(int((control / "pid").read_text()), signal.SIGTERM)
-    deadline = time.monotonic() + CLEANUP_TIMEOUT + 2
+    deadline = time.monotonic() + CLEANUP_TIMEOUT + CANCEL_CONFIRMATION_GRACE
     while not (control / "done").exists():
         if (control / "failed").exists() or time.monotonic() >= deadline:
             raise RuntimeError("Command teardown could not be confirmed")
@@ -128,11 +129,6 @@ def main() -> int:
     action, directory, *args = sys.argv[1:]
     control = Path(directory)
     try:
-        if action == "status":
-            if not control.exists():
-                return 126  # The execution transport did not start the supervisor.
-            state = (control / "done").read_text()
-            return 124 if state == "timeout" else 0
         if action == "cancel":
             cancel(control)
             return 0

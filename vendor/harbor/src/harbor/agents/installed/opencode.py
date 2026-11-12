@@ -1,7 +1,6 @@
 import copy
 import json
 import os
-import re
 import shlex
 import uuid
 from datetime import datetime, timezone

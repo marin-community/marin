@@ -6,10 +6,9 @@ revision recorded in [UPSTREAM.toml](UPSTREAM.toml). The source is licensed unde
 
 This package contains the evaluation runtime, agents, Shellbox environment adapters,
 verification, trajectories, registry downloads, FineStore archives, and telemetry.
-It supports Pi, Mini-SWE-Agent, Codex, OpenCode, Terminus-2 and Terminus-Kira.
-Job and trial configs must select an agent explicitly. Unsupported agent source
-remains in Git history. Historical launch configurations remain in Marin but
-fail preflight when they select an unsupported agent.
+It supports Pi, Mini-SWE-Agent, Codex, OpenCode, Terminus-2 and Terminus-Kira,
+selected by name in container mode. Job and trial configs must select an agent
+explicitly.
 
 It evaluates prebuilt Harbor tasks from local paths, Hugging Face repositories,
 or the Harbor registry. The `harbor` distribution provides both the `harbor` and
@@ -39,7 +38,10 @@ the deployed Daytona SDK version, 0.200.2.
 
 Harbor executes tasks only through Shellbox. Its environment types are `local`
 (the default), `daytona`, `qemu` and `shellsim`; other provider names and
-custom environment import paths fail validation. The adapters depend on
+custom environment import paths fail validation. The six supported agents require
+a Linux process environment. ShellSim cannot run them because it has no Linux
+process tree or tmux. QEMU agent execution has not been validated end to end.
+The adapters depend on
 Shellbox's generic machine API; Shellbox does not import Harbor. The `runtime`
 extra includes Daytona; `qemu` and `shellsim` install those optional backends.
 

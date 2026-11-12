@@ -6,12 +6,12 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Protocol
+from typing import Any, Protocol
 
 from shellbox.machine import MachineTerminated
 
 logger = logging.getLogger(__name__)
-_CLEANUPS: set[asyncio.Task[None]] = set()
+_CLEANUPS: set[asyncio.Task[Any]] = set()
 
 # Killed descendants can remain as zombies until their parent reaps them.
 PROCESS_GROUP_ABSENT_EXIT_CODE = 3
@@ -53,12 +53,12 @@ async def finish_owned[T](task: asyncio.Task[T]) -> T:
     return task.result()
 
 
-def own_cleanup(cleanup: Awaitable[None]) -> asyncio.Task[None]:
+def own_cleanup[T](cleanup: Awaitable[T]) -> asyncio.Task[T]:
     """Keep cleanup alive even if its caller is cancelled repeatedly."""
     task = asyncio.create_task(cleanup)
     _CLEANUPS.add(task)
 
-    def finished(task: asyncio.Task[None]) -> None:
+    def finished(task: asyncio.Task[T]) -> None:
         _CLEANUPS.discard(task)
         if not task.cancelled() and (error := task.exception()) is not None:
             logger.error("Process cleanup failed (%s)", type(error).__name__)
@@ -67,10 +67,10 @@ def own_cleanup(cleanup: Awaitable[None]) -> asyncio.Task[None]:
     return task
 
 
-async def await_cleanup(task: asyncio.Task[None]) -> None:
+async def await_cleanup[T](task: asyncio.Task[T]) -> T:
     """Finish cleanup before propagating its caller's original cancellation."""
     try:
-        await asyncio.shield(task)
+        return await asyncio.shield(task)
     except asyncio.CancelledError as cancellation:
         try:
             await finish_owned(task)

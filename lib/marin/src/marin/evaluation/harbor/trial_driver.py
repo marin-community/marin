@@ -17,7 +17,8 @@ from typing import Any
 
 import fsspec.config
 import yaml
-from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import]  # installed by external driver
+from harbor.agents.base import BaseAgent  # pyrefly: ignore[missing-import]  # installed by external driver
+from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import]
 from harbor.agents.installed.base import BaseInstalledAgent  # pyrefly: ignore[missing-import]
 from harbor.environments.docker_translate import (  # pyrefly: ignore[missing-import]
     COMPOSE_FILENAMES,
@@ -70,9 +71,6 @@ from marin.evaluation.harbor.agent_context import (
 _HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
 _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
-_OPENCODE_AGENT = "opencode"
-_OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
-_TERMINUS_2_AGENT = "terminus-2"
 _LLM_CALL_KWARGS_KEY = "llm_call_kwargs"
 _MAX_TOKENS_KEY = "max_tokens"
 _STABLE_JOB_NAME = "__marin_job__"
@@ -150,9 +148,8 @@ def _single_entry(config: JobConfig, field_name: str) -> object:
     return values[0]
 
 
-def _validate_agent(agent: AgentConfig) -> str:
-    agent_class = AgentFactory.get_agent_class_from_config(agent)
-    return agent_class.name()
+def _agent_class(agent: AgentConfig) -> type[BaseAgent]:
+    return AgentFactory.get_agent_class_from_config(agent)
 
 
 def _validate_environment(config: JobConfig) -> str:
@@ -175,7 +172,6 @@ def _validate_prepared_policy(config: JobConfig) -> None:
     if unknown_kwargs:
         raise ValueError(f"Unsupported {label} environment kwargs: {sorted(unknown_kwargs)}")
     for agent in config.agents:
-        _validate_agent(agent)
         if agent.env or agent.mcp_servers or agent.skills:
             raise ValueError(f"{label} does not accept agent environment forwarding, MCP servers, or skills")
         if {"extra_env", "mcp_servers", "skills_dir", "turn_callback"} & agent.kwargs.keys():
@@ -195,7 +191,7 @@ def _validate_job_tasks(job: Job) -> None:
             else task_config.path
         )
         task = Task(task_path, disable_verification=job.config.verifier.disable)
-        if _validate_agent(job.config.agents[0]) == AgentName.PI:
+        if job.config.agents[0].name == AgentName.PI:
             main_image = prepared_images(task.paths.environment_dir).get("main")
             if main_image is None or PINNED_IMAGE.fullmatch(main_image.image) is None:
                 raise ValueError(
@@ -349,6 +345,7 @@ def _terminus_llm_call_kwargs(
 
 def _agent_config(
     agent: AgentConfig,
+    agent_class: type[BaseAgent],
     *,
     endpoint_url: str,
     served_model: str,
@@ -356,7 +353,7 @@ def _agent_config(
     kwargs: Mapping[str, object],
 ) -> AgentConfig:
     runtime_kwargs = {**kwargs, "api_base": endpoint_url}
-    if _validate_agent(agent) == _OPENCODE_AGENT:
+    if agent_class.name() == AgentName.OPENCODE:
         runtime_kwargs["opencode_config"] = _opencode_config(kwargs.get("opencode_config", {}), endpoint_url)
     configured = AgentConfig.model_validate(
         {
@@ -372,28 +369,24 @@ def _agent_config(
     return configured
 
 
-def _installed_agent(agent: AgentConfig) -> bool:
-    agent_class = AgentFactory.get_agent_class_from_config(agent)
-    return issubclass(agent_class, BaseInstalledAgent)
-
-
-def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig:
+def _effective_agent(agent: AgentConfig, agent_class: type[BaseAgent], overlay: RuntimeOverlay) -> AgentConfig:
     kwargs = {**overlay.model_agent_kwargs, **agent.kwargs}
     model_info = reconciled_model_info(
         overlay.model_agent_kwargs.get(MODEL_INFO_KEY),
         agent.kwargs.get(MODEL_INFO_KEY),
     )
     kwargs[MODEL_INFO_KEY] = model_info
-    if _validate_agent(agent) == _TERMINUS_2_AGENT:
+    if agent_class.name() == AgentName.TERMINUS_2:
         kwargs[_LLM_CALL_KWARGS_KEY] = _terminus_llm_call_kwargs(
             kwargs.get(_LLM_CALL_KWARGS_KEY),
             model_info[MAX_OUTPUT_TOKENS_KEY],
         )
-    installed = _installed_agent(agent)
+    installed = issubclass(agent_class, BaseInstalledAgent)
     if installed:
         kwargs["api_key"] = "EMPTY"
     configured = _agent_config(
         agent,
+        agent_class,
         endpoint_url=(f"http://127.0.0.1:{CANDIDATE_MODEL_RELAY_PORT}/v1" if installed else overlay.endpoint_url),
         served_model=overlay.served_model,
         model_identity=overlay.model_identity,
@@ -417,6 +410,7 @@ def _stable_agent(agent: AgentConfig) -> AgentConfig:
     reconciled_model_info(None, agent.kwargs.get(MODEL_INFO_KEY))
     configured = _agent_config(
         agent,
+        _agent_class(agent),
         endpoint_url=_STABLE_ENDPOINT,
         served_model=_STABLE_MODEL,
         model_identity=_STABLE_MODEL,
@@ -452,14 +446,15 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
             for name, _ in get_required_host_vars(declaration)
         }
     )
-    agent = _effective_agent(config.agents[0], overlay)
+    agent_class = _agent_class(config.agents[0])
+    agent = _effective_agent(config.agents[0], agent_class, overlay)
     dataset = _dataset_with_runtime(
         config.datasets[0],
         dataset_path=overlay.dataset_path,
         task_limit=overlay.task_limit,
     )
     environment = config.environment
-    if _installed_agent(config.agents[0]):
+    if issubclass(agent_class, BaseInstalledAgent):
         if environment.type not in _MODEL_RELAY_ENVIRONMENTS:
             raise ValueError("Installed candidate model relays require the local or Daytona Shellbox backend")
         environment = environment.model_copy(
@@ -603,7 +598,7 @@ def _preflight_one(
     dataset = _single_entry(config, "datasets")
     assert isinstance(agent, AgentConfig)
     assert isinstance(dataset, DatasetConfig)
-    agent_name = _validate_agent(agent)
+    agent_name = _agent_class(agent).name()
     environment_name = _validate_environment(config)
     if config.environment.type == EnvironmentType.DAYTONA and not host_environment.get("DAYTONA_TARGET"):
         raise ValueError("Harbor Daytona policies require DAYTONA_TARGET before model allocation")
@@ -639,7 +634,7 @@ def _preflight_one(
             ),
         )
         effective_agent = effective.agents[0]
-        if _validate_agent(effective_agent) == AgentName.PI:
+        if agent_name == AgentName.PI:
             try:
                 AgentFactory.create_agent_from_name(
                     AgentName.PI,

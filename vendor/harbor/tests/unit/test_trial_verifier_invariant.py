@@ -155,9 +155,7 @@ async def _make_trial(tmp_path: Path) -> Trial:
     config = TrialConfig(
         task=TaskConfig(path=task_dir),
         trials_dir=trials_dir,
-        agent=AgentConfig(
-            import_path="tests.unit.test_trial_verifier_invariant:TimeoutAgent"
-        ),
+        agent=AgentConfig(name=AgentName.PI),
         environment=EnvironmentConfig(type=EnvironmentType.LOCAL, delete=True),
         # Verification ENABLED: this is the path that must never silently drop.
         verifier=VerifierConfig(disable=False),

@@ -720,7 +720,7 @@ class _CapturingConverter:
 
 class _CapturingTrainer:
     run_id = "test-run"
-    config = SimpleNamespace(checkpointer=None)
+    config = SimpleNamespace(checkpointer=None, field_dtype_overrides={"router_bias": jnp.dtype("float32")})
 
     def __init__(self):
         self.hooks = []
@@ -815,12 +815,13 @@ def test_separate_reference_hf_export_passes_generation_config():
     saved_model, _, saved_kwargs = converter.calls[0]
     assert saved_model is model
     assert saved_kwargs["generation_config"] == generation_config
+    assert saved_kwargs["field_dtype_overrides"] == {"router_bias": jnp.dtype("float32")}
 
 
 @pytest.mark.parametrize("updates", [6, 7])
 def test_dpo_exports_completed_update_intervals_and_final_checkpoint(tmp_path, updates):
     class ExportTrainer:
-        config = SimpleNamespace(checkpointer=None)
+        config = SimpleNamespace(checkpointer=None, field_dtype_overrides={})
         run_id = "export-cadence"
         add_hook = Trainer.add_hook
 

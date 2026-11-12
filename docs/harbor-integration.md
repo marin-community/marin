@@ -9,21 +9,6 @@ Harbor supports `local` (bubblewrap, the default), `daytona`, `qemu` and `shells
 See [Running Evaluations with Marin](tutorials/run-lm-evals.md) to choose a model and suite.
 Preflight checks the policy and model settings before allocating evaluation resources.
 
-Marin's vendored Harbor supports `pi`, `mini-swe-agent`, `codex`, `opencode`,
-`terminus-2` and `terminus-kira`. Job and trial configs must name an agent.
-Other agents, ACP aliases, local adapters and arbitrary import paths fail validation.
-Historical Tau3/ACP and Sotopia campaign policies remain in `experiments/evaluation`.
-Preflight rejects them before task allocation. Unsupported agent source remains in Git history.
-
-Installed CLI agents and foreground Terminus tmux servers run under Shellbox process
-scopes. Background processes survive individual tool calls. At the end of each agent
-phase, including timeout or cancellation, Harbor stops and confirms the agent-owned
-process trees before verification. Files, task sidecars and model relays remain
-available. A verifier that needs an agent-created server must restart it or run it
-as a task sidecar. Failed cleanup blocks verification. The supervisor uses an
-existing guest Python or uploads a private CPython runtime; it does not install
-system packages or change the task's `PATH`.
-
 Before launching:
 
 - Local execution needs prepared images and working bubblewrap namespaces. Shellbox
@@ -191,7 +176,7 @@ Compose tasks provide `environment/shellbox-images.json`:
 ```json
 {
   "main": {"image": "registry.example/main@sha256:<64-hex-digest>", "workdir": "/app"},
-  "sidecar": {
+  "helper": {
     "image": "registry.example/runtime@sha256:<64-hex-digest>",
     "workdir": "/app",
     "agent_logs": "publish"
@@ -216,9 +201,8 @@ A sidecar exit closes the whole local task, including the agent. Grading cannot 
 inside that task.
 
 The prepared local path accepts Pi, Mini-SWE-Agent, Codex, OpenCode,
-Terminus-2, and Terminus-Kira. Reviewed images must provide their harnesses
-and dependencies. Preflight rejects unsupported agents and simulated users
-before task allocation.
+Terminus-2, and Terminus-Kira. Preflight rejects unsupported agents and
+simulated users before task allocation.
 
 Standalone Pi tasks, including single-container tasks, must declare a digest-pinned
 `main` image with Pi installed in `environment/shellbox-images.json`.
@@ -228,9 +212,16 @@ setup checks it against the installed binary. On local execution, the manifest s
 the image. A `docker_image` in `task.toml`, if present, must match. This requirement applies
 to the BixBench and BFCL Pi campaign policies and the one-task onboarding ablation.
 
-A sidecar declaring `agent_logs: "publish"` has its logs copied into the actor's
-agent-log directory after the agent phase, before verification. There is no shared
-writable volume; actor writes do not flow back to the sidecar.
+A sidecar declaring `agent_logs: "publish"` has its logs copied into the actor's agent-log
+directory after the agent phase, before verification.
+There is no shared writable volume. Actor writes do not flow back to the sidecar.
+
+Harbor stops agent command scopes before shared-sandbox verification. It confirms
+cleanup against the evaluator's command transport; guest control files alone do not
+authorize grading. The `terminal-bench/terminal-bench-2-1` ref `6` tasks
+`qemu-alpine-ssh` and `git-multibranch` need agent-started services for their verifiers.
+On successful runs of those two tasks, Harbor keeps the services through grading and
+stops them at task teardown. Timeouts and cancellation still require confirmed cleanup.
 
 ### Local factory settings
 
@@ -298,22 +289,23 @@ the host. Candidate and judge credentials are separate.
 | Relay | Port | Access |
 | --- | --- | --- |
 | Candidate | 8788 | Installed candidate agents on local and Daytona backends. |
-| Judge | 8787 | Available during verification. Direct callers can explicitly grant runtime access. |
+| Judge | 8787 | Available during verification, or during execution when `judge_access: runtime` is set. |
 
 Both relays support `POST /v1/chat/completions`, `POST /v1/responses` and `POST /tokenize`.
 Each relay calls one fixed upstream model. It rejects redirects, limits request and response
 sizes, and returns sanitized provider error codes. Responses supports non-streaming text,
 output limits and reasoning options. Tools, stored responses and stateful continuations are unsupported.
 Streaming chat is buffered: the guest receives SSE frames after the complete response
-arrives.
+arrives. Some Codex features need routes outside this contract.
 
-`judge_access: verifier` opens the judge relay only during grading. Agent-owned
-processes stop before grading on local and Daytona backends. A grader needing a
-server started by the agent must restart it or use a task sidecar.
+`judge_access: verifier` opens the judge relay only during grading. Before opening it,
+local execution stops remaining agent command groups. A grader needing both a live agent
+service and private judge access needs separate isolation. Daytona's per-command process
+groups do not contain detached descendants; Harbor uses a phase scope for agent cleanup.
 
-`judge_access: runtime` keeps the judge available during execution when a direct
-caller explicitly requests it. Every peer sharing the task network can reach that
-relay, including the candidate. Tool filtering does not provide network isolation.
+`judge_access: runtime` keeps the judge available during execution. Direct callers must
+request it. Every peer sharing the task network can
+reach that relay, including the candidate. Tool filtering does not provide network isolation.
 
 Local bubblewrap shares the worker's kernel. Use isolated workers. These contracts do not
 certify deployed images or provider-injected settings. See the
@@ -328,8 +320,8 @@ A retry replaces its same-name registration. Saved job and trial JSON redacts th
 credential-bearing URLs. Resume supplies new URLs.
 
 `agents[0].model_name` stores the original model location with a `hosted_vllm/` prefix.
-`model_alias` routes requests to the served model. Moving an endpoint or changing
-its alias does not change the recorded model identity.
+`model_alias` routes requests to the served model. Moving an endpoint or
+changing its alias does not change the recorded model identity.
 
 ## Agent context limits
 
@@ -352,8 +344,8 @@ identify the model. These are estimates. Exact counts require the serving tokeni
 Optional `input_cost_per_token` and `output_cost_per_token` are USD per token. Harbor does
 not look up limits or prices in a model registry.
 
-LiteLLM is excluded from workspace and standalone evaluation environments.
-Use one of the six maintained agents with a compatible endpoint.
+LiteLLM is excluded from workspace and standalone evaluation environments. Use one of
+the six supported agents named in the vendored runtime README.
 
 ## Results
 

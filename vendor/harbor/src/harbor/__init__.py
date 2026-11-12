@@ -141,8 +141,7 @@ def _route_s3_endpoint_url_to_client_kwargs() -> None:
     ``client_kwargs`` (forwarded to ``session.create_client``, which DOES accept ``endpoint_url``),
     where ``region_name`` already lives. Relocating it here — the same import-time chokepoint as the
     addressing-style pin, since harbor addresses s3 through bare ``UPath`` with no per-call
-    storage_options — makes s3 access work on any s3fs version. Best-effort; never raises at import.
-    """
+    storage_options — makes s3 access work on any s3fs version. Best-effort; never raises at import."""
     try:
         import fsspec.config
 

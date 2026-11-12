@@ -1,3 +1,4 @@
+import asyncio
 import functools
 import shlex
 from abc import ABC, abstractmethod
@@ -446,15 +447,27 @@ class BaseInstalledAgent(BaseAgent, ABC):
             else None
         )
         scope = await environment.process_scope()
+        command = shlex.join(scope.command(("bash", "-o", "pipefail", "-c", command), budget))
+        execution_error: NonZeroAgentExitCodeError | None = None
+
+        async def run_scoped() -> ExecResult:
+            nonlocal execution_error
+            try:
+                return await self.exec_as_agent(environment, command=command, env=env)
+            except NonZeroAgentExitCodeError as error:
+                execution_error = error
+                if error.result is None:
+                    raise
+                return error.result
+
+        transport = asyncio.create_task(run_scoped())
+        environment.track_process_scope(scope, transport)
         async with environment.scoped_command(scope.cancel_command()):
             try:
-                return await self.exec_as_agent(
-                    environment,
-                    command=shlex.join(
-                        scope.command(("bash", "-o", "pipefail", "-c", command), budget)
-                    ),
-                    env=env,
-                )
+                result = await asyncio.shield(transport)
+                if execution_error is not None:
+                    raise execution_error
+                return result
             except NonZeroAgentExitCodeError as error:
                 if error.result is not None:
                     markers = (error.result.stderr or "").splitlines()

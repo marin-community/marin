@@ -31,7 +31,6 @@ from harbor.models.trajectories import (
 )
 from harbor.models.trial.paths import EnvironmentPaths
 from harbor.trial.errors import AgentTimeoutError
-from harbor.utils.env import parse_bool_env_value
 from harbor.utils.trajectory_utils import format_trajectory_json
 from upath import UPath
 

@@ -282,7 +282,7 @@ async def _make_trial(
     config = TrialConfig(
         task=TaskConfig(path=task_dir),
         trials_dir=trials_dir,
-        agent=AgentConfig(import_path="tests.unit.test_trial_cleanup:HangingAgent"),
+        agent=AgentConfig(name=AgentName.PI),
         environment=EnvironmentConfig(
             type=EnvironmentType.LOCAL,
             delete=True,
@@ -352,8 +352,7 @@ class TestStopBoundedByWallClock:
                 task=TaskConfig(path=task_dir),
                 trials_dir=trials_dir,
                 agent=AgentConfig(
-                    import_path="tests.unit.test_trial_cleanup:QuickAgent"
-                ),
+                    name=AgentName.CODEX),
                 environment=EnvironmentConfig(
                     type=EnvironmentType.LOCAL,
                     delete=True,
@@ -400,8 +399,7 @@ class TestPrepareLogsForHostCalledDuringTrial:
                 task=TaskConfig(path=task_dir),
                 trials_dir=trials_dir,
                 agent=AgentConfig(
-                    import_path="tests.unit.test_trial_cleanup:QuickAgent"
-                ),
+                    name=AgentName.CODEX),
                 environment=EnvironmentConfig(
                     type=EnvironmentType.LOCAL,
                 ),
@@ -437,7 +435,7 @@ async def test_environment_failure_logs_error_with_traceback(
     config = TrialConfig(
         task=TaskConfig(path=task_dir),
         trials_dir=trials_dir,
-        agent=AgentConfig(import_path="tests.unit.test_trial_cleanup:QuickAgent"),
+        agent=AgentConfig(name=AgentName.CODEX),
         environment=EnvironmentConfig(
             type=EnvironmentType.LOCAL,
             delete=True,
@@ -477,8 +475,7 @@ async def test_output_recovery_failure_is_persisted_as_secondary_exception(
         task=TaskConfig(path=task_dir),
         trials_dir=trials_dir,
         agent=AgentConfig(
-            import_path="tests.unit.test_trial_cleanup:TruncatedOutputAgent"
-        ),
+            name=AgentName.OPENCODE),
         environment=EnvironmentConfig(
             type=EnvironmentType.LOCAL,
         ),
