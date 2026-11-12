@@ -294,17 +294,15 @@ class DeconAdmissionReceipt(CatalogRecord):
     format: str
     status: DeconReceiptStatus
     dataset_id: str
-    dataset_revision: str
+    dataset_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     retained_tasks: int = Field(ge=0)
     dropped_tasks: int = Field(ge=0)
     drop_manifest_uri: str | None
     original_private_dataset_id: str | None
-    original_private_dataset_revision: str | None
+    original_private_dataset_revision: str | None = Field(pattern=r"^[0-9a-f]{40}$")
 
     @model_validator(mode="after")
     def _remediation_provenance(self) -> "DeconAdmissionReceipt":
-        if not self.private or self.format != "taskcompendium" or not self.dataset_id.startswith("open-athena/"):
-            raise ValueError("Admission requires a private open-athena TaskCompendium release")
         if self.status is DeconReceiptStatus.CLEAN and self.dropped_tasks:
             raise ValueError("A clean receipt cannot drop contaminated tasks")
         if self.status is DeconReceiptStatus.REMEDIATED:
@@ -314,10 +312,6 @@ class DeconAdmissionReceipt(CatalogRecord):
                 or not self.original_private_dataset_revision
             ):
                 raise ValueError("Remediation requires the drop manifest and exact original private pin")
-            if not self.dataset_id.startswith("open-athena/") or not self.original_private_dataset_id.startswith(
-                "open-athena/"
-            ):
-                raise ValueError("Remediation inputs and outputs must be private open-athena TaskCompendium releases")
             if (self.dataset_id, self.dataset_revision) == (
                 self.original_private_dataset_id,
                 self.original_private_dataset_revision,
@@ -380,7 +374,7 @@ class LexicalContaminationEvidence(CatalogRecord):
 def require_decontamination(
     evidence: LexicalContaminationEvidence | None, dataset_id: str | None, dataset_revision: str | None
 ) -> None:
-    """Require a clean or remediated private release before source QA or admission."""
+    """Require a clean or remediated release receipt bound to the selected dataset pin."""
     if evidence is None:
         raise ValueError("Decontamination measurement and private-release admission receipt are missing")
     if blocker := evidence.admission_blocker(dataset_id, dataset_revision):

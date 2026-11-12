@@ -17,8 +17,9 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
+from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 
-NUMBERS_DATASET = SourceReference("local-numbers", "pinned", "https://example.org/numbers")
+NUMBERS_DATASET = SourceReference("open-athena/numbers-fixture", "a" * 40, "https://example.org/numbers")
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,7 @@ def number_source(path: Path, name: str = "numbers") -> RlDataSource[NumbersConf
             id=f"fixture:{name}",
             title=name,
             origin="fixture",
+            lexical_contamination=decontamination_evidence(NUMBERS_DATASET.name, NUMBERS_DATASET.revision, 1),
         ),
         config=NumbersConfig(name, path),
         pipeline=numbers_pipeline,

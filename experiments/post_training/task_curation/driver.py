@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import cast
 
 import click
-from finestore.rl.curation import SourceDeclaration
+from finestore.rl.curation import LexicalContaminationEvidence, SourceDeclaration
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -555,6 +555,14 @@ def main(
         SelectionRecipe.model_validate_json(StoragePath(selection).read_text()) if selection is not None else None
     )
     selected = _selected_sources(sources, processing_mode)
+    if decontamination_receipt is not None:
+        decontamination = LexicalContaminationEvidence.model_validate_json(
+            StoragePath(decontamination_receipt).read_text()
+        )
+        selected = {
+            name: replace(source, info=replace(source.info, lexical_contamination=decontamination))
+            for name, source in selected.items()
+        }
     if processing_mode != SourceProcessingMode.QUICK and any(
         source.declaration.type == "eval" for source in selected.values()
     ):

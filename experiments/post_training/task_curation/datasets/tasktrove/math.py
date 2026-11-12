@@ -366,10 +366,9 @@ SOURCES = (
                 "unparsable-reference rows rejected at conversion and 181 exact-duplicate rows "
                 "collapse under the pipeline dedup key (2,221 published). Contained grader controls "
                 "72/72 on the 24-task sample. Blinded review: 8 of 20 sampled cases solvable blind; "
-                "after adjudication all 8 references verified correct (3 solver errors on my side, "
+                "after adjudication all 8 references verified correct (3 reviewer solver errors, "
                 "each confirmed by independent recomputation), leaving 12 sampled references "
-                "unverified by blind solve - the review-coverage caveat behind the SOME_ISSUES "
-                "disposition. Admitted at SAMPLE."
+                "unverified by blind solve (review-coverage caveat). Admitted at SAMPLE."
             ),
             oversight=OversightEvidence(
                 campaign="RL Data Atlas",

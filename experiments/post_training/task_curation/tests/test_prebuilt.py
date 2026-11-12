@@ -48,7 +48,7 @@ def _write(tmp_path, rows: list[dict]):
 
 def _cohort(rows: int):
     return prebuilt.PrebuiltCohort(
-        name="c", version="2026.11.12.1", repo="open-athena/repo", revision="rev", expected_rows=rows
+        name="c", version="2026.11.12.1", repo="open-athena/repo", revision="a" * 40, expected_rows=rows
     )
 
 
@@ -87,7 +87,7 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
             id="fixture",
             title="fixture",
             origin="fixture",
-            lexical_contamination=decontamination_evidence("open-athena/repo", "rev", 2),
+            lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 2),
         ),
     )
     artifact = run(prebuilt.import_prebuilt(source, PipelineOptions(mode, CampaignRuntime())))[0]
@@ -155,7 +155,7 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
                 id="native",
                 title="native",
                 origin="fixture",
-                lexical_contamination=decontamination_evidence("open-athena/repo", "rev", 1),
+                lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
                 task_format=TaskFormat.HARBOR,
             ),
         )
@@ -190,13 +190,13 @@ def test_direct_prebuilt_admission_requires_oversight_but_allows_unsafe_tasks(tm
     path = _write(tmp_path, [prebuilt_task("a")])
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
     config = prebuilt.PrebuiltCohort(
-        name="unsafe-cohort", version="2026.11.12.1", repo="open-athena/repo", revision="rev", expected_rows=1
+        name="unsafe-cohort", version="2026.11.12.1", repo="open-athena/repo", revision="a" * 40, expected_rows=1
     )
     source = RlDataSource(
         config=config,
         pipeline=prebuilt.import_prebuilt,
         info=SourceInfo(
-            lexical_contamination=decontamination_evidence("open-athena/repo", "rev", 1),
+            lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
             id="fixture:unsafe",
             title="Unsafe",
             origin="fixture",
@@ -280,7 +280,7 @@ def test_canonical_judged_release_preserves_tasks_without_a_runtime_envelope(tmp
             title="reply",
             origin="fixture",
             task_format=TaskFormat.TASKCOMPENDIUM,
-            lexical_contamination=decontamination_evidence("open-athena/repo", "rev", 1),
+            lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
         ),
     )
     artifact = run(
@@ -331,7 +331,7 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
             id="fixture:oracle",
             title="oracle",
             origin="fixture",
-            lexical_contamination=decontamination_evidence("open-athena/repo", "rev", 1),
+            lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     )
@@ -350,3 +350,54 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
         manifest = json.loads((destination / "manifest.json").read_text())
         assert manifest["admitted_rows"] == 1
         assert (destination / prebuilt.ORACLE_FILTER_FILENAME).exists()
+
+
+@pytest.mark.parametrize("policy", ["public", "other_namespace", "raw_format"])
+def test_atlas_private_release_policy_blocks_prebuilt_download(tmp_path, monkeypatch, policy):
+    config = _cohort(1)
+    if policy == "other_namespace":
+        config = prebuilt.PrebuiltCohort(
+            name=config.name, version=config.version, repo="other/private", revision=config.revision, expected_rows=1
+        )
+    document = decontamination_evidence(config.repo, config.revision, 1).model_dump(mode="json")
+    if policy == "public":
+        document["receipt"]["private"] = False
+    elif policy == "raw_format":
+        document["receipt"]["format"] = "raw"
+    evidence = type(decontamination_evidence(config.repo, config.revision, 1)).model_validate(document)
+    source = RlDataSource(
+        config=config,
+        pipeline=prebuilt.import_prebuilt,
+        info=SourceInfo(id="fixture:policy", title="policy", origin="fixture", lexical_contamination=evidence),
+    )
+    downloaded = []
+    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: downloaded.append(kwargs))
+    with pytest.raises(ValueError, match="private open-athena TaskCompendium"):
+        prebuilt.import_prebuilt(source, PipelineOptions(SourceProcessingMode.SAMPLE, CampaignRuntime()))
+    assert downloaded == []
+
+
+def test_quick_pass_writes_the_validated_cohort_as_converted_tasks(tmp_path, monkeypatch):
+    path = _write(tmp_path, [prebuilt_task("a"), prebuilt_task("b")])
+    monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **_kwargs: str(path))
+    output = tmp_path / "out"
+    source = RlDataSource(
+        config=_cohort(2),
+        pipeline=prebuilt.import_prebuilt,
+        info=SourceInfo(id="fixture:quick", title="quick", origin="fixture"),
+    )
+    step = prebuilt.import_prebuilt(source, PipelineOptions(SourceProcessingMode.QUICK, CampaignRuntime()))
+    artifact = step.run(step.build_config(StepContext.for_run(str(output), str(tmp_path))))
+
+    manifest = json.loads((output / "manifest.json").read_text())
+    tasks = [
+        TaskSpec.model_validate_json(item)
+        for item in pq.read_table(output / "normalize").column("task_json").to_pylist()
+    ]
+    assert artifact.status == "completed"
+    assert [task.id for task in tasks] == ["a", "b"]
+    assert manifest["input_rows"] == manifest["converted_rows"] == 2
+    assert manifest["rejections"] == {} and manifest["intended_use"] == "train"
+    assert manifest["mode"] == "quick"
+    assert not (output / "final").exists()
+    assert "admitted_rows" not in manifest

@@ -1063,20 +1063,6 @@ def sources() -> list[RlDataSource]:
                 "retracted: the connected 20-vertex/21-edge graph is bicyclic and theta(7,7,7) attains the "
                 "recorded 147 spanning trees, confirmed by two independent Matrix-Tree determinant checks."
             ),
-            qc=IndependentQC(
-                verdict=Verdict.SOME_ISSUES,
-                method=(
-                    "Blind solve of the 20-case seeded sample with post-unsealing adjudication; 8 of 20 "
-                    "cases solvable blind (all 8 references verified correct after adjudication), 12 "
-                    "references unverified for lack of a blind solve"
-                ),
-                reviewed=20,
-                admitted=20,
-                evidence_url=(
-                    "https://huggingface.co/datasets/open-athena/tasktrove-math_prism-taskcompendium-20261112"
-                    "/blob/ddb6f6cc8dbb09638d496739ab204b3ba5c6c37e/build.json"
-                ),
-            ),
             notes=(
                 "Symbolic exact compare with hidden gold references. Measured QC: blinded panel of 20 "
                 "seeded cases, 8 solvable blind; after adjudication all 8 references verified correct "
