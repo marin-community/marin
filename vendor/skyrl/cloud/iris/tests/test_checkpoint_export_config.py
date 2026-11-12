@@ -14,7 +14,8 @@ from cloud.iris.export_hf_checkpoint import (
     _run_export,
     checkpoint_export_launch_config,
 )
-from cloud.iris.launch_config import validate_iris_allocation
+from cloud.iris.launch_config import load_launch_config, validate_iris_allocation, validate_launch_config
+from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
 from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import CheckpointCallback, EvaluationCallback, HFModelSaveCallback
@@ -93,6 +94,21 @@ def test_checkpoint_export_config_carries_request_fields_as_data() -> None:
     assert config.skyrl.trainer.placement.policy_num_gpus_per_node == 4
     assert config.skyrl.checkpoint_export.checkpoint_path == request.checkpoint_path
     assert config.skyrl.checkpoint_export.export_root == request.export_path
+
+
+def test_policy_only_export_accepts_training_expert_block_transport(tmp_path: Path) -> None:
+    path = tmp_path / "training.yaml"
+    OmegaConf.save(OmegaConf.create(raw_launch_config()), path)
+    training = load_launch_config(path)
+    training.skyrl.generator.weight_sync_transport = "expert_block"
+    request = _request()
+
+    export = checkpoint_export_launch_config(training, request, _spec(request))
+    allocation = validate_launch_config(export)
+
+    assert allocation.num_nodes * allocation.gpus_per_node == 4
+    assert export.runtime.entrypoint == "skyrl_train.entrypoints.checkpoint_export"
+    assert export.skyrl.checkpoint_export.checkpoint_path == request.checkpoint_path
 
 
 def test_checkpoint_export_config_preserves_federated_routing() -> None:

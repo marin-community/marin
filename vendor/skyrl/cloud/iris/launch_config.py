@@ -352,7 +352,8 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     entrypoint = runtime["entrypoint"]
     registered_rl_entrypoint_module(entrypoint)
     if (
-        skyrl.get("generator", {}).get("weight_sync_transport") == WeightSyncTransport.EXPERT_BLOCK
+        run["mode"] == RunMode.TRAIN
+        and skyrl.get("generator", {}).get("weight_sync_transport") == WeightSyncTransport.EXPERT_BLOCK
         and skyrl.get("trainer", {}).get("placement", {}).get("colocate_all")
         and entrypoint != RL_ENTRYPOINTS[RLEntrypoint.STANDARD]
     ):
