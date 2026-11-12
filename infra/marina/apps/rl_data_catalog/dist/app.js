@@ -143,10 +143,7 @@ function sourceRow(row, others, canonical) {
     const quality = node('td'); quality.append(node('span', row.quality, `chip level level-${row.quality.toLowerCase()}`));
     const result = node('td'), key = resultKey(row);
     const badge = node('span', resultLabels[key], `chip quality-${resultClasses[key]}`);
-    if (row.assessment.status === 'complete') {
-      const anchor = node('a'); anchor.href = `assessment.html?source=${encodeURIComponent(row.id)}`; anchor.append(badge);
-      result.append(anchor, node('span', `${number.format(row.assessment.admitted.reviewed)} reviewed`, 'source-subtitle'));
-    } else result.append(badge);
+    result.append(badge);
     const area = node('td');
     if (row.coverage?.top_area) {
       const anchor = node('a', row.coverage.top_area.name, 'area-link');

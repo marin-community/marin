@@ -44,7 +44,7 @@ function list(items) {
 }
 function link(text, href) { const anchor = node('a', text); anchor.href = href; return anchor; }
 
-function render(data, sourceId) {
+async function render(data, sourceId) {
   const d = data.declaration, curation = data.curation, controls = curation?.verification, assessment = data.assessment;
   document.title = `${d.display_name} · Evidence · RL Data Atlas`;
   $('title').textContent = d.display_name;
@@ -99,6 +99,32 @@ function render(data, sourceId) {
     ['Catalog', pointer(data.catalog.root)], ['Notes', d.notes],
   ]));
   $('sections').replaceChildren(...sections);
+  if (assessment) {
+    const section = card('All stored assessment reviews', [], 'Loading complete review records…');
+    $('sections').append(section);
+    try {
+      const report = await json(`api/assessment?${new URLSearchParams({source_id: sourceId})}`);
+      const record = node('details');
+      record.append(node('summary', 'Complete assessment report'), node('pre', JSON.stringify(report.report, null, 2)));
+      section.replaceChildren(node('h2', 'All stored assessment reviews'),
+        node('p', `${number.format(report.report.evidence.samples.length)} stored records. Open each review for its full verdict and packet. FULL describes curation scope; reviews cover the stored assessment sample.`, 'card-intro'),
+        taskReviews(sourceId, report.report.evidence.samples), record);
+    } catch (error) { section.append(node('p', error.message, 'error')); }
+  }
+  for (const summary of data.archived_reviews) {
+    const section = card(`Archived review collection ${summary.id}`, [], 'Loading complete review records…');
+    $('sections').append(section);
+    try {
+      const review = await json(`api/archive/reviews/${encodeURIComponent(summary.id)}`);
+      const records = node('details', undefined, 'archived-collection');
+      records.append(node('summary', 'Complete review collection'), node('pre', JSON.stringify(review.collection, null, 2)));
+      section.replaceChildren(node('h2', `Archived review collection ${review.id}`), records);
+      const artifacts = list(review.artifacts.map(artifact => link(artifact.path,
+        `api/archive/reviews/${encodeURIComponent(review.id)}/artifacts/${artifact.path.split('/').map(encodeURIComponent).join('/')}`)));
+      section.append(node('h3', 'Saved reports, traces and receipts'), artifacts);
+    } catch (error) { section.append(node('p', error.message, 'error')); }
+  }
+
 }
 const sourceId = new URLSearchParams(location.hash.slice(1)).get('source_id');
 if (!sourceId) $('message').textContent = 'Open a source from the Atlas to see its evidence.';

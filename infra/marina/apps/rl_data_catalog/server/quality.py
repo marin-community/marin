@@ -75,8 +75,6 @@ def daytona(declaration: dict[str, Any], limit: int) -> dict[str, Any]:
     if "agentic" not in declaration.get("tags", []):
         return {"state": "na", "reason": "Non-agentic tasks provision no sandbox"}
     count = declaration.get("daytona_snapshot_count")
-    if count == 0:
-        return {"state": "na", "reason": "Measured zero machine snapshots; tasks provision no sandbox"}
     if count is None:
         return {"state": "unmeasured", "reason": "No production snapshot-identity measurement is recorded"}
     return {

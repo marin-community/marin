@@ -49,7 +49,6 @@ def test_sampled_grade_then_executed_qa_then_upstream_qc_decide_the_result():
 def test_daytona_is_not_applicable_without_a_sandbox_and_measured_otherwise():
     assert daytona({"tags": ["rlvr"]}, 10)["state"] == "na"
     assert daytona({"tags": ["agentic"], "daytona_snapshot_count": None}, 10)["state"] == "unmeasured"
-    assert daytona({"tags": ["agentic"], "daytona_snapshot_count": 0}, 10)["state"] == "na"
     measured = {
         "tags": ["agentic"],
         "daytona_snapshot_count": 15,
@@ -57,3 +56,15 @@ def test_daytona_is_not_applicable_without_a_sandbox_and_measured_otherwise():
         "daytona_snapshot_threshold": 10,
     }
     assert daytona(measured, 10) == {"state": "unsafe", "snapshots": 15, "limit": 10, "basis": None}
+
+
+def test_grader_only_host_image_execution_failure_is_unsafe_with_zero_snapshots():
+    declaration = {
+        "tags": ["agentic"],
+        "daytona_snapshot_count": 0,
+        "daytona_safety": "unsafe",
+        "daytona_count_basis": "grader-only HostImage; production validator rejected execution requirements",
+    }
+    label = daytona(declaration, 10)
+    assert label["state"] == "unsafe"
+    assert label["snapshots"] == 0

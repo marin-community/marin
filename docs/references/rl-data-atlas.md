@@ -97,7 +97,7 @@ Examples, Use and Top curriculum area come from the declaration's measured
 [coverage](task-curation.md#coverage); a declaration from an older snapshot
 without coverage falls back to the selected curriculum release.
 
-**Daytona** shows N/A for non-agentic sources or a measured count of zero machine snapshots.
+**Daytona** shows N/A for non-agentic sources. Zero snapshots alone does not establish that no machine is used; a grader-only host image can still be Unsafe.
 An agentic source shows Safe or Unsafe with its measured unique snapshot count
 against the limit of ten, or *Unknown (not measured)* when its declaration records no
 production snapshot-identity measurement.
@@ -114,7 +114,7 @@ row's `backend_capabilities` map when the row carries one.
 declared oversight pointers, grader controls and admission counts, the sampled
 LLM-judge review with its frozen sample, rubric, judge model and archived traces,
 independent QC, the pinned dataset and its revision, coverage and Daytona bases,
-diagnostics and archived reviews. Object-store URLs get a Filer link.
+diagnostics and archived reviews. Result is a plain outcome badge; Evidence opens this page. Every stored assessment review is listed with its full verdict and expandable evidence packet. Complete archived review collections and links to all saved reports, traces and receipts appear on the same page. FULL describes curation scope; it does not create review records for tasks outside the stored assessment sample. Object-store URLs get a Filer link.
 
 Example counts describe successfully converted tasks before curation admission.
 A dash means no processed examples from that source are in the currently
