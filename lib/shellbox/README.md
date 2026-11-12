@@ -222,7 +222,8 @@ Before grading, stop agent command submission and call `LocalMachine.quiesce_com
 to reclaim work left by earlier successful commands, including tmux servers.
 Process sessions, relay helpers and peer containers remain alive.
 
-For agent commands that need a separate grading boundary, call
+For agent commands that need a separate grading boundary, use
+`ProcessScopeMachine` and call
 `scope = await machine.open_process_scope()`, run those commands through
 `scope.run(command)`, then `await scope.terminate()` before collection or
 verification. Scope termination closes admission, kills detached descendants,

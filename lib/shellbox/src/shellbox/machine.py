@@ -224,10 +224,6 @@ class Machine(Protocol):
 
     async def run(self, command: Command) -> Result: ...
 
-    async def open_process_scope(self) -> "ProcessScope":
-        """Create an agent command scope with confirmed descendant teardown."""
-        ...
-
     async def upload(self, source: Path, target: str) -> None: ...
 
     async def download(self, source: str, target: Path) -> None: ...
@@ -246,6 +242,12 @@ class ProcessScope(Protocol):
     async def run(self, command: Command) -> Result: ...
 
     async def terminate(self) -> None: ...
+
+
+class ProcessScopeMachine(Machine, Protocol):
+    """A machine that can reject or create a scoped command boundary."""
+
+    async def open_process_scope(self) -> ProcessScope: ...
 
 
 class MachineFactory(Protocol):
