@@ -38,6 +38,8 @@ from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoeImplementation,
     QBRoutedMoE,
+    QbThresholdImpl,
+    RouterStats,
     validate_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
@@ -69,6 +71,15 @@ def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple
 
 
 LONG_ATTENTION_INTERVAL = 4
+_ROUTER_METRICS = (
+    "routing_entropy",
+    "routing_counts",
+    "load_balancing_loss",
+    "router_z_loss",
+    "qb_beta",
+    "capacity_overflow",
+    "skipped_assignments",
+)
 
 
 @dataclass(frozen=True)
@@ -143,7 +154,27 @@ class GrugModelConfig:
     them through one ``jax.lax.scan``. Collapses N per-layer subgraphs into one
     scan body so XLA only plans HBM for one iteration's intermediates — needed
     at scale where the unrolled program OOMs at compile time."""
+    qb_threshold_impl: QbThresholdImpl = "top_k"
+    """Select per-shard QB thresholds with top-k or GPU radix select."""
+    router_diagnostics: bool = True
+    """Compute per-layer routing diagnostics; a weighted z-loss remains enabled when false."""
+    skip_zero_router_z_loss: bool = False
+    """Omit the zero-weight z-loss and its backward pass; nonfinite z-loss then cannot make the loss NaN."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+
+    @property
+    def router_stats(self) -> RouterStats:
+        """The routing statistics each MoE layer computes."""
+        if self.router_diagnostics:
+            return "all"
+        return "z_loss" if self.router_z_loss_coef != 0 else "none"
+
+    @property
+    def uses_router_z_loss(self) -> bool:
+        """Whether the loss includes the router z-loss term."""
+        if self.router_z_loss_coef != 0:
+            return True
+        return self.router_diagnostics and not self.skip_zero_router_z_loss
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -429,10 +460,17 @@ class DenseMLP(eqx.Module):
 
 
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
+    out: dict[str, jax.Array | SummaryStats] = {"qb_beta_per_layer": router_metrics["qb_beta_per_layer"]}
+    router_z_loss = router_metrics.get("router_z_loss_per_layer")
+    if router_z_loss is not None:
+        out["train/router/router_z_loss"] = jnp.mean(router_z_loss)
+        for i in range(int(router_z_loss.shape[0])):
+            out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
+    if "routing_counts_per_layer" not in router_metrics:
+        return out
     routing_entropy = router_metrics["routing_entropy_per_layer"]
     routing_counts = router_metrics["routing_counts_per_layer"]
     load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
-    router_z_loss = router_metrics["router_z_loss_per_layer"]
     capacity_overflow = router_metrics["capacity_overflow_per_layer"]
     skipped_assignments = router_metrics["skipped_assignments_per_layer"]
     num_layers = int(routing_entropy.shape[0])
@@ -443,19 +481,14 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     total_positions_per_layer = assignments_per_layer + skipped_assignments.astype(jnp.float32)
     skipped_fraction = skipped_assignments.astype(jnp.float32) / jnp.maximum(total_positions_per_layer, 1.0)
 
-    out: dict[str, jax.Array | SummaryStats] = {
-        "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
-        "train/router/load_balancing_loss": jnp.mean(load_balancing_loss),
-        "train/router/router_z_loss": jnp.mean(router_z_loss),
-        "train/router/routing_counts_per_layer": routing_counts,
-        "train/router/capacity_overflow_rate_mean": jnp.mean(capacity_overflow_rate),
-        "train/router/skipped_padding_fraction_mean": jnp.mean(skipped_fraction),
-        "qb_beta_per_layer": router_metrics["qb_beta_per_layer"],
-    }
+    out["train/router/routing_entropy_mean"] = jnp.mean(routing_entropy)
+    out["train/router/load_balancing_loss"] = jnp.mean(load_balancing_loss)
+    out["train/router/routing_counts_per_layer"] = routing_counts
+    out["train/router/capacity_overflow_rate_mean"] = jnp.mean(capacity_overflow_rate)
+    out["train/router/skipped_padding_fraction_mean"] = jnp.mean(skipped_fraction)
     for i in range(num_layers):
         out[f"train/router/layer_{i}/routing_entropy"] = routing_entropy[i]
         out[f"train/router/layer_{i}/load_balancing_loss"] = load_balancing_loss[i]
-        out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
         out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
         out[f"train/router/layer_{i}/capacity_overflow_rate"] = capacity_overflow_rate[i]
     return out
@@ -526,6 +559,8 @@ class MoEMLP(eqx.Module):
             routed_moe=QBRoutedMoE(
                 num_experts_per_token=cfg.num_experts_per_token,
                 batch_axes=_BATCH_AXES,
+                qb_threshold_impl=cfg.qb_threshold_impl,
+                router_stats=cfg.router_stats,
             ),
             cfg=cfg,
         )
@@ -723,13 +758,9 @@ class Transformer(eqx.Module):
                 )
                 moe_router_stats.append(router_stats)
             router_metrics = {
-                "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
-                "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in moe_router_stats], axis=0),
-                "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in moe_router_stats], axis=0),
-                "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
-                "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
-                "capacity_overflow_per_layer": jnp.stack([s["capacity_overflow"] for s in moe_router_stats], axis=0),
-                "skipped_assignments_per_layer": jnp.stack([s["skipped_assignments"] for s in moe_router_stats], axis=0),
+                f"{name}_per_layer": jnp.stack([s[name] for s in moe_router_stats], axis=0)
+                for name in _ROUTER_METRICS
+                if name in moe_router_stats[0]
             }
         else:
             assert self.stacked_blocks is not None
@@ -750,13 +781,9 @@ class Transformer(eqx.Module):
                 xs=(self.stacked_blocks.stacked, mask_schedule),
             )
             router_metrics = {
-                "routing_entropy_per_layer": stacked_router_stats["routing_entropy"],
-                "routing_counts_per_layer": stacked_router_stats["routing_counts"],
-                "load_balancing_loss_per_layer": stacked_router_stats["load_balancing_loss"],
-                "router_z_loss_per_layer": stacked_router_stats["router_z_loss"],
-                "qb_beta_per_layer": stacked_router_stats["qb_beta"],
-                "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
-                "skipped_assignments_per_layer": stacked_router_stats["skipped_assignments"],
+                f"{name}_per_layer": stacked_router_stats[name]
+                for name in _ROUTER_METRICS
+                if name in stacked_router_stats
             }
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
@@ -797,9 +824,12 @@ class Transformer(eqx.Module):
             implementation=self.config.ce_implementation,
         )
         # No load-balancing loss; router z-loss only.
-        num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
-        rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
-        aux_loss = self.config.router_z_loss_coef * rzl
+        if self.config.uses_router_z_loss:
+            num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
+            rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
+            aux_loss = self.config.router_z_loss_coef * rzl
+        else:
+            aux_loss = jnp.zeros((), jnp.float32)
         loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)
@@ -807,9 +837,10 @@ class Transformer(eqx.Module):
             summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
             summarized_metrics[MOE_DROPPED_ASSIGNMENTS_METRIC] = router_metrics["capacity_overflow_per_layer"]
             summarized_metrics[MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC] = router_metrics["skipped_assignments_per_layer"]
-            summarized_metrics[MOE_VALID_ASSIGNMENTS_METRIC] = jnp.sum(
-                router_metrics["routing_counts_per_layer"], axis=-1, dtype=jnp.int32
-            )
+            if "routing_counts_per_layer" in router_metrics:
+                summarized_metrics[MOE_VALID_ASSIGNMENTS_METRIC] = jnp.sum(
+                    router_metrics["routing_counts_per_layer"], axis=-1, dtype=jnp.int32
+                )
             return loss, summarized_metrics
         return loss
 

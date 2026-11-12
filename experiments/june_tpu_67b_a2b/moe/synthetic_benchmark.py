@@ -42,6 +42,7 @@ from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug._moe.common import _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
 from levanter.grug.attention import GrugAttentionImplementation
+from levanter.grug.grug_moe import QbThresholdImpl
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
@@ -152,6 +153,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--compilation-cache-dir", help="Persistent JAX compilation cache directory.")
     parser.add_argument("--remat-mode", choices=get_args(RematMode), default="recompute_all")
     parser.add_argument(
+        "--qb-threshold",
+        choices=get_args(QbThresholdImpl),
+        default="top_k",
+        help="Select the QB thresholds with lax.top_k (a full sort on GPUs) or an exact radix select in one "
+        "Pallas-Triton kernel (GrugModelConfig.qb_threshold_impl).",
+    )
+    parser.add_argument(
+        "--no-router-diagnostics",
+        action="store_true",
+        help="Skip the diagnostic routing statistics (expert counts, probability sums, entropy, load balancing, "
+        "z-loss unless weighted) in every layer (GrugModelConfig.router_diagnostics=False).",
+    )
+    parser.add_argument(
+        "--skip-zero-router-z-loss",
+        action="store_true",
+        help="Leave the router z-loss out of the loss when its coefficient is 0, so its backward does not run "
+        "(GrugModelConfig.skip_zero_router_z_loss).",
+    )
+    parser.add_argument(
         "--watch-interval", type=int, default=10, help="Steps between gradient watch steps (0 disables)."
     )
     parser.add_argument(
@@ -198,6 +218,9 @@ def main() -> None:
         remat_mode=args.remat_mode,
         pooled_transport_capacity_factor=args.pooled_transport_capacity_factor,
         num_expert_waves=args.num_expert_waves,
+        qb_threshold_impl=args.qb_threshold,
+        router_diagnostics=not args.no_router_diagnostics,
+        skip_zero_router_z_loss=args.skip_zero_router_z_loss,
     )
     if args.capacity_factor is not None:
         model = dataclasses.replace(model, capacity_factor=args.capacity_factor)

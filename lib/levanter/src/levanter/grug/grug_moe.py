@@ -16,7 +16,7 @@ Implementation overview:
 
 from collections.abc import Callable
 from functools import partial
-from typing import cast
+from typing import Literal, cast
 
 import equinox as eqx
 import jax
@@ -71,6 +71,7 @@ from levanter.grug.sharding import (
     _reshard_for_shard_map,
     _value_spec_or_default,
 )
+from levanter.kernels.pallas.kth_largest import kth_largest
 from levanter.utils.activation import ActivationFunctionEnum
 
 MOE_DROPPED_ASSIGNMENTS_METRIC = "moe/dropped_assignments"
@@ -78,6 +79,12 @@ MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC = "moe/sender_dropped_assignments"
 MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC = "moe/receiver_dropped_assignments"
 MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC = "moe/skipped_padding_assignments"
 MOE_VALID_ASSIGNMENTS_METRIC = "moe/valid_assignments"
+
+QbThresholdImpl = Literal["top_k", "radix_select"]
+RouterStats = Literal["all", "z_loss", "none"]
+"""Which routing statistics a QB layer computes: all of them (expert counts, router probability sums, entropy,
+load-balancing loss, router z-loss), only the router z-loss (what an aux loss needs), or none. The QB thresholds and
+capacity counts are always computed."""
 
 
 def _expert_assignment_counts(
@@ -97,21 +104,27 @@ def moe_routing_stats(
     *,
     num_experts: int,
     num_experts_per_token: int,
+    stats: RouterStats = "all",
 ) -> dict[str, jax.Array]:
-    """Compute padding-aware routing distributions and auxiliary losses."""
-    router_probs_f = router_probs.astype(jnp.float32)
+    """Compute padding-aware routing distributions and auxiliary losses (only ``router_z_loss`` for ``stats="z_loss"``,
+    nothing for ``"none"``)."""
+    if stats == "none":
+        return {}
     router_logits_f = router_logits.astype(jnp.float32)
     valid_f = token_valid.astype(jnp.float32)
+    valid_tokens = jnp.maximum(jnp.sum(valid_f), 1.0)
+    log_partition = jsp.special.logsumexp(router_logits_f, axis=-1)
+    router_z_loss = jnp.sum(log_partition**2 * valid_f) / valid_tokens
+    if stats == "z_loss":
+        return {"router_z_loss": router_z_loss}
+    router_probs_f = router_probs.astype(jnp.float32)
     expert_counts = _expert_assignment_counts(selected_experts, token_valid, num_experts)
     total_assignments = jnp.maximum(jnp.sum(expert_counts), 1.0)
     assignment_fraction = expert_counts / total_assignments
     routing_entropy = -jnp.sum(assignment_fraction * jnp.log(assignment_fraction + 1e-6))
     token_fraction = assignment_fraction * num_experts_per_token
-    valid_tokens = jnp.maximum(jnp.sum(valid_f), 1.0)
     mean_router_probability = jnp.sum(router_probs_f * valid_f[:, None], axis=0) / valid_tokens
     load_balancing_loss = num_experts * jnp.sum(token_fraction * mean_router_probability)
-    log_partition = jsp.special.logsumexp(router_logits_f, axis=-1)
-    router_z_loss = jnp.sum(log_partition**2 * valid_f) / valid_tokens
     return {
         "routing_counts": expert_counts,
         "routing_entropy": routing_entropy,
@@ -210,12 +223,23 @@ def qb_beta_topk_shard(
     physical_count: int,
     num_experts_per_token: int,
     num_experts: int,
+    threshold_impl: QbThresholdImpl = "top_k",
 ) -> tuple[Float[Array, "E"], Int[Array, ""]]:
-    """Per-shard QB threshold over valid tokens plus the valid count that weights it."""
+    """Return per-expert QB thresholds and the shard's valid-token count.
+
+    Each threshold is the ``logical_count``-th largest valid score. At a signed-zero tie, top-k and radix select may
+    return different zero bit patterns.
+    """
     valid_count = jnp.sum(valid_local, dtype=jnp.int32)
-    topk_values, _ = jax.lax.top_k(jnp.where(valid_local[None, :], s_local.T, -jnp.inf), physical_count)
+    scores = jnp.where(valid_local[None, :], s_local.T, -jnp.inf)
     logical_count = jnp.clip(valid_count * num_experts_per_token // num_experts, 1, physical_count)
-    beta = jnp.take(topk_values, logical_count - 1, axis=1)
+    if threshold_impl == "top_k":
+        topk_values, _ = jax.lax.top_k(scores, physical_count)
+        beta = jnp.take(topk_values, logical_count - 1, axis=1)
+    elif threshold_impl == "radix_select":
+        beta = kth_largest(scores, logical_count)
+    else:
+        raise ValueError(f"unknown QB threshold_impl {threshold_impl!r}")
     return jnp.where(valid_count > 0, beta, 0), valid_count
 
 
@@ -227,6 +251,7 @@ def estimate_qb_beta_topk(
     batch_axes: tuple[str, ...],
     num_experts_per_token: int,
     num_experts: int,
+    threshold_impl: QbThresholdImpl = "top_k",
 ) -> Float[Array, "E"]:
     """Estimate QB thresholds from valid tokens on each batch shard."""
     num_devices = 1
@@ -244,6 +269,7 @@ def estimate_qb_beta_topk(
             physical_count=physical_count,
             num_experts_per_token=num_experts_per_token,
             num_experts=num_experts,
+            threshold_impl=threshold_impl,
         )
         weighted_beta = jax.lax.psum(beta * valid_count, axis_name=batch_axes)
         global_valid_count = jax.lax.psum(valid_count, axis_name=batch_axes)
@@ -271,6 +297,11 @@ class QBRoutedMoE(eqx.Module):
     # This is part of the QB routing recipe, rather than an independently tuned
     # model hyperparameter: selected sigmoid weights are normalized to this sum.
     routing_renorm_sum: float = eqx.field(static=True, default=2.5)
+    # How the per-shard QB thresholds are selected (``qb_beta_topk_shard``): a full top_k sort, or an exact radix
+    # select. Both give the same thresholds.
+    qb_threshold_impl: QbThresholdImpl = eqx.field(static=True, default="top_k")
+    # Which routing statistics to compute (``RouterStats``); the QB thresholds and capacity counts are always computed.
+    router_stats: RouterStats = eqx.field(static=True, default="all")
 
     @named_call
     def __call__(
@@ -319,6 +350,7 @@ class QBRoutedMoE(eqx.Module):
                 token_valid,
                 num_experts=router.shape[1],
                 num_experts_per_token=self.num_experts_per_token,
+                stats=self.router_stats,
             )
 
         with jax.named_scope("moe_qb_beta"):
@@ -330,6 +362,7 @@ class QBRoutedMoE(eqx.Module):
                 batch_axes=self.batch_axes,
                 num_experts_per_token=self.num_experts_per_token,
                 num_experts=router.shape[1],
+                threshold_impl=self.qb_threshold_impl,
             )
 
         with jax.named_scope("moe_experts"):
