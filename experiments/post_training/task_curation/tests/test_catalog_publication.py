@@ -23,6 +23,7 @@ from finestore.rl.curation import (
     CurationSummary,
     DaytonaSafety,
     OracleValidation,
+    SnapshotSource,
     register_catalog,
 )
 from finestore.store import DataStore
@@ -316,9 +317,13 @@ def test_retirement_materializes_legacy_missing_defaults_without_changing_archiv
     publish_catalog(root, "first", [kept, retired])
     with DataStore.open(root) as store:
         register_catalog(store)
-        records = [
-            store.read_view().point(INVENTORY, snapshot_id="first", id=source.info.id) for source in (kept, retired)
-        ]
+        by_source = {
+            row["id"]: row
+            for row in store.read_view().iter_rows(
+                INVENTORY, columns=list(SnapshotSource.model_fields), where=[("snapshot_id", "==", "first")]
+            )
+        }
+        records = [by_source[source.info.id] for source in (kept, retired)]
         records[0]["declaration"]["daytona_safety"] = None
         records[0]["declaration"]["oversight"] = None
         with store.transaction() as transaction:
