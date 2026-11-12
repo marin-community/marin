@@ -31,6 +31,7 @@ import pytest
 from haliax import Axis, named_jit
 from haliax.partitioning import set_mesh
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
+from jax.extend import core as jax_core
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from safetensors.numpy import load_file
 from tokenizers import Tokenizer, models, pre_tokenizers
@@ -352,13 +353,9 @@ def _walk_eqns(jaxpr, path: tuple = ()):
         yield path, eqn
         for value in eqn.params.values():
             for sub in value if isinstance(value, (list, tuple)) else (value,):
-                inner = getattr(sub, "jaxpr", sub)
-                if hasattr(inner, "eqns"):
+                inner = sub.jaxpr if isinstance(sub, jax_core.ClosedJaxpr) else sub
+                if isinstance(inner, jax_core.Jaxpr):
                     yield from _walk_eqns(inner, (*path, eqn.primitive.name))
-
-
-def _all_eqns(jaxpr) -> list:
-    return [eqn for _, eqn in _walk_eqns(jaxpr)]
 
 
 def test_snowball_fp32_activations_round_once():
@@ -392,7 +389,7 @@ def test_snowball_fp32_activations_round_once():
             for got, want in zip(outputs[flag], by_hand(flag)):
                 assert got.dtype == jnp.bfloat16
                 assert np.array_equal(np.asarray(got, np.float32), np.asarray(want, np.float32))
-            program = _all_eqns(jax.make_jaxpr(lambda v: norm(v))(x).jaxpr)
+            program = [eqn for _, eqn in _walk_eqns(jax.make_jaxpr(lambda v: norm(v))(x).jaxpr)]
             assert any(e.primitive.name == "convert_element_type" for e in program) == flag
     assert not np.array_equal(np.asarray(outputs[False][0], np.float32), np.asarray(outputs[True][0], np.float32))
 
