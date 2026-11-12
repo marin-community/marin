@@ -31,25 +31,22 @@ import json
 import math
 import random
 from collections import defaultdict
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import pyarrow.parquet as pq
-from daytona import Resources
-from harbor.environments.daytona import machine_spec
-from harbor_config.models.task.config import EnvironmentConfig
 from rolloutengine.models import MachineRuntimeSpec
-from shellbox.backends.daytona.machine import DaytonaMachineFactory, snapshot_identity
 from shellbox.backends.local.machine import LocalMachineFactory
-from shellbox.image import RegistryImage
-from shellbox.machine import HostImage, NetworkPolicy
+from shellbox.machine import HostImage, MachineSpec, NetworkPolicy
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 
 
-def _resources(cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int) -> Resources:
+def _resources(cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int):
     """The ``Resources`` the Daytona factory builds from the same numbers."""
+    from daytona import Resources  # noqa: PLC0415  (optional: only the Daytona placement needs it)
+
     return Resources(
         cpu=cpus,
         memory=math.ceil(memory_mb / 1024) if memory_mb is not None else None,
@@ -98,7 +95,7 @@ def sample_by_base(specs: dict[str, dict], bases: dict[str, str], per_base: int,
     return chosen
 
 
-async def run_one(spec: dict, base: str, factory: DaytonaMachineFactory) -> LivenessResult:
+async def run_one(spec: dict, base: str, factory=None) -> LivenessResult:
     """Grade an empty submission with the task's own grader, on a fresh grading machine."""
     task = TaskSpec.model_validate(spec["task"])
     runtime = MachineRuntimeSpec.model_validate(
@@ -112,33 +109,50 @@ async def run_one(spec: dict, base: str, factory: DaytonaMachineFactory) -> Live
             "cleanup_timeout": 120.0,
         }
     )
-    snapshot = snapshot_identity(
-        RegistryImage(task.environment_requirements.docker_image),
-        _resources(runtime.cpus, runtime.memory_mb, runtime.storage_mb, runtime.gpus),
-    )
     requirements = task.environment_requirements
-    spec_machine = machine_spec(
-        EnvironmentConfig(
-            docker_image=requirements.docker_image,
-            workdir=requirements.working_directory,
+    grader_environment = getattr(task.grader, "environment", None)
+    locked = grader_environment is not None and grader_environment.packages_lock is not None
+    if locked:
+        # A packaged grader runs in the local bubblewrap runtime; no sandbox backend and
+        # no snapshot identity are involved, so the Daytona pieces are never imported.
+        snapshot = ""
+        spec_machine = MachineSpec(
+            source=HostImage(),
+            workdir=requirements.working_directory or "/workspace",
+            network=NetworkPolicy.ALLOW,
             cpus=runtime.cpus,
             memory_mb=runtime.memory_mb,
             storage_mb=runtime.storage_mb,
-        ),
-        Path("/nonexistent"),
-        {},
-        cpus=runtime.cpus,
-        memory_mb=runtime.memory_mb,
-        storage_mb=runtime.storage_mb,
-    )
-    grader_environment = getattr(task.grader, "environment", None)
-    grading_factory = factory
-    if grader_environment is not None and grader_environment.packages_lock is not None:
-        # A packaged grader is DESIGNED to run in the local bubblewrap runtime: the grading
-        # path builds the lock and mounts it read-only (runtime/environment.py). It never
-        # reaches a sandbox backend, so it adds no Daytona identity.
-        spec_machine = replace(spec_machine, source=HostImage())
+        )
         grading_factory = LocalMachineFactory()
+    else:
+        from harbor.environments.daytona import machine_spec  # noqa: PLC0415
+        from harbor_config.models.task.config import EnvironmentConfig  # noqa: PLC0415
+        from shellbox.backends.daytona.machine import (  # noqa: PLC0415
+            DaytonaMachineFactory,
+            snapshot_identity,
+        )
+        from shellbox.image import RegistryImage  # noqa: PLC0415
+
+        snapshot = snapshot_identity(
+            RegistryImage(requirements.docker_image),
+            _resources(runtime.cpus, runtime.memory_mb, runtime.storage_mb, runtime.gpus),
+        )
+        spec_machine = machine_spec(
+            EnvironmentConfig(
+                docker_image=requirements.docker_image,
+                workdir=requirements.working_directory,
+                cpus=runtime.cpus,
+                memory_mb=runtime.memory_mb,
+                storage_mb=runtime.storage_mb,
+            ),
+            Path("/nonexistent"),
+            {},
+            cpus=runtime.cpus,
+            memory_mb=runtime.memory_mb,
+            storage_mb=runtime.storage_mb,
+        )
+        grading_factory = factory or DaytonaMachineFactory()
     try:
         result = await grade_empty_in_sandbox(task, grading_factory, spec_machine, timeout=VERIFIER_TIMEOUT)
     except TimeoutError as error:
@@ -158,10 +172,9 @@ async def run_one(spec: dict, base: str, factory: DaytonaMachineFactory) -> Live
 
 
 async def run(specs: dict[str, dict], bases: dict[str, str], task_ids: list[str], output: Path) -> None:
-    factory = DaytonaMachineFactory()
     with output.open("a") as handle:
         for index, task_id in enumerate(task_ids, start=1):
-            result = await run_one(specs[task_id], bases.get(task_id, "<unknown>"), factory)
+            result = await run_one(specs[task_id], bases.get(task_id, "<unknown>"))
             handle.write(json.dumps(asdict(result)) + "\n")
             handle.flush()
             print(f"[{index}/{len(task_ids)}] {task_id}: {result.outcome}", flush=True)
