@@ -41,6 +41,8 @@ TASKTROVE_UPSTREAM_URL = (
     "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/" "02923004846e4e73862c20962f823a6d05100e7a"
 )
 
+LEGACY_PYTHON_TESTS_RECIPE_REVISION = "datasets/tasktrove/python_tests.py @ e6be97168d"
+
 
 def _rebuilt_cohort(config: PrebuiltCohort, info: SourceInfo) -> RlDataSource[PrebuiltCohort]:
     return RlDataSource(
@@ -483,7 +485,7 @@ def sources() -> list[RlDataSource]:
                 oracle_validation=OracleValidation.SKIPPED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
                         "Unverified historical reward-only sample; does not certify test execution. "
                         "setup fidelity executed on all 505 converted specs at this revision (all "
@@ -534,7 +536,7 @@ def sources() -> list[RlDataSource]:
                 oracle_validation=OracleValidation.SKIPPED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
                         "Unverified historical reward-only sample; does not certify test execution. "
                         "setup fidelity executed on all 488 converted specs at this revision (all "
@@ -638,7 +640,7 @@ def sources() -> list[RlDataSource]:
                 oracle_validation=OracleValidation.SKIPPED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
                         "Unverified historical reward-only sample; does not certify test execution. "
                         "setup fidelity executed on all 4,993 converted specs at this revision (all "
@@ -688,7 +690,7 @@ def sources() -> list[RlDataSource]:
                 oracle_validation=OracleValidation.SKIPPED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
                         "Unverified historical reward-only sample; does not certify test execution. "
                         "setup fidelity executed on all 4,842 converted specs at this revision (all "
@@ -738,7 +740,7 @@ def sources() -> list[RlDataSource]:
                 oracle_validation=OracleValidation.SKIPPED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
                         "Unverified historical reward-only sample; does not certify test execution. "
                         "setup fidelity executed on all 500 converted specs at this revision (all "
@@ -789,7 +791,7 @@ def sources() -> list[RlDataSource]:
                 oracle_validation=OracleValidation.SKIPPED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
                         "Unverified historical reward-only sample; does not certify test execution. "
                         "setup fidelity executed on all 4,990 converted specs at this revision (all "
@@ -840,7 +842,7 @@ def sources() -> list[RlDataSource]:
                 oracle_validation=OracleValidation.SKIPPED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
                         "Unverified historical reward-only sample; does not certify test execution. "
                         "setup fidelity executed on all 492 converted specs at this revision (all "
@@ -891,7 +893,7 @@ def sources() -> list[RlDataSource]:
                 oracle_validation=OracleValidation.SKIPPED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
                         "Unverified historical reward-only sample; does not certify test execution. "
                         "setup fidelity executed on all 4,991 converted specs at this revision (all "
@@ -943,7 +945,7 @@ def sources() -> list[RlDataSource]:
                 oracle_validation=OracleValidation.SKIPPED,
                 oversight=OversightEvidence(
                     campaign="RL Data Atlas",
-                    recipe_revision="datasets/tasktrove/python_tests.py @ e6be97168d",
+                    recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
                         "Unverified historical reward-only sample; does not certify test execution. "
                         "setup fidelity executed on all 4,991 converted specs at this revision (all "

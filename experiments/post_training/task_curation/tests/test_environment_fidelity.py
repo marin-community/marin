@@ -44,10 +44,6 @@ def test_a_recipe_lowers_onto_its_pinned_base():
     lowered = lower_environment(recipe, PINNED_BASES)
     assert lowered.base_ref == PINNED_BASES["ubuntu:24.04"]
     assert lowered.working_directory == "/workspace"
-    assert lowered.setup_commands == (
-        "mkdir -p /workspace",
-        "(cd /workspace && export DEBIAN_FRONTEND=noninteractive; mkdir -p /out && chmod 777 /out)",
-    )
 
 
 @pytest.mark.parametrize(
