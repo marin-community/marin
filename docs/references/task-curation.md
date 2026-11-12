@@ -917,7 +917,8 @@ release and does not raise the level.
 ### Package-lock graders use the worker's local runtime
 
 A grader that declares `packages_lock` runs in the worker's local bubblewrap
-runtime. It adds no Daytona snapshot identity. Daytona qualification still
-depends on the task machine's declared environment and execution requirements.
-The admitted TaskTrove cohorts use this local grader path; CalibForge names an
+runtime. It adds no Daytona snapshot identity. The Daytona counter records that
+grader as unsupported on Daytona, independently of the task machine's image.
+A mixed deployment may run the agent on Daytona and the grader locally, but
+that does not qualify both machine slots for Daytona. CalibForge declares an
 image for its grader.
