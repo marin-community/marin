@@ -1,4 +1,5 @@
 import copy
+import inspect
 from collections.abc import Iterator, Mapping
 from dataclasses import fields, replace
 from types import SimpleNamespace
@@ -151,4 +152,8 @@ def test_code_default_declarations_match_native_dataclasses_and_canonical_choice
         assert set(get_args(annotation)) == {choice.value for choice in enum}, name
 
     callbacks = get_args(get_args(Callback)[0])
-    assert {get_args(callback.model_fields["type"].annotation)[0] for callback in callbacks} == set(CALLBACK_REGISTRY)
+    declared = {get_args(callback.model_fields["type"].annotation)[0]: callback for callback in callbacks}
+    assert declared.keys() == CALLBACK_REGISTRY.keys()
+    for name, callback in declared.items():
+        parameters = set(inspect.signature(CALLBACK_REGISTRY[name].__init__).parameters) - {"self"}
+        assert set(callback.model_fields) - {"type"} == parameters, name

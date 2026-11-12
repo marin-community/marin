@@ -527,28 +527,6 @@ def test_launch_validates_correction_and_selection_contract(tmp_path: Path, over
         load_launch_config(path)
 
 
-@pytest.mark.parametrize(
-    ("recipe", "nodes"), [("snowball_mopd_ultra_async_smoke", 8), ("snowball_mopd_ultra_async_32k_smoke", 9)]
-)
-def test_inherited_recipe_round_trips_as_a_self_contained_launch(tmp_path: Path, recipe: str, nodes: int):
-    raw = raw_launch_config()
-    raw["skyrl"] = {"defaults": [recipe, "_self_"], "trainer": {"max_steps": 2}}
-    raw["inputs"]["data_kind"] = "parquet"
-    raw["iris"]["allocation"]["num_nodes"] = nodes
-    path = tmp_path / "launch.yaml"
-    path.write_text(yaml.safe_dump(raw))
-    config = load_launch_config(path)
-    assert config.skyrl.trainer.max_steps == 2
-    assert config.skyrl.trainer.rollout_buffer.max_staleness_steps == 1
-    assert config.skyrl.trainer.algorithm.off_policy_correction == "tis"
-    assert config.skyrl.data.sampling.kind is None
-    assert config.skyrl.generator.engine_init_kwargs.max_model_len == (8192 if nodes == 8 else 32767)
-    resolved = tmp_path / "resolved.yaml"
-    OmegaConf.save(config, resolved)
-    reloaded = load_launch_config(resolved)
-    assert OmegaConf.to_container(reloaded, resolve=True) == OmegaConf.to_container(config, resolve=True)
-
-
 def test_source_launch_preserves_nested_open_mappings(tmp_path):
     raw = raw_launch_config()
     raw["skyrl"]["generator"]["engine_init_kwargs"] = {"user_options": {"nested": {}}}
@@ -557,6 +535,22 @@ def test_source_launch_preserves_nested_open_mappings(tmp_path):
     assert OmegaConf.to_container(load_launch_config(path).skyrl.generator.engine_init_kwargs.user_options) == {
         "nested": {}
     }
+
+
+def test_first_train_submission_validates_recipe_and_resolved_reload(tmp_path):
+    raw = raw_launch_config()
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    loaded = load_launch_config(path)
+    resolved = tmp_path / "resolved.yaml"
+    OmegaConf.save(loaded, resolved)
+    assert OmegaConf.to_container(load_launch_config(resolved), resolve=True) == OmegaConf.to_container(
+        loaded, resolve=True
+    )
+    del raw["skyrl"]["context_budget"]
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError, match="context_budget"):
+        load_launch_config(path)
 
 
 def test_source_launch_rejects_conflicting_author_values(tmp_path):

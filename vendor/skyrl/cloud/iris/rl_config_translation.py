@@ -31,8 +31,6 @@ from marinskyrl.resource_locator import join_resource_path, model_source_for_pat
 from marinskyrl.rollout_grading import validate_nemotron_ultra_grading
 from marinskyrl.speculative_decoding import parse_speculative_decoding_config
 
-# Directory containing the bundled example RL config YAML files.
-SKYRL_CONFIG_DIR = Path(__file__).parent / "configs"
 RL_CONFIG_TASK_DIR = "/tmp/marin-rl-configs"
 RL_CONFIG_PAYLOAD_ENV = "MARIN_RL_CONFIG_B64"
 RESOLVED_HARBOR_CONFIG_KEY = "terminal_bench_config"
@@ -106,32 +104,6 @@ class ParsedRLConfig:
     terminal_bench: Optional[Dict[str, Any]] = None
 
 
-def resolve_rl_config_path(raw_path: str) -> Path:
-    """Resolve an RL config path, checking the bundled ``configs/`` fallback.
-
-    Resolution order: the path as-is, then ``SKYRL_CONFIG_DIR / raw_path``, then
-    ``SKYRL_CONFIG_DIR / raw_path.yaml``.
-
-    Raises:
-        FileNotFoundError: If the config file cannot be found in any location.
-    """
-    path = Path(raw_path).expanduser()
-    if path.exists():
-        return path.resolve()
-
-    fallback = SKYRL_CONFIG_DIR / raw_path
-    if fallback.exists():
-        return fallback.resolve()
-
-    fallback_yaml = SKYRL_CONFIG_DIR / f"{raw_path}.yaml"
-    if fallback_yaml.exists():
-        return fallback_yaml.resolve()
-
-    raise FileNotFoundError(
-        f"RL config not found: {raw_path}\nSearched: {path}, {SKYRL_CONFIG_DIR / raw_path}, {fallback_yaml}"
-    )
-
-
 def materialize_launch_config(
     config_path: str,
     environment: Mapping[str, str] | None = None,
@@ -153,23 +125,10 @@ def materialize_launch_config(
     return str(destination)
 
 
-def load_rl_recipe(config_path: str) -> DictConfig:
-    """Compose a source recipe with Hydra defaults before deriving launch settings."""
-    path = resolve_rl_config_path(config_path)
-    raw = OmegaConf.load(path)
-    if "defaults" not in raw:
-        return raw
-    with initialize_config_dir(version_base=None, config_dir=str(path.parent)):
-        return compose(
-            config_name=path.name,
-            overrides=[f"hydra.searchpath=[file://{SKYRL_CONFIG_DIR.resolve()}]"],
-        )
-
-
-def parse_rl_config(config_path: str, model_override: str | None = None) -> ParsedRLConfig:
+def parse_rl_config(config_path: str) -> ParsedRLConfig:
     """Validate an authored recipe and prepare its sparse launch sections."""
-    path = resolve_rl_config_path(config_path)
-    raw = OmegaConf.to_container(load_rl_recipe(str(path)), resolve=False) or {}
+    path = Path(config_path).expanduser().resolve()
+    raw = OmegaConf.to_container(OmegaConf.load(path), resolve=False) or {}
     if not isinstance(raw, dict):
         raise ValueError(f"{path}: RL config must contain a mapping at the document root")
     if RESOLVED_HARBOR_CONFIG_KEY in raw:
@@ -208,8 +167,6 @@ def parse_rl_config(config_path: str, model_override: str | None = None) -> Pars
         engine_init_kwargs=generator.get("engine_init_kwargs", {}),
         context=f"{path}: generator.speculative_decoding",
     )
-    if model_override:
-        trainer.setdefault("policy", {}).setdefault("model", {})["path"] = model_override
     return ParsedRLConfig(
         config_path=path,
         recipe=recipe,

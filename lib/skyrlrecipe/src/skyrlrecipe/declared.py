@@ -94,6 +94,7 @@ class CheckpointCallback(Section):
     type: Literal["checkpoint"]
     save_steps: int = unset_field()
     save_on_train_end: bool = unset_field()
+    save_after_fraction: int | float = unset_field()
 
 
 class BestCheckpointCallback(Section):
@@ -142,6 +143,7 @@ class HFModelSaveCallback(Section):
     type: Literal["hf_model_save"]
     save_steps: int = unset_field()
     save_on_train_end: bool = unset_field()
+    save_after_fraction: int | float = unset_field()
 
 
 class DatabaseRegistrationCallback(Section):
@@ -181,6 +183,7 @@ class InferenceStatsCallback(Section):
     log_to_tracker: bool = unset_field()
     console_log_level: str = unset_field()
     poll_interval_seconds: int | float = unset_field()
+    sinks: None = unset_field()
 
 
 LoggingBackend = Literal["wandb", "mlflow", "swanlab", "tensorboard", "console"]

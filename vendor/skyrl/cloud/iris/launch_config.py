@@ -181,8 +181,12 @@ def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
     return composed
 
 
-def _is_source_recipe(skyrl: DictConfig) -> bool:
-    return "context_budget" in skyrl or "config_groups" in skyrl or "defaults" in skyrl
+def _is_source_recipe(config: DictConfig) -> bool:
+    return (
+        config.run.mode == RunMode.TRAIN and not config.runtime.entrypoint
+        or "context_budget" in config.skyrl
+        or "config_groups" in config.skyrl
+    )
 
 
 def _compose_source_recipe(config: DictConfig) -> DictConfig:
@@ -238,7 +242,7 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
 def load_launch_config(path: Path) -> DictConfig:
     """Load and validate one complete SkyRL launch document."""
     config = compose_launch_config(OmegaConf.load(path))
-    if _is_source_recipe(config.skyrl):
+    if _is_source_recipe(config):
         if config.run.mode != RunMode.TRAIN:
             raise ValueError("checkpoint_export launch configs must already contain a composed SkyRL subtree")
         config = _compose_source_recipe(config)

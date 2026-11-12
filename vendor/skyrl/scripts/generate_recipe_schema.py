@@ -106,7 +106,7 @@ def source_documents(config_dir: Path) -> SourceDocuments:
 
 
 def recipe_documents(recipe_dir: Path, config_dir: Path, groups: dict) -> list[dict]:
-    """Read authored type observations with the launcher's Hydra inheritance semantics."""
+    """Expand bundled fixtures to collect authored type observations."""
     documents = []
     for path in sorted(recipe_dir.glob("*.yaml")):
         recipe = OmegaConf.load(path)
