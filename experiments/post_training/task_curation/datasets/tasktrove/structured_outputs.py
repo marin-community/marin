@@ -130,7 +130,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name="tasktrove-structured_outputs",
                 source=tasktrove_source(CONFIG),
                 convert=TaskTroveConverter(CONFIG, convert_structured_outputs),
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=STRUCTURED_OUTPUTS_RUBRIC,
                 grader=GRADER_PACKAGES,

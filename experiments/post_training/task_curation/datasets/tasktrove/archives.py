@@ -5,7 +5,7 @@
 
 from dataclasses import dataclass, replace
 
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import CONVERSATION_ANSWERS, EnvironmentRequirements, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Converter, ImportFailureKind, ImportRejection, NormalizedTask, RawRow
 
@@ -43,10 +43,12 @@ class TaskTroveConverter:
         if isinstance(converted, ImportRejection):
             return converted
         task = converted.task if isinstance(converted, NormalizedTask) else converted
-        # The archive's environment is part of the task. A conversion that declares an
-        # image while the archive defines environment/Dockerfile has replaced it, so the
-        # row is rejected until it is reconverted faithfully.
-        reused = environment_unused(task.model_dump(mode="json"), row.data["files"])
+        # Reply-only conversions have no agent machine. Keep the archive as oracle
+        # evidence, while enforcing environment fidelity for tasks that use a machine.
+        reply_only = (
+            task.answer_type in CONVERSATION_ANSWERS and task.environment_requirements == EnvironmentRequirements()
+        )
+        reused = None if reply_only else environment_unused(task.model_dump(mode="json"), row.data["files"])
         if reused is not None:
             return ImportRejection(
                 kind=ImportFailureKind.CONVERTER_ERROR, reason="environment_substituted", detail=reused

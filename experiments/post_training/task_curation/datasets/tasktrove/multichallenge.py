@@ -109,7 +109,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name="tasktrove-multichallenge",
                 source=tasktrove_source(CONFIG),
                 convert=TaskTroveConverter(CONFIG, convert_multichallenge),
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 grader=GRADER_PACKAGES,

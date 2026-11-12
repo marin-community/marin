@@ -201,7 +201,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name=name,
                 source=tasktrove_source(config),
                 convert=TaskTroveConverter(config, convert_calendar),
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=rubric,
                 controls=Controls(golden=calendar_golden),

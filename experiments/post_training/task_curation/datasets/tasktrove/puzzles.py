@@ -98,7 +98,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name="tasktrove-puzzles",
                 source=tasktrove_source(PUZZLES_CONFIG),
                 convert=TaskTroveConverter(PUZZLES_CONFIG, convert_puzzle),
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 controls=Controls(golden=reference_reply),

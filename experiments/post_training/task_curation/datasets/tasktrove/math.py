@@ -329,7 +329,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name=source.name,
                 source=tasktrove_source(source.config),
                 convert=TaskTroveConverter(source.config, source.convert),
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=source.rubric,
                 controls=MATH_CONTROLS,
