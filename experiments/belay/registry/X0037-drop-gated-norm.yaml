@@ -4,7 +4,7 @@ name: Remove GatedNorm on embedding / lm_head input
 category: Normalization
 summary: Use plain RMSNorm instead of RMSNorm+GatedNorm on the embedding and before the lm_head.
 source: maintainer
-status: done
+status: running
 first_batch: 10
 tags:
 - gatednorm
@@ -90,6 +90,20 @@ trials:
   steps: 3030
   baseline: belay-X0017-control 3.0451 (same commit, seed 0)
   step_time_change: 0%
+- id: t005
+  variant: embed_gated_norm=false, final_gated_norm=false
+  rung: competitive-d512
+  protocol: equal_steps
+  batch: X0037
+  date: '2026-11-12'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0037
+  wandb: []
+  settings:
+    embed_gated_norm: 'false'
+    final_gated_norm: 'false'
+  commit: 9cee5ab13d
+  priority: batch
+  note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
 events:
 - type: adopted
   batch: '17'
