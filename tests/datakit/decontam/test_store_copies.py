@@ -46,7 +46,6 @@ def test_partial_or_reworded_copies_and_short_fields_are_not_found():
 
     assert _found(partial) == set()
     assert _found(reworded) == set()
-    # The 1-word label is below the word floor, so it is never searched.
     assert {t.field for t in _targets()} == {"question", "answer"}
 
 

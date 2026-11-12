@@ -10,7 +10,7 @@ decontamination mark is set, or the exact or verified fuzzy dedup attributes lis
 
 A field of a record is found in a document when the field's text occurs in the document,
 both lowercased with whitespace collapsed; the document is also searched after undoing
-JSON and Python string escapes, since many copies sit inside JSON lines and code. Fields
+common string escapes, since many copies sit inside JSON lines and code. Fields
 shorter than ``--min-words`` words are not searched. A record is copied when one kept
 document holds every searched field. A generic field, such as a multiple-choice stem like
 "which of the following is a correct statement?", also matches text that is not a copy;
@@ -21,8 +21,8 @@ or Parquet files (``--parquet GLOB``), with the string fields to search (``--fie
 Writes under OUT_PREFIX:
 
 * ``targets.json``: the searched fields of each record;
-* ``matches/<file>.parquet``: one row per normalized file, document and found field, with
-  the store's drop flags;
+* ``matches/<file>.parquet``: one row per matching record field in a normalized
+  document, with the store's drop flags;
 * ``records.parquet``: per record, whether one document (kept or not) holds every searched
   field, and the kept documents and sources that do;
 * ``report.md``: the summary.
@@ -91,7 +91,7 @@ def normalized(text: str) -> str:
 
 
 def unescaped(text: str) -> str:
-    """Undo JSON and Python string escapes, leaving any other backslash as is."""
+    """Undo four-digit Unicode, newline, carriage-return, tab, quote, slash, and backslash escapes."""
 
     def replace(match: re.Match) -> str:
         escape = match.group(1)
