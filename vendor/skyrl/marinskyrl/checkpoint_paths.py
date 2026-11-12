@@ -4,7 +4,7 @@ import json
 import math
 
 from rigging.filesystem.storage_path import StoragePath
-from marinskyrl.resource_locator import join_resource_path
+from .resource_locator import join_resource_path
 
 GLOBAL_STEP_PREFIX = "global_step_"
 LATEST_CHECKPOINT_FILE = "latest_ckpt_global_step.txt"

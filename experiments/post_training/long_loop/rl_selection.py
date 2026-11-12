@@ -10,12 +10,17 @@ from marin.rl.skyrl import SkyRLRun
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from vendor.skyrl.marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME
+
+VALIDATION_EMA_WINDOW = 5
+VALIDATION_EMA_ALPHA = 2 / (VALIDATION_EMA_WINDOW + 1)
+
 
 def validate_selection_receipts(best: dict, history: list[dict], selected_step: int) -> dict:
     """Reject incomplete coverage, changed lineage, or a nonwinning EMA selection."""
-    if best["model_format"] != "native" or best["step"] != selected_step or selected_step < 5:
+    if best["model_format"] != "native" or best["step"] != selected_step or selected_step < VALIDATION_EMA_WINDOW:
         raise ValueError("Full RL export must identify a trained five-step selection")
-    if best["ema_window"] != 5 or not math.isclose(best["ema_alpha"], 1 / 3):
+    if best["ema_window"] != VALIDATION_EMA_WINDOW or not math.isclose(best["ema_alpha"], VALIDATION_EMA_ALPHA):
         raise ValueError("Full RL requires trailing-five adjusted EMA with alpha=1/3")
     expected = best["attempted"]
     if expected < 1 or best["scored"] != expected:
@@ -25,10 +30,10 @@ def validate_selection_receipts(best: dict, history: list[dict], selected_step: 
         raise ValueError("Duplicate validation steps")
     scores = {}
     interval = best.get("evaluation_interval", 1)
-    weights = [(2 / 3) ** age for age in reversed(range(5))]
+    weights = [(1 - VALIDATION_EMA_ALPHA) ** age for age in reversed(range(VALIDATION_EMA_WINDOW))]
     for step in sorted(rows):
-        window = [rows.get(index) for index in range(step - 4 * interval, step + 1, interval)]
-        if step < 5 * interval or step % interval or any(row is None for row in window):
+        window = [rows.get(index) for index in range(step - (VALIDATION_EMA_WINDOW - 1) * interval, step + 1, interval)]
+        if step < VALIDATION_EMA_WINDOW * interval or step % interval or any(row is None for row in window):
             continue
         if any(row["attempted"] != expected or row["scored"] != expected for row in window):
             raise ValueError("Validation cohort coverage changed")
@@ -47,7 +52,7 @@ def validate_selection_receipts(best: dict, history: list[dict], selected_step: 
 def validate_full_selection(run: SkyRLRun) -> dict:
     """Read the durable native selection before admitting its HF export to eval."""
     root = run.checkpoint_root
-    fs, key = filesystem_for(prefix_join(root, "best_checkpoint.json"))
+    fs, key = filesystem_for(prefix_join(root, BEST_CHECKPOINT_FILENAME))
     best = json.loads(fs.cat_file(key))
     fs, key = filesystem_for(prefix_join(root, "validation_selection_history.json"))
     history = json.loads(fs.cat_file(key))

@@ -42,6 +42,8 @@ from experiments.post_training.long_loop.hf_archive import (
     upload_checkpoint,
     verify_hf_checkpoint,
 )
+from experiments.post_training.long_loop.rl_selection import VALIDATION_EMA_WINDOW
+from vendor.skyrl.marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME
 
 REQUIRED_CATEGORIES = {"source", "config", "dataset", "timing", "eval_trace", "wandb"}
 INCOMPLETE_HISTORY_EXCEPTION = "wandb.apis.public.runhistory.downloads.IncompleteRunHistoryError"
@@ -130,13 +132,13 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
     if run.hf_model_uri is None or run.global_step is None:
         raise ValueError("Selected RL run has no committed HF export")
     fs, root = filesystem_for(run.checkpoint_root)
-    best_uri = prefix_join(run.checkpoint_root, "best_checkpoint.json")
-    best = json.loads(fs.cat_file(prefix_join(root, "best_checkpoint.json")))
+    best_uri = prefix_join(run.checkpoint_root, BEST_CHECKPOINT_FILENAME)
+    best = json.loads(fs.cat_file(prefix_join(root, BEST_CHECKPOINT_FILENAME)))
     selected = prefix_join(run.checkpoint_root, f"global_step_{best['step']}")
     if (
         best["step"] != run.global_step
         or best["model_uri"] != prefix_join(selected, "policy")
-        or best["ema_window"] != 5
+        or best["ema_window"] != VALIDATION_EMA_WINDOW
     ):
         raise ValueError("Exported RL step differs from the five-step validation selection")
     request_sha = hashlib.sha256(
@@ -173,7 +175,7 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
         "ttl": resolved["native_checkpoint_ttl"],
         "disposable_files": disposable,
     }
-    for filename in ("best_checkpoint.json", "validation_selection_history.json"):
+    for filename in (BEST_CHECKPOINT_FILENAME, "validation_selection_history.json"):
         resolved["inputs"].append(
             {
                 "source": prefix_join(run.checkpoint_root, filename),

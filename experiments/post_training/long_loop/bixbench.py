@@ -18,6 +18,8 @@ from experiments.post_training.long_loop.archive import write_once
 from experiments.post_training.long_loop.eval_runtime.audit_results import audit
 from experiments.post_training.long_loop.sft import read_json
 
+BIXBENCH_RESULTS_FILENAME = "bixbench-pi.jsonl"
+
 
 def prepare_subset(*, output: str, source: str) -> None:
     fs, path = filesystem_for(prefix_join(source, "rollouts.parquet"))
@@ -118,9 +120,9 @@ def merge_results(*, output: str, original: str, repair: str) -> None:
     replacements = [
         p for p in repair_fs.glob(prefix_join(repair_root, "*.jsonl")) if not p.endswith("aggregated_results.jsonl")
     ]
-    if len(replacements) != 1 or not replacements[0].endswith("/bixbench-pi.jsonl"):
+    if len(replacements) != 1 or not replacements[0].endswith("/" + BIXBENCH_RESULTS_FILENAME):
         raise ValueError("Repair must contain BixBench only")
-    original_bix = json.loads(original_fs.cat_file(prefix_join(original_root, "bixbench-pi.jsonl")))
+    original_bix = json.loads(original_fs.cat_file(prefix_join(original_root, BIXBENCH_RESULTS_FILENAME)))
     repaired_bix = json.loads(repair_fs.cat_file(replacements[0]))
     identity["original_prompt_is_prefix"] = (
         repaired_bix["prompt_token_ids"][: len(original_bix["prompt_token_ids"])] == original_bix["prompt_token_ids"]
@@ -130,17 +132,19 @@ def merge_results(*, output: str, original: str, repair: str) -> None:
     provenance = []
     for row in before["benchmarks"]:
         name = row["file"]
-        if name != "bixbench-pi.jsonl" and row["verified"] != 1:
+        if name != BIXBENCH_RESULTS_FILENAME and row["verified"] != 1:
             raise ValueError(f"Another path is not verified: {name}")
         source_fs, source_root = (
-            (repair_fs, repair_root) if name == "bixbench-pi.jsonl" else (original_fs, original_root)
+            (repair_fs, repair_root) if name == BIXBENCH_RESULTS_FILENAME else (original_fs, original_root)
         )
         payload = source_fs.cat_file(prefix_join(source_root, name))
         write_once(prefix_join(prefix_join(output, suffix), name), payload)
         provenance.append(
             {
                 "file": name,
-                "source": prefix_join(prefix_join(repair if name == "bixbench-pi.jsonl" else original, suffix), name),
+                "source": prefix_join(
+                    prefix_join(repair if name == BIXBENCH_RESULTS_FILENAME else original, suffix), name
+                ),
                 "sha256": hashlib.sha256(payload).hexdigest(),
             }
         )
@@ -156,9 +160,9 @@ def merge_results(*, output: str, original: str, repair: str) -> None:
                 "original": original,
                 "repair": repair,
                 "preserved": 19,
-                "replaced": "bixbench-pi.jsonl",
+                "replaced": BIXBENCH_RESULTS_FILENAME,
                 "files": provenance,
-                "original_failed_result": prefix_join(prefix_join(original, suffix), "bixbench-pi.jsonl"),
+                "original_failed_result": prefix_join(prefix_join(original, suffix), BIXBENCH_RESULTS_FILENAME),
             },
             indent=2,
         ).encode(),

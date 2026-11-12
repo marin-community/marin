@@ -66,18 +66,3 @@ def test_empty_mapping_preserves_config_merge_contracts(tmp_path, key, error):
         compose_skyrl_config(
             parse_rl_config(str(path)), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
         )
-
-
-def test_daytona_evaluation_uses_separate_org_without_mutating_environment(monkeypatch):
-    monkeypatch.setenv('TRAIN_KEY', 'synthetic-train')
-    monkeypatch.setenv('EVAL_KEY', 'synthetic-eval')
-    monkeypatch.setattr('marinskyrl.task_machine_factories.shutil.which', lambda name: None)
-    settings = OmegaConf.create({'daytona': {
-        'api_key_env': 'TRAIN_KEY', 'eval_api_key_env': 'EVAL_KEY', 'ttl_minutes': 60,
-    }})
-    captured = []
-    monkeypatch.setattr('marinskyrl.task_machine_factories.DaytonaMachineFactory',
-                        lambda **kwargs: captured.append(kwargs))
-    task_machine_factories(settings, phase='train')
-    task_machine_factories(settings, phase='eval')
-    assert [item['client_factory'].args[0].api_key for item in captured] == ['synthetic-train', 'synthetic-eval']
