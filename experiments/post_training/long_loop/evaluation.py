@@ -5,7 +5,6 @@
 
 import hashlib
 import json
-import subprocess
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -31,11 +30,9 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation, run_judged
-from experiments.post_training.long_loop.eval_runtime.recipe import validate_environment_preflight
 from experiments.post_training.long_loop.eval_runtime.repair_release import repaired_table
 from experiments.post_training.long_loop.eval_runtime.selection import selected_rollouts
 from experiments.post_training.long_loop.rl_selection import validate_full_selection
-from experiments.post_training.long_loop.sft import read_json
 from experiments.post_training.long_loop.stage_config import validate_stage_config
 from vendor.skyrl.marinskyrl.resource_locator import validate_replayable_model_reference
 
@@ -49,7 +46,7 @@ def prepare_micro(*, output: str, dataset: str, revision: str, wheels_revision: 
         raise ValueError("Pinned Micro210 must contain 210 unique tasks")
     expanded_path = hf_hub_download(dataset, "data/validation-rollouts.parquet", repo_type="dataset", revision=revision)
     expanded, receipt = selected_rollouts(table, pq.read_table(expanded_path), tasks_per_benchmark)
-    smoke = repaired_table(expanded, wheels_revision)
+    prepared = repaired_table(expanded, wheels_revision)
     receipt.update(dataset=dataset, revision=revision, wheels_revision=wheels_revision)
     receipt["unique_source_sha256"] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
     receipt["expanded_source_sha256"] = hashlib.sha256(Path(expanded_path).read_bytes()).hexdigest()
@@ -57,34 +54,26 @@ def prepare_micro(*, output: str, dataset: str, revision: str, wheels_revision: 
     receipt_fs.pipe_file(receipt_key, json.dumps(receipt, indent=2).encode())
     fs, key = filesystem_for(prefix_join(output, "rollouts.parquet"))
     with fs.open(key, "wb") as target:
-        pq.write_table(smoke, target)
-    subprocess.run(
-        [
-            "uv",
-            "run",
-            "--frozen",
-            "--with-editable",
-            "./vendor/harbor",
-            "--with",
-            "daytona==0.200.2",
-            "--prerelease",
-            "allow",
-            "python",
-            "-m",
-            "experiments.post_training.long_loop.eval_runtime.environment_preflight",
-            *(["--smoke"] if tasks_per_benchmark == 1 else []),
-            "--credential-env",
-            "DAYTONA_EVAL_API_KEY",
-            "--data-uri",
-            output,
-            "--output-prefix",
-            output,
-            "--report-name",
-            "environment.json",
+        pq.write_table(prepared, target)
+    environment = {
+        "dataset": dataset,
+        "revision": revision,
+        "wheels_revision": wheels_revision,
+        "data_uri": output,
+        "provisioning": "performed by actual evaluation trials",
+        "setup_preflight_executed": False,
+        "tasks": [
+            {
+                "task_id": row["task_id"],
+                "repetition_index": row["repetition_index"],
+                "task_spec_sha256": hashlib.sha256(row["task_spec"].encode()).hexdigest(),
+                "task_rollout_spec_sha256": hashlib.sha256(row["task_rollout_spec"].encode()).hexdigest(),
+            }
+            for row in prepared.to_pylist()
         ],
-        check=True,
-    )
-    validate_environment_preflight(read_json(prefix_join(output, "environment.json")), output)
+    }
+    environment_fs, environment_key = filesystem_for(prefix_join(output, "environment.json"))
+    environment_fs.pipe_file(environment_key, json.dumps(environment, indent=2).encode())
 
 
 def validate_eval_policy(model: ResolvedModelLocator, source_uri: str) -> None:
@@ -193,9 +182,6 @@ def configured_evaluation_step(
         run = replace(run, launch_config_yaml=yaml.safe_dump(launch))
         if not ctx.is_fingerprint:
             validate_replayable_model_reference(model["local_path"], model["uri"], model["identity"])
-        if not ctx.is_fingerprint:
-            manifest = read_json(prefix_join(ctx.artifact_path(data), "environment.json"))
-            validate_environment_preflight(manifest, ctx.artifact_path(data))
         return JudgedEvaluation(run, judge, capability_origin, judge_gpu_count)
 
     return replace(step, run=run_judged, build_config=build_config)

@@ -1,17 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from marin.execution.lazy import ArtifactStep, StepContext
 from rolloutengine.models import TaskRolloutSpec
 
+from experiments.post_training.long_loop import evaluation
 from experiments.post_training.long_loop.context_evidence import context_evidence, validate_context_evidence
+from experiments.post_training.long_loop.eval_runtime import repair_release
 from experiments.post_training.long_loop.eval_runtime.repair_release import repaired_row
-from experiments.post_training.long_loop.evaluation import TerminalPolicy, validate_eval_policy
+from experiments.post_training.long_loop.evaluation import TerminalPolicy, prepare_micro, validate_eval_policy
 from vendor.skyrl.marinskyrl.resource_locator import ModelLocatorError
 
 
@@ -29,6 +35,53 @@ def test_frozen_micro_row_converts_without_changing_prompt_or_grader():
     for key, value in before["grader"].items():
         assert after["grader"][key] == value
     assert after["schema_version"] == "0.30"
+
+
+def test_prepare_micro_preserves_attempts_without_running_setup_trials(tmp_path, monkeypatch):
+    row = json.loads((Path(__file__).parent / "fixtures/micro028.json").read_text())
+    unique = [
+        {
+            **row,
+            "agent": "single-turn",
+            "task_id": f"task-{benchmark}-{task}",
+            "benchmark": "tau3-pi" if benchmark == 20 else f"benchmark-{benchmark}",
+            "repetitions": 3 if benchmark < 4 else 2,
+        }
+        for benchmark in range(21)
+        for task in range(10)
+    ]
+    expanded = [{**r, "repetition_index": rep} for r in unique for rep in range(r["repetitions"])]
+    pq.write_table(pa.Table.from_pylist(unique), tmp_path / "validation.parquet")
+    pq.write_table(pa.Table.from_pylist(expanded), tmp_path / "validation-rollouts.parquet")
+    (tmp_path / "manifest.json").write_text("[]")
+
+    def download(repo, filename, *, repo_type, revision):
+        return str(tmp_path / Path(filename).name)
+
+    def reject_trial_process(*args, **kwargs):
+        pytest.fail("Evaluation input preparation must not launch a setup trial or subprocess")
+
+    monkeypatch.setattr(evaluation, "hf_hub_download", download)
+    monkeypatch.setattr(repair_release, "hf_hub_download", download)
+    monkeypatch.setattr(subprocess, "run", reject_trial_process)
+    output = tmp_path / "prepared"
+    output.mkdir()
+    prepare_micro(
+        output=str(output), dataset="pinned/micro", revision="a" * 40, wheels_revision="b" * 40, tasks_per_benchmark=10
+    )
+
+    table = pq.read_table(output / "rollouts.parquet")
+    selection = json.loads((output / "selection.json").read_text())
+    manifest = json.loads((output / "environment.json").read_text())
+    assert table.num_rows == selection["attempts"] == 440
+    assert selection["unique_tasks"] == 200
+    assert manifest["setup_preflight_executed"] is False
+    assert manifest["data_uri"] == str(output)
+    assert len(manifest["tasks"]) == 440
+    for binding, prepared in zip(manifest["tasks"], table.to_pylist(), strict=True):
+        assert binding["task_id"] == prepared["task_id"]
+        assert binding["repetition_index"] == prepared["repetition_index"]
+        assert binding["task_rollout_spec_sha256"] == hashlib.sha256(prepared["task_rollout_spec"].encode()).hexdigest()
 
 
 def test_eval_policy_locator_rejects_hf_shaped_local_path():

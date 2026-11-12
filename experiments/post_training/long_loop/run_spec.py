@@ -177,7 +177,10 @@ def allocation_peaks(resolved: dict) -> dict[str, int]:
     coordinator_count = coordinator_gpu["count"] if coordinator_gpu else 0
     resources = {key: execution[key] for key in ("export", "eval_inputs", "archive")}
     resources["sft"] = resolved["sft"]["resources"]
-    peaks = {key: value["replicas"] * value["device"]["count"] for key, value in resources.items()}
+    peaks = {
+        key: value["replicas"] * value["device"]["count"] if value["device"]["kind"] == "gpu" else 0
+        for key, value in resources.items()
+    }
     for stage in ("rl", "evaluation"):
         plan = resolved[stage]["role_plan"]
         nodes = plan["policy_num_nodes"]

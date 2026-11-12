@@ -14,6 +14,9 @@ Add `--run --max-concurrent 1` for the real planned-budget run. No extra GPU
 smoke, probe or qualification job is scheduled. The resolved JSON records the
 spec digest, complete configs, dataset identities, scale changes and blockers.
 Strict SkyRL composition runs on the actual graph documents before allocation.
+Evaluation input preparation runs on CPUs and records the pinned task and rollout
+specification hashes. Environment startup and agent installation happen in the
+actual evaluation trials; preparation does not run setup trials or allocate GPUs.
 The complete example is intentionally **not launchable yet**: the selected Smartie
 cohorts still need their pinned exclusion evidence. The current SWE-only runtime
 bundle supplies it; CalibForge is excluded from that run.

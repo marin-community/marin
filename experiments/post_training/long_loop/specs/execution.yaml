@@ -35,9 +35,7 @@ eval_inputs:
   ram: 128GB
   disk: 512GB
   device:
-    variant: H100
-    kind: gpu
-    count: 8
+    kind: cpu
   preemptible: true
   regions: null
   zone: null
