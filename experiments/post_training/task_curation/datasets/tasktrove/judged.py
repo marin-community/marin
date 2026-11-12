@@ -5,14 +5,16 @@
 
 Each archive asks for a free-form answer in ``/app/response.txt`` and grades it with one holistic
 numeric judgement over a short rubric (``tests/judge.toml``, ``tests/verifier_data.json``). The
-task asks for the answer in the reply instead, and verifyit's checklist judge asks one yes/no
-question per source criterion and scores the fraction met. The source's judge configuration and
-data stay beside the grader for review. Sources with an unspecified judge model remain
-inventory until their grading contract is pinned and qualified.
+task asks for the answer in the reply instead. The MEDIUM profile awards one only for full
+satisfaction of the source rubric and otherwise zero. The checklist profile scores the fraction
+of criteria met. The source's judge configuration and data stay beside the grader for review.
+Pinned source profiles remain inventory until qualification and publication are complete.
 """
 
+import json
 import re
 from dataclasses import dataclass, field, replace
+from functools import partial
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
@@ -22,16 +24,17 @@ from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, NormalizedTask, RawRow
 from taskcompendium.runtime.resources import inline_resource
-from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
+from verifyit.spec import RUBRIC_CHECKLIST, RUBRIC_LABELS, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import VERIFIER_DATA, archive_file
+from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
-INCOMPLETE_JUDGE_SOURCES = frozenset(
+TIERED_JUDGE_SOURCES = frozenset(
     {
         "tasktrove-codereview",
         "tasktrove-glaive_code",
@@ -42,9 +45,9 @@ INCOMPLETE_JUDGE_SOURCES = frozenset(
         "tasktrove-wizard_orca",
     }
 )
-JUDGE_SPEC_DEFECT = (
-    " Inventory: the converted checklist grader leaves its judge model unspecified and has no reference answers. "
-    "Pin the judge contract and complete verifier QA before admission."
+JUDGE_QUALIFICATION_PENDING = (
+    " Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. "
+    "Source-level qualification and a private pinned release are required before admission."
 )
 
 NUMBERED = re.compile(r"^\s*\d+[.)]\s*")
@@ -83,8 +86,8 @@ Require a complete public request and any code, prior turns, or external passage
 
 Check each hidden criterion against the public request; flag invented constraints or incorrect premises.
 
-The source used one holistic numeric judge over four criteria and has no gold answer; this grader asks the judge about
-each criterion separately and scores the fraction met."""
+The source used one holistic numeric judge over four criteria and has no gold answer. The converted MEDIUM profile
+uses binary full-rubric grading; the original judge configuration is retained as source evidence."""
 
 HOLISTIC_SOURCE_CRITERIA = """
 Reject missing inputs, contradictions, and rubric requirements absent from the public request.
@@ -171,7 +174,9 @@ def source_criteria(data: dict) -> tuple[str, ...]:
     return tuple(NUMBERED.sub("", line).strip() for line in principle.splitlines() if line.strip())
 
 
-def convert_judged(row: RawRow, context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
+def convert_judged(
+    row: RawRow, context: ConversionContext, *, judge: JudgeSpec
+) -> TaskSpec | NormalizedTask | ImportRejection:
     data = row.data.get("verifier_data")
     if not isinstance(data, dict):
         return unsupported("missing_judge_data", "Source verifier_data.json is required")
@@ -186,12 +191,28 @@ def convert_judged(row: RawRow, context: ConversionContext) -> TaskSpec | Normal
         return source_defect("missing_instruction", "Public instruction is required")
     verifier_data = archive_file(row.data, VERIFIER_DATA)
     assert verifier_data is not None
+    public_instruction = response_instruction(instruction)
+    if judge.rubric == RUBRIC_LABELS:
+        rubric = data.get("rubric")
+        if not isinstance(rubric, list) or len(rubric) != len(criteria):
+            return unsupported("invalid_rubric", "The binary judge profile requires a complete source criterion list")
+        spec = replace(
+            judge,
+            question=public_instruction,
+            references=(json.dumps(rubric, ensure_ascii=False),),
+        )
+        environment = None
+    elif judge.rubric == RUBRIC_CHECKLIST:
+        spec = replace(judge, criteria=criteria, question=question)
+        environment = required_grader_environment(context)
+    else:
+        raise ValueError(f"Unsupported source judge rubric: {judge.rubric}")
     package = verifyit_package(
-        JudgeSpec(criteria=criteria, question=question, rubric=RUBRIC_CHECKLIST),
+        spec,
         (inline_resource("source/judge.toml", judge_toml), inline_resource("source/verifier_data.json", verifier_data)),
-        environment=required_grader_environment(context),
+        environment=environment,
     )
-    prompt = TextMessage(role="user", content=response_instruction(instruction))
+    prompt = TextMessage(role="user", content=public_instruction)
     task = conversation_task(row, events=(prompt,), package=package)
     domain = (
         ("safety",)
@@ -381,24 +402,34 @@ SOURCES = (
 def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
-            pipeline=None if source.name in INCOMPLETE_JUDGE_SOURCES else process_rows,
+            pipeline=None if source.name in TIERED_JUDGE_SOURCES else process_rows,
             info=replace(
                 source.info,
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 notes=(
-                    source.info.notes + JUDGE_SPEC_DEFECT
-                    if source.name in INCOMPLETE_JUDGE_SOURCES
+                    source.info.notes + JUDGE_QUALIFICATION_PENDING
+                    if source.name in TIERED_JUDGE_SOURCES
                     else source.info.notes
                 ),
             ),
             config=CurationRecipe(
                 name=source.name,
                 source=tasktrove_source(source.config),
-                convert=TaskTroveConverter(source.config, convert_judged),
-                version="2",
+                convert=TaskTroveConverter(
+                    source.config,
+                    partial(
+                        convert_judged,
+                        judge=(
+                            JUDGE_TIERS[JudgeTier.MEDIUM].spec
+                            if source.name in TIERED_JUDGE_SOURCES
+                            else JudgeSpec(rubric=RUBRIC_CHECKLIST)
+                        ),
+                    ),
+                ),
+                version="3" if source.name in TIERED_JUDGE_SOURCES else "2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=source.rubric,
-                grader=GRADER_PACKAGES,
+                grader=None if source.name in TIERED_JUDGE_SOURCES else GRADER_PACKAGES,
             ),
         )
         for source in SOURCES
