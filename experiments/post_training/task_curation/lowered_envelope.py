@@ -54,7 +54,7 @@ class LoweredSpec:
         )
 
     def envelope(self) -> dict:
-        """The JSON envelope the rollout runtime and the measurement code consume."""
+        """The JSON-ready task specification and agent/verifier machine shapes."""
         return {
             "task": self.task.model_dump(mode="json"),
             "runtime": {
