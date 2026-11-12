@@ -25,8 +25,13 @@ def compose_recipe(recipe: SkyRLRecipe) -> DictConfig:
     cfg = get_default_config()
     OmegaConf.set_struct(cfg, False)
     cfg = OmegaConf.merge(cfg, recipe.model_dump(mode="json", exclude_unset=True, exclude={"context_budget"}))
-    cfg.trainer.max_prompt_length = recipe.context_budget.max_input_tokens
-    cfg.generator.sampling_params.max_generate_length = recipe.context_budget.max_new_tokens_per_turn
+    for path, value in recipe.context_budget.derived_values(None).items():
+        if (
+            path == "generator.engine_init_kwargs.max_model_len"
+            and "serving_window_tokens" not in recipe.context_budget.model_fields_set
+        ):
+            continue
+        OmegaConf.update(cfg, path, value, force_add=True)
     return cfg
 
 

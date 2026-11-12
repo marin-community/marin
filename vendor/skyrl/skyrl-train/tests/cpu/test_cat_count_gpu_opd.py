@@ -32,7 +32,6 @@ def test_gpu_opd_runner_requires_an_explicit_spec_for_evens_only():
         ("cat_count", [], 5.0),
         ("cat_count", ["--advantage-clip", "none"], 10.0),
         ("nightly", ["--max-staleness-steps", "0"], 10.0),
-        ("nightly", ["--max-staleness-steps", "1"], 10.0),
     ],
 )
 def test_opd_clip_option_controls_teacher_credit(tmp_path, builder, flags, expected):

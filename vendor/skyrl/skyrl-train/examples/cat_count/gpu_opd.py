@@ -274,8 +274,6 @@ def opd_config(args: argparse.Namespace) -> DictConfig:
     cfg.trainer.seed = args.seed
     cfg.trainer.export_path = str(args.output / "exports")
     cfg.trainer.ckpt_path = str(args.output / "ckpts")
-    cfg.generator.max_turns = recipe.context_budget.max_turns
-    cfg.generator.engine_init_kwargs.max_model_len = recipe.context_budget.effective_serving_window_tokens
     return cfg
 
 
