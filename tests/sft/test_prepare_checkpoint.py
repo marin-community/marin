@@ -171,10 +171,18 @@ def test_hf_model_rejects_unpinned_hub_ref(model_ref):
         HFModel(model_ref)
 
 
-def test_hf_model_rejects_hf_url():
-    """An hf:// ref would skip the CPU mirror and stream from the Hub on the accelerator."""
-    with pytest.raises(ValueError, match="hf:// ref"):
-        HFModel("hf://Qwen/Qwen3-0.6B@" + "c" * 40)
+def test_hf_model_mirrors_hf_url_like_hub_ref():
+    """An hf:// ref is the same Hub ref: it gets the same CPU mirror, not a Hub stream on the accelerator."""
+    step = sft_step(_spec(HFModel("hf://" + _HF_REF)), ResourceConfig.with_cpu())
+
+    mirror = next(d for d in step.deps if d.name != "documents/ds")
+    assert mirror.name == "models/Qwen--Qwen3-0-6B--" + "c" * 40
+    assert materialized_config(step, _PREFIX).train_config.initialize_from_hf == mirror.path(_PREFIX)
+
+
+def test_hf_model_rejects_unpinned_hf_url():
+    with pytest.raises(ValueError, match="pinned to a full commit sha"):
+        HFModel("hf://Qwen/Qwen3-0.6B@main")
 
 
 def test_fingerprint_tracks_preparation_inputs():

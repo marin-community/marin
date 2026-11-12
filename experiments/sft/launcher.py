@@ -284,15 +284,13 @@ def _levanter_train_job(pod_config: TrainLmOnPodConfig) -> None:
 def _hf_mirror_step(model_ref: str) -> ArtifactStep[LevanterCheckpoint] | None:
     """The CPU step that copies a pinned Hub repo to the regional prefix, or None for a path ref.
 
-    Hub-vs-path uses Levanter's own rule (:func:`is_hf_model_id`), so the launcher and the loader agree.
+    Hub-vs-path uses Levanter's own rule (:func:`is_hf_model_id`), so the launcher and the loader agree. An
+    ``hf://org/model@<sha>`` ref is the same Hub ref and is mirrored too.
     """
-    if model_ref.startswith("hf://"):
-        raise ValueError(
-            f"HFModel would stream an hf:// ref from the Hub on the accelerator; use org/model@<sha>: {model_ref!r}"
-        )
-    if not is_hf_model_id(model_ref):
+    hub_ref = model_ref.removeprefix("hf://")
+    if not is_hf_model_id(hub_ref):
         return None
-    repo, _, revision = model_ref.partition("@")
+    repo, _, revision = hub_ref.partition("@")
     if not _HF_COMMIT_SHA.fullmatch(revision):
         raise ValueError(f"HFModel needs a Hub ref pinned to a full commit sha (org/model@<sha>), got {model_ref!r}")
     return download_model(ModelConfig(hf_repo_id=repo, hf_revision=revision))
