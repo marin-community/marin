@@ -3839,7 +3839,9 @@
           }
         },
         "converter_identity": "c38c5c2409f63faa622ab115de622a393d9737a7aad4011fbb7354ecfebb124f",
-        "combined_backend_pass": "handed_off"
+        "combined_backend_pass": "handed_off",
+        "task_specs_uri": "s3://marin-us-east-02a/marin/rl-data/atlas-disposition/2026.11.12.3/artifacts/task-trove-swe-gym-swe-gym/tasks.parquet",
+        "manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas-disposition/2026.11.12.3/artifacts/task-trove-swe-gym-swe-gym/manifest.json"
       }
     },
     {
@@ -4003,7 +4005,9 @@
           }
         },
         "converter_identity": "5c937e6da97479ec3af230c7243a6d7cb095c2eb0e29fb2fd8c1e2fbb9c20ff3",
-        "combined_backend_pass": "handed_off"
+        "combined_backend_pass": "handed_off",
+        "task_specs_uri": "s3://marin-us-east-02a/marin/rl-data/atlas-disposition/2026.11.12.3/artifacts/task-trove-xiaomimimo-mimo-v2-6-rl-oss-general/tasks.parquet",
+        "manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas-disposition/2026.11.12.3/artifacts/task-trove-xiaomimimo-mimo-v2-6-rl-oss-general/manifest.json"
       }
     },
     {
@@ -4068,7 +4072,9 @@
           }
         },
         "converter_identity": "b21f84dca4562436b6898dd6b8c70fda8c9302872a257e5e902c6f04b2b6f0ae",
-        "combined_backend_pass": "handed_off"
+        "combined_backend_pass": "handed_off",
+        "task_specs_uri": "s3://marin-us-east-02a/marin/rl-data/atlas-disposition/2026.11.12.3/artifacts/task-trove-xiaomimimo-mimo-v2-6-rl-oss-music/tasks.parquet",
+        "manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas-disposition/2026.11.12.3/artifacts/task-trove-xiaomimimo-mimo-v2-6-rl-oss-music/manifest.json"
       }
     },
     {
