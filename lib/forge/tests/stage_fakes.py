@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import override
 
 from rolloutengine.models import (
+    ConversationRecord,
     GradedRollout,
     Model,
     ModelRequest,
@@ -75,7 +76,11 @@ class SolverEngine(Engine):
             self.ready.set()
         await self.ready.wait()
         trial = int(run_id.split(":")[-2])
-        rollout = Rollout(run_id, (), "stop")
+        messages = (
+            {"role": "user", "content": "Add the numbers."},
+            {"role": "assistant", "content": f"Trial {trial}: unsure whether to round; answering 12."},
+        )
+        rollout = Rollout(run_id, (ConversationRecord(messages, (), (), (), None),), "stop")
         if trial == self.restart:
             raise RolloutInterrupted(rollout, RolloutOperation.MODEL)
         return GradedRollout(rollout, GradeResult(Outcome.GRADED, float(trial % 2 == 0)))

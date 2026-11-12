@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import re
 from dataclasses import replace
 from functools import partial
 from pathlib import PurePosixPath
@@ -24,8 +25,9 @@ from forge.effects.events import Note, Resolved
 from forge.effects.issues import Hold, OutputBudgetExhausted, Restart
 from forge.effects.log import EventLog
 from forge.harness.loop import AgenticHarness
-from forge.harness.protocol import Returned, Stopped, StopReason, Submitted
+from forge.harness.protocol import Returned, ReturnRequest, Stopped, StopReason, Submitted, ToolResult
 from forge.harness.tools.adversary import AdversaryClaim, AdversaryReport
+from forge.harness.tools.reviewer import ReviewedTrial, Suggestions, reviewer_tools
 from forge.lowering import machine_backend, requirements
 from forge.model.controls import CONTROL, CONTROLS, Candidate, Control, ControlKind, RewardBand
 from forge.model.llm import Completion, Message, Role, ToolCall, Usage
@@ -48,6 +50,11 @@ from forge.model.review import (
     Incomplete,
     Modify,
     Retry,
+    ReviewerResult,
+    Revise,
+    RevisionKind,
+    Suggestion,
+    TrialExcerpt,
     TrialResult,
     ValidationResult,
 )
@@ -98,6 +105,7 @@ def config(harness: RecordingHarness | None = None) -> ForgeConfig:
     return replace(
         build_config(load_policy(DEFAULTS_DIR), "S", {}),
         author=harness or RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ()))),
+        reviewer=RecordingHarness(Returned("suggest", Suggestions(()), Conversation((), ()))),
         workspace=WorkspaceHydration((inline_resource("workspace/notes", b"static"),), rendered_files),
     )
 
@@ -482,7 +490,7 @@ async def test_output_budget_retry(workpiece: Workpiece, solver: bool, failures:
     run = AsyncMock(side_effect=[*[OutputBudgetExhausted("output budget exhausted")] * failures, outcome])
     if solver:
         ctx.handle(SolverRollout, run)
-        trial = await solver_result(ctx, rollout_spec(arithmetic_task()), 0, 0)
+        trial, _ = await solver_result(ctx, rollout_spec(arithmetic_task()), 0, 0)
         assert trial.cause is None
         assert trial.grade == (
             success.grade if failures == 1 else GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted")
@@ -936,3 +944,93 @@ def test_old_shape_findings_parse_and_review_as_before(workpiece: Workpiece) -> 
     assert not finding.met and finding.expected.reward_min == 0.85
     setup = config()
     assert isinstance(default_review(workpiece.with_(evidence=(restored,)), setup.band, setup.budget), Accept)
+
+
+@pytest.mark.parametrize("case", ["accepts", "modifies", "spent"])
+async def test_reviewer_reads_rollouts_only_when_validation_would_accept(workpiece: Workpiece, case: str) -> None:
+    assert workpiece.submission is not None
+    if case == "modifies":
+        broken = replace(workpiece.submission.controls[1], expected=RewardBand(Outcome.GRADED, reward_min=1))
+        workpiece = workpiece.with_(
+            submission=replace(workpiece.submission, controls=(workpiece.submission.controls[0], broken))
+        )
+    if case == "spent":
+        suggestion = Suggestion(RevisionKind.OTHER, (TrialExcerpt(0, "x"),), "edit")
+        workpiece = workpiece.with_(decisions=(Revise(BandOutcome.IN_BAND, (suggestion,)),))
+    reviewer = RecordingHarness(Returned("suggest", Suggestions(()), Conversation((), ())))
+    setup = replace(config(), reviewer=reviewer)
+    ctx = Context(log=EventLog())
+    client = FakeInference(())
+    bundle = replace(resources(ctx), role_inference={"reviewer": client})
+    result = (await validate(ctx, workpiece, setup, bundle)).result
+    await ctx.drain()
+    if case != "accepts":
+        assert result.reviewer is None and reviewer.session is None
+        return
+    assert result.reviewer == ReviewerResult(True, ()) and reviewer.client is client
+    assert reviewer.session is not None
+    prompt = reviewer.session.messages[-1].content
+    assert all(f"trial {index}:" in prompt for index in range(K)) and '"met":true' in prompt
+
+
+async def test_reviewer_tools_bound_output_and_require_verbatim_evidence() -> None:
+    trials = (ReviewedTrial('{"reward":1.0}', ("x" * 5000, "assistant:\nthe   needle here")),)
+    tools = reviewer_tools(trials, arithmetic_task(), 1200)
+    ctx = Context(log=EventLog())
+    seen, args = "", {"trial": 0}
+    for _ in range(10):
+        reply = await tools["read_trial"](ctx, args)
+        assert isinstance(reply, ToolResult) and len(reply.content) <= 1200
+        seen += reply.content
+        if "[cut:" not in reply.content:
+            break
+        start, offset = (int(value) for value in re.findall(r"start=(\d+), offset=(\d+)", reply.content)[0])
+        args = {"trial": 0, "start": start, "offset": offset}
+    assert seen.count("x") == 5000 and "the   needle here" in seen
+    grep = await tools["grep_trials"](ctx, {"pattern": "NEEDLE"})
+    assert isinstance(grep, ToolResult) and grep.content.startswith("trial 0 message 1:")
+
+    def revision(trial: int, excerpt: str) -> dict[str, object]:
+        evidence = [{"trial": trial, "excerpt": excerpt}]
+        return {"revisions": [{"kind": "answer_leak", "evidence": evidence, "suggested_edit": "Hide it."}]}
+
+    for bad in (revision(0, "haystack"), revision(3, "needle"), revision(0, "")):
+        assert isinstance(await tools["suggest"](ctx, bad), ToolResult)
+    accepted = await tools["suggest"](ctx, revision(0, "the needle\nhere"))
+    assert isinstance(accepted, ReturnRequest) and isinstance(accepted.payload, Suggestions)
+    assert accepted.payload.revisions[0].kind is RevisionKind.ANSWER_LEAK
+    await ctx.drain()
+
+
+# Mark 2026-11-11: one author round on reviewer suggestions; a failing revision accepts the validated submission.
+@pytest.mark.parametrize("revision,revert", [("clean", False), ("defect", True), ("too_hard", True), ("stopped", True)])
+def test_reviewer_revision_accepts_or_reverts(workpiece: Workpiece, revision: str, revert: bool) -> None:
+    original = workpiece.submission
+    assert original is not None
+    incomplete = ReviewerResult(False, (), ("reviewer stopped without suggest: context_limit after 9 turns",))
+    unreviewed = decide(workpiece.with_(evidence=(replace(evidence(1), reviewer=incomplete),)))
+    accept = unreviewed.decisions[-1]
+    assert isinstance(accept, Accept) and incomplete.reasons[0] in accept.reasons
+    suggestion = Suggestion(RevisionKind.AMBIGUOUS_PROMPT, (TrialExcerpt(0, "unsure whether to round"),), "Clarify.")
+    pending = decide(workpiece.with_(evidence=(replace(evidence(1), reviewer=ReviewerResult(True, (suggestion,))),)))
+    assert isinstance(pending.decisions[-1], Revise) and pending.terminal is None and pending.round == 1
+    assert pending.fallback == Fallback(original, BandOutcome.IN_BAND)
+    assert pending.session is not None and "[ambiguous_prompt] Clarify." in pending.session.messages[-1].content
+    updated = replace(original, notes="applied 1")
+    pending = pending.with_(submission=updated)
+    if revision == "stopped":
+        final = stopped(pending, Stopped(StopReason.FINISHED, Conversation((), ()), "declined"))
+    else:
+        solved, met = {"clean": (1, True), "defect": (1, False), "too_hard": (0, True)}[revision]
+        final = decide(pending.with_(evidence=(evidence(solved, controls_met=met),)))
+    assert final.terminal is Terminal.ACCEPTED and final.accepted_with is None
+    assert final.submission == (original if revert else updated)
+
+
+async def test_reviewer_provider_hold_holds_validation(workpiece: Workpiece) -> None:
+    setup = replace(config(), reviewer=RecordingHarness(Hold("provider unavailable")))
+    ctx = Context(log=EventLog())
+    with pytest.raises((Hold, ExceptionGroup)) as caught:
+        await validate(ctx, workpiece, setup, resources(ctx))
+    assert not isinstance(caught.value, ExceptionGroup) or caught.value.subgroup(Hold) is not None
+    await ctx.drain()

@@ -56,7 +56,7 @@ Export these in the same shell as the launch (never commit or print them):
 | variable | source | used for |
 |---|---|---|
 | `CW_KEY_ID`, `CW_KEY_SECRET` | your personal CoreWeave key (`CW_STORAGE_KEY_ID/SECRET` in `~/openathena/.env`) | reading proposals, publishing outputs |
-| `GLM_API_KEY` | the **high-pool** GLM token: the value after `GLM_API_TOKEN=` in `glm-infer/glm_api_token.txt` (source the file; the driver refuses the whole line), not the bulk token | author, solver and adversary model calls through the relay |
+| `GLM_API_KEY` | the **high-pool** GLM token: the value after `GLM_API_TOKEN=` in `glm-infer/glm_api_token.txt` (source the file; the driver refuses the whole line), not the bulk token | author, solver, adversary and reviewer model calls through the relay |
 | `GLM_RELAY_JOB` | the Iris relay job that tunnels to the model routers, e.g. `/muchanem/glm53-relay-rno2a-g-20261027T0414Z` | endpoint resolution; one relay serves both `glm-5.3` and `deepseek-v4.1-flash` |
 | `PARALLEL_API_KEY` | `TASKFORGE_PARALLEL_KEY` in `~/openathena/.env` | the author's web tools (optional) |
 
@@ -168,6 +168,13 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   rounds within `budget.max_modify_rounds`, and a task still out of band is accepted with
   `accepted_with: too_easy` or `too_hard`. A revision that regresses (a defect, a placement on the
   other side, or an author that stops) reverts to the last clean submission and accepts that.
+- **Rollout reviewer**: `reviewer.model`, `reviewer.context_tokens`, `reviewer.max_rounds`. When
+  validation would accept (in band or tagged), a GLM agent reads every solver transcript through
+  `list_trials`, `read_trial`, `grep_trials` and `read_task_file`, and ends with `suggest`: revisions
+  of kind `ambiguous_prompt`, `grader_defect`, `answer_leak`, `environment_issue` or `other`, each with
+  verbatim trial evidence and an edit. Suggestions give the author one round (`author.suggestions`) in
+  which it may decline them; a revision that fails validation reverts to the reviewed submission.
+  Reviewer rounds do not spend `budget.max_modify_rounds`, and placement is final after one.
 - **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`, `budget.max_triage_repairs`.
 - **Adversary**: `adversary.roster` (names of adversary harnesses; empty by default),
   `adversary.image`. A finding is a demonstrated claim with a candidate and an expected grade;

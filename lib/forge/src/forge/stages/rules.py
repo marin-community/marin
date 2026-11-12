@@ -6,6 +6,7 @@
 
 import math
 from collections import Counter
+from dataclasses import replace
 
 from taskcompendium.grading_result import GradeResult, Outcome
 
@@ -21,6 +22,7 @@ from forge.model.review import (
     Reject,
     RejectKind,
     Retry,
+    Revise,
     TrialResult,
     ValidationResult,
 )
@@ -51,6 +53,7 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
     A too-easy task gets one hardening round and a too-hard task easing rounds within the shared modification budget;
     a task still out of band afterwards is accepted with its placement. A revision that regresses (a defect, or a
     placement other than the fallback's) reverts to the last clean submission and accepts it with that placement.
+    An acceptance with rollout-reviewer suggestions becomes ``Revise``; after that revision placement is final.
     """
     result = workpiece.evidence[-1]
     decision = assess(result, band)
@@ -62,6 +65,8 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
         cause = next((cause for cause in retryable if CAUSE_DECISIONS.get(cause) is Retry), None)
         if cause is not None and retries < budget.max_validation_retries:
             return Retry(cause, retries + 1)
+    if isinstance(decision, Accept):
+        return reviewed(decision, result)
     if not isinstance(decision, Modify):
         return decision
     placement, fallback = decision.placement, workpiece.fallback
@@ -70,11 +75,25 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
         return Accept(fallback.band, (*tagged(fallback.band), *reasons), revert=True)
     if placement is None:
         return decision
-    if placement is BandOutcome.TOO_EASY and fallback is not None:
-        return Accept(placement, (*tagged(placement), "One hardening round used"))
-    if modify_rounds(workpiece) >= budget.max_modify_rounds:
-        return Accept(placement, (*tagged(placement), "Shared modification budget exhausted"))
-    return decision
+    if any(isinstance(item, Revise) for item in workpiece.decisions):
+        reason = "Placement is final after a reviewer revision"
+    elif placement is BandOutcome.TOO_EASY and fallback is not None:
+        reason = "One hardening round used"
+    elif modify_rounds(workpiece) >= budget.max_modify_rounds:
+        reason = "Shared modification budget exhausted"
+    else:
+        return decision
+    return reviewed(Accept(placement, (*tagged(placement), reason)), result)
+
+
+def reviewed(decision: Accept, result: ValidationResult) -> Accept | Revise:
+    """An acceptance the rollout reviewer suggested revisions for goes back to the author once, as suggestions."""
+    review = result.reviewer
+    if review is None or decision.revert:
+        return decision
+    if review.suggestions:
+        return Revise(decision.band, review.suggestions, decision.reasons)
+    return replace(decision, reasons=(*decision.reasons, *review.reasons))
 
 
 def assess(result: ValidationResult, band: BandRules) -> Decision:

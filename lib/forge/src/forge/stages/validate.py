@@ -22,12 +22,15 @@ from forge.effects.events import Note, Resolved
 from forge.effects.issues import DecisionModelUnavailable, Hold, OutputBudgetExhausted, describe_exception
 from forge.harness.protocol import Returned, Stopped, StopReason
 from forge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
+from forge.harness.tools.reviewer import ReviewedTrial, render_message
+from forge.harness.tools.validate import pending_validate
 from forge.lowering import check_verification, host_requirements, lower_with_settings, lowering_settings, requirements
 from forge.model.content_hash import digest
 from forge.model.controls import Control
 from forge.model.llm import Message, Role
 from forge.model.proposal import render
 from forge.model.review import (
+    Accept,
     AdversaryFinding,
     AdversaryResult,
     Cause,
@@ -35,6 +38,7 @@ from forge.model.review import (
     Modify,
     Observation,
     ObservedStatus,
+    Revise,
     TrialResult,
     ValidationResult,
 )
@@ -47,6 +51,7 @@ from forge.resources.rollouts import SolverRollout
 from forge.stages.author import install_env, sandbox_limits
 from forge.stages.classify import CAUSE_DECISIONS, grade_cause, grader_infra_unavailable, trial_cause
 from forge.stages.exits import Validated
+from forge.stages.reviewer import run_reviewer
 from forge.stages.summary import excerpt, grade_summary, task_manifest
 
 
@@ -56,7 +61,10 @@ async def control_result(ctx: Context, spec: TaskRolloutSpec, index: int, contro
     return ControlResult(index, grade, cause is None and control.expected.met_by(grade), cause)
 
 
-async def solver_result(ctx: Context, spec: TaskRolloutSpec, trial: int, attempt: int) -> TrialResult:
+async def solver_result(
+    ctx: Context, spec: TaskRolloutSpec, trial: int, attempt: int
+) -> tuple[TrialResult, tuple[str, ...]]:
+    """A trial's grade, and its transcript (every conversation, one rendered string per message) for the reviewer."""
     for retry in range(2):
         result = None
         try:
@@ -64,8 +72,13 @@ async def solver_result(ctx: Context, spec: TaskRolloutSpec, trial: int, attempt
         except* OutputBudgetExhausted:
             await ctx.emit(Note(f"Solver {trial}: output budget exhausted on attempt {retry + 1} of 2"))
         if result is not None:
-            return TrialResult(trial, result.grade, trial_cause(result, spec.task))
-    return TrialResult(trial, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted"))
+            messages = tuple(
+                render_message(message)
+                for conversation in result.rollout.conversations
+                for message in conversation.messages
+            )
+            return TrialResult(trial, result.grade, trial_cause(result, spec.task)), messages
+    return TrialResult(trial, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted")), ()
 
 
 async def adversary_result(
@@ -315,11 +328,32 @@ async def validate(ctx: Context, workpiece: Workpiece, config: ForgeConfig, reso
                 group.create_task(adversary_result(ctx, workpiece, config, resources, spec, name))
                 for name in config.policy.setting("adversary.roster", tuple)
             ]
-        return Validated(
-            ValidationResult(
-                submission.digest,
-                tuple(trial.result() for trial in solver),
-                tuple(control.result() for control in controls),
-                tuple(result.result() for result in adversary),
-            )
+        result = ValidationResult(
+            submission.digest,
+            tuple(trial.result()[0] for trial in solver),
+            tuple(control.result() for control in controls),
+            tuple(result.result() for result in adversary),
         )
+        if reviewable(workpiece, config, result):
+            trials = tuple(
+                ReviewedTrial(json.dumps({"cause": trial.cause, **grade_summary(trial.grade)}, default=str), messages)
+                for trial, messages in (handle.result() for handle in solver)
+            )
+            result = replace(
+                result, reviewer=await run_reviewer(ctx, workpiece, config, resources, task, result, trials)
+            )
+        return Validated(result)
+
+
+def reviewable(workpiece: Workpiece, config: ForgeConfig, result: ValidationResult) -> bool:
+    """Whether review would accept ``result`` as it stands while reviewer rounds remain.
+
+    A tool validation (arm T) is skipped: the author's later submission is the one the reviewer reads.
+    """
+    if workpiece.session is not None and pending_validate(workpiece.session) is not None:
+        return False
+    rounds = sum(isinstance(decision, Revise) for decision in workpiece.decisions)
+    if rounds >= config.policy.setting("reviewer.max_rounds", int):
+        return False
+    decision = config.review(workpiece.with_(evidence=(*workpiece.evidence, result)), config.band, config.budget)
+    return isinstance(decision, Accept) and not decision.revert

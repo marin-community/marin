@@ -93,7 +93,51 @@ class Abandon:
             raise ValueError("Abandon requires non-empty reasons")
 
 
-type Decision = Annotated[Accept | Reject | Modify | Retry | Incomplete | Abandon, Field(discriminator="kind")]
+class RevisionKind(StrEnum):
+    AMBIGUOUS_PROMPT = "ambiguous_prompt"
+    GRADER_DEFECT = "grader_defect"
+    ANSWER_LEAK = "answer_leak"
+    ENVIRONMENT_ISSUE = "environment_issue"
+    OTHER = "other"
+
+
+@dataclass(frozen=True, slots=True)
+class TrialExcerpt:
+    """Verbatim text from one solver trial's transcript."""
+
+    trial: int
+    excerpt: str
+
+
+@dataclass(frozen=True, slots=True)
+class Suggestion:
+    """A rollout reviewer's proposed revision; the author may decline it."""
+
+    kind: RevisionKind
+    evidence: tuple[TrialExcerpt, ...]
+    edit: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewerResult:
+    """The rollout reviewer's suggestions; an incomplete review suggests nothing and says why."""
+
+    completed: bool
+    suggestions: tuple[Suggestion, ...]
+    reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Revise:
+    """Acceptable as ``band``, but the rollout reviewer suggested revisions: one author round, then accept."""
+
+    band: BandOutcome
+    suggestions: Annotated[tuple[Suggestion, ...], Field(min_length=1)]
+    reasons: tuple[str, ...] = ()
+    kind: Literal["revise"] = "revise"
+
+
+type Decision = Annotated[Accept | Reject | Modify | Retry | Incomplete | Abandon | Revise, Field(discriminator="kind")]
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,6 +268,7 @@ class ValidationResult:
     adversary: tuple[AdversaryResult, ...]
     lowering_error: str | None = None
     lowering_cause: Cause | None = None
+    reviewer: ReviewerResult | None = None
 
 
 @dataclass(frozen=True, slots=True)

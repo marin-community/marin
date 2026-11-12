@@ -291,6 +291,12 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
         )
         for name in policy.setting("adversary.roster", tuple)
     }
+    reviewer = AgenticHarness(
+        prompt_limit(policy, "reviewer"),
+        sampling,
+        policy.prompt("reviewer.nudge").template,
+        policy.setting("tools.output_chars", int),
+    )
     root = PurePosixPath(policy.setting("author.workdir", str))
     task_path, controls_path = str(root / "task.json"), str(root / "controls.json")
     tools = {
@@ -322,6 +328,7 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
         policy,
         author,
         adversaries,
+        reviewer,
         WorkspaceHydration((), hydration),
         tools,
         gate,
@@ -396,10 +403,8 @@ async def runtime(
     headers = {"x-api-key": parallel_api_key}
     async with AsyncExitStack() as owned:
         clients: dict[str, CompletionBackend] = {}
-        roles = (
-            ("author", "solver", "adversary", "judge")
-            if policy.setting("judge.model", str)
-            else ("author", "solver", "adversary")
+        roles = ("author", "solver", "adversary", "reviewer") + (
+            ("judge",) if policy.setting("judge.model", str) else ()
         )
         for role in roles:
             model = policy.setting(f"{role}.model", str)

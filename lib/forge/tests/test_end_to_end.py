@@ -119,9 +119,11 @@ def resources(envs: Envs, responses: Sequence[Completion]) -> Resources:
     )
 
 
-def config(arm: str) -> ForgeConfig:
+def config(arm: str, reviewer_rounds: int = 0) -> ForgeConfig:
     root = Path(__file__).parents[1] / "src/forge/policy/defaults"
-    policy = load_policy(root).overlaid({"solver.k": 2, "adversary.roster": [], "budget.max_modify_rounds": 1})
+    policy = load_policy(root).overlaid(
+        {"solver.k": 2, "adversary.roster": [], "budget.max_modify_rounds": 1, "reviewer.max_rounds": reviewer_rounds}
+    )
     return build_config(policy, arm, {})
 
 
@@ -514,3 +516,40 @@ async def test_driver_holds_an_undecodable_stream_without_touching_it(
     assert isinstance(decision := workpiece.decisions[-1], Incomplete) and "diverged" in decision.reasons[0]
     assert json.loads((destination / "status.json").read_text())["terminal"] == "held"
     assert (destination / "events.jsonl").read_bytes() == published
+
+
+# Mark 2026-11-11: a rollout reviewer's suggestions send an accepted task back to the author for one round.
+async def test_reviewer_suggestions_get_one_author_round_then_accept(proposal: TaskProposal) -> None:
+    excerpt = "unsure whether to round"
+    review = (
+        call("list_trials", {}, "list"),
+        call("grep_trials", {"pattern": "round"}, "grep"),
+        call(
+            "suggest",
+            {
+                "revisions": [
+                    {
+                        "kind": "ambiguous_prompt",
+                        "evidence": [{"trial": 1, "excerpt": excerpt}],
+                        "suggested_edit": "State that the answer is an exact integer.",
+                    }
+                ]
+            },
+            "suggest",
+        ),
+    )
+    responses = (*script("S"), *review, *script("S"))
+    log = EventLog()
+    bundle = resources(Envs(), responses)
+    wp = await run_workpiece(proposal, config("S", reviewer_rounds=1), bundle, log, install=install)
+    assert wp.terminal == Terminal.ACCEPTED and wp.round == 1 and wp.accepted_with is None
+    assert [type(decision).__name__ for decision in wp.decisions] == ["Revise", "Accept"]
+    first, second = wp.evidence
+    assert first.reviewer is not None and first.reviewer.suggestions[0].evidence[0].excerpt == excerpt
+    assert second.reviewer is None  # the reviewer budget is spent; the revision is accepted on its own evidence
+    assert isinstance(bundle.inference, FakeInference)
+    tool_replies = [m.content for m in bundle.inference.requests[len(script("S")) + 2].conversation if m.role == "tool"]
+    assert "trial 1:" in tool_replies[0] and "Trial 1: unsure whether to round" in tool_replies[1]
+    revision_prompt = bundle.inference.requests[len(script("S")) + len(review)].messages[-1].content
+    assert "State that the answer is an exact integer." in revision_prompt and "may decline" in revision_prompt
+    assert wp.fallback is not None and wp.fallback.submission.digest == first.task_digest

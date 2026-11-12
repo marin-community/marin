@@ -8,9 +8,20 @@ from types import MappingProxyType
 
 from forge.config import Transitions, transition
 from forge.harness.protocol import Returned, Stopped, Submitted
-from forge.harness.tools.validate import ValidateRequest
-from forge.model.llm import Message, Role, ToolCall
-from forge.model.review import Abandon, Accept, BandOutcome, Budget, Incomplete, Modify, Reject, Retry
+from forge.harness.tools.validate import ValidateRequest, pending_validate
+from forge.model.llm import Message, Role
+from forge.model.review import (
+    Abandon,
+    Accept,
+    BandOutcome,
+    Budget,
+    Incomplete,
+    Modify,
+    Reject,
+    Retry,
+    Revise,
+    Suggestion,
+)
 from forge.model.stage import Stage
 from forge.model.workpiece import Conversation, Fallback, Terminal, Workpiece
 from forge.policy import Policy
@@ -25,12 +36,6 @@ def submitted(wp: Workpiece, result: Submitted) -> Workpiece:
 
 def returned(wp: Workpiece, result: Returned[ValidateRequest]) -> Workpiece:
     return wp.with_(submission=result.payload.submission, session=result.session)
-
-
-def pending_validate(session: Conversation) -> ToolCall | None:
-    answered = {message.tool_call_id for message in session.messages if message.role == "tool"}
-    calls = (call for message in reversed(session.messages) for call in message.tool_calls)
-    return next((call for call in calls if call.name == "validate" and call.id not in answered), None)
 
 
 def validated(wp: Workpiece, result: Validated, *, tool: bool, workdir: str, output_chars: int) -> Workpiece:
@@ -60,25 +65,41 @@ def decided(wp: Workpiece, result: Decided, *, budget: Budget, policy: Policy) -
             return wp.with_(terminal=Terminal.REJECTED)
         case Abandon():
             return wp.with_(terminal=Terminal.ABANDONED)
-        case Modify(findings):
-            previous = wp.session
-            if previous is None:
-                raise ValueError("Cannot revise without an author session")
-            system = tuple(message for message in previous.messages if message.role == "system")
+        case Modify(findings, placement):
             prompt = policy.prompt("author.revision").render(kind="review", detail="\n".join(findings))
-            fallback = wp.fallback
-            if decision.placement is not None:
-                assert wp.submission is not None
-                fallback = Fallback(wp.submission, decision.placement)
-            return wp.with_(
-                round=wp.round + 1,
-                session=Conversation((*system, Message(Role.USER, prompt)), previous.tool_schemas),
-                fallback=fallback,
-            )
+            return revising(wp, prompt, placement)
+        case Revise(band, suggestions):
+            assert wp.submission is not None
+            return revising(wp, policy.prompt("author.suggestions").render(suggestions=rendered(suggestions)), band)
         case Retry():
             return wp
         case Incomplete():
             return wp.with_(terminal=Terminal.HELD)
+
+
+def revising(wp: Workpiece, prompt: str, placement: BandOutcome | None) -> Workpiece:
+    """Start an author round on ``prompt``; a clean submission at ``placement`` becomes the fallback."""
+    previous = wp.session
+    if previous is None:
+        raise ValueError("Cannot revise without an author session")
+    system = tuple(message for message in previous.messages if message.role == "system")
+    fallback = wp.fallback
+    if placement is not None:
+        assert wp.submission is not None
+        fallback = Fallback(wp.submission, placement)
+    return wp.with_(
+        round=wp.round + 1,
+        session=Conversation((*system, Message(Role.USER, prompt)), previous.tool_schemas),
+        fallback=fallback,
+    )
+
+
+def rendered(suggestions: tuple[Suggestion, ...]) -> str:
+    return "\n\n".join(
+        f"{index + 1}. [{suggestion.kind}] {suggestion.edit}\n"
+        + "\n".join(f"   Trial {item.trial}: {item.excerpt}" for item in suggestion.evidence)
+        for index, suggestion in enumerate(suggestions)
+    )
 
 
 def accepted(wp: Workpiece, decision: Accept) -> Workpiece:

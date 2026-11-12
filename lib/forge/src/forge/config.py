@@ -45,6 +45,7 @@ class ForgeConfig:
     policy: Policy
     author: Harness
     adversaries: Mapping[str, Harness]
+    reviewer: Harness
     workspace: WorkspaceHydration
     tools: Mapping[str, Mapping[str, Tool[object]]]
     submit_gate: Gate
