@@ -197,7 +197,7 @@ trainer:
       background: true
       background_finish_timeout: 120.0
       background_max_queue_size: 10000
-      entity: null
+      entity: marin-community
       fork_from: null
       group: null
       id: null

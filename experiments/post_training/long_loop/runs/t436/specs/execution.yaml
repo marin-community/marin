@@ -79,6 +79,7 @@ coordinator:
   - MARIN_PREFIX
   - MARIN_TEMP_PREFIX
   - HF_TOKEN
+  - WANDB_API_KEY
   container_profile: 4
 sandbox:
   cpu: 4

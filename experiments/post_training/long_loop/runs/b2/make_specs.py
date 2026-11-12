@@ -76,6 +76,7 @@ def main() -> None:
     t["trainer"]["checkpointer"]["keep"] = []  # The final save is permanent.
     arm = "replay" if share == 0 else f"contrib-{round(share * 100)}pct-loss"
     t["trainer"]["tracker"]["tags"] = ["long-loop", "b2", arm]
+    t["trainer"]["tracker"]["entity"] = "marin-community"
     t["trainer"]["initialize_from"] = "UNBOUND"
     dump("sft-b2.yaml", sft)
 

@@ -69,6 +69,7 @@ t["data_seed"] = 42
 t["trainer"]["checkpointer"]["keep"] = []  # The final save is permanent; fp32 params + Adam are ~0.8 TB each.
 t["gradient_accumulation_steps"] = 1
 t["trainer"]["tracker"]["tags"] = ["long-loop", "t436", "contributor-sft"]
+t["trainer"]["tracker"]["entity"] = "marin-community"
 t["trainer"]["initialize_from"] = "UNBOUND"
 dump("sft-contrib.yaml", sft)
 
@@ -157,8 +158,9 @@ for name, path in (
     dump(name, doc)
 
 # SFT and export read only these; the shared default also asks for the RL and eval sandbox and judge keys.
+# A missing W&B key fails here, before submit, instead of in trainer.initialize on every rank.
 execution = load("execution.yaml")
-execution["coordinator"]["required_env_vars"] = ["MARIN_PREFIX", "MARIN_TEMP_PREFIX", "HF_TOKEN"]
+execution["coordinator"]["required_env_vars"] = ["MARIN_PREFIX", "MARIN_TEMP_PREFIX", "HF_TOKEN", "WANDB_API_KEY"]
 dump("execution.yaml", execution)
 
 spec = load("round1.yaml")
