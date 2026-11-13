@@ -78,8 +78,8 @@ class Column:
     exact_values: tuple[str, ...] = ()
     # Persist exact per-value counts for GROUP BY + COUNT queries.
     value_counts: bool = False
-    # Keep each segment's min/max of this column in the catalog, so a range
-    # filter on it skips segments before opening them. INT64 columns only.
+    # Keep each segment's min/max of this column in the catalog. INT64 columns
+    # only.
     catalog_bounds: bool = False
 
 
