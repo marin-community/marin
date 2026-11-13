@@ -317,17 +317,14 @@ def _minimum_disaggregated_rollout_nodes(
             f"each rollout TP*PP rank group requires {tensor_pipeline_size} GPUs but one node has {gpus_per_node}"
         )
     # Mirror the runtime's placement atoms, including otherwise wasted GPUs when an atom does not divide a node.
-    # Verified TP1/PP1 EP workers use one-GPU PACK atoms. Other Ray engines use STRICT_PACK;
+    # Cross-host TP1/PP1 EP uses one-GPU PACK bundles. Other Ray engines use STRICT_PACK;
     # the mp path packs node-atomic TP*PP actors per DP rank.
     if not multiprocessing_backend and not expert_parallel_workers and per_engine_gpus > gpus_per_node:
         raise ValueError(
             f"each ray-backed rollout engine requires {per_engine_gpus} GPUs in one {gpus_per_node}-GPU node; "
             "reduce TP*PP*DP or use generator.inference_engine_mp_backend=true"
         )
-    if expert_parallel_workers:
-        placement_atom_gpus = 1
-        placement_atoms = replicas * data_parallel_size
-    elif multiprocessing_backend:
+    if multiprocessing_backend or expert_parallel_workers:
         placement_atom_gpus = tensor_pipeline_size
         placement_atoms = replicas * data_parallel_size
     elif per_engine_gpus > 1:

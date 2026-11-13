@@ -156,13 +156,26 @@ engine slice = tensor parallel * pipeline parallel
 engine ranks = engine slice * data parallel
 ```
 
-For disaggregated roles, one engine's ranks must fit within one node, except vLLM TP1/PP1
-engines with EP=DP>1. Those engines use one-GPU placement bundles across hosts; the runtime
-checks every worker's host, GPU UUID and parallel ranks before expert-block publication.
-For colocated roles, each
-TP-by-PP slice must fit within and divide a policy node; DP replicas occupy separate slices. Expert
-parallel size must divide `tensor parallel * data parallel`; pipeline stages form separate expert
-groups. Total planned GPUs are:
+Disaggregated vLLM engines can span hosts when TP=PP=1 and EP=DP exceeds the GPUs per host.
+The runtime assigns one GPU to each worker. It checks that each worker runs on its assigned
+host, uses a distinct physical GPU, and reports the parallel ranks required by the layout.
+The rollout pool uses `ceil(engine count * DP / GPUs per host)` hosts. For example, 48 policy
+GPUs plus one DP=EP=12 rollout engine require 15 four-GPU hosts. The planner also accepts
+other configured counts with valid Megatron geometry, with no rack-size cap. Runtime evidence
+for this cross-host path covers the 48/12 layout within one NVLink domain. Other layouts,
+including engines that share or partly fill a host, need separate runtime qualification.
+
+Resource-count validation does not ensure that an expert-parallel group stays within one
+NVLink domain. Iris places the combined policy and rollout allocation, and Ray assigns workers
+within it. An expert group may communicate across the interconnect between hosts or racks.
+Check placement and communication-backend support before running a new layout. Accepting a
+72-GPU policy in the planner does not establish a full-rack NVL72 trainer with inference elsewhere.
+
+Engines that fit on one host retain whole-engine packing: each host holds
+`floor(GPUs per host / engine ranks)` engines. Other disaggregated engines must still fit
+on one host. For colocated roles, each TP-by-PP slice must fit within and divide a policy node;
+DP replicas occupy separate slices. Expert parallel size must divide `tensor parallel * data parallel`;
+pipeline stages form separate expert groups. Total planned GPUs are:
 
 ```text
 policy GPUs = policy nodes * policy GPUs per node
@@ -172,9 +185,10 @@ separate roles: policy GPUs + rollout GPUs
 colocated roles: policy GPUs, which must equal rollout GPUs
 ```
 
-That total must equal `num_nodes * gpus_per_node`. For example, four 8-GPU policy nodes plus four
-node-sized rollout engines require 64 GPUs. Leaving rollout DP at one describes only 36 GPUs and is
-rejected during graph construction.
+The allocation must provide exactly the planned hosts, including whole-host rounding and
+host-local packing gaps. For example, four 8-GPU policy nodes plus four node-sized rollout
+engines require eight hosts. Leaving rollout DP at one needs only five hosts; an eight-host
+allocation then disagrees with the derived role plan and is rejected before submission.
 
 The preflight requires positive role dimensions, checks batch divisibility, and requires an explicit
 forward microbatch size to equal the training microbatch size. It checks local engine placement,

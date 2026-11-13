@@ -110,7 +110,7 @@ class SkyRLRolePlan:
 
     @property
     def uses_expert_parallel_placement(self) -> bool:
-        """Whether rollout needs the verified cross-node one-GPU EP placement path."""
+        """Whether rollout uses cross-host, one-GPU expert-parallel workers."""
         return (
             not self.colocate_all
             and self.inference_engine_tensor_parallel_size == 1
@@ -132,11 +132,11 @@ class SkyRLRolePlan:
         if self.uses_expert_parallel_placement:
             rollout_gpus = self.num_inference_engines * engine_gpus
             rollout_nodes = (rollout_gpus + self.policy_num_gpus_per_node - 1) // self.policy_num_gpus_per_node
-            return self.policy_num_nodes + (self.reference_num_nodes or 0) + rollout_nodes
-        engines_per_node = self.policy_num_gpus_per_node // engine_gpus
-        if not engines_per_node:
-            raise ValueError("each SkyRL inference engine must fit on one node")
-        rollout_nodes = (self.num_inference_engines + engines_per_node - 1) // engines_per_node
+        else:
+            engines_per_node = self.policy_num_gpus_per_node // engine_gpus
+            if not engines_per_node:
+                raise ValueError("each SkyRL inference engine must fit on one node")
+            rollout_nodes = (self.num_inference_engines + engines_per_node - 1) // engines_per_node
         return self.policy_num_nodes + (self.reference_num_nodes or 0) + rollout_nodes
 
 
@@ -590,7 +590,7 @@ def _validate_skyrl_backend_constraints(
     if not isinstance(_declared_config_value(config, "generator.backend"), str):
         raise ValueError("SkyRL config must explicitly set a non-empty generator.backend")
     if plan.uses_expert_parallel_placement and _declared_config_value(config, "generator.backend") != "vllm":
-        raise ValueError("cross-node TP1/PP1 expert-parallel inference requires the verified vLLM placement path")
+        raise ValueError("cross-host TP1/PP1 expert-parallel inference requires generator.backend=vllm")
 
     for key in ("use_conversation_multi_turn", "require_exact_chat_transport"):
         if _declared_config_value(config, f"generator.{key}") is not _MISSING_CONFIG_VALUE:
