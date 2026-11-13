@@ -24,18 +24,6 @@ feature-first layout on v4. The v4 compiler rejects trailing-feature
 reductions of rank-three tiles with an unsupported sublane gather.
 Transposing the full intermediate avoids that error but exceeds v4 VMEM;
 the v4 candidate instead constructs the diagonal tile feature-first.
-On v4, the candidate passes the output, final-state, and all-seven-gradient
-hardware gates at `[1,256,1,128]`, seed 0, decay 0.01, for BT128, MB16/32,
-and FP32/BF16 ([small-shape rows](../reports/data/gdn2-tpu-20260922/v4-bwdtiles.jsonl)).
-BT256 backward requires 40.88–40.97 MiB of VMEM, exceeding v4's 16 MiB limit.
-The same candidate BT128 tile/dtype combinations pass at `[1,512,1,128]`,
-seed 0, with `--decay 0.5 --decay 5`, covering stronger forgetting
-([stress rows](../reports/data/gdn2-tpu-20260922/v4-forgetting.jsonl)).
-The v4 representative sweep also passes all gates at `[B,4096,6,128]`
-for batches 4/8, FP32/BF16, BT128, MB16/32, and seeds 0/1
-(32 accepted rows; see the
-[measurement report](../reports/data/gdn2-tpu-20260922/README.md)).
-
 For each token, the reference computes the following recurrence. `g` is
 per-feature log-decay, and `*` denotes elementwise multiplication.
 
@@ -101,8 +89,19 @@ log large or non-finite candidate stage values. Files default to `IRIS_OUTPUT_DI
 when running on Iris, or `/tmp` otherwise, with name `gdn2-<timestamp>.jsonl`.
 Use `--output <path>` to choose a new file explicitly. Iris task-output archives have
 limited retention; preserve accepted measurement artifacts before expiry.
+The [v5e smoke test](https://iris.oa.dev/#/job/%2Fdlwh%2Fgdn2-pr9350-c82bff3)
+at `c82bff30aa` verified FP32 and BF16 outputs, final state, and all input
+gradients for the candidate and published baseline against the CPU oracle.
+It used shape `[1,256,1,128]`, BT128, and MB16. All 12 stage probes passed.
+
+### September 2026 measurements
+
 The [2026-09-22 measurement artifacts](../reports/data/gdn2-tpu-20260922/README.md)
-retain representative-shape samples and numerical error summaries.
+retain the exact source snapshots, representative-shape samples, and numerical
+error summaries. The speedups, tile winners, and v4 VMEM results below apply to
+those snapshots. The refactored candidate has only been verified by the v5e
+smoke test above, and its representative-shape performance and v4 VMEM fit
+remain unverified.
 
 For local FP32/BF16 shapes `[B,4096,6,128]`, the measured forward+backward
 winner was BT128/MB16 on v4/v5e/v5p and BT128/MB32 on v6e.
@@ -113,16 +112,16 @@ The measured environment used JAX 0.11.1. The v5e/v5p runs set both `--xla_tpu_s
 The v4 runs did not use the VMEM override.
 The v6e runs used a 98304 KiB scoped-VMEM limit and the enhanced launch barrier.
 
-On v6e, BT128/MB32 wins both timing modes at both measured batch endpoints
+On v6e, BT128/MB32 won both timing modes at both measured batch endpoints
 and dtypes in the full sweep and reversed-order, second-seed confirmation.
 Confirmation forward+backward medians are 11.652/11.649 ms at batch 4
 (FP32/BF16) and 22.510/22.444 ms at batch 8, or 3.12–3.22x faster than
 upstream's fastest tested tile (also BT128/MB32). Selected-tile medians
 differ by at most 0.22% between runs. All forward, final-state, and
-seven-input-gradient CPU gates pass, including separate strong-forgetting
+seven-input-gradient CPU gates passed, including separate strong-forgetting
 checks at `[1,512,1,128]`, both dtypes, all four tiles, and decays 0.5/5.
 The [row-level report](../reports/data/gdn2-tpu-20260922/README.md) retains
-outliers in other tiles; the static selection does not guarantee tail latency.
+outliers in other tiles.
 
 In the v4 representative sweep, MB16 has approximately 3% lower median
 forward+backward latency than MB32 for every batch-4/8, FP32/BF16,
@@ -137,8 +136,22 @@ MB16 medians is:
 The batch-8 FP32 seed-0 MB16 forward row has five of 20 samples at
 87–89 ms, versus approximately 55.9 ms for ordinary samples; seed 1
 does not show these spikes. The selection does not establish stable tail
-latency. The upstream baseline does not compile on v4, so these results
+latency. The upstream baseline did not compile on v4, so these results
 provide no v4 candidate-versus-upstream speedup.
+
+On v4, the recorded candidate passed the output, final-state, and all-seven-gradient
+hardware gates at `[1,256,1,128]`, seed 0, decay 0.01, for BT128, MB16/32,
+and FP32/BF16 ([small-shape rows](../reports/data/gdn2-tpu-20260922/v4-bwdtiles.jsonl)).
+BT256 backward requires 40.88–40.97 MiB of VMEM, exceeding v4's 16 MiB limit.
+The same candidate BT128 tile/dtype combinations passed at `[1,512,1,128]`,
+seed 0, with `--decay 0.5 --decay 5`, covering stronger forgetting
+([stress rows](../reports/data/gdn2-tpu-20260922/v4-forgetting.jsonl)).
+The v4 representative sweep also passed all gates at `[B,4096,6,128]`
+for batches 4/8, FP32/BF16, BT128, MB16/32, and seeds 0/1
+(32 accepted rows; see the
+[measurement report](../reports/data/gdn2-tpu-20260922/README.md)).
+
+### Benchmark tuning cache
 
 Add `--tuning-cache /path/to/gdn2-tiles.json` to opt into a persistent,
 single-writer benchmark tile cache. Without this option, the harness runs
