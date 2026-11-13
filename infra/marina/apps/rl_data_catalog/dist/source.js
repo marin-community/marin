@@ -53,7 +53,7 @@ async function render(data, sourceId) {
   const result = data.result;
   $('labels').replaceChildren(
     node('span', `Quality ${data.quality}`, `chip level level-${data.quality.toLowerCase()}`),
-    node('span', result ? `Result ${resultLabels[result]}${data.quality !== 'FULL' ? ' · provisional' : ''}` : 'Result not assessed', `chip quality-${result ? resultClasses[result] : 'unassessed'}${result && data.quality !== 'FULL' ? ' result-provisional' : ''}`),
+    node('span', result ? `Result ${resultLabels[result]}${data.result_provisional ? ' · provisional' : ''}` : 'Result not assessed', `chip quality-${result ? resultClasses[result] : 'unassessed'}${result && data.result_provisional ? ' result-provisional' : ''}`),
     contaminationChip(data.contamination_status),
     node('span', `Daytona ${daytonaLabel(data.daytona)}`, 'chip quality-unassessed'),
     node('span', data.updated_at ? `Last updated ${new Date(data.updated_at).toLocaleDateString()}` : 'Catalog load time unavailable', 'chip quality-unassessed'),
@@ -127,15 +127,15 @@ async function render(data, sourceId) {
     ['Combined exclusion manifest', lexical.receipt?.release?.drop_manifest_uri && pointer(lexical.receipt.release.drop_manifest_uri)],
   ] : [], 'Measurements describe the recorded input population; the retained release and its exclusions are shown separately.'));
   const progress = data.content_progress;
-  if (progress && data.quality !== 'FULL') sections.push(card('Provisional content-review progress', [
+  if (progress && (!data.review_completeness || data.review_completeness.required < progress.retained_count || data.result_provisional)) sections.push(card('Provisional content-review progress', [
     ['Status', 'Incomplete; strict final assembly pending'], ['Observed at', progress.as_of],
     ['Valid reviews (lower bound)', progress.valid_reviews_lower_bound], ['Retained contracts', progress.retained_count],
     ['Evidence', pointer(progress.evidence_uri)],
   ], 'This observation does not determine FULL or Result. Partial-batch reviews may be additional.'));
   const qualityResult = d.quality_result;
-  sections.push(card('Content review coverage', qualityResult ? [
-    ['Status', data.quality === 'FULL' ? 'Complete strict content assembly' : 'Provisional / incomplete'],
-    ['Conclusive reviewed contracts', qualityResult.reviewed], ['Retained contracts', d.within_source_dedup?.unique_count],
+  sections.push(card('Content review coverage', data.review_completeness ? [
+    ['Status', data.result_provisional ? 'Provisional / incomplete' : 'Required content review complete'],
+    ['Conclusive reviewed contracts', data.review_completeness?.reviewed], ['Required reviews', data.review_completeness?.required], ['Retained contracts', d.within_source_dedup?.unique_count],
     ['Execution qualification', d.oversight],
     ['Review evidence', d.independent_qc?.evidence_url && pointer(d.independent_qc.evidence_url)],
   ] : [], 'Content QA and execution qualification are separate. FULL requires complete recorded review coverage.'));
