@@ -230,18 +230,29 @@ async def test_local_disk_failure_headroom_uses_declared_capacity(tmp_path, exec
     pool = LocalDiskPool(tmp_path / "disks")
     factory = LocalMachineFactory(disk_pool=pool, image_cache=tmp_path / "images")
     machine = await factory.create(MachineSpec(executable_oci_image, workdir="/app", storage_mb=storage_mb))
-    # Leave about 2 MiB: above the 64 MiB filesystem's 1 MiB threshold and below
-    # the 512 MiB filesystem's 0.5% threshold. Metadata rounding is much smaller.
-    script = (
-        "free=$(/bin/busybox stat -f -c %a /app); block=$(/bin/busybox stat -f -c %S /app); "
-        "count=$((free - 2097152 / block)); "
-        '/bin/dd if=/dev/zero of=/app/fill bs="$block" count="$count" 2>/dev/null; exit 7'
-    )
+    # Leave about 2 MiB: above the minimum threshold but below 0.5% of 512 MiB.
+    # Real unwritten extents charge the same filesystem without streaming 512 MiB.
+    initial = os.statvfs(machine.root)
+    allocation = initial.f_bavail * initial.f_bsize - 2 * 1024 * 1024
     try:
-        session = await machine.open_process(Command(("/bin/sh", "-c", script), output_limit_bytes=0))
+        await asyncio.to_thread(
+            subprocess.run, ["fallocate", "-l", str(allocation), str(machine.root / "app/fill")], check=True
+        )
+        session = await machine.open_process(Command(("/bin/sh", "-c", "exit 7"), output_limit_bytes=0))
         try:
             await session.drain_output()
             remaining = os.statvfs(machine.root)
+            print(
+                json.dumps(
+                    {
+                        "headroom_capacity": {
+                            "storage_mb": storage_mb,
+                            "remaining_bytes": remaining.f_bavail * remaining.f_bsize,
+                        }
+                    }
+                ),
+                flush=True,
+            )
             assert 1024 * 1024 < remaining.f_bavail * remaining.f_bsize < 5 * 1024 * 1024 / 2
             if storage_mb == 64:
                 assert await session.wait() == 7
