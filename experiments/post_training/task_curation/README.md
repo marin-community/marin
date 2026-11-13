@@ -512,3 +512,51 @@ before writing the source result. Missing, overlapping or foreign evidence is
 rejected. Invalid observations
 remain unavailable in the computed Result and leave `coverage_complete=false`.
 Execution qualification remains pending.
+
+### CrossCode Python qualification candidate
+
+`crosscode_python` stages a new candidate for the frozen 500-task CrossCode Python
+population. Build the archived public actor context with the image builder first,
+using explicit batch priority and three-day deadlines for its build and push.
+Keep the returned image digest and context hash. The staging step checks that
+every retained task names that exact archived context.
+
+Prepare the separate grader's hashed dependency lock on a batch CPU worker:
+
+```bash
+uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.crosscode_python prepare-grader \
+  --output s3://bucket/crosscode/grader-build/v1 --run
+```
+
+The resulting artifact pins a Python 3.12 base and a hash-locked `tomli-w`
+dependency in `context.tar.gz`. Build that context with the same explicit image
+job policy, then stage the new TaskSpecs and faithful Harbor packages on CPU:
+
+```bash
+uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.crosscode_python stage \
+  --inputs s3://bucket/crosscode/retained-inputs/v1 \
+  --actor-image registry/actor@sha256:ACTOR_DIGEST \
+  --actor-context-sha256 ARCHIVED_CONTEXT_SHA256 \
+  --grader-image registry/grader@sha256:GRADER_DIGEST \
+  --output s3://bucket/crosscode/candidate/v1 --run
+```
+
+The original `solution/solution.py` is a completion fragment. Its new `solve.sh`
+copies those original bytes to `/app/solution.txt`; it does not execute the
+fragment or generate a reference. The private grader retains the native
+normalization and all four scoring tiers, including leading-identifier full
+credit and non-empty partial credit. It emits an authoritative structured verdict
+directly from those comparisons. A missing submission now produces a completed
+scored zero instead of a failed producer; a missing reference is an unscored
+invalid task. The new candidate records these reporting changes and preserves
+the archived native files.
+
+The candidate uses SEPARATE grading and explicit file capture. It is unqualified:
+run full-population original-oracle calibration and independent negative controls,
+then review all new exact contracts. Preserve native 900-second actor and
+720-second verifier deadlines while calibrating missing machine capacities.
+Use the [oracle filter procedure](../../../docs/references/task-curation.md#full-population-oracle-filter)
+for production Harbor trials and receipts. Staging neither publishes a dataset
+nor changes Atlas admission.
