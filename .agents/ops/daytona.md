@@ -295,7 +295,9 @@ redact those as well as named API keys before publication.
 Snapshot metadata, snapshot creation/listing and named sandbox creation retry
 HTTP 5xx, HTTP 408/429 and SDK connection/timeouts. Retry delays are capped at
 120 seconds. Retries continue until success or caller cancellation/deadline.
-Other 4xx errors and terminal image-build failures propagate. Deterministic
+The provider's HTTP 400 "failed to resolve container IP after 3 attempts"
+startup state also retries. Other 4xx errors and terminal image-build failures
+propagate. Deterministic
 snapshot names and caller-supplied sandbox names identify resources whose
 creation succeeded despite a lost response.
 

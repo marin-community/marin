@@ -37,6 +37,7 @@ from daytona import (
     DaytonaError,
     DaytonaNotFoundError,
     DaytonaTimeoutError,
+    DaytonaValidationError,
     Resources,
 )
 from daytona_api_client_async import SnapshotState
@@ -75,6 +76,7 @@ from shellbox.machine import (
     ("failure", "status"),
     [
         ("rejected_post", 429),
+        ("rejected_post", 400),
         ("accepted_post", 502),
         ("late_get", 503),
         ("prolonged_throttle", 429),
@@ -148,7 +150,16 @@ def test_daytona_creation_recovers_named_sandbox_after_transient_errors(monkeypa
                     }
                 )
             return web.json_response(
-                {"message": "transient provider error"}, status=status, headers={"Retry-After-sandbox-create": "17"}
+                {
+                    "message": (
+                        "bad request: failed to resolve container IP after 3 attempts: "
+                        "no IP address found. Is the Sandbox started?"
+                        if status == 400
+                        else "transient provider error"
+                    )
+                },
+                status=status,
+                headers={"Retry-After-sandbox-create": "17"},
             )
 
         app = web.Application()
@@ -201,7 +212,9 @@ def test_daytona_creation_recovers_named_sandbox_after_transient_errors(monkeypa
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("failure", ["rejected_create", "accepted_create", "metadata", "list", "transport", "forbidden"])
+@pytest.mark.parametrize(
+    "failure", ["rejected_create", "accepted_create", "metadata", "list", "transport", "forbidden", "invalid_shape"]
+)
 def test_daytona_snapshot_recovers_transient_http_without_duplicate_images(monkeypatch, failure):
     async def scenario():
         # Advance the backoff clock without real waiting.
@@ -233,8 +246,11 @@ def test_daytona_snapshot_recovers_transient_http_without_duplicate_images(monke
         async def endpoint(http):
             operation = "create" if http.method == "POST" else "list" if http.path.endswith("/snapshots") else "get"
             attempts[operation] += 1
-            if failure == "forbidden":
-                return web.json_response({"message": "forbidden"}, status=403)
+            if failure in {"forbidden", "invalid_shape"}:
+                return web.json_response(
+                    {"message": "Invalid CPU request" if failure == "invalid_shape" else "forbidden"},
+                    status=400 if failure == "invalid_shape" else 403,
+                )
             if failure == "transport" and operation == "get" and attempts[operation] == 1:
                 assert http.transport is not None
                 http.transport.close()
@@ -268,8 +284,10 @@ def test_daytona_snapshot_recovers_transient_http_without_duplicate_images(monke
             async with AsyncDaytona(
                 DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/"))
             ) as client:
-                if failure == "forbidden":
-                    with pytest.raises(DaytonaAuthorizationError):
+                if failure in {"forbidden", "invalid_shape"}:
+                    with pytest.raises(
+                        DaytonaValidationError if failure == "invalid_shape" else DaytonaAuthorizationError
+                    ):
                         await ensure_snapshot(client, request)
                     assert not snapshots
                     return
