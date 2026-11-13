@@ -637,7 +637,7 @@ class DaytonaDeclarativeMachineFactory(DaytonaMachineFactory):
         raise UnsupportedMachineSpec("Declarative builds run during sandbox creation; no snapshot can be prepared")
 
     async def _create_parameters(
-        self, client: AsyncDaytona, spec: MachineSpec, name: str
+        self, _client: AsyncDaytona, spec: MachineSpec, name: str
     ) -> tuple[CreateSandboxFromImageParams, None]:
         if self.snapshot_leaser is not None:
             raise ValueError("Declarative Daytona builds cannot use a snapshot leaser")
