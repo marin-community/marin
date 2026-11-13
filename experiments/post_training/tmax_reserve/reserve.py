@@ -24,7 +24,8 @@ Verified, Terminal-Bench 2.1, TBLite 2.0 and, as a near-duplicate check, the TMa
 ``rescreen`` re-runs the screen with the current rules on a previous ``select`` output, reuses its decon marks, and
 replaces each drawn task the new rules exclude with a seeded pick from the same domain.
 
-``package`` writes the sampled tasks as local Harbor task folders, unchanged except for ``TMUX_BAKE``.
+``package`` writes the sampled tasks as local Harbor task folders. Only the Dockerfile changes: ``TMUX_BAKE`` is
+appended, and JSON-form ``COPY`` lines are rewritten to shell form (``shell_form_copy``).
 """
 
 import argparse
@@ -56,6 +57,7 @@ BUILD_FILES = ("environment/Dockerfile", "environment/post_install.sh", "environ
 ORACLE_FIXTURE = "fixtures/oracle"
 # The only change to a task: Terminus-2 installs tmux at agent setup when the image lacks it (no reserve image has
 # it), and the pilot's sandboxes have no general egress. Eval sandboxes install tmux at setup instead.
+JSON_COPY = re.compile(r"^([ \t]*COPY[ \t]+)(\[.*\])[ \t]*$", re.MULTILINE | re.IGNORECASE)
 TMUX_BAKE = "RUN apt-get update && apt-get install -y --no-install-recommends tmux && rm -rf /var/lib/apt/lists/*"
 
 
@@ -439,8 +441,24 @@ def select(output: str, size: int, seed: int) -> None:
     print(json.dumps(summary, indent=1))
 
 
+def shell_form_copy(dockerfile: str) -> str:
+    """Rewrite ``COPY ["src", "dst"]`` as ``COPY src dst``; Docker treats the two the same when no path has a space.
+
+    The Daytona SDK's build-context parser (``daytona.common.image._parse_copy_command``) leaves the comma on each
+    JSON-form source path, so the snapshot build fails with "Path does not exist".
+    """
+
+    def rewrite(match: re.Match) -> str:
+        paths = json.loads(match.group(2))
+        if any(not isinstance(path, str) or re.search(r"\s", path) for path in paths):
+            raise ValueError(f"cannot rewrite COPY with a space in a path: {match.group(0)!r}")
+        return match.group(1) + " ".join(paths)
+
+    return JSON_COPY.sub(rewrite, dockerfile)
+
+
 def package(reserve: zipfile.ZipFile, tasks: list[str], dest: Path) -> dict:
-    """Write the drawn tasks as Harbor task folders with tmux baked into each image (see TMUX_BAKE)."""
+    """Write the drawn tasks as Harbor task folders: tmux baked into each image and shell-form COPY lines."""
     dest.mkdir(parents=True)
     files = task_files(reserve)
     digests = {}
@@ -449,7 +467,7 @@ def package(reserve: zipfile.ZipFile, tasks: list[str], dest: Path) -> dict:
         for rel in sorted(files[task]):
             data = reserve.read(f"{task}/{rel}")
             if rel == "environment/Dockerfile":
-                data = data.rstrip(b"\n") + b"\n" + TMUX_BAKE.encode() + b"\n"
+                data = shell_form_copy(data.decode()).rstrip("\n").encode() + b"\n" + TMUX_BAKE.encode() + b"\n"
             path = dest / task / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
@@ -457,7 +475,7 @@ def package(reserve: zipfile.ZipFile, tasks: list[str], dest: Path) -> dict:
         digests[task] = digest.hexdigest()
     manifest = {
         "reserve": f"{RESERVE[0]}@{RESERVE[1]}",
-        "environment_change": TMUX_BAKE,
+        "environment_changes": [TMUX_BAKE, "JSON-form COPY rewritten to shell form"],
         "tasks": digests,
         "sha256": hashlib.sha256(json.dumps(digests, sort_keys=True).encode()).hexdigest(),
     }

@@ -4,6 +4,7 @@
 import json
 
 from experiments.post_training.tmax_reserve.null_run import ALLOWED_HOST, PROBE_KEYSTROKES, ScriptedModel, summarize
+from experiments.post_training.tmax_reserve.waves import waves
 
 INSTRUCTIONS = {"a": "Count the lines in data.txt.", "b": "Sort the CSV by date."}
 
@@ -45,9 +46,17 @@ def test_summary_flags_egress_beyond_the_allowed_host_and_nonzero_null_rewards()
         {"task": "a", "reward": 0.0, "exception": None},
         {"task": "c", "reward": 1.0, "exception": None},
         {"task": "b", "reward": 1.0, "exception": None},
+        {"task": "d", "reward": None, "exception": "DaytonaError"},
     ]
     summary = summarize(trials, probes, controls={"b"})
     assert summary["egress_violations"] == ["https://github.com/"]
     assert summary["null_tasks_scoring_nonzero"] == ["c"]
+    assert summary["tasks_without_reward"] == ["d"]
     assert summary["control_rewards"] == {"b": 1.0}
     assert summary["probes_with_tmux"] == 1 and summary["probes_incomplete"] == 1
+
+
+def test_waves_cover_every_task_once_within_the_size():
+    tasks = [f"t{i:02d}" for i in range(45)]
+    split = waves(list(reversed(tasks)), 20)
+    assert [len(w) for w in split] == [20, 20, 5] and [t for w in split for t in w] == tasks

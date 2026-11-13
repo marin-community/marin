@@ -13,6 +13,7 @@ from experiments.post_training.tmax_reserve.reserve import (
     package,
     replace_ineligible,
     screen,
+    shell_form_copy,
 )
 
 TOML = '[metadata]\ndomain = "{domain}"\n'
@@ -123,3 +124,12 @@ def test_replace_ineligible_keeps_the_rest_of_the_draw_and_replaces_within_domai
     replacements = replace_ineligible(rows, decon, ["a0", "a1", "b0"], seed=3)
     assert list(replacements) == ["a0"] and replacements["a0"] in {"a2", "a3", "a4"}
     assert replacements == replace_ineligible(rows, decon, ["a0", "a1", "b0"], seed=3)
+
+
+def test_shell_form_copy_rewrites_json_copy_and_leaves_other_lines():
+    dockerfile = (
+        'FROM ubuntu:22.04\nCOPY ["_fixtures/app/a.png", "/app/a.png"]\n\nCOPY post_install.sh /tmp/\nRUN echo "[x]"\n'
+    )
+    assert shell_form_copy(dockerfile) == (
+        'FROM ubuntu:22.04\nCOPY _fixtures/app/a.png /app/a.png\n\nCOPY post_install.sh /tmp/\nRUN echo "[x]"\n'
+    )

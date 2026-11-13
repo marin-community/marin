@@ -12,7 +12,8 @@ runs those commands instead. Checks, written to ``<output>/null-summary.json``:
 - every control task scores 1 (the verifier passes on a known-good state);
 - every probe shows tmux, and only iris.oa.dev answers.
 
-Only Daytona sandboxes run; there is no GPU or model.
+Tasks run in waves (``waves.py``) so the snapshots fit the Daytona quota. Only Daytona sandboxes run; there is no
+GPU or model.
 """
 
 import argparse
@@ -31,7 +32,7 @@ import uvicorn
 import yaml
 from marin.evaluation.eval_env import DAYTONA_RUNTIME_ENV_KEYS
 from marin.evaluation.harbor.agent_context import CANDIDATE_API_KEY_ENV, served_model_info
-from marin.evaluation.harbor.driver_config import HarborRuntimeOverlay, preflight_harbor_configs, run_harbor_driver
+from marin.evaluation.harbor.driver_config import HarborRuntimeOverlay, preflight_harbor_configs
 from marin.inference.dashboard_server import bind_serving_socket
 from marin.inference.types import InferenceBackendState
 from rigging.filesystem.buckets import filesystem_for
@@ -40,6 +41,8 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
+
+from experiments.post_training.tmax_reserve.waves import run_in_waves
 
 logger = logging.getLogger(__name__)
 
@@ -165,25 +168,23 @@ def serve(app: Starlette) -> str:
     return f"http://127.0.0.1:{sock.getsockname()[1]}/v1"
 
 
-def null_policy(policy: Path, dest: Path, dataset: str | None) -> Path:
-    """The pilot policy with one attempt per task, optionally on another dataset; written next to it."""
+def null_policy(policy: Path, dest: Path) -> Path:
+    """The pilot policy with one attempt per task, next to it so its relative dataset path still resolves."""
     config = yaml.safe_load(policy.read_text())
     config["n_attempts"] = 1
-    if dataset:
-        config["datasets"][0]["path"] = dataset
     dest.write_text(yaml.safe_dump(config, sort_keys=False))
     return dest
 
 
-def trial_results(jobs_dir: Path) -> list[dict]:
+def trial_results(jobs_dirs: list[Path]) -> list[dict]:
     rows = []
-    for result in sorted(jobs_dir.glob("*/*/result.json")):
+    for result in sorted(path for jobs_dir in jobs_dirs for path in jobs_dir.glob("*/*/result.json")):
         data = json.loads(result.read_text())
         rewards = (data.get("verifier_result") or {}).get("rewards") or {}
         exc = data.get("exception_info")
         rows.append(
             {
-                "task": data.get("task_name"),
+                "task": data["task_name"].rsplit("/", 1)[-1],  # Harbor prefixes the dataset name
                 "reward": rewards.get("reward"),
                 "exception": exc.get("exception_type") if exc else None,
             }
@@ -206,7 +207,8 @@ def summarize(trials: list[dict], probes: dict[str, list[dict]], controls: set[s
         "trials": len(trials),
         "exceptions": dict(collections.Counter(t["exception"] for t in trials if t["exception"])),
         "null_reward_counts": dict(collections.Counter(str(t["reward"]) for t in null)),
-        "null_tasks_scoring_nonzero": sorted(t["task"] for t in null if t["reward"] not in (0, 0.0)),
+        "null_tasks_scoring_nonzero": sorted(t["task"] for t in null if t["reward"]),
+        "tasks_without_reward": sorted(t["task"] for t in trials if t["reward"] is None),
         "control_rewards": {t["task"]: t["reward"] for t in control},
         "probes": sum(len(runs) for runs in probes.values()),
         "probes_with_tmux": tmux[True],
@@ -219,14 +221,14 @@ def summarize(trials: list[dict], probes: dict[str, list[dict]], controls: set[s
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--policy", type=Path, required=True, help="The pilot Harbor policy (local dataset path).")
-    parser.add_argument("--dataset", help="Dataset path, relative to the policy, in place of the policy's own.")
+    parser.add_argument("--wave-size", type=int, required=True, help="Tasks per wave (see waves.py).")
     parser.add_argument("--controls", type=Path, help="JSON {task name: known-good shell commands}.")
     parser.add_argument("--output", type=Path, required=True, help="New local directory for jobs and the summary.")
     parser.add_argument("--upload", help="Remote directory that receives a copy of --output at the end.")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args.output.mkdir(parents=True)
-    policy = null_policy(args.policy, args.policy.with_name(f"{args.policy.stem}-null.yaml"), args.dataset)
+    policy = null_policy(args.policy, args.policy.with_name(f"{args.policy.stem}-null.yaml"))
     model_kwargs = {"model_info": served_model_info(32768, 4096)}
     (config,) = preflight_harbor_configs([(policy, model_kwargs)], judge_model=None)
     dataset = (policy.parent / yaml.safe_load(policy.read_text())["datasets"][0]["path"]).resolve()
@@ -236,10 +238,9 @@ def main() -> None:
         raise ValueError(f"controls not in the dataset: {sorted(set(controls) - set(instructions))}")
     scripted = ScriptedModel(instructions, controls)
     endpoint = serve(scripted.app())
-    jobs_dir = args.output / "jobs"
     overlay = HarborRuntimeOverlay(
         job_name="tmax-reserve-null",
-        jobs_dir=str(jobs_dir),
+        jobs_dir=str(args.output / "jobs"),
         dataset_path=str(dataset),
         endpoint_url=endpoint,
         served_model=SERVED_MODEL,
@@ -253,9 +254,9 @@ def main() -> None:
     driver_env = {"DAYTONA_API_KEY": require_secret("DAYTONA_API_KEY"), CANDIDATE_API_KEY_ENV: "EMPTY"}
     driver_env.update({key: os.environ[key] for key in DAYTONA_RUNTIME_ENV_KEYS if key in os.environ})
     try:
-        run_harbor_driver(config, overlay, driver_env, lambda: InferenceBackendState.READY)
+        run_in_waves(config, overlay, driver_env, lambda: InferenceBackendState.READY, args.wave_size, args.output)
     finally:
-        trials = trial_results(jobs_dir)
+        trials = trial_results(sorted((args.output / "waves").glob("w*/jobs")))
         summary = summarize(trials, scripted.probes, set(controls))
         (args.output / "null-trials.jsonl").write_text("".join(json.dumps(t) + "\n" for t in trials))
         (args.output / "null-probes.json").write_text(json.dumps(scripted.probes, indent=1))
