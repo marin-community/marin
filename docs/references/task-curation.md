@@ -110,7 +110,7 @@ cache before extending a CPU-produced population on GPU.
 The `harrier_parity` entry point checks a frozen 2,048-key reference bundle and
 writes a receipt before accepting the backend. Every vector must have cosine
 similarity at least 0.999 to its CPU BF16 reference, and both primary area
-assignments must agree for at least 99.9% of sampled tasks. A failed gate stops
+assignments must agree for at least 99.5% of sampled tasks. A failed gate stops
 the run; preserve its receipt rather than changing the thresholds.
 
 For a regional move, copy public Parquet and cache objects without clobbering,

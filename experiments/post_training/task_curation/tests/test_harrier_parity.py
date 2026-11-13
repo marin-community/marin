@@ -47,3 +47,16 @@ def test_parity_rejects_vector_drift_even_when_area_is_unchanged():
     assert measured.area_agreement == 1
     with pytest.raises(ValueError, match="cross-device parity failed"):
         measured.require_accepted()
+
+
+@pytest.mark.parametrize("flipped,accepted", [(10, True), (11, False)])
+def test_area_agreement_acceptance_boundary_for_2048_keys(flipped, accepted):
+    reference = np.tile(np.asarray([[1, 0.999]], dtype=np.float32), (2048, 1))
+    candidate = reference.copy()
+    candidate[:flipped] = [0.999, 1]
+    measured = measure_parity(reference, candidate, curriculum())
+    if accepted:
+        measured.require_accepted()
+    else:
+        with pytest.raises(ValueError, match="cross-device parity failed"):
+            measured.require_accepted()

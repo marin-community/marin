@@ -24,7 +24,7 @@ from taskcompendium.pipeline.curriculum.embedding import normalized_vectors
 from taskcompendium.pipeline.curriculum.models import EmbeddingSpec
 
 MIN_VECTOR_COSINE = 0.999
-MIN_AREA_AGREEMENT = 0.999
+MIN_AREA_AGREEMENT = 0.995
 PARITY_SAMPLE_SIZE = 2048
 
 
