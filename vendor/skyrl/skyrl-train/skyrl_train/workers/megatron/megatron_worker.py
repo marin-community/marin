@@ -168,6 +168,8 @@ class MegatronWorker:
 
         for k, v in transformer_config_kwargs.items():
             setattr(provider, k, v)
+        if hf_config.model_type == GRUG_MOE_MODEL_TYPE:
+            provider.grug_batch_invariant_experts = self.cfg.trainer.algorithm.batch_invariant
         provider.finalize()
 
         self.provider = provider

@@ -4,7 +4,7 @@
 ordinary source builds and does not rewrite wheel contents after compilation.
 Runtime installation consumes published wheels; it does not invoke this script.
 The [SkyRL lockfile](../../uv.lock) records their URLs and SHA-256 hashes.
-The [TE 2.21 proposal release](https://github.com/marin-community/marin/releases/tag/skyrl-native-te221-cu132torch2141-20261113-0821e3af)
+The [TE 2.21 native release](https://github.com/marin-community/marin/releases/tag/skyrl-native-te221-cu132torch2141-20261113-0821e3af)
 contains the qualified wheels and their original build records.
 
 | Target | Source | Torch / CUDA toolkit | Linux architectures |

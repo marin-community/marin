@@ -480,9 +480,10 @@ class GrugSharedExperts(nn.Module):
             expert.backward_dw()
 
 
-# TE 2.19 and 2.21 BF16 FC1 change fixed local rows when peer expert row counts change.
-# A 1 KiB workspace passed the repro but was slower and needed a global allocator patch.
-# Revisit when native TE passes Grug's peer-batch parity and trainer checks without that cost.
+# TE 2.21 BF16 FC1 can change a fixed row when its expert's batch size changes.
+# Use this path only for explicitly requested batch invariance. Ordinary RL
+# checks scoring versus training at its existing tolerance instead of exact zero.
+# Remove once native grouped BF16 passes the explicit-BI peer-batch test.
 class GrugColumnParallelGroupedLinear(TEColumnParallelGroupedLinear):
     """Keep Blackwell BF16 expert rows independent of peer-rank token counts."""
 
@@ -569,7 +570,8 @@ def grug_layer_spec(config: TransformerConfig) -> ModuleSpec:
 
     backend = TESpecProvider()
     moe = get_moe_module_spec_for_backend(backend, num_experts=config.num_moe_experts, moe_grouped_gemm=True)
-    moe.keywords["submodules"].experts.keywords["submodules"].linear_fc1 = GrugColumnParallelGroupedLinear
+    if config.grug_batch_invariant_experts:
+        moe.keywords["submodules"].experts.keywords["submodules"].linear_fc1 = GrugColumnParallelGroupedLinear
     moe.keywords["submodules"].router = GrugTopKRouter
     if config.grug_hero:
         shared = moe.keywords["submodules"].shared_experts
