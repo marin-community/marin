@@ -368,3 +368,9 @@ CP32/EP8 mesh on 256 H100s. Adam and the pinned historical mixture remain unchan
 The archive includes the population truncation/padding census and an exact-loader
 replay of the committed SFT sample, with per-source counts, token hashes, loss
 coverage and estimates of packing efficiency.
+
+A pinned HF export can be supplied as `adopted_sft` with `kind: hf_export`.
+The verifier checks the complete object inventory and SHA-256 values, model and
+expert geometry, tokenizer and EOS settings. The RL graph consumes that verified
+URI directly, without native checkpoint restoration, SFT or another export.
+HF-only adoption stops at `--through rl`; the archive requires native SFT evidence.

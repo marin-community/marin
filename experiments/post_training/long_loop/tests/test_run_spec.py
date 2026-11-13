@@ -370,3 +370,21 @@ def test_smoke_cannot_bypass_allocation_controls_by_scaling_eval(tmp_path):
     )
     assert resolved["gpu_peaks"]["evaluation"] == 16
     assert resolved["experimental_controls"]["changes"] == [{"control": "gpus/evaluation", "default": 136, "actual": 16}]
+
+
+def test_hf_adoption_is_the_rl_model_without_native_restore_or_export(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://test/long-loop")
+    resolved = resolve_spec(SPEC, smoke=True)
+    resolved["adopted_sft"] = yaml.safe_load((SPEC.parent / "adopted-sft-20261005.yaml").read_text())
+    terminal = build_spec_graph(resolved, "2026.11.13.43603", through="rl")
+    names = {step.name for step in graph_handles([terminal])}
+    assert f"{resolved['name']}/adopt-sft" in names
+    assert not any(name.endswith(("/sft", "/sft-handoff", "/base")) for name in names)
+    context = StepContext.for_run(
+        terminal.path(), "s3://test/long-loop", runtime_args=terminal.runtime_args, deps=terminal.deps
+    )
+    document = yaml.safe_load(terminal.build_config(context).launch_config_yaml)
+    assert document["inputs"]["model"]["uri"] == resolved["adopted_sft"]["uri"]
+    assert len(document["inputs"]["train_data"]) == 2
+    with pytest.raises(ValueError, match="no native SFT run evidence"):
+        build_spec_graph(resolved, "2026.11.13.43603", through="archive")
