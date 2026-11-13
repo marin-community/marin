@@ -67,8 +67,9 @@ uv run python -m experiments.post_training.mochi_rl.launch "${COMMON[@]}" \
 ```
 
 Inspect the model/data locators, role allocation, context budget and checkpoint
-paths, then add `--run` to submit the same graph. A new output version starts
-fresh MuonH state. Repeating an interrupted run with the same version recovers
+paths, then add `--run` to submit the same graph. The checkpoint callback saves
+at training end, so this smoke produces `global_step_2` when it completes. A new
+output version starts fresh MuonH state. Repeating an interrupted run with the same version recovers
 its latest completed native checkpoint when one exists.
 
 To extend a run or recover into a new output version, set `NATIVE` to the exact
