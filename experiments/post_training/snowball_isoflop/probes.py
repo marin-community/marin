@@ -143,7 +143,16 @@ def build_probe_pod(probe: Probe) -> TrainLmOnPodConfig:
         model_config=replace(
             spec.model_config, moe_implementation=probe.layout.dispatch, moe_capacity_factor=float(probe.layout.expert)
         ),
-        trainer_config=replace(spec.trainer_config, offload_opt_state=probe.layout.offload, record_device_memory=True),
+        trainer_config=replace(
+            spec.trainer_config,
+            offload_opt_state=probe.layout.offload,
+            record_device_memory=True,
+            max_eval_batches=(
+                0
+                if probe.phase.startswith("B") or probe.phase == "C-throughput"
+                else spec.trainer_config.max_eval_batches
+            ),
+        ),
         snowball_sft=replace(spec.snowball_sft, record_dispatch_counts=probe.phase.startswith("C")),
         mesh=probe.layout.mesh(),
         batch_size=probe.batch_size,

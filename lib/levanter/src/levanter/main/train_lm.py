@@ -351,7 +351,7 @@ def main(config: TrainLmConfig):
 
         # Get the tagged evaluation datasets
         evaluation_data = config.evaluation_data or config.data
-        tagged_eval_datasets = evaluation_data.tagged_eval_sets(Pos)
+        tagged_eval_datasets = [] if config.trainer.max_eval_batches == 0 else evaluation_data.tagged_eval_sets(Pos)
 
         adapter_key = jrandom.fold_in(model_key, ord("a"))
         load_source_model = functools.partial(

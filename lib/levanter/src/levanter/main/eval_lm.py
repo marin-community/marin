@@ -26,6 +26,7 @@ from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.models.loss import next_token_ids
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
+from levanter.models.snowball_sft import SnowballSftConfig, reseed_snowball_head
 from levanter.trainer import TrainerConfig
 from levanter.utils.tree_utils import inference_mode
 
@@ -44,6 +45,7 @@ class EvalLmConfig:
     model: LmConfig = field(default_factory=LlamaConfig)
     audit_token_ids: tuple[int, ...] = ()
     result_path: str | None = None
+    snowball_sft: SnowballSftConfig | None = None
 
     eval_on_train: bool = False
 
@@ -149,6 +151,8 @@ def main(config: EvalLmConfig):
         else:
             assert False, "Should not get here"
 
+        if config.snowball_sft is not None:
+            model = reseed_snowball_head(model, config.snowball_sft)
         log_dict = eval_model(evaluator, model, prefix="eval")
         if config.result_path is not None:
             audit = evaluation_input_audit(evaluator, config.audit_token_ids)

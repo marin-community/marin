@@ -4,17 +4,15 @@
 """Inspect or execute approved native SFTSpec cells inside an Iris CPU coordinator."""
 
 import argparse
-import contextvars
 import json
 import logging
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict
 
 import draccus
-from iris.client.client import iris_ctx
+from marin.training.training import TrainLmOnPodConfig
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.snowball_isoflop.budget import allocation_ledger
+from experiments.post_training.snowball_isoflop.budget import budgeted_map
 from experiments.post_training.snowball_isoflop.config import (
     PREFIX,
     VERSION,
@@ -29,7 +27,10 @@ logger = logging.getLogger(__name__)
 
 
 def run_cell(cell: Cell) -> str:
-    pod = build_pod(cell)
+    return run_training_pod(cell, build_pod(cell))
+
+
+def run_training_pod(cell: Cell, pod: TrainLmOnPodConfig) -> str:
     logger.info("Starting native SFTSpec cell %s at %s", cell.name, pod.output_path)
     build_spec(cell).model.run(pod)
     metadata = json.loads(
@@ -48,6 +49,7 @@ def main():
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--calibration-report")
     parser.add_argument("--max-concurrent", type=int, choices=range(1, 9), default=8)
+    parser.add_argument("--initial-concurrent", type=int, choices=range(1, 9))
     parser.add_argument("--h100-hour-limit", type=float, required=False)
     args = parser.parse_args()
     cells = calibration_cells() if args.phase == "calibration" else primary_cells()
@@ -81,38 +83,12 @@ def main():
         if gate is None or not StoragePath(gate.reference_path).exists():
             raise ValueError(f"Missing upstream reference evaluation for d{cell.size}; no training jobs submitted")
     manager_root = StoragePath(f"{PREFIX}/{VERSION}/manager-{args.phase}-{args.size or 'all'}")
+    if args.initial_concurrent is not None:
+        if args.initial_concurrent > args.max_concurrent:
+            parser.error("Initial concurrency exceeds the maximum")
+        (manager_root / "concurrency.json").write_text(json.dumps({"max_concurrent": args.initial_concurrent}))
     (manager_root / "submitted-cells.json").write_text(json.dumps([asdict(c) for c in cells], indent=2))
-    context = iris_ctx()
-    if context.client is None or context.job_id is None:
-        raise RuntimeError("A budgeted phase must run inside an Iris coordinator")
-    allocation_ledger(context.client, context.job_id)
-    concurrency = min(args.max_concurrent, len(cells))
-    # Context propagation keeps the enclosing Iris/Fray client in each coordinator thread.
-    with ThreadPoolExecutor(max_workers=concurrency) as executor:
-        pending = iter(cells)
-        futures = {}
-        try:
-            for _ in range(concurrency):
-                cell = next(pending)
-                futures[executor.submit(contextvars.copy_context().run, run_cell, cell)] = cell
-            while futures:
-                completed, _ = wait(futures, timeout=30, return_when=FIRST_COMPLETED)
-                ledger = allocation_ledger(context.client, context.job_id)
-                (manager_root / "allocation-ledger.json").write_text(json.dumps(ledger, indent=2))
-                # Reserve one minute of maximum allocation for polling and cancellation.
-                if ledger["h100_hours"] + concurrency * 8 / 60 >= args.h100_hour_limit:
-                    raise RuntimeError("Approved experiment H100-hour limit reached")
-                for future in completed:
-                    cell = futures.pop(future)
-                    output = future.result()
-                    (manager_root / f"completed-{cell.name}.json").write_text(json.dumps({"output": output}))
-                    cell = next(pending, None)
-                    if cell is not None:
-                        futures[executor.submit(contextvars.copy_context().run, run_cell, cell)] = cell
-        except Exception:
-            logger.exception("Stopping this experiment tree after a cell or budget-monitor failure")
-            context.client.job(context.job_id).cancel()
-            raise
+    budgeted_map({cell.name: cell for cell in cells}, run_cell, manager_root, args.h100_hour_limit, args.max_concurrent)
 
 
 if __name__ == "__main__":

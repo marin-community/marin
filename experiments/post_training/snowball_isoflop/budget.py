@@ -3,10 +3,19 @@
 
 """Account for allocated GPU time within one approved experiment job tree."""
 
-from iris.client.client import IrisClient
+import contextvars
+import json
+import logging
+from collections.abc import Callable, Mapping
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+
+from iris.client.client import IrisClient, iris_ctx
 from iris.client.workload import DeviceKind, TaskStatus
 from iris.cluster.types import JobName
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Timestamp
+
+logger = logging.getLogger(__name__)
 
 
 def allocated_seconds(task: TaskStatus, now: Timestamp) -> float:
@@ -53,3 +62,52 @@ def allocation_ledger(client: IrisClient, root: JobName) -> dict:
         "h100_hours": sum(row["h100_hours"] for row in rows),
         "tasks": rows,
     }
+
+
+def budgeted_map[T, R](
+    tasks: Mapping[str, T],
+    operation: Callable[[T], R],
+    manager_root: StoragePath,
+    h100_hour_limit: float,
+    max_concurrent: int,
+) -> dict[str, R]:
+    """Run named tasks under one live cap, stopping this tree on any failure."""
+    context = iris_ctx()
+    if context.client is None or context.job_id is None:
+        raise RuntimeError("A budgeted phase must run inside an Iris coordinator")
+    allocation_ledger(context.client, context.job_id)
+    concurrency = min(max_concurrent, len(tasks))
+    results = {}
+    control = manager_root / "concurrency.json"
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        pending = iter(tasks.items())
+        futures = {}
+        exhausted = False
+        try:
+            while futures or not exhausted:
+                desired = json.loads(control.read_text())["max_concurrent"] if control.exists() else concurrency
+                if not isinstance(desired, int) or not 1 <= desired <= concurrency:
+                    raise ValueError("Concurrency control is outside this coordinator's approved bound")
+                while len(futures) < desired and not exhausted:
+                    next_task = next(pending, None)
+                    if next_task is None:
+                        exhausted = True
+                        break
+                    name, task = next_task
+                    futures[executor.submit(contextvars.copy_context().run, operation, task)] = name
+                if not futures:
+                    break
+                completed, _ = wait(futures, timeout=30, return_when=FIRST_COMPLETED)
+                ledger = allocation_ledger(context.client, context.job_id)
+                (manager_root / "allocation-ledger.json").write_text(json.dumps(ledger, indent=2))
+                if ledger["h100_hours"] + concurrency * 8 / 60 >= h100_hour_limit:
+                    raise RuntimeError("Approved experiment H100-hour limit reached")
+                for future in completed:
+                    name = futures.pop(future)
+                    results[name] = future.result()
+                    (manager_root / f"completed-{name}.json").write_text(json.dumps({"result": results[name]}))
+        except Exception:
+            logger.exception("Stopping this experiment tree after a task or budget-monitor failure")
+            context.client.job(context.job_id).cancel()
+            raise
+    return results

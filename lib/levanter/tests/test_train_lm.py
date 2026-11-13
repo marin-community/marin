@@ -172,7 +172,8 @@ def test_restore_lm_model_from_partial_checkpoint_recovers_base_model():
     assert_trees_all_close(_array_leaves(restored_model), _array_leaves(trained_model))
 
 
-def test_train_lm_direct_dataset():
+@pytest.mark.parametrize("max_eval_batches", [0, 1])
+def test_train_lm_direct_dataset(max_eval_batches):
     with tempfile.TemporaryDirectory() as tmpdir:
         vocab_size = 128
         seq_len = 64
@@ -182,7 +183,7 @@ def test_train_lm_direct_dataset():
             data.append(GrugLmExample.causal(tokens))
         dataset = ListAsyncDataset(data)
 
-        component = DirectDatasetComponent(datasets={"train": dataset})
+        component = DirectDatasetComponent(datasets={"train": dataset, "validation": dataset})
         data_config = LmDataConfig(components={"direct": component}, vocab_size=vocab_size, tokenizer="passthrough")
 
         config = train_lm.TrainLmConfig(
@@ -198,7 +199,7 @@ def test_train_lm_direct_dataset():
             trainer=train_lm.TrainerConfig(
                 num_train_steps=2,
                 train_batch_size=len(jax.devices()),
-                max_eval_batches=1,
+                max_eval_batches=max_eval_batches,
                 tracker=JsonFileTrackerConfig(output_path=tmpdir),
                 checkpointer=CheckpointerConfig(base_path=os.path.join(tmpdir, "checkpoints")),
                 require_accelerator=False,
@@ -206,7 +207,11 @@ def test_train_lm_direct_dataset():
             ),
         )
         train_lm.main(config)
-        _assert_training_recorded(tmpdir)
+        metrics = _assert_training_recorded(tmpdir)
+        if max_eval_batches == 0:
+            assert "eval/loss" not in metrics
+        else:
+            assert math.isfinite(metrics["eval/loss"])
 
 
 def _frozen_lm_config(tmpdir, data_config, *, out, seed, init_from=None, ckpt_base=None):

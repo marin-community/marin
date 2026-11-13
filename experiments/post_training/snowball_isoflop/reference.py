@@ -4,10 +4,10 @@
 """Evaluate pinned pretrained bases through Levanter's independent eval entrypoint."""
 
 import argparse
-import contextvars
 import json
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from enum import StrEnum
+from functools import partial
 
 import draccus
 from fray.current_client import current_client
@@ -22,6 +22,7 @@ from marin.training.training import resolve_training_env
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
+from experiments.post_training.snowball_isoflop.budget import budgeted_map
 from experiments.post_training.snowball_isoflop.config import (
     PREFIX,
     SEQ_LEN,
@@ -38,14 +39,21 @@ from experiments.post_training.snowball_isoflop.config import (
 )
 
 
-def reference_config(size: int) -> EvalLmConfig:
+class ReferenceVariant(StrEnum):
+    RAW_RING = "raw-ring"
+    RAW_SONIC = "raw-sonic"
+    RESEEDED_SONIC = "reseeded-sonic"
+
+
+def reference_config(size: int, variant: ReferenceVariant = ReferenceVariant.RAW_RING) -> EvalLmConfig:
     cell = Cell(size, Mask.FULL, 0, 20, (20,), "reference")
     base = build_pod(cell).train_config
-    root = f"{PREFIX}/{VERSION}/reference-d{size}"
+    suffix = "" if variant == ReferenceVariant.RAW_RING else f"-{variant}"
+    root = f"{PREFIX}/{VERSION}/reference-d{size}{suffix}"
     receipt = model_receipt(size)
     trainer = replace(
         base.trainer,
-        id=f"{VERSION}-reference-d{size}",
+        id=f"{VERSION}-reference-d{size}{suffix}",
         max_eval_batches=1,
         tracker=JsonFileTrackerConfig(output_path=root),
     )
@@ -54,19 +62,23 @@ def reference_config(size: int) -> EvalLmConfig:
         trainer=trainer,
         data=reference_data_config(),
         max_eval_length=SEQ_LEN,
-        model=replace(base.model, moe_implementation="ring_gather_combine"),
+        model=replace(
+            base.model, moe_implementation="ring_gather_combine" if variant == ReferenceVariant.RAW_RING else "sonic"
+        ),
+        snowball_sft=base.snowball_sft if variant == ReferenceVariant.RESEEDED_SONIC else None,
         audit_token_ids=SPECIAL_IDS,
         result_path=f"{root}/result.json",
     )
 
 
-def evaluate_reference(size: int) -> None:
-    eval_main(reference_config(size))
+def evaluate_reference(size: int, variant: ReferenceVariant) -> None:
+    eval_main(reference_config(size, variant))
 
 
-def submit_reference(size: int) -> None:
-    config = reference_config(size)
-    root = StoragePath(f"{PREFIX}/{VERSION}/reference-d{size}")
+def submit_reference(size: int, variant: ReferenceVariant) -> None:
+    config = reference_config(size, variant)
+    assert config.result_path is not None
+    root = StoragePath(config.result_path).parent
     if (root / "result.json").exists():
         raise FileExistsError(f"Reference result already exists for d{size}")
     (root / "consumed-config.json").write_text(json.dumps(draccus.encode(config), indent=2))
@@ -79,8 +91,8 @@ def submit_reference(size: int) -> None:
     )
     job = current_client().submit(
         JobRequest(
-            name=f"reference-d{size}-{VERSION}",
-            entrypoint=Entrypoint.from_callable(evaluate_reference, args=[size]),
+            name=config.trainer.id,
+            entrypoint=Entrypoint.from_callable(evaluate_reference, args=[size, variant]),
             resources=resources(),
             environment=create_environment(extras=extras_for_resources(resources()), env_vars=environment),
             timeout=Duration.from_seconds(TASK_TIMEOUT),
@@ -97,15 +109,25 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--size", type=int, choices=SIZES)
+    parser.add_argument(
+        "--variant", type=ReferenceVariant, choices=tuple(ReferenceVariant), default=ReferenceVariant.RAW_RING
+    )
+    parser.add_argument("--h100-hour-limit", type=float, default=24)
     args = parser.parse_args()
     sizes = (args.size,) if args.size is not None else SIZES
     if not args.run:
-        print(json.dumps({size: draccus.encode(reference_config(size)) for size in sizes}))
+        print(json.dumps({size: draccus.encode(reference_config(size, args.variant)) for size in sizes}))
         return
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = [executor.submit(contextvars.copy_context().run, submit_reference, size) for size in sizes]
-        for future in futures:
-            future.result()
+    if not 0 < args.h100_hour_limit <= 24:
+        parser.error("References require a cap within the approved 24-H100-hour envelope")
+    root = StoragePath(f"{PREFIX}/{VERSION}/reference-manager-{args.variant}-{args.size or 'all'}")
+    budgeted_map(
+        {str(size): size for size in sizes},
+        partial(submit_reference, variant=args.variant),
+        root,
+        args.h100_hour_limit,
+        3,
+    )
 
 
 if __name__ == "__main__":
