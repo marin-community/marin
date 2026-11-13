@@ -1147,6 +1147,85 @@ def test_batched_xla_backward_b_tiled_from_lse_matches_reference_gradients():
     np.testing.assert_allclose(actual_w, expected_w, rtol=1e-5, atol=1e-5)
 
 
+@pytest.mark.parametrize("vocab", [12, 11, 3])
+def test_batched_xla_backward_streaming_from_lse_matches_reference_gradients(vocab):
+    """Whole blocks only (12), whole blocks plus a partial last block (11), and one partial block (3)."""
+    if jax.default_backend() == "tpu":
+        pytest.skip("batched_xla custom backward helper is covered by CPU/GPU precision paths")
+
+    precision = jax.lax.Precision.HIGHEST
+    key_x, key_w, key_y, key_loss, key_lse = jax.random.split(jax.random.PRNGKey(44), 5)
+    x = jax.random.normal(key_x, (7, 5), dtype=jnp.float32)
+    w = jax.random.normal(key_w, (5, vocab), dtype=jnp.float32)
+    y = jax.random.randint(key_y, (7,), 0, vocab, dtype=jnp.int32)
+    g_loss = jax.random.normal(key_loss, (7,), dtype=jnp.float32)
+    g_lse = jax.random.normal(key_lse, (7,), dtype=jnp.float32)
+
+    _, lse = linear_softmax_cross_entropy_loss_reference(
+        x, y, w, dtype=jnp.float32, logit_soft_cap=1.7, precision=precision
+    )
+
+    def reference_cotangent_loss(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        loss, logsumexp = linear_softmax_cross_entropy_loss_reference(
+            x_raw, y, w_raw, dtype=jnp.float32, logit_soft_cap=1.7, precision=precision
+        )
+        return jnp.sum(loss * g_loss + logsumexp * g_lse)
+
+    expected_x, expected_w = jax.grad(reference_cotangent_loss, argnums=(0, 1))(x, w)
+    actual_x, actual_w = batched_xla._backward_streaming_from_lse(
+        x,
+        y,
+        w,
+        lse,
+        g_loss,
+        g_lse,
+        v_block_size=4,
+        logit_soft_cap=1.7,
+        precision=precision,
+    )
+
+    np.testing.assert_allclose(actual_x, expected_x, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(actual_w, expected_w, rtol=1e-5, atol=1e-5)
+
+
+def test_batched_xla_streaming_keeps_a_float32_weight_grad_with_bfloat16_activations():
+    """A float32 weight gets a float32 weight gradient even when the activations are bf16."""
+    if jax.default_backend() == "tpu":
+        pytest.skip("batched_xla custom backward helper is covered by CPU/GPU precision paths")
+
+    batch, hidden, vocab = 64, 32, 300
+    kx, kw, kl, kg = jax.random.split(jax.random.PRNGKey(47), 4)
+    x = jax.random.normal(kx, (batch, hidden), jnp.float32).astype(jnp.bfloat16)
+    w = 0.2 * jax.random.normal(kw, (hidden, vocab), jnp.float32)
+    labels = jax.random.randint(kl, (batch,), 0, vocab)
+    g_loss = jax.random.uniform(kg, (batch,), jnp.float32)
+    g_lse = 0.1 * g_loss
+    x_f32 = x.astype(jnp.float32)
+    logits = jnp.dot(x_f32, w, precision="highest")
+
+    _, grad_w = batched_xla._backward_streaming_from_lse(
+        x,
+        labels,
+        w,
+        jax.nn.logsumexp(logits, axis=-1),
+        g_loss,
+        g_lse,
+        v_block_size=128,
+        logit_soft_cap=None,
+        precision=None,
+    )
+
+    # float32 reference for the kernel's arithmetic: only the softmax gradient is rounded to bf16, for the GEMM.
+    dlogits = jax.nn.softmax(logits, axis=-1) * (g_loss + g_lse)[:, None]
+    dlogits = (dlogits - jax.nn.one_hot(labels, vocab) * g_loss[:, None]).astype(jnp.bfloat16).astype(jnp.float32)
+    expected = np.asarray(jnp.dot(x_f32.T, dlogits, precision="highest"))
+
+    assert grad_w.dtype == jnp.float32
+    # A gradient rounded to bf16 anywhere on the way sits near bf16's 1.5e-3 here; the float32 one near 4e-6.
+    relative_rms_error = np.sqrt(np.mean((np.asarray(grad_w) - expected) ** 2) / np.mean(expected**2))
+    assert relative_rms_error < 1e-4
+
+
 def test_batched_xla_h100_full_vocab_policy_selects_b_tiled_path(monkeypatch: pytest.MonkeyPatch):
     x = jax.ShapeDtypeStruct((8192, 16), jnp.bfloat16)
     w = jax.ShapeDtypeStruct((16, 65536), jnp.bfloat16)
