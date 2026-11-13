@@ -8,14 +8,18 @@ import json
 import socket
 import threading
 import time
+from typing import ClassVar
 
 import fsspec
 import pytest
+import rigging.filesystem.cross_region as rfs
 import rigging.filesystem.s3_compat as s3_compat
 from aiobotocore.config import AioConfig
 from botocore.awsrequest import AWSRequest
 from botocore.exceptions import ReadTimeoutError
-from rigging.filesystem.cross_region import CrossRegionGuardedFS
+from fsspec.implementations.memory import MemoryFileSystem
+from fsspec.registry import _registry as _fsspec_implementations
+from rigging.filesystem.cross_region import CrossRegionGuardedFS, TransferBudget, TransferBudgetExceeded
 from rigging.filesystem.factory import (
     _s3_filesystem_options,
     filesystem,
@@ -75,14 +79,34 @@ def test_url_to_fs_does_not_wrap_local(tmp_path):
     assert not isinstance(fs, CrossRegionGuardedFS)
 
 
-def test_unbudgeted_url_to_fs_skips_only_the_transfer_guard():
-    guarded, path = url_to_fs("gs://some-bucket/state", token="anon")
-    unbudgeted, unbudgeted_path = unbudgeted_url_to_fs("gs://some-bucket/state", token="anon")
+class _FakeGcsFileSystem(MemoryFileSystem):
+    """In-memory object store that rigging classifies as GCS."""
 
-    assert isinstance(guarded, CrossRegionGuardedFS)
-    assert not isinstance(unbudgeted, CrossRegionGuardedFS)
-    assert unbudgeted.protocol == guarded._fs.protocol
-    assert unbudgeted_path == path
+    protocol = ("gs", "gcs")
+    store: ClassVar[dict] = {}
+    pseudo_dirs: ClassVar[list] = [""]
+
+
+@pytest.fixture()
+def exhausted_cross_region_budget(monkeypatch):
+    """A GCS bucket in another region than the VM, with no cross-region budget left."""
+    monkeypatch.setitem(_fsspec_implementations, "gs", _FakeGcsFileSystem)
+    monkeypatch.setattr(_FakeGcsFileSystem, "store", {})
+    monkeypatch.setattr(rfs, "cached_marin_region", lambda: "us-central1")
+    monkeypatch.setattr(rfs, "_cached_bucket_location", lambda bucket: "us-central2")
+    monkeypatch.setattr(rfs, "_global_transfer_budget", TransferBudget(limit_bytes=0))
+    fs, path = fsspec.core.url_to_fs("gs://remote-bucket/state/blob")
+    fs.pipe_file(path, b"bundle bytes")
+    return "gs://remote-bucket/state/blob"
+
+
+def test_unbudgeted_url_to_fs_reads_past_an_exhausted_budget(exhausted_cross_region_budget):
+    guarded, path = url_to_fs(exhausted_cross_region_budget)
+    with pytest.raises(TransferBudgetExceeded):
+        guarded.cat_file(path)
+
+    unbudgeted, path = unbudgeted_url_to_fs(exhausted_cross_region_budget)
+    assert unbudgeted.cat_file(path) == b"bundle bytes"
 
 
 def test_open_url_local_file(tmp_path):

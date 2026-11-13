@@ -26,6 +26,7 @@ from typing import TypeVar
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from rigging import telemetry
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.bundle import BundleStore
@@ -73,6 +74,11 @@ _PEER_RPC_ERRORS = (ConnectError, ConnectionError, OSError)
 # auth failures are excluded — a federation bearer is minted per request, so
 # UNAUTHENTICATED is a key/clock/rollout transient that a later attempt can clear.
 _TERMINAL_HANDOFF_CODES = frozenset({Code.ALREADY_EXISTS, Code.PERMISSION_DENIED, Code.INVALID_ARGUMENT})
+
+# Failures the background loops log and retry rather than raise. A rising count for one
+# peer means its handoffs or sync are failing on every pass.
+_LOOP_STEP_FAILURES = telemetry.counter("iris_federation_loop_step_failures", unit="{failure}")
+_HANDOFF_DELIVERY_FAILURES = telemetry.counter("iris_federation_handoff_delivery_failures", unit="{failure}")
 
 
 def _backend_availability(peer_id: str, backend: controller_pb2.Controller.BackendSummary) -> BackendAvailability:
@@ -357,25 +363,32 @@ class FederationManager:
             raise ValueError(f"unknown federation peer {peer_id!r}")
         return peer
 
-    def _run_loop(self, stop_event: threading.Event, step: Callable[[], None], interval: float) -> None:
+    def _run_loop(
+        self, stop_event: threading.Event, step: Callable[[], None], interval: float, *, loop: str, peer_id: str
+    ) -> None:
         """Run ``step`` every ``interval`` seconds until ``stop_event`` is set."""
         while not stop_event.is_set():
             try:
                 step()
-            except Exception:
+            except Exception as exc:
                 # A loop that exits is never restarted: its peer's handoffs or heartbeats
                 # would silently stop for the life of the process. Log and retry instead.
-                logger.exception("Federation loop step failed; retrying in %.0fs", interval)
+                logger.exception("Federation %s loop for peer %s failed; retrying in %.0fs", loop, peer_id, interval)
+                _LOOP_STEP_FAILURES.add(attributes={"loop": loop, "peer": peer_id, "error_type": type(exc).__name__})
             stop_event.wait(timeout=interval)
 
     def _run_peer_heartbeat_loop(self, stop_event: threading.Event, peer: FederationPeer) -> None:
-        self._run_loop(stop_event, peer.probe, self._heartbeat_interval.to_seconds())
+        self._run_loop(
+            stop_event, peer.probe, self._heartbeat_interval.to_seconds(), loop="heartbeat", peer_id=peer.peer_id
+        )
 
     def _run_peer_sync_loop(self, stop_event: threading.Event, peer: FederationPeer) -> None:
         self._run_loop(
             stop_event,
             lambda: self._sync_peer_once(peer),
             self._sync_interval.to_seconds(),
+            loop="sync",
+            peer_id=peer.peer_id,
         )
 
     def sync_once(self) -> None:
@@ -440,11 +453,12 @@ class FederationManager:
                 reason=f"Peer {spec.peer_id} rejected the handoff: {exc.message}",
             )
             return
-        except Exception:
+        except Exception as exc:
             # Anything else, e.g. a blob this cluster's bundle store could not read back,
             # may succeed on a later attempt. Keep it pending and deliver the rest of the
             # batch rather than failing the whole sync pass.
             logger.exception("Handoff of %s to peer %s failed (will retry)", spec.local_job_id, spec.peer_id)
+            _HANDOFF_DELIVERY_FAILURES.add(attributes={"peer": spec.peer_id, "error_type": type(exc).__name__})
             return
         self._store.mark_handed_off(spec.local_job_id)
 
