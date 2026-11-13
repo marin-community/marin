@@ -128,7 +128,7 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     # The factory probes for a working bubblewrap; CI hosts cannot build sandboxes.
     monkeypatch.setattr(
         "shellbox.backends.local.machine._working_bwrap",
-        lambda candidates, system_directories, mounts: Path("/usr/bin/bwrap"),
+        lambda candidates, system_directories, mounts, environment: Path("/usr/bin/bwrap"),
     )
     environment = Environment(
         requirements=REQUIREMENTS,

@@ -19,7 +19,6 @@ import re
 import resource
 import shutil
 import signal
-import subprocess
 import sys
 import tarfile
 import tempfile
@@ -31,7 +30,7 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import cast
 
-from shellbox.backends.local import launch
+from shellbox.backends.local import launch, nix
 from shellbox.backends.local.cgroup import MachineCgroup, check_cgroup_parent, delegated_cgroup_parent
 from shellbox.backends.local.images import PreparedLocalImage, prepare_local_image
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
@@ -60,9 +59,7 @@ from shellbox.task import Task, TaskSpec, single_container_task
 
 logger = logging.getLogger(__name__)
 
-NIX_SYSTEM_PROFILE = Path("/run/current-system/sw")
-NIX_SYSTEM_PATH_SUFFIX = f":{NIX_SYSTEM_PROFILE}/bin" if NIX_SYSTEM_PROFILE.is_dir() else ""
-DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" + NIX_SYSTEM_PATH_SUFFIX
+DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # Resolve the program through sh, as the container backends do: a missing or unexecutable program
 # or working directory becomes a failed command (127 or 126 for the program) rather than an exception.
 RUN_SCRIPT = 'cd "$1" || exit; shift; exec "$@"'
@@ -114,7 +111,7 @@ SHARED_MEMORY = "/dev/shm"
 """Python's multiprocessing creates its semaphores here."""
 SCRATCH = PurePosixPath("/tmp")
 HOME = PurePosixPath("/home/shellbox")
-CONTROL_ENVIRONMENT = {"PATH": "/usr/bin:/bin" + NIX_SYSTEM_PATH_SUFFIX, "HOME": str(HOME), "LANG": "C.UTF-8"}
+CONTROL_ENVIRONMENT = {"PATH": "/usr/bin:/bin", "HOME": str(HOME), "LANG": "C.UTF-8"}
 """The environment of the backend's own commands, such as transfers; ``MachineSpec.env`` does not reach them."""
 ROOT_MODE = 0o755
 """Lets a command that runs as another user traverse the machine's root directory."""
@@ -279,32 +276,9 @@ def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
     return (bwrap_path(), *(() if system is None else (Path(system),)))
 
 
-def _nix_system_mounts() -> tuple[Mount, ...]:
-    """Expose NixOS programs, ELF loaders and their store closures read-only."""
-    if not NIX_SYSTEM_PROFILE.is_dir():
-        return ()
-    profile = NIX_SYSTEM_PROFILE.resolve()
-    roots = [profile]
-    # Managed executables use FHS loaders that may sit outside the program profile's closure.
-    for directory in ("/lib", "/lib32", "/lib64", "/libx32"):
-        for loader in Path(directory).glob("ld*.so*"):
-            target = loader.resolve()
-            if target.is_relative_to("/nix/store"):
-                roots.append(target)
-    closure = subprocess.run(
-        [str(profile / "bin/nix-store"), "--query", "--requisites", *map(str, roots)],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=PROBE_TIMEOUT,
-    ).stdout.splitlines()
-    return (
-        *(Mount(Path(path), PurePosixPath(path)) for path in closure),
-        Mount(profile, PurePosixPath(NIX_SYSTEM_PROFILE)),
-    )
-
-
-def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories, mounts: tuple[Mount, ...]) -> str | None:
+def _prepare_sandbox(
+    bwrap: Path, system_directories: SystemDirectories, mounts: tuple[Mount, ...], environment: dict[str, str]
+) -> str | None:
     """Return why namespace creation or command entry fails, or None when both work."""
 
     async def probe() -> str | None:
@@ -315,7 +289,7 @@ def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories, mounts:
             root=root,
             layers=layers,
             mounts=mounts,
-            environment=CONTROL_ENVIRONMENT,
+            environment=environment,
         )
         try:
             try:
@@ -340,10 +314,15 @@ def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories, mounts:
         return executor.submit(asyncio.run, probe()).result()
 
 
-def _working_bwrap(candidates: Iterable[Path], system_directories: SystemDirectories, mounts: tuple[Mount, ...]) -> Path:
+def _working_bwrap(
+    candidates: Iterable[Path],
+    system_directories: SystemDirectories,
+    mounts: tuple[Mount, ...],
+    environment: dict[str, str],
+) -> Path:
     errors = []
     for candidate in candidates:
-        error = _prepare_sandbox(candidate, system_directories, mounts)
+        error = _prepare_sandbox(candidate, system_directories, mounts, environment)
         if error is None:
             return candidate
         errors.append(f"{candidate}: {error}")
@@ -619,7 +598,7 @@ class LocalMachine:
                 "--clearenv",
                 "--setenv",
                 "PATH",
-                DEFAULT_PATH,
+                self._environment["PATH"],
                 "/bin/sh",
                 "-c",
                 'read -r ready && [ "$ready" = shellbox-ready ] || exit 1; exec sleep 2147483647',
@@ -817,7 +796,7 @@ class LocalMachine:
             Command(
                 ("/bin/sh", "-c", script, "sh", str(path)), cwd="/", stdin=stdin, output_limit_bytes=output_limit_bytes
             ),
-            CONTROL_ENVIRONMENT,
+            {**CONTROL_ENVIRONMENT, "PATH": self._environment["PATH"]},
         )
 
     def _command_config(self, command: Command, environment: dict[str, str]) -> dict:
@@ -1219,8 +1198,12 @@ class LocalMachineFactory:
         self.python_version = python_version
         self.system_directories = system_directories
         candidates = _bwrap_candidates(bwrap)
-        self._system_mounts = _nix_system_mounts()
-        self.bwrap = _working_bwrap(candidates, system_directories, self._system_mounts)
+        self._system_mounts, self._system_bin_dirs = nix.system_programs()
+        environment = {
+            **CONTROL_ENVIRONMENT,
+            "PATH": os.pathsep.join((DEFAULT_PATH, *map(str, self._system_bin_dirs))),
+        }
+        self.bwrap = _working_bwrap(candidates, system_directories, self._system_mounts, environment)
         logger.info("Local backend sandboxes commands with %s, system directories %s", self.bwrap, system_directories)
 
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
@@ -1338,6 +1321,7 @@ class LocalMachineFactory:
                     *(str(directory.absolute()) for directory in host.bin_dirs),
                     *map(str, self.bin_dirs),
                     DEFAULT_PATH,
+                    *map(str, self._system_bin_dirs),
                 ]
             ),
             "HOME": str(HOME),

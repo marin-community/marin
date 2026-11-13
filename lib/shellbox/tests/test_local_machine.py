@@ -1492,7 +1492,7 @@ def executable_oci_image(oci_image):
     return oci_image(
         (archive.getvalue(),),
         {
-            "Env": ["PATH=/bin", "IMAGE_VALUE=from-image"],
+            "Env": ["IMAGE_VALUE=from-image"],
             "WorkingDir": "/app",
             "Entrypoint": ["/bin/sh", "-c"],
             "Cmd": ['printf "%s" "$IMAGE_VALUE" >index.html; exec httpd -f -p 8123 -h .'],
@@ -1548,8 +1548,13 @@ def test_prepared_local_task_applies_startup_overrides_with_private_writable_roo
         roots = [cast(LocalMachine, machine).root for machine in group.containers.values()]
         try:
             await group.wait_ready()
-            identity = await group.primary.run(Command(("sh", "-c", 'pwd; printf "%s\\n" "$IMAGE_VALUE"; id -u')))
-            assert (identity.exit_code, identity.stdout) == (0, b"/app\nfrom-image\n0\n")
+            identity = await group.primary.run(
+                Command(("sh", "-c", 'pwd; printf "%s\\n" "$IMAGE_VALUE"; id -u; printf "%s" "$PATH"'))
+            )
+            assert identity.exit_code == 0, identity.stderr
+            workdir, value, user, path = identity.stdout.decode().splitlines()
+            assert (workdir, value, user) == ("/app", "from-image", "0")
+            assert "/run/current-system" not in path
             written = await group.primary.run(Command(("sh", "-c", "printf actor >index.html")))
             assert written.exit_code == 0
             response = await group.primary.run(Command(("wget", "-q", "-O", "-", "http://runtime:8123")))
