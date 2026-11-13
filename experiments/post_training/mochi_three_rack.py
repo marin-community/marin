@@ -105,6 +105,8 @@ def build_run(
     )
     for role in ("policy", "ref"):
         trainer[role]["megatron_config"].update(MEGATRON_GEOMETRY)
+        # The unfused expert SwiGLU exhausted memory during 261K backward recomputation.
+        trainer[role]["megatron_config"].setdefault("transformer_config_kwargs", {})["bias_activation_fusion"] = True
     for callback in trainer["callbacks"]:
         if callback["type"] == "checkpoint":
             callback["save_steps"] = resume_step + updates
