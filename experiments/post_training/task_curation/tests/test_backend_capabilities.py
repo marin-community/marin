@@ -168,6 +168,24 @@ def test_declared_capacity_reaches_backend_checks_and_conflicting_runtime_fails(
         )
 
 
+def test_unclassified_capability_counts_a_misfit_on_every_backend():
+    checkers = {"docker": DockerMachineFactory().check_environment}
+    document = {
+        "environment_requirements": {
+            "command_semantics": "linux_process",
+            "capabilities": ["nemotron-agent:ns_tools_simple_agent"],
+        },
+        "grader": {"kind": "none"},
+    }
+    mapped = source_map(
+        "unclassified", [document], capability_matrix(checkers), checkers, {}, {"agent": RUNTIME, "grader": RUNTIME}
+    )
+    fit = mapped.backends["docker"]
+    assert fit.task_counts == {Support.UNSUPPORTED: 1}
+    assert fit.roles["agent"] == {Support.UNSUPPORTED: 1}
+    assert fit.blockers == {"agent:nemotron-agent:ns_tools_simple_agent": 1}
+
+
 def test_actor_capacity_preserves_independent_separate_grader_profile():
     environment = {"command_semantics": "linux_process", "docker_image": "example/image@sha256:" + "0" * 64}
     task = {

@@ -33,6 +33,7 @@ from taskcompendium.backend_requirements import (
     BackendSourceMap,
     BackendSurvey,
     RuntimeProfile,
+    UnclassifiedCapability,
     backend_schema_sha256,
     execution_resource_shape,
     task_demands,
@@ -112,7 +113,15 @@ def source_map(
             }
             for role, slot in (("agent", "task_machine"), ("grader", "verifier_machine"))
         }
-        demands = task_demands({"task": task, "runtime": runtime})
+        try:
+            demands = task_demands({"task": task, "runtime": runtime})
+        except UnclassifiedCapability as error:
+            for backend in checkers:
+                task_counts[backend][Support.UNSUPPORTED] += 1
+                role_counts[backend][error.role][Support.UNSUPPORTED] += 1
+                blockers[backend][f"{error.role}:{error.capability}"] += 1
+                errors[backend][str(error)] += 1
+            continue
         for role, needs in demands.items():
             declared = task.get("environment_requirements") if role == "agent" else task["grader"]["environment"]
             assigned = "local" if role == "grader" and declared.get("packages_lock") else "daytona"

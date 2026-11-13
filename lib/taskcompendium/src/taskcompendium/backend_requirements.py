@@ -31,6 +31,15 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import EnvironmentRequirements, ExecutionRequirements
 
 
+class UnclassifiedCapability(ValueError):
+    """A declared capability names no requirement in the survey vocabulary."""
+
+    def __init__(self, role: str, capability: str):
+        super().__init__(f"{role}: declared capability '{capability}' has no requirement classification")
+        self.role = role
+        self.capability = capability
+
+
 class RuntimeProfile(BaseModel):
     """Explicit deployment settings used where a converted spec omits a value."""
 
@@ -159,7 +168,12 @@ class BackendSurvey(BaseModel):
 
 def environment_demands(environment: EnvironmentRequirements) -> set[Requirement]:
     """Describe declared behavior; unknown capabilities fail classification."""
-    demands = {Requirement(capability) for capability in environment.capabilities}
+    demands = set()
+    for capability in environment.capabilities:
+        try:
+            demands.add(Requirement(capability))
+        except ValueError as error:
+            raise UnclassifiedCapability("environment", capability) from error
     if environment.command_semantics is not None:
         demands.add(Requirement(environment.command_semantics.value))
     for name in ("docker_image", "docker_build", "packages_lock", "package_spec"):
@@ -221,7 +235,10 @@ def task_demands(document: Mapping) -> dict[str, set[Requirement]]:
         if declared is None:
             continue
         environment = EnvironmentRequirements.model_validate(declared)
-        demands = environment_demands(environment)
+        try:
+            demands = environment_demands(environment)
+        except UnclassifiedCapability as error:
+            raise UnclassifiedCapability(role, error.capability) from error
         if task.get("integrity_contract") is not None:
             demands.update(TASK_FIELDS["integrity_contract"])
         if role == "agent":
