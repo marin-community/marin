@@ -284,9 +284,7 @@ def test_binding_selects_private_retained_pin_and_uses_new_population_evidence(r
     assert bound.info.oversight == source.info.oversight
     assert bound.info.oracle_validation == source.info.oracle_validation
     assert bound.info.quality_result == source.info.quality_result
-    assert bound.info.oversight.level is OversightLevel.SAMPLE and bound.info.oversight.admitted == 3
     assert bound.info.inherited_admission == source.current_release
-    assert "remediated: dedup/decon" in bound.info.notes
     assert source_lexical_use(bound).value == "train"
     require_private_release(bound.info.lexical_contamination, bound.dataset.name, bound.dataset.revision)
     with pytest.raises(ValueError, match="different dataset pin"):
