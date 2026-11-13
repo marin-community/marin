@@ -388,3 +388,27 @@ def test_hf_adoption_is_the_rl_model_without_native_restore_or_export(monkeypatc
     assert len(document["inputs"]["train_data"]) == 2
     with pytest.raises(ValueError, match="no native SFT run evidence"):
         build_spec_graph(resolved, "2026.11.13.43603", through="archive")
+
+
+@pytest.mark.parametrize(
+    "prefix,error",
+    [
+        ("s3://marin-rno2a/tmp/ttl=7d/local-run", None),
+        ("s3://marin-us-east-08a/tmp/ttl=7d/remote-run", "region-local bucket"),
+        ("s3://marin-rno2a/marin/permanent-run", "RNO2A outputs must use"),
+    ],
+)
+def test_rno2a_spec_rejects_cross_region_and_non_ttl_outputs(tmp_path, prefix, error):
+    root = tmp_path / "specs"
+    shutil.copytree(SPEC.parent, root)
+    path = root / SPEC.name
+    document = yaml.safe_load(path.read_text())
+    document["storage"] = {"output_prefix": prefix, "temporary_prefix": prefix}
+    path.write_text(yaml.safe_dump(document))
+    if error is not None:
+        with pytest.raises(ValueError, match=error):
+            resolve_spec(path, smoke=True)
+        return
+    resolved = resolve_spec(path, smoke=True)
+    assert resolved["storage"] == document["storage"]
+    assert resolved["execution"]["coordinator"]["target_cluster"] == "cw-rno2a"

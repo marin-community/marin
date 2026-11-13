@@ -49,5 +49,5 @@ smoke_overrides:
   eval_tasks_per_benchmark: 1
   eval_replicas: 16
 storage:
-  output_prefix: s3://marin-us-east-08a/marin/users/benfeuer/long-loop
-  temporary_prefix: s3://marin-us-east-08a/tmp
+  output_prefix: s3://marin-rno2a/tmp/ttl=7d/long-loop
+  temporary_prefix: s3://marin-rno2a/tmp/ttl=7d/long-loop-tmp
