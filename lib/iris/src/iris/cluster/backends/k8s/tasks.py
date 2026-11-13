@@ -491,10 +491,21 @@ def _lookup_pod(
     return candidates[0], None
 
 
+def _sandbox_image_owns_workdir(run_req: job_pb2.RunTaskRequest) -> bool:
+    return (
+        run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
+        and not run_req.bundle_id
+        and not run_req.entrypoint.workdir_files
+        and not run_req.entrypoint.workdir_file_refs
+    )
+
+
 def _build_volumes_and_mounts(
     mount_specs: Sequence[MountSpec],
     cache_dir: str,
     shm_limit_bytes: int,
+    *,
+    image_owns_workdir: bool,
 ) -> tuple[list[dict], list[dict]]:
     """Build pod volumes and container volume mounts for ``mount_specs`` plus /dev/shm.
 
@@ -503,6 +514,8 @@ def _build_volumes_and_mounts(
     Workdir, outputs and tmpfs use emptyDir; cache mounts use hostPath under
     cache_dir so they persist across pods on the same node. /dev/shm is
     memory-backed and shares the task container's memory limit when one is set.
+    When ``image_owns_workdir`` is true, omit the workdir volume and mount to
+    preserve the prepared image's files.
 
     NOTE: On CoreWeave bare-metal GPU nodes the root filesystem is a 15GB
     ramdisk. Set cache_dir to a path on the NVMe (e.g. /mnt/local/iris-cache)
@@ -512,6 +525,9 @@ def _build_volumes_and_mounts(
     volumes: list[dict] = []
     mounts: list[dict] = []
     for spec in mount_specs:
+        if image_owns_workdir and spec.kind is MountKind.WORKDIR:
+            # An empty workdir volume would hide the prepared image's /app.
+            continue
         if spec.kind is MountKind.CACHE:
             volumes.append(
                 {
@@ -1008,17 +1024,12 @@ def _build_pod_manifest(
     # ResourceSpec.memory defaults to zero, so low-level accelerator requests may omit it.
     if not shm_limit_bytes and has_accelerator:
         shm_limit_bytes = ACCELERATOR_SHM_FALLBACK_BYTES
-    mounts = isolation.mounts
-    if (
-        run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
-        and not run_req.bundle_id
-        and not run_req.entrypoint.workdir_files
-        and not run_req.entrypoint.workdir_file_refs
-    ):
-        # A bring-your-own sandbox image already owns /app. An empty workdir
-        # volume would hide its prepared applications and task inputs.
-        mounts = tuple(mount for mount in mounts if mount.kind is not MountKind.WORKDIR)
-    volumes, vol_mounts = _build_volumes_and_mounts(mounts, cache_dir, shm_limit_bytes=shm_limit_bytes)
+    volumes, vol_mounts = _build_volumes_and_mounts(
+        isolation.mounts,
+        cache_dir,
+        shm_limit_bytes=shm_limit_bytes,
+        image_owns_workdir=_sandbox_image_owns_workdir(run_req),
+    )
 
     container: dict = {
         "name": "task",
