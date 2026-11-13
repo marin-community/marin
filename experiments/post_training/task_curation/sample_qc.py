@@ -7,14 +7,11 @@ import argparse
 import json
 import logging
 from dataclasses import asdict
-from typing import Literal
 from uuid import uuid4
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import SourceQualityResult
-from marin.execution.artifact import Artifact, ArtifactRecord, result_type_name, write_record
-from pydantic import BaseModel, ConfigDict, Field
+from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -23,7 +20,6 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import ReviewStatus
 from taskcompendium.pipeline.review import Reviewer
 
-from experiments.post_training.task_curation.admission_inventory import SAMPLE_SEED, SAMPLE_SIZE
 from experiments.post_training.task_curation.full_qc import (
     REVIEW_RUBRIC,
     ReadyChatReviewer,
@@ -39,27 +35,15 @@ from experiments.post_training.task_curation.full_qc_review import (
 )
 from experiments.post_training.task_curation.judges import PinnedLocalJudgeEndpoint
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
+from experiments.post_training.task_curation.sample_qc_artifacts import (
+    SAMPLE_SEED,
+    SAMPLE_SIZE,
+    SamplePanel,
+    SampleQCReview,
+)
 
 LOGGER = logging.getLogger(__name__)
 PINNED_REVIEWER_SHA256 = "a3e17ee0607a1bf59bdbb8e0b9bffda2e8788390aaf41c7ab73c20b68325c9ea"
-
-
-class SamplePanel(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    source_id: str
-    dataset_id: str
-    dataset_revision: str
-    converter_version: str
-    input_artifact: str
-    task_specs_sha256: str
-    scanned_task_specs_sha256: str
-    retained_tasks: int = Field(gt=0)
-    sample_seed: int
-    sample_size: int = Field(gt=0, le=SAMPLE_SIZE)
-    panel_path: str
-    panel_sha256: str
-    evidence_url: str
 
 
 def panel_tasks(panel: SamplePanel) -> tuple[list[TaskSpec], list[dict]]:
@@ -96,20 +80,6 @@ def panel_tasks(panel: SamplePanel) -> tuple[list[TaskSpec], list[dict]]:
     if [task.id for task in tasks] != [row["task_id"] for row in rows]:
         raise ValueError("Sample panel IDs differ from their task contracts")
     return tasks, [task_contract(task, json.loads(row["runtime"])) for task, row in zip(tasks, rows, strict=True)]
-
-
-class SampleQCReview(Artifact):
-    panel: SamplePanel
-    reviewer: dict
-    rubric: dict
-    scope: Literal["sample_content"] = "sample_content"
-    qualification_status: Literal["pending"] = "pending"
-    panel_coverage_complete: bool
-    attempted_count: int
-    result: SourceQualityResult
-    records_path: str
-    records_sha256: str
-    batch_receipts: list[str]
 
 
 def review_panel(panel: SamplePanel, reviewer: Reviewer, output_root: str) -> SampleQCReview:

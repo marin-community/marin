@@ -539,6 +539,23 @@ reviewer without reserving GPUs. A resume reuses reviewed batch receipts only
 when task/runtime contracts, rubric and reviewer identity match exactly.
 Unavailable observations and unsuccessful attempts remain recorded.
 
+Export a selected Result for each source with:
+
+```bash
+uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.sample_qc_receipts \
+  --review-artifacts selected-review-artifacts.json \
+  --output-directory /private/staging/sample_qc_receipts
+```
+
+The input is a JSON array of immutable review artifact paths. Receipt generation
+checks panel membership, task/runtime hashes and the pinned reviewer, then
+recomputes counts from the stored observations. Archive the generated shards in
+the private registry and commit its exact references under
+`datasets/sample_qc_receipts/`. Source binding rejects another dataset pin,
+converter or population digest and preserves execution oversight. Catalog refresh
+uses the pinned content Result while retaining earlier assessments and packets.
+
 ### Audit reviewer errors
 
 `audit_harness` freezes a stratified sample of Prism issue-positive reviews and

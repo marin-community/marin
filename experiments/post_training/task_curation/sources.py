@@ -32,6 +32,7 @@ from experiments.post_training.task_curation.datasets.lexical_measurements impor
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
 from experiments.post_training.task_curation.datasets.retained_releases import retained_release_receipts
+from experiments.post_training.task_curation.datasets.sample_qc_results import sample_qc_receipts
 from experiments.post_training.task_curation.datasets.skyrl import code as skyrl_code
 from experiments.post_training.task_curation.datasets.skyrl import ifeval as skyrl_ifeval
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
@@ -54,6 +55,7 @@ from experiments.post_training.task_curation.lexical_policy import source_lexica
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.remediation_binding import bind_retained_release
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
+from experiments.post_training.task_curation.sample_qc_binding import bind_sample_result
 from experiments.post_training.task_curation.source import RlDataSource, TaskFormat
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
@@ -63,6 +65,7 @@ def all_sources() -> dict[str, RlDataSource]:
     actor_receipts = actor_census_receipts()
     lexical_receipts = lexical_measurements()
     retained_receipts = retained_release_receipts()
+    quality_receipts = sample_qc_receipts()
     dedup_receipts = read_dedup_receipts(
         Path(__file__).with_name("datasets") / "within_source_dedup.json", load_json=read_registry_json
     )
@@ -117,6 +120,7 @@ def all_sources() -> dict[str, RlDataSource]:
         )
         for source in sources
     ]
+    sources = [bind_sample_result(source, quality_receipts.get(source.info.id)) for source in sources]
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")

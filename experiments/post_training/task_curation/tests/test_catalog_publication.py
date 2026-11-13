@@ -27,6 +27,7 @@ from finestore.rl.curation import (
     DaytonaUnsafeReason,
     OracleValidation,
     SnapshotSource,
+    SourceQualityResult,
     register_catalog,
 )
 from finestore.rl.source_identity import canonical_source_id
@@ -547,3 +548,25 @@ def test_alias_metadata_refresh_keeps_archived_rows_and_packet_bytes(tmp_path):
     assert catalog.view.point(INVENTORY, snapshot_id="legacy", id=old)["declaration"]["id"] == old
     assert {table: list(catalog.view.iter_rows(table)) for table in before} == before
     assert catalog.packet("opaque-assessment-key", "opaque-assessment-key") == packet
+
+
+@pytest.mark.parametrize("publication", ["refresh", "campaign"])
+def test_pinned_content_result_survives_historical_assessment_counts(tmp_path, publication):
+    root = str(tmp_path / "catalog")
+    source = number_source(tmp_path / "input")
+    record_attempt(root, source, "historical", "2026-10-16T10:00:00Z", "historical-key")
+    publish_catalog(root, "historical", [source])
+    result = SourceQualityResult(
+        reviewed=1, issue_count=1, issues=[], repair_recommendation="Inspect new content review"
+    )
+    updated = replace(source, info=replace(source.info, quality_result=result))
+    if publication == "refresh":
+        refresh_catalog(root, "content", [updated], retired_source_ids=frozenset())
+    else:
+        record_attempt(root, updated, "content", "2026-10-16T11:00:00Z", "content-key")
+        publish_catalog(root, "content", [updated])
+    row = selected_sources(root)[source.info.id]
+    assert row.declaration.quality_result == result
+    catalog = CurationCatalog(root)
+    assert next(catalog.items("historical-key")).verdict == "good"
+    assert next(catalog.items(row.assessment_key)).verdict == "good"

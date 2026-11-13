@@ -25,10 +25,9 @@ from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 from experiments.post_training.task_curation.admission_binding import AdmissionCensusReceipt
 from experiments.post_training.task_curation.lexical_artifacts import ActorCensus, SourceTextPopulation
 from experiments.post_training.task_curation.prebuilt import validate_native_package
+from experiments.post_training.task_curation.sample_qc_artifacts import SAMPLE_SEED, SAMPLE_SIZE
 
 LOGGER = logging.getLogger(__name__)
-SAMPLE_SIZE = 100
-SAMPLE_SEED = 0
 PANEL_SCHEMA = pa.schema([("task_id", pa.string()), ("task_spec", pa.large_string()), ("runtime", pa.large_string())])
 
 
