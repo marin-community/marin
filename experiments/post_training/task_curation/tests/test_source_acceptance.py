@@ -49,14 +49,16 @@ def test_every_runnable_agentic_source_ingests_a_task_directory_format():
     )
 
 
-def test_a_new_internal_format_agentic_source_is_rejected():
-    with pytest.raises(ValueError, match="not grandfathered"):
-        require_accepted_task_format(_agentic(TaskFormat.MARINSKYRL, "Marin:a-new-blend"))
-
-
-def test_an_agentic_source_without_a_declared_format_is_rejected():
-    with pytest.raises(ValueError, match="declares no task format"):
-        require_accepted_task_format(_agentic(None))
+@pytest.mark.parametrize(
+    "task_format, source_id, error",
+    [
+        (TaskFormat.MARINSKYRL, "Marin:a-new-blend", "not grandfathered"),
+        (None, "Marin:agentic", "declares no task format"),
+    ],
+)
+def test_unaccepted_agentic_formats_are_rejected(task_format, source_id, error):
+    with pytest.raises(ValueError, match=error):
+        require_accepted_task_format(_agentic(task_format, source_id))
 
 
 def test_pipeline_less_pointers_are_rejected():

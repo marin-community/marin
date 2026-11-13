@@ -253,8 +253,8 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             info=replace(
                 SourceInfo(
                     id="TaskTrove:laion__nemotron-gym-arc-agi-python-inductive-v2",
-                    upstream_dataset="laion__nemotron-gym-arc-agi-python-inductive-v2",
-                    upstream_name="laion__nemotron-gym-arc-agi-python-inductive-v2",
+                    upstream_dataset=INDUCTIVE_CONFIG,
+                    upstream_name=INDUCTIVE_CONFIG,
                     subset=None,
                     build_path="Task Trove",
                     origin=SourceOrigin.TASKTROVE,
