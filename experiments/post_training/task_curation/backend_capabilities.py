@@ -278,6 +278,7 @@ def main() -> None:
         "--local-disk-root", type=Path, help="Probe ext4 loop/OverlayFS enforcement on this privileged worker."
     )
     parser.add_argument("--catalog-root", help="Bind to the current published catalog instead of an archived inventory.")
+    parser.add_argument("--revision", help="Survey code revision; the workspace carries no git metadata on workers.")
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
     if args.catalog_root is not None:
@@ -296,7 +297,10 @@ def main() -> None:
                 if source.declaration.grading_environment is not None
             },
         }
-    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    if args.revision is not None:
+        revision = args.revision
+    else:
+        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     disk_pool = LocalDiskPool(args.local_disk_root) if args.local_disk_root is not None else None
     if disk_pool is not None:
         manifest = {**manifest, "local_disk_root": str(args.local_disk_root)}
