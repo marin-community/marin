@@ -91,7 +91,6 @@ def simpleqa_verified_source(*, thinking: bool) -> RlDataSource[EvaluationCorpus
 
     The judge sees only the final answer, as in the reference notebook. The leaderboard judge is
     gpt-4.1-2025-04-14; runs name their own judge, so scores are comparable only under the same judge.
-    The thinking variant enables the chat template's reasoning mode, with room for a long trace.
     """
     benchmark = "SimpleQAVerifiedThinking" if thinking else "SimpleQAVerified"
     return RlDataSource(
@@ -131,7 +130,6 @@ def simpleqa_verified_source(*, thinking: bool) -> RlDataSource[EvaluationCorpus
                     top_k=None,
                     max_tokens=16384 if thinking else 2048,
                     stop=(),
-                    # The default variant measures direct factual recall without reasoning.
                     chat_template_kwargs={"enable_thinking": thinking},
                 ),
                 trials=TrialPolicy(count=1, seed=None),

@@ -5,7 +5,7 @@
 
 SimpleQA's prompt is from OpenAI simple-evals (MIT); its license is retained in
 `assets/simpleqa.LICENSE`. SimpleQA Verified's prompt is from its paper (CC BY 4.0).
-FinanceBench uses Marin's answer-equivalence protocol. All always call the judge,
+FinanceBench uses Marin's answer-equivalence protocol. Each calls the judge,
 including empty and exact candidates.
 """
 
