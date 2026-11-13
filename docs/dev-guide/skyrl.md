@@ -70,7 +70,7 @@ activation-offload modes.
 Set `trainer.policy.optimizer_config.optimizer: MuonH` and
 `trainer.policy.optimizer_config.optimizer_kwargs.expert_normalization: all_experts`
 to use Hero EP's norm constraint. Each layer's routed gate, up and down expert
-banks has one Frobenius norm across expert owners. The implementation reduces
+banks each preserve their own Frobenius norm across expert owners. The implementation reduces
 norm scalars over the EP group without gathering weights. Shared experts keep
 separate constraints; fused gate/up and Q/K/V weights retain separate logical
 matrix updates. Supported routed names end in
