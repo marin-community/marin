@@ -93,6 +93,7 @@ nav:
   - Developer Guide:
       - Contributing: dev-guide/contributing.md
       - Agent Workflows: dev-guide/agent-workflows.md
+      - AgentX/vLLM Tuning: dev-guide/agentx-vllm-tuning.md
       - Experiment Records: dev-guide/experiment-records.md
       - Research Engineering: dev-guide/research-engineering.md
       - Writing Style:
