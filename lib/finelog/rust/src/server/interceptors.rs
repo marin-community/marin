@@ -41,7 +41,12 @@ pub const DEFAULT_SLOW_RPC_THRESHOLD_MS: i64 = 7000;
 /// Per-method concurrency caps. Both FetchLogs and Query fan out into parquet
 /// scans across hundreds of MB; unbounded parallelism evicts the page cache and
 /// wedges the process.
-pub const MAX_CONCURRENT_FETCH_LOGS: usize = 4;
+///
+/// TEMPORARY: FetchLogs is held at 1 (normally 4) while the marin hub drains its
+/// L0 backlog (#11265). Each request scans every L0 of `log` and is cancelled at
+/// the read deadline, so more of them add load and return nothing. Restore 4
+/// once `log` reads succeed again.
+pub const MAX_CONCURRENT_FETCH_LOGS: usize = 1;
 pub const MAX_CONCURRENT_QUERY: usize = 2;
 
 /// The dispatched method's short name (`"FetchLogs"`, `"Query"`, ...), or `None`

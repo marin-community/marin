@@ -205,9 +205,14 @@ async fn run(
         .collect();
     let job_for_run = job.clone();
     let staging_dir = staging.path().to_path_buf();
-    let objects = Arc::clone(compaction.controller.object_store().ok_or_else(|| {
+    let objects = compaction.controller.object_store().ok_or_else(|| {
         StatsError::Internal("object compaction has no backing store".to_string())
-    })?);
+    })?;
+    // Input reads use the maintenance limiter so a merge does not wait behind
+    // query reads of the same cache.
+    let objects = objects
+        .maintenance_reads()
+        .unwrap_or_else(|| Arc::clone(objects));
     let runtime = tokio::runtime::Handle::current();
     // Same dedicated merge thread as a migration rewrite, mildly deprioritized:
     // an ordinary compaction merge at blocking-pool priority competes with

@@ -37,6 +37,14 @@ use super::local_file::atomic_write;
 pub(crate) const MAX_PARALLEL_FETCHES: usize = 8;
 const MAX_PARALLEL_CACHE_READS: usize = 8;
 
+/// Concurrent cache reads for maintenance, counted apart from query reads.
+///
+/// A compaction job reads its inputs one at a time, and each input takes
+/// several trips through the read limiter. On the marin hub, log queries over
+/// about 24,000 small files kept the shared limiter's queue full, and a
+/// 512-input merge that takes 1 s unloaded took up to 256 s.
+const MAX_PARALLEL_MAINTENANCE_CACHE_READS: usize = 8;
+
 /// Files kept resident for a read, independent of query warming policy.
 #[derive(Default)]
 pub struct CachePins {
@@ -164,6 +172,8 @@ pub struct CachedObjectStore {
     /// Bounds concurrent cache-miss downloads.
     fetches: Arc<Semaphore>,
     read_workers: Arc<ReadWorkers>,
+    /// The limiter a [`ObjectStore::maintenance_reads`] view reads through.
+    maintenance_read_workers: Arc<ReadWorkers>,
     fill_workers: Arc<ReadWorkers>,
     /// Bounds write-through uploads independently of reads and flush encoding.
     uploads: Arc<Semaphore>,
@@ -189,6 +199,9 @@ impl CachedObjectStore {
             cache: FileCache::new(root)?,
             fetches: Arc::new(Semaphore::new(MAX_PARALLEL_FETCHES)),
             read_workers: Arc::new(ReadWorkers::new(MAX_PARALLEL_CACHE_READS)),
+            maintenance_read_workers: Arc::new(ReadWorkers::new(
+                MAX_PARALLEL_MAINTENANCE_CACHE_READS,
+            )),
             fill_workers: Arc::new(ReadWorkers::new(MAX_PARALLEL_FETCHES)),
             uploads: Arc::new(Semaphore::new(MAX_PARALLEL_UPLOADS)),
             capacity_bytes,
@@ -553,6 +566,13 @@ impl ObjectStore for CachedObjectStore {
         reference: &ObjectReference,
     ) -> Result<Option<PathBuf>, StatsError> {
         self.lookup(reference).await
+    }
+
+    fn maintenance_reads(&self) -> Option<Arc<dyn ObjectStore>> {
+        Some(Arc::new(Self {
+            read_workers: Arc::clone(&self.maintenance_read_workers),
+            ..self.clone()
+        }))
     }
 
     async fn pin_cached_path(
