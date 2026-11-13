@@ -1500,8 +1500,8 @@ capability, even without declared disk. Older controllers are rejected before
 submission because they hide the image's `/app` under an empty volume. This
 capability describes image preservation and does not qualify storage enforcement.
 
-Iris SANDBOX storage enforcement is unqualified. Harbor reports no storage-limit
-capability and rejects declared `storage_mb` for this environment. The Shellbox
+Iris SANDBOX storage enforcement has not been validated. Harbor reports no
+storage-limit capability and rejects declared `storage_mb` for `iris-sandbox`. The Shellbox
 adapter also requires a direct Kubernetes controller advertising
 `sandbox-storage-limit` before submitting any declared disk; current controllers
 do not advertise it. Sandbox-profile pods cannot start on the pinned CPU pool
