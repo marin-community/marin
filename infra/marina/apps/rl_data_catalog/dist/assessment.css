@@ -13,3 +13,15 @@
 #reviews p { border-bottom: 1px solid var(--line); padding: 10px 0; margin: 0; font-size: 13px; overflow-wrap: anywhere; }
 #selected { font-size: 13px; }
 @media (max-width: 650px) { .assessment-card { padding: 16px; } }
+.evidence-labels { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
+.evidence-labels .chip { font-size: 12px; padding: 6px 9px; }
+.card-intro { color: var(--muted); margin: -4px 0 6px; }
+.pointer code { font-size: 11.5px; overflow-wrap: anywhere; }
+.field dd code { overflow-wrap: anywhere; white-space: pre-wrap; }
+
+@media (prefers-color-scheme: dark) {
+  .assessment-card { background: #1d2922; }
+  .assessment-page pre { background: #24352a; }
+}
+
+.assessment-page { overflow-wrap: anywhere; }

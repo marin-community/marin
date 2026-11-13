@@ -9,13 +9,14 @@
 <body>
 <main>
   <header class="atlas-header"><a class="atlas-name" href="./">RL Data Atlas</a><a href="archive.html">Review archive</a></header>
-  <nav class="atlas-tabs" aria-label="Atlas views"><a href="./">By source</a><a href="curriculum.html" aria-current="page">By curriculum</a></nav>
+  <nav class="atlas-tabs" aria-label="Atlas views"><a href="./">By source</a><a href="curriculum.html" aria-current="page">By curriculum</a><a href="guide.html">Getting started</a></nav>
   <section class="page-heading">
     <div><h1>Curriculum</h1><p id="message" role="status" aria-live="polite">Loading coverage…</p></div>
     <div class="coverage-totals"><span><strong id="task-count">—</strong> examples</span><span id="source-count"></span></div>
   </section>
   <form id="controls" class="browse-controls" role="search">
     <label class="search-control"><span>Find an area</span><input id="search" type="search" placeholder="Search subjects or skills…" aria-label="Search the curriculum"></label>
+    <label><span>Coverage population</span><select id="release"><option value="">Retained population (primary)</option></select></label>
     <label><span>Domain</span><select id="domain"><option value="">All domains</option></select></label>
     <label><span>Source</span><select id="source"><option value="">All sources</option></select></label>
     <label><span>Use</span><select id="use"><option value="all">All uses</option><option value="train">Training</option><option value="eval">Evaluation</option></select></label>

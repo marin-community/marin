@@ -3,7 +3,10 @@
 
 """The retained v75 renderer treats every other measured state as Unsafe."""
 
+import pytest
+
 from infra.marina.apps.rl_data_catalog.server.daytona import daytona
+from infra.marina.apps.rl_data_catalog.server.quality import quality
 
 
 def test_v75_api_marks_zero_actor_and_grandfathered_sources_without_false_unsafe():
@@ -66,3 +69,24 @@ def test_v75_api_requires_census_evidence_and_exact_frozen_exemption():
     for missing in ("daytona_machine_slots", "daytona_execution_failures", "daytona_count_basis"):
         incomplete = {key: value for key, value in complete.items() if key != missing}
         assert daytona(incomplete, 10)["state"] == "unmeasured"
+
+
+@pytest.mark.parametrize(
+    "reviewed,uncertain,unavailable,oversight,expected",
+    [
+        (500, 0, 0, "none", "FULL"),
+        (493, 7, 0, "none", "FULL"),
+        (499, 0, 1, "none", "QUICK"),
+        (499, 0, 0, "full", "SAMPLE"),
+    ],
+)
+def test_content_quality_distinguishes_complete_assembly_from_partial_execution(
+    reviewed, uncertain, unavailable, oversight, expected
+):
+    declaration = {
+        "oversight": oversight,
+        "within_source_dedup": {"unique_count": 500},
+        "independent_qc": {"reviewed": 500},
+        "quality_result": {"reviewed": reviewed, "unavailable_count": unavailable, "uncertain_count": uncertain},
+    }
+    assert quality(declaration, None) == expected

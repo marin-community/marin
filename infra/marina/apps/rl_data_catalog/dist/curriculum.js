@@ -6,7 +6,7 @@ const outcomes = {assigned: 'Capability match', subject_only: 'Subject only', ou
 const state = { data: null, parent: '', subject: '', nodes: new Map(), request: 0, taskRequest: 0, next: '', taskQuery: null};
 
 function parameters() {
-  return new URLSearchParams({intended_use: $('use').value, source_id: $('source').value});
+  return new URLSearchParams({intended_use: $('use').value, source_id: $('source').value, release: $('release').value});
 }
 function labelFor(id, subject) { return state.nodes.get(`${subject}/${id}`)?.name || id; }
 function button(text, className, action) { const item = node('button', text, className); item.type = 'button'; item.addEventListener('click', action); return item; }
@@ -68,6 +68,21 @@ function renderBreadcrumbs() {
 function renderCoverage() {
   const data = state.data;
   if (!data) return;
+  const measured = data.sources.filter(source => source.alignment?.basis === 'matched' &&
+    (!$('source').value || source.source_id === $('source').value) &&
+    ($('use').value === 'all' || source.alignment.intended_use === $('use').value));
+  if (!measured.length) {
+    for (const id of ['task-count', 'mapped-count', 'capability-count']) $(id).textContent = '—';
+    $('source-count').textContent = 'No measured sources in this selection';
+    $('broad-count').textContent = 'Coverage unavailable';
+    $('sample-note').textContent = 'No matching population was measured in this release.';
+    $('source-ledger').hidden = true; $('coverage-scope').hidden = true;
+    renderBreadcrumbs();
+    $('curriculum-map').replaceChildren(node('p', 'Coverage has not been measured for this selection.', 'scope-note'));
+    $('outcomes').replaceChildren(); $('matrix-summary').textContent = 'Coverage unavailable';
+    history.replaceState(null, '', viewUrl());
+    return;
+  }
   const total = data.totals.denominator;
   const mapped = data.totals.assigned + data.totals.subject_only;
   $('task-count').textContent = number.format(total);
@@ -243,6 +258,7 @@ function viewUrl() {
   const hash = new URLSearchParams();
   if ($('use').value !== 'all') hash.set('intended_use', $('use').value);
   if ($('source').value) hash.set('source_id', $('source').value);
+  if ($('release').value) hash.set('release', $('release').value);
   if (state.parent) { hash.set('parent_id', state.parent); hash.set('subject_id', state.subject); }
   if ($('search').value) hash.set('search', $('search').value);
   return location.pathname + (hash.size ? `#${hash}` : '');
@@ -250,6 +266,7 @@ function viewUrl() {
 function readLocation() {
   const initial = new URLSearchParams(location.hash.slice(1));
   $('use').value = initial.get('intended_use') || 'all';
+  $('release').value = initial.get('release') || '';
   $('search').value = initial.get('search') || '';
   const source = initial.get('source_id') || '';
   $('source').value = source;
@@ -259,7 +276,7 @@ function readLocation() {
   state.parent = initial.get('parent_id') || ''; state.subject = initial.get('subject_id') || '';
 }
 $('controls').addEventListener('submit', event => event.preventDefault());
-for (const id of ['source', 'use']) $(id).addEventListener('change', () => {
+for (const id of ['source', 'use', 'release']) $(id).addEventListener('change', () => {
   history.pushState(null, '', viewUrl()); loadCoverage();
 });
 $('domain').addEventListener('change', () => navigate($('domain').value ? state.nodes.get(`${$('domain').value}/subject:${$('domain').value}`) : null));
@@ -274,5 +291,13 @@ $('reset-view').addEventListener('click', () => {
   history.pushState(null, '', viewUrl()); loadCoverage();
 });
 window.addEventListener('popstate', () => { readLocation(); loadCoverage(); });
-readLocation();
-loadCoverage();
+async function start() {
+  const data = await json('api/curriculum/releases');
+  for (const release of data.releases.filter(item => !item.selected)) {
+    const option = node('option', 'Pre-remediation population (evidence)');
+    option.value = release.release_id; $('release').append(option);
+  }
+  readLocation();
+  await loadCoverage();
+}
+start().catch(error => { $('message').textContent = `Coverage could not be loaded. ${error.message}`; });

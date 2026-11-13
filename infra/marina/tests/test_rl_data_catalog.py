@@ -608,6 +608,8 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
         shutil.rmtree(tmp_path)
         assert client.get("/curriculum").json()["release_id"] == "next"
         assert client.get("/curriculum", params={"release": "first"}).json()["release_id"] == "first"
+        releases = client.get("/curriculum/releases").json()["releases"]
+        assert [(row["release_id"], row["selected"]) for row in releases] == [("next", True), ("first", False)]
         with engine.begin() as connection:
             connection.execute(text("DROP TABLE curriculum_matches"))
             connection.execute(text("DROP TABLE curriculum_tasks"))
@@ -895,6 +897,11 @@ def test_historical_alias_urls_keep_assessments_packets_and_sql_counts(catalog_d
             packet = client.get("/evidence", params={"source_id": identifier, "task_id": "one"}).json()["packet"]
             assert packet == original_packet
             assert client.get("/source-fingerprint", params={"source_id": identifier}).json()["source_id"] == current
+            detail = client.get("/source", params={"source_id": identifier}).json()
+            assert detail["declaration"]["id"] == current
+            assert detail["assessment"]["pipeline_key"] == "frozen"
+            assert detail["backend_capabilities"]["basis"] == "unassessed"
+            assert detail["result"] == "GOOD"
 
 
 def test_historical_curriculum_alias_keeps_counts_samples_and_pagination(catalog_database, catalog_query, tmp_path):

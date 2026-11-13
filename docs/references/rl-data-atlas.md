@@ -69,12 +69,24 @@ assessment page shows the curation associated with its selected grade.
 
 ## Browsing sources
 
-**By source** lists individual sources with their catalog, unique example
-count, training/evaluation use, current sampled quality, any independent QC the
-pinned release performed, whether the source is Daytona safe, and the curriculum domain
-with the most mapped examples. Search names, datasets or tags; filter by catalog,
-use or quality; select a column heading to sort. Filters and sorting are included in the URL. CSV export
-includes the filtered rows in the displayed order.
+**By source** lists each source's unique example count, training/evaluation use,
+Quality, Result, lexical contamination, actor-only Daytona verdict and leading
+curriculum area. Quality is QUICK for conversion without executed oversight and
+SAMPLE for recorded execution oversight. FULL requires a complete content-review
+assembly: independent QC and valid reviews cover every unique retained
+contract, with no unavailable observations. Uncertain reviews count toward coverage
+and remain separate from the conclusive Result denominator. The source details keep
+execution qualification separate. Partial content reviews show their coverage as
+provisional/incomplete. Result uses the inclusive issue-rate boundaries above.
+
+The default view hides QUICK and BAD entries and folds advisory duplicate groups.
+Expand a group to inspect matching members, or enable **Show QUICK-quality and
+BAD-result sources**. Search and filters apply before grouping; a hidden canonical
+member cannot reappear through a group. Search names, datasets or tags, select a
+column heading to sort, and export filtered rows as CSV. Filters and sorting stay
+in the URL. The four totals show canonical groups, unique examples, displayed
+quality counts and catalog freshness. Source evidence pages include exact release
+pins, deduplication ledgers, lexical measurements, QC and archived assessment packets.
 
 **Daytona safe** measures the actor only: SAFE requires at most ten snapshot
 identities and no refused actor requirements. Sources without an actor show N/A;
@@ -396,7 +408,7 @@ sample, and `/source-duplicates` returns review provenance, opinions and groups.
 Choose a domain from the picker or open an area to see its topics and skills.
 Breadcrumbs return to parent areas or all domains. Search names and descriptions
 across the curriculum, and filter counts by source or training/evaluation use.
-The URL preserves the selected area and filters. Select a count to read sampled
+The URL preserves the selected area, release and filters. The coverage-population picker keeps the retained release primary and makes the previous pre-remediation release available as evidence. Select a count to read sampled
 examples, then open an example for its public instruction preview, embedding
 text, cosine similarity to curriculum anchors and alternative matches.
 Long instruction previews record the original character count and truncation.

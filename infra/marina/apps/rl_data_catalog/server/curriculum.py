@@ -136,6 +136,22 @@ SAMPLE_SQL = (
 
 
 def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
+    @api.get("/curriculum/releases")
+    def releases() -> dict[str, Any]:
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT l.release_id, l.release_uri, l.manifest->>'created_at' AS created_at,
+                        l.load_id=c.load_id AS selected
+                    FROM curriculum_loads l JOIN curriculum_current c
+                        ON l.load_id=c.load_id OR l.load_id=c.previous_load_id
+                    WHERE c.name='latest' ORDER BY selected DESC
+                    """
+                )
+            ).mappings()
+            return {"releases": [dict(row) for row in rows]}
+
     @api.get("/curriculum")
     def coverage(
         filters: Annotated[CoverageQuery, Depends(coverage_query)],

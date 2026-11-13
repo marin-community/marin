@@ -17,6 +17,7 @@ from taskcompendium.source_fingerprints import DuplicateGroup, DuplicateReview
 
 from .curriculum import register_curriculum_routes, source_coverage
 from .daytona import daytona
+from .quality import intended_use, quality, result
 from .schema import SCHEMA_SQL
 
 
@@ -159,8 +160,12 @@ def create_api(services: AppletServices) -> FastAPI:
                         **row["declaration"],
                         "task_count": row["task_count"],
                         "curation": row["curation"],
+                        "quality": quality(row["declaration"], row["curation"]),
+                        "result": result(row["declaration"], (row["cohorts"] or {}).get("admitted")),
+                        "updated_at": metadata["loaded_at"],
                         "daytona": daytona(row["declaration"], DAYTONA_SAFE_SNAPSHOT_LIMIT),
                         "coverage": coverage.get(row["id"]),
+                        "intended_use": intended_use(row["declaration"]),
                         "backend_capabilities": row["backend_capabilities"],
                         "source_fingerprint": (
                             {
@@ -351,6 +356,84 @@ def create_api(services: AppletServices) -> FastAPI:
             "packet": json.loads(row["packet"]),
             "omissions": row["omissions"],
             "exclusion_reason": row["exclusion_reason"],
+        }
+
+    @api.get("/source")
+    def source_evidence(source_id: str) -> dict[str, Any]:
+        """Every quality-evidence pointer the catalog holds for one source."""
+        with engine.connect() as connection:
+            source = source_record(connection, source_id)
+            assessment = None
+            summaries: dict[str, Any] = {}
+            if source["assessment_key"] is not None:
+                parameters = {"load_id": source["load_id"], "pipeline_key": source["assessment_key"]}
+                assessment = dict(
+                    connection.execute(
+                        text(
+                            """
+                    SELECT pipeline_key, scope, model, rubric, curation_uri, traces,
+                        (SELECT COUNT(*) FROM atlas_items i WHERE i.load_id = a.load_id
+                            AND i.pipeline_key = a.pipeline_key) AS sample_items
+                    FROM atlas_assessments a WHERE load_id = :load_id AND pipeline_key = :pipeline_key
+                """
+                        ),
+                        parameters,
+                    )
+                    .mappings()
+                    .one()
+                )
+                summaries = cohort_summaries(connection, **parameters)
+            reviews = [
+                dict(row)
+                for row in connection.execute(
+                    text(
+                        """
+                SELECT id, updated_at, jsonb_array_length(collection->'reviews') AS review_count
+                FROM catalog_reviews WHERE source_id IN (:source_id, :original_source_id) ORDER BY updated_at
+            """
+                    ),
+                    {"source_id": canonical_source_id(source_id), "original_source_id": original_source_id(source_id)},
+                ).mappings()
+            ]
+            capabilities = connection.execute(
+                text(
+                    """
+                    SELECT capabilities FROM atlas_backend_sources WHERE load_id=:load_id
+                        AND source_id IN (:source_id, :original_source_id)
+                    """
+                ),
+                {
+                    "load_id": source["load_id"],
+                    "source_id": canonical_source_id(source_id),
+                    "original_source_id": original_source_id(source_id),
+                },
+            ).scalar_one_or_none()
+            load = loaded_catalog(connection)
+            coverage = source_coverage(connection).get(canonical_source_id(source_id))
+        declaration = source["declaration"]
+        review = summaries.get("admitted")
+        level = quality(declaration, source["curation"])
+        return {
+            "declaration": declaration,
+            "coverage": coverage,
+            "intended_use": intended_use(declaration),
+            "curation": source["curation"],
+            "diagnostics": source["diagnostics"],
+            "backend_capabilities": capabilities,
+            "duplicate_group": source["duplicate_group"],
+            "latest_attempt": {
+                "key": source["latest_attempt_key"],
+                "status": source["latest_attempt_status"],
+                "reason": source["reason"],
+            },
+            "assessment": assessment,
+            "cohorts": summaries,
+            "archived_reviews": reviews,
+            "quality": level,
+            "result": result(declaration, review),
+            "daytona": daytona(declaration, DAYTONA_SAFE_SNAPSHOT_LIMIT),
+            "updated_at": load["loaded_at"],
+            "catalog": {"root": load["catalog_root"], "snapshot_id": load["snapshot_id"]},
         }
 
     @api.get("/archive")
