@@ -963,8 +963,10 @@ def test_snowball_packed_context_parallel_hidden_states_and_loss_are_isolated(
         weights = hax.named((later & (jnp.arange(Pos.size)[None, :] < Pos.size - 1)).astype(jnp.float32), ids.axes)
         outputs = {}
         for context in (1, 4):
+            # Keep the plain baseline on one device: BF16 data-parallel reductions can vary
+            # between identical runs and obscure the packed-attention isolation check.
             mesh = Mesh(
-                np.asarray(devices).reshape(1, 4 // context, 1, context, 1),
+                np.asarray(devices[:context]).reshape(1, 1, 1, context, 1),
                 ("replica_dcn", "data", "expert", "context", "model"),
                 axis_types=(AxisType.Explicit,) * 5,
             )
