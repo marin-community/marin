@@ -344,7 +344,9 @@ the top three per changed source. The runtime-selected `JudgeEndpoint` uses
 `37561816e66b5b9153b1b64c10968c18c1e6f4a0`, temperature 0.7 and prompt
 `source-overlap-v1`. Hosted endpoints must advertise that exact model. The local
 route owns one H100 through `remote_inference`, with compilation and CUDA graphs
-enabled, and releases it when the bounded batch exits. Identical complete
+enabled, and releases it when the bounded batch exits. The local judge uses
+batch priority and a 65,536-token context, including up to 2,048 output tokens.
+Identical complete
 requests reuse cached reviews. Use a labelled duplicate/distinct fixture before
 accepting a new model or prompt.
 

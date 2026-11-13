@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 from finestore.rl.source_identity import canonical_source_id
 from iris.rpc import job_pb2
+from marin.evaluation.model_config import load_model_config
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
@@ -26,6 +27,7 @@ from taskcompendium.models import (
 from taskcompendium.source_fingerprints import DuplicateLabel, SourceFingerprint, SourceIdentitySurvey
 
 from experiments.post_training.task_curation.duplicate_review import (
+    DUPLICATE_MAX_TOKENS,
     DUPLICATE_MODEL,
     DUPLICATE_MODEL_CONFIG,
     LocalDuplicateEndpoint,
@@ -171,6 +173,16 @@ def test_uncached_local_review_requests_batch_gpu_capacity(review_server, monkey
     assert reviews[0].verdict.label is DuplicateLabel.DUPLICATE
     assert leases[0].iris.priority == job_pb2.PRIORITY_BAND_BATCH
     assert review_server.requests[0]["temperature"] == 0.7
+
+
+def test_longest_retained_pair_prompt_fits_local_judge_context():
+    # All 745 frozen pairs were tokenized with Qwen revision 37561816e66b5b9153b1b64c10968c18c1e6f4a0.
+    # Receipt SHA-256: b4d6e4d62acf61757eea387acd9144ca9d98e3c9300de77cd299305f63297433
+    receipt = Path(__file__).parent / "fixtures/source-overlap-context-budget.json"
+    budget = json.loads(receipt.read_text())
+    model = load_model_config(DUPLICATE_MODEL_CONFIG)
+    assert model.serve.max_model_len is not None
+    assert budget["max_prompt_tokens"] + DUPLICATE_MAX_TOKENS <= model.serve.max_model_len
 
 
 @pytest.mark.parametrize("field", ["converter_revision", "task_specs_sha256"])

@@ -10,7 +10,7 @@ resource_hint:
   disk: 150g
 serve:
   tensor_parallel_size: 1
-  max_model_len: 32768
+  max_model_len: 65536
   max_num_batched_tokens: 4096
   max_num_seqs: 4
   gpu_memory_utilization: 0.9
