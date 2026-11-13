@@ -15,6 +15,7 @@ from tests.rl.launch_document_census import render_launch_census
 # A cold SkyRL environment sync and the full batch of compositions share this deadline.
 @pytest.mark.timeout(540)
 def test_rl_launch_documents_load_with_the_vendored_launcher(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MARIN_PREFIX", "s3://test/launch-census")
     producers = set()
     validate = SkyRLSpec.__post_init__
 

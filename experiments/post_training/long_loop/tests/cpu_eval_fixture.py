@@ -283,6 +283,7 @@ def main(root):
     launch["skyrl"].setdefault("generator", {})["trajectory_retention"] = OmegaConf.to_container(
         cfg.generator.trajectory_retention
     )
+    del launch["skyrl"]["generator"]["trajectory_retention"]["output_path"]
     launch["run"]["export_hf"] = False
     launch["runtime"]["entrypoint"] = "skyrl_train.entrypoints.main_generate"
     launch["artifacts"] = {

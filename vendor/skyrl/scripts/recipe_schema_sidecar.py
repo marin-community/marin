@@ -187,6 +187,8 @@ TYPES = MappingProxyType(
         "trainer.rope_theta": "int | float | None",
         "generator.trajectory_retention.reward_below": "int | float | None",
         "generator.trajectory_retention.reward_above": "int | float | None",
+        "generator.trajectory_retention.max_bytes_per_step": "int | None",
+        "generator.trajectory_retention.max_bytes_per_run": "int | None",
         "trainer.evaluation_runner": _literal(runtime_options.EvaluationRunner),
         "generator.model_loading": _literal(RolloutModelLoading),
         "data.preference_pair_format": _literal(PreferencePairFormat),
