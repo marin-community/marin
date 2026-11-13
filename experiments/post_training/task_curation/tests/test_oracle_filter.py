@@ -21,6 +21,7 @@ from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.oracle_filter import (
     calibrate_cohort,
+    collect_trials,
     filter_cohort,
     harbor_inspection,
     native_requirements,
@@ -225,6 +226,10 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
     pq.write_table(pa.Table.from_pylist(rows), cohort)
     with pytest.raises(ValueError, match="changed after Harbor export"):
         filter_cohort(cohort, task_map, tmp_path / "jobs", tmp_path / "stale/tasks.parquet")
+
+    (tmp_path / "native/pass/instruction.md").write_text("Changed after the trial.")
+    with pytest.raises(ValueError):
+        collect_trials(tmp_path / "jobs")
 
 
 @pytest.mark.parametrize(("declared", "native_declared"), [(True, True), (False, False), (False, True)])
