@@ -86,6 +86,6 @@ def simpleqa_item(task: TaskSpec) -> EvaluationItem:
 
 def simpleqa_verified_item(task: TaskSpec) -> EvaluationItem:
     """Grade only the final answer: the reference implementation never shows the judge a reasoning trace."""
-    return chat_item(task, response_selection="final").model_copy(
+    return chat_item(task, response_selection="final_only").model_copy(
         update={"groups": {"source_index": str(source_evidence(task)["source_index"])}}
     )

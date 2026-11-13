@@ -183,7 +183,7 @@ def test_simpleqa_verified_publishes_bare_question_and_judges_only_the_final_ans
 
     (case,) = published_cases(simpleqa_verified_source(thinking=False), write_rows, tmp_path, monkeypatch, 1)
     assert conversation_messages(case.task.context.events) == [{"role": "user", "content": "Who wrote it?"}]
-    assert case.item.operation.response_selection == "final"
+    assert case.item.operation.response_selection == "final_only"
     assert case.item.groups == {"source_index": "0"}
     state, connection = judge_http
     state["response"] = judge_response("SimpleQAVerified")
