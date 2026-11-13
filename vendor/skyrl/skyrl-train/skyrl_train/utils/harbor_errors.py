@@ -15,7 +15,7 @@ class ErrorCategory(StrEnum):
     UNKNOWN = "unknown"
 
 
-# Persisted exception names from the editable Harbor revision in uv.lock.
+# Copies vendor/harbor/src/harbor_config/errors.py; test_harbor_error_categories.py keeps the mappings equal.
 _ERROR_CATEGORIES: Mapping[str, ErrorCategory] = MappingProxyType(
     {
         "ContextManagementInfrastructureError": ErrorCategory.INFRASTRUCTURE,
