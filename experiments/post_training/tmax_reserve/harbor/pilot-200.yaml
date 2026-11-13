@@ -1,0 +1,51 @@
+# TMax-15K reserve pilot: the TBLite scoring policy (eval-campaign-09-25-unlabeled/harbor-configs/
+# ot-tblite-recovery.yaml) with four changes: the local 200-task dataset (written by
+# `python -m experiments.post_training.tmax_reserve.reserve package`), k=8 attempts, 64 concurrent trials, and
+# a whole-sandbox Daytona network policy that allows only iris.oa.dev. Terminus-2 calls the model from the
+# Harbor process, and the TMax verifier runs pytest only, so the sandbox needs no other egress.
+n_concurrent_trials: 64
+n_attempts: 8
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 10
+  include_exceptions:
+  - InternalServerError
+  - APIConnectionError
+  - APITimeoutError
+  - ArtifactUploadTimeoutError
+  - ArtifactWriterBacklogError
+  - CancelledError
+  - ContextManagementInfrastructureError
+  - LLMRequestTimeoutError
+  - SandboxBuildFailedError
+  - ContainerRegistryThrottledError
+  - AgentSetupTimeoutError
+  - DaytonaSandboxStopError
+  - DaytonaProcessError
+  - TrialTimeoutError
+  - ArtifactWriteTimeoutError
+  - Tau3RuntimeInfrastructureError
+  - Tau3TargetInfrastructureError
+  - VerifierTimeoutError
+  - VerifierRuntimeError
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+  exclude_exceptions: []
+environment:
+  type: daytona
+  kwargs:
+    network_policy:
+      mode: domain_allow_list
+      value: iris.oa.dev
+agents:
+- name: terminus-2
+  override_setup_timeout_sec: 360
+  override_timeout_sec: 1800
+  kwargs:
+    model_info:
+      max_input_tokens: 32768
+datasets:
+- path: ../tasks/pilot-200
+verifier:
+  override_timeout_sec: 300
