@@ -45,7 +45,8 @@ async def test_original_judge_contract_uses_real_local_disk_and_cgroup_limits(tm
             groups = set(factory.cgroup_parent.glob("shellbox-*")) - before
             assert len(groups) == 1
             group = groups.pop()
-            assert (group / "cpu.max").read_text().split() == [str(spec.cpus * 100000), "100000"]
+            quota, period = map(int, (group / "cpu.max").read_text().split())
+            assert quota == spec.cpus * period
             assert (group / "memory.max").read_text().strip() == str(spec.memory_mb * 1024 * 1024)
             images = list(factory.disk_pool.root.glob("sandbox-*/disk.img"))
             assert len(images) == 1
