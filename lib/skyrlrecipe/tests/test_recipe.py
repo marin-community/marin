@@ -77,11 +77,13 @@ def test_recipe_round_trip_preserves_immutable_containers_and_mapping_order():
     assert restored == updated
     with pytest.raises(TypeError):
         restored.generator.engine_init_kwargs["schedule"]["windows"] = (9,)
-    for routes in ({1: 2}, {1: 2, "1": 3}):
+    for routes in ({1: 2}, {1: 2, "1": 3}, {"nested": {1: 2, "1": 3}}):
         document = {"context_budget": context.to_skyrl(), "generator": {"engine_init_kwargs": routes}}
         original_routes = list(routes.items())
         with pytest.raises(ValueError, match="mapping keys must be strings"):
             schema.SkyRLRecipe.from_document(document)
+        with pytest.raises(ValueError, match="mapping keys must be strings"):
+            recipe.generator.replace(engine_init_kwargs=routes)
         assert list(document["generator"]["engine_init_kwargs"].items()) == original_routes
 
 

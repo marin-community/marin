@@ -131,10 +131,11 @@ class Section(BaseModel):
 
     def replace(self, **changes: Any) -> Self:
         """Return a validated section with the supplied fields replaced."""
-        return type(self).model_validate_json(json.dumps({**self.to_skyrl(), **thaw(changes)}, allow_nan=False))
+        document = freeze({**self.to_skyrl(), **thaw(changes)})
+        return type(self).model_validate_json(json.dumps(thaw(document), allow_nan=False))
 
     def model_copy(self, *args: Any, **kwargs: Any) -> Self:
-        raise TypeError("model_copy skips validation; use merge()")
+        raise TypeError("model_copy skips validation; use replace()")
 
 
 _SectionT = TypeVar("_SectionT", bound=Section)
