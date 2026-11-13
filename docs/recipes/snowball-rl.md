@@ -82,7 +82,7 @@ python -m experiments.post_training.snowball_rl_publication --preset learning-me
 
 The pins in `snowball_rl_gate.CONTROLS` must match the preset's current revision; unavailable pins
 produce a usage error. Speed presets and data-short publish nothing. See the
-[dashboard and record contract](../../infra/marina/apps/rl_progress/README.md) for native identity,
+[dashboard and record contract](https://github.com/marin-community/marin/blob/2a13c0c0627c2a6b2dd6b44d898edd530b4e1b6d/infra/marina/apps/rl_progress/README.md) for native identity,
 recorded measurements and stored gate facts.
 
 ## Change one input
