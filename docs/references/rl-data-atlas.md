@@ -257,6 +257,10 @@ or FULL still require a computed Result. Catalog publication and production
 imports retain their strict Result gate; preview imports retain all admission
 and grading-census checks. Display policy is part of the load identity, so a
 preview import cannot make a later strict import skip validation.
+Matching computed aggregate and independent sample-panel counts display SAMPLE
+without changing execution oversight. The same pure projection runs during
+loading and API reads, so a code upgrade keeps an existing selected catalog
+readable even if a later strict reload is rejected.
 
 Before validation and release, optional frozen partial-review observations can
 replace `dist/measurements/content-progress.json`. Its JSON object contains

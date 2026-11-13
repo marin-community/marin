@@ -14,7 +14,7 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
     page.emulate_media(color_scheme=theme)
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-all").check()
-    expect(page.locator("#rows tr")).to_have_count(20)
+    expect(page.locator("#rows tr")).to_have_count(21)
     expected = {
         "clean": "NO ISSUES",
         "stale-clean": "NOT MEASURED",
@@ -68,6 +68,9 @@ def test_complete_sample_is_final_and_unfinished_reviews_are_provisional(journey
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-all").check()
     complete = page.locator('tr[data-source-id="Marin:sample-complete"]')
+    content_only = page.locator('tr[data-source-id="Marin:sample-content"]')
+    expect(content_only.locator(".level")).to_have_text("SAMPLE")
+    expect(content_only.locator(".result-provisional")).to_have_count(0)
     expect(complete.locator(".level")).to_have_text("SAMPLE")
     expect(complete.locator(".result-provisional")).to_have_count(0)
     expect(complete.locator("td").nth(4)).to_have_text("Good")

@@ -825,6 +825,40 @@ def test_atlas_blocks_invalid_admission_census_without_replacing_selected_catalo
         assert client.get("/sources").json()["snapshot_id"] == "reviewed"
 
 
+def test_release_keeps_legacy_selected_catalog_readable_after_rejected_strict_reload(
+    catalog_database, catalog_query, tmp_path
+):
+    root = str(tmp_path / "legacy")
+    publish_sample(root, "reviewed")
+    load_catalog(CurationCatalog(root), catalog_query)
+    publish_sample(root, "pending", unassessed_oversight=OversightLevel.SAMPLE)
+    catalog = CurationCatalog(root)
+    pending = next(iter(catalog.sources("pending"))).declaration.model_dump(mode="json")
+    catalog_query(
+        "UPDATE atlas_sources SET declaration=CAST(:declaration AS JSONB), assessment_key=NULL, curation=NULL "
+        "WHERE load_id=(SELECT load_id FROM atlas_current WHERE name='latest')",
+        {"declaration": json.dumps(pending)},
+    )
+    with catalog_database.begin() as connection:
+        migrate(connection)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        for reload in (False, True):
+            if reload:
+                with pytest.raises(ValueError, match="SAMPLE/FULL quality requires a computed Result"):
+                    load_catalog(catalog, catalog_query)
+            response = client.get("/sources")
+            assert response.status_code == 200
+            assert response.json()["snapshot_id"] == "reviewed"
+            source = response.json()["sources"][0]
+            detail_response = client.get("/source", params={"source_id": source["id"]})
+            assert detail_response.status_code == 200
+            detail = detail_response.json()
+            assert source["quality"] == detail["quality"] == "QUICK"
+            assert source["quality_review_status"] == detail["quality_review_status"] == "SAMPLE review in progress"
+            assert source["result"] is detail["result"] is None
+            assert detail["declaration"] == pending
+
+
 @pytest.mark.parametrize("verdicts, provisional", [(("good", "good"), False), (("good", "unknown"), True)])
 def test_loaded_sample_result_uses_required_review_completeness(
     catalog_database, catalog_query, tmp_path, verdicts, provisional
@@ -953,6 +987,9 @@ def test_loaded_assemblies_keep_inflight_and_uncertain_results_provisional(catal
             assert declaration.quality_result is not None
             assert source["review_completeness"]["reviewed"] == declaration.quality_result.reviewed
         assert sources["Marin:sample-complete"]["quality"] == sources["Marin:sample-uncertain"]["quality"] == "SAMPLE"
+        content_only = sources["Marin:sample-content"]
+        assert content_only["quality"] == "SAMPLE" and content_only["oversight"] == "none"
+        assert content_only["result"] == "GOOD" and content_only["result_provisional"] is False
         assert sources["Marin:full-uncertain"]["quality"] == "FULL"
         assert sources["Marin:full-inflight"]["review_completeness"]["coverage_complete"] is False
 

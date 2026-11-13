@@ -6,7 +6,6 @@
 import json
 import shutil
 from collections.abc import Iterator
-from dataclasses import asdict
 from pathlib import Path
 from uuid import UUID
 
@@ -19,7 +18,7 @@ from marina.server import MarinaConfig
 from sqlalchemy import text
 
 from infra.marina.apps.rl_data_catalog.server.app import migrate
-from infra.marina.apps.rl_data_catalog.server.quality import quality_display, review_completeness
+from infra.marina.apps.rl_data_catalog.server.quality import review_completeness
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import pending_review_declaration, review_declarations
 
@@ -51,15 +50,14 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                 connection.execute(
                     text(
                         "INSERT INTO atlas_sources (load_id,id,declaration,latest_attempt_status,"
-                        "diagnostics,review_completeness,quality_display) "
+                        "diagnostics,review_completeness) "
                         "VALUES ('lexical',:id,CAST(:declaration AS JSONB),'skipped','{}'::jsonb,"
-                        "CAST(:completeness AS JSONB),CAST(:display AS JSONB))"
+                        "CAST(:completeness AS JSONB))"
                     ),
                     {
                         "id": declaration.id,
                         "declaration": declaration.model_dump_json(),
                         "completeness": json.dumps(review_completeness(declaration, [], [])),
-                        "display": json.dumps(asdict(quality_display(declaration, None, None))),
                     },
                 )
             connection.execute(text("UPDATE atlas_current SET load_id='lexical' WHERE name='latest'"))

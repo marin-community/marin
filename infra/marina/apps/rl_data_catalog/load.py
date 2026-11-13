@@ -7,7 +7,6 @@ import json
 import time
 import uuid
 from collections.abc import Iterable
-from dataclasses import asdict
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -40,7 +39,7 @@ from experiments.post_training.task_curation.catalog_identity import (
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID
-from infra.marina.apps.rl_data_catalog.server.quality import quality_display, review_completeness
+from infra.marina.apps.rl_data_catalog.server.quality import Quality, quality_display, review_completeness
 
 MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
@@ -57,7 +56,7 @@ TABLE_COLUMNS = {
     "sources": (
         "id TEXT, declaration JSONB, assessment_key TEXT, latest_attempt_key TEXT, "
         "latest_attempt_status TEXT, reason TEXT, curation JSONB, diagnostics JSONB, "
-        "source_fingerprint JSONB, duplicate_group JSONB, review_completeness JSONB, quality_display JSONB"
+        "source_fingerprint JSONB, duplicate_group JSONB, review_completeness JSONB"
     ),
     "assessments": (
         "pipeline_key TEXT, source_id TEXT, scope TEXT, model JSONB, rubric TEXT, "
@@ -248,10 +247,14 @@ def load_catalog(
     all_items = []
     for source, record in zip(sources, metadata["sources"], strict=True):
         key = source.assessment_key
-        record["quality_display"] = asdict(quality_display(source.declaration, source.curation, key))
         record["review_completeness"] = review_completeness(source.declaration, [], [])
         if key is None:
-            if display_policy is CatalogDisplayPolicy.STRICT:
+            display = quality_display(
+                source.declaration.model_dump(mode="json"),
+                source.curation.model_dump(mode="json") if source.curation else None,
+                key,
+            )
+            if display_policy is CatalogDisplayPolicy.STRICT or display.quality is not Quality.QUICK:
                 require_content_result(source.declaration, source.curation, key)
             continue
         assessment = canonical_assessment(catalog.assessment(key))

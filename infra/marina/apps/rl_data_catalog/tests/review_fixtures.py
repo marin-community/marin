@@ -28,6 +28,7 @@ def pending_review_declaration() -> SourceDeclaration:
 def review_declarations() -> list[tuple[bool, SourceDeclaration]]:
     base = contamination_declarations()[0][1].model_dump(mode="json")
     cases = [
+        ("sample-content", 2, 0, 0, "none", 2, False),
         ("sample-complete", 2, 0, 0, "sample", None, False),
         ("sample-uncertain", 1, 1, 0, "sample", None, True),
         ("full-inflight", 1, 0, 2, "full", 1, True),

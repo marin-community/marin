@@ -68,7 +68,6 @@ CREATE TABLE IF NOT EXISTS atlas_sources (
 ALTER TABLE atlas_sources ADD COLUMN IF NOT EXISTS source_fingerprint JSONB;
 ALTER TABLE atlas_sources ADD COLUMN IF NOT EXISTS duplicate_group JSONB;
 ALTER TABLE atlas_sources ADD COLUMN IF NOT EXISTS review_completeness JSONB;
-ALTER TABLE atlas_sources ADD COLUMN IF NOT EXISTS quality_display JSONB;
 CREATE TABLE IF NOT EXISTS atlas_identity_surveys (
     load_id TEXT PRIMARY KEY, survey_id TEXT NOT NULL, metadata JSONB NOT NULL
 );

@@ -23,6 +23,9 @@ QUICK with “SAMPLE review in progress” in details and the Quality tooltip.
 It preserves the declaration and leaves Result, issue rate and completeness
 unmeasured. Production loads and catalog publication retain the strict Result
 requirement; preview mode still requires complete admission and grading evidence.
+Matching aggregate and independent SAMPLE-panel counts display SAMPLE even when
+declared execution oversight is unchanged. One pure projection serves the loader,
+source list and details; existing catalogs need no display-metadata backfill.
 Use the shared chip colors, with light and dark theme rules; a remediation warning
 also has a strong border. Phone layouts expose hidden columns through source
 details and Evidence. Do not rely on color alone to convey a state.
