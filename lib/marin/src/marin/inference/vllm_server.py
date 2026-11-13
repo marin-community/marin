@@ -783,6 +783,7 @@ def _router_data_parallel_size(extra_cli_args: Sequence[str]) -> int:
     parser.add_argument("--data-parallel-size-local", "-dpl", type=int)
     parser.add_argument("--data-parallel-rank", "-dpn", type=int)
     parser.add_argument("--data-parallel-start-rank", "-dpr", type=int)
+    parser.add_argument("--nnodes", type=int, default=1)
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--data-parallel-hybrid-lb", "-dph", action=argparse.BooleanOptionalAction)
     parser.add_argument("--data-parallel-external-lb", "-dpe", action=argparse.BooleanOptionalAction)
@@ -793,6 +794,9 @@ def _router_data_parallel_size(extra_cli_args: Sequence[str]) -> int:
         # vLLM normalizes underscores in option names, leaving their values intact.
         native_args.append(f"{option.replace('_', '-')}{equals}{value}" if arg.startswith("--") else arg)
     topology, _ = parser.parse_known_args(native_args)
+    local_dp = topology.data_parallel_size_local
+    if local_dp is None and topology.nnodes > 1:
+        local_dp = max(topology.data_parallel_size // topology.nnodes, 1)
     # A rank selects external balancing; a partial local group with a start rank
     # selects hybrid balancing even without an explicit load-balancer flag.
     if (
@@ -803,8 +807,8 @@ def _router_data_parallel_size(extra_cli_args: Sequence[str]) -> int:
         or (
             not topology.headless
             and topology.data_parallel_start_rank is not None
-            and topology.data_parallel_size_local is not None
-            and topology.data_parallel_size_local != topology.data_parallel_size
+            and local_dp is not None
+            and local_dp != topology.data_parallel_size
         )
     ):
         raise ValueError("session routing requires vLLM's global internal DP load balancer")

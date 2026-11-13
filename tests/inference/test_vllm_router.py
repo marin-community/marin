@@ -220,9 +220,9 @@ def test_router_never_publishes_an_endpoint_with_an_unavailable_worker(router_wo
         pytest.param(("--data-parallel-size", "2", "-dp", "4"), 4, id="short-alias"),
         pytest.param(("--data_parallel_size=4", "--data-parallel-size-local", "2"), 4, id="underscore-alias"),
         pytest.param(
-            ("--data-parallel-size=4", "--data-parallel-size-local=4", "--data-parallel-start-rank=0"),
+            ("--data-parallel-size=4", "--nnodes=1", "--data-parallel-start-rank=0"),
             4,
-            id="all-local-internal-balancer",
+            id="single-host-inferred-local-size",
         ),
         pytest.param(
             ("--data-parallel-size=4", "--data-parallel-external-lb", "--no-data-parallel-external-lb"),
@@ -282,6 +282,7 @@ def test_environment_routes_native_ranks_without_a_backend_or_second_topology_se
         ("--data-parallel-rank=0",),
         ("-dpn", "0"),
         ("--data-parallel-size-local=2", "--data-parallel-start-rank=0"),
+        ("--nnodes=2", "--data-parallel-start-rank=0"),
         ("-dpl", "2", "-dpr", "0"),
     ],
 )
