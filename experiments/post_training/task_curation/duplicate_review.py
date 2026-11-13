@@ -100,7 +100,7 @@ class LocalDuplicateEndpoint:
                 session.wait_until_ready()
                 endpoint = session.model.endpoint
                 with HostedJudgeEndpoint(
-                    DUPLICATE_MODEL, endpoint.base_url, endpoint.api_key or "unused"
+                    DUPLICATE_MODEL, endpoint.base_url, api_key or endpoint.api_key or "unused"
                 ).connect() as connection:
                     yield connection
         finally:
