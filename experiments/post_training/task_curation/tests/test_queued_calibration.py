@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("iris")
+pytest.importorskip("harbor")
 
 from daytona import DaytonaConnectionError
 from harbor.environments import factory as environment_factory
@@ -35,7 +35,7 @@ def test_calibration_consumes_queued_attempt_verdicts_and_infrastructure_failure
     (native / "instruction.md").write_text("Write done to answer.txt.\n")
     (native / "task.toml").write_text(
         '[environment]\ndocker_image="fixture:1"\nallow_internet=false\nworkdir="/workspace"\n'
-        'cpus=1\nmemory_mb=2048\nstorage_mb=2048\n[agent]\ntimeout_sec=300\n[verifier]\ntimeout_sec=60\n'
+        "cpus=1\nmemory_mb=2048\nstorage_mb=2048\n[agent]\ntimeout_sec=300\n[verifier]\ntimeout_sec=60\n"
     )
     solution = f"printf {'wrong' if outcome == 'wrong' else 'done'} > answer.txt\n"
     (native / "solution/solve.sh").write_text(solution)
@@ -48,7 +48,11 @@ def test_calibration_consumes_queued_attempt_verdicts_and_infrastructure_failure
     row = prebuilt_task("task")
     task = TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"])
     task = task.model_copy(
-        update={"resources": task.resources.model_copy(update={"oracle": (inline_resource("solution/solve.sh", solution.encode()),)})}
+        update={
+            "resources": task.resources.model_copy(
+                update={"oracle": (inline_resource("solution/solve.sh", solution.encode()),)}
+            )
+        }
     )
     inspection = harbor_inspection("tasks", [str(native)])[str(native)]
     mapping = {
