@@ -1344,13 +1344,21 @@ list does not advertise `glm-5.3`. A provider that cannot accept temperature may
 `temperature=None` to retain its API default; zero is disallowed.
 
 The spec pins base rubric `task-quality-v1`, its SHA-256 content hash, and review
-payload revision `3`. To change the base rubric, edit `BASE_RUBRIC` and bump
+payload revision `4`. To change the base rubric, edit `BASE_RUBRIC` and bump
 `BASE_RUBRIC_VERSION` in `taskcompendium.pipeline.reviewer_spec`; the content
 hash is computed from that text. Bump `REVIEW_PAYLOAD_REVISION` when changing the
 task evidence projected into the request. Quality review appends per-source
 `ReviewRubric` criteria to the base rubric and includes its ID and version in the
 request and quality manifest. Assessments use and retain their separate full
 assessment rubric text.
+
+Revision 4 separates content quality from execution qualification: it excludes
+top-level `execution_requirements`, actor/grader `packages_lock` artifact paths,
+and deployment-runtime rubric text. Its semantic task ID hashes the same
+projection, so calibration-only changes reuse exact requests. Full task and
+runtime hashes remain in the audit. Images, grader settings and resource bytes
+remain visible; edits to native task.toml or verifier code invalidate requests.
+The spec records serving precision as part of reviewer identity.
 
 Quality manifests and assessment model metadata record the complete spec identity.
 The request-cache namespace includes every spec field, including deployment and
