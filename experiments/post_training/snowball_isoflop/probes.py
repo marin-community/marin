@@ -18,8 +18,8 @@ from experiments.post_training.snowball_isoflop.config import (
     VERSION,
     Cell,
     Mask,
+    baseline_optimizer,
     build_spec,
-    recipe,
     resources,
     training_flops_per_position,
 )
@@ -27,8 +27,8 @@ from experiments.post_training.snowball_isoflop.config import (
 
 @dataclass(frozen=True)
 class Layout:
-    context: int = 8
-    data: int = 1
+    context: int = 4
+    data: int = 2
     expert: int = 1
     replica: int = 1
     dispatch: str = "sonic"
@@ -96,7 +96,7 @@ class Probe:
 def batch_probes(size: int) -> tuple[Probe, ...]:
     # The accumulation-only probe diagnoses overhead; five microbatch increases
     # select a training batch with at least the approved baseline exposure.
-    return (Probe("B-accumulation", size, 1, 1), *(Probe("B", size, microbatch, 8) for microbatch in (1, 2, 4, 8, 16)))
+    return (Probe("B-accumulation", size, 1, 1), *(Probe("B", size, microbatch, 4) for microbatch in (1, 2, 4, 8, 16)))
 
 
 def layout_probes(size: int, batch_size: int) -> tuple[Probe, ...]:
@@ -104,9 +104,9 @@ def layout_probes(size: int, batch_size: int) -> tuple[Probe, ...]:
         Layout(),
         Layout(dispatch="ring_gather_combine"),
         Layout(offload=False),
-        Layout(context=4, data=2),
-        Layout(context=4, expert=2, dispatch="ring_gather_combine"),
-        Layout(context=4, replica=2),
+        Layout(context=8, data=1),
+        Layout(context=4, data=1, expert=2, dispatch="ring_gather_combine"),
+        Layout(context=4, data=1, replica=2),
     )
     if batch_size % 8:
         raise ValueError("The B-selected batch must be divisible by eight")
@@ -125,10 +125,10 @@ def at_budget(probe: Probe, budget: float, phase: str) -> Probe:
 def build_probe_pod(probe: Probe) -> TrainLmOnPodConfig:
     spec = build_spec(probe.cell)
     assert spec.trainer_config is not None and spec.model_config is not None and spec.snowball_sft is not None
-    optimizer = recipe()["optimizer"]
+    optimizer = draccus.encode(baseline_optimizer(probe.size))
     optimizer["learning_rate"] = probe.learning_rate
     if probe.optimizer == "grug_moe_muonh_v1":
-        optimizer["adam_lr"] = probe.learning_rate
+        optimizer["adam_lr"] = probe.learning_rate * 3 / 13
     elif probe.optimizer == "adam":
         for key in ("adam_lr", "momentum", "backend_steps", "muon_epsilon", "coefficient_type"):
             optimizer.pop(key)

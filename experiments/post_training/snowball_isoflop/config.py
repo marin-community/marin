@@ -13,10 +13,12 @@ from enum import StrEnum
 from pathlib import Path
 
 import draccus
+import jmp
 from fray.types import ResourceConfig
 from iris.rpc.proto_display import priority_band_value
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import LmDataConfig
+from levanter.eval_audit import InitialEvalMatchConfig
 from levanter.models.snowball import GrugMoeHfConfig, SnowballConfig
 from levanter.models.snowball_sft import SnowballSftConfig
 from levanter.optim.config import OptimizerConfig
@@ -35,11 +37,12 @@ BATCH_SIZE = 8
 SCHEDULE_STEPS = 4750
 TASK_TIMEOUT = 259200
 PREFIX = "s3://marin-us-east-08a/marin/users/benfeuer/snowball-isoflop"
-VERSION = "2026.11.13.3"
+VERSION = "2026.11.13.4"
 BUDGETS = (3e18, 1e19, 3e19)
 SIZES = (512, 768, 1024)
 SPECIAL_IDS = (128006, 128007, 128002, 128003, 128005, 128011, 128009)
 ANCHOR_IDS = (3560, 1984, 1781, 4320, 5507, 842, 128001)
+REFERENCE_SOURCES = ("pretrain/c01q2", "pretrain/c02q4", "pretrain/c20q2", "pretrain/c34q3")
 
 
 class Mask(StrEnum):
@@ -68,6 +71,28 @@ def recipe() -> dict:
 
 def model_receipt(size: int) -> dict:
     return json.loads((INPUTS / f"d{size}-hf-config.json").read_text())
+
+
+def baseline_optimizer(size: int) -> OptimizerConfig:
+    pretrain = json.loads((INPUTS / f"d{size}-pretrain-settings.json").read_text())["optimizer"]
+    optimizer = recipe()["optimizer"]
+    for name in (
+        "beta1",
+        "beta2",
+        "epsilon",
+        "momentum",
+        "nesterov",
+        "backend_steps",
+        "coefficient_type",
+        "muon_epsilon",
+        "weight_decay",
+    ):
+        optimizer[name] = pretrain[name]
+    optimizer["learning_rate"] = 5e-5
+    optimizer["adam_lr"] = 5e-5 * 3 / 13
+    # Apply one global clip before optimizer parameter-group partitioning.
+    optimizer["max_grad_norm"] = None
+    return draccus.decode(OptimizerConfig, optimizer)
 
 
 def training_flops_per_position(size: int) -> float:
@@ -114,6 +139,7 @@ def data_config(mask: Mask) -> LmDataConfig:
     data = recipe()["data"]
     # Only phase 0 is reached at these exposure budgets. Keep its exact weights.
     data["train_weights"] = [data["train_weights"][0]]
+    data["num_validation_sequences"].update({name: 2 for name in REFERENCE_SOURCES})
     if mask == Mask.ASSISTANT:
         for component in data["components"].values():
             for leaf in component.get("children", {"self": component}).values():
@@ -130,10 +156,23 @@ def data_config(mask: Mask) -> LmDataConfig:
 def evaluation_data_config() -> LmDataConfig:
     data = data_config(Mask.ASSISTANT)
     assert data.num_validation_sequences is not None
-    selected = {name: data.components[name] for name in data.num_validation_sequences}
+    reserved = recipe()["data"]["num_validation_sequences"]
+    selected = {name: data.components[name] for name in reserved}
     # Validation reserves the same packed sequences, but need not construct
     # training pack indices for every unrelated corpus component a second time.
-    return replace(data, components=selected, train_weights={name: 1.0 for name in selected})
+    return replace(
+        data, components=selected, train_weights={name: 1.0 for name in selected}, num_validation_sequences=reserved
+    )
+
+
+def reference_data_config() -> LmDataConfig:
+    data = data_config(Mask.FULL)
+    return replace(
+        data,
+        components={name: data.components[name] for name in REFERENCE_SOURCES},
+        train_weights={name: 1.0 for name in REFERENCE_SOURCES},
+        num_validation_sequences={name: 2 for name in REFERENCE_SOURCES},
+    )
 
 
 def build_spec(cell: Cell) -> SFTSpec:
@@ -150,7 +189,7 @@ def build_spec(cell: Cell) -> SFTSpec:
         fp32_activations=False,
     )
     mesh = MeshConfig(
-        axes={"context": 8, "data": 1, "expert": 1, "replica": 1, "model": 1},
+        axes={"context": 4, "data": 2, "expert": 1, "replica": 1, "model": 1},
         dcn_axes={"replica_dcn": 1},
         compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context"},
         param_mapping={"embed": "data"},
@@ -162,6 +201,7 @@ def build_spec(cell: Cell) -> SFTSpec:
     trainer = draccus.decode(TrainerConfig, raw_trainer)
     trainer = replace(
         trainer,
+        mp=jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"),
         offload_opt_state=True,
         loader_fetch_batch_size=4,
         loader_max_buffered_batches=512,
@@ -206,7 +246,14 @@ def build_spec(cell: Cell) -> SFTSpec:
         datasets=(),
         prepared_data=data_config(cell.mask),
         evaluation_data=evaluation_data_config(),
-        optimizer=draccus.decode(OptimizerConfig, e1["optimizer"]),
+        initial_eval_match=InitialEvalMatchConfig(
+            data=reference_data_config(),
+            reference_path=f"{PREFIX}/{VERSION}/reference-d{cell.size}/result.json",
+            sequence_length=SEQ_LEN,
+            max_examples_per_dataset=2,
+            special_token_ids=SPECIAL_IDS,
+        ),
+        optimizer=baseline_optimizer(cell.size),
         optimizer_num_train_steps=SCHEDULE_STEPS,
         mesh=mesh,
         seq_len=SEQ_LEN,
@@ -214,6 +261,7 @@ def build_spec(cell: Cell) -> SFTSpec:
         per_device_parallelism=1,
         num_train_steps=cell.stop_step,
         z_loss_weight=1e-4,
+        global_gradient_clip=1.0,
         snowball_sft=SnowballSftConfig(SPECIAL_IDS, ANCHOR_IDS, math.sqrt(32), True),
         token_weighted_accumulation=True,
         tensorstore_cache_bytes=2**31,

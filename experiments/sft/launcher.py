@@ -83,6 +83,7 @@ from fray.types import ANY_REGION, CpuConfig, Entrypoint, GpuConfig, JobRequest,
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
 from levanter.data.text.formats import ChatLmDatasetFormat
+from levanter.eval_audit import InitialEvalMatchConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.lm_model import LmConfig
 from levanter.models.snowball_sft import SnowballSftConfig
@@ -243,12 +244,14 @@ def _levanter_train_config(
         hf_save_chat_template=spec.chat_template,
         hf_generation_eos_token_ids=list(eos_token_ids),
         z_loss_weight=spec.z_loss_weight,
+        global_gradient_clip=spec.global_gradient_clip,
         optimizer_num_train_steps=spec.optimizer_num_train_steps,
         snowball_sft=spec.snowball_sft,
         token_weighted_accumulation=spec.token_weighted_accumulation,
         data_seed=spec.data_seed,
         tensorstore_cache_bytes=spec.tensorstore_cache_bytes,
         evaluation_data=spec.evaluation_data,
+        initial_eval_match=spec.initial_eval_match,
     )
 
 
@@ -618,6 +621,8 @@ class SFTSpec:
     model_config: LmConfig | None = None
     trainer_config: TrainerConfig | None = None
     z_loss_weight: float = 0.0
+    global_gradient_clip: float | None = None
+    initial_eval_match: InitialEvalMatchConfig | None = None
     optimizer_num_train_steps: int | None = None
     snowball_sft: SnowballSftConfig | None = None
     token_weighted_accumulation: bool = False

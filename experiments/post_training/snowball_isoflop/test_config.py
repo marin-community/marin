@@ -97,8 +97,15 @@ def test_native_sft_lowering_reproduces_explicit_recipe_and_survives_hf_reload(c
     config = pod.train_config
     assert isinstance(config, TrainLmConfig)
     e1 = recipe()
-    assert draccus.encode(config)["optimizer"] == e1["optimizer"]
-    assert np.dtype(config.trainer.mp.param_dtype).name == "bfloat16"
+    assert config.optimizer.learning_rate == 5e-5
+    assert config.optimizer.adam_lr == 5e-5 * 3 / 13
+    assert config.optimizer.beta1 == 0.9062
+    assert config.optimizer.beta2 == 0.992027944069944
+    assert config.optimizer.max_grad_norm is None
+    assert config.global_gradient_clip == 1.0
+    assert config.optimizer.warmup == e1["optimizer"]["warmup"]
+    assert config.optimizer.decay == e1["optimizer"]["decay"]
+    assert np.dtype(config.trainer.mp.param_dtype).name == "float32"
     assert np.dtype(config.trainer.mp.compute_dtype).name == "bfloat16"
     assert config.trainer.train_batch_size == 8
     assert config.trainer.per_device_parallelism == 1
@@ -150,8 +157,8 @@ def test_both_masks_keep_every_cache_and_pack_boundary_including_concat_children
 def test_validation_selection_preserves_reserved_sources_and_packing():
     full = data_config(Mask.ASSISTANT)
     selected = evaluation_data_config()
-    assert selected.num_validation_sequences == full.num_validation_sequences
-    assert set(selected.components) == set(full.num_validation_sequences)
+    assert selected.num_validation_sequences == recipe()["data"]["num_validation_sequences"]
+    assert set(selected.components) == set(selected.num_validation_sequences)
     for name, component in selected.components.items():
         assert draccus.encode(component) == draccus.encode(full.components[name])
 

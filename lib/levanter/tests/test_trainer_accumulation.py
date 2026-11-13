@@ -7,11 +7,28 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import jmp
 
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import TrainerState
 from levanter.utils.mesh import MeshConfig
+
+
+def test_fp32_master_parameters_accumulate_updates_below_bfloat16_resolution():
+    optimizer = optax.sgd(1e-4)
+    policy = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
+    state = TrainerState.init(optimizer, jnp.asarray(1.0, jnp.bfloat16), key=jax.random.key(0), mp=policy)
+
+    @jax.jit
+    def update(state):
+        return state.take_step(jnp.asarray(1.0, jnp.float32), key=state.training_key)[0]
+
+    for _ in range(100):
+        state = update(state)
+    assert state.model.dtype == jnp.float32
+    np.testing.assert_allclose(state.model, 0.99, atol=2e-6)
+    assert policy.cast_to_compute(state.model).dtype == jnp.bfloat16
 
 
 class WeightedBatch(eqx.Module):

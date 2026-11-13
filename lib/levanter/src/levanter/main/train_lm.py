@@ -5,11 +5,13 @@ import dataclasses
 import functools
 import logging
 import os
+import json
 from dataclasses import dataclass, field, replace
 from typing import Optional
 
 import equinox as eqx
 import haliax as hax
+import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import optax
@@ -33,6 +35,9 @@ from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_conf
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.eval import TaggedEvaluator, eval_model, lm_eval_loss
+from levanter.eval_audit import InitialEvalMatchConfig, evaluation_input_audit, initial_eval_match
+from rigging.filesystem.storage_path import StoragePath
 from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
@@ -74,12 +79,14 @@ class TrainLmConfig:
     # TODO: atm you have to at least specify a levanter model config with the same type as the hf checkpoint
 
     z_loss_weight: float = 0.0
+    global_gradient_clip: float | None = None
     optimizer_num_train_steps: int | None = None
     """Optimizer schedule horizon, independent of the trainer's stopping step."""
     snowball_sft: SnowballSftConfig | None = None
     token_weighted_accumulation: bool = False
     tensorstore_cache_bytes: int | None = None
     evaluation_data: LmDataConfig | None = None
+    initial_eval_match: InitialEvalMatchConfig | None = None
 
     hf_save_path: Optional[str] = None
     hf_upload: Optional[str] = None
@@ -253,6 +260,8 @@ def main(config: TrainLmConfig):
 
     levanter.trainer.initialize(config)
     optimizer = config.optimizer.build(config.optimizer_num_train_steps or config.trainer.num_train_steps)
+    if config.global_gradient_clip is not None:
+        optimizer = optax.chain(optax.clip_by_global_norm(config.global_gradient_clip), optimizer)
     if config.snowball_sft is not None:
         if not isinstance(config.model, SnowballConfig):
             raise ValueError("Snowball SFT controls require a Snowball model")
@@ -396,6 +405,29 @@ def main(config: TrainLmConfig):
             )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.model)})
+        if config.initial_eval_match is not None and not resuming:
+            gate = config.initial_eval_match
+            gate_pos = Pos.resize(gate.sequence_length)
+            evaluator = TaggedEvaluator(
+                EvalBatch=EvalBatch,
+                tagged_eval_sets=gate.data.tagged_eval_sets(gate_pos),
+                loss_fn=functools.partial(lm_eval_loss, EvalBatch=EvalBatch, mp=trainer.mp),
+                tokenizer=tokenizer,
+                device_mesh=trainer.device_mesh,
+                axis_mapping=compute_axis_mapping,
+                max_examples_per_dataset=gate.max_examples_per_dataset,
+            )
+            initial_metrics = eval_model(evaluator, state.eval_model, prefix="eval")
+            audit = evaluation_input_audit(evaluator, gate.special_token_ids)
+            reference = json.loads(StoragePath(gate.reference_path).read_text())
+            match = initial_eval_match(reference, initial_metrics, audit, gate.absolute_tolerance)
+            levanter.tracker.log(
+                {"initial_eval/loss": match["initial_loss"], "initial_eval/delta": match["delta"]}, step=0
+            )
+            if config.hf_save_path is not None and jax.process_index() == 0:
+                (StoragePath(config.hf_save_path).parent / "initial-eval-match.json").write_text(
+                    json.dumps(match, indent=2)
+                )
 
         max_eval_examples_per_ds = config.trainer.max_eval_batches
         if max_eval_examples_per_ds is not None:

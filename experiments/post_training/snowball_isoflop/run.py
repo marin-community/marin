@@ -65,6 +65,10 @@ def main():
         ):
             raise ValueError("Calibration did not pass the approved primary-grid gate")
     logging.basicConfig(level=logging.INFO)
+    for cell in cells:
+        gate = build_pod(cell).train_config.initial_eval_match
+        if gate is None or not StoragePath(gate.reference_path).exists():
+            raise ValueError(f"Missing upstream reference evaluation for d{cell.size}; no training jobs submitted")
     manager_root = StoragePath(f"{PREFIX}/{VERSION}/manager-{args.phase}-{args.size or 'all'}")
     (manager_root / "submitted-cells.json").write_text(json.dumps([asdict(c) for c in cells], indent=2))
     # Context propagation keeps the enclosing Iris/Fray client in each coordinator thread.
