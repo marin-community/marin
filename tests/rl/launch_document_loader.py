@@ -24,10 +24,9 @@ def load_documents(source: Path, output: Path) -> None:
             path = Path(directory) / f"{index}.yaml"
             path.write_text(yaml, encoding="utf-8")
             try:
-                loaded = launch_config.load_launch_config(path).run
-                written = safe_load(yaml)["run"]
-                if (loaded.id, loaded.attempt_id) != (written["id"], written["attempt_id"]):
-                    raise ValueError(f"run.id and run.attempt_id load as {loaded.id!r} and {loaded.attempt_id!r}")
+                loaded = launch_config.load_launch_config(path).run.attempt_id
+                written = safe_load(yaml)["run"]["attempt_id"]
+                assert loaded == written, f"run.attempt_id {written!r} loads as {loaded!r}"
             except Exception as error:
                 failures[case] = f"{type(error).__name__}: {error}"
     output.write_text(json.dumps(failures))

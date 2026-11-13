@@ -921,7 +921,7 @@ def skyrl_step(
     )
 
     def build_config(ctx: StepContext) -> SkyRLRunConfig:
-        # The leading letter keeps YAML loaders from reading an id such as 104e63883176 as a float.
+        # OmegaConf reads an unquoted id such as 104e63883176 as a float; a leading letter keeps it a string.
         attempt_id = "<attempt_id>" if ctx.is_fingerprint else f"a{uuid.uuid4().hex[:11]}"
         if ctx.is_fingerprint:
             temporary_root = "<temporary_output_path>"
