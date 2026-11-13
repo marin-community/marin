@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.request import urlopen
 
-from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.factory import unbudgeted_url_to_fs
 from rigging.timing import Deadline, Duration
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,10 @@ class BundleStore:
         self._content_locks_guard = threading.Lock()
         self._content_locks: dict[str, _ContentLock] = {}
 
-        self._fs, self._fs_path = url_to_fs(storage_dir)
+        # The controller may read its own job payloads from another region throughout
+        # its lifetime; charging them to the cumulative budget would eventually block
+        # handoffs and worker fetches.
+        self._fs, self._fs_path = unbudgeted_url_to_fs(storage_dir)
         self._fs.mkdirs(self._fs_path, exist_ok=True)
 
         # content id -> bytes, ordered by access (MRU at end).
