@@ -1750,6 +1750,7 @@ service_accounts:
     - principal: human-026
     - principal: human-003
     - principal: human-075
+    - principal: human-007
   - role: roles/iam.serviceAccountUser
     members:
     - serviceAccount:iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
