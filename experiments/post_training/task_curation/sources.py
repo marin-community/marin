@@ -6,6 +6,7 @@
 
 from pathlib import Path
 
+from experiments.post_training.task_curation.admission_binding import require_declaration_admission
 from experiments.post_training.task_curation.census_binding import bind_actor_census
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
@@ -13,6 +14,7 @@ from experiments.post_training.task_curation.datasets import (
     structure_closure,
     thoughtcrime,
 )
+from experiments.post_training.task_curation.datasets.admission_censuses import ADMISSION_CENSUS_RECEIPTS
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.daytona_measurements import ACTOR_CENSUS_RECEIPTS
 from experiments.post_training.task_curation.datasets.evalchemy import code as eval_code
@@ -50,6 +52,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import structure
 from experiments.post_training.task_curation.lexical_binding import bind_lexical_measurement
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
 from experiments.post_training.task_curation.remediation_binding import bind_retained_release
+from experiments.post_training.task_curation.retirement import RETIRED_ADMISSION_SOURCE_IDS
 from experiments.post_training.task_curation.source import RlDataSource, TaskFormat
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
@@ -112,7 +115,7 @@ def all_sources() -> dict[str, RlDataSource]:
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")
-    return {source.info.id: source for source in sources}
+    return {source.info.id: source for source in sources if source.info.id not in RETIRED_ADMISSION_SOURCE_IDS}
 
 
 def require_accepted_task_format(source: RlDataSource) -> None:
@@ -144,6 +147,7 @@ def runnable_sources() -> dict[str, RlDataSource]:
         if not source.admission_blockers and source.declaration.status == "Available"
     ]
     for source in sources:
+        require_declaration_admission(source.declaration, ADMISSION_CENSUS_RECEIPTS)
         require_accepted_task_format(source)
     names = [source.name for source in sources]
     if len(set(names)) != len(names):

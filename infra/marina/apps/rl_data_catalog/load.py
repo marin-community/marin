@@ -18,7 +18,11 @@ from taskcompendium.backend_requirements import BackendSurvey, backend_schema_sh
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
+from experiments.post_training.task_curation.admission_binding import require_declaration_admission
+from experiments.post_training.task_curation.datasets.admission_censuses import ADMISSION_CENSUS_RECEIPTS
+from experiments.post_training.task_curation.retirement import RETIRED_ADMISSION_SOURCE_IDS
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
+from infra.marina.apps.rl_data_catalog.server.quality import Quality, quality
 
 MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
@@ -141,6 +145,10 @@ def load_catalog(
         },
     )
     sources = list(catalog.sources(snapshot.snapshot_id))
+    if retired := {source.id for source in sources} & RETIRED_ADMISSION_SOURCE_IDS:
+        raise ValueError(f"Retired sources remain in the selected catalog: {sorted(retired)}")
+    for source in sources:
+        require_declaration_admission(source.declaration, ADMISSION_CENSUS_RECEIPTS)
     if len(sources) != snapshot.source_count:
         raise ValueError("Catalog inventory does not cover its declared source count")
     if {source.id for source in sources} != {source.source_id for source in backend_map.sources}:
@@ -200,6 +208,15 @@ def load_catalog(
     for source in sources:
         key = source.assessment_key
         if key is None:
+            if (
+                quality(
+                    source.declaration.model_dump(mode="json"),
+                    source.curation.model_dump(mode="json") if source.curation else None,
+                )
+                in {Quality.SAMPLE, Quality.FULL}
+                and source.declaration.quality_result is None
+            ):
+                raise ValueError(f"SAMPLE/FULL quality requires a computed Result: {source.id}")
             continue
         assessment = catalog.assessment(key)
         if assessment.source_id != source.id:

@@ -34,15 +34,35 @@ from finestore.store import DataStore
 from rigging.filesystem.distributed_lock import LeaseLostError, LocalFileLease
 
 from experiments.post_training.task_curation.catalog_snapshot import (
-    publish_catalog,
-    refresh_catalog,
+    publish_catalog as publish_censused_catalog,
+)
+from experiments.post_training.task_curation.catalog_snapshot import (
+    refresh_catalog as refresh_censused_catalog,
+)
+from experiments.post_training.task_curation.catalog_snapshot import (
     refresh_daytona_measurements,
     retire_catalog_sources,
 )
 from experiments.post_training.task_curation.curation_catalog import RUNS
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, SourceReference
+from experiments.post_training.task_curation.tests.admission_fixtures import (
+    isolated_admission_census as isolated_admission_census,
+)
+from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
+
+pytestmark = pytest.mark.usefixtures("isolated_admission_census")
+
+
+def publish_catalog(root, run_id, sources):
+    return publish_censused_catalog(root, run_id, [with_admission_census(source) for source in sources])
+
+
+def refresh_catalog(root, snapshot_id, sources, *, retired_source_ids):
+    return refresh_censused_catalog(
+        root, snapshot_id, [with_admission_census(source) for source in sources], retired_source_ids=retired_source_ids
+    )
 
 
 def record_attempt(root, source, run_id, started_at, key, status=AssessmentStatus.COMPLETE, *, source_count=1):
@@ -349,6 +369,25 @@ def test_metadata_refresh_cannot_reuse_a_grade_for_a_changed_pipeline(tmp_path):
     assert CurationCatalog(root).current() == original
 
 
+def test_publication_does_not_carry_retired_sources_into_a_later_campaign(tmp_path, monkeypatch):
+    root = str(tmp_path / "production")
+    kept = number_source(tmp_path / "input", "kept")
+    retired = number_source(tmp_path / "input", "retired")
+    record_attempt(root, kept, "first", "2026-10-16T10:00:00Z", "kept-key", source_count=2)
+    record_attempt(root, retired, "first", "2026-10-16T10:00:00Z", "retired-key")
+    original = publish_catalog(root, "first", [kept, retired])
+    monkeypatch.setattr(
+        "experiments.post_training.task_curation.catalog_snapshot.RETIRED_ADMISSION_SOURCE_IDS",
+        frozenset({retired.info.id}),
+    )
+    record_attempt(root, kept, "next", "2026-10-16T11:00:00Z", "next-key")
+    publish_catalog(root, "next", [kept])
+    assert set(selected_sources(root)) == {kept.info.id}
+    catalog = CurationCatalog(root)
+    assert {row.id for row in catalog.sources(original.snapshot_id)} == {kept.info.id, retired.info.id}
+    assert catalog.packet("retired-key", "retired-key") == {"task": {"id": "retired-key"}}
+
+
 def test_publication_rejects_a_source_without_a_registered_converter(tmp_path):
     root = str(tmp_path / "production")
     pointer = RlDataSource(
@@ -361,7 +400,7 @@ def test_publication_rejects_a_source_without_a_registered_converter(tmp_path):
         )
     )
     with pytest.raises(ValueError, match="no registered conversion pipeline"):
-        publish_catalog(root, "invalid-source", [pointer])
+        publish_censused_catalog(root, "invalid-source", [pointer])
     assert not (tmp_path / "production").exists()
 
 

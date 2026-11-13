@@ -33,6 +33,7 @@ from finestore.rl.curation import (
     CurationCatalog,
     CurationSummary,
     CurrentCatalog,
+    OversightLevel,
     SnapshotSource,
     SourceDeclaration,
     SourceOrigin,
@@ -59,7 +60,12 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
 
+from experiments.post_training.task_curation.datasets.admission_censuses import ADMISSION_CENSUS_RECEIPTS
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
+from experiments.post_training.task_curation.tests.admission_fixtures import (
+    isolated_admission_census as isolated_admission_census,
+)
+from experiments.post_training.task_curation.tests.admission_fixtures import register_admission_census
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, prepare_preview
@@ -67,6 +73,8 @@ from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
 from infra.marina.apps.rl_data_catalog.server.quality import result
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
+
+pytestmark = pytest.mark.usefixtures("isolated_admission_census")
 
 
 def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:
@@ -227,6 +235,7 @@ def publish_sample(
     source_id: str = "Marin:math",
     origin: SourceOrigin = SourceOrigin.MARIN,
     duplicates: int = 0,
+    unassessed_oversight: OversightLevel | None = None,
 ) -> None:
     declaration = SourceDeclaration(
         id=source_id,
@@ -258,6 +267,8 @@ def publish_sample(
         kind="Dataset",
         status="Available",
         pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": "1", "files": []},
+        oversight=unassessed_oversight or OversightLevel.NONE,
+        actor_census_input=register_admission_census(source_id, "fixture", "1", "1", 3 - duplicates),
     )
     curation = CurationSummary(
         status="completed",
@@ -316,7 +327,7 @@ def publish_sample(
             snapshot_id=snapshot_id,
             id=source_id,
             declaration=declaration,
-            assessment_key=key,
+            assessment_key=key if unassessed_oversight is None else None,
             latest_attempt_key=key,
             latest_attempt_status="complete",
             reason=None,
@@ -531,7 +542,7 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
 def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
     catalog_database, catalog_query, tmp_path, monkeypatch, unavailable_status
 ):
-    monkeypatch.setattr("infra.marina.apps.rl_data_catalog.load.MAX_BATCH_BYTES", 2500)
+    monkeypatch.setattr("infra.marina.apps.rl_data_catalog.load.MAX_BATCH_BYTES", 3500)
     monkeypatch.setattr("infra.marina.apps.rl_data_catalog.load_curriculum.DELETE_BATCH_SIZE", 1)
     engine = catalog_database
     query = catalog_query
@@ -702,6 +713,54 @@ def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(
         assert client.get("/sources").json()["snapshot_id"] == "next"
         assert client.get("/evidence", params={"source_id": "Marin:math", "task_id": "one"}).json() == packet
         assert client.get("/archive/reviews/legacy/artifacts/nested/trace.txt").text == "saved trace"
+
+
+@pytest.mark.parametrize("oversight", [OversightLevel.SAMPLE, OversightLevel.FULL])
+def test_atlas_rejects_oversight_without_result_and_preserves_selected_catalog(
+    catalog_database, catalog_query, tmp_path, oversight
+):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "reviewed")
+    load_catalog(CurationCatalog(root), catalog_query)
+    publish_sample(root, "missing-result", unassessed_oversight=oversight)
+    with pytest.raises(ValueError, match="SAMPLE/FULL quality requires a computed Result"):
+        load_catalog(CurationCatalog(root), catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        inventory = client.get("/sources").json()
+        assert inventory["snapshot_id"] == "reviewed"
+        assert inventory["sources"][0]["result"] == "GOOD"
+
+
+@pytest.mark.parametrize("failure", ["missing", "stale", "no_grader"])
+def test_atlas_blocks_invalid_admission_census_without_replacing_selected_catalog(
+    catalog_database, catalog_query, tmp_path, failure
+):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "reviewed")
+    load_catalog(CurationCatalog(root), catalog_query)
+    publish_sample(root, "next")
+    source_id = "Marin:math"
+    receipt = ADMISSION_CENSUS_RECEIPTS[source_id]
+    if failure == "missing":
+        del ADMISSION_CENSUS_RECEIPTS[source_id]
+    elif failure == "stale":
+        ADMISSION_CENSUS_RECEIPTS[source_id] = receipt.model_copy(
+            update={"input": receipt.input.model_copy(update={"dataset_revision": "stale"})}
+        )
+    else:
+        ADMISSION_CENSUS_RECEIPTS[source_id] = type(receipt).model_validate(
+            {
+                **receipt.model_dump(),
+                "runnable_grader_tasks": 2,
+                "no_grader_tasks": 1,
+                "grader_kinds": {"verifyit": 2, "none": 1},
+                "missing_grader_reasons": {"No reward model": 1},
+            }
+        )
+    with pytest.raises(ValueError, match=r"Admission census|without runnable graders"):
+        load_catalog(CurationCatalog(root), catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        assert client.get("/sources").json()["snapshot_id"] == "reviewed"
 
 
 def test_a_competing_atlas_cutover_prevents_an_older_load_from_being_selected(catalog_query, tmp_path):

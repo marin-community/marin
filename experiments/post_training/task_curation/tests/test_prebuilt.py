@@ -148,7 +148,7 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
 
 
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
-@pytest.mark.parametrize("change", ["none", "package", "infrastructure_zero", "missing_contract"])
+@pytest.mark.parametrize("change", ["none", "package", "infrastructure_zero", "missing_contract", "default_environment"])
 def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch, change, mode):
     task = TaskSpec.model_validate(json.loads(prebuilt_task("native")["lowered_task_spec"])["task"])
     task = task.model_copy(
@@ -170,7 +170,12 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
                 verifier=tuple(
                     inline_resource(path, content)
                     for path, content in {
-                        "task.toml": b'[environment]\ndocker_image = "custom-task-image"\n',
+                        "task.toml": (
+                            b""
+                            if change == "default_environment"
+                            else b'[environment]\ndocker_image = "custom-task-image"\n'
+                        ),
+                        "environment/Dockerfile": b"FROM ubuntu@sha256:" + b"a" * 64 + b"\n",
                         "instruction.md": b"Fix the repository.",
                         "tests/test.sh": b"#!/bin/bash\nexit 0\n",
                     }.items()
@@ -197,7 +202,7 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
     (tmp_path / "controls.jsonl").write_text(json.dumps(receipt) + "\n")
     (tmp_path / prebuilt.ORACLE_FILTER_FILENAME).write_text(oracle_receipt([task]).model_dump_json())
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(tmp_path / kwargs["filename"]))
-    if change in {"none", "missing_contract"}:
+    if change in {"none", "missing_contract", "default_environment"}:
         assert prebuilt.import_harbor_cohort(_cohort(1)) == str(path)
         monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
         monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)

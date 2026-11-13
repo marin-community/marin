@@ -36,6 +36,7 @@ from finestore.rl.curation import (
     DaytonaMeasurement,
     JudgmentStatus,
     SnapshotSource,
+    SourceDeclaration,
     SourceQualityResult,
     Verdict,
     register_catalog,
@@ -48,8 +49,11 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.assessment import assessment_inputs, assessment_judgments, validate_coverage
 from zephyr.readers import load_parquet
 
+from experiments.post_training.task_curation.admission_binding import require_declaration_admission
 from experiments.post_training.task_curation.campaign import CampaignStatus
 from experiments.post_training.task_curation.curation_catalog import RUNS
+from experiments.post_training.task_curation.datasets.admission_censuses import ADMISSION_CENSUS_RECEIPTS
+from experiments.post_training.task_curation.retirement import RETIRED_ADMISSION_SOURCE_IDS
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 
@@ -211,6 +215,8 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
     """Archive selected outputs before publishing their typed catalog snapshot."""
     declarations = [source.declaration for source in sources]
     by_id = {row.id: row for row in declarations}
+    if retired := by_id.keys() & RETIRED_ADMISSION_SOURCE_IDS:
+        raise ValueError(f"Retired sources cannot re-enter the catalog: {sorted(retired)}")
     if len(by_id) != len(declarations):
         raise ValueError("Catalog source IDs must be unique")
     lease = create_lock(str(StoragePath(root) / "publication.lock"), worker_id=run_id)
@@ -245,8 +251,12 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
             declarations.extend(
                 row.declaration
                 for source_id, row in previous.items()
-                if source_id not in by_id and row.declaration.pipeline is not None
+                if source_id not in by_id
+                and source_id not in RETIRED_ADMISSION_SOURCE_IDS
+                and row.declaration.pipeline is not None
             )
+            for declaration in declarations:
+                require_declaration_admission(declaration, ADMISSION_CENSUS_RECEIPTS)
             completed = set(catalog.view.keys(ASSESSMENTS))
             rows = []
             for declaration in declarations:
@@ -375,6 +385,10 @@ def _refresh_snapshot(
                 SnapshotSource.model_validate({**row, "snapshot_id": snapshot_id}).model_dump(mode="json")
                 for row in transform(prior)
             ]
+            for row in rows:
+                require_declaration_admission(
+                    SourceDeclaration.model_validate(row["declaration"]), ADMISSION_CENSUS_RECEIPTS
+                )
             snapshot = CatalogSnapshot(
                 snapshot_id=snapshot_id, created_at=datetime.now(UTC).isoformat(), source_count=len(rows)
             )

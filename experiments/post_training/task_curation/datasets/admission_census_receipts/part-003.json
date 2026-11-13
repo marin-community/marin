@@ -1,0 +1,1416 @@
+{
+  "OpenAI:gsm8k": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/d4a76051c2c49c20f095/summary.json",
+    "grader_kinds": {
+      "verifyit": 7473
+    },
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "openai/gsm8k",
+      "dataset_revision": "740312add88f781978c0658806c59bc2815b9866",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/e8dd9cd2bbb26182da94/2026.11.12.4/.artifact.json",
+      "measured_tasks": 7473,
+      "task_specs_sha256": "603f65c7621fc0093b68015605854641a0be67a4aea495d393440406a05448ba"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/e8dd9cd2bbb26182da94/2026.11.12.2",
+    "retained_tasks": 7473,
+    "runnable_grader_tasks": 7473,
+    "scanned_task_specs_sha256": "4ed5d5abcdaf0eda0d106d82399f360eab8cec9b705007743efb6cfe7735a19c",
+    "source_id": "OpenAI:gsm8k"
+  },
+  "OpenAthena:structure-closure": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/6429e6e9af6d7320cc17/summary.json",
+    "grader_kinds": {
+      "verifyit": 57312
+    },
+    "input": {
+      "converter_revision": "2f4b27ba2e",
+      "converter_version": "2026.11.13.1",
+      "dataset_id": "open-athena/snowballv01-structure-closure-d9e5f81a-retained-20261113-v1",
+      "dataset_revision": "194f25bd9b10eea55a3a8dd2f17229c89af21b7d",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/d9e5f81ad5b060aed710/actor/.artifact.json",
+      "measured_tasks": 57312,
+      "task_specs_sha256": "27f80baa86436f76ee7552a8ddb22d2dd2f3877440e4876557565583d404264a"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/d9e5f81ad5b060aed710/population",
+    "retained_tasks": 57312,
+    "runnable_grader_tasks": 57312,
+    "scanned_task_specs_sha256": "27f80baa86436f76ee7552a8ddb22d2dd2f3877440e4876557565583d404264a",
+    "source_id": "OpenAthena:structure-closure"
+  },
+  "OpenAthena:structure-closure/validation": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/9b6abae84af840e0eb5c/summary.json",
+    "grader_kinds": {
+      "verifyit": 238
+    },
+    "input": {
+      "converter_revision": "2f4b27ba2e",
+      "converter_version": "2026.11.13.1",
+      "dataset_id": "open-athena/snowballv01-structure-closure-validation-abaae0c5-retained-20261113-v1",
+      "dataset_revision": "186e83734e9b655236007203e4aaab45d2b93d83",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/abaae0c5c68edc6e16d8/actor/.artifact.json",
+      "measured_tasks": 238,
+      "task_specs_sha256": "f514cb0c71316702bc3054b578cec6389a97903fdaba4c5270cbd6504839acd6"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/abaae0c5c68edc6e16d8/population",
+    "retained_tasks": 238,
+    "runnable_grader_tasks": 238,
+    "scanned_task_specs_sha256": "f514cb0c71316702bc3054b578cec6389a97903fdaba4c5270cbd6504839acd6",
+    "source_id": "OpenAthena:structure-closure/validation"
+  },
+  "PRIME-RL:eurus2_code": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/971daa8eb539398b7db4/summary.json",
+    "grader_kinds": {
+      "script": 24592
+    },
+    "input": {
+      "converter_revision": "2f4b27ba2e",
+      "converter_version": "2026.11.13.1",
+      "dataset_id": "open-athena/marinskyrl-eurus2-code-a8a86264-retained-20261113-v1",
+      "dataset_revision": "3993e1d5cffbbbb98a64aae73b7018709e923b31",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/a8a86264c8094750d353/actor/.artifact.json",
+      "measured_tasks": 24592,
+      "task_specs_sha256": "ed95088e342af4a3a9821ac6e190c7731fceac45a0c6e5fd4465716a72095391"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/a8a86264c8094750d353/population",
+    "retained_tasks": 24592,
+    "runnable_grader_tasks": 24592,
+    "scanned_task_specs_sha256": "ed95088e342af4a3a9821ac6e190c7731fceac45a0c6e5fd4465716a72095391",
+    "source_id": "PRIME-RL:eurus2_code"
+  },
+  "Reasoning Gym:reasoning_gym": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/54875376a58070c0a584/summary.json",
+    "grader_kinds": {
+      "script": 103870
+    },
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "1",
+      "dataset_id": "reasoning_gym-0.1.25-py3-none-any.whl",
+      "dataset_revision": "7f17a3eddb13c015d7d4a755ed576a061df889faf9468bcc2cca334ebe9e0435",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/9d68e12f6c11b89591a3/2026.11.12.4/.artifact.json",
+      "measured_tasks": 103870,
+      "task_specs_sha256": "277c7c8031ead60d9acafbfa1f71cac3df41195937332a62389a25217d25d30e"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/9d68e12f6c11b89591a3/2026.11.12.2",
+    "retained_tasks": 103870,
+    "runnable_grader_tasks": 103870,
+    "scanned_task_specs_sha256": "f121135106c6c294bf931629c8b3d670cdcc14776f846f6cfc4bcd79baee407f",
+    "source_id": "Reasoning Gym:reasoning_gym"
+  },
+  "TRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/9bba9d553830a62c4f07/summary.json",
+    "grader_kinds": {
+      "none": 4412
+    },
+    "input": {
+      "converter_revision": "2f4b27ba2e",
+      "converter_version": "2026.11.13.1",
+      "dataset_id": "open-athena/marinskyrl-kto-mix-argilla-distilabel-capybara-dpo-7k-b-503b1019-retained-20261113-v1",
+      "dataset_revision": "cb9ed115b2902dddcef4f8a33738fc95c18dfb78",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/503b101915668344218d/actor/.artifact.json",
+      "measured_tasks": 4412,
+      "task_specs_sha256": "9e52697935a33a1edf660e3a3853c4463611f9f67018076cef42f0ee56c78b1b"
+    },
+    "missing_grader_reasons": {
+      "Preference labels rank source candidates; scoring a new reply needs a reward model": 4412
+    },
+    "no_grader_tasks": 4412,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/503b101915668344218d/population",
+    "retained_tasks": 4412,
+    "runnable_grader_tasks": 0,
+    "scanned_task_specs_sha256": "9e52697935a33a1edf660e3a3853c4463611f9f67018076cef42f0ee56c78b1b",
+    "source_id": "TRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized"
+  },
+  "TRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/bc04f74569e1abd7157f/summary.json",
+    "grader_kinds": {
+      "none": 4542
+    },
+    "input": {
+      "converter_revision": "2f4b27ba2e",
+      "converter_version": "2026.11.13.1",
+      "dataset_id": "open-athena/marinskyrl-kto-mix-argilla-distilabel-intel-orca-dpo-pa-7958dc43-retained-20261113-v1",
+      "dataset_revision": "f3b78af4e6047db2d927f52001924cce3e1ba1f9",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/7958dc432a09a09d8edf/actor/.artifact.json",
+      "measured_tasks": 4542,
+      "task_specs_sha256": "35e686c7fd91269fd3bd50901fc8e52260d32d04c1c0bde96f4f25394f002af2"
+    },
+    "missing_grader_reasons": {
+      "Preference labels rank source candidates; scoring a new reply needs a reward model": 4542
+    },
+    "no_grader_tasks": 4542,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/7958dc432a09a09d8edf/population",
+    "retained_tasks": 4542,
+    "runnable_grader_tasks": 0,
+    "scanned_task_specs_sha256": "35e686c7fd91269fd3bd50901fc8e52260d32d04c1c0bde96f4f25394f002af2",
+    "source_id": "TRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs"
+  },
+  "TRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/1c9963821266757f3338/summary.json",
+    "grader_kinds": {
+      "none": 4452
+    },
+    "input": {
+      "converter_revision": "2f4b27ba2e",
+      "converter_version": "2026.11.13.1",
+      "dataset_id": "open-athena/marinskyrl-kto-mix-argilla-ultrafeedback-binarized-pref-00fc52db-retained-20261113-v1",
+      "dataset_revision": "324efb7cc98681e5f95ae131bb1918e41032dadf",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/00fc52db0a637cb1efe2/actor/.artifact.json",
+      "measured_tasks": 4452,
+      "task_specs_sha256": "f43632271c8b75860633926975b0f24f776218dd2ed5e60b8ef29190ec6dec04"
+    },
+    "missing_grader_reasons": {
+      "Preference labels rank source candidates; scoring a new reply needs a reward model": 4452
+    },
+    "no_grader_tasks": 4452,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/00fc52db0a637cb1efe2/population",
+    "retained_tasks": 4452,
+    "runnable_grader_tasks": 0,
+    "scanned_task_specs_sha256": "f43632271c8b75860633926975b0f24f776218dd2ed5e60b8ef29190ec6dec04",
+    "source_id": "TRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned"
+  },
+  "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/85b437bdc22be85e318a/summary.json",
+    "grader_kinds": {
+      "verifyit": 1494
+    },
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "3",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/34a220d8079413490d2e/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1494,
+      "task_specs_sha256": "8e0a471391b67b7f32cdd284e696dd7612ded113fa82d748705671ac22088e64"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/34a220d8079413490d2e/2026.11.12.2",
+    "retained_tasks": 1494,
+    "runnable_grader_tasks": 1494,
+    "scanned_task_specs_sha256": "95053920bf244dc53f82666e963f28af0cfca338ad2c7327e5a77e325f2c28f0",
+    "source_id": "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
+  },
+  "TaskTrove:DCAgent__code-contests-noblock": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/90f152e30ca129513e4e/summary.json",
+    "grader_kinds": {
+      "script": 8217
+    },
+    "input": {
+      "converter_revision": "2f4b27ba2e",
+      "converter_version": "2026.11.13.1",
+      "dataset_id": "open-athena/task-trove-dcagent-code-contests-noblock-19de283b-retained-20261113-v1",
+      "dataset_revision": "d4a32528a6b8c4f02afff8c804c541717b847672",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/19de283b4360271848b2/actor/.artifact.json",
+      "measured_tasks": 8217,
+      "task_specs_sha256": "168ef7cdccfa36700885d26b750cb0939bbce5b35b75ca7d0b06e8125566b578"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/19de283b4360271848b2/population",
+    "retained_tasks": 8217,
+    "runnable_grader_tasks": 8217,
+    "scanned_task_specs_sha256": "168ef7cdccfa36700885d26b750cb0939bbce5b35b75ca7d0b06e8125566b578",
+    "source_id": "TaskTrove:DCAgent__code-contests-noblock"
+  },
+  "TaskTrove:DCAgent__exp_rle_adversarial-v6": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/c9e2453103fe07b244e4/summary.json",
+    "grader_kinds": {
+      "native_harbor": 2726
+    },
+    "input": {
+      "converter_revision": "acf78953851c27bc611fe5ecd60bd75c5642226b974c2d4d7d10010ff09dea87",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rle-adversarial-v6-aed4e1d5-taskcompendium-20261112",
+      "dataset_revision": "9f771e52037a4e039f75ec7f4de85a30cb350722",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/fe7082c4c978202a5789/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2726,
+      "task_specs_sha256": "ce22b667cabecfa93c44180d44a1c587afb0cdcede12cbb5c506a5c388a5c991"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/fe7082c4c978202a5789/2026.11.12.4",
+    "retained_tasks": 2726,
+    "runnable_grader_tasks": 2726,
+    "scanned_task_specs_sha256": "39bf9d68420a1d9f053ee862924ec2561ad55816c74cd52f6adb6104da98351f",
+    "source_id": "TaskTrove:DCAgent__exp_rle_adversarial-v6"
+  },
+  "TaskTrove:DCAgent__exp_rpt_curriculum-easy": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/f0661a7832c360f73950/summary.json",
+    "grader_kinds": {
+      "verifyit": 505
+    },
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "5",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/97cae0bbc62c3e37bfc3/2026.11.12.4/.artifact.json",
+      "measured_tasks": 505,
+      "task_specs_sha256": "5db253ccef0a27a3d201491fd62eb870c2152068337644092cd723051f98d505"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/97cae0bbc62c3e37bfc3/2026.11.12.2",
+    "retained_tasks": 505,
+    "runnable_grader_tasks": 505,
+    "scanned_task_specs_sha256": "ede225fd9ee333a273e4e0fb9d040632278ade9cc1e154e1dff1d602e4c4c869",
+    "source_id": "TaskTrove:DCAgent__exp_rpt_curriculum-easy"
+  },
+  "TaskTrove:DCAgent__exp_rpt_curriculum-medium-v2": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/66670411832f13bf6d69/summary.json",
+    "grader_kinds": {
+      "verifyit": 488
+    },
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "6",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/3d6d1ae933ccea34e162/2026.11.12.4/.artifact.json",
+      "measured_tasks": 488,
+      "task_specs_sha256": "45236dde7bc384d47199ec037565bea8e8711e47f25ca80f3f8b254d3186562a"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/3d6d1ae933ccea34e162/2026.11.12.2",
+    "retained_tasks": 488,
+    "runnable_grader_tasks": 488,
+    "scanned_task_specs_sha256": "370c941c78678b2a8f3f3693b90177281c473984ede0051518e4f947124b2657",
+    "source_id": "TaskTrove:DCAgent__exp_rpt_curriculum-medium-v2"
+  },
+  "TaskTrove:DCAgent__exp_rpt_e2egit-large": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/9c28da8a4cc4840393cd/summary.json",
+    "grader_kinds": {
+      "verifyit": 4993
+    },
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "5",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/c7f719fcab895d83c578/2026.11.12.4/.artifact.json",
+      "measured_tasks": 4993,
+      "task_specs_sha256": "f738bb71f8bb6502755cc9844f4521eb1661ffde1255761d024acee0e3405fdc"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/c7f719fcab895d83c578/2026.11.12.2",
+    "retained_tasks": 4993,
+    "runnable_grader_tasks": 4993,
+    "scanned_task_specs_sha256": "f23db0a81c65b97eb363ab3f6bebf87b3c6be654545137d57b6ffd70fc30086c",
+    "source_id": "TaskTrove:DCAgent__exp_rpt_e2egit-large"
+  },
+  "TaskTrove:DCAgent__exp_rpt_e2egit-v2": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/807b176a51ef38266b5f/summary.json",
+    "grader_kinds": {
+      "verifyit": 477
+    },
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "8",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/ee97dbc5b1fe78f27ddd/2026.11.12.4/.artifact.json",
+      "measured_tasks": 477,
+      "task_specs_sha256": "92dd6ddcb137c33d304719fcc0f8e44557e28f20d26edc16c63453d21dd26ab6"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/ee97dbc5b1fe78f27ddd/2026.11.12.2",
+    "retained_tasks": 477,
+    "runnable_grader_tasks": 477,
+    "scanned_task_specs_sha256": "b69ddfc4946138eef47f8e200be844c79111a907f9069c10bb633f97c552ed67",
+    "source_id": "TaskTrove:DCAgent__exp_rpt_e2egit-v2"
+  },
+  "TaskTrove:DCAgent__exp_rpt_multifile-v3": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/7ac6261682c4d6d55105/summary.json",
+    "grader_kinds": {
+      "verifyit": 4842
+    },
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "5",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/faa4508d9d244727b37f/2026.11.12.4/.artifact.json",
+      "measured_tasks": 4842,
+      "task_specs_sha256": "b441623a82a231bfc797a3598ba3a9f998fde4c6de6444f166ef13a495f5501e"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/faa4508d9d244727b37f/2026.11.12.2",
+    "retained_tasks": 4842,
+    "runnable_grader_tasks": 4842,
+    "scanned_task_specs_sha256": "7889f75271aafdc74bb19cb5437ee00a04eed93fadeeffdff3a8559919904249",
+    "source_id": "TaskTrove:DCAgent__exp_rpt_multifile-v3"
+  },
+  "TaskTrove:DCAgent__exp_rpt_nemotron-cpp": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/dd08274e7d1576c95caa/summary.json",
+    "grader_kinds": {
+      "native_harbor": 4196
+    },
+    "input": {
+      "converter_revision": "593ac8dd9558f141a534c08be333bf26c588171bd4b0be7e693bb3136f4d8295",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-nemotron-cpp-e06e77b2-taskcompendium-20261112",
+      "dataset_revision": "f3de913c5da917dd80379463c5007b0136ecb624",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/277af7d7f63d7a044346/2026.11.12.4/.artifact.json",
+      "measured_tasks": 4196,
+      "task_specs_sha256": "622bab84ce6210f9318845471543ba977202c59891de77c4ea18ff2ea55781e3"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/277af7d7f63d7a044346/2026.11.12.4",
+    "retained_tasks": 4196,
+    "runnable_grader_tasks": 4196,
+    "scanned_task_specs_sha256": "f3586a3a5e26acc45b342e543f6be0b6614df37508d1b85e96fb044033397aae",
+    "source_id": "TaskTrove:DCAgent__exp_rpt_nemotron-cpp"
+  },
+  "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/72ea16180a238d201038/summary.json",
+    "grader_kinds": {
+      "verifyit": 4990
+    },
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "5",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/9773fc58ed1b35bf7ae6/2026.11.12.4/.artifact.json",
+      "measured_tasks": 4990,
+      "task_specs_sha256": "9d91e754aad02363588884f4775479e9489ac0df96ca21f9733c08a0483eb22a"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/9773fc58ed1b35bf7ae6/2026.11.12.2",
+    "retained_tasks": 4990,
+    "runnable_grader_tasks": 4990,
+    "scanned_task_specs_sha256": "db4a372a43931a4dfdcfc6471eb10bdb5b0e0d8db4764db359aa637bd4337b14",
+    "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2"
+  },
+  "TaskTrove:DCAgent__exp_rpt_pymethods2test-v3": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/6c371a420a064bef5946/summary.json",
+    "grader_kinds": {
+      "verifyit": 500
+    },
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "5",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/02d7ff75f00e9dbf4a74/2026.11.12.4/.artifact.json",
+      "measured_tasks": 500,
+      "task_specs_sha256": "fcb0d1051435b1487d12a7b50820f40ddf6856e2bf6f7ba15c58ef770d58ce35"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/02d7ff75f00e9dbf4a74/2026.11.12.2",
+    "retained_tasks": 500,
+    "runnable_grader_tasks": 500,
+    "scanned_task_specs_sha256": "72d30d2817fe7b0bbdf70c3e8515e9d2e861f90fa1df65ed0c73d2cf47253d01",
+    "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-v3"
+  },
+  "TaskTrove:DCAgent__exp_rpt_stack-pytest-v2": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/5b862b8fe70743d22da2/summary.json",
+    "grader_kinds": {
+      "verifyit": 492
+    },
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "5",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/e8644b39c57253fde215/2026.11.12.4/.artifact.json",
+      "measured_tasks": 492,
+      "task_specs_sha256": "31843a284dc4a14ebb441f9ce6341586f60c7c79f05152590727f252fb4f2ee4"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/e8644b39c57253fde215/2026.11.12.2",
+    "retained_tasks": 492,
+    "runnable_grader_tasks": 492,
+    "scanned_task_specs_sha256": "6fa9d0f8a7b10c58b5a569f6b4d2d4e224428a603101b1ca2e0f14142692b7a8",
+    "source_id": "TaskTrove:DCAgent__exp_rpt_stack-pytest-v2"
+  },
+  "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/bc301818cccd454da3de/summary.json",
+    "grader_kinds": {
+      "verifyit": 4991
+    },
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "5",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/970228fce82e7a83584c/2026.11.12.4/.artifact.json",
+      "measured_tasks": 4991,
+      "task_specs_sha256": "bc7a8cba6ad95baf9ce8309c461c6a9b03a6238e5969a6171acaf1c0e51ee918"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/970228fce82e7a83584c/2026.11.12.2",
+    "retained_tasks": 4991,
+    "runnable_grader_tasks": 4991,
+    "scanned_task_specs_sha256": "fdda05c2e9be088290be70f9bdeea4396d52f57fb9baed8a7745f6a910ca789b",
+    "source_id": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2"
+  },
+  "TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/4e46190654f9df9c72cc/summary.json",
+    "grader_kinds": {
+      "verifyit": 491
+    },
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "5",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/9ac523ca103766ad940a/2026.11.12.4/.artifact.json",
+      "measured_tasks": 491,
+      "task_specs_sha256": "9051c755535d65c2a889e5ccca41c576f85ae684bd05eccd5aca937ef549228d"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/9ac523ca103766ad940a/2026.11.12.2",
+    "retained_tasks": 491,
+    "runnable_grader_tasks": 491,
+    "scanned_task_specs_sha256": "85074daf313b7975064ffbbafe162e31f78fc373fd89305940be502474e9754a",
+    "source_id": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4"
+  },
+  "TaskTrove:DCAgent__inferredbugs-sandboxes-verifier": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/3b9ed3bad100d3100806/summary.json",
+    "grader_kinds": {
+      "native_harbor": 9659
+    },
+    "input": {
+      "converter_revision": "18bdabdd278b7a19cf3c06ec786cbf2c7359ed3f6e61e81ebc2ebc526660cfa1",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-dcagent-inferredbugs-sandboxes-verifier-d35a1a27-taskcompendium-20261112",
+      "dataset_revision": "85ec560970adec8b9e1d409e6a63206422736834",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/757e7303df5aa6dbdc70/2026.11.12.4/.artifact.json",
+      "measured_tasks": 9659,
+      "task_specs_sha256": "f9f03d1fde38852abec09cc431096980ad5979ad72b6a03275279d0c09ad2920"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/757e7303df5aa6dbdc70/2026.11.12.4",
+    "retained_tasks": 9659,
+    "runnable_grader_tasks": 9659,
+    "scanned_task_specs_sha256": "3847b915ccad2c0f04a229bba4ae56a421134a4e5ad5aa2a663e5fe064b1e16a",
+    "source_id": "TaskTrove:DCAgent__inferredbugs-sandboxes-verifier"
+  },
+  "TaskTrove:DCAgent__mix_h4_binary_easy": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/b6d7903aac3092c91b23/summary.json",
+    "grader_kinds": {
+      "native_harbor": 1996
+    },
+    "input": {
+      "converter_revision": "608e5dddda9912c2800d6f8a5e2cf0afe3668c913bb0db10aac38294a0d2bab1",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-dcagent-mix-h4-binary-easy-cfefcc4b-taskcompendium-20261112",
+      "dataset_revision": "df8e9522875c7adc974cc28f54fc06848f1fd5c7",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/7f50ff1c23c6d174b616/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1996,
+      "task_specs_sha256": "5c203d4db22e1a534e46c2b81dd084af619b62d65695cb212f1ee957e935c3ab"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/7f50ff1c23c6d174b616/2026.11.12.4",
+    "retained_tasks": 1996,
+    "runnable_grader_tasks": 1996,
+    "scanned_task_specs_sha256": "4e3adf74a451145177e387de25d0e032432f7f3e63898de19258902c6101c199",
+    "source_id": "TaskTrove:DCAgent__mix_h4_binary_easy"
+  },
+  "TaskTrove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/40d39f5a2b9034e69aef/summary.json",
+    "grader_kinds": {
+      "native_harbor": 6664
+    },
+    "input": {
+      "converter_revision": "2f4b27ba2e",
+      "converter_version": "2026.11.13.1",
+      "dataset_id": "open-athena/task-trove-dcagent-selfinstruct-naive-sandboxes-2-verif-48c10bb7-retained-20261113-v1",
+      "dataset_revision": "2486c147b956b84ff85576cd4a6f717d80f1aa67",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/48c10bb7706cf6d30cee/actor/.artifact.json",
+      "measured_tasks": 6664,
+      "task_specs_sha256": "dad434a92cc35768b0789099a26663a92792ac6c8bcdbdd6d18865cf8c5c1886"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/48c10bb7706cf6d30cee/population",
+    "retained_tasks": 6664,
+    "runnable_grader_tasks": 6664,
+    "scanned_task_specs_sha256": "dad434a92cc35768b0789099a26663a92792ac6c8bcdbdd6d18865cf8c5c1886",
+    "source_id": "TaskTrove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3"
+  },
+  "TaskTrove:DCAgent__swe_rebench_v2_patched_oracle-v2": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/1c0e17a07e4b023056f8/summary.json",
+    "grader_kinds": {
+      "script": 13562
+    },
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "4",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/ab83d3401ec31f610f33/2026.11.12.4/.artifact.json",
+      "measured_tasks": 13562,
+      "task_specs_sha256": "a015eb9fac33af27a2c2e0d7be693276691546fb860ca4c99c017c50a4e90dd6"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/ab83d3401ec31f610f33/2026.11.12.2",
+    "retained_tasks": 13562,
+    "runnable_grader_tasks": 13562,
+    "scanned_task_specs_sha256": "731c7df5bc317636c908fde774bb5242d5a497749bd22a269d0c307b1cb9c589",
+    "source_id": "TaskTrove:DCAgent__swe_rebench_v2_patched_oracle-v2"
+  },
+  "TaskTrove:GAIR__OpenSWE__openswe_oss": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/e4ac3002f0a115e70012/summary.json",
+    "grader_kinds": {
+      "native_harbor": 36884
+    },
+    "input": {
+      "converter_revision": "bd0ca09ef25d27bae269ac52212934b77d8a6a82fc086f53dd36e668e046d612",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-gair-openswe-openswe-oss-658e9af0-taskcompendium-20261112",
+      "dataset_revision": "4e04b64825c93f2247eb6ef105d2129eb6419cb2",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/6e4e5da8db3735a37590/2026.11.12.4/.artifact.json",
+      "measured_tasks": 36884,
+      "task_specs_sha256": "79eda3984fdc665d2968183064d0477acaa1fb09810a8129c1cf78b16c26e6ad"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/6e4e5da8db3735a37590/2026.11.12.4",
+    "retained_tasks": 36884,
+    "runnable_grader_tasks": 36884,
+    "scanned_task_specs_sha256": "f44fa311bad66088be73ffebe50e6fdfc4fb5f1a47ab887286a30a4023f611e0",
+    "source_id": "TaskTrove:GAIR__OpenSWE__openswe_oss"
+  },
+  "TaskTrove:GAIR__OpenSWE__openswe_other": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/4513b0701e24157505f0/summary.json",
+    "grader_kinds": {
+      "native_harbor": 8436
+    },
+    "input": {
+      "converter_revision": "57e4e5ad92dd3922b1cffad8514236be3b8cd20c7f9ccde232234a6ade08a3f8",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-gair-openswe-openswe-other-39780ea8-taskcompendium-20261112",
+      "dataset_revision": "aec964ce07a928fbd7c6ba21e5c1dfbd54e38285",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/d2b2ba5fe423f73761f4/2026.11.12.4/.artifact.json",
+      "measured_tasks": 8436,
+      "task_specs_sha256": "1406ad3b1ea0ab530268b0b57fc4d3ed1de55647c7afa9bfda02026ef236ca2d"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/d2b2ba5fe423f73761f4/2026.11.12.4",
+    "retained_tasks": 8436,
+    "runnable_grader_tasks": 8436,
+    "scanned_task_specs_sha256": "fb97dc06845545cda5c41be3aefb8bc0897989a35c368ffefb719fe9476da86c",
+    "source_id": "TaskTrove:GAIR__OpenSWE__openswe_other"
+  },
+  "TaskTrove:R2E-Gym__R2E-Gym-V1": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/453389a44acc01310e46/summary.json",
+    "grader_kinds": {
+      "native_harbor": 6909
+    },
+    "input": {
+      "converter_revision": "57c7301d7f86c32341949da8a06d8bb4a912d11fc0514c7268995503622427b2",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-r2e-gym-r2e-gym-v1-f65fc36d-taskcompendium-20261112",
+      "dataset_revision": "3e8a040ffdf962ce4eaf2fce2c51ff4d1b1971f0",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/f3fa9fde1392fb2478ba/2026.11.12.4/.artifact.json",
+      "measured_tasks": 6909,
+      "task_specs_sha256": "7895577e2980f4fda66871c8a12695b708516c6e326cd48df4d9ea6cc7a365d2"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/f3fa9fde1392fb2478ba/2026.11.12.4",
+    "retained_tasks": 6909,
+    "runnable_grader_tasks": 6909,
+    "scanned_task_specs_sha256": "dc69192c62fcf5fa83b42985942318e934cdba581eb798db66490d5ae4c4b1e5",
+    "source_id": "TaskTrove:R2E-Gym__R2E-Gym-V1"
+  },
+  "TaskTrove:SWE-Gym__SWE-Gym": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/f7e50a512745e0e30400/summary.json",
+    "grader_kinds": {
+      "native_harbor": 2438
+    },
+    "input": {
+      "converter_revision": "c38c5c2409f63faa622ab115de622a393d9737a7aad4011fbb7354ecfebb124f",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-swe-gym-swe-gym-d5c31023-taskcompendium-20261112",
+      "dataset_revision": "8095ba14bf91124929ec6bda1e8afe16426be2ca",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/3bda936779352247beca/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2438,
+      "task_specs_sha256": "470a5fd74624e6e7a7c1dd0a3d639ae1073074736871ab168cd1a17a3b15603b"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/3bda936779352247beca/2026.11.12.4",
+    "retained_tasks": 2438,
+    "runnable_grader_tasks": 2438,
+    "scanned_task_specs_sha256": "ff7fa5ee7dd59b3ce49454b16be2a4f796653299f30d5482a4f8f1b0d5cde86e",
+    "source_id": "TaskTrove:SWE-Gym__SWE-Gym"
+  },
+  "TaskTrove:SankalpKJ__nemotron-code-oracle-filtered": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/c756854220231f16a0b5/summary.json",
+    "grader_kinds": {
+      "native_harbor": 15156
+    },
+    "input": {
+      "converter_revision": "2f4b27ba2e",
+      "converter_version": "2026.11.13.1",
+      "dataset_id": "open-athena/task-trove-sankalpkj-nemotron-code-oracle-filtered-b254a4c8-retained-20261113-v1",
+      "dataset_revision": "f2b8131f6442d5da098f2ba15a4af3d3c64d6149",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/b254a4c8ee0e86e5c37b/actor/.artifact.json",
+      "measured_tasks": 15156,
+      "task_specs_sha256": "59c599f3a4255840f8f81cc8226d0abbdc63b693c8ca8dd11a5f0185034ba450"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/b254a4c8ee0e86e5c37b/population",
+    "retained_tasks": 15156,
+    "runnable_grader_tasks": 15156,
+    "scanned_task_specs_sha256": "59c599f3a4255840f8f81cc8226d0abbdc63b693c8ca8dd11a5f0185034ba450",
+    "source_id": "TaskTrove:SankalpKJ__nemotron-code-oracle-filtered"
+  },
+  "TaskTrove:SankalpKJ__nemotron-math-oracle-filtered-v2": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/eaf403d5a835aea7f859/summary.json",
+    "grader_kinds": {
+      "verifyit": 57419
+    },
+    "input": {
+      "converter_revision": "2f4b27ba2e",
+      "converter_version": "2026.11.13.1",
+      "dataset_id": "open-athena/task-trove-sankalpkj-nemotron-math-oracle-filtered-v2-51aaf614-retained-20261113-v1",
+      "dataset_revision": "be095cd012b1df1146f182d3103680fb71b438d2",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/51aaf61434eac05a80d3/actor/.artifact.json",
+      "measured_tasks": 57419,
+      "task_specs_sha256": "9ac697a10957cba3069c6d46101889a644a2c5a0ba81c491b8f7e6dbc3e71663"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/51aaf61434eac05a80d3/population",
+    "retained_tasks": 57419,
+    "runnable_grader_tasks": 57419,
+    "scanned_task_specs_sha256": "9ac697a10957cba3069c6d46101889a644a2c5a0ba81c491b8f7e6dbc3e71663",
+    "source_id": "TaskTrove:SankalpKJ__nemotron-math-oracle-filtered-v2"
+  },
+  "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__general": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/a52c29c7d53b6af9188a/summary.json",
+    "grader_kinds": {
+      "native_harbor": 925
+    },
+    "input": {
+      "converter_revision": "5c937e6da97479ec3af230c7243a6d7cb095c2eb0e29fb2fd8c1e2fbb9c20ff3",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-xiaomimimo-mimo-v2-6-rl-oss-general-535ff959-taskcompendium-20261112",
+      "dataset_revision": "d9a644247b0eeb0c02ab646b66be5ad45a92410b",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/3302ea900157d2e25990/2026.11.12.4/.artifact.json",
+      "measured_tasks": 925,
+      "task_specs_sha256": "9337f2bd0bfc364c237d42e296cd193629c3a0eb1e5cf4b9368cab18f55657d0"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/3302ea900157d2e25990/2026.11.12.4",
+    "retained_tasks": 925,
+    "runnable_grader_tasks": 925,
+    "scanned_task_specs_sha256": "c9a9ef56632651126454e640d0e76b49da129831b6c19cbfbcc3b81570c698f4",
+    "source_id": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__general"
+  },
+  "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__music": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/8c9b46c1f54f183628c8/summary.json",
+    "grader_kinds": {
+      "native_harbor": 1000
+    },
+    "input": {
+      "converter_revision": "b21f84dca4562436b6898dd6b8c70fda8c9302872a257e5e902c6f04b2b6f0ae",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-xiaomimimo-mimo-v2-6-rl-oss-music-71d53dd7-taskcompendium-20261112",
+      "dataset_revision": "c90333fe822a670c241f6e3649552abc01d948a8",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/ffa2b7b107a8a12dcc75/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1000,
+      "task_specs_sha256": "4fbd5863532a6e295e6cab822b66ec52052ddcef1769e8187d31aaa917afb9ae"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/ffa2b7b107a8a12dcc75/2026.11.12.4",
+    "retained_tasks": 1000,
+    "runnable_grader_tasks": 1000,
+    "scanned_task_specs_sha256": "9b517155f9a9217a37d692f5d5c8a0394449046cc7f87775e63e560a5ba2f7ee",
+    "source_id": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__music"
+  },
+  "TaskTrove:laion__all-puzzles-v2": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/93150aa171aee4da94c8/summary.json",
+    "grader_kinds": {
+      "verifyit": 6921
+    },
+    "input": {
+      "converter_revision": "2f4b27ba2e",
+      "converter_version": "2026.11.13.1",
+      "dataset_id": "open-athena/task-trove-laion-all-puzzles-v2-f2975a12-retained-20261113-v1",
+      "dataset_revision": "fb73d862f3a6fed9389ec3d9fd856dff19727ac8",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/f2975a1229b461e559c6/actor/.artifact.json",
+      "measured_tasks": 6921,
+      "task_specs_sha256": "80374fd54adec49ed1d7d326ae928cc503330d65b7a7fd4897455e88ba8a52f6"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/f2975a1229b461e559c6/population",
+    "retained_tasks": 6921,
+    "runnable_grader_tasks": 6921,
+    "scanned_task_specs_sha256": "80374fd54adec49ed1d7d326ae928cc503330d65b7a7fd4897455e88ba8a52f6",
+    "source_id": "TaskTrove:laion__all-puzzles-v2"
+  },
+  "TaskTrove:laion__codeelo-v2": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/187492687f1ccf07fd1e/summary.json",
+    "grader_kinds": {
+      "native_harbor": 499
+    },
+    "input": {
+      "converter_revision": "2f4b27ba2e",
+      "converter_version": "2026.11.13.1",
+      "dataset_id": "open-athena/task-trove-laion-codeelo-v2-53de531c-retained-20261113-v1",
+      "dataset_revision": "f8b02f0b5afd404e77015fb78d8e845a69478dea",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/53de531cedaa2205efd8/actor/.artifact.json",
+      "measured_tasks": 499,
+      "task_specs_sha256": "40788ba7f71ca8e49400d0dbf335469bd0a7be9cbe770d71221ea484f5acc99e"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/53de531cedaa2205efd8/population",
+    "retained_tasks": 499,
+    "runnable_grader_tasks": 499,
+    "scanned_task_specs_sha256": "40788ba7f71ca8e49400d0dbf335469bd0a7be9cbe770d71221ea484f5acc99e",
+    "source_id": "TaskTrove:laion__codeelo-v2"
+  },
+  "TaskTrove:laion__codeforces-v3": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/ab7425bb6d12fc07d200/summary.json",
+    "grader_kinds": {
+      "verifyit": 9690
+    },
+    "input": {
+      "converter_revision": "2f4b27ba2e",
+      "converter_version": "2026.11.13.1",
+      "dataset_id": "open-athena/task-trove-laion-codeforces-v3-2a90aa72-retained-20261113-v1",
+      "dataset_revision": "eccf9a938be33173b6c8a58eab6d17f27b8b479a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/2a90aa727848d0ecfc63/actor/.artifact.json",
+      "measured_tasks": 9690,
+      "task_specs_sha256": "0387698992e34c4d858b770fcc78e0b509d6904fc731d304248bb5e4729c48ec"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/2a90aa727848d0ecfc63/population",
+    "retained_tasks": 9690,
+    "runnable_grader_tasks": 9690,
+    "scanned_task_specs_sha256": "0387698992e34c4d858b770fcc78e0b509d6904fc731d304248bb5e4729c48ec",
+    "source_id": "TaskTrove:laion__codeforces-v3"
+  },
+  "TaskTrove:laion__exp_rpt_bugsinpy-v4": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/97367abe826c99ac0b69/summary.json",
+    "grader_kinds": {
+      "native_harbor": 479
+    },
+    "input": {
+      "converter_revision": "d3220aa47fc613e8fdd4c3a1ad52599fccc81c5cd8d41f8689f0771db2f11bfc",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-bugsinpy-v4-0d77757a-taskcompendium-20261112",
+      "dataset_revision": "b5bf846ac107cffe961a041800b5212f02ea7b13",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/5808e120a72416ed0f56/2026.11.12.4/.artifact.json",
+      "measured_tasks": 479,
+      "task_specs_sha256": "72a9022bdee84865602ce8fb47d826d97b4ebc79acf95a22901b3c3c8e1bcf3f"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/5808e120a72416ed0f56/2026.11.12.4",
+    "retained_tasks": 479,
+    "runnable_grader_tasks": 479,
+    "scanned_task_specs_sha256": "6b0a1018cc02a3a993bddc8c2c6bcf96084ebd77ee60ff78025c68343f568a33",
+    "source_id": "TaskTrove:laion__exp_rpt_bugsinpy-v4"
+  },
+  "TaskTrove:laion__exp_rpt_codenet-python-v4": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/4381b4ac36565767e0e9/summary.json",
+    "grader_kinds": {
+      "native_harbor": 6975
+    },
+    "input": {
+      "converter_revision": "3e8d1a0c0a2f4a5788485e8427c47117075df9a00773131d6a76c18c9fb6c087",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-codenet-python-v4-36a8f53c-taskcompendium-20261112",
+      "dataset_revision": "339b44af844aa0742706a9f8ab8a4d6a145f36f0",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/e069777951e3140cf497/2026.11.12.4/.artifact.json",
+      "measured_tasks": 6975,
+      "task_specs_sha256": "3e6cd267ec9e05ab62d00a5eb311a4983c80b7f595f042965a73574aa362e22d"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/e069777951e3140cf497/2026.11.12.4",
+    "retained_tasks": 6975,
+    "runnable_grader_tasks": 6975,
+    "scanned_task_specs_sha256": "607f3a9e2db7ae2d081fda65860dcefaa0bd78d1740323fd7ea37263c2e6631c",
+    "source_id": "TaskTrove:laion__exp_rpt_codenet-python-v4"
+  },
+  "TaskTrove:laion__exp_rpt_crosscodeeval-csharp-v4": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/3f5b40afc165588e7bec/summary.json",
+    "grader_kinds": {
+      "native_harbor": 1768
+    },
+    "input": {
+      "converter_revision": "836f80300de5cb2cc3f7bb677b21b220a03371634e5f7c04a0bfc9269ad721e5",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-csharp-v4-600ade46-taskcompendium-20261112",
+      "dataset_revision": "663f98ee95ef60f218a236e2c28aafb8027240ac",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/0a9ec61e9600c2fbcbd9/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1768,
+      "task_specs_sha256": "0fffddc729f8cd160a2e9b0c98d66139adb014625926bfd510299171dc02613c"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/0a9ec61e9600c2fbcbd9/2026.11.12.4",
+    "retained_tasks": 1768,
+    "runnable_grader_tasks": 1768,
+    "scanned_task_specs_sha256": "166b675d1bbfe5aa1eef879da6554b625e504e488e3f5bf7da2983548995d105",
+    "source_id": "TaskTrove:laion__exp_rpt_crosscodeeval-csharp-v4"
+  },
+  "TaskTrove:laion__exp_rpt_crosscodeeval-java-v3": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/9c25acaba1da65d267d3/summary.json",
+    "grader_kinds": {
+      "native_harbor": 2139
+    },
+    "input": {
+      "converter_revision": "0df37e3eb898efc9492b05b323f97b0017a9f9f38b2f7accd5adfd199517179e",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-java-v3-d4f66a66-taskcompendium-20261112",
+      "dataset_revision": "397522f49f8f0cdf8a4f95df5ad9ec0a7722f6c7",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/8fe8c203a3a9e875d768/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2139,
+      "task_specs_sha256": "d2852a57b06f75dacc427a8835d87c922317f86d7d8edd3bd12b645b058eac30"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/8fe8c203a3a9e875d768/2026.11.12.4",
+    "retained_tasks": 2139,
+    "runnable_grader_tasks": 2139,
+    "scanned_task_specs_sha256": "dbe58a560cd6ada8d821a5645fea1a964784af3507528fb3754fd83f06bccc70",
+    "source_id": "TaskTrove:laion__exp_rpt_crosscodeeval-java-v3"
+  },
+  "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/b3fb68e474a864d2f59c/summary.json",
+    "grader_kinds": {
+      "native_harbor": 500
+    },
+    "input": {
+      "converter_revision": "5411f877ffec19b7e93f48bcc54ed70ea91267365c44ce78ddb279bf17e29ed5",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-python-v2-dc0ebee3-taskcompendium-20261112",
+      "dataset_revision": "a953f93bc830704525ff2cce0b296dd262009662",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/b5d2abe06afc8a793318/2026.11.12.4/.artifact.json",
+      "measured_tasks": 500,
+      "task_specs_sha256": "dafe1c08f29eb599bac3398496313e94be634f9fe2bbd3f7947d334ffd20e8bb"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/b5d2abe06afc8a793318/2026.11.12.4",
+    "retained_tasks": 500,
+    "runnable_grader_tasks": 500,
+    "scanned_task_specs_sha256": "82e497f75c9d3c3ffc2a1eed157afcf82848ddb796eada16d529e1a15075d7c8",
+    "source_id": "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2"
+  },
+  "TaskTrove:laion__exp_rpt_crosscodeeval-typescript-v2": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/e26c25b71990259b247c/summary.json",
+    "grader_kinds": {
+      "native_harbor": 3356
+    },
+    "input": {
+      "converter_revision": "be9b16fa142e9cf9a71e3d6060938fc2f18f0d19df06cedf58c3aec35b298846",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-typescript-v2-d0a1cbe1-taskcompendium-20261112",
+      "dataset_revision": "f19d39a3923b02712d5674485f6eb230b1888372",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/66eacfa201a4723674cb/2026.11.12.4/.artifact.json",
+      "measured_tasks": 3356,
+      "task_specs_sha256": "1ddf0fe5a29deb1b6ba7e7dbc6eb47d1dc593b5278a62e6036d8acc54ce09a47"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/66eacfa201a4723674cb/2026.11.12.4",
+    "retained_tasks": 3356,
+    "runnable_grader_tasks": 3356,
+    "scanned_task_specs_sha256": "3b79eb266806aeaf7d1034acffab25d392707954b7a0c18cc981fa2ea0149a91",
+    "source_id": "TaskTrove:laion__exp_rpt_crosscodeeval-typescript-v2"
+  },
+  "TaskTrove:laion__exp_rpt_ghactions-v3": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/66dfa54a74ad7a916d17/summary.json",
+    "grader_kinds": {
+      "native_harbor": 9930
+    },
+    "input": {
+      "converter_revision": "c7011640ffde23bef4a5dc24583993e7a730c9b0170b03a0d8b1b5d2cb9b42f4",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-ghactions-v3-398f0582-taskcompendium-20261112",
+      "dataset_revision": "d8ed772114021e7ad484bb51db5dc919b09bc676",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/dbed90574012db40ff47/2026.11.12.4/.artifact.json",
+      "measured_tasks": 9930,
+      "task_specs_sha256": "e53d2e102d201be903f568c6312a49874dbcac0dedd0828fe89ce25f8da92f0c"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/dbed90574012db40ff47/2026.11.12.4",
+    "retained_tasks": 9930,
+    "runnable_grader_tasks": 9930,
+    "scanned_task_specs_sha256": "8167fe91bc6577ce9c6eb0eefd939b1bff1e36f61bd152df160c92d3f163d019",
+    "source_id": "TaskTrove:laion__exp_rpt_ghactions-v3"
+  },
+  "TaskTrove:laion__exp_rpt_methods2test-large-v4": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/7757bda911b07e6322c1/summary.json",
+    "grader_kinds": {
+      "native_harbor": 1194
+    },
+    "input": {
+      "converter_revision": "97a8f86ac373dcd9cc99ba2e6ea8ff8230dc2af710e4f31173379e7fe47dc08a",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-methods2test-large-v4-2879780c-taskcompendium-20261112",
+      "dataset_revision": "c226cc9adc5b086935d385f6592c354c3fd9f1b2",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/df6ff565e9a45cea1fba/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1194,
+      "task_specs_sha256": "5b80f36cb2b01432a1895ac164e81cba777054381dd7489d0f89e37cc367a64a"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/df6ff565e9a45cea1fba/2026.11.12.4",
+    "retained_tasks": 1194,
+    "runnable_grader_tasks": 1194,
+    "scanned_task_specs_sha256": "f64111143d381f4aa803e5099a0e0c53e76ea42792be35bc14296a233244a9ea",
+    "source_id": "TaskTrove:laion__exp_rpt_methods2test-large-v4"
+  },
+  "TaskTrove:laion__exp_rpt_nemotron-junit-v6": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/b9c22f8fe23423d0289c/summary.json",
+    "grader_kinds": {
+      "native_harbor": 447
+    },
+    "input": {
+      "converter_revision": "0c7817b10f3a26e850d719e2c5d6e8905010ea3cfd434100189e297ec1815258",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-nemotron-junit-v6-2fbbabc0-taskcompendium-20261112",
+      "dataset_revision": "92731ca6f403ec471f923d60e112e98c2e8b40d8",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/a37af6aed4b58b418ea6/2026.11.12.4/.artifact.json",
+      "measured_tasks": 447,
+      "task_specs_sha256": "24f2dca17d69393c8f27f870f82ee0d5084989abfb3a90cc625530bc4c67d67c"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/a37af6aed4b58b418ea6/2026.11.12.4",
+    "retained_tasks": 447,
+    "runnable_grader_tasks": 447,
+    "scanned_task_specs_sha256": "430d25f922883a9070dd728cb826baf83c33f87c96073334a7d6617f688403a1",
+    "source_id": "TaskTrove:laion__exp_rpt_nemotron-junit-v6"
+  },
+  "TaskTrove:laion__exp_rpt_scaffold-v3": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/9e86fbae16003f8ef536/summary.json",
+    "grader_kinds": {
+      "native_harbor": 3121
+    },
+    "input": {
+      "converter_revision": "08a598f68dad2d9f2f137d08a45b2b43d811fb63d105853375f3cfb6b55e667b",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-scaffold-v3-fad5ea9a-taskcompendium-20261112",
+      "dataset_revision": "223f8887d937df94b60aa65d7b67617a3b206e46",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/8ecffb5088098925b4b3/2026.11.12.4/.artifact.json",
+      "measured_tasks": 3121,
+      "task_specs_sha256": "fe61d7da09a36af80b5a9c4731d837ff40319ea15598fcc53760a25f08242ff3"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/8ecffb5088098925b4b3/2026.11.12.4",
+    "retained_tasks": 3121,
+    "runnable_grader_tasks": 3121,
+    "scanned_task_specs_sha256": "f9c4eca6c3a38c0bec9295ff6304edfa714e5a685ae98ba9b5cb96f4910c44e2",
+    "source_id": "TaskTrove:laion__exp_rpt_scaffold-v3"
+  },
+  "TaskTrove:laion__exp_rpt_stack-cpp-v4": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/f864a132bc3815dcb668/summary.json",
+    "grader_kinds": {
+      "native_harbor": 7878
+    },
+    "input": {
+      "converter_revision": "312fe71e304e174af76fe2cdc5ef7d1ee6d22c997cc0a868cbf88d13b65f57dd",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-cpp-v4-ed820df1-taskcompendium-20261112",
+      "dataset_revision": "216031e9222ae909857db0233ab47699ee7c26f7",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/b66f694b1e95540d577e/2026.11.12.4/.artifact.json",
+      "measured_tasks": 7878,
+      "task_specs_sha256": "c279974fa95777bdcae0f9879d377993a7a09efec5d4c16f7ae77409597d37e5"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/b66f694b1e95540d577e/2026.11.12.4",
+    "retained_tasks": 7878,
+    "runnable_grader_tasks": 7878,
+    "scanned_task_specs_sha256": "0af0a6e4b8f2f64aa1ab5076ee2e362d3d3e4cedb575e72ff90a9e3da7a577a6",
+    "source_id": "TaskTrove:laion__exp_rpt_stack-cpp-v4"
+  },
+  "TaskTrove:laion__exp_rpt_stack-dockerfile-gpt5mini-v7": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/268fa96b531335fa58ba/summary.json",
+    "grader_kinds": {
+      "native_harbor": 587
+    },
+    "input": {
+      "converter_revision": "635d482a03333ebb8d11725887285c5337d315cbf42f44f01e8017fd0858a952",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-dockerfile-gpt5mini-v7-91a3784f-taskcompendium-20261112",
+      "dataset_revision": "3f39ebf6056ae868ed8ca0f010b9941941837874",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/552c63d5821ceaca0720/2026.11.12.4/.artifact.json",
+      "measured_tasks": 587,
+      "task_specs_sha256": "6d089caa12aebee3b956546657dcf1403ecde3660c221316bed092a056838357"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/552c63d5821ceaca0720/2026.11.12.4",
+    "retained_tasks": 587,
+    "runnable_grader_tasks": 587,
+    "scanned_task_specs_sha256": "bacaa252830ea3ab06b40340e019180c8ae10eb472e8758b83a94a838087845f",
+    "source_id": "TaskTrove:laion__exp_rpt_stack-dockerfile-gpt5mini-v7"
+  },
+  "TaskTrove:laion__exp_rpt_stack-go-v5": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/d64ebdcd53cd68ee0d72/summary.json",
+    "grader_kinds": {
+      "native_harbor": 2275
+    },
+    "input": {
+      "converter_revision": "96ea9172f4470f15db700202628648f8c706e2c19399df7279c7d49059297749",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-go-v5-da0f0f78-taskcompendium-20261112",
+      "dataset_revision": "0532c59438e78c43fca0b5aaa8e2d3d8fab6d031",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/8ef0801bbe67bc7742fb/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2275,
+      "task_specs_sha256": "8e4dcb9fae66b034a9479642af37c17e01987f7317168c059ba17b166e55f00a"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/8ef0801bbe67bc7742fb/2026.11.12.4",
+    "retained_tasks": 2275,
+    "runnable_grader_tasks": 2275,
+    "scanned_task_specs_sha256": "5dfe9fea80357462c46f239c508d2975841078a7ec7836d7601dd0d1c78f87b9",
+    "source_id": "TaskTrove:laion__exp_rpt_stack-go-v5"
+  },
+  "TaskTrove:laion__exp_rpt_stack-jest-v5": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/5f5950e91616cc6d4bc1/summary.json",
+    "grader_kinds": {
+      "native_harbor": 424
+    },
+    "input": {
+      "converter_revision": "53837204daf001e82ea972abd8721e0d43bb89b56bb197f578b607825e025176",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-jest-v5-6819fa0d-taskcompendium-20261112",
+      "dataset_revision": "ec48b8fa719706dfe2051d1b87f38661d63ce719",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/74eeddd79d33937c7e7a/2026.11.12.4/.artifact.json",
+      "measured_tasks": 424,
+      "task_specs_sha256": "3e56bef80e81e250e2925fef34b0f1ad4964d57f1eefb22e16f9d791ea06b498"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/74eeddd79d33937c7e7a/2026.11.12.4",
+    "retained_tasks": 424,
+    "runnable_grader_tasks": 424,
+    "scanned_task_specs_sha256": "ac061c5b2bd5960e7d251b612bd90e71171f59c88a8815f344ac7c5b51f8e7ab",
+    "source_id": "TaskTrove:laion__exp_rpt_stack-jest-v5"
+  },
+  "TaskTrove:laion__exp_rpt_stack-junit-v6": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/d9a85e481161375ba197/summary.json",
+    "grader_kinds": {
+      "native_harbor": 843
+    },
+    "input": {
+      "converter_revision": "346271484142ea2fbf3fbb58d4f553d320c08ea24f43d3a17d4379b06b3e07cf",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-junit-v6-7c8684a8-taskcompendium-20261112",
+      "dataset_revision": "52420879e9c2c58e1435c93c7477c023f4658392",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/9b400f339b1d09742f45/2026.11.12.4/.artifact.json",
+      "measured_tasks": 843,
+      "task_specs_sha256": "0c50e4a7a5224c1779b04d08c818ae2434810b941b4d06bd3dad060ee934ecd7"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/9b400f339b1d09742f45/2026.11.12.4",
+    "retained_tasks": 843,
+    "runnable_grader_tasks": 843,
+    "scanned_task_specs_sha256": "fe3c6d52b421fba8fb2e02c00305fd823fe58b31b46ac2dee67409624bd39442",
+    "source_id": "TaskTrove:laion__exp_rpt_stack-junit-v6"
+  },
+  "TaskTrove:laion__exp_rpt_stack-php-large-v9": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/d953adaa665f83bb7705/summary.json",
+    "grader_kinds": {
+      "native_harbor": 462
+    },
+    "input": {
+      "converter_revision": "46518f37898e48e750704a2d13ac9cb92a7d3047467e646af17e4e3f45ca6083",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-php-large-v9-1989cf5b-taskcompendium-20261112",
+      "dataset_revision": "e5a78f38a3513b90a8a47a53d98fb2e90b99ea08",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/97cc082c7e368838cf0c/2026.11.12.4/.artifact.json",
+      "measured_tasks": 462,
+      "task_specs_sha256": "e53e793e6746eceaece106a7e39988f4b1db3bf49be9b30e7ef8d8f6eb1af291"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/97cc082c7e368838cf0c/2026.11.12.4",
+    "retained_tasks": 462,
+    "runnable_grader_tasks": 462,
+    "scanned_task_specs_sha256": "21fc0d8a50163ab4fba27f5c8921ad84fdc5b2e84b0dfd54343228ba0817b3f0",
+    "source_id": "TaskTrove:laion__exp_rpt_stack-php-large-v9"
+  },
+  "TaskTrove:laion__exp_rpt_stack-pytest-large-v3": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/ea674a8e8cdb7b3ca1fb/summary.json",
+    "grader_kinds": {
+      "native_harbor": 1782
+    },
+    "input": {
+      "converter_revision": "2d6aae4373f3fdc1fc22b697bbe62c03a8fedc5fbaba679337f5407a0a45c080",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-pytest-large-v3-768234a1-taskcompendium-20261112",
+      "dataset_revision": "552bb443070fe2a919372a2bcd8f96181f89efce",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/c026a0f78984e90b04c8/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1782,
+      "task_specs_sha256": "960204b1c88fe1aae89c253c68982e1cd025056478c8eae8ea47644a2ac3cbfb"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/c026a0f78984e90b04c8/2026.11.12.4",
+    "retained_tasks": 1782,
+    "runnable_grader_tasks": 1782,
+    "scanned_task_specs_sha256": "6fd36470f6b49f12041577529de6f532fd526db5cde31315506b25a7824bb9d3",
+    "source_id": "TaskTrove:laion__exp_rpt_stack-pytest-large-v3"
+  },
+  "TaskTrove:laion__exp_rpt_stack-rspec-v4": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/d5148f46e190119aab2b/summary.json",
+    "grader_kinds": {
+      "native_harbor": 8860
+    },
+    "input": {
+      "converter_revision": "5d99a8945b5a9f1f89e951fa0d0895b6742ab26273f6d268285a134e6508e8b0",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-stack-rspec-v4-b5c5329d-taskcompendium-20261112",
+      "dataset_revision": "681af469d02a5fd3e3c6f208bdb5dfeb4f7552a0",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/41840f7a8c5673583a71/2026.11.12.4/.artifact.json",
+      "measured_tasks": 8860,
+      "task_specs_sha256": "dce63e85dd84f9f6c189ced9b2d5e73043e73c9c40c150f616e1f36d524cfa31"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/41840f7a8c5673583a71/2026.11.12.4",
+    "retained_tasks": 8860,
+    "runnable_grader_tasks": 8860,
+    "scanned_task_specs_sha256": "5d81f420afb28de540d7e15310575517949a21f75d4934068f079aabc9871737",
+    "source_id": "TaskTrove:laion__exp_rpt_stack-rspec-v4"
+  },
+  "TaskTrove:laion__exp_rpt_taco-v2": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/ede8bc2f026837651de2/summary.json",
+    "grader_kinds": {
+      "script": 5114
+    },
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "5",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/830c0882cb57e4529088/2026.11.12.4/.artifact.json",
+      "measured_tasks": 5114,
+      "task_specs_sha256": "a37bc34a6b53822ab0fe56e7aa29014c32e77303de221c378425b04f5cefea83"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/830c0882cb57e4529088/2026.11.12.2",
+    "retained_tasks": 5114,
+    "runnable_grader_tasks": 5114,
+    "scanned_task_specs_sha256": "a5593db8101ad6c8421588e4aa57e0c6b9e8291ee23ab2272aaeb2d4de335982",
+    "source_id": "TaskTrove:laion__exp_rpt_taco-v2"
+  },
+  "TaskTrove:laion__magicoder-v4": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/1a2278edd34bc6a3e3cf/summary.json",
+    "grader_kinds": {
+      "native_harbor": 4087
+    },
+    "input": {
+      "converter_revision": "2f4b27ba2e",
+      "converter_version": "2026.11.13.1",
+      "dataset_id": "open-athena/task-trove-laion-magicoder-v4-acde1110-retained-20261113-v1",
+      "dataset_revision": "65b47c078b747074f01cf9d3c84ac8accb685aa7",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/acde1110e514f972d504/actor/.artifact.json",
+      "measured_tasks": 4087,
+      "task_specs_sha256": "d1fd0949598050d06c995a593c2bbb5105347f2b2f74e746d2218cce6a4a202e"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/acde1110e514f972d504/population",
+    "retained_tasks": 4087,
+    "runnable_grader_tasks": 4087,
+    "scanned_task_specs_sha256": "d1fd0949598050d06c995a593c2bbb5105347f2b2f74e746d2218cce6a4a202e",
+    "source_id": "TaskTrove:laion__magicoder-v4"
+  },
+  "TaskTrove:laion__mix_h10_reward_proportional-v2": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/f6bc3e03ab5c2f66a0e7/summary.json",
+    "grader_kinds": {
+      "native_harbor": 2858
+    },
+    "input": {
+      "converter_revision": "992489c30ef1523d8cf9fd3b95a2525886c3d6ed52ff942e988469664bb7ab06",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-mix-h10-reward-proportional-v2-ba26a9b1-taskcompendium-20261112",
+      "dataset_revision": "9f0028ec352e0ca4d9111e029cf8da9ab8710d91",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/666717602d7c349405c9/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2858,
+      "task_specs_sha256": "d6245d18eecbec8e5511128806d00b973892429d751ea16ebd45f70a2f2eb26e"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/666717602d7c349405c9/2026.11.12.4",
+    "retained_tasks": 2858,
+    "runnable_grader_tasks": 2858,
+    "scanned_task_specs_sha256": "5ebad7297e412e1127f02ac10eb822b56da78334ff69a7b8585be1ac36f48ca2",
+    "source_id": "TaskTrove:laion__mix_h10_reward_proportional-v2"
+  },
+  "TaskTrove:laion__mix_h11_single_skill_only-v2": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/27be04d8da9511c577b8/summary.json",
+    "grader_kinds": {
+      "native_harbor": 2859
+    },
+    "input": {
+      "converter_revision": "ca88633e63111d46e10780e0554b97e553ffa47a2ece60a83e31484c71e91809",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-mix-h11-single-skill-only-v2-8d3e081c-taskcompendium-20261112",
+      "dataset_revision": "60243d1122a66a5aba5bd0fe66921898d446e4da",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/edf6613196845a615e20/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2859,
+      "task_specs_sha256": "033bf6c1c98f2f20f640805034b3b176b08f4901a90e88f194575687087e9721"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/edf6613196845a615e20/2026.11.12.4",
+    "retained_tasks": 2859,
+    "runnable_grader_tasks": 2859,
+    "scanned_task_specs_sha256": "9602f2d03f4f37f9691ce5a474ffb4c93331cdb2a41af0e17472d17e3cfb9051",
+    "source_id": "TaskTrove:laion__mix_h11_single_skill_only-v2"
+  },
+  "TaskTrove:laion__mix_h8_original_tests-v2": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/b85d2f46c2d96e3b269c/summary.json",
+    "grader_kinds": {
+      "native_harbor": 2848
+    },
+    "input": {
+      "converter_revision": "848b0c37e6ac78e8a043270b91ce2adfb6cd7cbaa71704b891b34aa8f949c824",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-mix-h8-original-tests-v2-0a779549-taskcompendium-20261112",
+      "dataset_revision": "e0f2098e30198a8611bcca6372555a98a44596e6",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/8922fc9604971516e06a/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2848,
+      "task_specs_sha256": "dada04040b27b1ab9a006071f9348a99e1ea64426798fcd89a47504a5bd28ab4"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/8922fc9604971516e06a/2026.11.12.4",
+    "retained_tasks": 2848,
+    "runnable_grader_tasks": 2848,
+    "scanned_task_specs_sha256": "29bd581f2a768886ce64392a524b816790ca383ae039c6e90e7bd399df41c231",
+    "source_id": "TaskTrove:laion__mix_h8_original_tests-v2"
+  },
+  "TaskTrove:laion__nemo-prism-math-v3": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/a3d51da36bea0199a80b/summary.json",
+    "grader_kinds": {
+      "verifyit": 2221
+    },
+    "input": {
+      "converter_revision": "2f4b27ba2e",
+      "converter_version": "2026.11.13.1",
+      "dataset_id": "open-athena/task-trove-laion-nemo-prism-math-v3-d5a08668-retained-20261113-v1",
+      "dataset_revision": "f80786636ed36ba2faa15c0fd501cb7ee2b50a6c",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/d5a08668f5bd72a4fb5f/actor/.artifact.json",
+      "measured_tasks": 2221,
+      "task_specs_sha256": "0c4d093057cbcadcb8dd8ff2af239f5b8e5ddeed235b0d6abb272627b87a4738"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/d5a08668f5bd72a4fb5f/population",
+    "retained_tasks": 2221,
+    "runnable_grader_tasks": 2221,
+    "scanned_task_specs_sha256": "0c4d093057cbcadcb8dd8ff2af239f5b8e5ddeed235b0d6abb272627b87a4738",
+    "source_id": "TaskTrove:laion__nemo-prism-math-v3"
+  },
+  "TaskTrove:laion__nemotron-gym-agent-calendar-v2": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/71f57c8da42a8b89e527/summary.json",
+    "grader_kinds": {
+      "script": 2699
+    },
+    "input": {
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "converter_version": "2",
+      "dataset_id": "open-thoughts/TaskTrove",
+      "dataset_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/1206c26594abe648af81/2026.11.12.4/.artifact.json",
+      "measured_tasks": 2699,
+      "task_specs_sha256": "66bfa2c0c99a37033d4c98b0716557e2d2f6749eafe856bb127a09134fe5d3ad"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/1206c26594abe648af81/2026.11.12.2",
+    "retained_tasks": 2699,
+    "runnable_grader_tasks": 2699,
+    "scanned_task_specs_sha256": "07f14a5800ccef76f0ff8f9b28c1681a2d9e8907c5fa0f2a90874d78474e1e24",
+    "source_id": "TaskTrove:laion__nemotron-gym-agent-calendar-v2"
+  },
+  "TaskTrove:laion__nemotron-gym-agentic-function-calling-pivot-v3": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/0f60096d70fbb2e2a541/summary.json",
+    "grader_kinds": {
+      "native_harbor": 9579
+    },
+    "input": {
+      "converter_revision": "304db2e222973a195d2915331aa12774e503e0ea673b4831c79ef3891b88fb6d",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-agentic-function-calling-pivot-v3-85b3be47-taskcompendium-20261112",
+      "dataset_revision": "4d6516b2c9385f2ce10f344db0f1e4112ae0e0f9",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/02676bdeec23d54f45d1/2026.11.12.4/.artifact.json",
+      "measured_tasks": 9579,
+      "task_specs_sha256": "d04e9788a9e1798909b3d12fd39487aee717126d08790b16213f33f9304a6579"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/02676bdeec23d54f45d1/2026.11.12.4",
+    "retained_tasks": 9579,
+    "runnable_grader_tasks": 9579,
+    "scanned_task_specs_sha256": "a6733e7b70148f5ebd6f3764b202ac219bb8e4a8b7286f9868184393937ea04d",
+    "source_id": "TaskTrove:laion__nemotron-gym-agentic-function-calling-pivot-v3"
+  },
+  "TaskTrove:laion__nemotron-gym-agentic-indirect-prompt-injection-v3": {
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/793fb8f695f1213cfcde/summary.json",
+    "grader_kinds": {
+      "native_harbor": 1272
+    },
+    "input": {
+      "converter_revision": "638099fb232038b883a682104358839b7a97843fd181be38faf0d8f7ee7e9084",
+      "converter_version": "2026.11.12.1",
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-agentic-indirect-prompt-injection-8109e8f1-taskcompendium-20261112",
+      "dataset_revision": "8a2380bcd1a453c11a7cd6a638d3fc993ddd8ea1",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/d57a96d6673c18b4c7cc/2026.11.12.4/.artifact.json",
+      "measured_tasks": 1272,
+      "task_specs_sha256": "1f0cf77d415b325d7374469bb83def2d6f5abadbeb1f007e6fa4b0e3cb949a44"
+    },
+    "missing_grader_reasons": {},
+    "no_grader_tasks": 0,
+    "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/d57a96d6673c18b4c7cc/2026.11.12.4",
+    "retained_tasks": 1272,
+    "runnable_grader_tasks": 1272,
+    "scanned_task_specs_sha256": "56675c1b1c0d2c7c6a814ec2eb8a2aa2107847d4facd6c36b2173b3353541cdc",
+    "source_id": "TaskTrove:laion__nemotron-gym-agentic-indirect-prompt-injection-v3"
+  }
+}

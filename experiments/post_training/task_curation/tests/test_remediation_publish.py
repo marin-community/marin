@@ -491,3 +491,43 @@ def test_unqualified_retained_release_cannot_enter_admitted_import(retained_rece
     source = replace(source, info=replace(source.info, **changes))
     with pytest.raises(ValueError, match=r"cannot admit|excluded"):
         source.pipeline(source, PipelineOptions(SourceProcessingMode.FULL, CampaignRuntime()))
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_retained_admission_rejects_missing_grader_or_empty_population(tmp_path, retained_receipt, monkeypatch, empty):
+    original, receipt = retained_receipt
+    task = TaskSpec.model_validate(json.loads(prebuilt_task("retained")["lowered_task_spec"])["task"])
+    task = task.model_copy(update={"grader": NoGrader(reason="Preference labels cannot grade new replies")})
+    encoded = task.model_dump_json()
+    local = tmp_path / "tasks.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "task_spec": [] if empty else [encoded],
+                "task_sha256": [] if empty else [hashlib.sha256(encoded.encode()).hexdigest()],
+                "runtime": [] if empty else ["{}"],
+            }
+        ),
+        local,
+    )
+    publication = receipt.publication.model_copy(update={"tasks_parquet_sha256": file_sha256(StoragePath(str(local)))})
+    source = bind_retained_release(original, receipt.model_copy(update={"publication": publication}))
+    assert source.config is not None
+    monkeypatch.setattr(retained_release, "hf_hub_download", lambda *args, **kwargs: str(local))
+    invocation = RetainedImport(
+        replace(source.config, expected_rows=0 if empty else 1),
+        str(tmp_path / "admitted"),
+        SourceProcessingMode.FULL,
+        source.info.oversight,
+        source.info.inherited_admission,
+        source.info.lexical_contamination,
+    )
+    with pytest.raises(ValueError, match="nonempty retained population" if empty else "no runnable grader"):
+        run_retained_import(invocation)
+    assert not (tmp_path / "admitted" / "final").exists()
+    if not empty:
+        # QUICK can retain unsupported contracts for diagnosis without admitting them.
+        quick = run_retained_import(
+            replace(invocation, mode=SourceProcessingMode.QUICK, output_path=str(tmp_path / "quick"))
+        )
+        assert "final" not in quick.result.outputs

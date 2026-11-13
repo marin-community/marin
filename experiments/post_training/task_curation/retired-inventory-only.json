@@ -6094,6 +6094,2676 @@
       "disposition": "mechanical_grader_defect",
       "disposition_reason": "All 50,606 retained converted tasks still contain an unspecified nested judge model, and the full ScriptSpec composition does not inject the runtime JudgeConnection. Grounding-only controls do not validate complete positive extraction.",
       "repair_recommendation": "Pin an instantiable judge and its active settings, supply JudgeConnection through the complete script composition, and validate format plus schema plus grounding with positive/wrong/empty production controls."
+    },
+    {
+      "actor_census_input": {
+        "converter_revision": "2f4b27ba2e",
+        "converter_version": "2026.11.13.1",
+        "dataset_id": "open-athena/marinskyrl-hh-rlhf-harmless-base-cf9b5a50-retained-20261113-v1",
+        "dataset_revision": "032843223e8f5d240c6532c593b013912b9bfcb8",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/cf9b5a50dddd132e4d47/actor/.artifact.json",
+        "measured_tasks": 42375,
+        "task_specs_sha256": "6d07e68d058781075954bba56150e3ad10d3338447490f0548014809891d3768"
+      },
+      "build_path": "MarinSkyRL",
+      "converted_examples": null,
+      "current_release": {
+        "repo": "open-athena/marinskyrl-hh-rlhf-harmless-base-cf9b5a50-retained-20261113-v1",
+        "revision": "032843223e8f5d240c6532c593b013912b9bfcb8",
+        "url": "https://huggingface.co/datasets/open-athena/marinskyrl-hh-rlhf-harmless-base-cf9b5a50-retained-20261113-v1/tree/032843223e8f5d240c6532c593b013912b9bfcb8"
+      },
+      "dataset_id": "open-athena/marinskyrl-hh-rlhf-harmless-base-cf9b5a50-retained-20261113-v1",
+      "dataset_revision": "032843223e8f5d240c6532c593b013912b9bfcb8",
+      "daytona_count_basis": "Complete 42375-TaskSpec census from open-athena/marinskyrl-hh-rlhf-harmless-base-cf9b5a50-retained-20261113-v1@032843223e8f5d240c6532c593b013912b9bfcb8; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/cf9b5a50dddd132e4d47/population",
+      "daytona_execution_failures": 0,
+      "daytona_exemption": null,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_safety": "not_applicable",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": 10,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": [],
+      "display_name": "hh_rlhf \u00b7 harmless-base",
+      "family": "preference",
+      "grading_environment": {
+        "assessed_tasks": 42375,
+        "declared_counts": {
+          "unavailable": 42375
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-grading/2026.11.13.1/cf9b5a50dddd132e4d47.json",
+        "reason_counts": {
+          "No executable grader is declared": 42375
+        },
+        "required_counts": {
+          "separate": 42375
+        },
+        "status_counts": {
+          "unavailable": 42375
+        }
+      },
+      "id": "Anthropic:hh_rlhf/harmless-base",
+      "independent_qc": null,
+      "integrity_contracts": {
+        "absent_contract_tasks": 42375,
+        "dataset_id": "open-athena/marinskyrl-hh-rlhf-harmless-base-cf9b5a50-retained-20261113-v1",
+        "dataset_revision": "032843223e8f5d240c6532c593b013912b9bfcb8",
+        "distinct_groups": 1,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/cf9b5a50dddd132e4d47/actor/integrity-contracts.json",
+        "example": null,
+        "groups": [
+          {
+            "count": 42375,
+            "dependency_state": null,
+            "harness_policy_sha256": null,
+            "id": null,
+            "native_family": null,
+            "present": false,
+            "version": null
+          }
+        ],
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "task_specs_sha256": "6d07e68d058781075954bba56150e3ad10d3338447490f0548014809891d3768"
+      },
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "lexical_contamination": {
+        "contaminated_fraction": 7.079144839303412e-05,
+        "contaminated_tasks": 3,
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "drop_set_uris": [
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/a30e97f3e7f1594ff1cd",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+        ],
+        "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+        "eval_corpus_version": "aa-index-v4.1.1-v3",
+        "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/a30e97f3e7f1594ff1cd/measurement.json",
+        "feature_filter_version": 4,
+        "input_dataset_id": "Anthropic/hh-rlhf",
+        "input_dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "matched_evals": {
+          "qqp": 3
+        },
+        "max_overlap": 0.5,
+        "mean_max_overlap": 3.539572419651706e-05,
+        "measured_tasks": 42378,
+        "min_matched_features": 2,
+        "ngram_length": 13,
+        "overlap_threshold": 0.5,
+        "p95_max_overlap": 0.0,
+        "receipt": {
+          "dropped_tasks": 3,
+          "duplicate_dropped_tasks": 0,
+          "release": {
+            "dataset_id": "open-athena/marinskyrl-hh-rlhf-harmless-base-cf9b5a50-retained-20261113-v1",
+            "dataset_revision": "032843223e8f5d240c6532c593b013912b9bfcb8",
+            "dedup_census_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.6/a30e97f3e7f1594ff1cd/measurement.json",
+            "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/a30e97f3e7f1594ff1cd/combined-drops.parquet",
+            "duplicate_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/a30e97f3e7f1594ff1cd/duplicates.parquet",
+            "format": "taskcompendium",
+            "original_dataset_id": "Anthropic/hh-rlhf",
+            "original_dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+            "original_private_dataset_id": "open-athena/marinskyrl-hh-rlhf-harmless-base-cf9b5a50-original-20261113-v1",
+            "original_private_dataset_revision": "136203081a5306c1231db5a087a6ab4c1bb7647b",
+            "private": true
+          },
+          "retained_tasks": 42375,
+          "status": "remediated",
+          "use": "train"
+        },
+        "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/a30e97f3e7f1594ff1cd/task_flags",
+        "text_renderer_version": "taskcompendium-format-conversation-v1",
+        "version": 1
+      },
+      "name": "hh_harmless_base-retained",
+      "notes": "remediated: dedup/decon. Retained TaskSpec and runtime bytes match the original pin; original oversight and quality evidence apply through this subset lineage: s3://marin-us-east-02a/marin/rl-data/atlas/private-retention/2026.11.13.1/cf9b5a50dddd132e4d47/result.json. Interaction describes supported conversation structure. Conversational collections can include one-turn examples. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "oracle_validation": null,
+      "origin": "Anthropic",
+      "oversight": "none",
+      "oversight_evidence": null,
+      "pipeline": {
+        "files": [
+          "tasks.parquet"
+        ],
+        "name": "hh_harmless_base-retained",
+        "revision": "032843223e8f5d240c6532c593b013912b9bfcb8",
+        "source": "open-athena/marinskyrl-hh-rlhf-harmless-base-cf9b5a50-retained-20261113-v1",
+        "version": "2026.11.13.1"
+      },
+      "quality_result": null,
+      "status": "Not selectable",
+      "subset": "harmless-base",
+      "tags": [
+        "alignment",
+        "multi-turn",
+        "license:mit",
+        "gym/preference"
+      ],
+      "task_count": 42375,
+      "turns": "Multi-turn",
+      "type": "Alignment",
+      "upstream_dataset": "hh_rlhf",
+      "upstream_name": "hh_rlhf",
+      "url": "https://huggingface.co/datasets/Anthropic/hh-rlhf/tree/09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+      "variant": null,
+      "within_source_dedup": {
+        "converter_revision": "2f4b27ba2e",
+        "converter_version": "2026.11.13.1",
+        "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/cf9b5a50dddd132e4d47/dedup/drops.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/private-retention/2026.11.13.1/cf9b5a50dddd132e4d47/result.json",
+        "raw_count": 42375,
+        "source_dataset_id": "open-athena/marinskyrl-hh-rlhf-harmless-base-cf9b5a50-retained-20261113-v1",
+        "source_revision": "032843223e8f5d240c6532c593b013912b9bfcb8",
+        "unique_count": 42375,
+        "within_source_duplicates": 0
+      },
+      "disposition": "retired_admission_check",
+      "disposition_reason": "No runnable grader exists for the complete current converted population.",
+      "disposition_evidence": {
+        "inventory_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/inventory.json",
+        "previous_assessment_key": null,
+        "previous_admission_counts": null,
+        "retained_tasks": 42375,
+        "runnable_grader_tasks": 0,
+        "no_grader_tasks": 42375,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/9d77f78e3952d83ab5ca/summary.json"
+      }
+    },
+    {
+      "actor_census_input": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "1",
+        "dataset_id": "Anthropic/hh-rlhf",
+        "dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/5b1d6c49d6456f6971a7/2026.11.12.4/.artifact.json",
+        "measured_tasks": 43699,
+        "task_specs_sha256": "bfd6f1cad832d16e7cc2b41571b44ef0418cc08e3d469adb8718fd526c4181b5"
+      },
+      "build_path": "MarinSkyRL",
+      "converted_examples": null,
+      "current_release": {
+        "repo": "Anthropic/hh-rlhf",
+        "revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "url": "https://huggingface.co/datasets/Anthropic/hh-rlhf/tree/09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa"
+      },
+      "dataset_id": "Anthropic/hh-rlhf",
+      "dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+      "daytona_count_basis": "Complete 43699-TaskSpec census from Anthropic/hh-rlhf@09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/5b1d6c49d6456f6971a7/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_exemption": null,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_safety": "not_applicable",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": 10,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": [],
+      "display_name": "hh_rlhf \u00b7 helpful-base",
+      "family": "preference",
+      "grading_environment": null,
+      "id": "Anthropic:hh_rlhf/helpful-base",
+      "independent_qc": null,
+      "integrity_contracts": {
+        "absent_contract_tasks": 43699,
+        "dataset_id": "Anthropic/hh-rlhf",
+        "dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "distinct_groups": 1,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/5b1d6c49d6456f6971a7/2026.11.12.7/integrity-contracts.json",
+        "example": null,
+        "groups": [
+          {
+            "count": 43699,
+            "dependency_state": null,
+            "harness_policy_sha256": null,
+            "id": null,
+            "native_family": null,
+            "present": false,
+            "version": null
+          }
+        ],
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "task_specs_sha256": "bfd6f1cad832d16e7cc2b41571b44ef0418cc08e3d469adb8718fd526c4181b5"
+      },
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "lexical_contamination": {
+        "contaminated_fraction": 0.0,
+        "contaminated_tasks": 0,
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "drop_set_uris": [
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/5b1d6c49d6456f6971a7",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+        ],
+        "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+        "eval_corpus_version": "aa-index-v4.1.1-v3",
+        "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/5b1d6c49d6456f6971a7/measurement.json",
+        "feature_filter_version": 4,
+        "input_dataset_id": "Anthropic/hh-rlhf",
+        "input_dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "matched_evals": {},
+        "max_overlap": 0.3333333333333333,
+        "mean_max_overlap": 7.627939617229989e-06,
+        "measured_tasks": 43699,
+        "min_matched_features": 2,
+        "ngram_length": 13,
+        "overlap_threshold": 0.5,
+        "p95_max_overlap": 0.0,
+        "receipt": null,
+        "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/5b1d6c49d6456f6971a7/task_flags",
+        "text_renderer_version": "taskcompendium-format-conversation-v1",
+        "version": 1
+      },
+      "name": "hh_helpful_base",
+      "notes": "Interaction describes supported conversation structure. Conversational collections can include one-turn examples. Admission blocked: Decontamination admission blocked: clean or remediated decontamination receipt is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "oracle_validation": null,
+      "origin": "Anthropic",
+      "oversight": "none",
+      "oversight_evidence": null,
+      "pipeline": {
+        "files": [
+          "helpful-base/train.jsonl.gz"
+        ],
+        "name": "hh_helpful_base",
+        "revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "source": "Anthropic/hh-rlhf",
+        "version": "1"
+      },
+      "quality_result": null,
+      "status": "Not selectable",
+      "subset": "helpful-base",
+      "tags": [
+        "alignment",
+        "multi-turn",
+        "license:mit",
+        "gym/preference"
+      ],
+      "task_count": 43699,
+      "turns": "Multi-turn",
+      "type": "Alignment",
+      "upstream_dataset": "hh_rlhf",
+      "upstream_name": "hh_rlhf",
+      "url": "https://huggingface.co/datasets/Anthropic/hh-rlhf/tree/09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+      "variant": null,
+      "within_source_dedup": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "1",
+        "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/5b1d6c49d6456f6971a7/duplicates.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.6/5b1d6c49d6456f6971a7/measurement.json",
+        "raw_count": 43699,
+        "source_dataset_id": "Anthropic/hh-rlhf",
+        "source_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "unique_count": 43699,
+        "within_source_duplicates": 0
+      },
+      "disposition": "retired_admission_check",
+      "disposition_reason": "No runnable grader exists for the complete current converted population.",
+      "disposition_evidence": {
+        "inventory_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/inventory.json",
+        "previous_assessment_key": "rl-assessment/hh_helpful_base/report-d22f442c@2026.10.12.3:d22f442c",
+        "previous_admission_counts": {
+          "admitted": 0,
+          "rejected": 128,
+          "deferred": 8,
+          "no_grader": 43699,
+          "unverified": 0
+        },
+        "retained_tasks": 43699,
+        "runnable_grader_tasks": 0,
+        "no_grader_tasks": 43699,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/d587beb02be5706914cc/summary.json"
+      }
+    },
+    {
+      "actor_census_input": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "1",
+        "dataset_id": "Anthropic/hh-rlhf",
+        "dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/6b685865956477dbeb48/2026.11.12.4/.artifact.json",
+        "measured_tasks": 21989,
+        "task_specs_sha256": "3503da05413d05042410d6e4081fbcf67000c2ce804c3a3574fa374788503c7a"
+      },
+      "build_path": "MarinSkyRL",
+      "converted_examples": null,
+      "current_release": {
+        "repo": "Anthropic/hh-rlhf",
+        "revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "url": "https://huggingface.co/datasets/Anthropic/hh-rlhf/tree/09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa"
+      },
+      "dataset_id": "Anthropic/hh-rlhf",
+      "dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+      "daytona_count_basis": "Complete 21989-TaskSpec census from Anthropic/hh-rlhf@09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/6b685865956477dbeb48/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_exemption": null,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_safety": "not_applicable",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": 10,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": [],
+      "display_name": "hh_rlhf \u00b7 helpful-online",
+      "family": "preference",
+      "grading_environment": null,
+      "id": "Anthropic:hh_rlhf/helpful-online",
+      "independent_qc": null,
+      "integrity_contracts": {
+        "absent_contract_tasks": 21989,
+        "dataset_id": "Anthropic/hh-rlhf",
+        "dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "distinct_groups": 1,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/6b685865956477dbeb48/2026.11.12.7/integrity-contracts.json",
+        "example": null,
+        "groups": [
+          {
+            "count": 21989,
+            "dependency_state": null,
+            "harness_policy_sha256": null,
+            "id": null,
+            "native_family": null,
+            "present": false,
+            "version": null
+          }
+        ],
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "task_specs_sha256": "3503da05413d05042410d6e4081fbcf67000c2ce804c3a3574fa374788503c7a"
+      },
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "lexical_contamination": {
+        "contaminated_fraction": 0.0,
+        "contaminated_tasks": 0,
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "drop_set_uris": [
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/6b685865956477dbeb48",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+        ],
+        "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+        "eval_corpus_version": "aa-index-v4.1.1-v3",
+        "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/6b685865956477dbeb48/measurement.json",
+        "feature_filter_version": 4,
+        "input_dataset_id": "Anthropic/hh-rlhf",
+        "input_dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "matched_evals": {},
+        "max_overlap": 0.14285714285714285,
+        "mean_max_overlap": 8.789567944145232e-06,
+        "measured_tasks": 21989,
+        "min_matched_features": 2,
+        "ngram_length": 13,
+        "overlap_threshold": 0.5,
+        "p95_max_overlap": 0.0,
+        "receipt": null,
+        "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/6b685865956477dbeb48/task_flags",
+        "text_renderer_version": "taskcompendium-format-conversation-v1",
+        "version": 1
+      },
+      "name": "hh_helpful_online",
+      "notes": "Interaction describes supported conversation structure. Conversational collections can include one-turn examples. Admission blocked: Decontamination admission blocked: clean or remediated decontamination receipt is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "oracle_validation": null,
+      "origin": "Anthropic",
+      "oversight": "none",
+      "oversight_evidence": null,
+      "pipeline": {
+        "files": [
+          "helpful-online/train.jsonl.gz"
+        ],
+        "name": "hh_helpful_online",
+        "revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "source": "Anthropic/hh-rlhf",
+        "version": "1"
+      },
+      "quality_result": null,
+      "status": "Not selectable",
+      "subset": "helpful-online",
+      "tags": [
+        "alignment",
+        "multi-turn",
+        "license:mit",
+        "gym/preference"
+      ],
+      "task_count": 21989,
+      "turns": "Multi-turn",
+      "type": "Alignment",
+      "upstream_dataset": "hh_rlhf",
+      "upstream_name": "hh_rlhf",
+      "url": "https://huggingface.co/datasets/Anthropic/hh-rlhf/tree/09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+      "variant": null,
+      "within_source_dedup": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "1",
+        "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/6b685865956477dbeb48/duplicates.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.6/6b685865956477dbeb48/measurement.json",
+        "raw_count": 21989,
+        "source_dataset_id": "Anthropic/hh-rlhf",
+        "source_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "unique_count": 21989,
+        "within_source_duplicates": 0
+      },
+      "disposition": "retired_admission_check",
+      "disposition_reason": "No runnable grader exists for the complete current converted population.",
+      "disposition_evidence": {
+        "inventory_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/inventory.json",
+        "previous_assessment_key": "rl-assessment/hh_helpful_online/report-4ebdd785@2026.10.12.3:4ebdd785",
+        "previous_admission_counts": {
+          "admitted": 0,
+          "rejected": 8,
+          "deferred": 10,
+          "no_grader": 21989,
+          "unverified": 0
+        },
+        "retained_tasks": 21989,
+        "runnable_grader_tasks": 0,
+        "no_grader_tasks": 21989,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/ff5b974890ea80e25873/summary.json"
+      }
+    },
+    {
+      "actor_census_input": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "1",
+        "dataset_id": "Anthropic/hh-rlhf",
+        "dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/ceb4b6b6a1282a2eed05/2026.11.12.4/.artifact.json",
+        "measured_tasks": 52382,
+        "task_specs_sha256": "83ce1dba8ac33e3b7a1996e1a98e4f879e75e68adf5004367316d1b8bf172e6a"
+      },
+      "build_path": "MarinSkyRL",
+      "converted_examples": null,
+      "current_release": {
+        "repo": "Anthropic/hh-rlhf",
+        "revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "url": "https://huggingface.co/datasets/Anthropic/hh-rlhf/tree/09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa"
+      },
+      "dataset_id": "Anthropic/hh-rlhf",
+      "dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+      "daytona_count_basis": "Complete 52382-TaskSpec census from Anthropic/hh-rlhf@09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/ceb4b6b6a1282a2eed05/2026.11.12.2",
+      "daytona_execution_failures": 0,
+      "daytona_exemption": null,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_safety": "not_applicable",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": 10,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": [],
+      "display_name": "hh_rlhf \u00b7 helpful-rejection-sampled",
+      "family": "preference",
+      "grading_environment": null,
+      "id": "Anthropic:hh_rlhf/helpful-rejection-sampled",
+      "independent_qc": null,
+      "integrity_contracts": {
+        "absent_contract_tasks": 52382,
+        "dataset_id": "Anthropic/hh-rlhf",
+        "dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "distinct_groups": 1,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/ceb4b6b6a1282a2eed05/2026.11.12.7/integrity-contracts.json",
+        "example": null,
+        "groups": [
+          {
+            "count": 52382,
+            "dependency_state": null,
+            "harness_policy_sha256": null,
+            "id": null,
+            "native_family": null,
+            "present": false,
+            "version": null
+          }
+        ],
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "task_specs_sha256": "83ce1dba8ac33e3b7a1996e1a98e4f879e75e68adf5004367316d1b8bf172e6a"
+      },
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "lexical_contamination": {
+        "contaminated_fraction": 0.0,
+        "contaminated_tasks": 0,
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "drop_set_uris": [
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/ceb4b6b6a1282a2eed05",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+        ],
+        "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+        "eval_corpus_version": "aa-index-v4.1.1-v3",
+        "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/ceb4b6b6a1282a2eed05/measurement.json",
+        "feature_filter_version": 4,
+        "input_dataset_id": "Anthropic/hh-rlhf",
+        "input_dataset_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "matched_evals": {},
+        "max_overlap": 0.0,
+        "mean_max_overlap": 0.0,
+        "measured_tasks": 52382,
+        "min_matched_features": 2,
+        "ngram_length": 13,
+        "overlap_threshold": 0.5,
+        "p95_max_overlap": 0.0,
+        "receipt": null,
+        "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/ceb4b6b6a1282a2eed05/task_flags",
+        "text_renderer_version": "taskcompendium-format-conversation-v1",
+        "version": 1
+      },
+      "name": "hh_helpful_rejection_sampled",
+      "notes": "Interaction describes supported conversation structure. Conversational collections can include one-turn examples. Admission blocked: Decontamination admission blocked: clean or remediated decontamination receipt is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "oracle_validation": null,
+      "origin": "Anthropic",
+      "oversight": "none",
+      "oversight_evidence": null,
+      "pipeline": {
+        "files": [
+          "helpful-rejection-sampled/train.jsonl.gz"
+        ],
+        "name": "hh_helpful_rejection_sampled",
+        "revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "source": "Anthropic/hh-rlhf",
+        "version": "1"
+      },
+      "quality_result": null,
+      "status": "Not selectable",
+      "subset": "helpful-rejection-sampled",
+      "tags": [
+        "alignment",
+        "multi-turn",
+        "license:mit",
+        "gym/preference"
+      ],
+      "task_count": 52382,
+      "turns": "Multi-turn",
+      "type": "Alignment",
+      "upstream_dataset": "hh_rlhf",
+      "upstream_name": "hh_rlhf",
+      "url": "https://huggingface.co/datasets/Anthropic/hh-rlhf/tree/09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+      "variant": null,
+      "within_source_dedup": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "1",
+        "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/ceb4b6b6a1282a2eed05/duplicates.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.6/ceb4b6b6a1282a2eed05/measurement.json",
+        "raw_count": 52382,
+        "source_dataset_id": "Anthropic/hh-rlhf",
+        "source_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        "unique_count": 52382,
+        "within_source_duplicates": 0
+      },
+      "disposition": "retired_admission_check",
+      "disposition_reason": "No runnable grader exists for the complete current converted population.",
+      "disposition_evidence": {
+        "inventory_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/inventory.json",
+        "previous_assessment_key": "rl-assessment/hh_helpful_rejection_sampled/report-529908ca@2026.10.12.3:529908ca",
+        "previous_admission_counts": {
+          "admitted": 0,
+          "rejected": 35,
+          "deferred": 4,
+          "no_grader": 52382,
+          "unverified": 0
+        },
+        "retained_tasks": 52382,
+        "runnable_grader_tasks": 0,
+        "no_grader_tasks": 52382,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/f34b8b1ed19e56adaee8/summary.json"
+      }
+    },
+    {
+      "actor_census_input": {
+        "converter_revision": "2f4b27ba2e",
+        "converter_version": "2026.11.13.1",
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-hs3-en-6f52c90d-retained-20261113-v1",
+        "dataset_revision": "e2b2911ef2656bfe24bcd8451619fd6b671a6b6e",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/6f52c90dd3aca012751c/actor/.artifact.json",
+        "measured_tasks": 1280,
+        "task_specs_sha256": "65db36eb9e52db3c91f8e95b52c87abc7333c0a50cd503d06420999d1ba1fcba"
+      },
+      "build_path": "MarinSkyRL",
+      "converted_examples": null,
+      "current_release": {
+        "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-hs3-en-6f52c90d-retained-20261113-v1",
+        "revision": "e2b2911ef2656bfe24bcd8451619fd6b671a6b6e",
+        "url": "https://huggingface.co/datasets/open-athena/marinskyrl-nemotron-ultra-mopd-hs3-en-6f52c90d-retained-20261113-v1/tree/e2b2911ef2656bfe24bcd8451619fd6b671a6b6e"
+      },
+      "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-hs3-en-6f52c90d-retained-20261113-v1",
+      "dataset_revision": "e2b2911ef2656bfe24bcd8451619fd6b671a6b6e",
+      "daytona_count_basis": "Complete 1280-TaskSpec census from open-athena/marinskyrl-nemotron-ultra-mopd-hs3-en-6f52c90d-retained-20261113-v1@e2b2911ef2656bfe24bcd8451619fd6b671a6b6e; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/6f52c90dd3aca012751c/population",
+      "daytona_execution_failures": 1280,
+      "daytona_exemption": null,
+      "daytona_machine_slots": 1280,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 1280
+            },
+            "machine_slots": 1280
+          }
+        },
+        "grader": {}
+      },
+      "daytona_safety": "unsafe",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": 10,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 1280
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ],
+      "display_name": "nemotron_ultra_mopd \u00b7 hs3_en",
+      "family": "preference",
+      "grading_environment": {
+        "assessed_tasks": 1280,
+        "declared_counts": {
+          "unavailable": 1280
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-grading/2026.11.13.1/6f52c90dd3aca012751c.json",
+        "reason_counts": {
+          "No executable grader is declared": 1280
+        },
+        "required_counts": {
+          "separate": 1280
+        },
+        "status_counts": {
+          "unavailable": 1280
+        }
+      },
+      "id": "Nemotron:nemotron_ultra_mopd/hs3_en",
+      "independent_qc": null,
+      "integrity_contracts": {
+        "absent_contract_tasks": 1280,
+        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-hs3-en-6f52c90d-retained-20261113-v1",
+        "dataset_revision": "e2b2911ef2656bfe24bcd8451619fd6b671a6b6e",
+        "distinct_groups": 1,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/6f52c90dd3aca012751c/actor/integrity-contracts.json",
+        "example": null,
+        "groups": [
+          {
+            "count": 1280,
+            "dependency_state": null,
+            "harness_policy_sha256": null,
+            "id": null,
+            "native_family": null,
+            "present": false,
+            "version": null
+          }
+        ],
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "task_specs_sha256": "65db36eb9e52db3c91f8e95b52c87abc7333c0a50cd503d06420999d1ba1fcba"
+      },
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "lexical_contamination": {
+        "contaminated_fraction": 0.00078064012490242,
+        "contaminated_tasks": 1,
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "drop_set_uris": [
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/0a850d2ad0f99151b960",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+        ],
+        "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+        "eval_corpus_version": "aa-index-v4.1.1-v3",
+        "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/0a850d2ad0f99151b960/measurement.json",
+        "feature_filter_version": 4,
+        "input_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "input_dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "matched_evals": {
+          "leaderboard_mmlu_pro": 1,
+          "mmlu_pro_economics": 1
+        },
+        "max_overlap": 0.6486486486486487,
+        "mean_max_overlap": 0.0005087705452004178,
+        "measured_tasks": 1281,
+        "min_matched_features": 2,
+        "ngram_length": 13,
+        "overlap_threshold": 0.5,
+        "p95_max_overlap": 0.0,
+        "receipt": {
+          "dropped_tasks": 1,
+          "duplicate_dropped_tasks": 0,
+          "release": {
+            "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-hs3-en-6f52c90d-retained-20261113-v1",
+            "dataset_revision": "e2b2911ef2656bfe24bcd8451619fd6b671a6b6e",
+            "dedup_census_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.6/0a850d2ad0f99151b960/measurement.json",
+            "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/0a850d2ad0f99151b960/combined-drops.parquet",
+            "duplicate_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/0a850d2ad0f99151b960/duplicates.parquet",
+            "format": "taskcompendium",
+            "original_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+            "original_dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+            "original_private_dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-hs3-en-6f52c90d-original-20261113-v1",
+            "original_private_dataset_revision": "57c00ceb4821369f5bf8c854ee0e3fe873e7e15b",
+            "private": true
+          },
+          "retained_tasks": 1280,
+          "status": "remediated",
+          "use": "train"
+        },
+        "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/0a850d2ad0f99151b960/task_flags",
+        "text_renderer_version": "taskcompendium-format-conversation-v1",
+        "version": 1
+      },
+      "name": "nemotron_ultra_mopd_hs3_en-retained",
+      "notes": "remediated: dedup/decon. Retained TaskSpec and runtime bytes match the original pin; original oversight and quality evidence apply through this subset lineage: s3://marin-us-east-02a/marin/rl-data/atlas/private-retention/2026.11.13.1/6f52c90dd3aca012751c/result.json.  Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "oracle_validation": null,
+      "origin": "Nemotron",
+      "oversight": "none",
+      "oversight_evidence": null,
+      "pipeline": {
+        "files": [
+          "tasks.parquet"
+        ],
+        "name": "nemotron_ultra_mopd_hs3_en-retained",
+        "revision": "e2b2911ef2656bfe24bcd8451619fd6b671a6b6e",
+        "source": "open-athena/marinskyrl-nemotron-ultra-mopd-hs3-en-6f52c90d-retained-20261113-v1",
+        "version": "2026.11.13.1"
+      },
+      "quality_result": null,
+      "status": "Not selectable",
+      "subset": "hs3_en",
+      "tags": [
+        "alignment",
+        "single-turn",
+        "license:cc-by-4.0",
+        "gym/nemotron_ultra"
+      ],
+      "task_count": 1280,
+      "turns": "Single-turn",
+      "type": "Alignment",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_name": "nemotron_ultra_mopd",
+      "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4",
+      "variant": null,
+      "within_source_dedup": {
+        "converter_revision": "2f4b27ba2e",
+        "converter_version": "2026.11.13.1",
+        "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/6f52c90dd3aca012751c/dedup/drops.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/private-retention/2026.11.13.1/6f52c90dd3aca012751c/result.json",
+        "raw_count": 1280,
+        "source_dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-hs3-en-6f52c90d-retained-20261113-v1",
+        "source_revision": "e2b2911ef2656bfe24bcd8451619fd6b671a6b6e",
+        "unique_count": 1280,
+        "within_source_duplicates": 0
+      },
+      "disposition": "retired_admission_check",
+      "disposition_reason": "No runnable grader exists for the complete current converted population.",
+      "disposition_evidence": {
+        "inventory_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/inventory.json",
+        "previous_assessment_key": null,
+        "previous_admission_counts": null,
+        "retained_tasks": 1280,
+        "runnable_grader_tasks": 0,
+        "no_grader_tasks": 1280,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/dd2ccd90c33c2692eff2/summary.json"
+      }
+    },
+    {
+      "actor_census_input": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "3",
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/a4e6156dd0178b060fef/2026.11.12.4/.artifact.json",
+        "measured_tasks": 962,
+        "task_specs_sha256": "98d47e1a11d87d0f065677c066eace547d908de00e7cbff33a756dbd59bfa60b"
+      },
+      "build_path": "MarinSkyRL",
+      "converted_examples": null,
+      "current_release": {
+        "repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4"
+      },
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 962-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/a4e6156dd0178b060fef/2026.11.12.2",
+      "daytona_execution_failures": 962,
+      "daytona_exemption": null,
+      "daytona_machine_slots": 962,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 962
+            },
+            "machine_slots": 962
+          }
+        },
+        "grader": {}
+      },
+      "daytona_safety": "unsafe",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": 10,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 962
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ],
+      "display_name": "nemotron_ultra_mopd \u00b7 hs3_multi",
+      "family": "preference",
+      "grading_environment": null,
+      "id": "Nemotron:nemotron_ultra_mopd/hs3_multi",
+      "independent_qc": null,
+      "integrity_contracts": {
+        "absent_contract_tasks": 962,
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "distinct_groups": 1,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/a4e6156dd0178b060fef/2026.11.12.7/integrity-contracts.json",
+        "example": null,
+        "groups": [
+          {
+            "count": 962,
+            "dependency_state": null,
+            "harness_policy_sha256": null,
+            "id": null,
+            "native_family": null,
+            "present": false,
+            "version": null
+          }
+        ],
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "task_specs_sha256": "98d47e1a11d87d0f065677c066eace547d908de00e7cbff33a756dbd59bfa60b"
+      },
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "lexical_contamination": {
+        "contaminated_fraction": 0.0,
+        "contaminated_tasks": 0,
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "drop_set_uris": [
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/a4e6156dd0178b060fef",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+        ],
+        "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+        "eval_corpus_version": "aa-index-v4.1.1-v3",
+        "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/a4e6156dd0178b060fef/measurement.json",
+        "feature_filter_version": 4,
+        "input_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "input_dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "matched_evals": {},
+        "max_overlap": 0.0,
+        "mean_max_overlap": 0.0,
+        "measured_tasks": 962,
+        "min_matched_features": 2,
+        "ngram_length": 13,
+        "overlap_threshold": 0.5,
+        "p95_max_overlap": 0.0,
+        "receipt": null,
+        "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/a4e6156dd0178b060fef/task_flags",
+        "text_renderer_version": "taskcompendium-format-conversation-v1",
+        "version": 1
+      },
+      "name": "nemotron_ultra_mopd_hs3_multi",
+      "notes": "Admission blocked: Decontamination admission blocked: clean or remediated decontamination receipt is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "oracle_validation": null,
+      "origin": "Nemotron",
+      "oversight": "none",
+      "oversight_evidence": null,
+      "pipeline": {
+        "files": [
+          "mopd.jsonl"
+        ],
+        "name": "nemotron_ultra_mopd_hs3_multi",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "source": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "version": "3"
+      },
+      "quality_result": null,
+      "status": "Not selectable",
+      "subset": "hs3_multi",
+      "tags": [
+        "alignment",
+        "single-turn",
+        "license:cc-by-4.0",
+        "gym/nemotron_ultra"
+      ],
+      "task_count": 962,
+      "turns": "Single-turn",
+      "type": "Alignment",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_name": "nemotron_ultra_mopd",
+      "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4",
+      "variant": null,
+      "within_source_dedup": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "3",
+        "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/a4e6156dd0178b060fef/duplicates.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.6/a4e6156dd0178b060fef/measurement.json",
+        "raw_count": 962,
+        "source_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "source_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "unique_count": 962,
+        "within_source_duplicates": 0
+      },
+      "disposition": "retired_admission_check",
+      "disposition_reason": "No runnable grader exists for the complete current converted population.",
+      "disposition_evidence": {
+        "inventory_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/inventory.json",
+        "previous_assessment_key": "rl-assessment/nemotron_ultra_mopd_hs3_multi/report-93fafc5e@2026.10.12.3:93fafc5e",
+        "previous_admission_counts": {
+          "admitted": 0,
+          "rejected": 0,
+          "deferred": 0,
+          "no_grader": 962,
+          "unverified": 0
+        },
+        "retained_tasks": 962,
+        "runnable_grader_tasks": 0,
+        "no_grader_tasks": 962,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/faa7b18a5e5ffc44fcd4/summary.json"
+      }
+    },
+    {
+      "actor_census_input": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "3",
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/97fbc5c67d5428601448/2026.11.12.4/.artifact.json",
+        "measured_tasks": 1243,
+        "task_specs_sha256": "beec5351f543ac0879dd1e63df90e0c9b26ed19f9857032e9cc3b0c02178e949"
+      },
+      "build_path": "MarinSkyRL",
+      "converted_examples": null,
+      "current_release": {
+        "repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4"
+      },
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 1243-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/97fbc5c67d5428601448/2026.11.12.2",
+      "daytona_execution_failures": 1243,
+      "daytona_exemption": null,
+      "daytona_machine_slots": 1243,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 1243
+            },
+            "machine_slots": 1243
+          }
+        },
+        "grader": {}
+      },
+      "daytona_safety": "unsafe",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": 10,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 1243
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ],
+      "display_name": "nemotron_ultra_mopd \u00b7 hs3_multiturn",
+      "family": "preference",
+      "grading_environment": null,
+      "id": "Nemotron:nemotron_ultra_mopd/hs3_multiturn",
+      "independent_qc": null,
+      "integrity_contracts": {
+        "absent_contract_tasks": 1243,
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "distinct_groups": 1,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/97fbc5c67d5428601448/2026.11.12.7/integrity-contracts.json",
+        "example": null,
+        "groups": [
+          {
+            "count": 1243,
+            "dependency_state": null,
+            "harness_policy_sha256": null,
+            "id": null,
+            "native_family": null,
+            "present": false,
+            "version": null
+          }
+        ],
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "task_specs_sha256": "beec5351f543ac0879dd1e63df90e0c9b26ed19f9857032e9cc3b0c02178e949"
+      },
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "lexical_contamination": {
+        "contaminated_fraction": 0.0,
+        "contaminated_tasks": 0,
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "drop_set_uris": [
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/97fbc5c67d5428601448",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+        ],
+        "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+        "eval_corpus_version": "aa-index-v4.1.1-v3",
+        "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/97fbc5c67d5428601448/measurement.json",
+        "feature_filter_version": 4,
+        "input_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "input_dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "matched_evals": {},
+        "max_overlap": 0.0,
+        "mean_max_overlap": 0.0,
+        "measured_tasks": 1243,
+        "min_matched_features": 2,
+        "ngram_length": 13,
+        "overlap_threshold": 0.5,
+        "p95_max_overlap": 0.0,
+        "receipt": null,
+        "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/97fbc5c67d5428601448/task_flags",
+        "text_renderer_version": "taskcompendium-format-conversation-v1",
+        "version": 1
+      },
+      "name": "nemotron_ultra_mopd_hs3_multiturn",
+      "notes": "Admission blocked: Decontamination admission blocked: clean or remediated decontamination receipt is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "oracle_validation": null,
+      "origin": "Nemotron",
+      "oversight": "none",
+      "oversight_evidence": null,
+      "pipeline": {
+        "files": [
+          "mopd.jsonl"
+        ],
+        "name": "nemotron_ultra_mopd_hs3_multiturn",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "source": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "version": "3"
+      },
+      "quality_result": null,
+      "status": "Not selectable",
+      "subset": "hs3_multiturn",
+      "tags": [
+        "alignment",
+        "multi-turn",
+        "license:cc-by-4.0",
+        "gym/nemotron_ultra"
+      ],
+      "task_count": 1243,
+      "turns": "Multi-turn",
+      "type": "Alignment",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_name": "nemotron_ultra_mopd",
+      "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4",
+      "variant": null,
+      "within_source_dedup": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "3",
+        "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/97fbc5c67d5428601448/duplicates.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.6/97fbc5c67d5428601448/measurement.json",
+        "raw_count": 1243,
+        "source_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "source_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "unique_count": 1243,
+        "within_source_duplicates": 0
+      },
+      "disposition": "retired_admission_check",
+      "disposition_reason": "No runnable grader exists for the complete current converted population.",
+      "disposition_evidence": {
+        "inventory_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/inventory.json",
+        "previous_assessment_key": "rl-assessment/nemotron_ultra_mopd_hs3_multiturn/report-f18cd871@2026.10.12.3:f18cd871",
+        "previous_admission_counts": {
+          "admitted": 0,
+          "rejected": 0,
+          "deferred": 0,
+          "no_grader": 1243,
+          "unverified": 0
+        },
+        "retained_tasks": 1243,
+        "runnable_grader_tasks": 0,
+        "no_grader_tasks": 1243,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/f79ab9496fb6ce23b78a/summary.json"
+      }
+    },
+    {
+      "actor_census_input": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "3",
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/8e4c4d11beab791fdf89/2026.11.12.4/.artifact.json",
+        "measured_tasks": 2000,
+        "task_specs_sha256": "36d108bcf76cf41a2633053853520cb2193759fb5b946d34b746c06ec46eab84"
+      },
+      "build_path": "MarinSkyRL",
+      "converted_examples": null,
+      "current_release": {
+        "repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4"
+      },
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 2000-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/8e4c4d11beab791fdf89/2026.11.12.2",
+      "daytona_execution_failures": 2000,
+      "daytona_exemption": "Grandfathered blend; Daytona safety is exempt and no verdict is asserted",
+      "daytona_machine_slots": 2000,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 2000
+            },
+            "machine_slots": 2000
+          }
+        },
+        "grader": {}
+      },
+      "daytona_safety": null,
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": 10,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 2000
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ],
+      "display_name": "nemotron_ultra_mopd \u00b7 makeshn_ultra_v3_ipi_train",
+      "family": "agentic-safety",
+      "grading_environment": null,
+      "id": "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
+      "independent_qc": null,
+      "integrity_contracts": {
+        "absent_contract_tasks": 2000,
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "distinct_groups": 1,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/8e4c4d11beab791fdf89/2026.11.12.7/integrity-contracts.json",
+        "example": null,
+        "groups": [
+          {
+            "count": 2000,
+            "dependency_state": null,
+            "harness_policy_sha256": null,
+            "id": null,
+            "native_family": null,
+            "present": false,
+            "version": null
+          }
+        ],
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "task_specs_sha256": "36d108bcf76cf41a2633053853520cb2193759fb5b946d34b746c06ec46eab84"
+      },
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "lexical_contamination": {
+        "contaminated_fraction": 0.0,
+        "contaminated_tasks": 0,
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "drop_set_uris": [
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/8e4c4d11beab791fdf89",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+        ],
+        "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+        "eval_corpus_version": "aa-index-v4.1.1-v3",
+        "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/8e4c4d11beab791fdf89/measurement.json",
+        "feature_filter_version": 4,
+        "input_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "input_dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "matched_evals": {},
+        "max_overlap": 0.0,
+        "mean_max_overlap": 0.0,
+        "measured_tasks": 2000,
+        "min_matched_features": 2,
+        "ngram_length": 13,
+        "overlap_threshold": 0.5,
+        "p95_max_overlap": 0.0,
+        "receipt": null,
+        "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/8e4c4d11beab791fdf89/task_flags",
+        "text_renderer_version": "taskcompendium-format-conversation-v1",
+        "version": 1
+      },
+      "name": "nemotron_ultra_mopd_makeshn_ultra_v3_ipi_train",
+      "notes": "",
+      "oracle_validation": null,
+      "origin": "Nemotron",
+      "oversight": "none",
+      "oversight_evidence": null,
+      "pipeline": {
+        "files": [
+          "mopd.jsonl"
+        ],
+        "name": "nemotron_ultra_mopd_makeshn_ultra_v3_ipi_train",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "source": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "version": "3"
+      },
+      "quality_result": null,
+      "status": "Available",
+      "subset": "makeshn_ultra_v3_ipi_train",
+      "tags": [
+        "agentic",
+        "multi-turn",
+        "license:cc-by-4.0",
+        "gym/nemotron_ultra"
+      ],
+      "task_count": 2000,
+      "turns": "Multi-turn",
+      "type": "Agentic",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_name": "nemotron_ultra_mopd",
+      "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4",
+      "variant": null,
+      "within_source_dedup": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "3",
+        "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/8e4c4d11beab791fdf89/duplicates.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.6/8e4c4d11beab791fdf89/measurement.json",
+        "raw_count": 2000,
+        "source_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "source_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "unique_count": 2000,
+        "within_source_duplicates": 0
+      },
+      "disposition": "retired_admission_check",
+      "disposition_reason": "No runnable grader exists for the complete current converted population.",
+      "disposition_evidence": {
+        "inventory_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/inventory.json",
+        "previous_assessment_key": "rl-assessment/nemotron_ultra_mopd_makeshn_ultra_v3_ipi_train/report-f2bf9523@2026.10.12.3:f2bf9523",
+        "previous_admission_counts": {
+          "admitted": 0,
+          "rejected": 0,
+          "deferred": 0,
+          "no_grader": 2000,
+          "unverified": 0
+        },
+        "retained_tasks": 2000,
+        "runnable_grader_tasks": 0,
+        "no_grader_tasks": 2000,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/d10b2d2aa3e0b485a550/summary.json"
+      }
+    },
+    {
+      "actor_census_input": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "3",
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/33000d444daf083e8a77/2026.11.12.4/.artifact.json",
+        "measured_tasks": 629,
+        "task_specs_sha256": "b1e1af0adfe142fa6092975a5b46350197e6f144694f693893b1f3e8ce241c85"
+      },
+      "build_path": "MarinSkyRL",
+      "converted_examples": null,
+      "current_release": {
+        "repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4"
+      },
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 629-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/33000d444daf083e8a77/2026.11.12.2",
+      "daytona_execution_failures": 629,
+      "daytona_exemption": null,
+      "daytona_machine_slots": 629,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 629
+            },
+            "machine_slots": 629
+          }
+        },
+        "grader": {}
+      },
+      "daytona_safety": "unsafe",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": 10,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 629
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ],
+      "display_name": "nemotron_ultra_mopd \u00b7 safety_en",
+      "family": "preference",
+      "grading_environment": null,
+      "id": "Nemotron:nemotron_ultra_mopd/safety_en",
+      "independent_qc": null,
+      "integrity_contracts": {
+        "absent_contract_tasks": 629,
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "distinct_groups": 1,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/33000d444daf083e8a77/2026.11.12.7/integrity-contracts.json",
+        "example": null,
+        "groups": [
+          {
+            "count": 629,
+            "dependency_state": null,
+            "harness_policy_sha256": null,
+            "id": null,
+            "native_family": null,
+            "present": false,
+            "version": null
+          }
+        ],
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "task_specs_sha256": "b1e1af0adfe142fa6092975a5b46350197e6f144694f693893b1f3e8ce241c85"
+      },
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "lexical_contamination": {
+        "contaminated_fraction": 0.0,
+        "contaminated_tasks": 0,
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "drop_set_uris": [
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/33000d444daf083e8a77",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+        ],
+        "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+        "eval_corpus_version": "aa-index-v4.1.1-v3",
+        "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/33000d444daf083e8a77/measurement.json",
+        "feature_filter_version": 4,
+        "input_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "input_dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "matched_evals": {},
+        "max_overlap": 0.0,
+        "mean_max_overlap": 0.0,
+        "measured_tasks": 629,
+        "min_matched_features": 2,
+        "ngram_length": 13,
+        "overlap_threshold": 0.5,
+        "p95_max_overlap": 0.0,
+        "receipt": null,
+        "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/33000d444daf083e8a77/task_flags",
+        "text_renderer_version": "taskcompendium-format-conversation-v1",
+        "version": 1
+      },
+      "name": "nemotron_ultra_mopd_safety_en",
+      "notes": "Admission blocked: Decontamination admission blocked: clean or remediated decontamination receipt is missing. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "oracle_validation": null,
+      "origin": "Nemotron",
+      "oversight": "none",
+      "oversight_evidence": null,
+      "pipeline": {
+        "files": [
+          "mopd.jsonl"
+        ],
+        "name": "nemotron_ultra_mopd_safety_en",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "source": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "version": "3"
+      },
+      "quality_result": null,
+      "status": "Not selectable",
+      "subset": "safety_en",
+      "tags": [
+        "alignment",
+        "single-turn",
+        "license:cc-by-4.0",
+        "gym/nemotron_ultra"
+      ],
+      "task_count": 629,
+      "turns": "Single-turn",
+      "type": "Alignment",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_name": "nemotron_ultra_mopd",
+      "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4",
+      "variant": null,
+      "within_source_dedup": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "3",
+        "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/33000d444daf083e8a77/duplicates.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.6/33000d444daf083e8a77/measurement.json",
+        "raw_count": 629,
+        "source_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "source_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "unique_count": 629,
+        "within_source_duplicates": 0
+      },
+      "disposition": "retired_admission_check",
+      "disposition_reason": "No runnable grader exists for the complete current converted population.",
+      "disposition_evidence": {
+        "inventory_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/inventory.json",
+        "previous_assessment_key": "rl-assessment/nemotron_ultra_mopd_safety_en/report-a2325a0a@2026.10.12.3:a2325a0a",
+        "previous_admission_counts": {
+          "admitted": 0,
+          "rejected": 0,
+          "deferred": 0,
+          "no_grader": 629,
+          "unverified": 0
+        },
+        "retained_tasks": 629,
+        "runnable_grader_tasks": 0,
+        "no_grader_tasks": 629,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/d15ad9493703c1b77a74/summary.json"
+      }
+    },
+    {
+      "actor_census_input": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "3",
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/2801eb628187b42fcb02/2026.11.12.4/.artifact.json",
+        "measured_tasks": 860,
+        "task_specs_sha256": "ace30cc9f93b4013f5415c58ff63d59b23cd303cc0b73860766ca688ba33c546"
+      },
+      "build_path": "MarinSkyRL",
+      "converted_examples": null,
+      "current_release": {
+        "repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4"
+      },
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 860-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/2801eb628187b42fcb02/2026.11.12.2",
+      "daytona_execution_failures": 860,
+      "daytona_exemption": "Grandfathered blend; Daytona safety is exempt and no verdict is asserted",
+      "daytona_machine_slots": 860,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 860
+            },
+            "machine_slots": 860
+          }
+        },
+        "grader": {}
+      },
+      "daytona_safety": null,
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": 10,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 860
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ],
+      "display_name": "nemotron_ultra_mopd \u00b7 swe_pivot_len40k/SWE-Gym/SWE-Gym",
+      "family": "swe-repo",
+      "grading_environment": null,
+      "id": "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
+      "independent_qc": null,
+      "integrity_contracts": {
+        "absent_contract_tasks": 860,
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "distinct_groups": 1,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/2801eb628187b42fcb02/2026.11.12.7/integrity-contracts.json",
+        "example": null,
+        "groups": [
+          {
+            "count": 860,
+            "dependency_state": null,
+            "harness_policy_sha256": null,
+            "id": null,
+            "native_family": null,
+            "present": false,
+            "version": null
+          }
+        ],
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "task_specs_sha256": "ace30cc9f93b4013f5415c58ff63d59b23cd303cc0b73860766ca688ba33c546"
+      },
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "lexical_contamination": {
+        "contaminated_fraction": 0.0,
+        "contaminated_tasks": 0,
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "drop_set_uris": [
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/2801eb628187b42fcb02",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+        ],
+        "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+        "eval_corpus_version": "aa-index-v4.1.1-v3",
+        "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/2801eb628187b42fcb02/measurement.json",
+        "feature_filter_version": 4,
+        "input_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "input_dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "matched_evals": {},
+        "max_overlap": 0.0,
+        "mean_max_overlap": 0.0,
+        "measured_tasks": 860,
+        "min_matched_features": 2,
+        "ngram_length": 13,
+        "overlap_threshold": 0.5,
+        "p95_max_overlap": 0.0,
+        "receipt": null,
+        "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/2801eb628187b42fcb02/task_flags",
+        "text_renderer_version": "taskcompendium-format-conversation-v1",
+        "version": 1
+      },
+      "name": "nemotron_ultra_mopd_swe_pivot_len40k_swe_gym_swe_gym",
+      "notes": "",
+      "oracle_validation": null,
+      "origin": "Nemotron",
+      "oversight": "none",
+      "oversight_evidence": null,
+      "pipeline": {
+        "files": [
+          "mopd.jsonl"
+        ],
+        "name": "nemotron_ultra_mopd_swe_pivot_len40k_swe_gym_swe_gym",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "source": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "version": "3"
+      },
+      "quality_result": null,
+      "status": "Available",
+      "subset": "swe_pivot_len40k/SWE-Gym/SWE-Gym",
+      "tags": [
+        "agentic",
+        "multi-turn",
+        "license:cc-by-4.0",
+        "gym/nemotron_ultra"
+      ],
+      "task_count": 860,
+      "turns": "Multi-turn",
+      "type": "Agentic",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_name": "nemotron_ultra_mopd",
+      "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4",
+      "variant": null,
+      "within_source_dedup": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "3",
+        "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/2801eb628187b42fcb02/duplicates.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.6/2801eb628187b42fcb02/measurement.json",
+        "raw_count": 860,
+        "source_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "source_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "unique_count": 860,
+        "within_source_duplicates": 0
+      },
+      "disposition": "retired_admission_check",
+      "disposition_reason": "No runnable grader exists for the complete current converted population.",
+      "disposition_evidence": {
+        "inventory_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/inventory.json",
+        "previous_assessment_key": "rl-assessment/nemotron_ultra_mopd_swe_pivot_len40k_swe_gym_swe_gym/report-5deddaab@2026.10.12.3:5deddaab",
+        "previous_admission_counts": {
+          "admitted": 0,
+          "rejected": 0,
+          "deferred": 0,
+          "no_grader": 860,
+          "unverified": 0
+        },
+        "retained_tasks": 860,
+        "runnable_grader_tasks": 0,
+        "no_grader_tasks": 860,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/449f65753d610f85f4c8/summary.json"
+      }
+    },
+    {
+      "actor_census_input": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "3",
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/0f5a5918ef89d504cc72/2026.11.12.4/.artifact.json",
+        "measured_tasks": 3903,
+        "task_specs_sha256": "c74d21b80dd1804f985f43f421302fe706d98f618646fc7494651e238b2b976f"
+      },
+      "build_path": "MarinSkyRL",
+      "converted_examples": null,
+      "current_release": {
+        "repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4"
+      },
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 3903-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/0f5a5918ef89d504cc72/2026.11.12.2",
+      "daytona_execution_failures": 3903,
+      "daytona_exemption": "Grandfathered blend; Daytona safety is exempt and no verdict is asserted",
+      "daytona_machine_slots": 3903,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 3903
+            },
+            "machine_slots": 3903
+          }
+        },
+        "grader": {}
+      },
+      "daytona_safety": null,
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": 10,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 3903
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ],
+      "display_name": "nemotron_ultra_mopd \u00b7 swe_pivot_len40k/nebius/SWE-rebench-V2",
+      "family": "swe-repo",
+      "grading_environment": null,
+      "id": "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
+      "independent_qc": null,
+      "integrity_contracts": {
+        "absent_contract_tasks": 3903,
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "distinct_groups": 1,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/0f5a5918ef89d504cc72/2026.11.12.7/integrity-contracts.json",
+        "example": null,
+        "groups": [
+          {
+            "count": 3903,
+            "dependency_state": null,
+            "harness_policy_sha256": null,
+            "id": null,
+            "native_family": null,
+            "present": false,
+            "version": null
+          }
+        ],
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "task_specs_sha256": "c74d21b80dd1804f985f43f421302fe706d98f618646fc7494651e238b2b976f"
+      },
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "lexical_contamination": {
+        "contaminated_fraction": 0.0,
+        "contaminated_tasks": 0,
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "drop_set_uris": [
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/0f5a5918ef89d504cc72",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+        ],
+        "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+        "eval_corpus_version": "aa-index-v4.1.1-v3",
+        "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/0f5a5918ef89d504cc72/measurement.json",
+        "feature_filter_version": 4,
+        "input_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "input_dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "matched_evals": {},
+        "max_overlap": 0.0,
+        "mean_max_overlap": 0.0,
+        "measured_tasks": 3903,
+        "min_matched_features": 2,
+        "ngram_length": 13,
+        "overlap_threshold": 0.5,
+        "p95_max_overlap": 0.0,
+        "receipt": null,
+        "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/0f5a5918ef89d504cc72/task_flags",
+        "text_renderer_version": "taskcompendium-format-conversation-v1",
+        "version": 1
+      },
+      "name": "nemotron_ultra_mopd_swe_pivot_len40k_nebius_swe_rebench_v2",
+      "notes": "",
+      "oracle_validation": null,
+      "origin": "Nemotron",
+      "oversight": "none",
+      "oversight_evidence": null,
+      "pipeline": {
+        "files": [
+          "mopd.jsonl"
+        ],
+        "name": "nemotron_ultra_mopd_swe_pivot_len40k_nebius_swe_rebench_v2",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "source": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "version": "3"
+      },
+      "quality_result": null,
+      "status": "Available",
+      "subset": "swe_pivot_len40k/nebius/SWE-rebench-V2",
+      "tags": [
+        "agentic",
+        "multi-turn",
+        "license:cc-by-4.0",
+        "gym/nemotron_ultra"
+      ],
+      "task_count": 3903,
+      "turns": "Multi-turn",
+      "type": "Agentic",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_name": "nemotron_ultra_mopd",
+      "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4",
+      "variant": null,
+      "within_source_dedup": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "3",
+        "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/0f5a5918ef89d504cc72/duplicates.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.6/0f5a5918ef89d504cc72/measurement.json",
+        "raw_count": 3903,
+        "source_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "source_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "unique_count": 3903,
+        "within_source_duplicates": 0
+      },
+      "disposition": "retired_admission_check",
+      "disposition_reason": "No runnable grader exists for the complete current converted population.",
+      "disposition_evidence": {
+        "inventory_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/inventory.json",
+        "previous_assessment_key": "rl-assessment/nemotron_ultra_mopd_swe_pivot_len40k_nebius_swe_rebench_v2/report-92542c5a@2026.10.12.3:92542c5a",
+        "previous_admission_counts": {
+          "admitted": 0,
+          "rejected": 0,
+          "deferred": 0,
+          "no_grader": 3903,
+          "unverified": 0
+        },
+        "retained_tasks": 3903,
+        "runnable_grader_tasks": 0,
+        "no_grader_tasks": 3903,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/a97805d1a6ba745f1b98/summary.json"
+      }
+    },
+    {
+      "actor_census_input": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "3",
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/3f465a6ff9bd77b94d61/2026.11.12.4/.artifact.json",
+        "measured_tasks": 246,
+        "task_specs_sha256": "83007c0a1b03a2b8a04a93efe6509c8d32bba9d622ff5370e06265851476d88b"
+      },
+      "build_path": "MarinSkyRL",
+      "converted_examples": null,
+      "current_release": {
+        "repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4"
+      },
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 246-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/3f465a6ff9bd77b94d61/2026.11.12.2",
+      "daytona_execution_failures": 246,
+      "daytona_exemption": "Grandfathered blend; Daytona safety is exempt and no verdict is asserted",
+      "daytona_machine_slots": 246,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 246
+            },
+            "machine_slots": 246
+          }
+        },
+        "grader": {}
+      },
+      "daytona_safety": null,
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": 10,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 246
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ],
+      "display_name": "nemotron_ultra_mopd \u00b7 ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
+      "family": "swe-repo",
+      "grading_environment": null,
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
+      "independent_qc": null,
+      "integrity_contracts": {
+        "absent_contract_tasks": 246,
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "distinct_groups": 1,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/3f465a6ff9bd77b94d61/2026.11.12.7/integrity-contracts.json",
+        "example": null,
+        "groups": [
+          {
+            "count": 246,
+            "dependency_state": null,
+            "harness_policy_sha256": null,
+            "id": null,
+            "native_family": null,
+            "present": false,
+            "version": null
+          }
+        ],
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "task_specs_sha256": "83007c0a1b03a2b8a04a93efe6509c8d32bba9d622ff5370e06265851476d88b"
+      },
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "lexical_contamination": {
+        "contaminated_fraction": 0.0,
+        "contaminated_tasks": 0,
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "drop_set_uris": [
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/3f465a6ff9bd77b94d61",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+        ],
+        "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+        "eval_corpus_version": "aa-index-v4.1.1-v3",
+        "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/3f465a6ff9bd77b94d61/measurement.json",
+        "feature_filter_version": 4,
+        "input_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "input_dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "matched_evals": {},
+        "max_overlap": 0.0,
+        "mean_max_overlap": 0.0,
+        "measured_tasks": 246,
+        "min_matched_features": 2,
+        "ngram_length": 13,
+        "overlap_threshold": 0.5,
+        "p95_max_overlap": 0.0,
+        "receipt": null,
+        "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/3f465a6ff9bd77b94d61/task_flags",
+        "text_renderer_version": "taskcompendium-format-conversation-v1",
+        "version": 1
+      },
+      "name": "nemotron_ultra_mopd_ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k_swe_gym_swe_gym",
+      "notes": "",
+      "oracle_validation": null,
+      "origin": "Nemotron",
+      "oversight": "none",
+      "oversight_evidence": null,
+      "pipeline": {
+        "files": [
+          "mopd.jsonl"
+        ],
+        "name": "nemotron_ultra_mopd_ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k_swe_gym_swe_gym",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "source": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "version": "3"
+      },
+      "quality_result": null,
+      "status": "Available",
+      "subset": "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
+      "tags": [
+        "agentic",
+        "multi-turn",
+        "license:cc-by-4.0",
+        "gym/nemotron_ultra"
+      ],
+      "task_count": 246,
+      "turns": "Multi-turn",
+      "type": "Agentic",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_name": "nemotron_ultra_mopd",
+      "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4",
+      "variant": null,
+      "within_source_dedup": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "3",
+        "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.5/3f465a6ff9bd77b94d61/duplicates.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.6/3f465a6ff9bd77b94d61/measurement.json",
+        "raw_count": 246,
+        "source_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "source_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "unique_count": 246,
+        "within_source_duplicates": 0
+      },
+      "disposition": "retired_admission_check",
+      "disposition_reason": "No runnable grader exists for the complete current converted population.",
+      "disposition_evidence": {
+        "inventory_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/inventory.json",
+        "previous_assessment_key": "rl-assessment/nemotron_ultra_mopd_ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k_swe_gym_swe_gym/report-c5457ae8@2026.10.12.3:c5457ae8",
+        "previous_admission_counts": {
+          "admitted": 0,
+          "rejected": 0,
+          "deferred": 0,
+          "no_grader": 246,
+          "unverified": 0
+        },
+        "retained_tasks": 246,
+        "runnable_grader_tasks": 0,
+        "no_grader_tasks": 246,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/e37c824be1fd83257d67/summary.json"
+      }
+    },
+    {
+      "actor_census_input": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "3",
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/dab3b5f24ff023011b6b/2026.11.12.4/.artifact.json",
+        "measured_tasks": 932,
+        "task_specs_sha256": "d0f5dd7ac2a461e8337531dc530b321f0c5f6748365bb88c1c4ba0dac2c3aa6c"
+      },
+      "build_path": "MarinSkyRL",
+      "converted_examples": null,
+      "current_release": {
+        "repo": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4"
+      },
+      "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+      "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+      "daytona_count_basis": "Complete 932-TaskSpec census from nvidia/Nemotron-RL-Ultra-Training-Blends@482392c14c6418e26804ea2e5d10359df9877df4; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/dab3b5f24ff023011b6b/2026.11.12.2",
+      "daytona_execution_failures": 932,
+      "daytona_exemption": "Grandfathered blend; Daytona safety is exempt and no verdict is asserted",
+      "daytona_machine_slots": 932,
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "failures": {
+              "agent: no declared environment": 932
+            },
+            "machine_slots": 932
+          }
+        },
+        "grader": {}
+      },
+      "daytona_safety": null,
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": 10,
+      "daytona_unsafe_counts": {
+        "execution_requirement": 932
+      },
+      "daytona_unsafe_details": {
+        "execution_requirement": "agent: no declared environment"
+      },
+      "daytona_unsafe_reasons": [
+        "execution_requirement"
+      ],
+      "display_name": "nemotron_ultra_mopd \u00b7 ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
+      "family": "swe-repo",
+      "grading_environment": null,
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
+      "independent_qc": null,
+      "integrity_contracts": {
+        "absent_contract_tasks": 932,
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "distinct_groups": 1,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/integrity-census/dab3b5f24ff023011b6b/2026.11.12.7/integrity-contracts.json",
+        "example": null,
+        "groups": [
+          {
+            "count": 932,
+            "dependency_state": null,
+            "harness_policy_sha256": null,
+            "id": null,
+            "native_family": null,
+            "present": false,
+            "version": null
+          }
+        ],
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "task_specs_sha256": "d0f5dd7ac2a461e8337531dc530b321f0c5f6748365bb88c1c4ba0dac2c3aa6c"
+      },
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "lexical_contamination": {
+        "contaminated_fraction": 0.0,
+        "contaminated_tasks": 0,
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "drop_set_uris": [
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/dab3b5f24ff023011b6b",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+        ],
+        "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+        "eval_corpus_version": "aa-index-v4.1.1-v3",
+        "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/dab3b5f24ff023011b6b/measurement.json",
+        "feature_filter_version": 4,
+        "input_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "input_dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "matched_evals": {},
+        "max_overlap": 0.0,
+        "mean_max_overlap": 0.0,
+        "measured_tasks": 932,
+        "min_matched_features": 2,
+        "ngram_length": 13,
+        "overlap_threshold": 0.5,
+        "p95_max_overlap": 0.0,
+        "receipt": null,
+        "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/dab3b5f24ff023011b6b/task_flags",
+        "text_renderer_version": "taskcompendium-format-conversation-v1",
+        "version": 1
+      },
+      "name": "nemotron_ultra_mopd_ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k_nebius_swe_rebench_v2",
+      "notes": "",
+      "oracle_validation": null,
+      "origin": "Nemotron",
+      "oversight": "none",
+      "oversight_evidence": null,
+      "pipeline": {
+        "files": [
+          "mopd.jsonl"
+        ],
+        "name": "nemotron_ultra_mopd_ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k_nebius_swe_rebench_v2",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "source": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "version": "3"
+      },
+      "quality_result": null,
+      "status": "Available",
+      "subset": "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
+      "tags": [
+        "agentic",
+        "multi-turn",
+        "license:cc-by-4.0",
+        "gym/nemotron_ultra"
+      ],
+      "task_count": 932,
+      "turns": "Multi-turn",
+      "type": "Agentic",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_name": "nemotron_ultra_mopd",
+      "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/482392c14c6418e26804ea2e5d10359df9877df4",
+      "variant": null,
+      "within_source_dedup": {
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "converter_version": "3",
+        "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/dab3b5f24ff023011b6b/duplicates.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.6/dab3b5f24ff023011b6b/measurement.json",
+        "raw_count": 932,
+        "source_dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "source_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "unique_count": 932,
+        "within_source_duplicates": 0
+      },
+      "disposition": "retired_admission_check",
+      "disposition_reason": "No runnable grader exists for the complete current converted population.",
+      "disposition_evidence": {
+        "inventory_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/inventory.json",
+        "previous_assessment_key": "rl-assessment/nemotron_ultra_mopd_ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k_nebius_swe_rebench_v2/report-183b465b@2026.10.12.3:183b465b",
+        "previous_admission_counts": {
+          "admitted": 0,
+          "rejected": 0,
+          "deferred": 0,
+          "no_grader": 932,
+          "unverified": 0
+        },
+        "retained_tasks": 932,
+        "runnable_grader_tasks": 0,
+        "no_grader_tasks": 932,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/364aa2f60fa29d076d58/summary.json"
+      }
+    },
+    {
+      "actor_census_input": {
+        "converter_revision": "2f4b27ba2e",
+        "converter_version": "2026.11.13.1",
+        "dataset_id": "open-athena/marinskyrl-kto-mix-argilla-distilabel-capybara-dpo-7k-b-503b1019-retained-20261113-v1",
+        "dataset_revision": "cb9ed115b2902dddcef4f8a33738fc95c18dfb78",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/503b101915668344218d/actor/.artifact.json",
+        "measured_tasks": 4412,
+        "task_specs_sha256": "9e52697935a33a1edf660e3a3853c4463611f9f67018076cef42f0ee56c78b1b"
+      },
+      "build_path": "MarinSkyRL",
+      "converted_examples": null,
+      "current_release": {
+        "repo": "open-athena/marinskyrl-kto-mix-argilla-distilabel-capybara-dpo-7k-b-503b1019-retained-20261113-v1",
+        "revision": "cb9ed115b2902dddcef4f8a33738fc95c18dfb78",
+        "url": "https://huggingface.co/datasets/open-athena/marinskyrl-kto-mix-argilla-distilabel-capybara-dpo-7k-b-503b1019-retained-20261113-v1/tree/cb9ed115b2902dddcef4f8a33738fc95c18dfb78"
+      },
+      "dataset_id": "open-athena/marinskyrl-kto-mix-argilla-distilabel-capybara-dpo-7k-b-503b1019-retained-20261113-v1",
+      "dataset_revision": "cb9ed115b2902dddcef4f8a33738fc95c18dfb78",
+      "daytona_count_basis": "Complete 4412-TaskSpec census from open-athena/marinskyrl-kto-mix-argilla-distilabel-capybara-dpo-7k-b-503b1019-retained-20261113-v1@cb9ed115b2902dddcef4f8a33738fc95c18dfb78; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/503b101915668344218d/population",
+      "daytona_execution_failures": 0,
+      "daytona_exemption": null,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_safety": "not_applicable",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": 10,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": [],
+      "display_name": "kto_mix \u00b7 argilla/distilabel-capybara-dpo-7k-binarized",
+      "family": "preference",
+      "grading_environment": {
+        "assessed_tasks": 4412,
+        "declared_counts": {
+          "unavailable": 4412
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-grading/2026.11.13.1/503b101915668344218d.json",
+        "reason_counts": {
+          "No executable grader is declared": 4412
+        },
+        "required_counts": {
+          "separate": 4412
+        },
+        "status_counts": {
+          "unavailable": 4412
+        }
+      },
+      "id": "TRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized",
+      "independent_qc": null,
+      "integrity_contracts": {
+        "absent_contract_tasks": 4412,
+        "dataset_id": "open-athena/marinskyrl-kto-mix-argilla-distilabel-capybara-dpo-7k-b-503b1019-retained-20261113-v1",
+        "dataset_revision": "cb9ed115b2902dddcef4f8a33738fc95c18dfb78",
+        "distinct_groups": 1,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/503b101915668344218d/actor/integrity-contracts.json",
+        "example": null,
+        "groups": [
+          {
+            "count": 4412,
+            "dependency_state": null,
+            "harness_policy_sha256": null,
+            "id": null,
+            "native_family": null,
+            "present": false,
+            "version": null
+          }
+        ],
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "task_specs_sha256": "9e52697935a33a1edf660e3a3853c4463611f9f67018076cef42f0ee56c78b1b"
+      },
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "lexical_contamination": {
+        "contaminated_fraction": 0.019991115059973346,
+        "contaminated_tasks": 90,
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "drop_set_uris": [
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/acfe6a1974f3a3e598a3",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+        ],
+        "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+        "eval_corpus_version": "aa-index-v4.1.1-v3",
+        "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/acfe6a1974f3a3e598a3/measurement.json",
+        "feature_filter_version": 4,
+        "input_dataset_id": "trl-lib/kto-mix-14k",
+        "input_dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+        "matched_evals": {
+          "leaderboard_mmlu_pro": 90,
+          "mmlu_pro_business": 12,
+          "mmlu_pro_computer_science": 14,
+          "mmlu_pro_math": 46,
+          "mmlu_pro_physics": 18
+        },
+        "max_overlap": 0.9932432432432432,
+        "mean_max_overlap": 0.018757345862793248,
+        "measured_tasks": 4502,
+        "min_matched_features": 2,
+        "ngram_length": 13,
+        "overlap_threshold": 0.5,
+        "p95_max_overlap": 0.0,
+        "receipt": {
+          "dropped_tasks": 90,
+          "duplicate_dropped_tasks": 0,
+          "release": {
+            "dataset_id": "open-athena/marinskyrl-kto-mix-argilla-distilabel-capybara-dpo-7k-b-503b1019-retained-20261113-v1",
+            "dataset_revision": "cb9ed115b2902dddcef4f8a33738fc95c18dfb78",
+            "dedup_census_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.6/acfe6a1974f3a3e598a3/measurement.json",
+            "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/acfe6a1974f3a3e598a3/combined-drops.parquet",
+            "duplicate_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/acfe6a1974f3a3e598a3/duplicates.parquet",
+            "format": "taskcompendium",
+            "original_dataset_id": "trl-lib/kto-mix-14k",
+            "original_dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+            "original_private_dataset_id": "open-athena/marinskyrl-kto-mix-argilla-distilabel-capybara-dpo-7k-b-503b1019-original-20261113-v1",
+            "original_private_dataset_revision": "fa9869d0445f7a8be9e61c000cfb4ae530261325",
+            "private": true
+          },
+          "retained_tasks": 4412,
+          "status": "remediated",
+          "use": "train"
+        },
+        "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/acfe6a1974f3a3e598a3/task_flags",
+        "text_renderer_version": "taskcompendium-format-conversation-v1",
+        "version": 1
+      },
+      "name": "kto_component_capybara-retained",
+      "notes": "remediated: dedup/decon. Retained TaskSpec and runtime bytes match the original pin; original oversight and quality evidence apply through this subset lineage: s3://marin-us-east-02a/marin/rl-data/atlas/private-retention/2026.11.13.1/503b101915668344218d/result.json. Interaction describes supported conversation structure. Conversational collections can include one-turn examples. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "oracle_validation": null,
+      "origin": "TRL",
+      "oversight": "none",
+      "oversight_evidence": null,
+      "pipeline": {
+        "files": [
+          "tasks.parquet"
+        ],
+        "name": "kto_component_capybara-retained",
+        "revision": "cb9ed115b2902dddcef4f8a33738fc95c18dfb78",
+        "source": "open-athena/marinskyrl-kto-mix-argilla-distilabel-capybara-dpo-7k-b-503b1019-retained-20261113-v1",
+        "version": "2026.11.13.1"
+      },
+      "quality_result": null,
+      "status": "Not selectable",
+      "subset": "argilla/distilabel-capybara-dpo-7k-binarized",
+      "tags": [
+        "alignment",
+        "multi-turn",
+        "gym/preference"
+      ],
+      "task_count": 4412,
+      "turns": "Multi-turn",
+      "type": "Alignment",
+      "upstream_dataset": "kto_mix",
+      "upstream_name": "kto_mix",
+      "url": "https://huggingface.co/datasets/trl-lib/kto-mix-14k/tree/4470f033f33364e7d064c9f920c3df54d0cce767",
+      "variant": null,
+      "within_source_dedup": {
+        "converter_revision": "2f4b27ba2e",
+        "converter_version": "2026.11.13.1",
+        "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/503b101915668344218d/dedup/drops.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/private-retention/2026.11.13.1/503b101915668344218d/result.json",
+        "raw_count": 4412,
+        "source_dataset_id": "open-athena/marinskyrl-kto-mix-argilla-distilabel-capybara-dpo-7k-b-503b1019-retained-20261113-v1",
+        "source_revision": "cb9ed115b2902dddcef4f8a33738fc95c18dfb78",
+        "unique_count": 4412,
+        "within_source_duplicates": 0
+      },
+      "disposition": "retired_admission_check",
+      "disposition_reason": "No runnable grader exists for the complete current converted population.",
+      "disposition_evidence": {
+        "inventory_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/inventory.json",
+        "previous_assessment_key": null,
+        "previous_admission_counts": null,
+        "retained_tasks": 4412,
+        "runnable_grader_tasks": 0,
+        "no_grader_tasks": 4412,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/9bba9d553830a62c4f07/summary.json"
+      }
+    },
+    {
+      "actor_census_input": {
+        "converter_revision": "2f4b27ba2e",
+        "converter_version": "2026.11.13.1",
+        "dataset_id": "open-athena/marinskyrl-kto-mix-argilla-distilabel-intel-orca-dpo-pa-7958dc43-retained-20261113-v1",
+        "dataset_revision": "f3b78af4e6047db2d927f52001924cce3e1ba1f9",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/7958dc432a09a09d8edf/actor/.artifact.json",
+        "measured_tasks": 4542,
+        "task_specs_sha256": "35e686c7fd91269fd3bd50901fc8e52260d32d04c1c0bde96f4f25394f002af2"
+      },
+      "build_path": "MarinSkyRL",
+      "converted_examples": null,
+      "current_release": {
+        "repo": "open-athena/marinskyrl-kto-mix-argilla-distilabel-intel-orca-dpo-pa-7958dc43-retained-20261113-v1",
+        "revision": "f3b78af4e6047db2d927f52001924cce3e1ba1f9",
+        "url": "https://huggingface.co/datasets/open-athena/marinskyrl-kto-mix-argilla-distilabel-intel-orca-dpo-pa-7958dc43-retained-20261113-v1/tree/f3b78af4e6047db2d927f52001924cce3e1ba1f9"
+      },
+      "dataset_id": "open-athena/marinskyrl-kto-mix-argilla-distilabel-intel-orca-dpo-pa-7958dc43-retained-20261113-v1",
+      "dataset_revision": "f3b78af4e6047db2d927f52001924cce3e1ba1f9",
+      "daytona_count_basis": "Complete 4542-TaskSpec census from open-athena/marinskyrl-kto-mix-argilla-distilabel-intel-orca-dpo-pa-7958dc43-retained-20261113-v1@f3b78af4e6047db2d927f52001924cce3e1ba1f9; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/7958dc432a09a09d8edf/population",
+      "daytona_execution_failures": 0,
+      "daytona_exemption": null,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_safety": "not_applicable",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": 10,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": [],
+      "display_name": "kto_mix \u00b7 argilla/distilabel-intel-orca-dpo-pairs",
+      "family": "preference",
+      "grading_environment": {
+        "assessed_tasks": 4542,
+        "declared_counts": {
+          "unavailable": 4542
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-grading/2026.11.13.1/7958dc432a09a09d8edf.json",
+        "reason_counts": {
+          "No executable grader is declared": 4542
+        },
+        "required_counts": {
+          "separate": 4542
+        },
+        "status_counts": {
+          "unavailable": 4542
+        }
+      },
+      "id": "TRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs",
+      "independent_qc": null,
+      "integrity_contracts": {
+        "absent_contract_tasks": 4542,
+        "dataset_id": "open-athena/marinskyrl-kto-mix-argilla-distilabel-intel-orca-dpo-pa-7958dc43-retained-20261113-v1",
+        "dataset_revision": "f3b78af4e6047db2d927f52001924cce3e1ba1f9",
+        "distinct_groups": 1,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/7958dc432a09a09d8edf/actor/integrity-contracts.json",
+        "example": null,
+        "groups": [
+          {
+            "count": 4542,
+            "dependency_state": null,
+            "harness_policy_sha256": null,
+            "id": null,
+            "native_family": null,
+            "present": false,
+            "version": null
+          }
+        ],
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "task_specs_sha256": "35e686c7fd91269fd3bd50901fc8e52260d32d04c1c0bde96f4f25394f002af2"
+      },
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "lexical_contamination": {
+        "contaminated_fraction": 0.00044014084507042255,
+        "contaminated_tasks": 2,
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "drop_set_uris": [
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/bef9b36cd36b481b26b6",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+        ],
+        "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+        "eval_corpus_version": "aa-index-v4.1.1-v3",
+        "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/bef9b36cd36b481b26b6/measurement.json",
+        "feature_filter_version": 4,
+        "input_dataset_id": "trl-lib/kto-mix-14k",
+        "input_dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+        "matched_evals": {
+          "qqp": 2
+        },
+        "max_overlap": 1.0,
+        "mean_max_overlap": 0.0005493685151175548,
+        "measured_tasks": 4544,
+        "min_matched_features": 2,
+        "ngram_length": 13,
+        "overlap_threshold": 0.5,
+        "p95_max_overlap": 0.0,
+        "receipt": {
+          "dropped_tasks": 2,
+          "duplicate_dropped_tasks": 0,
+          "release": {
+            "dataset_id": "open-athena/marinskyrl-kto-mix-argilla-distilabel-intel-orca-dpo-pa-7958dc43-retained-20261113-v1",
+            "dataset_revision": "f3b78af4e6047db2d927f52001924cce3e1ba1f9",
+            "dedup_census_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.6/bef9b36cd36b481b26b6/measurement.json",
+            "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/bef9b36cd36b481b26b6/combined-drops.parquet",
+            "duplicate_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/bef9b36cd36b481b26b6/duplicates.parquet",
+            "format": "taskcompendium",
+            "original_dataset_id": "trl-lib/kto-mix-14k",
+            "original_dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+            "original_private_dataset_id": "open-athena/marinskyrl-kto-mix-argilla-distilabel-intel-orca-dpo-pa-7958dc43-original-20261113-v1",
+            "original_private_dataset_revision": "edb03f7c86e9a10b0d8a1a268f9d8fbe226950ef",
+            "private": true
+          },
+          "retained_tasks": 4542,
+          "status": "remediated",
+          "use": "train"
+        },
+        "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/bef9b36cd36b481b26b6/task_flags",
+        "text_renderer_version": "taskcompendium-format-conversation-v1",
+        "version": 1
+      },
+      "name": "kto_component_intel_orca-retained",
+      "notes": "remediated: dedup/decon. Retained TaskSpec and runtime bytes match the original pin; original oversight and quality evidence apply through this subset lineage: s3://marin-us-east-02a/marin/rl-data/atlas/private-retention/2026.11.13.1/7958dc432a09a09d8edf/result.json. Interaction describes supported conversation structure. Conversational collections can include one-turn examples. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "oracle_validation": null,
+      "origin": "TRL",
+      "oversight": "none",
+      "oversight_evidence": null,
+      "pipeline": {
+        "files": [
+          "tasks.parquet"
+        ],
+        "name": "kto_component_intel_orca-retained",
+        "revision": "f3b78af4e6047db2d927f52001924cce3e1ba1f9",
+        "source": "open-athena/marinskyrl-kto-mix-argilla-distilabel-intel-orca-dpo-pa-7958dc43-retained-20261113-v1",
+        "version": "2026.11.13.1"
+      },
+      "quality_result": null,
+      "status": "Not selectable",
+      "subset": "argilla/distilabel-intel-orca-dpo-pairs",
+      "tags": [
+        "alignment",
+        "single-turn",
+        "gym/preference"
+      ],
+      "task_count": 4542,
+      "turns": "Single-turn",
+      "type": "Alignment",
+      "upstream_dataset": "kto_mix",
+      "upstream_name": "kto_mix",
+      "url": "https://huggingface.co/datasets/trl-lib/kto-mix-14k/tree/4470f033f33364e7d064c9f920c3df54d0cce767",
+      "variant": null,
+      "within_source_dedup": {
+        "converter_revision": "2f4b27ba2e",
+        "converter_version": "2026.11.13.1",
+        "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/7958dc432a09a09d8edf/dedup/drops.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/private-retention/2026.11.13.1/7958dc432a09a09d8edf/result.json",
+        "raw_count": 4542,
+        "source_dataset_id": "open-athena/marinskyrl-kto-mix-argilla-distilabel-intel-orca-dpo-pa-7958dc43-retained-20261113-v1",
+        "source_revision": "f3b78af4e6047db2d927f52001924cce3e1ba1f9",
+        "unique_count": 4542,
+        "within_source_duplicates": 0
+      },
+      "disposition": "retired_admission_check",
+      "disposition_reason": "No runnable grader exists for the complete current converted population.",
+      "disposition_evidence": {
+        "inventory_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/inventory.json",
+        "previous_assessment_key": null,
+        "previous_admission_counts": null,
+        "retained_tasks": 4542,
+        "runnable_grader_tasks": 0,
+        "no_grader_tasks": 4542,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/bc04f74569e1abd7157f/summary.json"
+      }
+    },
+    {
+      "actor_census_input": {
+        "converter_revision": "2f4b27ba2e",
+        "converter_version": "2026.11.13.1",
+        "dataset_id": "open-athena/marinskyrl-kto-mix-argilla-ultrafeedback-binarized-pref-00fc52db-retained-20261113-v1",
+        "dataset_revision": "324efb7cc98681e5f95ae131bb1918e41032dadf",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/00fc52db0a637cb1efe2/actor/.artifact.json",
+        "measured_tasks": 4452,
+        "task_specs_sha256": "f43632271c8b75860633926975b0f24f776218dd2ed5e60b8ef29190ec6dec04"
+      },
+      "build_path": "MarinSkyRL",
+      "converted_examples": null,
+      "current_release": {
+        "repo": "open-athena/marinskyrl-kto-mix-argilla-ultrafeedback-binarized-pref-00fc52db-retained-20261113-v1",
+        "revision": "324efb7cc98681e5f95ae131bb1918e41032dadf",
+        "url": "https://huggingface.co/datasets/open-athena/marinskyrl-kto-mix-argilla-ultrafeedback-binarized-pref-00fc52db-retained-20261113-v1/tree/324efb7cc98681e5f95ae131bb1918e41032dadf"
+      },
+      "dataset_id": "open-athena/marinskyrl-kto-mix-argilla-ultrafeedback-binarized-pref-00fc52db-retained-20261113-v1",
+      "dataset_revision": "324efb7cc98681e5f95ae131bb1918e41032dadf",
+      "daytona_count_basis": "Complete 4452-TaskSpec census from open-athena/marinskyrl-kto-mix-argilla-ultrafeedback-binarized-pref-00fc52db-retained-20261113-v1@324efb7cc98681e5f95ae131bb1918e41032dadf; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/00fc52db0a637cb1efe2/population",
+      "daytona_execution_failures": 0,
+      "daytona_exemption": null,
+      "daytona_machine_slots": 0,
+      "daytona_roles": {
+        "agent": {},
+        "grader": {}
+      },
+      "daytona_safety": "not_applicable",
+      "daytona_snapshot_count": 0,
+      "daytona_snapshot_threshold": 10,
+      "daytona_unsafe_counts": {},
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_reasons": [],
+      "display_name": "kto_mix \u00b7 argilla/ultrafeedback-binarized-preferences-cleaned",
+      "family": "preference",
+      "grading_environment": {
+        "assessed_tasks": 4452,
+        "declared_counts": {
+          "unavailable": 4452
+        },
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-grading/2026.11.13.1/00fc52db0a637cb1efe2.json",
+        "reason_counts": {
+          "No executable grader is declared": 4452
+        },
+        "required_counts": {
+          "separate": 4452
+        },
+        "status_counts": {
+          "unavailable": 4452
+        }
+      },
+      "id": "TRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned",
+      "independent_qc": null,
+      "integrity_contracts": {
+        "absent_contract_tasks": 4452,
+        "dataset_id": "open-athena/marinskyrl-kto-mix-argilla-ultrafeedback-binarized-pref-00fc52db-retained-20261113-v1",
+        "dataset_revision": "324efb7cc98681e5f95ae131bb1918e41032dadf",
+        "distinct_groups": 1,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/00fc52db0a637cb1efe2/actor/integrity-contracts.json",
+        "example": null,
+        "groups": [
+          {
+            "count": 4452,
+            "dependency_state": null,
+            "harness_policy_sha256": null,
+            "id": null,
+            "native_family": null,
+            "present": false,
+            "version": null
+          }
+        ],
+        "required_shared_tasks": 0,
+        "shared_missing_contract_tasks": 0,
+        "task_specs_sha256": "f43632271c8b75860633926975b0f24f776218dd2ed5e60b8ef29190ec6dec04"
+      },
+      "is_benchmark": false,
+      "kind": "Dataset",
+      "lexical_contamination": {
+        "contaminated_fraction": 0.000449034575662326,
+        "contaminated_tasks": 2,
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "drop_set_uris": [
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/6034c3321421e0612e9b",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global"
+        ],
+        "eval_bloom_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+        "eval_corpus_version": "aa-index-v4.1.1-v3",
+        "eval_hash_index_uri": "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/eval_hash_index.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/6034c3321421e0612e9b/measurement.json",
+        "feature_filter_version": 4,
+        "input_dataset_id": "trl-lib/kto-mix-14k",
+        "input_dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+        "matched_evals": {
+          "qnli": 2,
+          "squad_completion": 2
+        },
+        "max_overlap": 1.0,
+        "mean_max_overlap": 0.0010309767967103067,
+        "measured_tasks": 4454,
+        "min_matched_features": 2,
+        "ngram_length": 13,
+        "overlap_threshold": 0.5,
+        "p95_max_overlap": 0.0,
+        "receipt": {
+          "dropped_tasks": 2,
+          "duplicate_dropped_tasks": 0,
+          "release": {
+            "dataset_id": "open-athena/marinskyrl-kto-mix-argilla-ultrafeedback-binarized-pref-00fc52db-retained-20261113-v1",
+            "dataset_revision": "324efb7cc98681e5f95ae131bb1918e41032dadf",
+            "dedup_census_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.6/6034c3321421e0612e9b/measurement.json",
+            "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/6034c3321421e0612e9b/combined-drops.parquet",
+            "duplicate_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.12.4/6034c3321421e0612e9b/duplicates.parquet",
+            "format": "taskcompendium",
+            "original_dataset_id": "trl-lib/kto-mix-14k",
+            "original_dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+            "original_private_dataset_id": "open-athena/marinskyrl-kto-mix-argilla-ultrafeedback-binarized-pref-00fc52db-original-20261113-v1",
+            "original_private_dataset_revision": "b0949aae425a7d3c4f077132eb4cac58ad20e974",
+            "private": true
+          },
+          "retained_tasks": 4452,
+          "status": "remediated",
+          "use": "train"
+        },
+        "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/6034c3321421e0612e9b/task_flags",
+        "text_renderer_version": "taskcompendium-format-conversation-v1",
+        "version": 1
+      },
+      "name": "kto_component_ultrafeedback-retained",
+      "notes": "remediated: dedup/decon. Retained TaskSpec and runtime bytes match the original pin; original oversight and quality evidence apply through this subset lineage: s3://marin-us-east-02a/marin/rl-data/atlas/private-retention/2026.11.13.1/00fc52db0a637cb1efe2/result.json. Interaction describes supported conversation structure. Conversational collections can include one-turn examples. Admission blocked: SAMPLE or FULL oversight with verification evidence is missing.",
+      "oracle_validation": null,
+      "origin": "TRL",
+      "oversight": "none",
+      "oversight_evidence": null,
+      "pipeline": {
+        "files": [
+          "tasks.parquet"
+        ],
+        "name": "kto_component_ultrafeedback-retained",
+        "revision": "324efb7cc98681e5f95ae131bb1918e41032dadf",
+        "source": "open-athena/marinskyrl-kto-mix-argilla-ultrafeedback-binarized-pref-00fc52db-retained-20261113-v1",
+        "version": "2026.11.13.1"
+      },
+      "quality_result": null,
+      "status": "Not selectable",
+      "subset": "argilla/ultrafeedback-binarized-preferences-cleaned",
+      "tags": [
+        "alignment",
+        "single-turn",
+        "gym/preference"
+      ],
+      "task_count": 4452,
+      "turns": "Single-turn",
+      "type": "Alignment",
+      "upstream_dataset": "kto_mix",
+      "upstream_name": "kto_mix",
+      "url": "https://huggingface.co/datasets/trl-lib/kto-mix-14k/tree/4470f033f33364e7d064c9f920c3df54d0cce767",
+      "variant": null,
+      "within_source_dedup": {
+        "converter_revision": "2f4b27ba2e",
+        "converter_version": "2026.11.13.1",
+        "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/00fc52db0a637cb1efe2/dedup/drops.parquet",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/private-retention/2026.11.13.1/00fc52db0a637cb1efe2/result.json",
+        "raw_count": 4452,
+        "source_dataset_id": "open-athena/marinskyrl-kto-mix-argilla-ultrafeedback-binarized-pref-00fc52db-retained-20261113-v1",
+        "source_revision": "324efb7cc98681e5f95ae131bb1918e41032dadf",
+        "unique_count": 4452,
+        "within_source_duplicates": 0
+      },
+      "disposition": "retired_admission_check",
+      "disposition_reason": "No runnable grader exists for the complete current converted population.",
+      "disposition_evidence": {
+        "inventory_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.3/admission/inventory.json",
+        "previous_assessment_key": null,
+        "previous_admission_counts": null,
+        "retained_tasks": 4452,
+        "runnable_grader_tasks": 0,
+        "no_grader_tasks": 4452,
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/1c9963821266757f3338/summary.json"
+      }
     }
   ]
 }
