@@ -3,10 +3,9 @@ Source: https://github.com/Akseleu-J/atomic-ops
 Revision: a9bd7c5315907d23ccf1ce6b033d46a196566888 (PyPI 0.1.0 compute sources)
 License: MIT; see LICENSE for the original copyright and permission notice.
 
-Only configs.py, gdn2_fwd.py, gdn2_bwd.py, and gdn2_pipeline.py are
-vendored. upstream/ preserves the baseline compute implementation; its
-block-solver list has an added type annotation with no arithmetic change.
-candidate/ derives from those files and removes clipping, non-finite
+The benchmark uses the published atomic-ops==0.1.0 package as the baseline.
+The candidate derives from its configs.py, gdn2_fwd.py, gdn2_bwd.py, and
+gdn2_pipeline.py and removes clipping, non-finite
 replacement, and damping. It replaces off-diagonal pairwise reductions
 with boundary-centered matrix products and masks diagonal blocks before
 exponentiation. Diagonal masks use full-rank iotas to avoid an unsupported

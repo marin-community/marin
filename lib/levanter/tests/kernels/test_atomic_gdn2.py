@@ -16,7 +16,7 @@ from levanter.kernels.pallas.gdn2.reference import gdn2_reference
 def test_gdn2_rejects_bfloat16_initial_state_before_scan():
     tokens = jax.ShapeDtypeStruct((1, 32, 1, 128), jnp.bfloat16)
     state = jax.ShapeDtypeStruct((1, 1, 128, 128), jnp.bfloat16)
-    config = KernelConfig(bt=32, bc=16, mb=8, interpret=True)
+    config = KernelConfig(bt=32, mb=8, interpret=True)
 
     def forward(q, k, v, w, b, g, h0):
         return gdn2_pallas_forward_trainable(q, k, v, w, b, g, 128**-0.5, h0=h0, config=config)
@@ -25,6 +25,8 @@ def test_gdn2_rejects_bfloat16_initial_state_before_scan():
         jax.eval_shape(forward, tokens, tokens, tokens, tokens, tokens, tokens, state)
 
 
+@pytest.mark.slow
+@pytest.mark.timeout(180)
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
 @pytest.mark.parametrize("decay", [0.005, 0.5, 5.0])
 @pytest.mark.parametrize("score_layout", list(ScoreLayout))
@@ -40,7 +42,7 @@ def test_gdn2_output_state_and_all_input_gradients_match_recurrence(dtype, decay
     g = -decay * jax.random.uniform(keys[5], shape, minval=0.5, maxval=1.5)
     h0 = 0.05 * jax.random.normal(keys[6], (1, 1, 128, 128))
     inputs = tuple(x.astype(dtype) for x in (q, k, v, w, b, g)) + (h0,)
-    config = KernelConfig(bt=32, bc=16, mb=8, interpret=True, score_layout=score_layout)
+    config = KernelConfig(bt=32, mb=8, interpret=True, score_layout=score_layout)
     scale = 128**-0.5
 
     def candidate(q, k, v, w, b, g, h0):

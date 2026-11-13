@@ -70,7 +70,7 @@ def _weighted_pair_sum(a_i, edecay, b_j):
 
 
 def _kernel_a_body(
-    q_ref, k_ref, b_ref, g_ref, aqk_ref, akk_ref, *, scale: float, bt: int, bc: int, n_sub: int, config: KernelConfig
+    q_ref, k_ref, b_ref, g_ref, aqk_ref, akk_ref, *, scale: float, bt: int, bc: int, config: KernelConfig
 ):
     q_full = q_ref[0, 0, 0].astype(jnp.float32)
     k_full = k_ref[0, 0, 0].astype(jnp.float32)
@@ -84,7 +84,7 @@ def _kernel_a_body(
     aqk_ref[0, 0, 0] = jnp.zeros((bt, bt), dtype=jnp.float32)
     akk_ref[0, 0, 0] = jnp.zeros((bt, bt), dtype=jnp.float32)
 
-    for si in range(n_sub):
+    for si in range(2):
         for sj in range(si + 1):
             i0, i1 = si * bc, (si + 1) * bc
             j0, j1 = sj * bc, (sj + 1) * bc
@@ -148,7 +148,6 @@ def build_chunk_scores_pallas(q, k, b, g, scale, config: KernelConfig = DEFAULT_
             scale=scale,
             bt=config.bt,
             bc=config.bc,
-            n_sub=config.n_sub,
             config=config,
         ),
         name="gdn2_scores",
@@ -163,7 +162,6 @@ def build_chunk_scores_pallas(q, k, b, g, scale, config: KernelConfig = DEFAULT_
             scale=scale,
             bt=config.bt,
             bc=config.bc,
-            n_sub=config.n_sub,
             config=config,
         ),
         compiler_params=pltpu.CompilerParams(),
@@ -173,9 +171,8 @@ def build_chunk_scores_pallas(q, k, b, g, scale, config: KernelConfig = DEFAULT_
 
 
 # ---------- Kernel B ----------
-def _micro_forward_substitution(T_mb, mb: int, eps: float, config: KernelConfig):
+def _micro_forward_substitution(T_mb, mb: int):
     idx = jnp.arange(mb)
-    T_mb = T_mb * (1.0 - eps)
 
     A = jnp.zeros((mb, mb), dtype=jnp.float32)
     # Static row indices avoid runtime sublane gathers on TPU v4.
@@ -192,14 +189,13 @@ def _micro_forward_substitution(T_mb, mb: int, eps: float, config: KernelConfig)
 def _block_solve(T_full, config: KernelConfig):
     N_MICRO = config.n_micro
     MB = config.mb
-    eps = config.wy_eps
     blocks: list[list[jax.Array]] = [
         [jnp.zeros((MB, MB), dtype=jnp.float32) for _ in range(N_MICRO)] for _ in range(N_MICRO)
     ]
 
     for m in range(N_MICRO):
         T_mm = T_full[m * MB : (m + 1) * MB, m * MB : (m + 1) * MB]
-        A_mm = _micro_forward_substitution(T_mm, MB, eps, config)
+        A_mm = _micro_forward_substitution(T_mm, MB)
         blocks[m][m] = A_mm
 
         for n in range(m - 1, -1, -1):
@@ -207,7 +203,7 @@ def _block_solve(T_full, config: KernelConfig):
             for k in range(n, m):
                 T_mk = T_full[m * MB : (m + 1) * MB, k * MB : (k + 1) * MB]
                 A_kn = blocks[k][n]
-                contrib = jnp.dot(T_mk * (1.0 - eps), A_kn, precision=_HIGHEST)
+                contrib = jnp.dot(T_mk, A_kn, precision=_HIGHEST)
                 acc = acc + contrib
             A_mn = -jnp.dot(A_mm, acc, precision=_HIGHEST)
             blocks[m][n] = A_mn
@@ -225,11 +221,6 @@ def _block_solve(T_full, config: KernelConfig):
 
 
 def _kernel_b_body(akk_ref, a_ref, *, bt: int, bc: int, config: KernelConfig):
-    assert bt == 2 * bc, (
-        f"Kernel B поддерживает только двухблочный top-level split "
-        f"(bt == 2*bc); получено bt={bt}, bc={bc}. Для варьирования "
-        f"granularity решателя используйте config.mb, а не config.bc."
-    )
     Akk = akk_ref[0, 0, 0].astype(jnp.float32)
     T00 = Akk[0:bc, 0:bc]
     T11 = Akk[bc : 2 * bc, bc : 2 * bc]
@@ -238,8 +229,7 @@ def _kernel_b_body(akk_ref, a_ref, *, bt: int, bc: int, config: KernelConfig):
     A00 = _block_solve(T00, config)
     A11 = _block_solve(T11, config)
 
-    eps = config.wy_eps
-    tmp = jnp.dot(T10 * (1.0 - eps), A00, precision=_HIGHEST)
+    tmp = jnp.dot(T10, A00, precision=_HIGHEST)
     A10 = -jnp.dot(A11, tmp, precision=_HIGHEST)
 
     a_ref[0, 0, 0] = jnp.zeros((bt, bt), dtype=jnp.float32)
@@ -250,11 +240,6 @@ def _kernel_b_body(akk_ref, a_ref, *, bt: int, bc: int, config: KernelConfig):
 
 def wy_solve_pallas(Akk, config: KernelConfig = DEFAULT_CONFIG):
     bsz, H, n_chunks = Akk.shape[:3]
-    assert config.bt == 2 * config.bc, (
-        f"wy_solve_pallas: bt должен быть == 2*bc (top-level 2-блочный "
-        f"solve), получено bt={config.bt}, bc={config.bc}. Не варьируйте "
-        f"bc независимо от bt -- для granularity решателя есть config.mb."
-    )
     grid = (bsz, H, n_chunks)
     spec = pl.BlockSpec((1, 1, 1, config.bt, config.bt), lambda i, h, c: (i, h, c, 0, 0))
     A = pl.pallas_call(
@@ -386,9 +371,9 @@ def gdn2_inter_chunk_combine(
         return h_new, o_c
 
     h_final, o_scanned = jax.lax.scan(step, h0, to_scan)
-    h_final = _stage_diag(f"{debug_tag}:kernel_D_h_final", h_final)
+    h_final = _stage_diag(f"{debug_tag}:kernel_D_h_final", h_final, config)
     o = jnp.moveaxis(o_scanned, 0, 2)
-    o = _stage_diag(f"{debug_tag}:kernel_D_o", o)
+    o = _stage_diag(f"{debug_tag}:kernel_D_o", o, config)
     return o, h_final
 
 
@@ -415,9 +400,9 @@ def gdn2_inter_chunk_combine_with_state(
         return h_new, (o_c, h_pre, v_new)
 
     h_final, (o_scanned, h_pre_all, v_new_all) = jax.lax.scan(step, h0, to_scan)
-    h_final = _stage_diag(f"{debug_tag}:kernel_D_h_final", h_final)
+    h_final = _stage_diag(f"{debug_tag}:kernel_D_h_final", h_final, config)
     o = jnp.moveaxis(o_scanned, 0, 2)
-    o = _stage_diag(f"{debug_tag}:kernel_D_o", o)
+    o = _stage_diag(f"{debug_tag}:kernel_D_o", o, config)
     return o, h_final, h_pre_all, v_new_all
 
 
@@ -425,17 +410,17 @@ def gdn2_pallas_forward(q, k, v, w, b, g, scale, h0=None, config: KernelConfig =
     bsz, L, H, D, n_chunks = validate_inputs(q, k, v, w, b, g, scale, h0, config)
 
     Aqk, Akk = build_chunk_scores_pallas(q, k, b, g, scale, config)
-    Aqk = _stage_diag(f"{debug_tag}:kernel_A_Aqk", Aqk)
-    Akk = _stage_diag(f"{debug_tag}:kernel_A_Akk", Akk)
+    Aqk = _stage_diag(f"{debug_tag}:kernel_A_Aqk", Aqk, config)
+    Akk = _stage_diag(f"{debug_tag}:kernel_A_Akk", Akk, config)
 
     A = wy_solve_pallas(Akk, config)
-    A = _stage_diag(f"{debug_tag}:kernel_B_wy_inverse_A", A)
+    A = _stage_diag(f"{debug_tag}:kernel_B_wy_inverse_A", A, config)
 
     w_pseudo, u, kg, qg, gc_last = recompute_wy_pallas(q, k, v, w, b, g, A, config)
-    w_pseudo = _stage_diag(f"{debug_tag}:kernel_C_w_pseudo", w_pseudo)
-    u = _stage_diag(f"{debug_tag}:kernel_C_u", u)
-    kg = _stage_diag(f"{debug_tag}:kernel_C_kg", kg)
-    qg = _stage_diag(f"{debug_tag}:kernel_C_qg", qg)
+    w_pseudo = _stage_diag(f"{debug_tag}:kernel_C_w_pseudo", w_pseudo, config)
+    u = _stage_diag(f"{debug_tag}:kernel_C_u", u, config)
+    kg = _stage_diag(f"{debug_tag}:kernel_C_kg", kg, config)
+    qg = _stage_diag(f"{debug_tag}:kernel_C_qg", qg, config)
 
     o_chunks, h_final = gdn2_inter_chunk_combine(
         Aqk, w_pseudo, u, kg, qg, gc_last, scale, h0=h0, config=config, debug_tag=debug_tag
@@ -450,17 +435,17 @@ def gdn2_pallas_forward_with_residuals(
     bsz, L, H, D, n_chunks = validate_inputs(q, k, v, w, b, g, scale, h0, config)
 
     Aqk, Akk = build_chunk_scores_pallas(q, k, b, g, scale, config)
-    Aqk = _stage_diag(f"{debug_tag}:kernel_A_Aqk", Aqk)
-    Akk = _stage_diag(f"{debug_tag}:kernel_A_Akk", Akk)
+    Aqk = _stage_diag(f"{debug_tag}:kernel_A_Aqk", Aqk, config)
+    Akk = _stage_diag(f"{debug_tag}:kernel_A_Akk", Akk, config)
 
     A = wy_solve_pallas(Akk, config)
-    A = _stage_diag(f"{debug_tag}:kernel_B_wy_inverse_A", A)
+    A = _stage_diag(f"{debug_tag}:kernel_B_wy_inverse_A", A, config)
 
     w_pseudo, u, kg, qg, gc_last = recompute_wy_pallas(q, k, v, w, b, g, A, config)
-    w_pseudo = _stage_diag(f"{debug_tag}:kernel_C_w_pseudo", w_pseudo)
-    u = _stage_diag(f"{debug_tag}:kernel_C_u", u)
-    kg = _stage_diag(f"{debug_tag}:kernel_C_kg", kg)
-    qg = _stage_diag(f"{debug_tag}:kernel_C_qg", qg)
+    w_pseudo = _stage_diag(f"{debug_tag}:kernel_C_w_pseudo", w_pseudo, config)
+    u = _stage_diag(f"{debug_tag}:kernel_C_u", u, config)
+    kg = _stage_diag(f"{debug_tag}:kernel_C_kg", kg, config)
+    qg = _stage_diag(f"{debug_tag}:kernel_C_qg", qg, config)
 
     o_chunks, h_final, h_pre_all, v_new_all = gdn2_inter_chunk_combine_with_state(
         Aqk, w_pseudo, u, kg, qg, gc_last, scale, h0=h0, config=config, debug_tag=debug_tag

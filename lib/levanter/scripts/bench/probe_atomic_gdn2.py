@@ -25,6 +25,9 @@ from jax.experimental.pallas import tpu as pltpu
 
 from levanter.kernels.pallas import gdn2
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
+from levanter.kernels.pallas.gdn2.candidate.configs import KernelConfig, ScoreLayout
+
+from bench_atomic_gdn2 import baseline_version
 
 
 def primitive_operation(value, operation):
@@ -137,6 +140,8 @@ def main():
     device = jax.local_devices()[0]
     if device.platform != "tpu":
         parser.error("This compiler diagnostic requires TPU")
+    implementations = args.implementation or ["upstream", "candidate"]
+    atomic_ops_version = baseline_version(parser, implementations)
     path = args.output or Path(os.environ.get("IRIS_OUTPUT_DIR", "/tmp")) / f"gdn2-probe-{time.time_ns()}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     source_digest = hashlib.sha256()
@@ -152,6 +157,7 @@ def main():
         "git_sha": os.environ.get("GDN2_GIT_SHA"),
         "source_sha256": source_digest.hexdigest(),
         "xla_flags": os.environ.get("XLA_FLAGS", ""),
+        "upstream_diagnostics": os.environ.get("GDN2_FWD_DIAG", ""),
         "libtpu_init_args": os.environ.get("LIBTPU_INIT_ARGS", ""),
     }
     with path.open("x") as stream, jax.default_device(device):
@@ -174,22 +180,17 @@ def main():
         dh_next = jax.random.normal(jax.random.key(4), state_shape)
         do = jax.random.normal(jax.random.key(5), v_chunk.shape)
         dv = jax.random.normal(jax.random.key(6), v_chunk.shape)
-        for implementation in args.implementation or ("upstream", "candidate"):
-            prefix = f"levanter.kernels.pallas.gdn2.{implementation}"
+        for implementation in implementations:
+            if implementation == "candidate":
+                prefix = "levanter.kernels.pallas.gdn2.candidate"
+                layout = ScoreLayout.for_device_kind(device.device_kind)
+                config = KernelConfig(bt=args.bt, mb=args.mb, score_layout=layout)
+            else:
+                prefix = "atomic_ops"
+                config_module = importlib.import_module("atomic_ops.configs")
+                config = config_module.KernelConfig(bt=args.bt, bc=args.bt // 2, mb=args.mb, wy_eps=0.0)
             module = importlib.import_module(prefix + ".gdn2_fwd")
             backward_module = importlib.import_module(prefix + ".gdn2_bwd")
-            config_module = importlib.import_module(prefix + ".configs")
-            if implementation == "candidate":
-                layout = (
-                    config_module.ScoreLayout.FEATURE_FIRST
-                    if "tpu v4" in device.device_kind.lower()
-                    else config_module.ScoreLayout.FEATURE_LAST
-                )
-                config = config_module.KernelConfig(
-                    bt=args.bt, bc=args.bt // 2, mb=args.mb, wy_eps=0.0, score_layout=layout
-                )
-            else:
-                config = config_module.KernelConfig(bt=args.bt, bc=args.bt // 2, mb=args.mb, wy_eps=0.0)
             for stage, function, stage_module, inputs in (
                 ("A", stage_a, module, (q, k, b, g)),
                 ("B", stage_b, module, (akk,)),
@@ -206,6 +207,7 @@ def main():
                 metadata = dict(
                     common,
                     implementation=implementation,
+                    atomic_ops_version=atomic_ops_version if implementation == "upstream" else None,
                     stage=stage,
                     shape=shape,
                     block_sizes={"bt": args.bt, "bc": args.bt // 2, "mb": args.mb},

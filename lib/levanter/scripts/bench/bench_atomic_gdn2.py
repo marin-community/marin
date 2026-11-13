@@ -5,7 +5,8 @@
 
 Example on each TPU generation (configure LIBTPU_INIT_ARGS before launch)::
 
-    uv run --package marin-levanter python lib/levanter/scripts/bench/bench_atomic_gdn2.py \
+    JAX_PLATFORMS=tpu,cpu uv run --package marin-levanter --extra tpu --with atomic-ops==0.1.0 \
+        python lib/levanter/scripts/bench/bench_atomic_gdn2.py \
         --shape 1,256,1,128 --shape 4,4096,6,128 --dtype float32 --dtype bfloat16 \
         --bt 128 --bt 256 --mb 16 --mb 32 --output /tmp/gdn2.jsonl
 
@@ -20,6 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib
+from importlib.metadata import PackageNotFoundError, version
 import itertools
 import json
 import math
@@ -37,11 +39,13 @@ import jax.numpy as jnp
 import numpy as np
 
 from levanter.kernels.pallas import gdn2
+from levanter.kernels.pallas.gdn2.candidate.configs import KernelConfig, ScoreLayout
 from levanter.kernels.pallas.gdn2.reference import gdn2_reference
 
 FORWARD_NAMES = ("output", "final_state")
 GRADIENT_NAMES = ("loss", "dq", "dk", "dv", "dw", "db", "dg", "dh0")
 CACHE_VERSION = 1
+ATOMIC_OPS_VERSION = "0.1.0"
 
 
 def token_reference(q, k, v, w, b, g, h0):
@@ -241,6 +245,19 @@ def update_tuning_entry(entries, context, rows, results_path):
     }
 
 
+def baseline_version(parser: argparse.ArgumentParser, implementations: list[str]) -> str | None:
+    """Require the measured wheel when the upstream baseline is selected."""
+    if "upstream" not in implementations:
+        return None
+    try:
+        installed = version("atomic-ops")
+    except PackageNotFoundError:
+        parser.error(f"The upstream baseline requires --with atomic-ops=={ATOMIC_OPS_VERSION}")
+    if installed != ATOMIC_OPS_VERSION:
+        parser.error(f"Expected atomic-ops=={ATOMIC_OPS_VERSION}, found {installed}")
+    return installed
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--shape", type=parse_shape, action="append")
@@ -248,6 +265,7 @@ def main():
     parser.add_argument("--implementation", choices=("upstream", "candidate"), action="append")
     parser.add_argument("--bt", type=int, choices=(128, 256), action="append")
     parser.add_argument("--mb", type=int, choices=(16, 32), action="append")
+    parser.add_argument("--diagnostics", action="store_true", help="Enable candidate stage diagnostics")
     parser.add_argument("--seed", type=int, action="append")
     parser.add_argument("--decay", type=float, action="append", help="Maximum negative log gate magnitude")
     parser.add_argument("--device-index", type=int, default=0)
@@ -255,8 +273,8 @@ def main():
     parser.add_argument(
         "--reference-device",
         choices=("current", "cpu"),
-        default="current",
-        help="CPU oracle additionally records TPU-versus-CPU reference discrepancies; requires JAX_PLATFORMS=tpu,cpu",
+        default="cpu",
+        help="The CPU oracle requires JAX_PLATFORMS=tpu,cpu and also records TPU reference discrepancies",
     )
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--repetitions", type=int, default=10)
@@ -276,11 +294,12 @@ def main():
     shapes = args.shape or [(1, 256, 1, 128)]
     dtypes = args.dtype or ["float32", "bfloat16"]
     implementations = args.implementation or ["upstream", "candidate"]
+    atomic_ops_version = baseline_version(parser, implementations)
     configs = list(itertools.product(args.bt or [256], args.mb or [16]))
     seeds = args.seed or [0]
     decays = args.decay or [0.01]
-    if any(decay < 0 for decay in decays):
-        parser.error("Decay must be nonnegative")
+    if any(not math.isfinite(decay) or decay < 0 for decay in decays):
+        parser.error("Decay must be finite and nonnegative")
     git_sha = os.environ.get("GDN2_GIT_SHA")
     git_dirty = None
     if git_sha is None:
@@ -333,6 +352,8 @@ def main():
                     "shape": shape,
                     "dtype": dtype,
                     "implementation": implementation,
+                    "atomic_ops_version": atomic_ops_version if implementation == "upstream" else None,
+                    "diagnostics": args.diagnostics if implementation == "candidate" else False,
                     "backend_env": environment,
                     "xla_flags": os.environ.get("XLA_FLAGS", ""),
                     "configs": sorted(configs),
@@ -358,6 +379,8 @@ def main():
                 base: dict[str, Any] = {
                     "kernel": "gdn2",
                     "implementation": implementation,
+                    "atomic_ops_version": atomic_ops_version if implementation == "upstream" else None,
+                    "diagnostics": args.diagnostics if implementation == "candidate" else False,
                     "shape": shape,
                     "dtype": dtype,
                     "backend": device.platform,
@@ -391,21 +414,17 @@ def main():
                         else "fallback_after_failed_hit" if orders[implementation][1] is not None else "miss"
                     )
                 try:
-                    module_name = f"levanter.kernels.pallas.gdn2.{implementation}"
-                    config_module = importlib.import_module(module_name + ".configs")
-                    config_type = config_module.KernelConfig
-                    kernel = importlib.import_module(module_name + ".gdn2_pipeline").gdn2_pallas_forward_trainable
                     if implementation == "candidate":
-                        layout = (
-                            config_module.ScoreLayout.FEATURE_FIRST
-                            if "tpu v4" in device.device_kind.lower()
-                            else config_module.ScoreLayout.FEATURE_LAST
-                        )
-                        config = config_type(bt=bt, bc=bt // 2, mb=mb, wy_eps=0.0, score_layout=layout)
+                        module_name = "levanter.kernels.pallas.gdn2.candidate"
+                        layout = ScoreLayout.for_device_kind(device.device_kind)
+                        config = KernelConfig(bt=bt, mb=mb, score_layout=layout, diagnostics=args.diagnostics)
                         base["score_layout"] = layout.value
                     else:
-                        config = config_type(bt=bt, bc=bt // 2, mb=mb, wy_eps=0.0)
+                        module_name = "atomic_ops"
+                        config_module = importlib.import_module("atomic_ops.configs")
+                        config = config_module.KernelConfig(bt=bt, bc=bt // 2, mb=mb, wy_eps=0.0)
                         base["score_layout"] = "upstream"
+                    kernel = importlib.import_module(module_name + ".gdn2_pipeline").gdn2_pallas_forward_trainable
 
                     def forward(q, k, v, w, b, g, h0):
                         return kernel(q, k, v, w, b, g, shape[-1] ** -0.5, h0=h0, config=config)

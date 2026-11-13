@@ -129,7 +129,6 @@ def _kernel_b3_body(
     *,
     scale: float,
     bt: int,
-    wy_eps: float,
     config: KernelConfig,
 ):
     q_c = q_ref[0, 0, 0].astype(jnp.float32)
@@ -175,7 +174,6 @@ def _kernel_b3_body(
 
     tmp = jnp.dot(dA_total, A.T, precision=_HIGHEST)
     dAkk_raw = -jnp.dot(A.T, tmp, precision=_HIGHEST)
-    dAkk_raw = dAkk_raw * (1.0 - wy_eps)
     dAkk = dAkk_raw * strict
 
     dk_from_kb = dkb_decayed * jnp.exp(gc) * b_c
@@ -231,7 +229,7 @@ def wy_dqkg_backward_pallas(
         jax.ShapeDtypeStruct((bsz, H, n_chunks, config.bt, config.bt), jnp.float32)
     ]
     dq, dk, db, dw, dv_raw, dgc, dAkk = pl.pallas_call(
-        lambda *refs: _kernel_b3_body(*refs, scale=scale, bt=config.bt, wy_eps=config.wy_eps, config=config),
+        lambda *refs: _kernel_b3_body(*refs, scale=scale, bt=config.bt, config=config),
         name="gdn2_backward_wy",
         grid=grid,
         in_specs=[
@@ -257,7 +255,6 @@ def wy_dqkg_backward_pallas(
             outputs,
             scale=scale,
             bt=config.bt,
-            wy_eps=config.wy_eps,
             config=config,
         ),
         compiler_params=pltpu.CompilerParams(),
@@ -324,7 +321,6 @@ def _kernel_b4_body(
     scale: float,
     bt: int,
     bc: int,
-    n_sub: int,
     config: KernelConfig,
 ):
     q_full = q_ref[0, 0, 0].astype(jnp.float32)
@@ -345,7 +341,7 @@ def _kernel_b4_body(
     db_ref[0, 0, 0] = jnp.zeros_like(k_full)
     dgc_ref[0, 0, 0] = jnp.zeros_like(g_raw)
 
-    for si in range(n_sub):
+    for si in range(2):
         for sj in range(si + 1):
             i0, i1 = si * bc, (si + 1) * bc
             j0, j1 = sj * bc, (sj + 1) * bc
@@ -435,7 +431,6 @@ def intra_backward_pallas(
             scale=scale,
             bt=config.bt,
             bc=config.bc,
-            n_sub=config.n_sub,
             config=config,
         ),
         grid=grid,
@@ -450,7 +445,6 @@ def intra_backward_pallas(
             scale=scale,
             bt=config.bt,
             bc=config.bc,
-            n_sub=config.n_sub,
             config=config,
         ),
         compiler_params=pltpu.CompilerParams(),

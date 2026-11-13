@@ -7,14 +7,11 @@ It is not integrated into a model or distributed training API.
 
 ## Sources and arithmetic
 
-`upstream/` vendors four compute files from
-[Atomic Ops](https://github.com/Akseleu-J/atomic-ops/tree/a9bd7c5315907d23ccf1ce6b033d46a196566888),
-revision `a9bd7c5315907d23ccf1ce6b033d46a196566888`. The package's `LICENSE`
-and `NOTICE` retain the MIT attribution and describe local changes.
-The baseline retains upstream clipping and non-finite replacement.
-`wy_eps` controls solve damping. The benchmark disables damping in both
-implementations by setting `wy_eps=0`, so damping is not an experimental
-difference in these comparisons.
+The benchmark uses the published `atomic-ops==0.1.0` package, built from
+[Atomic Ops revision `a9bd7c5`](https://github.com/Akseleu-J/atomic-ops/tree/a9bd7c5315907d23ccf1ce6b033d46a196566888).
+The candidate's `LICENSE` and `NOTICE` retain the MIT attribution and
+describe local changes. The baseline retains upstream clipping and non-finite
+replacement. The benchmark disables baseline solve damping with `wy_eps=0`.
 
 `candidate/` removes clipping, non-finite replacement, and solve damping.
 Off-diagonal score blocks and their gradients use boundary-centered matrix
@@ -65,7 +62,7 @@ From the repository root on an allocated TPU host, use the Levanter
 workspace environment with TPU dependencies and its CPU backend enabled:
 
 ```bash
-JAX_PLATFORMS=tpu,cpu uv run --package marin-levanter --extra tpu \
+JAX_PLATFORMS=tpu,cpu uv run --package marin-levanter --extra tpu --with atomic-ops==0.1.0 \
   python lib/levanter/scripts/bench/bench_atomic_gdn2.py \
   --reference-device cpu --shape 4,4096,6,128 \
   --dtype float32 --dtype bfloat16 \
@@ -80,7 +77,7 @@ the process. For v6e, use
 Do not set this override on v4.
 On v4, replace the two `--bt` options above with
 `--implementation candidate --bt 128`; the upstream path and candidate
-BT256 backward do not compile.
+BT256 backward do not compile. Candidate-only runs can omit `--with atomic-ops==0.1.0`.
 
 The CPU oracle receives the exact TPU-generated inputs and output/state
 cotangents. The harness also records the TPU reference's deviations from
@@ -98,27 +95,20 @@ single-device calls and includes dispatch overhead. Inspect the recorded
 sample distribution and repeat comparisons before choosing tiles.
 
 JSONL results include the source SHA256, upstream/candidate identity,
-hardware, JAX version, environment flags, tile sizes, input seed, error
-metrics, and individual timing samples. Files default to `IRIS_OUTPUT_DIR`
+hardware, JAX and Atomic Ops versions, environment flags, tile sizes, input
+seed, error metrics, and individual timing samples. Use `--diagnostics` to
+log large or non-finite candidate stage values. Files default to `IRIS_OUTPUT_DIR`
 when running on Iris, or `/tmp` otherwise, with name `gdn2-<timestamp>.jsonl`.
 Use `--output <path>` to choose a new file explicitly. Iris task-output archives have
 limited retention; preserve accepted measurement artifacts before expiry.
 The [2026-09-22 measurement artifacts](../reports/data/gdn2-tpu-20260922/README.md)
 retain representative-shape samples and numerical error summaries.
 
-`gdn2.tuned_block_sizes.select_kernel_config` selects candidate
-BT128/BC64/MB16 for JAX device kinds `TPU v4`, `TPU v5 lite`, and
-`TPU v5`, FP32/BF16, and local shapes `[B,4096,6,128]` with
-`4 <= B <= 8`. For `TPU v6 lite` (v6e), it selects BT128/BC64/MB32
-in the same dtype/shape bucket. The returned configuration uses
-`ScoreLayout.FEATURE_FIRST` on v4 and `ScoreLayout.FEATURE_LAST` on v5e/v5p/v6e.
-Batches 4 and 8 passed hardware correctness gates and
-repeated timing comparisons; batches 5–7 interpolate between those
-endpoints and remain unmeasured. Pass an explicit
-`fallback=KernelConfig(...)` for unmatched devices, dtypes, or shapes.
-This experimental lookup does not validate inputs, compile kernels,
-change backends, or configure the runtime. The measured environment used
-JAX 0.11.1. The v5e/v5p runs set both `--xla_tpu_scoped_vmem_limit_kib=50000` and
+For local FP32/BF16 shapes `[B,4096,6,128]`, the measured forward+backward
+winner was BT128/MB16 on v4/v5e/v5p and BT128/MB32 on v6e.
+Batches 4 and 8 passed hardware correctness gates and repeated timing
+comparisons. Batches 5–7 remain unmeasured.
+The measured environment used JAX 0.11.1. The v5e/v5p runs set both `--xla_tpu_scoped_vmem_limit_kib=50000` and
 `--xla_tpu_use_enhanced_launch_barrier=true` in `LIBTPU_INIT_ARGS`.
 The v4 runs did not use the VMEM override.
 The v6e runs used a 98304 KiB scoped-VMEM limit and the enhanced launch barrier.
@@ -162,23 +152,24 @@ tries every remaining tile. The run still exits with failure, even if an
 alternative passes. A context with no accepted tile is removed from the
 cache. Cached timings are never copied into a new measurement.
 
-Cache keys include the source digest, JAX version, device kind, shape,
-dtype, implementation, recorded backend/XLA flags, requested tile set,
+Cache keys include the source digest, JAX and Atomic Ops versions, device kind, shape,
+dtype, implementation, diagnostics, recorded backend/XLA flags, requested tile set,
 seed, decay, oracle backend, tolerances, warmup/repetition counts, and
 forward+backward objective. Changing any of these produces a miss.
 The [hardware cache check](../reports/data/gdn2-tpu-20260922/README.md) has
 six accepted rows covering a miss sweep and a freshly validated hit.
-This validates successful miss/hit behavior; it does not establish a
-performance improvement. This opt-in benchmark cache is separate from the static
-`select_kernel_config` lookup.
 
 `lib/levanter/scripts/bench/probe_atomic_gdn2.py` separately compiles forward stages and small
 layout primitives. Its successful execution does not establish numerical
-correctness or performance. CPU interpretation tests are in
-`lib/levanter/tests/kernels/test_atomic_gdn2.py`.
+correctness or performance. The CPU interpretation parity matrix in
+`lib/levanter/tests/kernels/test_atomic_gdn2.py` is marked `slow`.
 
-Invoke the diagnostic in the same TPU environment with
-`python lib/levanter/scripts/bench/probe_atomic_gdn2.py`.
+Invoke the diagnostic in the same TPU environment:
+
+```bash
+uv run --package marin-levanter --extra tpu --with atomic-ops==0.1.0 \
+  python lib/levanter/scripts/bench/probe_atomic_gdn2.py
+```
 
 ## Analytical performance limits
 

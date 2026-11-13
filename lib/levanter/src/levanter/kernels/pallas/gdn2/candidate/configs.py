@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import dataclasses as dc
 from enum import StrEnum
-import os
 
 import jax
 import jax.numpy as jnp
@@ -25,39 +24,33 @@ class ScoreLayout(StrEnum):
     FEATURE_LAST = "feature_last"
     FEATURE_FIRST = "feature_first"
 
+    @classmethod
+    def for_device_kind(cls, device_kind: str) -> ScoreLayout:
+        """Choose a layout supported by the TPU generation."""
+        return cls.FEATURE_FIRST if device_kind == "TPU v4" else cls.FEATURE_LAST
+
 
 @dc.dataclass(frozen=True)
 class KernelConfig:
-    bt: int = 256
-    bc: int = 128
+    bt: int = 128
     mb: int = 16
     interpret: bool = False
-    wy_eps: float = 0.0
     score_layout: ScoreLayout = ScoreLayout.FEATURE_LAST
+    diagnostics: bool = False
 
     @property
-    def n_sub(self) -> int:
-        return self.bt // self.bc
+    def bc(self) -> int:
+        return self.bt // 2
 
     @property
     def n_micro(self) -> int:
         return self.bc // self.mb
 
     def __post_init__(self):
-        if self.bt % self.bc != 0:
-            raise ValueError(f"bt={self.bt} must be divisible by bc={self.bc}")
-        if self.bt != 2 * self.bc:
-            raise ValueError(
-                f"bt={self.bt} must equal 2*bc (top-level WY-solve split "
-                f"supports only the 2-block case); got bc={self.bc}. "
-                f"Vary `mb` instead of `bc` to change solver granularity -- "
-                f"bc/mb do not affect numerical accuracy of the solve, only "
-                f"its speed."
-            )
-        if self.bc % self.mb != 0:
-            raise ValueError(f"bc={self.bc} must be divisible by mb={self.mb}")
-        if self.wy_eps != 0.0:
-            raise ValueError("GDN-2 uses the exact triangular solve; wy_eps must be zero")
+        if self.bt <= 0 or self.bt % 2:
+            raise ValueError(f"bt={self.bt} must be a positive even chunk size")
+        if self.mb <= 0 or self.bc % self.mb:
+            raise ValueError(f"mb={self.mb} must be positive and divide bc={self.bc}")
 
 
 DEFAULT_CONFIG = KernelConfig()
@@ -73,13 +66,11 @@ def _reshape_from_chunks(t, bsz, n_chunks, bt, H, D):
     return t2.reshape(bsz, n_chunks * bt, H, D)
 
 
-_GDN2_FWD_DIAG = os.environ.get("GDN2_FWD_DIAG", "0") == "1"
 _LARGE_THRESHOLD = 1e6  # suspiciously large but still-finite trigger level
 
 
-def _stage_diag(tag: str, x):
-    """No-op unless GDN2_FWD_DIAG=1. Diagnostic only -- never changes x."""
-    if not _GDN2_FWD_DIAG:
+def _stage_diag(tag: str, x, config: KernelConfig):
+    if not config.diagnostics:
         return x
 
     finite_mask = jnp.isfinite(x)
