@@ -8,7 +8,7 @@
       "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
       "measured_tasks": 2221,
       "task_specs_sha256": "6f0564cf3a0dbafdf2151c472e8bca59c9eeb459a46fba9757e7f5e97fde2ef4",
-      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/2552b39df05e85f232a0/2026.11.12.2/.artifact.json"
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/2552b39df05e85f232a0/2026.11.12.4/.artifact.json"
     },
     "contract_index": {
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/contracts/2552b39df05e85f232a0/2026.11.12.2/attempts/cf28b1eedbf44292b8e85d1a6c961048/contracts.parquet",

@@ -10,6 +10,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import (
+    ActorCensusInput,
     OversightEvidence,
     OversightLevel,
     QualityResultFinalization,
@@ -145,7 +146,7 @@ def test_same_input_sample_cannot_replace_explicit_whole_source_finality(content
     assert quality(restored.model_dump(mode="json"), None) == ("FULL" if binding.coverage_complete else "SAMPLE")
 
 
-@pytest.mark.parametrize("change", ["dataset_revision", "task_specs_sha256", "missing_binding"])
+@pytest.mark.parametrize("change", ["dataset_revision", "task_specs_sha256", "evidence_url", "missing_binding"])
 def test_changed_input_or_missing_binding_clears_stale_finality_before_fresh_sample(content_source, change):
     binding = whole_source_binding(content_source, QualityResultFinalization.ACCEPTED_INCOMPLETE)
     final = bind_full_content_result(content_source, binding)
@@ -153,7 +154,12 @@ def test_changed_input_or_missing_binding_clears_stale_finality_before_fresh_sam
     if change == "missing_binding":
         changed = replace(final, info=replace(final.info, full_content_result_binding=None))
     else:
-        actor = actor.model_copy(update={change: "b" * (40 if change == "dataset_revision" else 64)})
+        replacement = {
+            "dataset_revision": "b" * 40,
+            "task_specs_sha256": "b" * 64,
+            "evidence_url": "memory://actor-census/replaced/.artifact.json",
+        }[change]
+        actor = actor.model_copy(update={change: replacement})
         changed = replace(
             final,
             config=replace(
@@ -284,12 +290,24 @@ def test_final_binding_verifies_records_and_preserves_exact_retained_runtime(qc_
             )
         )
         waiver = ContentEvidenceReference(uri=str(path), sha256=file_sha256(StoragePath(str(path))))
-    binding = full_content_result_binding(receipt, finalization, waiver, reviewer, population)
+    actor_input = ActorCensusInput(
+        dataset_id=population.dataset_id,
+        dataset_revision=population.dataset_revision,
+        converter_version=population.source_version,
+        converter_revision=population.converter_revision,
+        measured_tasks=population.task_count,
+        task_specs_sha256=population.task_specs_sha256,
+        evidence_url="memory://actor-census/immutable/.artifact.json",
+    )
+    binding = full_content_result_binding(receipt, finalization, waiver, reviewer, actor_input, population)
     assert binding.input.measured_tasks == 2 and binding.input.task_specs_sha256 == files.task_specs_sha256
     assert binding.result.issue_count == (1 if incomplete else 2)
     assert binding.result.unavailable_count == int(incomplete)
     assert binding.records.sha256 == review.records_sha256 and binding.contract_index.sha256 == inputs.index_sha256
     assert binding.result.issues == []
+    assert review.result.issues
+    assert binding.result.model_dump(exclude={"issues"}) == review.result.model_dump(exclude={"issues"})
+    assert binding.input == actor_input
     table = pq.read_table(review.records_path)
     rows = table.to_pylist()
     rows[0]["runtime_sha256"] = "f" * 64
@@ -302,4 +320,4 @@ def test_final_binding_verifies_records_and_preserves_exact_retained_runtime(qc_
     )
     changed_receipt = ContentEvidenceReference(uri=receipt.uri, sha256=file_sha256(receipt_path))
     with pytest.raises(ValueError, match="exact retained contract"):
-        full_content_result_binding(changed_receipt, finalization, waiver, reviewer, population)
+        full_content_result_binding(changed_receipt, finalization, waiver, reviewer, actor_input, population)

@@ -25,7 +25,7 @@ def matches_full_content_input(source: RlDataSource, binding: FullContentResultB
             binding.input.converter_version,
             binding.input.measured_tasks,
         )
-        and actor.model_dump(exclude={"evidence_url"}) == binding.input.model_dump(exclude={"evidence_url"})
+        and actor == binding.input
     )
 
 

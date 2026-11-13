@@ -599,6 +599,7 @@ uv run --package marin-core --extra dedup python -m \
   experiments.post_training.task_curation.full_content_receipts \
   --review-receipt s3://BUCKET/IMMUTABLE_REVIEW/.artifact.json \
   --review-receipt-sha256 ARTIFACT_SHA256 \
+  --actor-census s3://BUCKET/CURRENT_ACTOR_CENSUS \
   --reviewer-version v2 --prompt-budget 512000 \
   --finalization accepted_incomplete \
   --waiver s3://BUCKET/FINALIZATION.json --waiver-sha256 WAIVER_SHA256 \
@@ -613,7 +614,10 @@ for the retained release. A raw population with a different count cannot certify
 the retained input. Review the resulting metadata
 before adding it to `datasets/full_content_results.json`. This transport contains
 pins, counts, digests, generic Result and evidence references; task-level evidence
-stays private. Source loading reads the local transport without new storage
+stays private. The public Result projection omits private issue excerpts while
+preserving every computed numeric field and verdict. The binding preserves the
+current actor-census provenance URI as part of exact input equality. Source
+loading reads the local transport without new storage
 credentials or remote verification calls. This step does not publish a dataset or
 load production Atlas.
 

@@ -18,6 +18,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import ReviewRecord, ReviewStatus
 from taskcompendium.pipeline.reviewer_spec import ReviewerSpec
 
+from experiments.post_training.task_curation.census_binding import receipt_from_census
 from experiments.post_training.task_curation.full_content_results import (
     ContentEvidenceReference,
     FullContentResultBinding,
@@ -32,7 +33,7 @@ from experiments.post_training.task_curation.full_qc_repair import (
     repair_identity,
 )
 from experiments.post_training.task_curation.full_qc_review import quality_result
-from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
+from experiments.post_training.task_curation.lexical_artifacts import ActorCensus, SourceTextPopulation
 from experiments.post_training.task_curation.published_census import population_documents
 
 
@@ -41,6 +42,7 @@ def full_content_result_binding(
     finalization: QualityResultFinalization,
     waiver: ContentEvidenceReference | None,
     reviewer: ReviewerSpec,
+    actor_input: ActorCensusInput,
     population: SourceTextPopulation | None = None,
 ) -> FullContentResultBinding:
     """Recompute a final Result from SHA-checked observations and exact retained contracts."""
@@ -64,6 +66,22 @@ def full_content_result_binding(
     population = population or review.inputs.population
     if population.source_id != review.source_id or population.task_count != review.inputs.retained_count:
         raise ValueError("Final binding requires an exact retained population census")
+    if (
+        actor_input.dataset_id,
+        actor_input.dataset_revision,
+        actor_input.converter_version,
+        actor_input.converter_revision,
+        actor_input.measured_tasks,
+        actor_input.task_specs_sha256,
+    ) != (
+        population.dataset_id,
+        population.dataset_revision,
+        population.source_version,
+        population.converter_revision,
+        population.task_count,
+        population.task_specs_sha256,
+    ):
+        raise ValueError("Actor census differs from the reviewed retained population")
     seen = set()
     for document, runtime in population_documents(population):
         task = TaskSpec.model_validate(document)
@@ -94,15 +112,7 @@ def full_content_result_binding(
             raise ValueError("Finalization waiver belongs to another whole-source review")
     return FullContentResultBinding(
         source_id=review.source_id,
-        input=ActorCensusInput(
-            dataset_id=population.dataset_id,
-            dataset_revision=population.dataset_revision,
-            converter_version=population.source_version,
-            converter_revision=population.converter_revision,
-            measured_tasks=population.task_count,
-            task_specs_sha256=population.task_specs_sha256,
-            evidence_url=str(StoragePath(population.path) / RECORD_FILENAME),
-        ),
+        input=actor_input,
         contract_index=ContentEvidenceReference(uri=review.inputs.index_path, sha256=review.inputs.index_sha256),
         review_receipt=review_receipt,
         records=ContentEvidenceReference(uri=review.records_path, sha256=review.records_sha256),
@@ -117,6 +127,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--review-receipt", required=True)
     parser.add_argument("--review-receipt-sha256", required=True)
+    parser.add_argument("--actor-census", required=True)
     parser.add_argument("--reviewer-version", type=ReviewerVersion, choices=list(ReviewerVersion), required=True)
     parser.add_argument("--prompt-budget", type=int, required=True)
     parser.add_argument(
@@ -130,6 +141,7 @@ def main() -> None:
     if args.output.exists():
         raise FileExistsError(f"Preserve the staged binding and choose a new output: {args.output}")
     configure_coreweave_s3()
+    census = ActorCensus.raw_load(args.actor_census)
     binding = full_content_result_binding(
         ContentEvidenceReference(uri=args.review_receipt, sha256=args.review_receipt_sha256),
         args.finalization,
@@ -139,8 +151,11 @@ def main() -> None:
             prompt_budget=args.prompt_budget,
             retry_prompt_budget=args.prompt_budget,
         ),
+        receipt_from_census(census.model_dump(mode="json"), None).input,
         SourceTextPopulation.raw_load(args.population) if args.population is not None else None,
     )
+    if census.source_id != binding.source_id:
+        raise ValueError("Actor census belongs to another source")
     args.output.write_text(binding.model_dump_json(indent=2) + "\n")
 
 
