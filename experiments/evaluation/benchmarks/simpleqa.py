@@ -54,7 +54,7 @@ def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvaluationCor
             EvaluationProtocol(
                 benchmark=benchmark,
                 requires_judge=True,
-                version="2026.11.13",
+                version="2026.11.02",
                 operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
                     temperature=None,
@@ -64,7 +64,7 @@ def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvaluationCor
                     stop=(),
                     chat_template_kwargs={"enable_thinking": True},
                 ),
-                trials=TrialPolicy(count=1, seed=0),
+                trials=TrialPolicy(count=1, seed=None),
                 metrics=Metrics.CLASSIFICATION,
                 primary_metric="accuracy",
                 summary=SummaryKind.CLASSIFICATION,

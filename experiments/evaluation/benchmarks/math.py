@@ -92,7 +92,6 @@ def math_dataset(
     answer_field: str,
     population: int,
     trials: int,
-    temperature: float | None = None,
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     recipe = CurationRecipe(
         name="evalchemy-" + name,
@@ -115,17 +114,17 @@ def math_dataset(
             recipe,
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="2026.11.13",
+                version="2026.11.02",
                 operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
-                    temperature=temperature,
+                    temperature=None,
                     top_p=None,
                     top_k=None,
                     max_tokens=None,
                     stop=CHAT_REQUEST_STOPS,
                     chat_template_kwargs={"enable_thinking": True},
                 ),
-                trials=TrialPolicy(count=trials, seed=0),
+                trials=TrialPolicy(count=trials, seed=None),
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
@@ -161,17 +160,17 @@ def olympiad_source(*, judged: bool) -> RlDataSource[EvaluationCorpusRecipe]:
             EvaluationProtocol(
                 benchmark=benchmark,
                 requires_judge=judged,
-                version="2026.11.13",
+                version="2026.11.02",
                 operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
-                    temperature=0.7 if judged else None,
+                    temperature=None,
                     top_p=1,
                     top_k=None,
                     max_tokens=32768,
                     stop=CHAT_REQUEST_STOPS,
                     chat_template_kwargs={"enable_thinking": True},
                 ),
-                trials=TrialPolicy(count=count, seed=0),
+                trials=TrialPolicy(count=count, seed=None),
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
@@ -206,7 +205,6 @@ def base_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             answer_field="expected_answer",
             population=30,
             trials=10,
-            temperature=0.7,
         ),
     ]
 

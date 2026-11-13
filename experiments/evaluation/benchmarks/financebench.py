@@ -53,7 +53,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 EvaluationProtocol(
                     benchmark="FinanceBench",
                     requires_judge=True,
-                    version="2026.11.13",
+                    version="2026.11.05.2",
                     operation=OperationKind.CHAT_GENERATION,
                     sampling=Sampling(
                         temperature=None,
@@ -63,7 +63,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                         stop=(),
                         chat_template_kwargs={"enable_thinking": False},
                     ),
-                    trials=TrialPolicy(count=1, seed=0),
+                    trials=TrialPolicy(count=1, seed=None),
                     metrics=Metrics.CLASSIFICATION,
                     primary_metric="accuracy",
                     summary=SummaryKind.MEAN,

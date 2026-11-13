@@ -111,7 +111,7 @@ def mrcr_source(*, name: str, max_context: int) -> RlDataSource[EvaluationCorpus
             ),
             EvaluationProtocol(
                 benchmark=name,
-                version="2026.11.13",
+                version="2026.11.02",
                 operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
                     temperature=None,
@@ -121,7 +121,7 @@ def mrcr_source(*, name: str, max_context: int) -> RlDataSource[EvaluationCorpus
                     stop=(),
                     chat_template_kwargs={"enable_thinking": False},
                 ),
-                trials=TrialPolicy(count=1, seed=0),
+                trials=TrialPolicy(count=1, seed=None),
                 metrics=(
                     Metric(name="accuracy", kind=MetricKind.CONTINUOUS, higher_is_better=True),
                     Metric(name="prefix_hit_rate", kind=MetricKind.BINARY, higher_is_better=True),
@@ -164,7 +164,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 ),
                 EvaluationProtocol(
                     benchmark="GraphWalks",
-                    version="2026.11.13",
+                    version="2026.11.02",
                     operation=OperationKind.CHAT_GENERATION,
                     sampling=Sampling(
                         temperature=None,
@@ -174,7 +174,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                         stop=(),
                         chat_template_kwargs={"enable_thinking": True},
                     ),
-                    trials=TrialPolicy(count=1, seed=0),
+                    trials=TrialPolicy(count=1, seed=None),
                     metrics=tuple(
                         Metric(
                             name=name,

@@ -133,10 +133,9 @@ clients and machine factories to
 Concurrency defaults to 64 attempts across generation and grading. The explicit
 run `max_tokens` is further bounded by the protocol and available context. A null
 run seed preserves source trial seeds; an explicit seed uses base-plus-trial.
-Every generation benchmark declares a base seed, so repeated runs send the same
-requests at whatever temperature applies. AIME24, GPQA-Diamond and judged
-OlympiadBench declare temperature 0.7; other benchmarks leave temperature to the
-served model.
+The `experiments.evaluation` launcher sets run seed 0 when none is given and the
+model is served where per-request seeds are accepted. TPU vLLM rejects a seed
+on sampled requests, so those runs stay unseeded unless a seed is given.
 Omitted source sampling options stay omitted: for example, `top_p: null` lets the
 served generation configuration apply. Record those serving defaults with the
 model identity.

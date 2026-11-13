@@ -75,7 +75,7 @@ def instruction_following_evaluation(
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="2026.11.13",
+                version="2026.11.02",
                 operation=(
                     OperationKind.TEXT_GENERATION
                     if profile is InstructionProfile.HARNESS
@@ -89,7 +89,7 @@ def instruction_following_evaluation(
                     stop=(),
                     chat_template_kwargs={} if profile is InstructionProfile.HARNESS else {"enable_thinking": False},
                 ),
-                trials=TrialPolicy(count=1, seed=0),
+                trials=TrialPolicy(count=1, seed=None),
                 metrics=tuple(
                     Metric(
                         name=name,

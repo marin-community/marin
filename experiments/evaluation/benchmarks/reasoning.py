@@ -141,7 +141,6 @@ def choice_dataset(
     population: int,
     trials: int,
     inputs: dict[str, HfSource],
-    temperature: float | None = None,
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
@@ -164,17 +163,17 @@ def choice_dataset(
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="2026.11.13",
+                version="2026.11.02",
                 operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
-                    temperature=temperature,
+                    temperature=None,
                     top_p=None,
                     top_k=None,
                     max_tokens=None,
                     stop=(),
                     chat_template_kwargs={"enable_thinking": True},
                 ),
-                trials=TrialPolicy(count=trials, seed=0),
+                trials=TrialPolicy(count=trials, seed=None),
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
@@ -197,7 +196,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             population=198,
             trials=3,
             inputs={},
-            temperature=0.7,
         ),
         choice_dataset(
             name="mmlu-pro",

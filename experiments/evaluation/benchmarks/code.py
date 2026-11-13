@@ -66,7 +66,7 @@ def python_source(
             ),
             protocol=EvaluationProtocol(
                 benchmark=name,
-                version="2026.11.13",
+                version="2026.11.02",
                 operation=OperationKind.TEXT_GENERATION if completion else OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
                     temperature=None,
@@ -76,7 +76,7 @@ def python_source(
                     stop=HUMANEVAL_REQUEST_STOPS if completion else (),
                     chat_template_kwargs={} if completion else {"enable_thinking": False},
                 ),
-                trials=TrialPolicy(count=1, seed=0),
+                trials=TrialPolicy(count=1, seed=None),
                 num_fewshot=0 if completion else None,
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
