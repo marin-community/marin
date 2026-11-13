@@ -75,9 +75,11 @@ impl Default for CompactionConfig {
             level_targets: vec![64 * MIB, 256 * MIB, 256 * MIB],
             max_segments_per_level: 32,
             max_l0_inputs: 32,
-            // ~2x this in peak merge RSS. Sized for the 32 GiB hub box, whose
-            // query pool may hold 21 GiB concurrently.
-            max_merge_arrow_bytes: 4 * GIB,
+            // ~2x this in peak merge RSS, and four maintenance cycles may merge
+            // at once, so the worst case is about 16 GiB. Sized for the 32 GiB
+            // hub box, whose query pool may hold 21 GiB concurrently. At 4 GiB
+            // with four cycles the hub's container swung between 10 and 21 GiB.
+            max_merge_arrow_bytes: 2 * GIB,
             migration_batch_sources: 1024,
             max_segments_per_namespace: 1000,
             max_bytes_per_namespace: 15 * 1024 * 1024 * 1024,
