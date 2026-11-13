@@ -105,7 +105,7 @@ TAU_REPAIR_RELEASES = {
         name="tau-pivot-rlvr1",
         version=TAU_REPAIR_VERSION,
         repo="open-athena/tau-pivot-rlvr1-taskcompendium-20261113",
-        revision="3a33359dec9905630d17cf702c068e30c8a59414",
+        revision="1c274f93ce0dde4b2697108f5242ecdeb80f4092",
         expected_rows=20035,
     ),
     "rlvr2": PrebuiltCohort(
@@ -113,7 +113,7 @@ TAU_REPAIR_RELEASES = {
         name="tau-pivot-rlvr2",
         version=TAU_REPAIR_VERSION,
         repo="open-athena/tau-pivot-rlvr2-taskcompendium-20261113",
-        revision="bf91d652fc8f0085ea7d0e3fd90c58db12b3ae4e",
+        revision="b290f14c7cda51bd398b6964e184f2cb83b11f66",
         expected_rows=20035,
     ),
 }
