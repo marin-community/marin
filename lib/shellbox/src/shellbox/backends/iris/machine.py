@@ -5,6 +5,7 @@
 
 import asyncio
 import base64
+import logging
 import math
 import re
 import shlex
@@ -48,12 +49,22 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
+from shellbox.process_session import (
+    PROBE_PROCESS_GROUP_COMMAND,
+    PROCESS_GROUP_ABSENT_EXIT_CODE,
+    finish_owned,
+    own_cleanup,
+)
 from shellbox.task import Task as SandboxTask
 from shellbox.task import TaskSpec
 
-# The worker runs `docker exec` or `kubectl exec` with the command as argv, and Linux caps one
-# argument at 128 KiB (MAX_ARG_STRLEN). An upload chunk travels base64-encoded inside one
-# `sh -c` script, so 64 KiB of data (87,384 encoded bytes) leaves room for the target path.
+logger = logging.getLogger(__name__)
+INTERRUPT_TIMEOUT = 10
+PROCESS_GROUP_PROBE_INTERVAL = 0.05
+IRIS_CAPABILITIES = LINUX_PROCESS_CAPABILITIES | {"retained_command_cancellation"}
+
+# Linux caps one exec argument at 128 KiB. Base64-encoded 64 KiB chunks leave
+# room for the surrounding shell script and target path.
 TRANSFER_CHUNK_BYTES = 64 * 1024
 DEFAULT_MEMORY_MB = 2048
 DEFAULT_DISK_MB = 10240
@@ -126,7 +137,7 @@ class IrisMachine:
         timeout_ms = (seconds + RPC_PADDING_SECONDS) * 1000 if seconds >= 0 else DEFAULT_JOB_TTL * 1000
 
         def attempt() -> controller_pb2.Controller.ExecInContainerResponse:
-            # A timed-out ``run`` closes the machine while this thread may still be retrying.
+            # Explicit close can race with an exec retry after controller load shedding.
             with self._admission:
                 if self._closed:
                     raise RuntimeError("Machine is closed")
@@ -223,35 +234,80 @@ class IrisMachine:
         if command.output_limit_bytes < 0:
             raise ValueError("Output limit must be nonnegative")
         prefix = f"/tmp/.shellbox-{uuid.uuid4().hex}"
-        stdin_path, stdout_path, stderr_path = (f"{prefix}-{part}" for part in ("in", "out", "err"))
-        if command.stdin:
-            await self._upload_bytes(command.stdin, stdin_path)
-        exports = "\n".join(
-            f"export {key}={shlex.quote(value)}" for key, value in {**self.spec.env, **command.env}.items()
-        )
-        if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) for key in {**self.spec.env, **command.env}):
-            raise ValueError("Environment variable names must be shell identifiers")
-        script = (
-            f"{exports}\ncd {shlex.quote(command.cwd or self.spec.workdir)} || exit 1\n"
-            f"{shlex.join(command.argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
-            f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
-        )
+        await self._checked(f"mkdir -m 700 {shlex.quote(prefix)}")
+        stdin_path, stdout_path, stderr_path = (f"{prefix}/{part}" for part in ("in", "out", "err"))
         try:
-            response = await asyncio.wait_for(self._script(script), timeout=command.timeout)
-            stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
-            stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)
-            return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, ExitReason.EXITED)
-        except TimeoutError:
-            await self.close()
-            return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
-        except asyncio.CancelledError:
-            await self.close()
-            raise
+            if command.stdin:
+                await self._upload_bytes(command.stdin, stdin_path)
+            environment = {**self.spec.env, **command.env}
+            if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) for key in environment):
+                raise ValueError("Environment variable names must be shell identifiers")
+            exports = "\n".join(f"export {key}={shlex.quote(value)}" for key, value in environment.items())
+            body = (
+                f"{exports}\ncd {shlex.quote(command.cwd or self.spec.workdir)} || exit 1\n"
+                f"exec {shlex.join(command.argv)} "
+                f"< {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
+                f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
+            )
+            # Publish the group before executing the command. The stop marker also
+            # fences an exec that the controller admits only after cancellation.
+            grouped = (
+                f"printf '%s\\n' \"$$\" > {shlex.quote(prefix + '/pid')}\n"
+                f"[ ! -e {shlex.quote(prefix + '/stop')} ] || exit 0\n"
+                f"{body}"
+            )
+            # Waiting in the outer shell keeps setsid from being a group leader
+            # and detaching from the RPC before the command has finished.
+            script = f'setsid sh -c {shlex.quote(grouped)} & wait "$!"'
+            execution = asyncio.create_task(self._script(script))
+            try:
+                response = await asyncio.wait_for(asyncio.shield(execution), timeout=command.timeout)
+                stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
+                stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)
+                return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, ExitReason.EXITED)
+            except (TimeoutError, asyncio.CancelledError) as interruption:
+                try:
+                    await finish_owned(own_cleanup(self._interrupt_command(prefix, execution)))
+                except Exception as error:
+                    logger.exception("Cannot stop the Iris command process group")
+                    interruption.add_note(f"Command cleanup failed ({type(error).__name__})")
+                    await finish_owned(own_cleanup(self.close()))
+                    raise interruption from error
+                if isinstance(interruption, asyncio.CancelledError):
+                    raise
+                return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
         finally:
             if not self._closed:
-                await self._script(
-                    f"rm -f {shlex.quote(stdin_path)} {shlex.quote(stdout_path)} {shlex.quote(stderr_path)}"
+                await finish_owned(own_cleanup(self._remove_command_files(prefix)))
+
+    async def _remove_command_files(self, prefix: str) -> None:
+        await self._checked(f"rm -rf {shlex.quote(prefix)}")
+
+    async def _interrupt_command(self, prefix: str, execution: asyncio.Task[ExecOutput]) -> None:
+        async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            await self._checked(f"touch {shlex.quote(prefix + '/stop')}")
+            while True:
+                pid = await self._script(f"cat {shlex.quote(prefix + '/pid')}")
+                if pid.exit_code == 0:
+                    group = int(pid.stdout.strip())
+                    if group <= 1:
+                        raise RuntimeError("Iris exec supplied an invalid process-group ID")
+                    break
+                if execution.done():
+                    execution.result()
+                    return
+                await asyncio.sleep(PROCESS_GROUP_PROBE_INTERVAL)
+            await self._script(f'kill -KILL "-{group}"')
+            while True:
+                probe = await asyncio.to_thread(
+                    self._exec_sync, ["sh", "-c", PROBE_PROCESS_GROUP_COMMAND, "probe-command", str(group)]
                 )
+                if probe.exit_code == PROCESS_GROUP_ABSENT_EXIT_CODE:
+                    break
+                if probe.exit_code:
+                    raise RuntimeError(f"Cannot inspect Iris command group: {probe.stderr}")
+                await asyncio.sleep(PROCESS_GROUP_PROBE_INTERVAL)
+            await asyncio.shield(execution)
 
     async def upload(self, source: Path, target: str) -> None:
         if source.is_dir():
@@ -360,7 +416,7 @@ class IrisMachineFactory:
             requirements,
             spec,
             semantics=CommandSemantics.LINUX_PROCESS,
-            capabilities=LINUX_PROCESS_CAPABILITIES,
+            capabilities=IRIS_CAPABILITIES,
             image_reference=source.reference,
         )
 
@@ -376,6 +432,11 @@ class IrisMachineFactory:
                         raise
                 else:
                     if status.state == TaskState.RUNNING:
+                        prepared = await machine._script("command -v setsid && test -r /proc/1/stat")
+                        if prepared.exit_code:
+                            raise UnsupportedMachineSpec(
+                                "Iris task images require setsid and /proc for command cancellation"
+                            )
                         created = await asyncio.to_thread(machine._exec_sync, ["mkdir", "-p", spec.workdir])
                         if created.exit_code:
                             raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
@@ -402,6 +463,20 @@ class IrisMachineFactory:
         machine = await self.create(spec.primary_container.machine)
         return SandboxTask({spec.primary: machine}, spec, machine.close)
 
+    def _check_backend(self, rpc: ControllerServiceClientSync, spec: MachineSpec) -> None:
+        if spec.storage_mb is None:
+            return
+        backends = rpc.list_backends(controller_pb2.Controller.ListBackendsRequest()).backends
+        if (
+            len(backends) != 1
+            or backends[0].kind != "kubernetes"
+            or SANDBOX_STORAGE_LIMIT_CAPABILITY not in backends[0].capabilities
+        ):
+            raise UnsupportedMachineSpec(
+                "Declared Iris storage limits require a direct Kubernetes controller "
+                "advertising sandbox-storage-limit"
+            )
+
     def _submit_sync(self, spec: MachineSpec, source: RegistryImage) -> IrisMachine:
         endpoint = connect_controller(cluster_name=self.cluster, controller_url=self.controller_url)
         url, credentials = endpoint.url, endpoint.credentials
@@ -416,17 +491,7 @@ class IrisMachineFactory:
                 accept_compression=IRIS_RPC_COMPRESSIONS,
                 send_compression=None,
             )
-            if spec.storage_mb is not None:
-                backends = rpc.list_backends(controller_pb2.Controller.ListBackendsRequest()).backends
-                if (
-                    len(backends) != 1
-                    or backends[0].kind != "kubernetes"
-                    or SANDBOX_STORAGE_LIMIT_CAPABILITY not in backends[0].capabilities
-                ):
-                    raise UnsupportedMachineSpec(
-                        "Declared Iris storage limits require a direct Kubernetes controller "
-                        "advertising sandbox-storage-limit"
-                    )
+            self._check_backend(rpc, spec)
             job = client.submit(
                 # Process 1 must exit on the stop signal, or a cancelled machine keeps its node
                 # capacity for the whole termination grace period.
@@ -464,3 +529,13 @@ class IrisMachineFactory:
                 finally:
                     endpoint.close()
             raise
+
+
+class KubernetesIrisMachineFactory(IrisMachineFactory):
+    """Prepared-image task pods whose /app is not masked by a worker workdir."""
+
+    def _check_backend(self, rpc: ControllerServiceClientSync, spec: MachineSpec) -> None:
+        backends = rpc.list_backends(controller_pb2.Controller.ListBackendsRequest()).backends
+        if len(backends) != 1 or backends[0].kind != "kubernetes":
+            raise UnsupportedMachineSpec("Prepared Iris tasks require a direct Kubernetes controller")
+        super()._check_backend(rpc, spec)

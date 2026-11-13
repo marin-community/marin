@@ -8,11 +8,7 @@ from typing import NamedTuple
 
 from harbor.environments.base import BaseEnvironment
 from harbor.environments.capabilities import EnvironmentResourceCapabilities
-from harbor.environments.resource_policies import (
-    LocalExecutionRoute,
-    local_resource_capabilities,
-    validate_resource_capabilities,
-)
+from harbor.environments.resource_policies import validate_resource_capabilities
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.task.config import EnvironmentConfig
@@ -28,6 +24,7 @@ class _EnvEntry(NamedTuple):
 
 # Optional Shellbox backends load only when selected.
 _ENVIRONMENT_REGISTRY: dict[EnvironmentType, _EnvEntry] = {
+    EnvironmentType.IRIS_SANDBOX: _EnvEntry("harbor.environments.iris_sandbox", "IrisSandboxEnvironment"),
     EnvironmentType.LOCAL: _EnvEntry("harbor.environments.local", "LocalEnvironment"),
     EnvironmentType.DAYTONA: _EnvEntry(
         "harbor.environments.daytona", "DaytonaEnvironment"
@@ -81,10 +78,8 @@ class EnvironmentFactory:
 
     @classmethod
     def resource_capabilities(
-        cls, type: EnvironmentType, *, kwargs: Mapping[str, object] = {}
+        cls, type: EnvironmentType
     ) -> EnvironmentResourceCapabilities | None:
-        if type is EnvironmentType.LOCAL and kwargs.get("iris_cluster"):
-            return local_resource_capabilities(LocalExecutionRoute.IRIS_TASK)
         return _load_environment_class(type).resource_capabilities()
 
     @classmethod
@@ -93,7 +88,7 @@ class EnvironmentFactory:
             raise ValueError(
                 "Shellbox environments cannot be retained: --no-delete and environment.delete=false are unsupported"
             )
-        resource_capabilities = cls.resource_capabilities(config.type, kwargs=config.kwargs)
+        resource_capabilities = cls.resource_capabilities(config.type)
         if resource_capabilities is None:
             return
         validate_resource_capabilities(

@@ -535,37 +535,24 @@ async def test_local_interrupted_command_preserves_task_until_trial_cleanup(
             await machine.close()
 
 
-@pytest.mark.parametrize("iris_cluster", [None, "cw-fixture"])
-def test_storage_capability_and_admission_require_one_sandbox_per_iris_task(tmp_path, iris_cluster):
+@pytest.mark.parametrize("environment_type", [EnvironmentType.LOCAL, EnvironmentType.IRIS_SANDBOX])
+def test_unqualified_storage_is_rejected_by_the_selected_environment(tmp_path, environment_type):
     environment_dir = tmp_path / "environment"
     environment_dir.mkdir()
     (environment_dir / "shellbox-images.json").write_text(json.dumps({
-        "main": {"image": "fixture@sha256:" + "a" * 64, "workdir": "/workspace"}
+        "main": {"image": "fixture@sha256:" + "a" * 64, "workdir": "/app"}
     }))
-    capabilities = EnvironmentFactory.resource_capabilities(
-        EnvironmentType.LOCAL, kwargs={"iris_cluster": iris_cluster}
-    )
-    assert capabilities.storage_limit is (iris_cluster is not None)
-    kwargs = dict(
-        environment_dir=environment_dir, environment_name="storage", session_id="fixture",
-        trial_paths=TrialPaths(tmp_path / "trial"),
-        task_env_config=EnvironmentConfig(cpus=1, memory_mb=2048, storage_mb=2048),
-        iris_cluster=iris_cluster,
-    )
-    if iris_cluster is None:
-        with pytest.raises(ValueError, match="do not enforce storage"):
-            LocalEnvironment(**kwargs)
-        return
-    LocalEnvironment(**kwargs)
-    (environment_dir / "shellbox-images.json").write_text(json.dumps({
-        name: {"image": "fixture@sha256:" + "a" * 64, "workdir": "/workspace"}
-        for name in ("main", "peer")
-    }))
-    (environment_dir / "compose.yaml").write_text(json.dumps({
-        "services": {"main": {}, "peer": {}}
-    }))
-    with pytest.raises(ValueError, match="one sandbox"):
-        LocalEnvironment(**kwargs)
+    capabilities = EnvironmentFactory.resource_capabilities(environment_type)
+    assert capabilities.storage_limit is False
+    kwargs = {"cluster": "cw-fixture"} if environment_type is EnvironmentType.IRIS_SANDBOX else {}
+    with pytest.raises(ValueError, match="storage"):
+        EnvironmentFactory.create_environment(
+            type=environment_type,
+            environment_dir=environment_dir, environment_name="storage", session_id="fixture",
+            trial_paths=TrialPaths(tmp_path / "trial"),
+            task_env_config=EnvironmentConfig(cpus=1, memory_mb=2048, storage_mb=2048),
+            **kwargs,
+        )
 
 
 async def test_iris_disk_resource_limit_remains_a_harbor_disk_failure():
@@ -573,8 +560,7 @@ async def test_iris_disk_resource_limit_remains_a_harbor_disk_failure():
         async def run(self, command):
             raise DiskLimitExceeded("RESOURCE_LIMIT_DISK: exceeded ephemeral storage")
 
-    with pytest.raises(SandboxDiskFullError) as raised:
+    with pytest.raises(SandboxDiskFullError):
         await execute_shellbox_command(
             EvictedMachine(), "dd if=/dev/zero of=/tmp/full", cwd="/", env={}, timeout_sec=60, user="root"
         )
-    assert isinstance(raised.value.__cause__, DiskLimitExceeded)

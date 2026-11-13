@@ -137,14 +137,18 @@ Before selecting a new catalog load:
 2. Survey the production backends at Marin latest for their current capabilities
    with the [survey procedure](#backend-survey), and publish the matrix beside the deployment record.
    Execute this survey at each deployment; do not reuse an older deployment's matrix.
-3. For storage-limited LOCAL, deploy the Iris controller's exact-byte
-   ephemeral-storage limits and `RESOURCE_LIMIT_DISK` classification. Select a
-   direct Kubernetes controller advertising `sandbox-storage-limit` with
-   `iris_cluster`; verify one sandbox container and one replica per task, no writable hostPath, and CPU/memory pod limits.
-   Pin `iris_pool` to a CPU pool with a verified gVisor runtime.
-   Record a bounded disk-overflow job and its raw kubelet eviction evidence. A
-   controller running older code must not qualify this route. Shared-worker LOCAL
-   retains no storage capability; reject service groups and model relays on Iris LOCAL.
+3. Keep Iris sandbox storage admission disabled until a real
+   `CONTAINER_PROFILE_SANDBOX` overflow succeeds on the pinned CPU pool. Record
+   the node's CoreWeave-provided `runsc.toml` `overlay2` setting beside the raw
+   kubelet eviction status; a restricted-profile overflow is insufficient.
+   Check one sandbox container and one replica per task, exact-byte storage
+   quantities, no writable hostPath, and CPU/memory pod limits. Confirm an
+   own-limit eviction is `FAILED / RESOURCE_LIMIT_DISK`, rather than memory OOM
+   or node pressure. Only then enable Harbor storage admission and advertise
+   `sandbox-storage-limit` as an explicit backend fact. The current controller
+   advertises no such capability, and Harbor `iris-sandbox` rejects declared disk.
+   Controller deployment/restart requires separate user authorization. Service
+   groups and model relays remain unsupported on this environment.
 4. Verify every source has a complete, exact-pin `within_source_dedup` receipt and
    Examples equals its `unique_count`, including QUICK sources. Check raw and duplicate
    counts against the drop manifest, then verify version-bound lexical evidence.
@@ -193,8 +197,9 @@ outcomes. `supported` means the declared feature passes its check; `partial`
 records an implementation or deployment condition; `unsupported` records a
 rejection or missing implementation. These are execution-contract checks, not
 provider capacity or verifier-liveness measurements. Docker storage quotas depend
-on its storage driver. Iris storage enforcement requires a direct Kubernetes
-controller and one sandbox per task; shared-worker LOCAL has no disk quota.
+on its storage driver. Iris storage enforcement remains unqualified and is not advertised. It requires
+one sandbox per task on a direct Kubernetes controller and the SANDBOX overflow
+evidence described in the deployment checklist. Shared-worker LOCAL has no disk quota.
 QEMU OCI inputs need configured assets and caches. Uploaded mtimes and non-root users have separate cells.
 
 This offline survey makes no provider calls and creates no machines or snapshots.

@@ -2025,7 +2025,7 @@ def test_list_backends_kubernetes_detail_from_cluster_state(state, scheduler, tm
     refresh()
 
     summary = next(b for b in rpc_post(client, "ListBackends")["backends"] if b["backendId"] == DEFAULT_BACKEND_ID)
-    assert "sandbox-storage-limit" in summary["capabilities"]
+    assert "sandbox-storage-limit" not in summary["capabilities"]
     detail = summary["detail"]["kubernetes"]
     assert detail["totalNodes"] == 1
     assert detail["podStatuses"][0]["podName"] == "iris-task-0"

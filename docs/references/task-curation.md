@@ -1377,12 +1377,12 @@ uv run python -m experiments.post_training.task_curation.oracle_filter calibrate
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
   --output-dir /path/to/oracle-run-v2 --environment daytona --concurrency 128
 
-# LOCAL: one digest-pinned image sandbox per Iris Kubernetes task.
-# The Harbor harness stays outside the sandbox pod. Root commands only.
+# IRIS-SANDBOX: intended invocation after SANDBOX disk qualification.
+# Currently rejects declared storage; do not use for calibrated cohorts.
 uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
-  --output-dir /path/to/oracle-local-v2 --environment local --concurrency 4 \
-  --environment-kwargs '{"iris_cluster":"cw-us-east-02a","iris_pool":"cpu-genoa","iris_priority":"batch","ttl":259200}'
+  --output-dir /path/to/oracle-iris-v2 --environment iris-sandbox --concurrency 4 \
+  --environment-kwargs '{"cluster":"cw-us-east-02a","pool":"cpu-genoa","priority":"batch","ttl":259200}'
 
 uv run python -m experiments.post_training.task_curation.oracle_filter collect \
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/oracle-run-v2/task-map.json \
@@ -1391,46 +1391,46 @@ uv run python -m experiments.post_training.task_curation.oracle_filter collect \
 ~~~
 
 DAYTONA normally runs about 128 concurrent sandboxes in the RL organization
-when the cohort's snapshot identities fit the cap. Otherwise use LOCAL on Iris
-Kubernetes CPU tasks using `iris_cluster`, with the task's own prepared image
-references in `shellbox-images.json`. The existing Shellbox Iris backend submits
-exactly one sandbox container and one replica per job to the named controller;
-it accepts declared storage only when the direct Kubernetes controller
-advertises `sandbox-storage-limit`. Older and worker-daemon controllers are
-rejected. Each actor and each separate grader runs in its own Iris task and
-sandbox pod with its own declared resources. `ttl` is a lifetime in seconds;
-259200 gives each job a three-day timeout. `iris_pool` pins the job to a named
-Iris worker pool. `iris_priority` explicitly selects `batch` (the route default)
-or `production` for every sandbox child, independently of the coordinator.
-On cw-us-east-02a, `cpu-genoa` selects CPU nodes. Verify its
-runtime before use: both CPU and H100 nodes have failed gVisor startup
-([incident](https://marina.oa.dev/echo/wiki/976),
-[#10090](https://github.com/marin-community/marin/issues/10090)).
-Concurrency does not waive snapshot or CPU capacity limits.
+when the cohort's snapshot identities fit the cap. The `iris-sandbox` environment
+uses prepared image references from `shellbox-images.json` and submits exactly
+one sandbox container and replica per Iris job. It takes `cluster`, `pool`,
+`priority` (`batch` by default, or `production`) and `ttl` in seconds. A TTL of
+259200 gives each job a three-day timeout. Images retain their prepared `/app`
+contents; commands run in separate process groups so a timeout or cancellation
+can stop a command while preserving the task filesystem for the verifier.
+Images must provide `setsid` and a readable `/proc`.
 
-On this route Kubernetes enforces CPU and memory through the sandbox container's
-cgroup limits. Its ephemeral-storage limit is exactly `storage_mb * 1024**2`
-bytes, with no rounding and zero harness allowance. The harness runs outside the
-pod. Writable container layers, container logs and disk-backed emptyDir volumes,
-including Shellbox command files and task artifacts, share that disk budget.
-Read-only image layers are outside Kubernetes ephemeral-storage usage.
-Kubelet storage accounting and eviction are asynchronous, so writes can briefly
-exceed the limit before eviction. An eviction explicitly naming the pod or
-container's exceeded storage limit becomes `RESOURCE_LIMIT_DISK`, then a typed
-Shellbox `DiskLimitExceeded` and Harbor disk-full failure. Calibration doubles
-disk just as for ENOSPC, including when a verifier also reports an infrastructure
-verdict. Node disk-pressure evictions retain their infrastructure classification.
+Iris SANDBOX storage enforcement is unqualified. Harbor reports no storage-limit
+capability and rejects declared `storage_mb` for this environment. The Shellbox
+adapter also requires a direct Kubernetes controller advertising
+`sandbox-storage-limit` before submitting any declared disk; current controllers
+do not advertise it. Sandbox-profile pods cannot start on the pinned CPU pool
+([#11343](https://github.com/marin-community/marin/issues/11343)); H100 startup
+is blocked separately ([#10090](https://github.com/marin-community/marin/issues/10090)).
+See the [runtime incident](https://marina.oa.dev/echo/wiki/976).
 
-The shared-worker bubblewrap LOCAL route uses delegated cgroups for CPU and
-memory and still rejects `storage_mb`; it advertises no storage-limit capability.
-The Iris LOCAL route honors `allow_internet`, supports root commands and a single
-container, and rejects Compose service groups and process-session model relays.
-Choose a supporting route for those requirements. Deploy the Iris controller
-changes and complete the [deployment checklist](rl-data-atlas.md#deployment-checklist)
-before qualifying tasks on this route.
+The candidate pod manifest sets ephemeral-storage to exactly
+`storage_mb * 1024**2` bytes, with zero harness allowance. The driver stays outside
+the pod. Kubelet's runtime accounting must include task writes and command files
+for this to enforce disk. Its accounting and eviction are asynchronous. A real
+`CONTAINER_PROFILE_SANDBOX` overflow on the pinned pool must establish the disk
+boundary, with the node's `runsc.toml` `overlay2` setting recorded beside raw
+kubelet eviction evidence. A restricted-profile overflow does not qualify this
+path; a memory-backed overlay can turn disk pressure into an OOM. Follow the
+[deployment checklist](rl-data-atlas.md#deployment-checklist) before enabling
+storage admission or advertising the capability. Deployment/restart requires
+separate user authorization.
+
+Only newly annotated sandbox pods receive typed own-limit storage failures:
+`RESOURCE_LIMIT_DISK`, Shellbox `DiskLimitExceeded`, then Harbor disk-full.
+Calibration doubles disk as for ENOSPC, including alongside an infrastructure
+verifier verdict. Ordinary jobs and node disk-pressure evictions retain their
+previous retry classification. The shared-worker bubblewrap `local` environment
+remains separate. `iris-sandbox` honors `allow_internet`, supports root commands
+and one container, and rejects service groups and process-session model relays.
 
 Use CPU Iris jobs with a three-day job timeout. Select the campaign's approved
-priority explicitly through `iris_priority`; use production for the bounded
+priority explicitly through `priority`; use production for the bounded
 disk-overflow correctness check. Run `collect` against the same calibrated run; there is no second oracle pass.
 Each attempt uses a fresh container and a fresh native package directory.
 Preserve the original packages, trials and published prefixes; select a new

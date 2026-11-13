@@ -883,7 +883,7 @@ def main() -> None:
     calibrate.add_argument("--cohort", type=Path, required=True)
     calibrate.add_argument("--task-map", type=Path, required=True)
     calibrate.add_argument("--output-dir", type=Path, required=True)
-    calibrate.add_argument("--environment", choices=("local", "daytona"), required=True)
+    calibrate.add_argument("--environment", choices=("local", "daytona", "iris-sandbox"), required=True)
     calibrate.add_argument("--environment-kwargs", type=json.loads, default={})
     calibrate.add_argument("--concurrency", type=int, required=True)
     calibrate.add_argument("--calibration-solutions", type=Path)

@@ -137,14 +137,25 @@ includes queueing, and stopping the coordinator stops its children.
 
 ### Sandbox disk limits
 
-Kubernetes sandbox tasks enforce CPU and memory with container limits and disk
-with `resources.limits.ephemeral-storage` in exact bytes. No writable hostPath
-is mounted. Disk accounting covers writable layers, logs and disk-backed
-emptyDir volumes; read-only image layers are excluded. Kubelet eviction is
-asynchronous. `RESOURCE_LIMIT_DISK` in the task error and attempt terminal reason
-identifies an eviction for exceeding the pod/container's own storage limit. It
-is a task failure charged to the failure retry budget, not a node-pressure
-preemption. Shellbox exposes it as a typed disk resource-limit exception.
+Kubernetes sandbox pod manifests set CPU and memory container limits. A nonzero
+`ResourceSpec.disk` sets the storage request and limit in exact bytes; omitting
+disk sets neither. Ordinary jobs retain rounded storage quantities and their
+existing eviction retry behavior. Newly launched sandbox pods with declared disk
+carry an annotation; their own-limit evictions report `RESOURCE_LIMIT_DISK` and
+charge the failure retry budget. Existing pods and node-pressure evictions retain
+their previous classification.
+
+Kubelet accounts for runtime-reported writable layers, logs and disk-backed
+emptyDir volumes. gVisor writable-layer accounting has not been qualified, so
+Kubernetes backends do not advertise `sandbox-storage-limit`. A restricted-profile
+overflow does not qualify SANDBOX. Qualification requires a successful
+`CONTAINER_PROFILE_SANDBOX` overflow on the pinned pool, with the node's
+CoreWeave-provided `runsc.toml` `overlay2` setting and raw kubelet eviction status
+recorded together. A memory-backed overlay can charge writes to memory instead
+of disk. Sandbox startup is currently blocked on both H100
+([#10090](https://github.com/marin-community/marin/issues/10090)) and CPU Genoa
+([#11343](https://github.com/marin-community/marin/issues/11343)).
+
 Inspect the pod's status reason/message as well as the container termination:
 exit 137 and the word `ephemeral-storage` alone do not establish a task limit.
 

@@ -41,7 +41,7 @@ credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
 addresses; `DENY` denies external traffic. Neither grants cluster access.
 
 Iris commands and file transfer use the existing `ExecInContainer` RPC and require
-`/bin/sh`, `base64`, `tar`, `head`, `tail` and `wc` in the task image.
+`/bin/sh`, `setsid`, `base64`, `tar`, `head`, `tail`, `wc` and readable `/proc` in the task image.
 Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `head` and `wc`
 for commands and directory transfer.
 Daytona uploads each control wrapper into a private command directory before execution,
@@ -112,17 +112,26 @@ address. Concurrent groups may use the same ports. Every member must request
 
 The Iris adapter supports singleton `create_task`, machine commands and file
 transfer. It rejects multi-container tasks and provides no process sessions.
-Declared storage requires a direct Kubernetes controller. Every sandbox is one
-pod with one task container: CPU and memory use pod cgroup limits, and disk uses
-an exact-byte ephemeral-storage limit with no harness allowance. Command files
-share that budget. Kubelet may evict asynchronously after usage exceeds the
-limit; an explicit limit eviction raises `DiskLimitExceeded` with resource `disk`.
-Node disk pressure remains an infrastructure failure.
+Each command runs in a new process group. Timeout or caller cancellation stops
+that group, waits for its live members and remote exec to finish, and preserves
+the machine's files for verification. Failure to confirm the stop closes the
+machine. A stop marker fences commands admitted after cancellation.
 
-Harbor LOCAL selects this route with `iris_cluster="cw-us-east-02a"`; its
-`storage_mb` declaration is preserved. The shared-worker LOCAL route still rejects
-storage limits. Iris LOCAL supports only single-container offline tasks without
-process-session model relays.
+Declared storage requires a direct Kubernetes controller advertising
+`sandbox-storage-limit`. The candidate manifest sets exact-byte ephemeral-storage
+limits with zero harness allowance, including command files. Only newly marked
+sandbox pods' explicit own-limit evictions raise `DiskLimitExceeded`; ordinary
+jobs and node disk pressure retain their prior classification. SANDBOX writable
+layer accounting is unqualified, so no controller currently advertises this
+capability. Restricted-profile overflow evidence is insufficient.
+
+Harbor selects this backend through `--environment iris-sandbox` with `cluster`,
+`pool`, `priority` and `ttl` kwargs. It reports no storage capability and rejects
+declared disk until a real SANDBOX overflow qualifies the pinned pool and its
+`runsc.toml` `overlay2` setting. Sandbox startup is currently blocked on
+[cpu-genoa](https://github.com/marin-community/marin/issues/11343) and
+[H100](https://github.com/marin-community/marin/issues/10090). The environment
+supports only single-container tasks without process-session model relays.
 
 Creation starts the containers and returns handles without waiting for health.
 Start host capabilities before readiness when a container needs them:

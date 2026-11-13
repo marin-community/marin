@@ -244,7 +244,8 @@ def survey_backend(backend: str, check: Checker) -> list[CapabilityCell]:
                 if backend == "iris" and requirement is Requirement.STORAGE:
                     note += (
                         " Enforcement requires one sandbox per task and a direct Kubernetes controller "
-                        "advertising sandbox-storage-limit."
+                        "advertising sandbox-storage-limit. SANDBOX writable-layer accounting is unqualified; "
+                        "current controllers withhold that capability pending a real SANDBOX overflow."
                     )
                 if backend == "docker" or backend == "gvisor":
                     note += " Disk quotas require a compatible Docker storage driver; GPUs require host/runtime support."
