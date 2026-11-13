@@ -1815,8 +1815,10 @@ Use the registry's current 40-character commit as `--parent-revision`; a concurr
 update fails rather than overwriting it. The command uses add operations only,
 reads every staged file back at the new immutable commit and verifies its hash
 before updating any Git reference. Earlier commits and artifacts remain intact.
-Stage the complete replacement shard collection; if shard filenames change,
-review the reference inventory explicitly so stale shards are not left active.
+Stage the complete replacement shard collection. For each staged `part-*.json`
+directory, inactive existing tail shards are archived as empty objects in the
+new revision and their references are updated too. This prevents stale receipts
+without deleting any earlier artifact or revision.
 Do not write generated bodies over pinned references. The overlap workflow reads
 through the read-only `ATLAS_REGISTRY_HF_TOKEN` secret, exposed as `HF_TOKEN` in
 that job. Local readers use the Hugging Face client's normal credentials; the

@@ -54,6 +54,13 @@ def archive_registry_documents(
     }
     if not documents:
         raise ValueError(f"No registry documents staged in {staged_root}")
+    shard_directories = {Path(name).parent for name in documents if Path(name).match("part-*.json")}
+    for directory in shard_directories:
+        for previous in (references_root / directory).glob("part-*.json"):
+            name = previous.relative_to(references_root).as_posix()
+            # Preserve the old artifact in its prior immutable revision while
+            # excluding inactive tail shards from the refreshed collection.
+            documents.setdefault(name, b"{}\n")
     for name, data in documents.items():
         if not isinstance(json.loads(data), dict):
             raise ValueError(f"Registry document must contain an object: {name}")
