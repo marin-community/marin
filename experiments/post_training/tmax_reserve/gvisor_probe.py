@@ -14,6 +14,9 @@ Runs inside one Iris CPU job on a CoreWeave cluster. Nothing is published:
   The round records the start latency, then closes every sandbox and checks that its job ended.
 - Three TMax Dockerfiles are built with kaniko ``--no-push`` through Taskforge's build job. The image
   tarball goes only to the cluster's private temporary bucket, as the build job's output archive.
+
+Every job runs on the cluster whose controller started this one. Run it where gVisor starts: on
+cw-us-east-02a sandbox pods fail in ``FailedCreatePodSandBox`` (Echo incident 631, issue 10090).
 """
 
 import argparse
@@ -31,11 +34,14 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from iris.cli.connect import connect_controller
-from iris.client import IrisClient
+from iris.client import IrisClient, Job
 from iris.cluster.client import get_job_info
-from iris.cluster.types import Entrypoint, JobName
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.resources.state import is_job_finished
+from iris.rpc import job_pb2
 from rigging.filesystem.buckets import filesystem_for
+from rigging.secrets import COREWEAVE_SECRET_NAMES, SecretBehavior, get_secret
+from rigging.timing import Duration
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec, NetworkPolicy
@@ -46,10 +52,11 @@ from taskforge.sandbox.image_builder import (
     CONTEXT_FILE,
     CRANE_SHA256,
     CRANE_URL,
+    JOB_TIMEOUT,
     KANIKO_IMAGE,
+    SCHEDULING_TIMEOUT,
     BuildFailed,
     output_archive,
-    submit_job,
     wait_succeeded,
 )
 
@@ -163,6 +170,7 @@ async def _sandbox(factory: IrisMachineFactory, scratch: Path, index: int) -> di
         )
     except Exception as error:
         row["error"] = f"create: {type(error).__name__}: {error}"
+        logger.info("sandbox %s", json.dumps(row))
         return row
     row["start_seconds"] = time.monotonic() - start
     row["job_id"] = str(machine.job.job_id)
@@ -172,6 +180,7 @@ async def _sandbox(factory: IrisMachineFactory, scratch: Path, index: int) -> di
         row["error"] = f"checks: {type(error).__name__}: {error}"
     finally:
         await machine.close()
+    logger.info("sandbox %s", json.dumps(row))
     return row
 
 
@@ -200,34 +209,55 @@ def _context_archive(environment: Path) -> bytes:
     return gzip.compress(raw.getvalue(), mtime=0)
 
 
-def _build(controller_url: str, target_cluster: str, task: str) -> dict:
+def _submit_build(client: IrisClient, task: str) -> Job:
+    """Submit Taskforge's kaniko build job with no registry secret and no cluster pin.
+
+    ``taskforge``'s ``submit_job`` pins its target cluster, which a regional controller rejects as
+    not a federation peer of itself. Like ``submit_job``, inherited variables are blanked and the
+    job receives only the CoreWeave storage credentials Iris requires, as secrets.
+    """
+    job_info = get_job_info()
+    inherited = {} if job_info is None else {name: "" for name in job_info.env if name not in COREWEAVE_SECRET_NAMES}
+    storage = {name: value for name in COREWEAVE_SECRET_NAMES if (value := get_secret(name)) is not None}
+    return client.submit(
+        entrypoint=Entrypoint(
+            command=["bash", "-c", BUILD_SCRIPT],
+            workdir_files={CONTEXT_FILE: _context_archive(TASK_DIR / task / "environment")},
+        ),
+        name=f"tmax-gvisor-probe-build-{uuid.uuid4().hex[:12]}",
+        environment=EnvironmentSpec(
+            setup_scripts=[],
+            env_vars={
+                **inherited,
+                "CRANE_URL": CRANE_URL,
+                "CRANE_SHA256": CRANE_SHA256,
+                "KANIKO_IMAGE": KANIKO_IMAGE,
+                "CONTEXT_FILE": CONTEXT_FILE,
+                "DOCKERFILE": "Dockerfile",
+                "BUILD_SETUP_FAILED_EXIT": str(BUILD_SETUP_FAILED_EXIT),
+                # kaniko requires a destination name even with --no-push; .invalid never resolves.
+                "DESTINATION": f"probe.invalid/tmax-probe:{task.replace('_', '-')}",
+            },
+            secrets=storage,
+            secret_behavior=SecretBehavior.ISOLATE,
+        ),
+        resources=ResourceSpec(cpu=2, memory=4 * 1024**3, disk=20 * 1024**3),
+        task_image=BUILD_IMAGE,
+        container_profile=job_pb2.CONTAINER_PROFILE_DEFAULT,
+        scheduling_timeout=Duration.from_seconds(SCHEDULING_TIMEOUT),
+        timeout=Duration.from_seconds(JOB_TIMEOUT),
+        max_retries_failure=0,
+        max_retries_preemption=0,
+    )
+
+
+def _build(controller_url: str, task: str) -> dict:
     """Build one TMax image with kaniko --no-push; nothing is pushed anywhere."""
-    run_id = uuid.uuid4().hex[:12]
     start = time.monotonic()
     with connect_controller(controller_url=controller_url) as endpoint:
         client = IrisClient.remote(endpoint.url, workspace=None, credentials=endpoint.credentials)
         try:
-            job = submit_job(
-                client,
-                name=f"tmax-gvisor-probe-build-{run_id}",
-                entrypoint=Entrypoint(
-                    command=["bash", "-c", BUILD_SCRIPT],
-                    workdir_files={CONTEXT_FILE: _context_archive(TASK_DIR / task / "environment")},
-                ),
-                image=BUILD_IMAGE,
-                env={
-                    "CRANE_URL": CRANE_URL,
-                    "CRANE_SHA256": CRANE_SHA256,
-                    "KANIKO_IMAGE": KANIKO_IMAGE,
-                    "CONTEXT_FILE": CONTEXT_FILE,
-                    "DOCKERFILE": "Dockerfile",
-                    "BUILD_SETUP_FAILED_EXIT": str(BUILD_SETUP_FAILED_EXIT),
-                    # kaniko requires a destination name even with --no-push; .invalid never resolves.
-                    "DESTINATION": f"probe.invalid/tmax-probe:{task.replace('_', '-')}",
-                },
-                secrets={},
-                target_cluster=target_cluster,
-            )
+            job = _submit_build(client, task)
             row = {"task": task, "job_id": str(job.job_id)}
             try:
                 wait_succeeded(job, BuildFailed)
@@ -239,6 +269,7 @@ def _build(controller_url: str, target_cluster: str, task: str) -> dict:
                 if not is_job_finished(job.state):
                     job.cancel()
             row["seconds"] = time.monotonic() - start
+            logger.info("build %s", json.dumps(row))
             return row
         finally:
             client.shutdown()
@@ -293,7 +324,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sandboxes", type=int, required=True, help="Concurrent sandboxes per round.")
     parser.add_argument("--rounds", type=int, required=True)
-    parser.add_argument("--target-cluster", required=True, help="Cluster the kaniko build jobs run on.")
     parser.add_argument("--max-p90-start", type=float, required=True, help="Pass rule for p90 start latency (s).")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--upload", required=True, help="Remote directory that receives a copy of --output.")
@@ -308,24 +338,37 @@ def main() -> None:
     scratch.mkdir(exist_ok=True)
     (scratch / "test_probe.py").write_text(TEST_FILE)
     factory = IrisMachineFactory(controller_url=controller_url, job_ttl=SANDBOX_TTL)
+    try:
+        summary = _probe(factory, controller_url, scratch, args)
+    finally:
+        fs, path = filesystem_for(args.upload)
+        fs.put(str(args.output), path, recursive=True)
+    if not summary["passed"]:
+        raise SystemExit("gVisor probe did not pass; see probe-summary.json")
+
+
+def _probe(factory: IrisMachineFactory, controller_url: str, scratch: Path, args: argparse.Namespace) -> dict:
+    rounds = []
     with ThreadPoolExecutor(len(BUILD_TASKS)) as pool:
-        build_futures = [pool.submit(_build, controller_url, args.target_cluster, task) for task in BUILD_TASKS]
-        rounds = []
+        build_futures = [pool.submit(_build, controller_url, task) for task in BUILD_TASKS]
         for number in range(args.rounds):
             logger.info("round %d: %d sandboxes", number, args.sandboxes)
             rows = asyncio.run(_round(factory, scratch, args.sandboxes))
             (args.output / f"round-{number}.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
             rounds.append(rows)
-        builds = [future.result() for future in build_futures]
+        builds = []
+        for task, future in zip(BUILD_TASKS, build_futures, strict=True):
+            try:
+                builds.append(future.result())
+            except Exception as error:
+                builds.append({"task": task, "succeeded": False, "error": f"submit: {type(error).__name__}: {error}"})
+    (args.output / "builds.json").write_text(json.dumps(builds, indent=1))
     job_ids = [row["job_id"] for rows in rounds for row in rows if "job_id" in row]
     terminal = _jobs_terminal(controller_url, job_ids)
     summary = summarize(rounds, terminal, builds, args.max_p90_start)
     (args.output / "probe-summary.json").write_text(json.dumps(summary, indent=1))
     print(json.dumps(summary, indent=1))
-    fs, path = filesystem_for(args.upload)
-    fs.put(str(args.output), path, recursive=True)
-    if not summary["passed"]:
-        raise SystemExit("gVisor probe did not pass; see probe-summary.json")
+    return summary
 
 
 if __name__ == "__main__":
