@@ -108,7 +108,8 @@ candidates are recorded without changing the blend wiring.
 The curation driver defaults to `s3://marin-us-east-02a/marin` on CoreWeave.
 `--artifact-root URL` selects another root explicitly and overrides the ambient
 `MARIN_PREFIX`. Local `--cache-dir PATH` takes precedence for local execution.
-`--output-root`, `--report-path` and `--review-cache` remain explicit locations;
+`--output-root` and `--report-path` remain explicit locations, and `--review-cache`
+defaults to `<artifact-root>/rl-data/review-cache`;
 use the same CW bucket for retained remote runs and a new versioned output
 directory for each campaign.
 
@@ -130,8 +131,8 @@ campaigns use `--publish-catalog s3://marin-us-east-02a/marin/rl-data/catalog/pr
 to accumulate results across versioned report directories, with assessment enabled.
 `--cache-dir` selects local execution and a local artifact root, so shared
 publication rejects it; local and SAMPLE runs keep separate catalogs. Remote runs
-reuse completed artifacts under `--artifact-root` and model requests under the
-explicit `--review-cache`. Reuse those locations, pinned inputs, recipe versions,
+reuse completed artifacts under `--artifact-root` and model requests under
+`--review-cache`. Reuse those locations, pinned inputs, recipe versions,
 rubric and model revisions across campaigns. A new report directory or enabling
 assessment does not force recomputation of completed work. Switching artifact
 roots does not copy completed work or model-request caches; verify their reuse
@@ -884,6 +885,33 @@ Conversation-only tasks need no machine. Memory settings are advisory sizing hin
 Built environments export gzip layers, including inherited base-image layers,
 for Docker and OCI consumers. Compression enters built-image cache
 identity; lock-backed worker environments retain their existing identities.
+
+## Environment fidelity and repair
+
+An agentic task's environment is part of its data. Execution uses the environment
+and resource requirements carried by that task's specification. A declaration or
+worker image cannot replace missing task requirements.
+
+A native Harbor package retains its own `task.toml`, build context, files and
+permissions. A TaskCompendium task carries its declared image, build context or
+package environment. `lower_environment` in
+[`environment_fidelity.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/environment_fidelity.py)
+can express supported archive recipes as setup commands on a matching
+digest-pinned base, preserving the working directory and environment variables.
+Unsupported steps remain explicit conversion failures. `missing_environment`
+rejects an agentic task without an environment; `environment_unused` detects a
+conversion that drops the archive's environment.
+
+A source is repaired when the published specification completely describes its
+runtime behavior. Changing a task's bytes requires a new private, pinned
+TaskCompendium release with [SAMPLE or FULL oversight](#curation-modes-and-oversight-levels).
+Conversion fidelity, executed grading controls, drop accounting and the frozen
+review evidence remain distinct. A zero reward does not establish verifier
+liveness; use the [no-oracle procedure](#sources-without-oracle-solutions).
+Every oracle-bearing task is filtered in both SAMPLE and FULL, subject only to
+an explicitly recorded [targeted requalification decision](#targeted-requalification-after-an-approved-harness-change).
+QC reports issues and never rejects tasks. Mandatory within-source deduplication
+and lexical evidence apply separately, including measurement-only EVAL receipts.
 
 ## Graders and controls
 
@@ -1700,6 +1728,14 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   --report-path CAMPAIGN_PREFIX/sample.json
 ```
 
+Iris execution defaults to `--max-workers 64`, `--coordinator-memory 16g`,
+`--normalized-shards 32` and `--review-cache <artifact-root>/rl-data/review-cache`.
+Review cache keys hash the model, its revision and the complete request, so one
+shared cache cannot return a judgment for a different prompt or model. Without
+`--worker-image`, Zephyr workers run the cluster's configured task image
+(`default_task_image`, `ghcr.io/marin-community/iris-task:latest`). Pass a
+digest-pinned `--worker-image` to record an exact image in the artifact identity.
+
 Build the [registered environments](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/images/README.md#building)
 first, with `MARIN_PREFIX` set to the driver's artifact root:
 
@@ -1845,11 +1881,13 @@ alive under object-age lifecycle deletion.
 
 ## Curation modes and oversight levels
 
-`CurationSummary.mode` is a `CurationMode`, and it says how much of a source a pass
-examined: `QUICK` (inventory or a spot check), `SAMPLE` (a documented sample executed
-end to end, verifiers included) or `FULL` (every task executed end to end). Only
-`SAMPLE` and `FULL` admit tasks; a `QUICK` summary cannot record admitted counts
-(`CurationSummary` rejects it) and its corpus is not selectable for training.
+`CurationSummary.mode` records the requested processing scope. `QUICK` converts
+without qualifying execution oversight; `SAMPLE` records a documented end-to-end
+sample, including verifiers; `FULL` processes the complete population. The mode
+alone does not prove execution coverage or complete content QA: those require
+their own oversight and review evidence. Only `SAMPLE` and `FULL` admit tasks;
+a `QUICK` summary cannot record admitted counts (`CurationSummary` rejects it),
+and its corpus is not selectable for training.
 
 Oracle filtering covers the full population in both SAMPLE and FULL whenever
 solutions are supplied. Oversight still differs in its other quality checks,
@@ -1866,9 +1904,10 @@ release and does not raise the level.
 
 Runnable agentic sources require an accepted task format, a production snapshot-identity
 measurement and its basis, an execution-requirement failure count, and SAMPLE or FULL
-oversight with verification evidence. Sources missing these records remain visible as
-Inventory. The grandfathered MarinSkyRL sources retain their existing admission policy.
-Conversion and sampled review can collect evidence before a source becomes runnable.
+oversight with verification evidence. A missing required record blocks admission.
+The grandfathered MarinSkyRL sources retain their existing admission policy.
+Conversion and diagnostic review can collect evidence before admission; there is
+no inventory-only substitute for a registered converter.
 Deprecated sources retain their history and name their qualified replacement.
 
 Conversion rejects machine tasks without a declared image, build context, package lock

@@ -202,7 +202,9 @@ def test_evaluation_input_change_during_conversion_withdraws_the_release_marker(
     path.write_bytes(original)
     with pytest.raises(RuntimeError):
         run(step, max_concurrent=1)
-    retry = curate(replace(source, config=replace(dataset, recipe=replace(source.config.recipe, version="2"))), options)
+    retry = prepare_evaluation(
+        replace(source, config=replace(dataset, recipe=replace(source.config.recipe, version="2"))), options
+    )
     artifact = run(retry, max_concurrent=1)[0]
     assert artifact.path != step.path()
     assert len(list(evaluation_cases(artifact.path))) == 1

@@ -67,6 +67,20 @@ no current grade; archived evidence remains available. Every source has a regist
 QUICK records conversion without review. Source details show the latest curation outcome; the
 assessment page shows the curation associated with its selected grade.
 
+## Getting started page
+
+**Getting started** (`guide.html`) explains, for a reader new to Marin, every
+path from a candidate dataset to an Atlas source: the task format gate,
+environment fidelity, curation modes, qualification, Daytona safety and
+publication. It states what each outcome guarantees and links each step to the
+normative section of the [task curation reference](task-curation.md) and to the
+enforcing code. Per-outcome counts, Daytona labels and oracle-validation counts
+are computed in the browser from the same `/sources` response as **By source**,
+so they follow each catalog load without a code release. Sources from snapshots
+published before declarations carried an oversight level count as *oversight
+not declared*. Edit the rules in the reference first, then the page text in
+`infra/marina/apps/rl_data_catalog/dist/guide.html`, and release the app.
+
 ## Browsing sources
 
 **By source** lists each source's unique example count, training/evaluation use,
@@ -343,8 +357,8 @@ s3://marin-us-east-02a/marin/rl-data/catalog/production` to the
 [campaign command](task-curation.md#run-a-campaign) with assessment enabled.
 `--cache-dir` selects local execution and a local artifact root, so production
 publication rejects it. Production uses the shared artifact cache under
-`--artifact-root` (default `s3://marin-us-east-02a/marin`) and an explicit
-`--review-cache` for model requests. Reuse the existing cache locations, pinned
+`--artifact-root` (default `s3://marin-us-east-02a/marin`) and `--review-cache`
+(default `<artifact-root>/rl-data/review-cache`) for model requests. Reuse the existing cache locations, pinned
 inputs, recipe versions, rubric and model revisions to reuse completed work.
 Assessment can use cached results; enabling it does not force regrading.
 A new report directory does not invalidate the caches. Switching a local or GCP
