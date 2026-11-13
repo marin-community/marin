@@ -159,11 +159,32 @@ iris attempt events /user/job/0:2
 iris task exec /user/job/0 --timeout 300 -- python -c 'import jax; print(jax.devices())'
 ```
 
-Events retain backend observations and controller decisions across attempts for
-up to 30 days, including deleted Pods. Inspect output archives before repeating
-a workload whose runtime verdict disagrees with its application result; see
-[evaluation audit](../../docs/tutorials/run-lm-evals.md#audit-an-evalchemy-run-before-its-record-appears).
-Exec buffers output, is non-interactive, and defaults to a 60-second timeout.
+`task events` is the first stop when a pod or Kubernetes Event has already been
+garbage-collected. It queries `iris.task_event` across every retained attempt in
+the task's current job incarnation in one call and shows both backend
+observations (`k8s/kueue`, `k8s/container`) and controller decisions
+(`iris/controller`) in chronological order. Events are retained for up to 30
+days. Kubernetes `DisruptionTarget` conditions are recorded as
+`k8s/disruption` events with the pod and node identity plus a snapshot of the
+node's taints, conditions, hardware/topology labels, and CoreWeave health
+annotations.
+
+For an evaluator that retries after a `Completed` container event and a later
+`PodDeleted` worker-failure verdict, inspect its durable result archive before
+rerunning or accepting the retry. The evaluator may already have written a
+complete, sealed result even though its parent lacks a canonical record. See
+[Auditing a curated run](../../docs/tutorials/run-lm-evals.md#audit-a-curated-run-before-its-record-appears)
+for the archive checks. The Iris verdict alone does not establish whether the
+application result is complete.
+
+Default timeout is 60s. Use `--timeout 300` for slow commands, `--timeout -1` for no timeout (last resort).
+
+The exec session is non-interactive and buffers output. To run a command that survives disconnect, wrap with `nohup` + `&`:
+
+```bash
+iris task exec /user/job/0 -- bash -c "nohup bash -c 'your-command > /tmp/out.log 2>&1' &"
+iris task exec /user/job/0 -- cat /tmp/out.log   # check later
+```
 
 ### Task with no logs or W&B progress
 

@@ -12,12 +12,13 @@ This module is import-light on purpose -- the filesystem layer plus Pydantic, wi
 marin/levanter/iris imports -- so it can be vendored into the dashboard image that reads records back.
 """
 
+import json
 import logging
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.factory import open_url, url_to_fs
@@ -40,6 +41,7 @@ DEFAULT_SCAN_PREFIXES = (
 )
 RECORD_FILE = "record.json"
 _MAX_RECORD_READERS = 16
+DEFAULT_EVALUATION_CONCURRENCY = 64
 EVALCHEMY_INFRASTRUCTURE_ERROR = "EVALCHEMY_INFRASTRUCTURE_ERROR"
 
 
@@ -121,6 +123,7 @@ class BenchmarkMetadataRef(BaseModel):
     reducers: tuple[BenchmarkReducerRef, ...] = ()
     prompt_length: BenchmarkPromptLengthRef | None = None
     requires_judge: bool = False
+    identity: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def validate_protocol(self) -> "BenchmarkMetadataRef":
@@ -240,7 +243,7 @@ class ModelConfigRef(BaseModel):
     serve: ModelServeConfig
     generation: ModelGenerationConfig
     agent: ModelAgentConfig
-    evalchemy_num_concurrent: int | None = None
+    evaluation_num_concurrent: int | None = None
 
 
 class ModelRef(BaseModel):
@@ -340,6 +343,107 @@ class HarborRef(BaseModel):
     )
 
 
+class JudgeIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    deployment: str = Field(min_length=1)
+    models: dict[str, str]
+    default_model: str | None = None
+
+
+class EvaluationOverrides(BaseModel):
+    """Run policy supplied by a suite or campaign."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    limit: int | None = Field(default=None, gt=0)
+    max_tokens: int | None = Field(default=None, gt=0)
+    seed: int | None = None
+    judge: JudgeIdentity | None = None
+    judge_endpoint: str | None = None
+    judge_api_key: tuple[str, ...] = ()
+
+
+class PromptFormat(StrEnum):
+    COMPLETION = "completion"
+    CHAT = "chat"
+
+
+class ResolvedEvaluationSelection(BaseModel):
+    """The explicit protocol choice bound to published corpora."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    benchmark: str
+    protocol: str
+    num_fewshot: int | None = Field(default=None, ge=0)
+    prompt_format: PromptFormat | None = None
+    partitions: tuple[str, ...] = ()
+
+
+class EvaluationSelection(BaseModel):
+    """Select a benchmark protocol without exposing its compiled artifact names."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    benchmark: str
+    label: str | None = None
+    protocol: str | None = None
+    num_fewshot: int | None = Field(default=None, ge=0)
+    prompt_format: PromptFormat | None = None
+    partitions: tuple[str, ...] = ()
+    run: EvaluationOverrides = Field(default_factory=EvaluationOverrides)
+
+    @property
+    def name(self) -> str:
+        if self.label is not None:
+            return self.label
+        parts = [self.benchmark]
+        if self.protocol is not None:
+            parts.append(self.protocol)
+        if self.num_fewshot is not None:
+            parts.append(f"{self.num_fewshot}shot")
+        if self.prompt_format is not None:
+            parts.append(self.prompt_format)
+        return "-".join(parts)
+
+
+class CuratedSettings(BaseModel):
+    """Recorded selection and execution settings shared by launch and dashboard readers."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    max_tokens: int | None = Field(default=None, gt=0)
+    source_limit: int | None = Field(default=None, gt=0)
+    seed: int | None = None
+    judge: JudgeIdentity | None = None
+    concurrency: int = Field(default=DEFAULT_EVALUATION_CONCURRENCY, gt=0)
+
+
+def scoring_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
+    """Separate request scheduling from settings that govern saved observations."""
+    return {key: value for key, value in settings.items() if key != "concurrency"}
+
+
+class CuratedRef(BaseModel):
+    """Pinned corpus selection and typed TaskSpec driver settings."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    datasets: tuple[str, ...]
+    settings: CuratedSettings
+    selection: ResolvedEvaluationSelection | None = Field(default=None, exclude_if=lambda value: value is None)
+
+    @model_validator(mode="before")
+    @classmethod
+    def read_initial_native_records(cls, value: Any) -> Any:
+        # Initial native smoke records encoded the settings as JSON inside record.json.
+        if isinstance(value, dict) and "settings_json" in value:
+            value = dict(value)
+            value["settings"] = json.loads(value.pop("settings_json"))
+        return value
+
+
 class EvalRef(BaseModel):
     """The eval that was run: its name, mechanism, and mechanism-specific detail.
 
@@ -361,6 +465,7 @@ class EvalRef(BaseModel):
     )
     tasks: tuple[EvalTaskRef, ...] = ()
     evalchemy: EvalchemyRef | None = None
+    curated: CuratedRef | None = Field(default=None, exclude_if=lambda value: value is None)
     harbor: HarborRef | None = None
     postprocessing: dict[str, str] = Field(default_factory=dict, exclude_if=lambda value: not value)
     """Named final-score protocols and their frozen JSON configurations."""
