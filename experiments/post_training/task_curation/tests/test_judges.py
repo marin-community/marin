@@ -9,6 +9,7 @@ import pytest
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.inference.config import EffectiveServing
 from marin.inference.types import OpenAIEndpoint, RunningModel
+from taskcompendium.pipeline.reviewer_spec import JudgeEndpoint
 from verifyit.grade import Status
 from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate
 from verifyit.spec import parse_spec, render_spec
@@ -17,7 +18,6 @@ from experiments.post_training.task_curation import judges
 from experiments.post_training.task_curation.judges import (
     JUDGE_TIERS,
     HostedJudgeEndpoint,
-    JudgeEndpoint,
     JudgeTier,
     LocalJudgeEndpoint,
     RelayJudgeEndpoint,
@@ -111,12 +111,16 @@ def test_relay_endpoint_uses_registered_job_url_and_checks_model(review_server, 
         return base_url
 
     monkeypatch.setattr(judges, "resolve_glm_base_url", resolve)
+    endpoint: JudgeEndpoint = RelayJudgeEndpoint("/fixture/existing-relay", "fixture-reviewer-model", "fixture-key")
     review_server.model_ids = ["glm-5.3"]
-    endpoint: JudgeEndpoint = RelayJudgeEndpoint("/fixture/existing-relay", "fixture-key")
+    with pytest.raises(ValueError, match="does not advertise"):
+        with endpoint.connect():
+            pytest.fail("The relay must advertise the reviewer's pinned model")
+    review_server.model_ids = ["fixture-reviewer-model"]
     with endpoint.connect() as connection:
         assert connection.base_url == base_url
-        assert connection.default_model == "glm-5.3"
-    assert discovered_jobs == ["/fixture/existing-relay"]
+        assert connection.default_model == "fixture-reviewer-model"
+    assert discovered_jobs == ["/fixture/existing-relay"] * 2
 
 
 @pytest.mark.parametrize("advertised_model", ["MiniMaxAI/MiniMax-M3-MXFP8", "wrong-checkpoint"])

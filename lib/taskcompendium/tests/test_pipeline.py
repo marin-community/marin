@@ -80,6 +80,7 @@ from .pipeline_stages import (
     svamp_row_task,
     svamp_task,
 )
+from .reviewer_specs import reviewer_spec
 
 
 @dataclass(frozen=True)
@@ -152,7 +153,10 @@ def test_review_tasks_propagates_unexpected_response_membership(apple_row, monke
     monkeypatch.setattr(service, "output", lambda _batch: Output(json.dumps(response("unexpected"))))
     with pytest.raises(ValueError, match="Unexpected batch response ID"):
         review_tasks(
-            [svamp_task("task", apple_row)], SVAMP_RUBRIC, BatchReviewer(service, "fixture", "revision"), cached=None
+            [svamp_task("task", apple_row)],
+            SVAMP_RUBRIC,
+            BatchReviewer(service, reviewer_spec("fixture", "revision")),
+            cached=None,
         )
 
 
@@ -163,7 +167,7 @@ def test_audit_reviews_only_eligible_tasks_and_writes_batch_evidence_once(tmp_pa
         [{**apple_row, "Answer": "invalid"}, apple_row, {**apple_row, "Body": "Bea has 2 apples."}],
         output_path=tmp_path,
         limit=3,
-        reviewer=BatchReviewer(service, "fixture", "revision"),
+        reviewer=BatchReviewer(service, reviewer_spec("fixture", "revision")),
     )
     table = stage_table(tmp_path)
     rows = table.to_pylist()
@@ -221,7 +225,7 @@ def test_conversion_failures_retain_raw_records_without_review_or_accepted_outpu
         rows,
         output_path=tmp_path,
         limit=len(rows),
-        reviewer=BatchReviewer(service, "fixture-model", "fixture-deployment"),
+        reviewer=BatchReviewer(service, reviewer_spec("fixture-model", "fixture-deployment")),
     )
     persisted = stage_table(tmp_path).to_pylist()
     assert manifest["normalized_rows"] == 1
@@ -257,7 +261,7 @@ def test_tasks_over_the_resource_budget_are_deferred_and_counted(tmp_path, apple
         rows,
         output_path=tmp_path,
         limit=len(rows),
-        reviewer=BatchReviewer(BatchService(), "fixture-model", "fixture-deployment"),
+        reviewer=BatchReviewer(BatchService(), reviewer_spec("fixture-model", "fixture-deployment")),
     )
     persisted = stage_table(tmp_path).to_pylist()
     assert manifest["dispositions"] == {"keep": 1, "defer": 1}
@@ -315,7 +319,7 @@ def test_pipeline_accounts_for_rejects_duplicates_and_conflicting_keys(tmp_path,
         rows,
         output_path=tmp_path,
         limit=10,
-        reviewer=BatchReviewer(service, "fixture-model", "fixture-deployment"),
+        reviewer=BatchReviewer(service, reviewer_spec("fixture-model", "fixture-deployment")),
     )
 
     audit = stage_table(tmp_path).to_pylist()
@@ -356,7 +360,7 @@ def test_audit_deduplicates_across_acquired_shards_on_storage_uri(tmp_path, appl
     root = StoragePath(f"memory://curation-{tmp_path.name}")
     (root / "staged" / "source.jsonl").write_bytes(snapshot.read_bytes())
     service = BatchService()
-    reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment")
+    reviewer = BatchReviewer(service, reviewer_spec("fixture-model", "fixture-deployment"))
     review_source(
         str(root / "staged"),
         str(root / "audited"),
@@ -387,7 +391,7 @@ def test_audit_restart_reuses_completed_shards_when_worker_count_changes(tmp_pat
     staged.mkdir()
     (staged / "source.jsonl").write_bytes(snapshot.read_bytes())
     initial = BatchService()
-    reviewer = BatchReviewer(initial, "fixture", "revision")
+    reviewer = BatchReviewer(initial, reviewer_spec("fixture", "revision"))
     review_source(
         str(staged), str(tmp_path / "audited"), svamp_recipe, AuditExecution(max_workers=1, reviewer=reviewer), len(rows)
     )
@@ -406,7 +410,7 @@ def test_audit_restart_reuses_completed_shards_when_worker_count_changes(tmp_pat
         str(staged),
         str(tmp_path / "audited"),
         svamp_recipe,
-        AuditExecution(max_workers=3, reviewer=BatchReviewer(resumed, "fixture", "revision")),
+        AuditExecution(max_workers=3, reviewer=BatchReviewer(resumed, reviewer_spec("fixture", "revision"))),
         len(rows),
     )
     reviewed = [request["custom_id"] for requests in resumed.batches.values() for request in requests]
@@ -437,7 +441,7 @@ def test_one_preparation_partition_yields_independent_review_tasks(tmp_path, app
     rows = [{**apple_row, "Body": f"Person {index} has 2 apples."} for index in range(2)]
     (staged / "source.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
     service = ConcurrentBatchService()
-    reviewer = BatchReviewer(service, "fixture", "revision")
+    reviewer = BatchReviewer(service, reviewer_spec("fixture", "revision"))
     manifest = review_source(
         str(staged),
         str(tmp_path / "audited"),
@@ -457,7 +461,7 @@ def test_one_preparation_partition_yields_independent_review_tasks(tmp_path, app
 
 def test_pipeline_reuses_completed_reviews_when_filtering_again(tmp_path, apple_row, svamp_recipe):
     service = BatchService(confidence="medium")
-    reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment")
+    reviewer = BatchReviewer(service, reviewer_spec("fixture-model", "fixture-deployment"))
     resumed = run_stages(
         svamp_recipe,
         [apple_row],
@@ -486,7 +490,7 @@ def test_pipeline_reuses_completed_reviews_when_filtering_again(tmp_path, apple_
 
 def test_pipeline_retries_invalid_model_reply_and_preserves_both_attempts(tmp_path, apple_row, svamp_recipe):
     service = BatchService(invalid_first_batch=True)
-    reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment")
+    reviewer = BatchReviewer(service, reviewer_spec("fixture-model", "fixture-deployment"))
     manifest = run_stages(svamp_recipe, [apple_row], output_path=tmp_path, limit=1, reviewer=reviewer)
     assert manifest["dispositions"] == {"keep": 1}
     assert manifest["reviewed_rows"] == 1
@@ -614,7 +618,7 @@ def test_unsupported_verification_is_annotated_separately_from_quality(tmp_path,
         [row],
         output_path=tmp_path / "run",
         limit=1,
-        reviewer=BatchReviewer(BatchService(quality=quality), "model", "deployment"),
+        reviewer=BatchReviewer(BatchService(quality=quality), reviewer_spec("model", "deployment")),
     )
     assert manifest["reviewed_rows"] == 1
     assert manifest["dispositions"] == {disposition: 1}
@@ -636,7 +640,7 @@ def test_query_cache_survives_catalog_changes_and_invalidates_review_inputs(tmp_
     task = svamp_row_task(RawRow("first", source, apple_row))
     assert isinstance(task, TaskSpec)
     cache_root = str(tmp_path / "cache")
-    reviewer = BatchReviewer(service, "fixture-model", "deployment-1", query_cache_root=cache_root)
+    reviewer = BatchReviewer(service, reviewer_spec("fixture-model", "deployment-1"), query_cache_root=cache_root)
     first = reviewer.review([task], SVAMP_RUBRIC).reviews
     changed = task.model_copy(
         update={
@@ -654,7 +658,7 @@ def test_query_cache_survives_catalog_changes_and_invalidates_review_inputs(tmp_
         criteria=(*SVAMP_RUBRIC.criteria, "Check all arithmetic."),
     )
     reviewer.review([changed], rubric)
-    replace(reviewer, model_revision="deployment-2").review([changed], rubric)
+    replace(reviewer, spec=replace(reviewer.spec, model_revision="deployment-2")).review([changed], rubric)
     assert len(service.batches) == 3
     inventory = EnvironmentInventory("image@sha256:fixture", "source manifest", ("/app",), ("/app/input.csv",), False)
     with_inventory = replace(rubric, environment_inventory=inventory)
@@ -672,7 +676,9 @@ def test_query_cache_miss_retries_after_polling_disconnect(tmp_path, apple_row):
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
     task = svamp_row_task(RawRow("first", source, apple_row))
     assert isinstance(task, TaskSpec)
-    reviewer = BatchReviewer(service, "model", "deployment", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
+    reviewer = BatchReviewer(
+        service, reviewer_spec("model", "deployment", max_attempts=1), query_cache_root=str(tmp_path / "cache")
+    )
     interrupted = reviewer.review([task], SVAMP_RUBRIC).reviews
     assert interrupted[0].status == ReviewStatus.UNAVAILABLE
 
@@ -764,7 +770,9 @@ def test_review_retry_submits_only_failed_parts_with_bounded_attempts(
         task = svamp_row_task(RawRow(str(index), source, {**apple_row, "Body": f"Person {index} has 2 apples."}))
         assert isinstance(task, TaskSpec)
         tasks.append(task)
-    reviewer = BatchReviewer(service, "model", "deployment", max_attempts=3, query_cache_root=str(tmp_path / "cache"))
+    reviewer = BatchReviewer(
+        service, reviewer_spec("model", "deployment", max_attempts=3), query_cache_root=str(tmp_path / "cache")
+    )
     records = reviewer.review(tasks, SVAMP_RUBRIC).reviews
     assert all(record.status == ReviewStatus.REVIEWED for record in records)
     expected = {
@@ -773,9 +781,11 @@ def test_review_retry_submits_only_failed_parts_with_bounded_attempts(
         (True, "batch-2"): [64, 1, 64, 64],
     }
     assert [len(batch) for batch in service.batches.values()] == expected[invalid_first_batch, interrupted_batch]
-    assert all(request["body"]["max_tokens"] == reviewer.max_tokens for request in service.batches["batch-0"])
+    assert all(request["body"]["max_tokens"] == reviewer.spec.max_tokens for request in service.batches["batch-0"])
     if invalid_first_batch:
-        assert all(request["body"]["max_tokens"] == reviewer.retry_max_tokens for request in service.batches["batch-2"])
+        assert all(
+            request["body"]["max_tokens"] == reviewer.spec.retry_max_tokens for request in service.batches["batch-2"]
+        )
 
 
 @pytest.mark.parametrize("operation", ["upload", "create", "wait", "output"])
@@ -795,7 +805,7 @@ def test_batch_provider_failures_have_finite_neutral_retries(tmp_path, apple_row
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
     task = svamp_row_task(RawRow("task", source, apple_row))
     assert isinstance(task, TaskSpec)
-    reviewer = BatchReviewer(service, "model", "deployment", query_cache_root=str(tmp_path / "cache"))
+    reviewer = BatchReviewer(service, reviewer_spec("model", "deployment"), query_cache_root=str(tmp_path / "cache"))
     result = review_tasks([task], SVAMP_RUBRIC, reviewer, cached=None)
     record = result.reviews[0]
     assert len(attempts) == 3
@@ -917,7 +927,7 @@ def test_audit_limit_counts_selected_input_across_files_before_normalization(tmp
     (staged / "a.jsonl").write_text(json.dumps({**apple_row, "Answer": None}) + "\n")
     (staged / "b.jsonl").write_text("".join(json.dumps(row) + "\n" for row in [apple_row, apple_row]))
     service = BatchService()
-    reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment")
+    reviewer = BatchReviewer(service, reviewer_spec("fixture-model", "fixture-deployment"))
     manifest = review_source(str(staged), str(tmp_path / "audited"), svamp_recipe, AuditExecution(reviewer=reviewer), 2)
     rows = [row for file in (tmp_path / "audited/audit").glob("*.parquet") for row in pq.read_table(file).to_pylist()]
     assert manifest["input_rows"] == 2
@@ -955,7 +965,7 @@ def test_preference_candidates_are_not_conflicting_answer_keys(tmp_path):
         [{**first, "origin": "a"}, second, {**first, "origin": "b"}],
         output_path=tmp_path / "run",
         limit=3,
-        reviewer=BatchReviewer(service, "fixture-model", "fixture-deployment"),
+        reviewer=BatchReviewer(service, reviewer_spec("fixture-model", "fixture-deployment")),
     )
     assert manifest["dispositions"] == {"keep": 2, "reject": 1}
     rows = stage_table(tmp_path / "run").to_pylist()
@@ -971,7 +981,9 @@ def test_query_cache_does_not_reuse_invalid_completions(tmp_path, apple_row):
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
     task = svamp_row_task(RawRow("task", source, apple_row))
     assert isinstance(task, TaskSpec)
-    reviewer = BatchReviewer(service, "model", "deployment", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
+    reviewer = BatchReviewer(
+        service, reviewer_spec("model", "deployment", max_attempts=1), query_cache_root=str(tmp_path / "cache")
+    )
     assert reviewer.review([task], SVAMP_RUBRIC).reviews[0].status == ReviewStatus.INVALID
     assert reviewer.review([task], SVAMP_RUBRIC).reviews[0].status == ReviewStatus.REVIEWED
     assert len(service.batches) == 2
@@ -996,7 +1008,9 @@ def test_query_cache_fetches_only_missing_completions_on_repeated_review(tmp_pat
     for task in normalized:
         assert isinstance(task, TaskSpec)
         tasks.append(task)
-    reviewer = BatchReviewer(service, "model", "deployment", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
+    reviewer = BatchReviewer(
+        service, reviewer_spec("model", "deployment", max_attempts=1), query_cache_root=str(tmp_path / "cache")
+    )
     first = reviewer.review(tasks, SVAMP_RUBRIC)
     assert [record.status for record in first.reviews] == [ReviewStatus.UNAVAILABLE, ReviewStatus.REVIEWED]
     resumed = replace(reviewer).review(tasks, SVAMP_RUBRIC)
@@ -1042,7 +1056,7 @@ def test_repeated_source_judge_context_still_receives_full_quality_review():
     )
     original = task.model_dump_json()
     service = BatchService()
-    reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment", max_prompt_characters=128000)
+    reviewer = BatchReviewer(service, reviewer_spec("fixture-model", "fixture-deployment", prompt_budget=128000))
     review = reviewer.review([task], SOURCE_CONTRACT_RUBRIC).reviews
     assert review[0].status == ReviewStatus.REVIEWED
     payload = json.loads(service.batches["batch-0"][0]["body"]["messages"][1]["content"])
@@ -1103,12 +1117,14 @@ def test_trusted_panel_with_defects_infers_unsampled_rows_without_reviewing_them
     rows = [{**apple_row, "Body": f"Person {index} has 2 apples."} for index in range(120)]
     (staged / "source.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
     service = PanelDefectsBatchService()
-    reviewer = BatchReviewer(service, "fixture", "quality-panel", max_attempts=1)
+    reviewer = BatchReviewer(service, reviewer_spec("fixture", "quality-panel", max_attempts=1))
     config = review_config(reviewer)
     execution = AuditExecution(max_workers=1, review_batch_size=100, reviewer=reviewer)
     prepare_source(str(staged), str(prepared), svamp_recipe, None, execution, num_output_shards=1)
     report = assess_source_quality(str(prepared), str(quality), svamp_recipe, config, SourceQualityPolicy(), execution)
     assert report.status == "trust"
+    quality_manifest = json.loads((quality / "manifest.json").read_text())
+    assert quality_manifest["reviewer_spec"] == reviewer.spec.identity
     audit_prepared_source(str(prepared), str(quality), str(audited), svamp_recipe, config, execution)
     manifest = filter_source(str(audited), str(filtered), max_workers=1)
     records = [row for path in (filtered / "audit").glob("*.parquet") for row in pq.read_table(path).to_pylist()]
@@ -1154,7 +1170,7 @@ def test_source_quality_gate_reuses_reviews_and_preserves_all_rows(
     rows.extend([rows[0], {**apple_row, "Answer": "invalid"}])
     (staged / "source.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
     service = service_factory()
-    reviewer = BatchReviewer(service, "fixture", "quality-panel", max_attempts=1)
+    reviewer = BatchReviewer(service, reviewer_spec("fixture", "quality-panel", max_attempts=1))
     config = review_config(reviewer)
     execution = AuditExecution(max_workers=2, review_batch_size=10, reviewer=reviewer)
     prepare_source(str(staged), str(prepared), svamp_recipe, None, execution, num_output_shards=1)
@@ -1200,7 +1216,7 @@ def test_source_quality_without_eligible_tasks_retains_import_failures(tmp_path,
     staged.mkdir()
     (staged / "source.jsonl").write_text(json.dumps({**apple_row, "Answer": "invalid"}) + "\n")
     service = BatchService()
-    reviewer = BatchReviewer(service, "fixture", "empty-quality-panel")
+    reviewer = BatchReviewer(service, reviewer_spec("fixture", "empty-quality-panel"))
     config = review_config(reviewer)
     execution = AuditExecution(reviewer=reviewer)
     prepared, quality, audited = (str(tmp_path / name) for name in ("prepared", "quality", "audited"))
@@ -1223,7 +1239,7 @@ def test_large_encoded_code_tests_receive_bounded_review_without_changing_audit(
     task = conversation_task(row, "Implement solve for the supplied input.", grader)
     original = task.model_dump_json()
     service = BatchService()
-    reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment", max_prompt_characters=128000)
+    reviewer = BatchReviewer(service, reviewer_spec("fixture-model", "fixture-deployment", prompt_budget=128000))
     records = reviewer.review([task], SOURCE_CONTRACT_RUBRIC).reviews
     assert records[0].status == ReviewStatus.REVIEWED
     payload = json.loads(service.batches["batch-0"][0]["body"]["messages"][1]["content"])
@@ -1245,7 +1261,7 @@ def test_unicode_public_prompt_uses_character_budget_and_oversized_prompt_is_not
     prompt = "漢字" * 5000
     task = task.model_copy(update={"context": ConversationInput(events=(TextMessage(role="user", content=prompt),))})
     service = BatchService()
-    reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment", max_prompt_characters=40000)
+    reviewer = BatchReviewer(service, reviewer_spec("fixture-model", "fixture-deployment", prompt_budget=40000))
     assert reviewer.review([task], SVAMP_RUBRIC).reviews[0].status == ReviewStatus.REVIEWED
     payload = json.loads(service.batches["batch-0"][0]["body"]["messages"][1]["content"])
     assert payload["context"]["events"][0]["content"] == prompt

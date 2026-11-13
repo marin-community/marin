@@ -697,6 +697,7 @@ class CurationSummary(CatalogRecord):
 
 
 class ModelReference(CatalogRecord):
+    reviewer_spec_json: str | None = None
     model: str
     revision: str
     max_tokens: int

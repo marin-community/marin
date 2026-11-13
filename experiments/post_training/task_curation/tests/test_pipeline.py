@@ -11,6 +11,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import cast
 
+import click
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
@@ -50,6 +51,7 @@ from experiments.post_training.task_curation.images.build import (
     built_environment,
     environment_artifact,
 )
+from experiments.post_training.task_curation.judges import HostedJudgeEndpoint
 from experiments.post_training.task_curation.pipeline import (
     CampaignMachines,
     CurationRecipe,
@@ -78,6 +80,7 @@ from experiments.post_training.task_curation.tests.resource_receipts import (
 )
 from experiments.post_training.task_curation.tests.review_server import JudgeReply
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
+from lib.taskcompendium.tests.reviewer_specs import reviewer_spec
 
 AGENT_IMAGE = "ghcr.io/marin-community/iris-task@sha256:" + "d" * 64
 
@@ -93,7 +96,7 @@ def config() -> SourcePipelineConfig:
         mode=SourceProcessingMode.SAMPLE,
         quality_policy=SourceQualityPolicy(),
         verification_policy=SourceVerificationPolicy(10, 0, 2, 0.9),
-        review=ReviewConfig("fixture-model", "fixture-revision", mode=ReviewMode.BATCH),
+        review=ReviewConfig(reviewer_spec("fixture-model", "fixture-revision"), mode=ReviewMode.BATCH),
         execution=AuditExecution(),
         normalized_shards=2,
         machines=CampaignMachines(),
@@ -166,11 +169,13 @@ def test_declaration_changes_rename_the_artifact(config, change):
     assert step_name(change(math500()), config) != step_name(math500(), config)
 
 
-def test_review_settings_enter_identity_only_with_a_rubric(config):
-    revised = replace(config, review=replace(config.review, model_revision="other-revision"))
+def test_review_spec_enters_identity_for_every_reviewed_mode(config):
+    revised = replace(
+        config, review=replace(config.review, spec=replace(config.review.spec, model_revision="other-revision"))
+    )
     assert step_name(math500(), revised) != step_name(math500(), config)
     unreviewed = replace(math500(), rubric=None)
-    assert step_name(unreviewed, revised) == step_name(unreviewed, config)
+    assert step_name(unreviewed, revised) != step_name(unreviewed, config)
 
 
 def test_image_factory_enters_identity_only_with_controls(config):
@@ -298,7 +303,7 @@ def test_recipe_result_omits_skipped_review_and_verification_stages(tmp_path, co
     options = PipelineOptions(
         SourceProcessingMode.SAMPLE,
         runtime,
-        recipe_settings=RecipeSettings(config=replace(config, review=None, execution=AuditExecution(), machines=None)),
+        recipe_settings=RecipeSettings(config=replace(config, execution=AuditExecution(), machines=None)),
     )
     step = source_step(pipeline, options, receipt_root=primary)
     # Substitute only the HF transfer boundary; materialize the real declared dependency.
@@ -395,7 +400,6 @@ def test_reviewed_local_inputs_keep_controls_and_invalidate_changed_bytes(
         recipe_settings=RecipeSettings(
             config=replace(
                 config,
-                review=None,
                 machines=None,
                 quality_policy=SourceQualityPolicy(sample_size=1),
                 verification_policy=SourceVerificationPolicy(10, 0, 1, 1),
@@ -503,7 +507,7 @@ def test_reviewed_input_mutation_fails_instead_of_publishing_under_planned_ident
             files={file.name: file} if changed_input == "file" else {},
             auxiliary={"answers": str(auxiliary)},
         ),
-        recipe_settings=RecipeSettings(config=replace(config, review=None, machines=None)),
+        recipe_settings=RecipeSettings(config=replace(config, machines=None)),
     )
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     planned = source_step(recipe, options)
@@ -583,6 +587,15 @@ def test_recipe_without_review_uses_its_explicit_connection_for_judge_controls(
         controls=Controls(negative=semantic_empty_negative),
         grader=None,
     )
+    pinned_review = replace(
+        config.review,
+        spec=replace(
+            config.review.spec,
+            endpoint=HostedJudgeEndpoint(
+                "fixture-model", f"http://127.0.0.1:{review_server.server_port}/v1", "fixture-key"
+            ),
+        ),
+    )
     runtime = CampaignRuntime()
     options = PipelineOptions(
         SourceProcessingMode.FULL,
@@ -591,15 +604,15 @@ def test_recipe_without_review_uses_its_explicit_connection_for_judge_controls(
         recipe_settings=RecipeSettings(
             config=replace(
                 config,
-                review=None,
+                review=pinned_review,
                 execution=AuditExecution(),
                 machines=None,
                 verification_policy=SourceVerificationPolicy(10, 0, 1, 1),
             ),
-            base_url=f"http://127.0.0.1:{review_server.server_port}/v1",
             api_key="fixture-key",
         ),
     )
+    review_server.model_ids.append("fixture-model")
     review_server.judge_replies = [JudgeReply("FAIL")]
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     client = LocalClient()
@@ -688,3 +701,17 @@ def test_harbor_hub_input_override_bypasses_acquisition_and_tracks_content(tmp_p
     second = source_step(recipe, local_options)
     if mode != SourceProcessingMode.QUICK:
         assert first.name != second.name
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+def test_reviewed_modes_without_reviewer_spec_fail_before_building_graph(config, mode):
+    options = PipelineOptions(
+        mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=replace(config, review=None))
+    )
+    with pytest.raises(click.UsageError, match="ReviewerSpec"):
+        source_step(math500(), options)
+
+
+def test_worker_capacity_preserves_source_artifact_identity(config):
+    increased = replace(config, execution=replace(config.execution, max_workers=64))
+    assert step_name(math500(), config) == step_name(math500(), increased)

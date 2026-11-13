@@ -84,8 +84,8 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python \
   --source aime24 --source svamp --quality-sample-size 5 \
   --assess --assessment-sample-size 3 --excluded-sample-size 2 \
   --max-workers 2 --concurrent-sources 1 --review-concurrency 1 \
-  --review-mode chat --model-revision YOUR_GLM_REVISION \
-  --base-url YOUR_GLM_ENDPOINT --run
+  --reviewer-tier HEAVY \
+  --run
 ```
 
 Local reviewed runs need no worker image or controller for in-process graders.
@@ -131,16 +131,17 @@ records and packets into Postgres; SQL computes cohort labels and counts.
 
 Malformed or unavailable responses use finite retries. Remaining failures retain
 partial grades and fail the stage. Repeated runs reuse successful exact requests.
-Changing the rubric or `--assessment-model-revision` reuses curation and prepared
-packets. Ordinary source changes invalidate their downstream artifacts; shared
-stage implementation changes require an explicit version bump.
+Changing the assessment rubric reuses curation and prepared packets. Changing the
+reviewer spec selects new review and assessment cache identities. Ordinary source
+changes invalidate their downstream artifacts; shared stage implementation changes require an explicit version bump.
 
 Chat transport allows up to 64 requests per worker process, selected with
 `--review-concurrency`. Eight concurrently grading sources at 64 requests each
 can issue up to 512 requests in flight. Local reviewers share one process limit;
 remote worker processes have separate limits. Byte groups do not impose a
-completion barrier. Each task still has its own request, judgment and trace;
-`--review-mode batch` selects the provider's separate asynchronous batch API.
+completion barrier. Each task still has its own request, judgment and trace.
+Programmatic callers can select the provider's asynchronous batch API with
+`ReviewConfig(spec, mode=ReviewMode.BATCH)`.
 Tune concurrency from measured throughput and errors for the chosen endpoint.
 
 The cohort label is unknown for an empty sample, unavailable judgments or a
@@ -307,8 +308,8 @@ rendered text and embedding specification; Zephyr writes vector Parquet.
 Alignment reads that Parquet and keeps the curriculum matrix in worker memory.
 A curriculum edit reuses task vectors.
 
-Optional `--representation rewrite --model MODEL --model-revision REVISION
---base-url ENDPOINT` uses an inference service to rewrite public inputs before
+Optional `--representation rewrite --description-model MODEL --description-model-revision REVISION
+--description-base-url ENDPOINT` uses an inference service to rewrite public inputs before
 embedding. Supply its credential through `GLM_BULK_TOKEN`. Failed rewrites retain
 `skipped` rows and counters after bounded retries; the pass fails above 5%
 failures across distinct public inputs. `insufficient_context` records an input

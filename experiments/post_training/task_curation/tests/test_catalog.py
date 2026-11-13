@@ -33,7 +33,9 @@ def test_parquet_count_export_identifies_the_counted_input(tmp_path):
         parquet_counts(snapshot, "another-revision", "*.parquet")
 
 
-def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubric(tmp_path, monkeypatch, review_server):
+def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubric(
+    tmp_path, monkeypatch, review_server, qa_reviewer
+):
     monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
     staged = tmp_path / "input"
     staged.mkdir()
@@ -82,14 +84,8 @@ def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubr
         "2",
         "--assessment-sample-size",
         "2",
-        "--review-mode",
-        "chat",
-        "--model-revision",
-        "fixture",
         "--review-concurrency",
         "1",
-        "--base-url",
-        f"http://127.0.0.1:{review_server.server_address[1]}/v1",
         "--run",
     ]
     runner = CliRunner()

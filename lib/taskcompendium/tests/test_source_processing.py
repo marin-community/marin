@@ -74,6 +74,7 @@ from .pipeline_stages import (
     script_graded,
     svamp_row_task,
 )
+from .reviewer_specs import reviewer_spec
 from .test_pipeline import BatchService, Output
 
 REFERENCE_CONTROLS = Controls(golden=reference_reply)
@@ -194,7 +195,7 @@ def test_shared_admission_requires_integrity_but_quick_keeps_measurement(tmp_pat
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(1))
     recipe = fixture_recipe(unprotected_shared_task, rubric=None, controls=None)
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     with ZephyrContext(max_workers=1, chunk_storage_prefix=str(tmp_path / "quick-chunks")) as context:
         quick = run_source_pipeline(
             recipe,
@@ -287,7 +288,7 @@ def test_small_source_export_preserves_rows_with_fewer_files(tmp_path, rows, lim
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(rows))
     recipe = fixture_recipe(convert_svamp, rubric=None, controls=REFERENCE_CONTROLS)
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     config = pipeline_config(SourceProcessingMode.FULL, reviewer, normalized_shards=limit)
     result = run_pipeline(recipe, source, tmp_path / "output", config)
 
@@ -314,7 +315,7 @@ def test_full_preparation_preserves_joined_rows_across_partition_layouts(tmp_pat
     rows[6] = {**rows[6], "grader": "none"}
     write_jsonl(source, rows)
     recipe = fixture_recipe(convert_mixed_graders, rubric=None)
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     config = pipeline_config(SourceProcessingMode.FULL, reviewer, execution=AuditExecution(review_batch_size=2000))
     snapshots = []
     for maximum in (1, 64):
@@ -360,7 +361,7 @@ def test_complete_deduplication_precedes_quality_panel_and_admission(tmp_path, m
     first, second = apple_rows(2)
     write_jsonl(source, [first, first, second])
     recipe = fixture_recipe(convert_svamp, rubric=None, controls=None)
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     result = run_pipeline(recipe, source, tmp_path / "output", pipeline_config(mode, reviewer))
     manifest = read_json(result.manifest_path)
     assert manifest["raw_population_count"] == 3
@@ -459,7 +460,7 @@ def test_complete_conversion_precedes_bounded_quality_and_preserves_ledgers(
         ),
     )
     service = BatchService(quality=quality)
-    reviewer = BatchReviewer(service, "fixture", "revision")
+    reviewer = BatchReviewer(service, reviewer_spec("fixture", "revision"))
     config = pipeline_config(mode, reviewer)
     config = calibrated_config(recipe, source, config)
     with ZephyrContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
@@ -530,9 +531,7 @@ def test_complete_conversion_precedes_bounded_quality_and_preserves_ledgers(
     assert recipe.rubric is not None
     for requests in service.batches.values():
         for request in requests:
-            assert request["body"] == completion_body(
-                expected_tasks[request["custom_id"]], recipe.rubric, reviewer.model, reviewer.max_tokens
-            )
+            assert request["body"] == completion_body(expected_tasks[request["custom_id"]], recipe.rubric, reviewer.spec)
     assert all(row["raw_input_sha256"] == raw_by_id[row["task_id"]]["raw_input_sha256"] for row in normalized)
     assert all(row["raw_sha256"] != row["raw_input_sha256"] for row in normalized)
     assert all(row["raw_sha256"] is None for row in raw)
@@ -563,7 +562,7 @@ def test_unsupported_raw_panel_never_becomes_a_small_population_census(tmp_path,
     conversions.mkdir()
     write_jsonl(source, apple_rows(population_count + 1)[1:])
     recipe = fixture_recipe(RecordingConverter(str(conversions), unsupported=True))
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     result = run_pipeline(recipe, source, tmp_path / "output", pipeline_config(SourceProcessingMode.FULL, reviewer))
     report = read_json(result.manifest_path)
     assert report["quality"]["status"] == ("census" if population_count <= 100 else "trust")
@@ -598,7 +597,7 @@ def test_source_read_in_parts_publishes_the_views_of_a_whole_read(tmp_path, mode
     source, produced = tmp_path / "source", tmp_path / "produced"
     produced.mkdir()
     write_jsonl(source, apple_rows(125))
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     config = pipeline_config(mode, reviewer)
     whole = run_pipeline(fixture_recipe(convert_svamp), source, tmp_path / "whole", config)
     parts = AlternatingParts(3, str(produced))
@@ -630,7 +629,7 @@ def test_completed_source_preserves_phase_payloads_and_reuses_inference_cache(tm
     write_jsonl(source, apple_rows(2)[1:])
     recipe = fixture_recipe(convert_svamp)
     initial = BatchService()
-    reviewer = BatchReviewer(initial, "fixture", "revision", query_cache_root=str(tmp_path / "cache"))
+    reviewer = BatchReviewer(initial, reviewer_spec("fixture", "revision"), query_cache_root=str(tmp_path / "cache"))
     config = pipeline_config(SourceProcessingMode.SAMPLE, reviewer)
     first = run_pipeline(recipe, source, tmp_path / "output", config)
     first_review = parquet_rows(first.review_path)
@@ -659,7 +658,9 @@ def test_source_retry_reuses_successful_reviews_after_unavailable_evidence(tmp_p
         recipe = fixture_recipe(convert_svamp)
         unavailable = available = None
     service = BatchService(interrupted=failure == "quality_panel")
-    reviewer = BatchReviewer(service, "fixture", "revision", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
+    reviewer = BatchReviewer(
+        service, reviewer_spec("fixture", "revision", max_attempts=1), query_cache_root=str(tmp_path / "cache")
+    )
     config = pipeline_config(SourceProcessingMode.FULL, reviewer, machines=unavailable)
     if failure == "verification":
         tasks = [
@@ -739,7 +740,7 @@ def test_qc_unavailability_does_not_reject_tasks_but_controls_still_can(
     )
     recipe = fixture_recipe(convert_svamp, controls=controls)
     service = PartiallyUnavailableReview(bad_count)
-    reviewer = BatchReviewer(service, "fixture", "revision", max_attempts=1)
+    reviewer = BatchReviewer(service, reviewer_spec("fixture", "revision", max_attempts=1))
     result = run_pipeline(recipe, source, tmp_path / "output", pipeline_config(mode, reviewer))
     assert result.status == ("sampled" if processed < population else "completed")
     report = read_json(result.manifest_path)
@@ -767,7 +768,9 @@ def test_unavailable_reviews_remain_in_the_ledger_while_full_conversion_complete
 ):
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(125))
-    reviewer = BatchReviewer(PartiallyUnavailableReview(bad_count, unavailable), "fixture", "revision", max_attempts=1)
+    reviewer = BatchReviewer(
+        PartiallyUnavailableReview(bad_count, unavailable), reviewer_spec("fixture", "revision", max_attempts=1)
+    )
     result = run_pipeline(
         fixture_recipe(convert_svamp),
         source,
@@ -810,7 +813,7 @@ def test_raw_panel_with_source_defects_keeps_fixed_draw_and_decisive_quality(
     write_jsonl(source, apple_rows(101))
     recipe = fixture_recipe(MixedPanelConverter(str(conversions), defect_limit))
     service = BatchService()
-    reviewer = BatchReviewer(service, "fixture", "revision")
+    reviewer = BatchReviewer(service, reviewer_spec("fixture", "revision"))
     result = run_pipeline(recipe, source, tmp_path / "output", pipeline_config(SourceProcessingMode.SAMPLE, reviewer))
     report = read_json(result.manifest_path)
     assert report["raw_sample_count"] == report["quality"]["population"]["input_count"] == 100
@@ -833,7 +836,7 @@ def test_source_failure_retains_nested_preparation_evidence_without_review_reque
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(3)[2:])
     recipe = fixture_recipe(convert_svamp)
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     config = pipeline_config(
         SourceProcessingMode.SAMPLE,
         reviewer,
@@ -879,7 +882,7 @@ def test_source_without_rubric_keeps_converted_rows_without_review_requests(tmp_
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(120))
     service = BatchService()
-    reviewer = BatchReviewer(service, "fixture", "revision")
+    reviewer = BatchReviewer(service, reviewer_spec("fixture", "revision"))
     result = run_pipeline(
         fixture_recipe(convert_svamp, rubric=None), source, tmp_path / "output", pipeline_config(mode, reviewer)
     )
@@ -906,7 +909,7 @@ def test_admission_admits_only_rows_with_a_ready_grader_and_names_each_output_vi
         {"Body": "Aya has apples.", "Question": "How many?", "Answer": "unknown", "grader": "in_process"}
     ]
     write_jsonl(source, rows)
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     recipe = fixture_recipe(convert_mixed_graders, rubric=None)
     converted = [
         convert_source_row({"locator": f"source.jsonl:{i}", "data": row}, recipe).result for i, row in enumerate(rows)
@@ -962,7 +965,7 @@ def test_admission_admits_only_rows_with_a_ready_grader_and_names_each_output_vi
 def test_judge_graded_source_without_controls_is_admitted_unverified(tmp_path):
     source = tmp_path / "source"
     write_jsonl(source, [{**row, "grader": "judge"} for row in apple_rows(3)])
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     result = run_pipeline(
         fixture_recipe(convert_mixed_graders, rubric=None, controls=None),
         source,
@@ -984,7 +987,7 @@ def test_judge_graded_source_runs_controls_through_explicit_remote_connection(tm
     judge_server.reply = "FAIL"
     source = tmp_path / "source"
     write_jsonl(source, [{**row, "grader": "judge"} for row in apple_rows(3)])
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     result = run_pipeline(
         fixture_recipe(convert_mixed_graders, rubric=None, controls=JUDGE_CONTROLS),
         source,
@@ -1018,7 +1021,7 @@ def test_judge_graded_source_runs_controls_through_explicit_remote_connection(tm
 def test_sandbox_rows_reach_final_only_after_controls_pass(tmp_path, machines, admission, status):
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(3))
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     recipe = fixture_recipe(convert_script_graded, rubric=None, controls=ORACLE_CONTROLS)
     tasks = [
         convert_source_row({"locator": f"source.jsonl:{i}", "data": data}, recipe).result.task
@@ -1075,7 +1078,7 @@ def test_reviewed_modes_share_quick_conversion_records_before_admission(tmp_path
         RecordingConverter(str(conversions), unsupported=True),
         source=replace(SOURCE_FILES, patterns=(filename,), format=source_format, decode=drop_archive_path),
     )
-    reviewer = BatchReviewer(BatchService(quality="good"), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(quality="good"), reviewer_spec("fixture", "revision"))
     with ZephyrContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
         quick = run_source_pipeline(
             recipe,
@@ -1129,7 +1132,7 @@ def test_reviewed_oracle_source_requires_population_filter_and_rejects_failed_or
     write_jsonl(source, rows)
     recipe = replace(fixture_recipe(convert_script_graded, rubric=None, controls=ORACLE_CONTROLS), oracle_solutions=True)
     service = BatchService()
-    reviewer = BatchReviewer(service, "fixture", "revision")
+    reviewer = BatchReviewer(service, reviewer_spec("fixture", "revision"))
     config = pipeline_config(mode, reviewer, machines=FixtureGradingMachines())
     with pytest.raises(ValueError, match="full-population Harbor oracle filter"):
         run_pipeline(recipe, source, tmp_path / "missing", config)
@@ -1154,7 +1157,7 @@ def test_decontamination_receipt_precedes_conversion_and_quality_review(tmp_path
     conversions.mkdir()
     recipe = fixture_recipe(RecordingConverter(str(conversions)), controls=REFERENCE_CONTROLS)
     service = BatchService()
-    reviewer = BatchReviewer(service, "fixture", "revision")
+    reviewer = BatchReviewer(service, reviewer_spec("fixture", "revision"))
     evidence = decontamination_evidence(recipe.source.dataset, recipe.source.revision, 1)
     document = evidence.model_dump(mode="json")
     if state == "measurement_only":
@@ -1188,13 +1191,13 @@ def test_transport_outage_cannot_qualify_tasks_with_passing_controls(tmp_path):
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(2))
     recipe = fixture_recipe(convert_svamp, controls=REFERENCE_CONTROLS)
-    available = BatchReviewer(BatchService(), "fixture", "available", max_attempts=1)
+    available = BatchReviewer(BatchService(), reviewer_spec("fixture", "available", max_attempts=1))
     qualified = run_pipeline(
         recipe, source, tmp_path / "available", pipeline_config(SourceProcessingMode.FULL, available)
     )
     assert qualified.status == "completed"
     assert len(parquet_rows(qualified.final_path)) == 2
-    unavailable = BatchReviewer(BatchService(interrupted=True), "fixture", "unavailable", max_attempts=1)
+    unavailable = BatchReviewer(BatchService(interrupted=True), reviewer_spec("fixture", "unavailable", max_attempts=1))
     pending = run_pipeline(
         recipe, source, tmp_path / "unavailable", pipeline_config(SourceProcessingMode.FULL, unavailable)
     )

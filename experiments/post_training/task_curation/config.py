@@ -13,7 +13,6 @@ from taskcompendium.pipeline.source_processing import SourcePipelineConfig, Sour
 from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_SAMPLE_SIZE
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig
 
-from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 
 
@@ -24,9 +23,7 @@ class RecipeSettings:
     config: SourcePipelineConfig | None = None
     review: ReviewConfig | None = None
     review_cache: str | None = None
-    base_url: str | None = None
     api_key: str | None = None
-    relay_job: str = DEFAULT_GLM_RELAY_JOB
     review_concurrency: int = MAX_DIRECT_CONCURRENT_REQUESTS
     normalized_shards: int | None = None
     machines: GradingMachines | None = None
