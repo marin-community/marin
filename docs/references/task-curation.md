@@ -649,13 +649,18 @@ filesystem state outside the protected harness. Grading uses that same container
 with its pytest child running as a separate UID, 10002.
 
 Before agent access, the harness captures the task-reference tests and conftests,
-pytest and its declared plugin implementations, the test interpreter and the
+third-party pytest and plugin implementations, the test interpreter and the
 control program. It discovers the source's own pytest configuration and root
 directory using the task interpreter and preserves its configuration and addopts.
 On every grading launch it kills agent-UID processes, restores those source files,
 and removes added tests and local-plugin initializers. Installed entrypoint plugins
-load from the protected runner using the frozen pre-agent entrypoint names and
-modules. It registers their packages for assertion rewriting before imports,
+use frozen pre-agent entrypoint names and modules. Third-party implementations
+load from the protected runner; repository-owned distributions remain live
+product code, even when they register pytest plugins. Ownership is captured
+before agent access: distribution files resolve into the workspace, or its
+top-level packages match repository package roots in that census. A third-party
+plugin's dependency on a repository-owned distribution does not pin that product.
+The runner registers entrypoint packages for assertion rewriting before imports,
 preserves plugin registration names and honors source `-p no:...` blocks.
 Configuration discovery reads the source settings without starting plugins;
 the grading session validates required plugins after loading the frozen baseline.
@@ -670,7 +675,11 @@ retained as diagnostic output and cannot serve as the verdict. Per-trial
 `site-packages-diff.json` and `startup-hooks-diff.json` compare dependency files
 and startup hooks to the pre-agent baseline. `source-environment.json` records the
 pytest and pytest-metadata versions captured with the protected runner before
-agent access. The contract records these audit
+agent access. `workspace-owned-distributions.json` records the package-root census,
+ownership evidence and which distributions were encountered in the grader's
+dependency graph; `workspace-owned-diff.json` compares their repository files
+against the pre-agent baseline. Installed copies remain covered by the site-packages
+diff. The contract records the dependency/hook audit
 probes and the known open `.pth` and `sitecustomize` hook gaps.
 
 This policy temporarily gives greater weight to avoiding bad RL signal from

@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -72,7 +73,7 @@ def shared_runtime(request):
             (workspace / test_path).write_text(
                 "import candidate\ndef test_value(source_value): assert candidate.VALUE == source_value\n"
             )
-        elif request.param != "base":
+        elif request.param in {"pyproject.toml", "setup.cfg", "pytest.ini"}:
             (workspace / "extras").mkdir()
             (workspace / "extras/source_dependency.py").write_text("VALUE = 1\n")
             (workspace / "test_case.py").write_text(
@@ -111,6 +112,38 @@ def shared_runtime(request):
             "baseline_plugin.py,,\nbaseline_plugin-1.dist-info/METADATA,,\n"
             "baseline_plugin-1.dist-info/entry_points.txt,,\nbaseline_plugin-1.dist-info/RECORD,,\n"
         )
+        if request.param.startswith("workspace-plugin-"):
+            (workspace / "candidate.py").unlink()
+            package = workspace / "candidate"
+            package.mkdir()
+            (package / "__init__.py").write_text("VALUE = 0\n")
+            (package / "plugin.py").write_text("# Repository-owned pytest plugin\n")
+            (workspace / "test_case.py").write_text(
+                "import candidate, baseline_plugin\n"
+                "def test_value():\n"
+                "    assert candidate.VALUE == 1, candidate.__file__\n"
+                "    assert baseline_plugin.SENTINEL == 1\n"
+            )
+            (site / "baseline_plugin.py").write_text("SENTINEL = 1\n")
+            owner = workspace if request.param == "workspace-plugin-editable" else site
+            product_metadata = owner / "candidate_product-1.dist-info"
+            product_metadata.mkdir()
+            (product_metadata / "METADATA").write_text("Name: candidate-product\nVersion: 1\n")
+            (product_metadata / "top_level.txt").write_text("candidate\n")
+            (product_metadata / "RECORD").write_text(
+                "candidate/__init__.py,,\ncandidate/plugin.py,,\n"
+                "candidate_product-1.dist-info/METADATA,,\ncandidate_product-1.dist-info/RECORD,,\n"
+            )
+            if owner == workspace:
+                (site / "source-product.pth").write_text(str(workspace) + "\n")
+            else:
+                shutil.copytree(package, site / "candidate")
+            if request.param == "workspace-plugin-dependency":
+                (metadata / "METADATA").write_text(
+                    "Name: baseline-plugin\nVersion: 1\nRequires-Dist: candidate-product\n"
+                )
+            else:
+                (product_metadata / "entry_points.txt").write_text("[pytest11]\nproduct = candidate.plugin\n")
         if request.param in {"entrypoints", "entrypoint-block", "entrypoint-required"}:
             (site / "baseline_plugin.py").unlink()
             package = site / "baseline_plugin"
@@ -167,6 +200,29 @@ def shared_runtime(request):
         )
         verifyit.chmod(0o755)
         yield SharedRuntime(contract, site, verifyit)
+
+
+@pytest.mark.parametrize(
+    "shared_runtime",
+    ["workspace-plugin-editable", "workspace-plugin-wheel", "workspace-plugin-dependency"],
+    indirect=True,
+)
+def test_shared_grading_keeps_repository_product_live_and_third_party_plugin_pinned(shared_runtime):
+    runtime = shared_runtime
+    candidate = Path(runtime.contract.workspace) / "candidate/__init__.py"
+    candidate.write_text("VALUE = 1\n")
+    (runtime.site / "baseline_plugin.py").write_text("SENTINEL = 0\n")
+    verdict = runtime.grade()
+    assert verdict["reward"] == 1.0, verdict
+    reports = Path(runtime.contract.report_directory)
+    ownership = json.loads((reports / "workspace-owned-distributions.json").read_text())
+    product = next(row for row in ownership["distributions"] if row["distribution"] == "candidate-product")
+    assert product["grader_dependency"]
+    changes = json.loads((reports / "workspace-owned-diff.json").read_text())
+    assert changes[str(candidate)] == {
+        "before": hashlib.sha256(b"VALUE = 0\n").hexdigest(),
+        "after": hashlib.sha256(b"VALUE = 1\n").hexdigest(),
+    }
 
 
 @pytest.mark.parametrize(
