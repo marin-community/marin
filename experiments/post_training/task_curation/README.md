@@ -481,7 +481,13 @@ uv run --no-sync --package marin-core --extra dedup python -m \
 
 Each pass retries invalid or unavailable observations under the pinned review
 protocol. Valid observations in partially completed batches are retained,
-successful batches are reused, and every attempt remains available. A shard
+successful batches are reused, and every attempt remains available. Run exactly
+one current-version writer per batch cache: do not overlap a whole-source
+review driver with shard workers, or two shard campaigns sharing that
+cache. The batch `latest.json` pointer has no compare-and-swap protection.
+Pre-sharding drivers that write only immutable attempts and all-valid
+`complete.json` receipts may finish alongside a shard campaign; they never
+replace its partial-progress pointer. A shard
 record reports its attempted and valid counts; it makes no source-wide FULL claim.
 First-pass and final status counts are retained, and the assembly campaign
 reports the final invalid rate per source separately from its issue rate.
