@@ -15,7 +15,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.machines import grading_machine_factory, task_machine
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits
 from shellbox.backends.local.disk import verified_local_disk_pool
-from shellbox.backends.local.machine import LocalMachineFactory
+from shellbox.backends.local.machine import SYSTEM_DIRECTORIES, LocalMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import (
     ExitReason,
@@ -448,10 +448,14 @@ class TaskSpecTrial(Trial):
     async def _grade_in_process(self, relay: ModelRelay | None, connection: JudgeConnection | None) -> GradeResult:
         # Production Verifyit judges use the host judge service. Keep its interpreter
         # in a bounded framework worker, leaving the task lock and actor environment untouched.
+        directories = {
+            Path(path).resolve() for path in (sys.prefix, sys.base_prefix, *sys.path) if path and Path(path).is_dir()
+        }
         roots = tuple(
-            dict.fromkeys(
-                Path(path).resolve() for path in (sys.prefix, sys.base_prefix, *sys.path) if path and Path(path).is_dir()
-            )
+            path
+            for path in sorted(directories)
+            if not any(path.is_relative_to(root) for root in SYSTEM_DIRECTORIES)
+            and not any(parent in directories for parent in path.parents)
         )
         image = HostImage(read_only=roots, bin_dirs=(Path(sys.executable).parent,))
         env = (
