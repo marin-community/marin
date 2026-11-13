@@ -326,7 +326,9 @@ print(json.dumps({'sites':sorted(sites),'executable':sys.executable,
             [contract["interpreter"], "-I", "-c", "import sysconfig;print(sysconfig.get_path('purelib'))"],
             cwd=root,
             timeout=30,
-        ).strip()
+        )
+        .decode()
+        .strip()
     )
     # Product subprocesses use this interpreter too; retain their live source dependencies.
     (child_site / "taskcompendium-source-sites.pth").write_text(
