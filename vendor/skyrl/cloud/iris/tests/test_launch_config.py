@@ -36,7 +36,7 @@ from skyrl_train.inference_engines import placement as inference_placement
 def test_starting_checkpoint_resolves_without_overriding_resume_mode(tmp_path: Path, mode: str | None) -> None:
     raw = raw_launch_config()
     checkpoint = {"uri": "s3://seed/checkpoints/global_step_2", "identity": "seed@2026.11.13:abc"}
-    raw["inputs"]["resume_checkpoint"] = checkpoint
+    raw["inputs"]["starting_checkpoint"] = checkpoint
     if mode is not None:
         raw["skyrl"]["trainer"]["resume_mode"] = mode
     path = tmp_path / "launch.yaml"
@@ -46,7 +46,7 @@ def test_starting_checkpoint_resolves_without_overriding_resume_mode(tmp_path: P
 
     assert resolved.skyrl.trainer.resume_mode == (mode or "latest")
     assert resolved.skyrl.trainer.resume_path == checkpoint["uri"]
-    assert OmegaConf.to_container(resolved.inputs.resume_checkpoint) == checkpoint
+    assert OmegaConf.to_container(resolved.inputs.starting_checkpoint) == checkpoint
     assert resolved.artifacts.checkpoint_root == raw["artifacts"]["checkpoint_root"]
 
 
