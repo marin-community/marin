@@ -25,6 +25,25 @@ class Quality(StrEnum):
 
 
 @dataclass(frozen=True)
+class QualityDisplay:
+    quality: Quality
+    review_status: str | None
+
+
+def quality_display(
+    declaration: dict[str, Any], curation: dict[str, Any] | None, assessment_key: str | None
+) -> QualityDisplay:
+    """Keep unfinished reviews pending without changing declared oversight or evidence."""
+    aggregate = declaration.get("quality_result")
+    if aggregate is not None and aggregate["reviewed"] == 0:
+        return QualityDisplay(Quality.QUICK, "SAMPLE review in progress")
+    level = quality(declaration, curation)
+    if level != Quality.QUICK and declaration.get("quality_result") is None and assessment_key is None:
+        return QualityDisplay(Quality.QUICK, "SAMPLE review in progress")
+    return QualityDisplay(level, None)
+
+
+@dataclass(frozen=True)
 class ReviewCompleteness:
     reviewed: int
     required: int
@@ -103,6 +122,8 @@ def quality(declaration: dict[str, Any], curation: dict[str, Any] | None) -> Qua
         and review.get("unavailable_count", 0) == 0
     ):
         return Quality.FULL
+    if review is not None and qc is not None and review.get("sample_count") and qc["reviewed"] == review["sample_count"]:
+        return Quality.SAMPLE
     if declaration.get("oversight") in {"sample", "full"}:
         return Quality.SAMPLE
     if (curation or {}).get("mode") in {"sample", "full"}:
@@ -126,7 +147,7 @@ def measured_result(declaration: dict[str, Any], review: dict[str, Any] | None) 
         )
     else:
         return None
-    return measured
+    return measured if measured.reviewed else None
 
 
 def result(declaration: dict[str, Any], review: dict[str, Any] | None) -> str | None:

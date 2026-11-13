@@ -248,6 +248,20 @@ uv run marina release /tmp/atlas-preview-package --allow-dirty --base-version CU
 Use a fresh output directory for each build. Replace `CURRENT_VERSION` with the
 versions response's top-level `current_version`.
 
+The loader selects preview display policy only for UUID
+`c9742a15-fb46-4d56-bc88-aa916351ebd3`. A source awaiting an exact-input SAMPLE
+Result displays QUICK with “SAMPLE review in progress” in its details and Quality
+tooltip. The declaration's oversight and evidence remain unchanged, and absent
+Results, issue rates and coverage remain unmeasured. Sources displayed as SAMPLE
+or FULL still require a computed Result. Catalog publication and production
+imports retain their strict Result gate; preview imports retain all admission
+and grading-census checks. Display policy is part of the load identity, so a
+preview import cannot make a later strict import skip validation.
+Matching computed aggregate and independent sample-panel counts display SAMPLE
+without changing execution oversight. The same pure projection runs during
+loading and API reads, so a code upgrade keeps an existing selected catalog
+readable even if a later strict reload is rejected.
+
 Before validation and release, optional frozen partial-review observations can
 replace `dist/measurements/content-progress.json`. Its JSON object contains
 `as_of` and a `sources` list. Each row contains `source_id`, `dataset_id`,
