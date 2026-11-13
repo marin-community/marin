@@ -98,6 +98,13 @@ sampling and telemetry gaps remain documented there.
 
 ## RL-only continuation
 
+Set `rl.train_routes` to `[agentic]` or `[nonagentic]` for a single-route smoke.
+Omission selects both datasets. Consumed-group quotas must match the selected
+route pools; the emitted launch contains only their training inputs and source
+classifications. Set `rl.export_hf: false` to omit the terminal HF export in
+a training-only qualification; full loops export by default. Disable checkpoint
+callbacks separately when the qualification only needs an optimizer update.
+
 After SFT commits, pin its selection, checkpoint metadata/manifest, consumed config,
 source lineage, and payload inventory in an `adopted_sft` file. Reference that file
 by path and SHA-256 in the run spec. Use a fresh runtime version. Missing or changed

@@ -38,6 +38,7 @@ def configured_rl_step(
     retained: int,
     seed: int,
     ray_timeouts: dict[str, int],
+    export_hf: bool,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind supplied training settings to admitted model/data artifacts and runtime paths."""
     validate_stage_config(config, "rl")
@@ -63,7 +64,7 @@ def configured_rl_step(
             seed=seed,
         ),
         execution,
-        export_hf=True,
+        export_hf=export_hf,
     )
 
     recipe_export_selection = config["trainer"]["hf_export_checkpoint"]
@@ -72,7 +73,9 @@ def configured_rl_step(
     def bind_runtime(context: StepContext) -> SkyRLRunConfig:
         launch = original_builder(context)
         document = yaml.safe_load(launch.launch_config_yaml)
-        document["run"]["finalization"] = "any_terminal" if recipe_export_selection == "best" else "success"
+        document["run"]["finalization"] = (
+            "any_terminal" if export_hf and recipe_export_selection == "best" else "success"
+        )
         document["ray"].update(ray_timeouts)
         recipe = document["skyrl"]
         for callback in recipe["trainer"].get("callbacks", []):

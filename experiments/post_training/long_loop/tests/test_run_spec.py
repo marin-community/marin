@@ -23,6 +23,29 @@ from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 SPEC = Path(__file__).parents[1] / "specs" / "round1.yaml"
 
 
+@pytest.mark.parametrize("route", ["agentic", "nonagentic"])
+def test_single_training_route_excludes_the_other_dataset(monkeypatch, route):
+    prefix = "s3://marin-rno2a/tmp/ttl=7d/test-route"
+    monkeypatch.setenv("MARIN_PREFIX", prefix)
+    resolved = resolve_spec(SPEC, smoke=True)
+    resolved["adopted_sft"] = {
+        "kind": "hf_export",
+        "uri": "s3://test/model",
+        "repository": "test/model",
+        "revision": "a" * 40,
+    }
+    resolved["rl"]["train_routes"] = [route]
+    batch_size = resolved["rl"]["role_plan"]["train_batch_size"]
+    resolved["rl"]["config"]["trainer"]["rollout_buffer"]["consumed_route_quotas"] = {route: batch_size}
+    terminal = build_spec_graph(resolved, "2026.11.13.43606", through="rl")
+    context = StepContext.for_run(terminal.path(prefix), prefix, runtime_args=terminal.runtime_args, deps=terminal.deps)
+    launch = yaml.safe_load(terminal.build_config(context).launch_config_yaml)
+    assert [(source["uri"], source["relative_path"]) for source in launch["inputs"]["train_data"]] == [
+        (resolved["datasets"][route]["uri"], resolved["datasets"][route]["data_file"])
+    ]
+    assert set(launch["skyrl"]["trainer"]["rollout_buffer"]["source_routes"].values()) == {route}
+
+
 def test_emitted_rl_validation_and_eval_settings_come_from_the_pinned_spec(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "s3://test/long-loop")
     monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")

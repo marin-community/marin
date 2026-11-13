@@ -17,8 +17,13 @@ from experiments.post_training.long_loop import rl
 from experiments.post_training.long_loop.spec_pipeline import runtime_execution, stage_execution
 
 
-@pytest.mark.parametrize("export_selection,finalization", [("best", "any_terminal"), ("latest", "success")])
-def test_real_builder_binds_selected_model_and_attempt_trace_paths(monkeypatch, export_selection, finalization):
+@pytest.mark.parametrize(
+    "export_selection,finalization,export_hf",
+    [("best", "any_terminal", True), ("latest", "success", True), ("latest", "success", False)],
+)
+def test_real_builder_binds_selected_model_and_attempt_trace_paths(
+    monkeypatch, export_selection, finalization, export_hf
+):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
     recipe = yaml.safe_load((Path(__file__).parents[1] / "specs/rl.yaml").read_text())
     recipe["config"]["trainer"]["hf_export_checkpoint"] = export_selection
@@ -41,11 +46,13 @@ def test_real_builder_binds_selected_model_and_attempt_trace_paths(monkeypatch, 
         retained=recipe["retained"],
         seed=recipe["seed"],
         ray_timeouts=recipe["ray_timeouts"],
+        export_hf=export_hf,
     )
     context = StepContext.for_run(step.path(), "s3://test/output", runtime_args=step.runtime_args, deps=step.deps)
     built = step.build_config(replace(context, is_fingerprint=True))
     document = yaml.safe_load(built.launch_config_yaml)
     assert document["run"]["finalization"] == finalization
+    assert document["run"]["export_hf"] is export_hf
     config = document["skyrl"]
     assert config["trainer"]["hf_export_checkpoint"] == export_selection
     selection = next(c for c in config["trainer"]["callbacks"] if c["type"] == "best_checkpoint")

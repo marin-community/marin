@@ -234,9 +234,12 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
     }
     rl = resolved["rl"]
     rl_config = json.loads(json.dumps(rl["config"]))
-    routes = {source: route for route in ("agentic", "nonagentic") for source in datasets[route]["source_names"]}
-    if len(routes) != sum(len(datasets[route]["source_names"]) for route in ("agentic", "nonagentic")):
-        raise ValueError("Agentic and nonagentic source names overlap")
+    train_routes = tuple(rl.get("train_routes", ("agentic", "nonagentic")))
+    if not train_routes or len(set(train_routes)) != len(train_routes) or set(train_routes) - {"agentic", "nonagentic"}:
+        raise ValueError("RL train_routes must select distinct agentic/nonagentic datasets")
+    routes = {source: route for route in train_routes for source in datasets[route]["source_names"]}
+    if len(routes) != sum(len(datasets[route]["source_names"]) for route in train_routes):
+        raise ValueError("Selected training source names overlap")
     rl_config["trainer"]["rollout_buffer"]["source_routes"] = routes
     rl_execution = stage_execution(rl["execution"], coordinator)
     budget = rl.get("wall_clock_budget")
@@ -276,11 +279,10 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             tokenizer_revision=tokenizer["revision"],
             relative_path=handoff_dir,
         ),
-        train_data=tuple(
-            ArtifactDataSource(adopted[k], relative_path=datasets[k]["data_file"]) for k in ("agentic", "nonagentic")
-        ),
+        train_data=tuple(ArtifactDataSource(adopted[k], relative_path=datasets[k]["data_file"]) for k in train_routes),
         validation_data=(ArtifactDataSource(adopted["heldout"], relative_path=datasets["heldout"]["data_file"]),),
         ray_timeouts=rl["ray_timeouts"],
+        export_hf=rl.get("export_hf", True),
         config=rl_config,
         plan=draccus.decode(SkyRLRolePlan, rl["role_plan"]),
         execution=rl_execution,
