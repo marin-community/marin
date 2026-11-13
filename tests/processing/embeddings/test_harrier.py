@@ -6,15 +6,13 @@ from threading import Barrier
 
 import numpy as np
 import pytest
+from marin.processing.embeddings.harrier import HarrierConfig, load_harrier
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
+from transformers import AutoModel, PreTrainedTokenizerFast, Qwen3Config
 
-torch = pytest.importorskip("torch")
-
-from transformers import PreTrainedTokenizerFast, Qwen3Config, Qwen3Model
-
-from marin.processing.embeddings.harrier import HarrierConfig, load_harrier
+pytest.importorskip("torch")
 
 
 def test_concurrent_harrier_loads_share_a_usable_backend(tmp_path):
@@ -23,7 +21,7 @@ def test_concurrent_harrier_loads_share_a_usable_backend(tmp_path):
     PreTrainedTokenizerFast(
         tokenizer_object=tokenizer, unk_token="[UNK]", pad_token="[PAD]", model_max_length=32
     ).save_pretrained(tmp_path)
-    Qwen3Model(
+    AutoModel.from_config(
         Qwen3Config(
             vocab_size=4,
             hidden_size=16,
