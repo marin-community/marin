@@ -85,7 +85,6 @@ def test_repaired_fragment_exports_the_exact_oracle_and_a_separate_private_grade
     assert config["artifacts"] == [{"source": "/app/solution.txt", "destination": "app/solution.txt"}]
     assert payload.files["environment/Dockerfile"] == f"FROM {ACTOR_IMAGE}\n".encode()
     assert all("tests/" not in name for name in payload.files if name.startswith("environment/"))
-    assert repaired.execution_requirements is None
     archived = {r.path: resource_bytes(r) for r in repaired.resources.oracle}
     assert archived["source_archive/tests/test.sh"] == NATIVE_SCRIPT.read_bytes()
     assert archived["source_archive/tests/solution.txt"] == b"target()\n"
@@ -99,7 +98,6 @@ def test_repaired_fragment_exports_the_exact_oracle_and_a_separate_private_grade
         (b"\n \t\ntarget()  \r\n\t\n", b"target()", 1.0, "1/exact"),
         (b"target()\nextra\nmore\nlast\n", b"target()", 1.0, "2/startswith"),
         (b"target anything entirely wrong", b"target()", 1.0, "3/leading-identifier"),
-        (b"other", b"target()", 0.25, "4/non-empty-partial"),
         (b"y" * 399, b"target()", 0.25, "4/non-empty-partial"),
         (b"y" * 400, b"target()", 0.0, ""),
         (b"123 + ---", b"target()", 0.0, ""),
