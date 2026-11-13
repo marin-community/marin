@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 from experiments.evals.vep.prompts import HEALTHY_PREFIX, classification_prompt
+from experiments.evals.vep.protocol import SEQUENCE_LENGTH, VARIANT_INDEX, VARIANT_POSITION
 
 
 @dataclass(frozen=True)
@@ -39,12 +40,12 @@ def targets(rows: list[dict], demonstrations: list[dict], format_check_ids: set[
                     question = original[original.index("Which classification applies") :]
                     prompt = (
                         "Classify variant V01 for Mendelian disease.\n"
-                        "The reference and alternate sequences are each 255 bases long.\n"
-                        "The mutation is at position 128 (1-based) in the displayed sequences.\n\n"
+                        f"The reference and alternate sequences are each {SEQUENCE_LENGTH} bases long.\n"
+                        f"The mutation is at position {VARIANT_POSITION} (1-based) in the displayed sequences.\n\n"
                         f"Reference sequence: {sequences['reference']}\n"
                         f"Alternate sequence: {sequences['alternate']}\n"
-                        f"Mutation V01: {sequences['reference'][127]}>{sequences['alternate'][127]} at position 128\n\n"
-                        + question
+                        f"Mutation V01: {sequences['reference'][VARIANT_INDEX]}>"
+                        f"{sequences['alternate'][VARIANT_INDEX]} at position {VARIANT_POSITION}\n\n" + question
                     )
                     for candidate in (" A", " B"):
                         yield Target(row["id"], "explicit-pair", strand, mapping, candidate, prompt, candidate, True)

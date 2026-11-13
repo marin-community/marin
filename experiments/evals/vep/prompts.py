@@ -5,6 +5,8 @@
 
 from pathlib import Path
 
+from experiments.evals.vep.protocol import VARIANT_INDEX
+
 HEALTHY_PREFIX = "The following sequence is from a healthy individual:\n"
 TEMPLATES = Path(__file__).parent / "templates"
 
@@ -13,8 +15,8 @@ def fields(row: dict, strand: str) -> dict[str, str]:
     sequences = row["sequences"][strand]
     return {
         "reference_sequence": sequences["reference"],
-        "ref_base": sequences["reference"][127],
-        "alt_base": sequences["alternate"][127],
+        "ref_base": sequences["reference"][VARIANT_INDEX],
+        "alt_base": sequences["alternate"][VARIANT_INDEX],
     }
 
 

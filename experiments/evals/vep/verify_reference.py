@@ -11,6 +11,8 @@ from pathlib import Path
 
 import requests
 
+from experiments.evals.vep.protocol import AUTOSOMES, VARIANT_INDEX
+
 ENDPOINT = "https://rest.ensembl.org/sequence/region/homo_sapiens"
 
 
@@ -23,8 +25,8 @@ def main() -> None:
     rows = [row for panel in panels["panels"].values() for row in panel]
     expected = {}
     for row in rows:
-        assert row["chrom"] in {str(i) for i in range(1, 23)}
-        region = f"{row['chrom']}:{row['pos'] - 127}..{row['pos'] + 127}:1"
+        assert row["chrom"] in AUTOSOMES
+        region = f"{row['chrom']}:{row['pos'] - VARIANT_INDEX}..{row['pos'] + VARIANT_INDEX}:1"
         sequence = row["sequences"]["+"]["reference"]
         assert region not in expected or expected[region] == sequence
         expected[region] = sequence

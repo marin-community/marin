@@ -41,6 +41,17 @@ def completion_score(response: dict, token_ids: list[int], start: int, target: s
     return math.fsum(scores)
 
 
+@dataclass(frozen=True)
+class LikelihoodScore:
+    """Observed continuation likelihood and the exact token accounting."""
+
+    logprob: float
+    target_ids: list[int]
+    prefix_tokens: int
+    input_tokens: int
+    usage: dict[str, object]
+
+
 @dataclass
 class ScoringClient:
     """Caller supplies an authenticated session and a private output stream."""
@@ -103,7 +114,7 @@ class ScoringClient:
             self.tokenizations[text] = tokens
         return self.tokenizations[text]
 
-    def score(self, prefix: str, target: str, single_token: bool) -> dict:
+    def score(self, prefix: str, target: str, single_token: bool) -> LikelihoodScore:
         prefix_ids = self.tokenize(prefix)
         tokens = self.tokenize(prefix + target)
         start = continuation_start(prefix_ids, tokens, single_token)
@@ -125,10 +136,10 @@ class ScoringClient:
         if self.fingerprint is None:
             self.fingerprint = fingerprint
         assert fingerprint == self.fingerprint, "Serving build changed during scoring"
-        return {
-            "logprob": completion_score(response, tokens, start, target),
-            "target_ids": tokens[start:],
-            "prefix_tokens": start,
-            "input_tokens": len(tokens),
-            "usage": response["usage"],
-        }
+        return LikelihoodScore(
+            logprob=completion_score(response, tokens, start, target),
+            target_ids=tokens[start:],
+            prefix_tokens=start,
+            input_tokens=len(tokens),
+            usage=response["usage"],
+        )

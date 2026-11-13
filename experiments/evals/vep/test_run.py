@@ -6,6 +6,7 @@ import io
 import json
 
 import pytest
+from marin.evaluation.likelihood import LikelihoodScore
 from requests import Session
 
 from experiments.evals.vep.run import run_panel
@@ -32,7 +33,7 @@ class RecordingClient:
 
     def score(self, prefix, target, single_token):
         self.requests_sent += 1
-        return {"logprob": -len(target), "target_ids": [1]}
+        return LikelihoodScore(-len(target), [1], 1, len(target), {})
 
 
 @pytest.mark.parametrize("fail_final", [False, True])

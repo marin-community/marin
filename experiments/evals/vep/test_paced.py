@@ -5,7 +5,7 @@ import io
 import json
 
 import pytest
-from marin.evaluation.likelihood import ScoringClient
+from marin.evaluation.likelihood import LikelihoodScore, ScoringClient
 
 from experiments.evals.vep.paced import PacedClient
 from experiments.evals.vep.targets import Target
@@ -13,7 +13,7 @@ from experiments.evals.vep.targets import Target
 
 def test_changed_sentinel_stops_before_more_scores(monkeypatch):
     values = iter([-0.5, -0.5, -0.4])
-    monkeypatch.setattr(ScoringClient, "score", lambda *args: {"logprob": next(values)})
+    monkeypatch.setattr(ScoringClient, "score", lambda *args: LikelihoodScore(next(values), [], 1, 1, {}))
     evidence = io.StringIO()
     client = PacedClient(None, "unused", "fixture", io.StringIO(), 100, 900, guard_log=evidence)
     client.sentinels = [Target("fixture", "null", "+", "none", "reference", "", "ACGT", False)]

@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-AUTOSOMES = frozenset(str(i) for i in range(1, 23))
+from experiments.evals.vep.protocol import AUTOSOMES, SEQUENCE_LENGTH, VARIANT_INDEX
+
 INPUTS = {
     "variants-train.parquet": "919abf532debd9f5e339b94cd4eef9868cbfa92dbe4fc57a0b1398da481f469f",
     "sequences-train.parquet": "3e8a6fa99f94ced9e86972a56857b60ddaf7e0cea3f4deddbee555aef9832506",
@@ -62,7 +63,7 @@ def select_panels(groups: dict[str, list[dict]], seed: int, validation_groups: i
                 row
                 for row in candidates
                 if all(
-                    row["match_group"] != other["match_group"] and abs(row["pos"] - other["pos"]) > 254
+                    row["match_group"] != other["match_group"] and abs(row["pos"] - other["pos"]) > SEQUENCE_LENGTH - 1
                     for other in chosen
                 )
             )
@@ -78,7 +79,9 @@ def select_panels(groups: dict[str, list[dict]], seed: int, validation_groups: i
     validation = []
     for key in query_groups[10:]:
         group = groups[key]
-        if any(a["chrom"] == b["chrom"] and abs(a["pos"] - b["pos"]) <= 254 for a in group for b in pilot):
+        if any(
+            a["chrom"] == b["chrom"] and abs(a["pos"] - b["pos"]) <= SEQUENCE_LENGTH - 1 for a in group for b in pilot
+        ):
             continue
         validation.extend(group)
         if len(validation) == validation_groups * 10:
@@ -115,13 +118,13 @@ def attach_sequences(panels: dict[str, list[dict]], path: Path) -> None:
         assert strand in {"+", "-"} and strand not in sequences[identity]
         ref = row["context"] + row["ref_completion"]
         alt = row["context"] + row["alt_completion"]
-        assert len(row["context"]) == 127 and len(ref) == len(alt) == 255
+        assert len(row["context"]) == VARIANT_INDEX and len(ref) == len(alt) == SEQUENCE_LENGTH
         assert set(ref + alt) <= set("ACGT")
-        assert [i for i, (a, b) in enumerate(zip(ref, alt, strict=True)) if a != b] == [127]
+        assert [i for i, (a, b) in enumerate(zip(ref, alt, strict=True)) if a != b] == [VARIANT_INDEX]
         alleles = (source["ref"], source["alt"])
         if strand == "-":
             alleles = tuple(reverse_complement(base) for base in alleles)
-        assert (ref[127], alt[127]) == alleles
+        assert (ref[VARIANT_INDEX], alt[VARIANT_INDEX]) == alleles
         sequences[identity][strand] = {"reference": ref, "alternate": alt}
     for identity, row in wanted.items():
         pair = sequences[identity]
