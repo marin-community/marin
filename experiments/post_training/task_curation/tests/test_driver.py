@@ -39,7 +39,7 @@ from experiments.post_training.task_curation.pipeline import (
     environment_requirements,
     process_rows,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource, SourceInfo, SourceOrigin
 from experiments.post_training.task_curation.tests.image_builds import (
     DATA_PATH,
     REPOSITORY,
@@ -56,6 +56,19 @@ from lib.taskcompendium.tests.deduplication_fixtures import deduplication_eviden
 def math500() -> CurationRecipe:
     recipe = cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
     return resource_recipe(replace(recipe, source=replace(recipe.source, repo="open-athena/math500-fixture")))
+
+
+def source_with_input_evidence[ConfigT: CatalogConfig](source: RlDataSource[ConfigT]) -> RlDataSource[ConfigT]:
+    dataset = source.dataset
+    assert dataset is not None and dataset.revision is not None
+    return replace(
+        source,
+        info=replace(
+            source.info,
+            lexical_contamination=decontamination_evidence(dataset.name, dataset.revision, 1),
+            within_source_dedup=deduplication_evidence(dataset.name, dataset.revision, source.version),
+        ),
+    )
 
 
 @pytest.fixture
@@ -251,19 +264,7 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
     input_file = tmp_path / "numbers.txt"
     input_file.write_text("1\n2\n3\n")
     source = number_source(input_file)
-    source = replace(
-        source,
-        info=replace(
-            source.info, lexical_contamination=decontamination_evidence(source.dataset.name, source.dataset.revision, 1)
-        ),
-    )
-    source = replace(
-        source,
-        info=replace(
-            source.info,
-            within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, source.version),
-        ),
-    )
+    source = source_with_input_evidence(source)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     options = [
         "--mode",
@@ -445,19 +446,7 @@ def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, 
             controls=None,
         ),
     )
-    source = replace(
-        source,
-        info=replace(
-            source.info, lexical_contamination=decontamination_evidence(source.dataset.name, source.dataset.revision, 1)
-        ),
-    )
-    source = replace(
-        source,
-        info=replace(
-            source.info,
-            within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, source.version),
-        ),
-    )
+    source = source_with_input_evidence(source)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
     staged = tmp_path / "input"
@@ -512,19 +501,7 @@ def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, r
         ),
     )
     source = replace(declared, config=replace(math500(), rubric=None, controls=None))
-    source = replace(
-        source,
-        info=replace(
-            source.info, lexical_contamination=decontamination_evidence(source.dataset.name, source.dataset.revision, 1)
-        ),
-    )
-    source = replace(
-        source,
-        info=replace(
-            source.info,
-            within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, source.version),
-        ),
-    )
+    source = source_with_input_evidence(source)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
     staged = tmp_path / "input"
@@ -586,19 +563,7 @@ def test_full_campaign_requires_qa_transport_availability(tmp_path, monkeypatch,
         ),
     )
     source = replace(declared, config=replace(math500(), controls=None))
-    source = replace(
-        source,
-        info=replace(
-            source.info, lexical_contamination=decontamination_evidence(source.dataset.name, source.dataset.revision, 1)
-        ),
-    )
-    source = replace(
-        source,
-        info=replace(
-            source.info,
-            within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, source.version),
-        ),
-    )
+    source = source_with_input_evidence(source)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
     review_server.review_available = False
