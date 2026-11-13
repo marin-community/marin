@@ -1,6 +1,6 @@
 format: sft_spec
 profile: snowball_h100
-pack: true
+pack: 256
 target_positions: 50063212544
 source_step_positions: 67108864
 stop_after_steps: 23872

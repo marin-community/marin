@@ -100,7 +100,7 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         for child in children:
             child["format"] = {"type": "serialized_chat", **recipe["serialized_chat"]}
             child["pack"] = recipe["pack"]
-    data["block_cross_document_attention"] = recipe["pack"]
+    data["block_cross_document_attention"] = bool(recipe["pack"])
     data_config = draccus.decode(LmDataConfig, data)
     return replace(
         SNOWBALL_SFT,
