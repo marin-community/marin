@@ -62,6 +62,14 @@ from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentity
 
 from experiments.post_training.task_curation.catalog_identity import backend_survey_payload, canonical_backend_survey
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
+from experiments.post_training.task_curation.tests.admission_fixtures import (
+    actor_census_input,
+    grading_evidence,
+    with_declaration_admission_census,
+)
+from experiments.post_training.task_curation.tests.admission_fixtures import (
+    isolated_admission_census as isolated_admission_census,
+)
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, PRODUCTION_APP_ID, prepare_preview
@@ -72,6 +80,8 @@ from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_s
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_declarations
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
+
+pytestmark = pytest.mark.usefixtures("isolated_admission_census")
 
 
 def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:
@@ -255,6 +265,7 @@ def publish_sample(
     source_id: str = "Marin:math",
     origin: SourceOrigin = SourceOrigin.MARIN,
     duplicates: int = 0,
+    unassessed_oversight: OversightLevel | None = None,
     grading_environment: GradingEnvironmentEvidence | None = None,
     admitted_verdicts: tuple[str, str] = ("good", "unknown"),
     oversight: OversightLevel = OversightLevel.NONE,
@@ -273,7 +284,7 @@ def publish_sample(
         daytona_machine_slots=0,
         daytona_execution_failures=0,
         daytona_count_basis="Fixture tasks contain no actor environment.",
-        grading_environment=grading_environment,
+        grading_environment=grading_environment or grading_evidence(3 - duplicates),
         family="Marin:math",
         tags=[],
         task_count=3 - duplicates,
@@ -281,7 +292,7 @@ def publish_sample(
             update={"unique_count": 3 - duplicates, "within_source_duplicates": duplicates}
         ),
         notes="",
-        oversight=oversight,
+        oversight=unassessed_oversight or oversight,
         dataset_id="fixture",
         dataset_revision="1",
         url=None,
@@ -291,6 +302,7 @@ def publish_sample(
         kind="Dataset",
         status="Available",
         pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": "1", "files": []},
+        actor_census_input=actor_census_input("fixture", "1", "1", 3 - duplicates),
     )
     curation = CurationSummary(
         status="completed",
@@ -349,7 +361,7 @@ def publish_sample(
             snapshot_id=snapshot_id,
             id=source_id,
             declaration=declaration,
-            assessment_key=key,
+            assessment_key=key if unassessed_oversight is None else None,
             latest_attempt_key=key,
             latest_attempt_status="complete",
             reason=None,
@@ -564,7 +576,7 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
 def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
     catalog_database, catalog_query, tmp_path, monkeypatch, unavailable_status
 ):
-    monkeypatch.setattr("infra.marina.apps.rl_data_catalog.load.MAX_BATCH_BYTES", 2500)
+    monkeypatch.setattr("infra.marina.apps.rl_data_catalog.load.MAX_BATCH_BYTES", 3500)
     monkeypatch.setattr("infra.marina.apps.rl_data_catalog.load_curriculum.DELETE_BATCH_SIZE", 1)
     engine = catalog_database
     query = catalog_query
@@ -737,6 +749,51 @@ def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(
         assert client.get("/archive/reviews/legacy/artifacts/nested/trace.txt").text == "saved trace"
 
 
+@pytest.mark.parametrize("oversight", [OversightLevel.SAMPLE, OversightLevel.FULL])
+def test_atlas_rejects_oversight_without_result_and_preserves_selected_catalog(
+    catalog_database, catalog_query, tmp_path, oversight
+):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "reviewed")
+    load_catalog(CurationCatalog(root), catalog_query)
+    publish_sample(root, "missing-result", unassessed_oversight=oversight)
+    with pytest.raises(ValueError, match="SAMPLE/FULL quality requires a computed Result"):
+        load_catalog(CurationCatalog(root), catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        inventory = client.get("/sources").json()
+        assert inventory["snapshot_id"] == "reviewed"
+        assert inventory["sources"][0]["result"] == "GOOD"
+
+
+@pytest.mark.parametrize("failure", ["missing", "stale", "no_grader"])
+def test_atlas_blocks_invalid_admission_census_without_replacing_selected_catalog(
+    catalog_database, catalog_query, tmp_path, failure
+):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "reviewed")
+    load_catalog(CurationCatalog(root), catalog_query)
+    publish_sample(root, "next")
+    source_id = "Marin:math"
+    catalog = CurationCatalog(root)
+    source = next(row for row in catalog.sources("next") if row.id == source_id)
+    declaration = source.declaration.model_dump(mode="json")
+    if failure == "missing":
+        declaration["grading_environment"] = None
+    elif failure == "stale":
+        declaration["actor_census_input"]["dataset_revision"] = "stale"
+    else:
+        declaration["grading_environment"]["reason_counts"] = {"No executable grader is declared": 3}
+    changed = {**source.model_dump(mode="json"), "declaration": declaration}
+    with DataStore.open(root) as store:
+        register_catalog(store)
+        with store.transaction() as transaction:
+            transaction.table(INVENTORY).add(changed)
+    with pytest.raises(ValueError, match=r"Admission census|Actor census input|without runnable graders"):
+        load_catalog(CurationCatalog(root), catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        assert client.get("/sources").json()["snapshot_id"] == "reviewed"
+
+
 @pytest.mark.parametrize("verdicts, provisional", [(("good", "good"), False), (("good", "unknown"), True)])
 def test_loaded_sample_result_uses_required_review_completeness(
     catalog_database, catalog_query, tmp_path, verdicts, provisional
@@ -781,7 +838,10 @@ def test_unchanged_catalog_refreshes_pre_completeness_load(catalog_database, cat
 
 def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, catalog_query, tmp_path):
     root = str(tmp_path / "lexical-catalog")
-    cases = contamination_declarations()
+    cases = [
+        (expected, with_declaration_admission_census(declaration))
+        for expected, declaration in contamination_declarations()
+    ]
     with DataStore.open(root, writer_id="lexical") as store:
         register_catalog(store)
         with store.transaction() as tx:
@@ -823,7 +883,9 @@ def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, c
 
 def test_loaded_assemblies_keep_inflight_and_uncertain_results_provisional(catalog_database, catalog_query, tmp_path):
     root = str(tmp_path / "lexical-catalog")
-    cases = review_declarations()
+    cases = [
+        (expected, with_declaration_admission_census(declaration)) for expected, declaration in review_declarations()
+    ]
     with DataStore.open(root, writer_id="lexical") as store:
         register_catalog(store)
         with store.transaction() as tx:

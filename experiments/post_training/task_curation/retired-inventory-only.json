@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "77e73c85cab608d95e9a67f2a8599094853787d7",
+  "revision": "bd037d5147689c7d6c98f43ee0d127222f60eb08",
   "path": "experiments/post_training/task_curation/retired-inventory-only.json",
-  "sha256": "6e7eacfe631df425978bc6943f1d7e85b593e7c10d809a73163cbc0c9ac6bee8"
+  "sha256": "65b7c21cc599a2d0ee493287ca16e2cb72d7b92267f3b7a4be674735c2fbc308"
 }

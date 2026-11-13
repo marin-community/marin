@@ -454,6 +454,28 @@ MarinSkyRL builds them.
 | `current_release` | Required exact `{repo, revision, url}` consumed for training. QUICK uses its pinned input; QA/repair uses its private open-athena release; decontamination uses the configured remediated pin after the pipeline is rebound. Release URLs must match their repository and revision. |
 | `quality_result` | Computed `reviewed`, `issue_count`, `issue_rate`, `verdict`, `issues`, and `repair_recommendation`. `sample_count`, `uncertain_count` and `unavailable_count` retain coverage. Mechanical exclusions remain in their own ledger. |
 
+Catalog publication, metadata refresh, Atlas loading and registered training selection require an
+exact-input `AdmissionCensusReceipt` from task curation. Its `ActorCensusInput` must match the
+current dataset pin, converter and population digest; the retained population must be nonempty,
+and every task must have a runnable grader. Missing or stale receipts fail validation. Native
+Harbor packages are checked for their executable verifier and environment rather than treating
+their `NoGrader` transport wrapper as an absent grader. A population with no executable grader
+is retired into the historical ledger; aliases, previous snapshots and artifacts remain available.
+Atlas also refuses a new load that would display SAMPLE or FULL without a computed Result.
+Executed grader controls alone do not supply a content-quality Result.
+
+`admission_inventory` scans current populations through their actor-census bindings and freezes
+seed-zero panels of at most 100 tasks. It records the stored-byte scan digest independently from
+the original conversion-order digest. `--resume-root` reuses completed matching censuses and
+hash-checked panels. These panels provide neither execution qualification nor an oracle receipt.
+Run the census on CPU workers in the data's region with an explicit target, production priority
+and a three-day timeout:
+
+```bash
+python -m experiments.post_training.task_curation.admission_inventory \
+  --declarations FROZEN_DECLARATIONS.json --output-root NEW_VERSIONED_PREFIX --workers 12
+```
+
 Catalog projection rejects every non-grandfathered source without actor census
 counts and their basis, including conversation-only sources claiming N/A. Keep
 unmeasured cohorts in the pending ingestion ledger. Publish a new metadata

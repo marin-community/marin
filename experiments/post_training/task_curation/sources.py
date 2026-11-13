@@ -53,6 +53,7 @@ from experiments.post_training.task_curation.lexical_binding import bind_lexical
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.remediation_binding import bind_retained_release
+from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from experiments.post_training.task_curation.source import RlDataSource, TaskFormat
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
@@ -129,7 +130,7 @@ def all_sources() -> dict[str, RlDataSource]:
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")
-    return {source.info.id: source for source in sources}
+    return {source.info.id: source for source in sources if source.info.id not in retired_admission_source_ids()}
 
 
 def require_accepted_task_format(source: RlDataSource) -> None:

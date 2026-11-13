@@ -63,6 +63,7 @@ from experiments.post_training.task_curation.inventory import (
     write_training,
 )
 from experiments.post_training.task_curation.pipeline import source_recipe
+from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.conversion import converted_task
 from experiments.post_training.task_curation.tests.resource_receipts import resource_recipe, write_fixture_receipt
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, original_source_id
@@ -410,6 +411,7 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
             within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, source.version),
         ),
     )
+    source = with_admission_census(source)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     staged = tmp_path / "input"
     staged.mkdir()

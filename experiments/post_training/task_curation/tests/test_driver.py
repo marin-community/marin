@@ -14,7 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from finestore.rl.curation import CurationCatalog
+from finestore.rl.curation import CurationCatalog, OversightEvidence, OversightLevel
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
@@ -22,12 +22,15 @@ from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import Command, HostImage, Mount, NetworkPolicy
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.local import LocalRuntime, local_runtime
 from zephyr.readers import load_parquet
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
+from experiments.post_training.task_curation import driver
 from experiments.post_training.task_curation import pipeline as processor
+from experiments.post_training.task_curation import sources as source_catalog
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.environment import Environment
@@ -40,6 +43,7 @@ from experiments.post_training.task_curation.pipeline import (
     process_rows,
 )
 from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.image_builds import (
     DATA_PATH,
     REPOSITORY,
@@ -61,13 +65,15 @@ def math500() -> CurationRecipe:
 def source_with_input_evidence[ConfigT: CatalogConfig](source: RlDataSource[ConfigT]) -> RlDataSource[ConfigT]:
     dataset = source.dataset
     assert dataset is not None and dataset.revision is not None
-    return replace(
-        source,
-        info=replace(
-            source.info,
-            lexical_contamination=decontamination_evidence(dataset.name, dataset.revision, 1),
-            within_source_dedup=deduplication_evidence(dataset.name, dataset.revision, source.version),
-        ),
+    return with_admission_census(
+        replace(
+            source,
+            info=replace(
+                source.info,
+                lexical_contamination=decontamination_evidence(dataset.name, dataset.revision, 1),
+                within_source_dedup=deduplication_evidence(dataset.name, dataset.revision, source.version),
+            ),
+        )
     )
 
 
@@ -441,6 +447,7 @@ def test_recipe_cli_plans_pinned_review_and_requires_credentials_only_for_execut
             within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, source.version),
         ),
     )
+    source = with_admission_census(source)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     report = tmp_path / "report.json"
     options = [
@@ -735,3 +742,20 @@ def test_quick_conversion_can_collect_actor_evidence_before_catalog_publication(
     output = tmp_path / "output" / source.name / "numbers.json"
     assert json.loads(output.read_text()) == [2, 4]
     assert source.catalog_declaration is None
+
+
+def test_quick_selection_does_not_require_admission_for_unrelated_sources(tmp_path, monkeypatch):
+    source = number_source(tmp_path / "input")
+    unrelated = number_source(tmp_path / "other", "unqualified")
+    unrelated = replace(
+        unrelated,
+        info=replace(
+            unrelated.info,
+            oversight=OversightEvidence(level=OversightLevel.SAMPLE, verification="Executed fixture controls"),
+        ),
+    )
+    monkeypatch.setattr(driver, "all_sources", lambda: {source.info.id: source, unrelated.info.id: unrelated})
+
+    monkeypatch.setattr(source_catalog, "all_sources", driver.all_sources)
+    monkeypatch.setattr(driver, "runnable_sources", source_catalog.runnable_sources)
+    assert driver._selected_sources((source.name,), SourceProcessingMode.QUICK) == {source.name: source}
