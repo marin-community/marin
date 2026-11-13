@@ -50,7 +50,6 @@ MARIN_RUFF_CONFIG = ROOT_DIR / "lib/marin/pyproject.toml"
 EXCLUDE_PATTERNS = [
     # Vendored runtimes retain upstream formatting and license notices.
     "vendor/skyrl/**",
-    "vendor/evalchemy/**",
     "vendor/harbor/**",
     # Canonical instruction checkers retain upstream style and license notices.
     "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifeval/**",
@@ -884,6 +883,7 @@ PRECOMMIT_CONFIGS = [
             "lib/fray/src/**/*.py",
             "lib/iris/src/**/*.py",
             "lib/rigging/src/**/*.py",
+            "lib/skyrlrecipe/src/**/*.py",
             "lib/zephyr/src/**/*.py",
             "infra/marina/src/**/*.py",
             "infra/marina/apps/**/*.py",

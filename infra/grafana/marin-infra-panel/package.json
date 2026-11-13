@@ -17,7 +17,7 @@
   "devDependencies": {
     "@grafana/eslint-config": "^9.0.0",
     "@grafana/plugin-e2e": "^3.6.1",
-    "@grafana/sign-plugin": "^3.2.2",
+    "@grafana/sign-plugin": "^4.0.0",
     "@grafana/tsconfig": "^2.0.1",
     "@playwright/test": "^1.57.0",
     "@stylistic/eslint-plugin-ts": "^4.4.0",

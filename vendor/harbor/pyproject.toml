@@ -54,6 +54,7 @@ tinker = ["tinker>=0.14.0", "tinker-cookbook>=0.1.0"]
 [dependency-groups]
 test = [
     "harbor[shellsim]",
+    "marin-taskcompendium",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.2.0",
     "pytest-cov>=7.0.0",
@@ -87,6 +88,8 @@ marin-taskcompendium = { path = "../../lib/taskcompendium", editable = true }
 marin-rolloutengine = { path = "../../lib/rolloutengine", editable = true }
 marin-verifyit = { path = "../../lib/verifyit", editable = true }
 marin-finelog = { path = "../../lib/finelog", editable = true }
+marin-taskcompendium = { path = "../../lib/taskcompendium", editable = true }
+marin-verifyit = { path = "../../lib/verifyit", editable = true }
 
 [tool.pytest.ini_options]
 timeout = 60

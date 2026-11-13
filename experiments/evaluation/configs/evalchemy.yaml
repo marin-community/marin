@@ -1,0 +1,184 @@
+evaluations:
+  aime24-smoke:
+    benchmark: aime24
+    run:
+      limit: 2
+  financebench:
+    benchmark: financebench
+    run:
+      judge:
+        deployment: together
+        models:
+          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
+        default_model: openai/gpt-oss-120b
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key:
+      - env:TOGETHER_API_KEY
+      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+  gsm8k-0shot:
+    benchmark: gsm8k
+    num_fewshot: 0
+  gsm8k-smoke:
+    benchmark: gsm8k
+    run:
+      limit: 128
+  mmlu-smoke:
+    partitions:
+    - abstract_algebra
+    benchmark: mmlu
+    num_fewshot: 0
+    run:
+      limit: 64
+  olympiadbench-deterministic:
+    benchmark: olympiadbench
+    protocol: deterministic
+  olympiadbench:
+    benchmark: olympiadbench
+    run:
+      judge:
+        deployment: together
+        models:
+          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
+        default_model: openai/gpt-oss-120b
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key:
+      - env:TOGETHER_API_KEY
+      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+  arc-challenge-10shot:
+    benchmark: arc-challenge
+    num_fewshot: 10
+  arc-easy-10shot:
+    benchmark: arc-easy
+    num_fewshot: 10
+  boolq-10shot:
+    benchmark: boolq
+    num_fewshot: 10
+  piqa-10shot:
+    benchmark: piqa
+    num_fewshot: 10
+  winogrande-0shot:
+    benchmark: winogrande
+    num_fewshot: 0
+  hellaswag-0shot:
+    benchmark: hellaswag
+    num_fewshot: 0
+  truthfulqa-6shot:
+    benchmark: truthfulqa
+    num_fewshot: 6
+  mmlu-0shot:
+    benchmark: mmlu
+    num_fewshot: 0
+  mmlu-pro-5shot:
+    benchmark: mmlu-pro
+    protocol: likelihood
+    num_fewshot: 5
+  gsm8k-cot-8shot:
+    benchmark: gsm8k
+    protocol: cot
+    num_fewshot: 8
+  bbh-cot-3shot:
+    benchmark: bbh
+    protocol: cot
+  nq-open-0shot:
+    benchmark: nq-open
+    num_fewshot: 0
+  triviaqa-0shot:
+    benchmark: triviaqa
+    num_fewshot: 0
+  drop-0shot:
+    benchmark: drop
+    num_fewshot: 0
+  humaneval-10shot:
+    benchmark: humaneval
+    num_fewshot: 10
+  mrcr-32k:
+    benchmark: mrcr
+    protocol: 32k
+  mrcr-65k:
+    benchmark: mrcr
+    protocol: 65k
+suites:
+  smoke:
+  - mmlu-smoke
+  - gsm8k-smoke
+  standard:
+  - mmlu
+  - arc-challenge
+  - hellaswag
+  - winogrande
+  - truthfulqa
+  - boolq
+  - piqa
+  - openbookqa
+  - gsm8k
+  - math500
+  - humaneval
+  - arc-easy
+  - lambada
+  - triviaqa
+  - nq-open
+  - drop
+  - gsm8k-0shot
+  - aime24
+  - olympiadbench
+  - olympiadbench-deterministic
+  - humanevalplus
+  - mbppplus
+  - mmlu-smoke
+  - gsm8k-smoke
+  - aime24-smoke
+  - mmlu-pro
+  - gpqa-diamond
+  - cruxeval
+  - financebench
+  - ifeval
+  - ifbench
+  - mrcr
+  - graphwalks
+  - nupa5k-loose
+  core:
+  - mmlu
+  - gsm8k
+  - arc-challenge
+  - hellaswag
+  - winogrande
+  - truthfulqa
+  - boolq
+  - piqa
+  - openbookqa
+  - humaneval
+  - math500
+  nlp:
+  - mmlu
+  - arc-challenge
+  - arc-easy
+  - hellaswag
+  - winogrande
+  - truthfulqa
+  - boolq
+  - piqa
+  - openbookqa
+  - lambada
+  - triviaqa
+  - nq-open
+  - drop
+  - gsm8k-0shot
+  chat:
+  - math500
+  - aime24
+  - olympiadbench
+  math:
+  - math500
+  - aime24
+  - gsm8k-0shot
+  code:
+  - humanevalplus
+  - mbppplus
+  agentic:
+  - tb2
+  - swebench
+  - gaia
+  - bfcl
+  - aider
+  - medagentbench
+  - financeagent

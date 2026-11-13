@@ -1438,6 +1438,7 @@ tinker = [
 test = [
     { name = "anthropic" },
     { name = "harbor", extra = ["shellsim"] },
+    { name = "marin-taskcompendium" },
     { name = "mini-swe-agent" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1499,6 +1500,7 @@ provides-extras = ["runtime", "taskcompendium", "iris", "qemu", "shellsim", "sot
 test = [
     { name = "anthropic", specifier = ">=1.11.0" },
     { name = "harbor", extras = ["shellsim"] },
+    { name = "marin-taskcompendium", editable = "../../lib/taskcompendium" },
     { name = "mini-swe-agent", specifier = "==2.1.0" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-asyncio", specifier = ">=1.2.0" },

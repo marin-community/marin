@@ -12,10 +12,10 @@ No task object or harness dependency is retained in a released corpus.
 import re
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from random import Random
 from typing import Any
 
-import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
 from verifyit.spec import ExactSpec
 
@@ -28,14 +28,24 @@ from taskcompendium.evaluation.spec import (
     LikelihoodRequest,
     TextGeneration,
 )
-from taskcompendium.importers.evalchemy.grader import source_package
+from taskcompendium.importers.evalchemy.fewshot_grader import source_package
 from taskcompendium.importers.evalchemy.scorers.harness_generation import drop_references
+from taskcompendium.importers.fewshot import (
+    FEWSHOT_SEED,
+    ChoiceDocument,
+    ChoiceLayout,
+    ChoiceTemplate,
+    FewshotPolicy,
+    FewshotSampling,
+    parquet_documents,
+    sample_indices,
+)
+from taskcompendium.importers.fewshot import compile_choice_documents as compile_choices
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
 
 HARNESS_REVISION = "6d642546f4688648fced259eb3302efd36ece5af"
-FEWSHOT_SEED = 1234
 TRUTHFULQA_PREFIX = """Q: What is human life expectancy in the United States?
 A: Human life expectancy in the United States is 78 years.
 
@@ -61,13 +71,6 @@ class HarnessTemplate:
     num_fewshot: int
     subject: str = ""
     fewshot_file: str = ""
-
-
-@dataclass(frozen=True)
-class ChoiceDocument:
-    prompt: str
-    choices: tuple[str, ...]
-    gold: int
 
 
 @dataclass(frozen=True)
@@ -141,67 +144,47 @@ def choice_document(doc: Mapping[str, Any], template: HarnessTemplate) -> Choice
 def compile_choice_documents(
     documents: Iterable[dict[str, Any]], fewshot_documents: Sequence[dict[str, Any]], template: HarnessTemplate
 ) -> Iterator[dict[str, Any]]:
-    """Compile a complete source file in source order, preserving stateful few-shot sampling."""
-    random = Random(FEWSHOT_SEED)
-    for doc in documents:
-        if template.name == "mmlu":
-            indices = list(range(template.num_fewshot))
-            subject = template.subject.replace("_", " ")
-            prefix = f"The following are multiple choice questions (with answers) about {subject}.\n\n"
-        else:
-            indices = _sample_indices(random, fewshot_documents, doc, template)
-            prefix = ""
-        for index in indices:
-            demonstration = choice_document(fewshot_documents[index], template)
-            target = demonstration.choices[demonstration.gold]
-            prefix += (
-                target + " " + demonstration.prompt
-                if template.name == "winogrande"
-                else demonstration.prompt + " " + target
-            ) + "\n\n"
-        document = choice_document(doc, template)
-        requests = tuple(
-            (
-                LikelihoodRequest(context=prefix + choice, continuation=" " + document.prompt)
-                if template.name == "winogrande"
-                else LikelihoodRequest(context=prefix + document.prompt, continuation=" " + choice)
-            )
-            for choice in document.choices
-        )
-        operation = ChoiceLikelihood(
-            choices=document.choices,
-            requests=requests,
-            gold=(
-                tuple(index for index, label in enumerate(doc["mc2_targets"]["labels"]) if label)
-                if template.name == "truthfulqa_mc2"
-                else (document.gold,)
-            ),
-        )
-        yield {
-            "document": doc,
-            "task_name": original_task_name(template),
-            "operation": operation.model_dump(mode="json"),
-            "fewshot_indices": indices,
-            "fewshot_seed": FEWSHOT_SEED,
-            "num_fewshot": template.num_fewshot,
-            "harness_revision": HARNESS_REVISION,
-        }
+    """Adapt pinned lm-eval formatting to the shared source-order compiler."""
+    subject = template.subject.replace("_", " ")
+    policy = FewshotPolicy(
+        shots=template.num_fewshot,
+        sampling=FewshotSampling.FIRST if template.name == "mmlu" else _sampling(template),
+        pool_file=template.fewshot_file,
+        description=(
+            f"The following are multiple choice questions (with answers) about {subject}.\n\n"
+            if template.name == "mmlu"
+            else ""
+        ),
+    )
+    configured = ChoiceTemplate(
+        name=original_task_name(template),
+        render=partial(choice_document, template=template),
+        fewshot=policy,
+        layout=ChoiceLayout.CONTEXT_CHOICES if template.name == "winogrande" else ChoiceLayout.CONTINUATION_CHOICES,
+        gold_indices=_truthfulqa_gold if template.name == "truthfulqa_mc2" else None,
+    )
+    for row in compile_choices(documents, fewshot_documents, configured):
+        yield {**row, "fewshot_seed": FEWSHOT_SEED, "harness_revision": HARNESS_REVISION}
+
+
+def _truthfulqa_gold(document: Mapping[str, Any]) -> tuple[int, ...]:
+    return tuple(index for index, label in enumerate(document["mc2_targets"]["labels"]) if label)
+
+
+def _sampling(template: HarnessTemplate) -> FewshotSampling:
+    # These pinned tasks leave both split names unset, so the upstream sampler draws n+1.
+    return (
+        FewshotSampling.EXCLUDE_CURRENT
+        if template.name in {"hellaswag", "winogrande", "triviaqa", "nq_open", "drop", "boolq", "piqa", "truthfulqa_mc2"}
+        else FewshotSampling.RANDOM
+    )
 
 
 def _sample_indices(
     random: Random, pool: Sequence[dict[str, Any]], doc: dict[str, Any], template: HarnessTemplate
 ) -> list[int]:
-    # The pinned task passes eval_doc when both fewshot_split and test_split
-    # are None (validation-only tasks), so its sampler draws one extra.
-    exclude = template.name in {"hellaswag", "winogrande", "triviaqa", "nq_open", "drop"} and template.num_fewshot > 0
-    indices = random.sample(range(len(pool)), template.num_fewshot + int(exclude))
-    return [index for index in indices if pool[index] != doc][: template.num_fewshot] if exclude else indices
-
-
-def parquet_documents(path: StoragePath) -> Iterator[dict[str, Any]]:
-    with path.open("rb") as stream:
-        for batch in pq.ParquetFile(stream).iter_batches():
-            yield from batch.to_pylist()
+    excluded_document = doc if _sampling(template) is FewshotSampling.EXCLUDE_CURRENT else None
+    return sample_indices(random, pool, template.num_fewshot, excluded_document)
 
 
 def read_choice_file(
