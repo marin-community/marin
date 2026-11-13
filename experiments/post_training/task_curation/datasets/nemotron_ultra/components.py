@@ -1399,12 +1399,7 @@ def _source(blend: str, path: str) -> RlDataSource[CurationRecipe]:
 
 
 def repaired_tau_source(blend: str) -> RlDataSource[PrebuiltCohort]:
-    """The repaired tau pivot pin: judge temperature 0.7, same grader environment lock.
-
-    The blend recipe stays registered for its conversion capability, but the consumed pin is the
-    private TaskCompendium repair release; its prebuilt import validates every published task hash,
-    duplicate IDs and required environment without re-converting.
-    """
+    """Bind the repaired tau cohort; retain its conversion recipe only as lineage."""
     cohort = TAU_REPAIR_RELEASES[blend]
     return RlDataSource(
         pipeline=import_taskcompendium_prebuilt,
