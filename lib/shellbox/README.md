@@ -49,6 +49,9 @@ so nested shell quoting does not enlarge the argument sent to its execution API.
 The original argv, stdin, environment and working directory are preserved;
 Linux limits still apply to each original argument. The wrapper is removed with
 the command's other temporary files.
+If command execution or cancellation fails, later sandbox-deletion failures are
+attached as exception notes. Cleanup failure after a successful command still
+raises an error.
 Daytona sandboxes and Iris jobs default to a six-hour lifetime. Iris scans for
 expired jobs about once a minute. An expired, killed or preempted machine raises
 `MachineTerminated`; uncertain command failures are not replayed.
