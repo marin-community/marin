@@ -117,10 +117,10 @@ BASELINE_ARGS = (
     '{"distributed": true, "concurrency": 4, "memory_limit": 17179869184}',
     "--enable-per-request-metrics",
     "--trust-remote-code",
-    # Rafal's server runs a single API server process (its log shows one APIServer pid).
-    "--api-server-count",
-    "1",
 )
+# Rafal's server runs a single API server process (its log shows one APIServer pid). Only the
+# leader starts API servers; headless followers reject the flag.
+LEADER_ARGS = ("--api-server-count", "1")
 
 
 @dataclass(frozen=True)
@@ -135,6 +135,7 @@ class ArmConfig:
     phases: tuple[str, ...]
     probes: ProbeConfig
     env: tuple[tuple[str, str], ...] = ()
+    leader_args: tuple[str, ...] = LEADER_ARGS
 
 
 def _write_json(uri: str, payload: object) -> None:
@@ -189,7 +190,8 @@ def run_arm(config: ArmConfig) -> None:
         data_parallel_size_local=geometry.data_parallel_size,
     ) as launch:
         subprocess_env = {**launch.subprocess_env, **dict(config.env)}
-        with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=subprocess_env) as environment:
+        extra_args = (*launch.extra_cli_args, *(config.leader_args if launch.is_leader else ()))
+        with backend.start(spec, extra_args=extra_args, subprocess_env=subprocess_env) as environment:
             if launch.is_leader:
                 with iris_vllm_followers(launch):
                     started = time.time()
@@ -204,7 +206,7 @@ def run_arm(config: ArmConfig) -> None:
                             "server_url": server.server_url,
                             "engine": dataclasses.asdict(config.engine),
                             "geometry": dataclasses.asdict(geometry),
-                            "extra_cli_args": list(launch.extra_cli_args),
+                            "extra_cli_args": list(extra_args),
                         },
                     )
                     try:
