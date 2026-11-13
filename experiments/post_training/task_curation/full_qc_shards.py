@@ -24,7 +24,7 @@ from experiments.post_training.task_curation.full_qc import (
 )
 from experiments.post_training.task_curation.full_qc_artifacts import FullQCReviewShard
 from experiments.post_training.task_curation.full_qc_review import assemble_shards, load_inputs, review_shard
-from experiments.post_training.task_curation.judges import LocalJudgeEndpoint, PinnedLocalJudgeEndpoint
+from experiments.post_training.task_curation.judges import LocalJudgeEndpoint
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ def read_shard(path: StoragePath) -> FullQCReviewShard:
 def review_work(work: list[ShardWork], args: argparse.Namespace) -> None:
     spec = local_reviewer(args.reviewer_version)
     endpoint = spec.endpoint
-    assert isinstance(endpoint, (LocalJudgeEndpoint, PinnedLocalJudgeEndpoint))
+    assert isinstance(endpoint, LocalJudgeEndpoint)
     campaign = StoragePath(args.campaign_output) / "attempts" / uuid4().hex
     with endpoint.serve() as session:
         for row in work:

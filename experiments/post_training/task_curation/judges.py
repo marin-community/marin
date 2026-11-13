@@ -12,7 +12,7 @@ import hashlib
 import logging
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -149,7 +149,7 @@ class LocalJudgeModel:
 
 @dataclass(frozen=True)
 class LocalJudgeEndpoint:
-    """Own maintained Iris inference from a model YAML matching the tier's pin.
+    """Own maintained Iris inference from a model YAML matching the model pin.
 
     Run inside an Iris job. Exiting the context releases its serving workers,
     including when readiness, identity checks or grading fail.
@@ -157,7 +157,7 @@ class LocalJudgeEndpoint:
 
     tier: JudgeTier
     model_config: Path
-    context_window_tokens: int
+    model: LocalJudgeModel
     accelerator: AcceleratorChoice
     priority: int
     env_vars: Mapping[str, str] = field(default_factory=dict)
@@ -179,26 +179,15 @@ class LocalJudgeEndpoint:
 
     @contextmanager
     def serve(self) -> Iterator[RemoteInferenceSession]:
-        definition = JUDGE_TIERS[self.tier]
-        if definition.model_revision is None:
-            raise ValueError(f"The {self.tier} tier has no immutable checkpoint pin for local hosting")
-        pin = LocalJudgeModel(
-            definition.model_identity, definition.model_revision, definition.spec.model, self.context_window_tokens
-        )
-        with self._serve_model(pin) as session:
-            yield session
-
-    @contextmanager
-    def _serve_model(self, pin: LocalJudgeModel) -> Iterator[RemoteInferenceSession]:
         model = load_model_config(self.model_config)
         if (model.location, model.revision, model.serve.max_model_len) != (
-            pin.model_identity,
-            pin.model_revision,
-            pin.context_window_tokens,
+            self.model.model_identity,
+            self.model.model_revision,
+            self.model.context_window_tokens,
         ):
             raise ValueError(f"Model YAML must match the {self.tier} model, revision and context window")
         config = inference_config_for_model(
-            model, self.accelerator, env_vars=self.env_vars, priority=self.priority, api_model=pin.api_model
+            model, self.accelerator, env_vars=self.env_vars, priority=self.priority, api_model=self.model.api_model
         )
         engine = config.engine
         environment = config.iris.worker_environment
@@ -234,52 +223,22 @@ class LocalJudgeEndpoint:
                 ),
             ),
         )
-        if config.model.max_model_len != pin.context_window_tokens:
+        if config.model.max_model_len != self.model.context_window_tokens:
             raise ValueError("Resolved serving configuration changed the declared context window")
         with remote_inference(config) as session:
             self.job_ids.extend(str(job.job_id) for job in session.jobs)
             logger.info("Judge serving jobs: %s", self.job_ids)
             session = session.ready_direct_session()
-            if session.effective_serving is None or session.effective_serving.max_model_len != pin.context_window_tokens:
+            if (
+                session.effective_serving is None
+                or session.effective_serving.max_model_len != self.model.context_window_tokens
+            ):
                 raise ValueError("Running inference does not confirm the declared context window")
             endpoint = session.model.endpoint
-            if endpoint.model != pin.api_model:
+            if endpoint.model != self.model.api_model:
                 raise ValueError(f"Serving endpoint returned an unexpected model {endpoint.model!r}")
-            with HostedJudgeEndpoint(pin.api_model, endpoint.base_url, endpoint.api_key or "unused").connect():
+            with HostedJudgeEndpoint(self.model.api_model, endpoint.base_url, endpoint.api_key or "unused").connect():
                 yield session
-
-    @contextmanager
-    def connect(self, api_key: str | None = None) -> Iterator[JudgeConnection]:
-        with self.serve() as session:
-            endpoint = session.model.endpoint
-            yield JudgeConnection(
-                endpoint.base_url, api_key or endpoint.api_key or "unused", default_model=endpoint.model
-            )
-
-
-@dataclass(frozen=True)
-class PinnedLocalJudgeEndpoint:
-    """Serve an explicit model pin without consulting shared judge presets."""
-
-    local: LocalJudgeEndpoint
-    pin: LocalJudgeModel
-
-    @property
-    def identity(self) -> dict[str, Any]:
-        return {**self.local.identity, "model_pin": asdict(self.pin)}
-
-    @property
-    def job_ids(self) -> list[str]:
-        return self.local.job_ids
-
-    @property
-    def context_window_tokens(self) -> int:
-        return self.pin.context_window_tokens
-
-    @contextmanager
-    def serve(self) -> Iterator[RemoteInferenceSession]:
-        with self.local._serve_model(self.pin) as session:
-            yield session
 
     @contextmanager
     def connect(self, api_key: str | None = None) -> Iterator[JudgeConnection]:
