@@ -103,12 +103,12 @@ async def _lock_probe(environment, factory, machine_spec) -> dict:
 
 
 def lock_install(task: TaskSpec) -> dict:
-    """Prepare the grader machine from the pinned lock and run its environment inside.
+    """Prove the grader's declared lock environment installs and imports.
 
-    The judged tasks grade through the judge service, not in the machine, so this
-    step proves the environment half of the grader: the machine installs the lock
-    environment (``prepare_machine_spec`` builds the uv runtime from the 127-package
-    hash lock) and the locked distributions import inside the sandbox.
+    The judged tasks grade through the judge service, not in a machine, so this
+    step covers the environment half of the grader: a fresh machine installs the
+    grader's declared environment and the locked distributions import inside the
+    sandbox.
     """
     grader = task.grader
     if isinstance(grader, NoGrader):
