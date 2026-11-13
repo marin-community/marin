@@ -37,19 +37,20 @@ from experiments.post_training.task_curation.full_qc_review import (
 from experiments.post_training.task_curation.judges import PinnedLocalJudgeEndpoint
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.sample_qc_artifacts import (
+    PINNED_REVIEWER_SHA256,
     SAMPLE_SEED,
     SAMPLE_SIZE,
+    SampleInventory,
     SamplePanel,
     SampleQCReview,
 )
 
 LOGGER = logging.getLogger(__name__)
-PINNED_REVIEWER_SHA256 = "a3e17ee0607a1bf59bdbb8e0b9bffda2e8788390aaf41c7ab73c20b68325c9ea"
 
 
 def panel_tasks(panel: SamplePanel) -> tuple[list[TaskSpec], list[dict]]:
     """Check source and panel bytes before constructing exact task/runtime contracts."""
-    if SamplePanel.model_validate_json(StoragePath(panel.evidence_url).read_text()) != panel:
+    if SampleInventory.model_validate_json(StoragePath(panel.evidence_url).read_text()).qc_panel() != panel:
         raise ValueError("Sample panel differs from its complete-population census")
     population = SourceTextPopulation.raw_load(panel.input_artifact)
     if (
@@ -98,18 +99,18 @@ def review_panel(panel: SamplePanel, reviewer: Reviewer, output_root: str) -> Sa
             reviews, receipt = review_batch(batch.tasks, batch.contracts, REVIEW_RUBRIC, reviewer, output)
             yield batch, reviews, receipt
 
-    records_path, all_reviews, receipts = write_observations(str(output), batches())
+    observations = write_observations(str(output), batches())
     result = SampleQCReview(
-        path=str(records_path.parent),
+        path=str(observations.records_path.parent),
         panel=panel,
         reviewer=reviewer.identity,
         rubric=asdict(REVIEW_RUBRIC),
-        panel_coverage_complete=all(row.status is ReviewStatus.REVIEWED for row in all_reviews),
-        attempted_count=len(all_reviews),
-        result=quality_result(all_reviews),
-        records_path=str(records_path),
-        records_sha256=file_sha256(records_path),
-        batch_receipts=receipts,
+        panel_coverage_complete=all(row.status is ReviewStatus.REVIEWED for row in observations.reviews),
+        attempted_count=len(observations.reviews),
+        result=quality_result(observations.reviews),
+        records_path=str(observations.records_path),
+        records_sha256=file_sha256(observations.records_path),
+        batch_receipts=observations.batch_receipts,
     )
     write_record(
         ArtifactRecord(
@@ -132,7 +133,7 @@ def main() -> None:
     queue = StoragePath(args.queue)
     if file_sha256(queue) != args.queue_sha256:
         raise ValueError("Frozen sample queue changed")
-    panels = [SamplePanel.model_validate(row) for row in json.loads(queue.read_text())]
+    panels = [SampleInventory.model_validate(row).qc_panel() for row in json.loads(queue.read_text())]
     if not panels or len({row.source_id for row in panels}) != len(panels):
         raise ValueError("Sample queue requires distinct source populations")
     spec = local_reviewer(ReviewerVersion.V3)

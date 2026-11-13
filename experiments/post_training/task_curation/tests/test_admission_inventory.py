@@ -4,6 +4,7 @@
 import hashlib
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -111,17 +112,35 @@ def test_two_shard_inventory_checks_native_contracts_and_rejects_changed_resume_
     )
     declaration = source.declaration
     result = inventory_source(declaration, str(tmp_path / "first"), None)
-    assert result["retained_tasks"] == 2 and result["sample_size"] == 2
-    assert result["scanned_task_specs_sha256"] == population.task_specs_sha256
-    assert {row["task_id"] for row in pq.read_table(result["panel_path"]).to_pylist()} == {"typed", "native"}
+    assert result.retained_tasks == 2 and result.sample_size == 2
+    assert result.scanned_task_specs_sha256 == population.task_specs_sha256
+    assert {row["task_id"] for row in pq.read_table(result.panel_path).to_pylist()} == {"typed", "native"}
     assert inventory_source(declaration, str(tmp_path / "resumed"), str(tmp_path / "first")) == result
+    historical = {
+        **result.model_dump(mode="json", exclude_none=True),
+        "runnable_grader_tasks": 2,
+        "no_grader_tasks": 0,
+        "grader_kinds": {"script": 1, "native_harbor": 1},
+        "missing_grader_reasons": {},
+    }
+    summary = Path(result.evidence_url)
+    summary.write_text(json.dumps(historical))
+    frozen_summary = summary.read_bytes()
+    resumed = inventory_source(declaration, str(tmp_path / "historical-resume"), str(tmp_path / "first"))
+    assert resumed.model_dump(mode="json", exclude_none=True) == historical
+    assert resumed.qc_panel().model_dump_json() == result.qc_panel().model_dump_json()
+    assert summary.read_bytes() == frozen_summary
+    summary.write_text(json.dumps({**historical, "dataset_revision": "another-pin"}))
+    with pytest.raises(ValueError, match="another current input"):
+        inventory_source(declaration, str(tmp_path / "stale-resume"), str(tmp_path / "first"))
+    summary.write_bytes(frozen_summary)
     complete = census_source(
         GradingCensusInput(population=population, input=source.info.actor_census_input),
         str(tmp_path / "complete-grading"),
     )
     assert complete.evidence.assessed_tasks == 2
     assert complete.evidence.status_counts == {"matched": 2}
-    with open(result["panel_path"], "ab") as stream:
+    with open(result.panel_path, "ab") as stream:
         stream.write(b"changed")
     with pytest.raises(ValueError, match="sample panel changed"):
         inventory_source(declaration, str(tmp_path / "changed"), str(tmp_path / "first"))
