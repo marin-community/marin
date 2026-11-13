@@ -203,7 +203,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         receipt["config"]["skyrl"]["trainer"]["max_steps"] = 1
         write_receipt(source, receipt)
     if case == "negative-duration":
-        receipt["result"]["finished_at"] = "2026-11-06T17:40:00+00:00"
+        receipt["result"]["finished_at"] = "2026-11-06T20:40:00+00:00"
         write_receipt(source, receipt)
         with pytest.raises(ValueError):
             publication.build_record(
