@@ -20,6 +20,7 @@ from iris.cluster.client.bundle import collect_workspace_files
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.grading_environment import GradingEnvironmentMode
+from taskcompendium.harbor.execution import native_execution_limits
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
 from taskcompendium.pipeline.oracle_filter import (
@@ -66,11 +67,7 @@ FAILURE_LOG_BYTES = 64 * 1024
 
 def declared_native_requirements(path: Path) -> dict[ResourceDimension, float]:
     document = tomllib.loads((path / "task.toml").read_text())
-    values = {name: document.get("environment", {}).get(name) for name in ("cpus", "memory_mb", "storage_mb")}
-    values.update(
-        {f"{phase}_timeout_sec": document.get(phase, {}).get("timeout_sec") for phase in ("agent", "verifier")}
-    )
-    return {ResourceDimension(name): value for name, value in values.items() if value is not None}
+    return {ResourceDimension(name): value for name, value in native_execution_limits(document).declared.items()}
 
 
 def native_requirements(path: Path) -> ExecutionRequirements:
@@ -125,7 +122,13 @@ def trial_receipt(path: Path) -> OracleTrialReceipt:
     document = decode_json_value(path.read_text())
     native = Path(document["config"]["task"]["path"])
     package = harbor_inspection("tasks", [str(native)])[str(native)]
-    if package["task_checksum"] != document["task_checksum"]:
+    return receipt_from_trial(path, document, package["task_checksum"])
+
+
+def receipt_from_trial(path: Path, document: dict, native_checksum: str) -> OracleTrialReceipt:
+    """Read a trial's evidence against its measured native checksum."""
+    native = Path(document["config"]["task"]["path"])
+    if native_checksum != document["task_checksum"]:
         raise ValueError(f"Native task changed after its oracle trial: {native}")
     verdict_path = path.parent / "verifier/verdict.json"
     verdict = decode_json_value(verdict_path.read_text()) if verdict_path.exists() else None
@@ -192,6 +195,7 @@ def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]
     seen = {}
     paths = sorted(jobs.rglob("result.json"))
     validated = harbor_inspection("results", [str(path) for path in paths])
+    documents = {}
     for path in paths:
         document = decode_json_value(path.read_text())
         if str(path) not in validated:
@@ -204,7 +208,12 @@ def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]
         seen[document["id"]] = digest
         if document["config"]["agent"]["name"] != "oracle":
             raise ValueError(f"Non-oracle trial in filter job: {path}")
-        receipt = trial_receipt(path)
+        documents[path] = document
+    native_paths = sorted({document["config"]["task"]["path"] for document in documents.values()})
+    packages = harbor_inspection("tasks", native_paths) if native_paths else {}
+    for path, document in documents.items():
+        native = document["config"]["task"]["path"]
+        receipt = receipt_from_trial(path, document, packages[native]["task_checksum"])
         trials.setdefault((document["task_name"], document["task_checksum"]), []).append(receipt)
     return trials
 
@@ -541,11 +550,11 @@ def calibrated_task(
         if declared is None:
             document = tomlkit.parse((package / "task.toml").read_text())
             for name in ("cpus", "memory_mb", "storage_mb"):
-                document.setdefault("environment", {})[name] = shape.model_dump()[name]
+                document.setdefault("environment", {}).setdefault(name, shape.model_dump()[name])
                 if "environment" in document.get("verifier", {}):
                     document["verifier"]["environment"].setdefault(name, shape.model_dump()[name])
             for phase in ("agent", "verifier"):
-                document.setdefault(phase, {})["timeout_sec"] = shape.model_dump()[f"{phase}_timeout_sec"]
+                document.setdefault(phase, {}).setdefault("timeout_sec", shape.model_dump()[f"{phase}_timeout_sec"])
             (package / "task.toml").write_text(tomlkit.dumps(document))
         config = {
             "task": {"path": str(package)},
@@ -883,7 +892,7 @@ def main() -> None:
     calibrate.add_argument("--cohort", type=Path, required=True)
     calibrate.add_argument("--task-map", type=Path, required=True)
     calibrate.add_argument("--output-dir", type=Path, required=True)
-    calibrate.add_argument("--environment", choices=("local", "daytona"), required=True)
+    calibrate.add_argument("--environment", choices=("local", "daytona", "iris-sandbox"), required=True)
     calibrate.add_argument("--environment-kwargs", type=json.loads, default={})
     calibrate.add_argument("--concurrency", type=int, required=True)
     calibrate.add_argument("--calibration-solutions", type=Path)

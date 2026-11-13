@@ -21,7 +21,7 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus
 from taskcompendium.pipeline.review import ChatReviewer, Reviewer
 
-from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, local_reviewer
+from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.full_qc_artifacts import FullQCReview
 from experiments.post_training.task_curation.full_qc_review import (
     RECORD_SCHEMA,
@@ -190,7 +190,7 @@ def main() -> None:
         raise ValueError("Pinned primary artifact changed")
     primary = FullQCReview.raw_load(args.primary)
     spec = replace(
-        local_reviewer(),
+        local_reviewer(ReviewerVersion.V2),
         max_tokens=REPAIR_MAX_TOKENS,
         retry_max_tokens=REPAIR_RETRY_MAX_TOKENS,
         prompt_budget=primary.reviewer["prompt_budget"],

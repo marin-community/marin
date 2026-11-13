@@ -17,7 +17,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import ReviewStatus
 from taskcompendium.pipeline.review import ChatReviewer
 
-from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, local_reviewer
+from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.full_qc_review import review_batch
 
 
@@ -43,7 +43,7 @@ def main() -> None:
     output = StoragePath(args.output)
     reviewer = ChatReviewer(
         OpenAIChatClient(require_secret("QA_ENDPOINT_URL"), "unused", timeout=600),
-        local_reviewer(),
+        local_reviewer(ReviewerVersion.V2),
         query_cache_root=str(output / "request-cache"),
         max_concurrent=8,
     )

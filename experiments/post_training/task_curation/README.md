@@ -407,6 +407,28 @@ artifacts record `qualification_status=pending`, so complete content coverage
 does not establish execution admission. Qualification and repairs use the
 [full-population oracle procedure](../../../docs/references/task-curation.md#full-population-oracle-filter).
 
+Choose `--reviewer-version v3` for future FULL-QC source starts. The ongoing
+48-worker campaign, Gym repair and Prism finalization remain on their frozen v2
+specifications. Resuming or assembling that campaign requires explicit `v2`;
+never replay its completed observations under v3. New v3 source and campaign
+outputs use separate prefixes and an exact-request cache. The reviewer identity
+and source assembly bind the v3 model-YAML digest and generation budgets, so v2
+and v3 observations cannot be silently combined.
+
+Reviewer-spec changelog (2026-11-13):
+
+| Version | Serving context (tokens) | Initial / retry generation (tokens) | Status |
+| --- | ---: | ---: | --- |
+| v2 | 262,144 | 4,096 / 8,192 | Existing main pass, preserved |
+| v2 repair | 262,144 | 8,192 / 16,384 | Existing incomplete-only repair policy |
+| v3 | 524,288 | 8,192 / 16,384 | Future FULL-QC starts |
+
+V3 retains GLM-5.3's pinned checkpoint, FP8 precision, temperature 0.7, low
+reasoning effort, three attempts, payload revision 4 and the task-quality-v2
+rubric. Prompt character budgets remain explicit and unchanged (512,000 by
+default); they are separate from the serving token context. Compilation and CUDA
+graphs remain enabled. The v3 YAML has not yet been exercised by a live GPU job.
+
 Provide a JSON list with `inputs_path` and `output_path` for each source. Run
 inside a CPU Iris job with batch priority, a three-day timeout, and an explicit
 target cluster. Launch this coordinator with --target-cluster cw-us-east-08a.
@@ -437,10 +459,10 @@ reviewer identity and caches when the task and reviewer contracts are unchanged.
 
 ```bash
 uv run --no-sync --package marin-core --extra dedup python -m \
-  experiments.post_training.task_curation.full_qc \
+  experiments.post_training.task_curation.full_qc --reviewer-version v3 \
   --work s3://bucket/campaign/work.json \
-  --campaign-output s3://bucket/campaign/review-v1 \
-  --review-cache s3://bucket/campaign/request-cache --run
+  --campaign-output s3://bucket/campaign/review-v3 \
+  --review-cache s3://bucket/campaign/request-cache-v3 --run
 ```
 
 Omit `--run` to inspect the source plan and pinned reviewer identity
@@ -511,9 +533,9 @@ children also use batch priority and three-day timeouts:
 
 ```bash
 uv run --no-sync --package marin-core --extra dedup python -m \
-  experiments.post_training.task_curation.full_qc_shards review \
+  experiments.post_training.task_curation.full_qc_shards review --reviewer-version v3 \
   --work s3://bucket/campaign/shard-work.json --shard-index 0 --shard-count 48 \
-  --max-passes 3 --review-cache s3://bucket/campaign/request-cache \
+  --max-passes 3 --review-cache s3://bucket/campaign/request-cache-v3 \
   --campaign-output s3://bucket/campaign/worker-000 --run
 ```
 
@@ -539,7 +561,7 @@ missing shard records:
 
 ```bash
 uv run --no-sync --package marin-core --extra dedup python -m \
-  experiments.post_training.task_curation.full_qc_shards assemble \
+  experiments.post_training.task_curation.full_qc_shards assemble --reviewer-version v3 \
   --work s3://bucket/campaign/shard-work.json --shard-count 48 \
   --campaign-output s3://bucket/campaign/assembly --run
 ```
@@ -589,6 +611,15 @@ leave coverage incomplete. Rerunning the same frozen primary and repair prefix
 reuses successful repair receipts without resampling them. Existing primary
 records and pointers are never changed. Oracle filtering and resource calibration
 remain separate requirements for execution qualification.
+
+Prism's v2 content review is finalized with 2,220 valid reviews of 2,221 retained
+contracts. The Result is SOME_ISSUES: 286 issues among 2,213 conclusive reviews
+(12.9236%); seven valid uncertain reviews are reported separately. One task stays
+in the population as “QC unreviewed: review exceeded 16,384 tokens.” Its strict
+coverage remains incomplete, and execution qualification is unchanged.
+[Final source evidence](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Fatlas%2Ffull-qc%2Ffinal-content%2F2026.11.13.1%2Fprism.json)
+is stored at
+`s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/final-content/2026.11.13.1/prism.json`.
 
 ### CrossCode Python qualification candidate
 

@@ -674,6 +674,8 @@ the grading session validates required plugins after loading the frozen baseline
 Conftest plugin imports keep pytest's normal test-path handling.
 The `-I -S` launcher restores standard `site` builtins such as `help` after
 adding dependency sites and before importing `sitecustomize`.
+Product subprocesses launched through `sys.executable` also load the source
+interpreter's live dependency sites from a protected startup-path file.
 The runner disables live plugin autoload
 and clears the test environment,
 including PYTHONPATH, PYTEST_ADDOPTS, LD_PRELOAD and user-site loading. Verifyit
@@ -1266,14 +1268,24 @@ SAMPLE and FULL admission require it and a population-complete resource receipt.
 Harbor export writes these values into the task package. Trials must use them
 without resource overrides or timeout multipliers.
 
+Native Harbor ingestion and the TaskTrove archive wrapper lift all five explicit
+`task.toml` limits into `execution_requirements`. Partial declarations remain in
+the original package; ingestion supplies no defaults. An existing top-level
+declaration that conflicts with an explicit source limit is an error. Frozen
+releases need a separately versioned projection preserving task IDs, provenance
+and resource bytes. Only an identical content-review payload can reuse a review;
+reconversion can change importer provenance even when task files stay identical.
+
 Calibration runs inside the full-population oracle filter. Tasks with declared
 limits are validated at exactly those limits. For a task without declared limits,
 stage a new package at 1 CPU, 2 GiB memory, 2 GiB disk, a five-minute agent
 timeout and a one-minute verifier timeout. Preserve any limits already explicit
-in the native package; calibrate only missing dimensions. After a failed trial, double only the
+in the native package; calibrate only missing dimensions. Existing native TOML
+literals remain unchanged; only missing keys are inserted. Added native settings
+still require an exact content-review payload comparison before cache reuse. After a failed trial, double only the
 dimension identified by its failure: memory for an explicit OOM kill, disk for
-ENOSPC, agent timeout for an agent timeout, or verifier timeout for a verifier
-timeout. Also double CPU on an agent timeout when measured CPU use reaches 90%
+ENOSPC or a typed Iris `RESOURCE_LIMIT_DISK` eviction, agent timeout for an agent
+timeout, or verifier timeout for a verifier timeout. Also double CPU on an agent timeout when measured CPU use reaches 90%
 of its allocated capacity. A bare exit 137 does not establish OOM, and unavailable
 CPU counters do not establish CPU saturation.
 
@@ -1413,6 +1425,13 @@ uv run python -m experiments.post_training.task_curation.oracle_filter calibrate
   --output-dir /path/to/oracle-local-v2 --environment local --concurrency 4 \
   --environment-kwargs '{"image_cache":"/cache/shellbox-images","cgroup_parent":"/sys/fs/cgroup/marin-liveness","disk_root":"/cache/shellbox-disks"}'
 
+# IRIS-SANDBOX: intended invocation after SANDBOX disk qualification.
+# Currently rejects declared storage; do not use for calibrated cohorts.
+uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
+  --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
+  --output-dir /path/to/oracle-iris-v2 --environment iris-sandbox --concurrency 4 \
+  --environment-kwargs '{"cluster":"cw-us-east-02a","pool":"cpu-genoa","priority":"batch","ttl":259200}'
+
 uv run python -m experiments.post_training.task_curation.oracle_filter collect \
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/oracle-run-v2/task-map.json \
   --jobs-dir /path/to/oracle-run-v2 --output /path/to/filtered-v2/tasks.parquet \
@@ -1420,10 +1439,14 @@ uv run python -m experiments.post_training.task_curation.oracle_filter collect \
 ~~~
 
 DAYTONA normally runs about 128 concurrent sandboxes in the RL organization
-when the cohort's snapshot identities fit the cap. Otherwise use LOCAL on Iris
-CPU workers, with the task's own prepared images. Concurrency does not waive
-snapshot or CPU capacity limits. LOCAL honors allow_internet and cannot run
-nonroot task commands; choose a supporting route when the task requires them.
+when the cohort's snapshot identities fit the cap. The `iris-sandbox` environment
+uses prepared image references from `shellbox-images.json` and submits exactly
+one sandbox container and replica per Iris job. It takes `cluster`, `pool`,
+`priority` (`batch` by default, or `production`) and `ttl` in seconds. A TTL of
+259200 gives each job a three-day timeout. Images retain their prepared `/app`
+contents; commands run in separate process groups so a timeout or cancellation
+can stop a command while preserving the task filesystem for the verifier.
+Images must provide `setsid` and a readable `/proc`.
 
 LOCAL accepts declared `storage_mb` only with an explicit `disk_root` whose
 `LocalDiskPool` host probe passes. The worker needs Linux root in the existing
@@ -1470,8 +1493,45 @@ uv run --package marin-shellbox --group test pytest \
   lib/shellbox/tests/test_local_disk.py -o addopts='' -m manual -q -s
 ```
 
-Use CPU Iris workers at production priority with a three-day job timeout.
-Run `collect` against the same calibrated run; there is no second oracle pass.
+LOCAL honors `allow_internet` and supports only root commands.
+
+Iris prepared-image submission requires the separate `sandbox-image-workdir` backend
+capability, even without declared disk. Older controllers are rejected before
+submission because they hide the image's `/app` under an empty volume. This
+capability describes image preservation and does not qualify storage enforcement.
+
+Iris SANDBOX storage enforcement is unqualified. Harbor reports no storage-limit
+capability and rejects declared `storage_mb` for this environment. The Shellbox
+adapter also requires a direct Kubernetes controller advertising
+`sandbox-storage-limit` before submitting any declared disk; current controllers
+do not advertise it. Sandbox-profile pods cannot start on the pinned CPU pool
+([#11343](https://github.com/marin-community/marin/issues/11343)); H100 startup
+is blocked separately ([#10090](https://github.com/marin-community/marin/issues/10090)).
+See the [runtime incident](https://marina.oa.dev/echo/wiki/976).
+
+The candidate pod manifest sets ephemeral-storage to exactly
+`storage_mb * 1024**2` bytes, with zero harness allowance. The driver stays outside
+the pod. Kubelet's runtime accounting must include task writes and command files
+for this to enforce disk. Its accounting and eviction are asynchronous. A real
+`CONTAINER_PROFILE_SANDBOX` overflow on the pinned pool must establish the disk
+boundary, with the node's `runsc.toml` `overlay2` setting recorded beside raw
+kubelet eviction evidence. A restricted-profile overflow does not qualify this
+path; a memory-backed overlay can turn disk pressure into an OOM. Follow the
+[deployment checklist](rl-data-atlas.md#deployment-checklist) before enabling
+storage admission or advertising the capability. Deployment/restart requires
+separate user authorization.
+
+Only newly annotated sandbox pods receive typed own-limit storage failures:
+`RESOURCE_LIMIT_DISK`, Shellbox `DiskLimitExceeded`, then Harbor disk-full.
+Calibration doubles disk as for ENOSPC, including alongside an infrastructure
+verifier verdict. Ordinary jobs and node disk-pressure evictions retain their
+previous retry classification. The shared-worker bubblewrap `local` environment
+remains separate. `iris-sandbox` honors `allow_internet`, supports root commands
+and one container, and rejects service groups and process-session model relays.
+
+Use CPU Iris jobs with a three-day job timeout. Select the campaign's approved
+priority explicitly through `priority`; use production for the bounded
+disk-overflow correctness check. Run `collect` against the same calibrated run; there is no second oracle pass.
 Each attempt uses a fresh container and a fresh native package directory.
 Preserve the original packages, trials and published prefixes; select a new
 output version when rerunning.
@@ -1530,7 +1590,7 @@ the relay does not attest an immutable checkpoint. Connection fails if its model
 list does not advertise `glm-5.3`. A provider that cannot accept temperature may use
 `temperature=None` to retain its API default; zero is disallowed.
 
-The spec pins base rubric `task-quality-v1`, its SHA-256 content hash, and review
+The spec pins base rubric `task-quality-v2`, its SHA-256 content hash, and review
 payload revision `4`. To change the base rubric, edit `BASE_RUBRIC` and bump
 `BASE_RUBRIC_VERSION` in `taskcompendium.pipeline.reviewer_spec`; the content
 hash is computed from that text. Bump `REVIEW_PAYLOAD_REVISION` when changing the
@@ -1546,6 +1606,14 @@ projection, so calibration-only changes reuse exact requests. Full task and
 runtime hashes remain in the audit. Images, grader settings and resource bytes
 remain visible; edits to native task.toml or verifier code invalidate requests.
 The spec records serving precision as part of reviewer identity.
+
+The self-hosted retained-population FULL-QC workflow has explicit reviewer
+versions, separate from the shared relay preset. Its v3 policy doubles v2's
+serving context from 262,144 to 524,288 tokens and generation limits from
+4,096/8,192 to 8,192/16,384 initial/retry tokens. Future source starts use v3;
+in-flight v2 work and its valid observations keep their original identities.
+The [FULL-QC reviewer changelog](https://github.com/marin-community/marin/blob/atlas-env-audit/experiments/post_training/task_curation/README.md#complete-retained-population-review)
+records cache separation, resume commands and the preserved v2 repair policy.
 
 Quality manifests and assessment model metadata record the complete spec identity.
 The request-cache namespace includes every spec field, including deployment and

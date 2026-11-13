@@ -21,6 +21,7 @@ from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.oracle_filter import (
     calibrate_cohort,
+    collect_trials,
     filter_cohort,
     harbor_inspection,
     native_requirements,
@@ -226,11 +227,15 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
     with pytest.raises(ValueError, match="changed after Harbor export"):
         filter_cohort(cohort, task_map, tmp_path / "jobs", tmp_path / "stale/tasks.parquet")
 
+    (tmp_path / "native/pass/instruction.md").write_text("Changed after the trial.")
+    with pytest.raises(ValueError):
+        collect_trials(tmp_path / "jobs")
 
-@pytest.mark.parametrize("declared", [False, True])
+
+@pytest.mark.parametrize(("declared", "native_declared"), [(True, True), (False, False), (False, True)])
 @pytest.mark.parametrize("canonical", [False, True])
 def test_population_calibration_doubles_missing_limits_but_preserves_swe_declarations(
-    tmp_path, monkeypatch, declared, canonical
+    tmp_path, monkeypatch, declared, native_declared, canonical
 ):
     row = prebuilt_task("task")
     envelope = json.loads(row["lowered_task_spec"])
@@ -262,9 +267,10 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
     (native / "task.toml").write_text(
         "[environment]\ncpus=2\nmemory_mb=4096\nstorage_mb=10240\n"
         "[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=600\n"
-        if declared
+        if native_declared
         else "[environment]\n"
     )
+    native_document = (native / "task.toml").read_bytes()
     mapping = tmp_path / "map.json"
     write_task_map(cohort, native.parent, mapping)
     production_run = subprocess.run
@@ -314,7 +320,9 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
     output = tmp_path / "filtered/tasks.parquet"
     receipt = filter_cohort(cohort, run / "task-map.json", run, output)
     entry = receipt.tasks[task.id]
-    if declared:
+    if native_declared:
+        final_native = Path(entry.calibration.attempts[-1].result["config"]["task"]["path"]) / "task.toml"
+        assert final_native.read_bytes() == native_document
         assert shapes == [swe]
         assert not entry.passed
         assert entry.exclusion_reason == "resource_calibration:oom"

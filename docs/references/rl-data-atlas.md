@@ -69,12 +69,24 @@ assessment page shows the curation associated with its selected grade.
 
 ## Browsing sources
 
-**By source** lists individual sources with their catalog, unique example
-count, training/evaluation use, current sampled quality, any independent QC the
-pinned release performed, whether the source is Daytona safe, and the curriculum domain
-with the most mapped examples. Search names, datasets or tags; filter by catalog,
-use or quality; select a column heading to sort. Filters and sorting are included in the URL. CSV export
-includes the filtered rows in the displayed order.
+**By source** lists each source's unique example count, training/evaluation use,
+Quality, Result, lexical contamination, actor-only Daytona verdict and leading
+curriculum area. Quality is QUICK for conversion without executed oversight and
+SAMPLE for recorded execution oversight. FULL requires a complete content-review
+assembly: independent QC and valid reviews cover every unique retained
+contract, with no unavailable observations. Uncertain reviews count toward coverage
+and remain separate from the conclusive Result denominator. The source details keep
+execution qualification separate. Partial content reviews show their coverage as
+provisional/incomplete. Result uses the inclusive issue-rate boundaries above.
+
+The default view hides QUICK and BAD entries and folds advisory duplicate groups.
+Expand a group to inspect matching members, or enable **Show QUICK-quality and
+BAD-result sources**. Search and filters apply before grouping; a hidden canonical
+member cannot reappear through a group. Search names, datasets or tags, select a
+column heading to sort, and export filtered rows as CSV. Filters and sorting stay
+in the URL. The four totals show canonical groups, unique examples, displayed
+quality counts and catalog freshness. Source evidence pages include exact release
+pins, deduplication ledgers, lexical measurements, QC and archived assessment packets.
 
 **Daytona safe** measures the actor only: SAFE requires at most ten snapshot
 identities and no refused actor requirements. Sources without an actor show N/A;
@@ -141,18 +153,74 @@ Before selecting a new catalog load:
    worker with `--local-disk-root /cache/shellbox-disks`. Require its ext4 loop,
    OverlayFS, ENOSPC and cleanup probe to pass. Retain the overflow/neighbor and
    post-teardown loop/mount evidence; a workstation survey cannot qualify the host.
-3. Verify every source has a complete, exact-pin `within_source_dedup` receipt and
+3. Require `sandbox-image-workdir` in the direct Kubernetes backend descriptor
+   before submitting any prepared-image Iris task, even without declared disk.
+   Older controllers hide `/app` and must be rejected before submission.
+   Keep Iris sandbox storage admission disabled until a real
+   `CONTAINER_PROFILE_SANDBOX` overflow succeeds on the pinned CPU pool. Record
+   the node's CoreWeave-provided `runsc.toml` `overlay2` setting beside the raw
+   kubelet eviction status; a restricted-profile overflow is insufficient.
+   Check one sandbox container and one replica per task, exact-byte storage
+   quantities, no writable hostPath, and CPU/memory pod limits. Confirm an
+   own-limit eviction is `FAILED / RESOURCE_LIMIT_DISK`, rather than memory OOM
+   or node pressure. Only then enable Harbor storage admission and advertise
+   `sandbox-storage-limit` as an explicit backend fact. The current controller
+   advertises no such capability, and Harbor `iris-sandbox` rejects declared disk.
+   Controller deployment/restart requires separate user authorization. Service
+   groups and model relays remain unsupported on this environment.
+4. Verify every source has a complete, exact-pin `within_source_dedup` receipt and
    Examples equals its `unique_count`, including QUICK sources. Check raw and duplicate
    counts against the drop manifest, then verify version-bound lexical evidence.
    New or changed admissions require a private TaskCompendium clean/remediated
    receipt after [lexical decontamination](task-curation.md#lexical-decontamination-before-publication);
    preserve grandfathered selection until explicitly approved.
-4. Validate and release the app against the inspected package version, then load
+5. Validate and release the app against the inspected package version, then load
    the catalog with that survey's `--backend-map` artifact and the selected
    snapshot's `--source-identities` artifact. Fingerprint changed sources and
    resolve or acknowledge their shortlisted source-overlap flags before admission.
-5. Check `/backends`, `/source-duplicates`, `/sources`, an assessment and its evidence. Confirm the
+6. Check `/backends`, `/source-duplicates`, `/sources`, an assessment and its evidence. Confirm the
    selected snapshot and survey revision agree with the deployment record.
+
+### Preview packaging before the shared runtime is updated
+
+The preview can carry the exact canonical catalog models in its own package.
+This avoids a shared Marina deployment while the integration branch is under
+review. The staging command copies the alias table and model definitions from the
+specified checkout, relocates their imports into the app namespace, and records
+source and packaged SHA-256 values in `dist/bundled-model-provenance.json`.
+It writes a new directory and fixes its manifest to the preview UUID.
+
+From the clean integrated build checkout:
+
+```bash
+uv run python infra/marina/apps/rl_data_catalog/prepare_preview.py \
+  --checkout "$PWD" --output /tmp/atlas-preview-package
+uv run marina validate /tmp/atlas-preview-package
+uv run marina apps versions c9742a15-fb46-4d56-bc88-aa916351ebd3 --json
+uv run marina release /tmp/atlas-preview-package --allow-dirty --base-version CURRENT_VERSION --json
+```
+
+Use a fresh output directory for each build. Replace `CURRENT_VERSION` with the
+versions response's top-level `current_version`.
+
+Before validation and release, optional frozen partial-review observations can
+replace `dist/measurements/content-progress.json`. Its JSON object contains
+`as_of` and a `sources` list. Each row contains `source_id`, `dataset_id`,
+`dataset_revision`, `retained_count`, `valid_reviews_lower_bound` and `evidence_uri`.
+The renderer requires an exact current ID, pin and unique-count match. Progress
+never determines FULL or Result.
+
+After the package release, load the complete catalog with the
+[catalog loader](#updating-atlas), using the explicit preview app ID above.
+Use the [curriculum loader](#curriculum-coverage) twice: first pass the deployment's
+pre-remediation `release.json` and `coverage.json`, then the retained pair.
+Each successful load selects its release and retains the previous selection,
+so this order makes retained coverage primary and pre-remediation coverage previous
+evidence. Keep the exact input URIs and hashes in the deployment record.
+
+Production remains on hold. Before a production release, the shared runtime must
+carry these canonical modules natively; this preview staging command always targets
+the separate preview app.
 
 ### Backend survey
 
@@ -196,8 +264,10 @@ outcomes. `supported` means the declared feature passes its check; `partial`
 records an implementation or deployment condition; `unsupported` records a
 rejection or missing implementation. These are execution-contract checks, not
 provider capacity or verifier-liveness measurements. Docker storage quotas depend
-on its storage driver; Iris disk is a scheduling request. QEMU OCI inputs need
-configured assets and caches. Uploaded mtimes and non-root users have separate cells.
+on its storage driver. Iris storage enforcement remains unqualified and is not advertised. It requires
+one sandbox per task on a direct Kubernetes controller and the SANDBOX overflow
+evidence described in the deployment checklist. Shared-worker LOCAL has no disk quota.
+QEMU OCI inputs need configured assets and caches. Uploaded mtimes and non-root users have separate cells.
 
 This offline survey makes no provider calls and creates no machines or snapshots.
 Record measured account limits separately in `deployment_limits`, keyed by backend,
@@ -407,7 +477,7 @@ sample, and `/source-duplicates` returns review provenance, opinions and groups.
 Choose a domain from the picker or open an area to see its topics and skills.
 Breadcrumbs return to parent areas or all domains. Search names and descriptions
 across the curriculum, and filter counts by source or training/evaluation use.
-The URL preserves the selected area and filters. Select a count to read sampled
+The URL preserves the selected area, release and filters. The coverage-population picker keeps the retained release primary and makes the previous pre-remediation release available as evidence. Select a count to read sampled
 examples, then open an example for its public instruction preview, embedding
 text, cosine similarity to curriculum anchors and alternative matches.
 Long instruction previews record the original character count and truncation.
@@ -468,6 +538,16 @@ the release. Byte-bounded SQL requests keep import work proportional to the
 compact export. Failed loads preserve the selected release; the current and
 previous releases are retained. Run one curriculum loader per app at a time.
 APIs read Postgres without cloud scans.
+
+A metadata-only TRAIN-to-EVAL correction requires `--role-projection RECEIPT_URI
+RECEIPT_SHA256`. Set `--release` and `--coverage` to the receipt's exact corrected
+manifest URIs. The loader verifies the receipt and referenced artifact hashes,
+recomputes release identities, and requires each correction to match the current
+catalog's exact dataset pin and EVAL policy. Only the listed source roles and
+release identities may change; paths, counts and frozen data remain identical.
+Ordinary imports still require matching sample roles. Corrected task details show
+the effective Use alongside the historical `recorded_intended_use`, and the
+curriculum page links to the correction receipt.
 
 Start the local stack as shown in [Updating Atlas](#updating-atlas), then use the
 same curriculum-loader command with its printed ID and origin. Stop the stack
