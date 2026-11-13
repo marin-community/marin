@@ -29,10 +29,10 @@ from finestore.rl.curation import (
     SnapshotSource,
     register_catalog,
 )
-from finestore.rl.source_identity import canonical_source_id
 from finestore.store import DataStore
 from rigging.filesystem.distributed_lock import LeaseLostError, LocalFileLease
 
+from experiments.post_training.task_curation.catalog_identity import canonical_assessment
 from experiments.post_training.task_curation.catalog_snapshot import (
     publish_catalog,
     refresh_catalog,
@@ -42,6 +42,7 @@ from experiments.post_training.task_curation.catalog_snapshot import (
 from experiments.post_training.task_curation.curation_catalog import RUNS
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, SourceReference
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
@@ -504,7 +505,9 @@ def test_alias_metadata_refresh_keeps_archived_rows_and_packet_bytes(tmp_path):
     catalog = CurationCatalog(root)
     (selected,) = catalog.sources("canonical")
     assert selected.id == current and selected.assessment_key == "opaque-assessment-key"
-    assert catalog.assessment("opaque-assessment-key").source_id == current
+    archived = catalog.assessment("opaque-assessment-key")
+    assert archived.source_id == old
+    assert canonical_assessment(archived).source_id == current
     assert catalog.view.point(INVENTORY, snapshot_id="legacy", id=old)["declaration"]["id"] == old
     assert {table: list(catalog.view.iter_rows(table)) for table in before} == before
     assert catalog.packet("opaque-assessment-key", "opaque-assessment-key") == packet

@@ -23,7 +23,12 @@ from experiments.post_training.task_curation.full_qc import (
     local_reviewer,
 )
 from experiments.post_training.task_curation.full_qc_artifacts import FullQCReviewShard
-from experiments.post_training.task_curation.full_qc_review import assemble_shards, load_inputs, review_shard
+from experiments.post_training.task_curation.full_qc_review import (
+    SHARD_REQUEST_CONCURRENCY,
+    assemble_shards,
+    load_inputs,
+    review_shard,
+)
 from experiments.post_training.task_curation.judges import LocalJudgeEndpoint, PinnedLocalJudgeEndpoint
 
 logger = logging.getLogger(__name__)
@@ -63,7 +68,12 @@ def review_work(work: list[ShardWork], args: argparse.Namespace) -> None:
         for row in work:
             inputs = load_inputs(row.inputs_path)
             source_spec = replace(spec, prompt_budget=row.prompt_budget, retry_prompt_budget=row.prompt_budget)
-            reviewer = ReadyChatReviewer(session, source_spec, query_cache_root=args.review_cache, max_concurrent=32)
+            reviewer = ReadyChatReviewer(
+                session,
+                source_spec,
+                query_cache_root=args.review_cache,
+                max_concurrent=SHARD_REQUEST_CONCURRENCY // args.batch_workers,
+            )
             output = StoragePath(row.shard_output_path) / f"{args.shard_index:03}"
             result = review_shard(
                 inputs,
@@ -75,6 +85,7 @@ def review_work(work: list[ShardWork], args: argparse.Namespace) -> None:
                 shard_count=args.shard_count,
                 batch_offset=row.batch_offset,
                 max_passes=args.max_passes,
+                batch_workers=args.batch_workers,
                 worker_jobs=endpoint.job_ids,
             )
             write_pointer(result, output / "latest.json")
@@ -156,6 +167,9 @@ def main() -> None:
         if name == "review":
             command.add_argument("--shard-index", required=True, type=int)
             command.add_argument("--max-passes", required=True, type=int)
+            command.add_argument(
+                "--batch-workers", required=True, type=int, choices=range(1, SHARD_REQUEST_CONCURRENCY + 1)
+            )
             command.add_argument("--review-cache", required=True)
     args = parser.parse_args()
     configure_coreweave_s3()

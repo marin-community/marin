@@ -13,7 +13,6 @@ from typing import cast
 
 import click
 from finestore.rl.curation import LexicalContaminationEvidence, SourceDeclaration
-from finestore.rl.source_identity import canonical_source_id
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -51,6 +50,7 @@ from experiments.post_training.task_curation.campaign import (
     campaign_plan,
     run_campaign,
 )
+from experiments.post_training.task_curation.catalog_identity import canonical_declaration
 from experiments.post_training.task_curation.catalog_snapshot import publish_catalog
 from experiments.post_training.task_curation.config import (
     InputOverrides,
@@ -76,6 +76,7 @@ from experiments.post_training.task_curation.pipeline import CampaignMachines, C
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
 from experiments.post_training.task_curation.sources import all_sources, runnable_sources
 from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 LOCAL_MAX_WORKERS = 4
 LOCAL_MEMORY = "4g"
@@ -266,7 +267,7 @@ class _CorpusSources:
 
 def _corpus_sources(corpus: str) -> _CorpusSources:
     document = json.loads(StoragePath(corpus).read_text())
-    inventory = [SourceDeclaration.model_validate(row) for row in document["inventory"]]
+    inventory = [canonical_declaration(SourceDeclaration.model_validate(row)) for row in document["inventory"]]
     roots = {}
     for row in document["sources"]:
         manifest = json.loads((StoragePath(row["root"]) / "manifest.json").read_text())

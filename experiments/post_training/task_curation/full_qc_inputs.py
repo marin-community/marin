@@ -14,7 +14,6 @@ from uuid import uuid4
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.source_identity import canonical_source_id, original_source_id
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -29,6 +28,7 @@ from experiments.post_training.task_curation.lexical_artifacts import SourceText
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from experiments.post_training.task_curation.published_census import population_documents
 from experiments.post_training.task_curation.retention_plan import RetentionPlan
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, original_source_id
 
 logger = logging.getLogger(__name__)
 INDEX_SCHEMA = pa.schema([("task_id", pa.string()), ("task_sha256", pa.string()), ("runtime_sha256", pa.string())])

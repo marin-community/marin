@@ -30,7 +30,6 @@ from finestore.rl.curation import (
     source_identifier,
     source_title,
 )
-from finestore.rl.source_identity import canonical_source_id
 from marin.execution.lazy import ArtifactStep
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
@@ -40,6 +39,7 @@ from experiments.post_training.task_curation.source_policy import (
     GRANDFATHERED_DAYTONA_EXEMPTION,
     GRANDFATHERED_MARINSKYRL_SOURCES,
 )
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 
 class PinnedReference(Protocol):
