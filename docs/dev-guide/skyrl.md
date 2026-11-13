@@ -70,24 +70,29 @@ activation-offload modes.
 Set `trainer.policy.optimizer_config.optimizer: MuonH` and
 `trainer.policy.optimizer_config.optimizer_kwargs.expert_normalization: all_experts`
 to use Hero EP's norm constraint. Each layer's routed gate, up and down expert
-banks each preserve their own Frobenius norm across expert owners. The implementation reduces
-norm scalars over the EP group without gathering weights. Shared experts keep
-separate constraints; fused gate/up and Q/K/V weights retain separate logical
-matrix updates. Supported routed names end in
+banks each preserve their weight Frobenius norm across expert owners. The implementation reduces
+norm scalars over the EP group without gathering weights. Each shared expert
+projection keeps its own weight norm. Fused gate/up and Q/K/V weights retain
+separate logical matrix updates. Supported routed names end in
 `mlp.experts.linear_fc[12].weight<N>` or
 `mlp.experts.experts.linear_fc[12].weight<N>`.
 
 The default `expert_normalization: per_expert` keeps a separate constraint for
-each expert matrix. Both modes use Hero EP's BF16 coefficient and norm rounding
-and its square-matrix Newton–Schulz orientation. This changes numerical updates
+each expert matrix. Both modes round quintic coefficients and the FP32 sum
+of squared BF16 direction entries to BF16 before taking the square root. Square
+matrices transpose before Newton–Schulz in Megatron layout to match Levanter's
+transposed weight layout. This changes numerical updates
 in the existing per-expert mode too. Independent three-update JAX fixtures cover
 both modes in `vendor/skyrl/skyrl-train/tests/test_grug_muonh.py`.
 
-MuonH owns matrix weights, AdamH owns the readout, and Adam owns embeddings,
+MuonH and AdamH use Muon and Adam directions, respectively, then project the
+updated weights back to their original Frobenius norm. MuonH owns matrix
+weights, AdamH owns the readout, and Adam owns embeddings,
 routers, attention gates, scalar norm gains and ShortConv kernels. Set
 `optimizer_kwargs.adam_lr` separately for the Adam route. Hero EP uses
 `adam_betas: [0.9, 0.95]`, momentum `0.95`, Nesterov momentum, five BF16 quintic
-steps and both epsilons `1e-8`. Learning rates and schedules belong to the run;
+steps, `epsilon: 1e-8` for Adam/AdamH and `muon_epsilon: 1e-8` for direction
+normalization. Learning rates and schedules belong to the run;
 the pretraining heuristic is in `experiments/grug/moe_hero_ep/optimizer.py`.
 
 Use `weight_decay: 0`, `max_grad_norm: 0`, TP=ETP=1, FP32 master parameters and
