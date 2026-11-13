@@ -27,6 +27,7 @@ from zephyr.readers import load_parquet
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignFailed, CampaignRuntime
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
+from experiments.post_training.task_curation.datasets.evalchemy import math as eval_math
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import prepare_blend
 from experiments.post_training.task_curation.datasets.tasktrove import calendar
 from experiments.post_training.task_curation.driver import main as curation_main
@@ -127,7 +128,10 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
     assert successful["verification_status"] is None
 
 
-def test_local_eval_planning_uses_cache_for_grader_artifact_lookup(tmp_path):
+def test_local_eval_planning_uses_cache_for_grader_artifact_lookup(tmp_path, monkeypatch):
+    source = next(source for source in eval_math.sources() if source.name == "evalchemy-math500")
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {})
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.all_sources", lambda: {source.info.id: source})
     cache = tmp_path / "cache"
     result = CliRunner().invoke(
         curation_main,
