@@ -124,6 +124,12 @@ async function render(data, sourceId) {
     ['Lexical drop sets', list(lexical.drop_set_uris.map(uri => pointer(uri)))],
     ['Combined exclusion manifest', lexical.receipt?.release?.drop_manifest_uri && pointer(lexical.receipt.release.drop_manifest_uri)],
   ] : [], 'Measurements describe the recorded input population; the retained release and its exclusions are shown separately.'));
+  const progress = data.content_progress;
+  if (progress && data.quality !== 'FULL') sections.push(card('Provisional content-review progress', [
+    ['Status', 'Incomplete; strict final assembly pending'], ['Observed at', progress.as_of],
+    ['Valid reviews (lower bound)', progress.valid_reviews_lower_bound], ['Retained contracts', progress.retained_count],
+    ['Evidence', pointer(progress.evidence_uri)],
+  ], 'This observation does not determine FULL or Result. Partial-batch reviews may be additional.'));
   const qualityResult = d.quality_result;
   sections.push(card('Content review coverage', qualityResult ? [
     ['Status', data.quality === 'FULL' ? 'Complete strict content assembly' : 'Provisional / incomplete'],
@@ -180,6 +186,7 @@ async function render(data, sourceId) {
 }
 const sourceId = new URLSearchParams(location.hash.slice(1)).get('source_id');
 if (!sourceId) $('message').textContent = 'Open a source from the Atlas to see its evidence.';
-else json(`api/source?${new URLSearchParams({source_id: sourceId})}`).then(data => render(data, sourceId)).catch(error => {
+else Promise.all([json(`api/source?${new URLSearchParams({source_id: sourceId})}`), json('measurements/content-progress.json')])
+  .then(([data, progress]) => render({...data, content_progress: boundProgress(data.declaration, progress)}, sourceId)).catch(error => {
   $('title').textContent = 'Source evidence'; $('message').textContent = error.message; $('message').classList.add('error');
 });

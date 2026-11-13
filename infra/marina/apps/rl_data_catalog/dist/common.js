@@ -76,3 +76,11 @@ function datasetLinks(row) {
   if (current) append('Current dataset ↗', current.url, `Pinned training release: ${current.repo} @ ${current.revision}`);
   return links.childNodes.length ? links : null;
 }
+
+// Progress is a frozen observation; only the declaration's completed QA can set FULL or Result.
+function boundProgress(source, measurement) {
+  const progress = measurement.sources.find(item => item.source_id === source.id);
+  if (!progress || progress.dataset_id !== source.dataset_id || progress.dataset_revision !== source.dataset_revision ||
+      progress.retained_count !== source.within_source_dedup.unique_count) return null;
+  return {...progress, as_of: measurement.as_of};
+}

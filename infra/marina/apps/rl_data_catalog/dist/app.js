@@ -165,7 +165,7 @@ function sourceRow(row, others, canonical) {
     result.append(badge);
     if (row.quality_result?.issue_rate != null) result.append(node('span', `${(100 * row.quality_result.issue_rate).toFixed(2)}% issues`, 'source-subtitle'));
     if (row.quality === 'FULL') quality.append(node('span', 'Content QA complete', 'source-subtitle'));
-    else quality.append(node('span', 'Content QA pending / incomplete', 'source-subtitle'));
+    else quality.append(node('span', row.content_progress ? `Provisional: ≥${number.format(row.content_progress.valid_reviews_lower_bound)} / ${number.format(row.content_progress.retained_count)} reviewed` : 'Content QA pending / incomplete', 'source-subtitle'));
     if (row.quality_result && row.quality !== 'FULL') result.append(node('span', `${number.format(row.quality_result.reviewed)} reviewed · provisional`, 'source-subtitle'));
     const area = node('td');
     if (row.coverage?.top_area) {
@@ -226,8 +226,8 @@ function metrics(displayed) {
   $('metric-date').textContent = day(state.syncedAt);
 }
 async function load() {
-  const data = await json('api/sources');
-  state.sources = data.sources;
+  const [data, progress] = await Promise.all([json('api/sources'), json('measurements/content-progress.json')]);
+  state.sources = data.sources.map(row => ({...row, content_progress: boundProgress(row, progress)}));
   state.syncedAt = data.synced_at;
   $('message').hidden = true;
   $('snapshot-info').textContent = `Last updated ${day(data.synced_at)}`;
