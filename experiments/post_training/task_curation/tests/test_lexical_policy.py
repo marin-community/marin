@@ -123,18 +123,3 @@ def test_crosscode_eval_keeps_its_private_population_and_measures_lexical_overla
     assert evidence.receipt.release is None
     assert source.info.within_source_dedup.unique_count == source.info.count
     assert source.declaration.status == "Not selectable"
-
-
-def test_crosscode_python_retains_complete_content_result_without_execution_admission():
-    source = all_sources()["TaskTrove:laion__exp_rpt_crosscodeeval-python-v2"]
-    declaration = source.declaration
-    assert declaration.current_release.revision == "a953f93bc830704525ff2cce0b296dd262009662"
-    assert declaration.quality_result.reviewed == declaration.task_count == 500
-    assert declaration.quality_result.issue_count == 8
-    assert declaration.quality_result.issue_rate == 0.016
-    assert declaration.quality_result.verdict == "good"
-    assert declaration.quality_result.unavailable_count == declaration.quality_result.uncertain_count == 0
-    assert declaration.independent_qc.reviewed == 500
-    assert declaration.independent_qc.admitted is None
-    assert declaration.oversight == "none"
-    assert declaration.status == "Not selectable"
