@@ -15,6 +15,7 @@ from datasets import Dataset
 from rolloutengine.harness.shell import task_prompt as marin_task_prompt
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, assistant_prefix_prompt
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
+from rolloutengine.validation import task_machine_reason
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
 from skyrl_gym.source_task import session_parameters, source_task
 from taskcompendium.models import (
@@ -192,6 +193,14 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     continues_assistant = isinstance(final_event, TextMessage) and final_event.role == "assistant"
     harness = ASSISTANT_PREFIX_HARNESS if continues_assistant else config["default_harness"]
     session = {**config["session"], "task_session": harness}
+    if task.source.dataset in config["max_turns_by_dataset"]:
+        session["max_turns"] = config["max_turns_by_dataset"][task.source.dataset]
+    machine = config["task_machine_by_dataset"].get(task.source.dataset)
+    task_machine = (
+        MachineRuntimeSpec.model_validate(machine)
+        if machine is not None and task_machine_reason(task) is not None
+        else None
+    )
     verifier = None
     grader = task.grader
     if (
@@ -201,7 +210,7 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     ):
         machine = config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
         verifier = MachineRuntimeSpec.model_validate(machine)
-    lowered = rollout_spec(task, session, verifier_machine=verifier)
+    lowered = rollout_spec(task, session, task_machine=task_machine, verifier_machine=verifier)
     return _stored_prompt(lowered)
 
 

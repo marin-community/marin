@@ -480,7 +480,7 @@ def _run_command(function: Callable) -> click.Command:
     "tasks_name",
     metavar="NAME@VERSION",
     help="Curated task selection at an immutable version, recording the full EvalLite in recipe.exclusions. "
-    "Required by data presets, whose selection must hold out the same task_set as the default; "
+    "Required by data presets, whose selection must hold out the same task set as the default; "
     "train-long defaults to the pinned snowball-100k.",
 )
 @click.option(

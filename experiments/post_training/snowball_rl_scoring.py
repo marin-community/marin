@@ -340,8 +340,10 @@ def _window_values(preset: presets.Preset, metrics: Mapping[int, Mapping[str, fl
         - {"step", "attempt_id", "metric_attempt_ids"}
     )
     for key in (*declared, *sorted(extra)):
-        window = declared.get(key, presets.WindowStatistic.MEAN)
-        if key.startswith("startup/"):
+        window = declared.get(
+            key, presets.WindowStatistic.FIRST if key.startswith("startup/") else presets.WindowStatistic.MEAN
+        )
+        if window == presets.WindowStatistic.FIRST:
             first = next((row[key] for _, row in sorted(metrics.items()) if key in row), None)
             if first is not None:
                 values[key] = float(first)
@@ -359,12 +361,16 @@ def _window_values(preset: presets.Preset, metrics: Mapping[int, Mapping[str, fl
             ):
                 values[key] = math.fsum(count / total * row[key] for row, count in nonempty)
             continue
-        if key == presets.UPDATE_SECONDS_METRIC:
+        if window == presets.WindowStatistic.PHASE_SUM_MEDIAN:
             series = [math.fsum(row[key] for key in phases) for row in rows if phases and set(phases) <= set(row)]
         else:
             series = [row[key] for row in rows if key in row]
         if series and len(series) == len(rows):
-            reducer = statistics.median if window == presets.WindowStatistic.MEDIAN else statistics.mean
+            reducer = (
+                statistics.median
+                if window in (presets.WindowStatistic.MEDIAN, presets.WindowStatistic.PHASE_SUM_MEDIAN)
+                else statistics.mean
+            )
             values[key] = float(reducer(series))
     return values
 
@@ -559,7 +565,7 @@ def load_run(
         holds = workload.fixed_reply_holds(fixed, training, answers)
         invariants.append(Invariant(name="fixed_reply_tokens", value=holds, limit=True, comparator="==", holds=holds))
     missing = any(
-        metric.key.startswith("policy/mismatch/")
+        metric.window == presets.WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN
         and _mismatch_counts([metrics.get(step, {}) for step in preset.measured], metric.key.rsplit("/", 1)[0]) is None
         for metric in preset.guards
     )
@@ -604,7 +610,7 @@ def load_run(
 def with_objectives(candidate: RunData, preset: presets.Preset) -> RunData:
     values = dict(candidate.values)
     for metric in preset.objectives:
-        if metric.key.endswith("/gain_per_h100_hour"):
+        if metric.window == presets.WindowStatistic.GAIN_PER_H100_HOUR:
             gain = values.get(metric.key.removesuffix("_per_h100_hour"))
             if gain is not None and candidate.h100_hours:
                 values[metric.key] = gain / candidate.h100_hours

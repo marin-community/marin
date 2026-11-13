@@ -69,7 +69,7 @@ REPO_ROOT = find_project_root(Path(__file__))
 RUN_PREFIX = "checkpoints/snowball-rl"
 UPDATE_SECONDS_METRIC = "speed/update_seconds"
 GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
-# Fraction of a native task_set that must be scored before its scores count.
+# Fraction of a native task set that must be scored before its scores count.
 MINIMUM_SCORED_FRACTION = 0.99
 SEED = 20261020
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
@@ -190,6 +190,9 @@ class Duration(StrEnum):
 class WindowStatistic(StrEnum):
     MEAN = "mean"
     MEDIAN = "median"
+    PHASE_SUM_MEDIAN = "phase-sum-median"
+    GAIN_PER_H100_HOUR = "gain-per-h100-hour"
+    FIRST = "first"
     SELECTED_TOKEN_WEIGHTED_MEAN = "selected-token-weighted-mean"
 
 
@@ -783,7 +786,10 @@ _LEARNING_MEDIUM = Preset(
     measured=range(21, 26),
     evaluations=(replace(EVALUATIONS["eval_lite"], at_start=True),),
     guards=(Metric("eval_lite/family_mean", True),),
-    objectives=(Metric("eval_lite/family_mean", True), Metric("eval_lite/family_mean/gain_per_h100_hour", True)),
+    objectives=(
+        Metric("eval_lite/family_mean", True),
+        Metric("eval_lite/family_mean/gain_per_h100_hour", True, WindowStatistic.GAIN_PER_H100_HOUR),
+    ),
     gaps=_GAPS,
     budget="asynchronous runtime unmeasured",
 )
@@ -860,7 +866,7 @@ PRESETS = MappingProxyType(
                 data_settings=frozenset(),
                 focus=Focus.SPEED,
                 duration=Duration.MEDIUM,
-                objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.MEDIAN),),
+                objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),),
                 recipe=replace(
                     _ASYNC_P40,
                     fixed_reply_tokens=4096,
@@ -875,7 +881,7 @@ PRESETS = MappingProxyType(
                 updates=10,
                 measured=range(2, 11),
                 guards=(
-                    Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.MEDIAN),
+                    Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),
                     Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
                 ),
                 gaps=(*_GAPS, Gap.MISMATCH_IS_AGREEMENT, Gap.LAYOUT_P40_ONLY),
@@ -898,12 +904,12 @@ PRESETS = MappingProxyType(
                 data_settings=frozenset(),
                 focus=Focus.SPEED,
                 duration=Duration.LONG,
-                objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.MEDIAN),),
+                objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),),
                 recipe=_ASYNC_P40,
                 updates=20,
                 measured=range(3, 21),
                 guards=(
-                    Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.MEDIAN),
+                    Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),
                     Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
                 ),
                 gaps=(*_GAPS, Gap.LAYOUT_P40_ONLY),

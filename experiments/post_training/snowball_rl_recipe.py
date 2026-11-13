@@ -114,10 +114,11 @@ def run_spec(
     """Build the complete default recipe with explicit candidate inputs and settings."""
     config = _training_config(preset, settings)
     explicit = presets.override_document(settings)
+    authored = config.to_skyrl()
     batch_changes = {
         field: value
         for key, field in presets.BATCH_SETTINGS.items()
-        if (value := get_path(explicit, key)) is not MISSING
+        if (value := get_path(authored, key)) is not MISSING
     }
     if batch_changes:
         workload = preset.recipe.layout.workload.with_batches(batch_changes)

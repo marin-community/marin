@@ -215,6 +215,7 @@ def test_models_endpoint_reports_the_configured_model(test_client):
     payload = response.json()
     assert payload["object"] == "list"
     assert [model["id"] for model in payload["data"]] == [server.config.model_name]
+    assert payload["data"][0]["max_model_len"] == server.inference_context.engine.config.max_seq_len
 
 
 def test_chat_completion_without_a_chat_template_is_rejected(test_client, monkeypatch, local_gpt2_tokenizer):

@@ -133,10 +133,7 @@ def _coordinator_request(
 
 
 def submit_or_run(
-    module_name: str,
-    handles: list[ArtifactStep],
-    max_concurrent: int,
-    coordinator_env: Mapping[str, str],
+    module_name: str, handles: list[ArtifactStep], max_concurrent: int, coordinator_env: Mapping[str, str]
 ) -> JobName | None:
     """Run the graph in-job, or submit it and return the coordinator's ID."""
     if get_job_info() is not None:
@@ -152,8 +149,8 @@ def submit_or_run(
         workspace,
         coordinator_env,
     )
-    with open_iris_client(config_file=Path(cluster_config), workspace=workspace) as client:
-        handle = FrayIrisClient.from_iris_client(client).submit(request, adopt_existing=False)
+    with open_iris_client(config_file=Path(cluster_config), workspace=workspace) as iris_client:
+        handle = FrayIrisClient.from_iris_client(iris_client).submit(request, adopt_existing=False)
     click.echo(f"submitted RL coordinator {handle.job_id} ({request.name}) via {cluster_config}")
     return JobName.from_wire(handle.job_id)
 

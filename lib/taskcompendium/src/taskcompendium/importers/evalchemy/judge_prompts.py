@@ -9,7 +9,6 @@ protocol. Both always call the judge, including empty and exact candidates.
 """
 
 import json
-from dataclasses import replace
 
 from verifyit.spec import EmptyOutputPolicy, JudgeCompletionPolicy, JudgeSpec
 
@@ -115,13 +114,15 @@ Judgment:"""  # noqa: E501 - exact source prompt
 DEFAULT_JUDGE_MODEL = "gpt-4o-mini"
 
 
-def classification_spec(question: str, reference: str, template: str, labels: tuple[str, str, str]) -> JudgeSpec:
+def classification_spec(
+    question: str, reference: str, template: str, labels: tuple[str, str, str], *, model: str
+) -> JudgeSpec:
     """Map complete source labels to all classification observations."""
     correct, incorrect, not_attempted = labels
     return JudgeSpec(
         question=question,
         references=(reference,),
-        model=DEFAULT_JUDGE_MODEL,
+        model=model,
         rubric="labels",
         prompt_template=template,
         exact_gate=False,
@@ -147,16 +148,15 @@ def classification_spec(question: str, reference: str, template: str, labels: tu
 
 
 def financebench_spec(question: str, answer: str) -> JudgeSpec:
-    return replace(
-        classification_spec(
-            question,
-            json.dumps([answer], ensure_ascii=False),
-            EQUIVALENCE_JUDGE_TEMPLATE.replace("{reference_answers}", "{reference}").replace(
-                "{candidate_answer}", "{candidate}"
-            ),
-            ("correct", "incorrect", "not_attempted"),
+    return classification_spec(
+        question,
+        json.dumps([answer], ensure_ascii=False),
+        EQUIVALENCE_JUDGE_TEMPLATE.replace("{reference_answers}", "{reference}").replace(
+            "{candidate_answer}", "{candidate}"
         ),
-        model="openai/gpt-oss-120b",
+        ("correct", "incorrect", "not_attempted"),
+        # Use the judge deployment selected by the evaluation launcher.
+        model="",
     )
 
 
@@ -166,4 +166,5 @@ def simpleqa_spec(question: str, answer: str) -> JudgeSpec:
         answer,
         SIMPLEQA_GRADER_TEMPLATE.replace("{target}", "{reference}").replace("{predicted_answer}", "{candidate}"),
         ("A", "B", "C"),
+        model=DEFAULT_JUDGE_MODEL,
     )

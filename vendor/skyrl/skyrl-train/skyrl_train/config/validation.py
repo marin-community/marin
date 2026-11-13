@@ -20,20 +20,11 @@ def validate_batch_invariant_config(cfg: DictConfig) -> None:
         )
 
 
-def num_rollout_gpus(cfg: DictConfig) -> int:
-    generator = cfg.generator
-    return (
-        generator.num_inference_engines
-        * generator.inference_engine_tensor_parallel_size
-        * generator.inference_engine_pipeline_parallel_size
-        * generator.inference_engine_data_parallel_size
-    )
 
 
 def validate_megatron_config(cfg: DictConfig):
     # not yet supported + tested features
     assert cfg.generator.weight_sync_backend == "nccl", "only nccl is supported for megatron weight sync"
-    assert cfg.generator.backend == "vllm", "only vllm is supported for with megatron"
     assert cfg.trainer.critic.model.path is None, "only GRPO training is currently supported for megatron"
 
     worker_configs = [(cfg.trainer.policy, "policy"), (cfg.trainer.ref, "ref")]
@@ -155,9 +146,14 @@ def validate_training_settings(cfg: DictConfig) -> None:
         gpus_per_node = cfg.trainer.placement.policy_num_gpus_per_node
         validate_colocated_engine_geometry(tensor_pipeline_size=tp_pp_size, gpus_per_node=gpus_per_node)
         num_policy_gpus = cfg.trainer.placement.policy_num_gpus_per_node * cfg.trainer.placement.policy_num_nodes
-        rollout_gpus = num_rollout_gpus(cfg)
-        assert num_policy_gpus == rollout_gpus, (
-            f"num_policy_gpus ({num_policy_gpus}) and num_rollout_gpus ({rollout_gpus}) must be the same when colocating all models"
+        num_rollout_gpus = (
+            cfg.generator.num_inference_engines
+            * cfg.generator.inference_engine_tensor_parallel_size
+            * cfg.generator.inference_engine_pipeline_parallel_size
+            * cfg.generator.inference_engine_data_parallel_size
+        )
+        assert num_policy_gpus == num_rollout_gpus, (
+            f"num_policy_gpus ({num_policy_gpus}) and num_rollout_gpus ({num_rollout_gpus}) must be the same when colocating all models"
         )
 
     else:

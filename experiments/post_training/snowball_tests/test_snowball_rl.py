@@ -359,13 +359,13 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
     for binding, summary in summaries.items():
         (StoragePath(presets.selection_artifact(binding).path()) / presets.SUMMARY_FILENAME).write_text(summary)
     revisions = {
-        "speed-short": {"2026.11.13.1": None},
-        "data-short": {"2026.11.13.1": None},
-        "speed-medium": {"2026.11.12.1": None},
-        "learning-medium": {"2026.11.12.1": None},
-        "data-medium": {"2026.11.12.1": None},
-        "speed-long": {"2026.11.11.1": None},
-        "train-long": {"2026.11.11.1": None},
+        "speed-short": {"2026.11.13.1": "e492dd1e"},
+        "data-short": {"2026.11.13.1": "f29bf661"},
+        "speed-medium": {"2026.11.12.1": "1af00f32"},
+        "learning-medium": {"2026.11.12.1": "5d01147c"},
+        "data-medium": {"2026.11.12.1": "5d01147c"},
+        "speed-long": {"2026.11.11.1": "ebab276e"},
+        "train-long": {"2026.11.11.1": "05f0a068"},
     }
     expected = {name: versions.get(presets.PRESETS[name].revision) for name, versions in revisions.items()}
     paths = []
@@ -374,7 +374,13 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
         spec = recipe.run_spec(preset, name="fixture-default-" + name)
         step = recipe.run_step(preset, spec)
         path = tmp_path / f"{name}.yaml"
-        _render(step, path, runtime=True)
+        context = StepContext.for_run(
+            "/snowball-pin-output/" + step.name,
+            "/snowball-pin-prefix",
+            runtime_args=step.runtime_args,
+            deps=step.deps,
+        )
+        path.write_text(step.build_config(context).launch_config_yaml)
         paths.append(str(path))
     configs = gate.compose_configs(paths)
     actual = {

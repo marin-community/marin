@@ -7,7 +7,6 @@ import time
 from pathlib import Path
 from typing import Any, Protocol
 
-import hydra
 import ray
 from loguru import logger
 from omegaconf import DictConfig
@@ -20,10 +19,7 @@ from skyrl_train.evaluation_profiles import (
     validate_generation_profiles,
 )
 from skyrl_train.config.rollout_validation import EntrypointOperation
-from skyrl_train.entrypoints.main_base import (
-    BasePPOExp,
-    config_dir,
-)
+from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.inference_engines.base import NamedWeightsUpdateRequest, lora_disk_load_request
 from skyrl_train.inference_engines.vllm.stats import IntervalReadMode
 from skyrl_train.inference_observability import trainer_metrics
@@ -31,7 +27,8 @@ from skyrl_train.metric_names import (
     PROMPTS_DROPPED_TOO_LONG_METRIC,
 )
 from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray
-from skyrl_train.config.validation import num_rollout_gpus
+from skyrl_train.config.placement_geometry import num_rollout_gpus
+from skyrl_train.config.utils import normalize_logging_backends
 from skyrl_train.evaluate import evaluate
 from skyrl_train.trajectory_runners.trajectory_retention import make_trajectory_sink
 from skyrl_train.utils.trainer_utils import build_eval_dataloader
@@ -157,16 +154,8 @@ def eval_entrypoint(cfg: DictConfig) -> dict:
 
 
 def run(cfg: DictConfig) -> None:
+    normalize_logging_backends(cfg)
     validate_generator_cfg(cfg)
     initialize_ray(cfg)
     metrics = ray.get(eval_entrypoint.remote(cfg))
     logger.info(f"Metrics from eval only run: {metrics}")
-
-
-@hydra.main(config_path=config_dir, config_name="ppo_base_config", version_base=None)
-def main(cfg: DictConfig) -> None:
-    run(cfg)
-
-
-if __name__ == "__main__":
-    main()
