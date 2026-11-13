@@ -1228,6 +1228,35 @@ Changing these reviewer instructions changes `ReviewerSpec` and invalidates prio
 request-cache entries; preserve the old review artifacts when correcting a rubric.
 See the [campaign command](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#complete-retained-population-review).
 
+### Inventory calibration prerequisites
+
+Before dispatching a backfill, inspect every retained contract against its frozen
+combined duplicate/lexical drop plan. This CPU census records missing execution
+requirements, original oracle resources, grading boundaries and task-level
+static blockers. Mutable image inputs, missing package locks and fragment-only
+oracles require a separately versioned repair. A source with zero static blockers
+still requires production calibration, provider quota checks and complete receipts.
+
+```bash
+uv run --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.calibration_inventory \
+  --retention-plans FROZEN_PLANS.json --source-ids SOURCE_IDS.json \
+  --prepared-inputs FROZEN_INPUT_ARTIFACTS.json \
+  --output-root REGIONAL_VERSIONED_URL --workers 4
+```
+
+`--prepared-inputs` maps source IDs to previously frozen FULL-QC input artifacts.
+Their per-task and runtime hashes bind the inventory to the reviewed contracts.
+Without a prior index, hashes are observations and every task records a missing
+frozen-index blocker. Legacy aggregate digests identify population metadata;
+they cannot verify a reordered stream of stored TaskSpecs.
+
+Use an explicit data-local Iris target, the campaign's authorized priority and a
+three-day timeout. The command preserves all input TaskSpecs and writes per-task
+hashes and blockers plus source summaries. Reusing an output prefix is rejected;
+interrupted attempts require a fresh version. These inventories supply no
+execution admission, calibration result or publication evidence.
+
 ### Full-population oracle filter
 
 Every admitted TaskSpec must declare `execution_requirements`: `cpus`,
