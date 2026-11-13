@@ -165,7 +165,7 @@ class InputsConfig:
     data_kind: str = MISSING
     train_data: list[dict[str, Any]] = field(default_factory=list)
     validation_data: list[dict[str, Any]] = field(default_factory=list)
-    resume_checkpoint: NativeCheckpointLocator | None = None
+    starting_checkpoint: NativeCheckpointLocator | None = None
 
 
 @dataclass
@@ -201,10 +201,9 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
     raw_skyrl = OmegaConf.to_container(config.skyrl, resolve=False)
     if not isinstance(raw_skyrl, dict):
         raise TypeError("skyrl must be a mapping")
-    if config.inputs.resume_checkpoint is not None:
+    if config.inputs.starting_checkpoint is not None:
         trainer = raw_skyrl.setdefault("trainer", {})
-        trainer["resume_path"] = str(config.inputs.resume_checkpoint.uri)
-        trainer.setdefault("resume_mode", "latest")
+        trainer["resume_path"] = str(config.inputs.starting_checkpoint.uri)
     model_uri = str(config.inputs.model.uri)
     model_identity = str(config.inputs.model.identity)
     model_is_cloud = is_cloud_uri(model_uri)
