@@ -585,17 +585,27 @@ and 16,384-token retry budgets.
 These budgets have a separate ReviewerSpec and exact-request cache identity.
 
 Run a batch-priority CPU job on the serving workers' cluster with a three-day
-timeout. Borrow an existing serving worker from the same primary campaign; this
-command neither starts nor stops serving jobs. It resolves that worker's current child registration
-before each request, including when batch preemption replaces the child. Keep
-the primary 48 workers running and use a separate output prefix and cache:
+timeout. Repeat `--serving-root` to borrow existing workers from the same pinned
+primary campaign. Each request selects from their current registrations and
+checks the advertised model; an unregistered worker is skipped until it returns.
+The command neither starts nor stops serving jobs. Keep the primary 48 workers
+running and use a separate output prefix and cache.
+
+Set `--batch-workers` explicitly, from one to 16. The writer streams fixed groups
+of that many original 32-task batches and processes each group concurrently;
+it never queues the whole source in memory. Each batch admits at most four
+requests, so the CLI adds at most 64 concurrent repair requests across the
+borrowed serving pool. Physical routing and concurrency do not change the
+reviewer, request-cache or composite identity. Only incomplete primary contracts
+are submitted, and completed repair receipts are reused on resume:
 
 ```bash
 uv run --no-sync --package marin-core --extra dedup python -m \
   experiments.post_training.task_curation.full_qc_repair \
   --primary s3://bucket/assembled/source/v1/attempts/PRIMARY \
   --primary-sha256 PRIMARY_ARTIFACT_SHA256 \
-  --serving-root /owner/primary-worker \
+  --serving-root /owner/primary-worker-000 \
+  --serving-root /owner/primary-worker-001 --batch-workers 2 \
   --output s3://bucket/repair-overlay/source/v1 \
   --review-cache s3://bucket/repair-overlay/request-cache --run
 ```
