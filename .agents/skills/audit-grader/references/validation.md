@@ -1,4 +1,6 @@
-# Validation on five small graders
+# Validation
+
+## Five small graders with planted defects
 
 This skill was checked on five small graders written for the purpose, which
 cover the four kinds the skill names: two programmatic checkers (one for math
@@ -57,3 +59,62 @@ Limits:
   rate.
 - The cases are small. Claude Opus 5.5 also wrote them, and each key names the
   skill step where each planted item should surface.
+
+## Blind rerun on IFBench
+
+The audit in [ifbench.md](ifbench.md) was done before this skill was written. In
+the rerun, a fresh agent session audited the same grader, Marin's vendored
+IFBench checkers, with SKILL.md and `reviewer-prompt.md` as merged in #10422. It
+had no `ifbench.md`, no copy of this file and no result of the earlier audit.
+Its working directory held the grader, the reference at allenai/IFBench
+`1c40f0c`, the dataset, and the earlier audit's stored panel of 68,400
+responses. For step 6, two more sessions each labeled the frozen sample of 458
+verdicts in a folder that held only its own batches. The run's files and the
+score card are in
+[`XiaoyuanWang111/audit-grader-suite` at `f4738d6`](https://github.com/XiaoyuanWang111/audit-grader-suite/tree/f4738d6ca7a3cb82a922232358962f371608e2e3),
+under `runs/ifbench-r3/` and `runs/SCORES-ifbench.md`.
+
+The rerun's report was scored against the earlier audit's findings. The rule for
+a found defect is the one above, and it was written down before the first
+match. A finding counts under "decision entry" when the rerun files the
+behavior as a decision for the maintainers.
+
+| Earlier audit's findings | Reported as a finding | As a decision entry | Not reported |
+|---|---|---|---|
+| 34 checker findings that hold under every reading | 28 | 3 | 3 |
+| 9 checker findings that rest on a decision | 3 | 5 | 1 |
+| 6 protocol findings | 3 | 2 | 1 |
+
+The seventh protocol finding, loose grading, is left out because SKILL.md names
+it. The rerun lists 56 findings, and every counterexample reproduces on the
+grader. Three concern the working directory and the stored panel. Of the other
+53, 40 match the earlier audit, 5 are defects that the earlier audit did not
+report, and 8 are behaviors that the earlier audit or the rerun's own reviewers
+treat as decisions. None is false. The rerun puts the grader's error rate at
+7.2% [5.9, 9.1], against 7.6% [4.7, 11.3] and 6.1% [3.9, 10.1] in the earlier
+audit's two rounds, and it also recommends fixing the grader.
+
+The four checker findings that the rerun did not report are each an input form
+that it had used to show a defect in another check: a list label, a curly
+quote, or punctuation after a repeated word. A fifth was missing before the
+review: the flag emoji that the grader rejects. After the review, the auditor
+went through the two review cases that every grader got wrong, and the panel
+verdicts on which no reading of the decision entries makes the replacement
+agree with the grader. The skill does not ask for this step. It added four
+findings, the flag emoji among them. #11187 tracks both gaps.
+
+Limits:
+
+- This is one run. The auditor and both reviewers were Claude Opus 5.5, and the
+  earlier audit's reviewers were Claude models too, so the two audits can share
+  blind spots.
+- The auditor's work took two sessions. The first stopped once it had frozen
+  the review sample. The second started from the files when both reviews were
+  in, and was told to write the report before any further analysis.
+- SKILL.md says how many checkers the earlier audit covered, and the reference
+  already fixes six of the earlier findings.
+- The sessions were told to work offline inside their folders; nothing enforced
+  this. A script read each session's tool calls afterwards and found no access
+  to the earlier audit or to another session's files.
+- The two reports were matched by hand, and no second reader checked the
+  matches.
