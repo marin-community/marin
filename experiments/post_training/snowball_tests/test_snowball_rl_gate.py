@@ -463,6 +463,10 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
             fingerprint=built.runs[0].fingerprint(),
         )
     )
+    if case == "train-failed":
+        receipt = json.loads((source / "terminal.json").read_text())
+        receipt["result"]["state"] = "failed"
+        write_receipt(source, receipt)
     if case.startswith("malformed-"):
         root = roots[0] if case == "malformed-control" else source
         receipt = json.loads((root / "terminal.json").read_text())

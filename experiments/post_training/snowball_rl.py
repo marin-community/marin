@@ -7,7 +7,7 @@
   speed-short      engine throughput and full EvalLite quality; 8 H100, about 15 min.
   speed-medium     asynchronous update time and mismatch; 40 H100, runtime unmeasured.
   speed-long       asynchronous update time and mismatch; 40 H100, 45-75 min.
-  learning-medium  task_set score after 25 async updates; 40 H100, runtime unmeasured.
+  learning-medium  EvalLite score after 25 async updates; 40 H100, runtime unmeasured.
   data-short       mixed-answer fraction on --tasks; 8 H100, about 15 min.
   data-medium      learning-medium on --tasks; 40 H100, runtime unmeasured.
   train-long       async training, checkpoints and HF export; 40 H100 east; no verdict.
@@ -323,7 +323,7 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
             verdict["rl_path_changes_since_control"] = changes
             if reason:
                 verdict["rl_path_changes_reason"] = reason
-    if "verdict" not in verdict:
+    if "verdict" not in verdict and preset.gated:
         crashed = next((row for row in rows if str(row["state"]).lower() in _FAILED_RUN_STATES), None)
         if crashed is not None:
             verdict = {
@@ -400,7 +400,7 @@ def _wait_for_run(job: JobName, handles: list[ArtifactStep], preset: presets.Pre
     run = _from_handles(handles)
     snapshot = _status(run, preset)
     if "verdict" not in snapshot and (parent.state != JobState.SUCCEEDED or run.gate is not None):
-        snapshot["reason"] = f"coordinator {job} is {parent.state}; required verdict unavailable"
+        snapshot["reason"] = f"coordinator {job} is {parent.state}; verdict unavailable"
     click.echo(yaml.safe_dump(snapshot, sort_keys=False, width=1000))
     if "report" in snapshot:
         click.echo((StoragePath(snapshot["report"]).parent / snowball_rl_gate.GATE_MARKDOWN_FILENAME).read_text())

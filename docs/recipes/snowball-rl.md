@@ -40,7 +40,7 @@ Repeating the same command reuses completed artifacts. Track or stage source fil
 `--version dev` satisfies the standard launcher interface; each preset's steps use its `revision`.
 
 Exit codes are 0 for PASS or a completed ungated run, 1 for FAIL, 2 for INVALID,
-3 for an unavailable required verdict, and 4 for refusal before execution. Submission without
+3 for a failed coordinator or unavailable required verdict, and 4 for refusal before execution. Submission without
 `--wait` returns 0 when accepted. Status lists completed updates, native attempt and job IDs,
 W&B URLs and a Grafana dashboard link. Set `WANDB_API_KEY` before submission;
 `WANDB_ENTITY` selects the team, with `marin-community` as the default. The project is
