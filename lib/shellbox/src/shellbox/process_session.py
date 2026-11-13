@@ -38,15 +38,24 @@ class ClosableResource(Protocol):
     async def close(self) -> None: ...
 
 
-async def finish_owned[T](task: asyncio.Task[T]) -> T:
+async def finish_owned[T](task: asyncio.Task[T], *, timeout: float | None = None) -> T:
     """Finish an owned operation despite repeated cancellation of its caller.
 
     The caller must preserve and re-raise its originating error or cancellation.
     Errors from the owned operation still propagate for explicit handling there.
+    An explicit timeout bounds remaining cleanup by wall time, including repeated cancellation.
     """
+    deadline = None if timeout is None else asyncio.get_running_loop().time() + timeout
     while not task.done():
         try:
-            await asyncio.shield(task)
+            if deadline is None:
+                await asyncio.shield(task)
+            else:
+                remaining = max(0, deadline - asyncio.get_running_loop().time())
+                done, _ = await asyncio.wait({task}, timeout=remaining)
+                if not done:
+                    task.cancel()
+                    raise TimeoutError("Owned operation exceeded its cleanup deadline")
         except asyncio.CancelledError:
             if task.cancelled():
                 break

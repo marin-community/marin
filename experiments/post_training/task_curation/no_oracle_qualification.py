@@ -543,12 +543,7 @@ def execute_lowered_setup(
     timeout: int = DOCKER_SETUP_TIMEOUT,
     dns: tuple[str, ...] = (),
 ) -> SetupExecution:
-    """Run a lowered spec's setup commands in its image and compare the written files.
-
-    The spec is the artifact a rollout consumes: resources carry the fixtures and
-    ``environment_requirements.setup_commands`` stage them. This executes exactly
-    those commands, so a spec that declares a hook nothing runs cannot pass.
-    """
+    """Run the lowered spec's declared setup and verify its native file bytes and modes."""
     task = spec["task"]
     requirements = task["environment_requirements"]
     commands = tuple(requirements.get("setup_commands") or ())
