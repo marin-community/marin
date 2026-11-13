@@ -1991,12 +1991,13 @@ def test_sandbox_pod_enforces_exact_declared_disk_and_cpu(disk_bytes: int) -> No
 
 
 @pytest.mark.parametrize(
-    "message,expected_state,exit_code,disrupted",
+    "message,expected_state,exit_code,disrupted,sandbox",
     [
         (
             "Pod ephemeral local storage usage exceeds the total limit of containers 2Gi.",
             job_pb2.TASK_STATE_FAILED,
             137,
+            True,
             True,
         ),
         (
@@ -2004,25 +2005,35 @@ def test_sandbox_pod_enforces_exact_declared_disk_and_cpu(disk_bytes: int) -> No
             job_pb2.TASK_STATE_FAILED,
             0,
             False,
+            True,
         ),
-        ('Container task exceeded its local ephemeral storage limit "2Gi".', job_pb2.TASK_STATE_FAILED, 137, True),
+        ('Container task exceeded its local ephemeral storage limit "2Gi".', job_pb2.TASK_STATE_FAILED, 137, True, True),
         (
             "The node was low on resource: ephemeral-storage. Threshold quantity: 100Gi, available: 5Gi.",
             job_pb2.TASK_STATE_PREEMPTED,
             137,
             True,
+            True,
+        ),
+        (
+            "Pod ephemeral local storage usage exceeds the total limit of containers 2Gi.",
+            job_pb2.TASK_STATE_PREEMPTED,
+            137,
+            True,
+            False,
         ),
     ],
 )
 def test_storage_eviction_classifies_task_limit_separately_from_node_pressure(
-    message: str, expected_state: int, exit_code: int, disrupted: bool
+    message: str, expected_state: int, exit_code: int, disrupted: bool, sandbox: bool
 ) -> None:
     k8s = InMemoryK8sService(namespace="iris")
     provider = K8sTaskProvider(
         descriptor=k8s_backend_descriptor(), kubectl=k8s, pods=pod_config(), cluster_scan_interval=0.0
     )
     req = make_run_req("/storage/0", attempt_uid="disk-limit-test")
-    req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    if sandbox:
+        req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
     req.resources.disk_bytes = 2 * 1024**3
     try:
         provider.sync(make_batch(tasks_to_run=[req]))

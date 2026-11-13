@@ -195,6 +195,7 @@ _LABEL_TASK_HASH = "iris.task_hash"
 _LABEL_JOB_ID = "iris.job_id"
 # Unique per attempt, even when a resubmitted job reuses the task ID and attempt number.
 _LABEL_ATTEMPT_UID = "iris.attempt_uid"
+_SANDBOX_STORAGE_LIMIT_ANNOTATION = "iris.sandbox_storage_limit_bytes"
 
 # Runtime identifier for pods created by K8sTaskProvider.
 _RUNTIME_LABEL_VALUE = IRIS_KUBERNETES_RUNTIME
@@ -1068,6 +1069,9 @@ def _build_pod_manifest(
         "annotations": {IRIS_TASK_ID_ANNOTATION: run_req.task_id},
     }
 
+    if run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX and run_req.resources.disk_bytes:
+        metadata["annotations"][_SANDBOX_STORAGE_LIMIT_ANNOTATION] = str(run_req.resources.disk_bytes)
+
     # Every pod is admitted through one Kueue TAS flavor: its accounting and
     # preemption arbitrate all capacity. A pod that bypassed Kueue would hold nodes
     # Kueue can neither count in its topology bookkeeping nor select as a victim.
@@ -1321,6 +1325,10 @@ def _format_disruption_reason(condition: dict) -> str:
 
 
 def _disk_limit_exceeded(pod: dict) -> bool:
+    # Only newly opted-in sandbox pods change retry semantics. Existing and
+    # ordinary pods retain their original disruption classification.
+    if _SANDBOX_STORAGE_LIMIT_ANNOTATION not in pod.get("metadata", {}).get("annotations", {}):
+        return False
     status = pod.get("status", {})
     if status.get("reason") != "Evicted":
         return False
