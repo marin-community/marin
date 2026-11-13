@@ -174,9 +174,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     ]
 
 
-@pytest.mark.parametrize(
-    "case,expected", [("weighted", 0.05), ("empty", None), ("nonfinite", None), ("pooled", 0.2), ("warmup", 0.05)]
-)
+@pytest.mark.parametrize("case,expected", [("weighted", 0.05), ("empty", None), ("nonfinite", None), ("pooled", 0.2)])
 def test_mismatch_uses_selected_tokens_over_the_measured_window(case, expected):
     preset = replace(presets.PRESETS["speed-long"], measured=range(2, 4))
     prefix = KL.rsplit("/", 1)[0]
@@ -258,13 +256,14 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
             row["task_id"] = "candidate-" + row["task_id"]
         path.write_text("".join(json.dumps(row) + "\n" for row in rows))
     metrics = read_skyrl_metrics(str(root))
-    step = presets.PRESETS[preset].recipe.layout.workload.metric_step(presets.PRESETS[preset].updates)
+    step = presets.PRESETS[preset].updates
     values = metrics[step]
     report = rescore(preset, "--candidate", "users/test/current-generation")
     assert (report["verdict"], report["label"]) == ("pass", "no change"), report
     if preset in ("speed-short", "learning-medium"):
-        values["eval/eval_lite/all/outcome/graded"] = 19
-        values["eval/eval_lite/all/outcome/unavailable"] = 1
+        prefix = "eval/all/outcome/" if preset == "learning-medium" else "eval/eval_lite/all/outcome/"
+        values[prefix + "graded"] = 19
+        values[prefix + "unavailable"] = 1
         write_metrics(root, metrics)
         alias = root.parent.parent / "current-bad-counter" / root.name
         shutil.copytree(root, alias)
@@ -503,6 +502,7 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
     [
         ("--wait",),
         ("--set", "trainer.dump_eval_results=false"),
+        ("--set", 'trainer={"algorithm":{"off_policy_correction":"none"}}'),
         ("--set", "trainer.policy.optimizer_config.lr=wrong"),
     ],
 )

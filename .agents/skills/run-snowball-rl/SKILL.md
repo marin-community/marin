@@ -57,7 +57,7 @@ its TaskSpec ID, prompt, output, tokens and verification.
 ## Read and record the result
 
 Read the recipe's [report contract](../../../docs/recipes/snowball-rl.md#compare-with-controls):
-objectives, constraints and invariants, then the verdict and label. Inspect the reason for INVALID.
+the verdict, label, reason and report path, followed by the Markdown tables. Inspect the reason for INVALID.
 
 Confirm the native receipt records success and the Iris job finished before reporting success.
 Prepare the experiment issue update with the change, exact source, inputs, run/attempt IDs,

@@ -161,6 +161,12 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
                 2048 if name == "speed-short" else 1024
             )
             assert trainer["eval_interval"] > 0 and config["inputs"]["validation_data"]
+            sampling = generator["eval_sampling_params"]
+            assert (sampling["temperature"], sampling["max_generate_length"], sampling["ignore_eos"]) == (
+                1,
+                4096 if name == "speed-short" else 8192,
+                name == "speed-short",
+            )
         else:
             assert generator["apply_overlong_filtering"] is False
         assert (trainer["bf16"], generator["model_dtype"], trainer["algorithm"]["batch_invariant"]) == (
@@ -177,6 +183,12 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
                 ),
                 None,
             )
+            for source in config["inputs"]["evaluation_data"].get("eval_lite", []):
+                assert (
+                    source["identity"].partition(":")[0]
+                    == f"{presets.SELECTION_PREFIX}/{presets.PRESETS[name].eval_lite}"
+                )
+                assert source["relative_path"] == "full_validation.parquet"
             sampling = profile["sampling_params"] if profile else generator["eval_sampling_params"]
             assert (
                 sampling["temperature"],
@@ -192,6 +204,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
         if name == "train-long":
             kinds = [row["type"] for row in trainer["callbacks"]]
             assert kinds.index("evaluation") < kinds.index("best_checkpoint")
+            assert next(row for row in trainer["callbacks"] if row["type"] == "evaluation")["eval_on_train_end"] is False
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):

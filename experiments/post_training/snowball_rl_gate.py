@@ -586,13 +586,13 @@ def _write_gate(
     preset_name: str,
     run_paths: tuple[str, ...],
     control_paths: tuple[str, ...],
-    pin: ControlPin,
+    control_pin: ControlPin,
     inputs: GateInputs,
     output: str,
 ) -> GateReport:
     preset = presets.PRESETS[preset_name]
     metadata = RunMetadata(**inputs.model_dump(), replicates=len(run_paths))
-    control = ControlMetadata(commit=pin.commit, revision=pin.revision, runs=len(control_paths))
+    control = ControlMetadata(commit=control_pin.commit, revision=control_pin.revision, runs=len(control_paths))
     invariants, comparisons = [], []
     verdict, label, reason = Verdict.INVALID, None, None
     try:
@@ -622,7 +622,7 @@ def _write_gate(
             update={"eval_lite": controls[0].eval_lite, "engines": tuple(run.engine for run in controls)}
         )
         for candidate in controls:
-            _check_control(candidate, pin)
+            _check_control(candidate, control_pin)
         if any(candidate.evaluation_identity != controls[0].evaluation_identity for candidate in (*runs, *controls)):
             raise InvalidComparison("evaluation protocol or held-out TaskSpec content differs")
         current_config, expected_config = _current_configs(preset, inputs)
@@ -715,7 +715,7 @@ def _gate_artifact(
         preset_name=preset.name,
         run_paths=candidates,
         control_paths=tuple(identity for identity, _ in controls),
-        pin=pin,
+        control_pin=pin,
         inputs=inputs,
         output=OUT,
     )

@@ -49,7 +49,7 @@ def _training_config(
     budget = recipe.config.context_budget
     assert budget is not None
     if recipe.fixed_reply_tokens is not None:
-        budget = budget.model_copy(update={"max_new_tokens_per_turn": recipe.fixed_reply_tokens})
+        budget = budget.replace(max_new_tokens_per_turn=recipe.fixed_reply_tokens)
     config = recipe.config.merge(
         RecipePatch(
             context_budget=budget,
