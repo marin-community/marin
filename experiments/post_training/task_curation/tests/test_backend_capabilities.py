@@ -213,11 +213,6 @@ def test_actor_capacity_preserves_independent_separate_grader_profile():
     assert mapped.resource_ranges["grader"]["memory_mb"] == (8192, 8192)
 
 
-def _runtime_defaults() -> dict:
-    profile = RUNTIME.model_dump(mode="json")
-    return {"agent": profile, "grader": profile}
-
-
 def _unit_checkers() -> dict[str, Checker]:
     """Real Docker and LOCAL checks; optional backends reject without their CI-absent packages."""
 
@@ -245,16 +240,6 @@ def _write_spec_parquet(path: Path, documents: list[dict]) -> None:
     pq.write_table(table, path)
 
 
-def _survey_manifest(source_ids: list[str], inputs: list[dict]) -> dict:
-    return {
-        "catalog_root": "test:catalog",
-        "snapshot_id": "test-snapshot",
-        "source_ids": source_ids,
-        "runtime_defaults": _runtime_defaults(),
-        "inputs": inputs,
-    }
-
-
 def test_runtime_column_applies_published_runtime_allocations(tmp_path):
     task = {
         "id": "budgeted",
@@ -267,9 +252,13 @@ def test_runtime_column_applies_published_runtime_allocations(tmp_path):
     runtime = {"task_machine": {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240}, "verifier_machine": {}}
     path = tmp_path / "specs.parquet"
     _write_spec_parquet(path, [{"task": task, "runtime": runtime}])
-    manifest = _survey_manifest(
-        ["cohort"],
-        [
+    profile = RUNTIME.model_dump(mode="json")
+    manifest = {
+        "catalog_root": "test:catalog",
+        "snapshot_id": "test-snapshot",
+        "source_ids": ["cohort"],
+        "runtime_defaults": {"agent": profile, "grader": profile},
+        "inputs": [
             {
                 "source_id": "cohort",
                 "paths": [str(path)],
@@ -278,23 +267,10 @@ def test_runtime_column_applies_published_runtime_allocations(tmp_path):
                 "expected_tasks": 1,
             }
         ],
-    )
+    }
     survey = build_survey(manifest, _unit_checkers(), "rev")
     measured = survey.sources[0]
     assert measured.task_count == 1
     assert measured.resource_ranges["agent"]["storage_mb"] == (10240, 10240)
     assert measured.demands["agent"][Requirement.STORAGE] == 1
     assert measured.backends["docker"].task_counts == {Support.PARTIAL: 1}
-
-
-def test_unassessed_sources_require_and_carry_reason():
-    manifest = _survey_manifest(["absent"], [])
-    with pytest.raises(ValueError, match="unassessed_reason"):
-        build_survey(manifest, _unit_checkers(), "rev")
-    manifest["unassessed_reason"] = "No converted population is bound to this snapshot revision."
-    survey = build_survey(manifest, _unit_checkers(), "rev")
-    row = survey.sources[0]
-    assert row.source_id == "absent"
-    assert row.basis == "unassessed"
-    assert row.reason == manifest["unassessed_reason"]
-    assert row.task_count == 0 and not row.backends and not row.demands

@@ -4,8 +4,8 @@
 """Survey backend validation and join a complete converted-spec census for Atlas.
 
 This command never creates machines, snapshots, or provider clients. Inputs are
-an explicit local JSON manifest; published object-store shards should first be
-staged with fsutil near their storage region.
+an explicit local JSON manifest; stage object-store shards and rewrite their
+paths with stage_survey_manifest on a worker near their storage region.
 """
 
 import argparse
