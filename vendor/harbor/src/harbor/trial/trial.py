@@ -7,9 +7,12 @@ import time
 import traceback
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+from rigging.timing import active_timeout
 
 from harbor_config.errors import ErrorCategory, error_category
 from harbor_config.models.trial.config import TaskConfig
@@ -75,13 +78,15 @@ TrialHookCallback = Callable[[TrialHookEvent], Awaitable[None]]
 
 _MAX_VERIFIER_ENV_SESSION_ID_LEN = 63
 
-# Wall-clock bound on environment teardown. A healthy stop (including the
-# provider retry tiers) finishes well inside this; a stop stuck on a severed
-# provider connection would otherwise hold the trial's concurrency slot
-# indefinitely, since the stop runs inside trial finalize. On timeout the stop
-# task is abandoned, not cancelled: it stays shielded and completes if the
-# connection heals, and an orphaned sandbox is reaped server-side.
+# Provider recovery may pause this budget during normal teardown. Cancellation
+# switches to the wall-clock cleanup grace; the overall attempt bound never pauses.
 ENVIRONMENT_STOP_TIMEOUT_SEC = 300.0
+
+
+def _phase_timeout(seconds: float | None) -> AbstractAsyncContextManager[asyncio.Timeout]:
+    task = asyncio.current_task()
+    assert task is not None
+    return asyncio.timeout(seconds) if task.cancelling() else active_timeout(seconds)
 
 
 def _log_abandoned_stop_failure(
@@ -718,9 +723,12 @@ class Trial(ABC):
         timeout_error: asyncio.TimeoutError,
     ) -> Any:
         """Bound a phase while preserving persistence failures and caller cancellation."""
-        task = asyncio.ensure_future(awaitable)
         try:
-            done, _ = await asyncio.wait({task}, timeout=timeout_sec)
+            async with _phase_timeout(timeout_sec):
+                task = asyncio.ensure_future(awaitable)
+                done, _ = await asyncio.wait({task})
+        except TimeoutError:
+            done = set()
         except asyncio.CancelledError as cancellation:
             task.cancel()
             self._track_cleanup_task(task)
@@ -1093,6 +1101,7 @@ class Trial(ABC):
     ) -> AsyncGenerator[BaseEnvironment, None]:
         env = EnvironmentFactory.create_environment_from_config(
             config=self.config.environment,
+            trial_attempt_timeout_sec=self.config.trial_attempt_timeout_sec,
             environment_dir=self._verifier_env_build_context(step_cfg),
             environment_name=self.task.short_name,
             session_id=self._separate_verifier_session_id(key),
@@ -1285,6 +1294,7 @@ class Trial(ABC):
             session_id = f"{session_id}__attempt_{attempt_index}"
         self.agent_environment = EnvironmentFactory.create_environment_from_config(
             config=self.config.environment,
+            trial_attempt_timeout_sec=self.config.trial_attempt_timeout_sec,
             environment_dir=self.task.paths.environment_dir,
             environment_name=self.task.short_name,
             session_id=session_id,
@@ -1419,7 +1429,7 @@ class Trial(ABC):
         await self.agent_environment.empty_dirs([target], chmod=False)
         await self.agent_environment.upload_dir(source_dir=source, target_dir=target)
         if self.task.config.environment.os != TaskOS.WINDOWS:
-            await self.agent_environment.exec(
+            await self.agent_environment.exec_control(
                 f"chmod -R a+rX {target}",
                 user="root",
             )
@@ -1482,24 +1492,38 @@ class Trial(ABC):
         self._is_agent_environment_stopped = True
 
     async def _stop_environment(self, environment: BaseEnvironment, label: str) -> None:
-        stop_task = asyncio.create_task(
-            environment.stop(delete=self.config.environment.delete)
-        )
-        deadline = asyncio.get_running_loop().time() + ENVIRONMENT_STOP_TIMEOUT_SEC
         cancellation: asyncio.CancelledError | None = None
-        while not stop_task.done():
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                self._environment_cleanup_failed = True
-                _log_abandoned_stop_failure(stop_task, self.logger, label)
-                self._track_cleanup_task(stop_task)
-                raise EnvironmentStopError(
-                    "Environment teardown did not complete before its deadline"
-                ) from TimeoutError("Environment stop deadline exceeded")
-            try:
-                await asyncio.wait({stop_task}, timeout=remaining)
-            except asyncio.CancelledError as exc:
-                cancellation = exc
+        owner = asyncio.current_task()
+        assert owner is not None
+        timeout = self.config.trial_cleanup_grace_sec if owner.cancelling() else ENVIRONMENT_STOP_TIMEOUT_SEC
+        try:
+            async with _phase_timeout(timeout):
+                stop_task = asyncio.create_task(environment.stop(delete=self.config.environment.delete))
+                done, _ = await asyncio.wait({stop_task})
+        except TimeoutError:
+            done = set()
+        except asyncio.CancelledError as exc:
+            cancellation = exc
+            deadline = asyncio.get_running_loop().time() + self.config.trial_cleanup_grace_sec
+            done = set()
+            while stop_task not in done:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    break
+                try:
+                    done, _ = await asyncio.wait({stop_task}, timeout=remaining)
+                except asyncio.CancelledError:
+                    continue
+        if stop_task not in done:
+            stop_task.cancel()
+            self._environment_cleanup_failed = True
+            _log_abandoned_stop_failure(stop_task, self.logger, label)
+            self._track_cleanup_task(stop_task)
+            if cancellation is not None:
+                raise cancellation
+            raise EnvironmentStopError(
+                "Environment teardown did not complete before its deadline"
+            ) from TimeoutError("Environment stop deadline exceeded")
 
         try:
             stop_task.result()

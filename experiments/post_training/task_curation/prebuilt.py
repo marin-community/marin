@@ -55,7 +55,7 @@ from experiments.post_training.task_curation.decontamination import require_priv
 from experiments.post_training.task_curation.environment_fidelity import missing_environment
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference, TaskFormat
 
-PREBUILT_ADMISSION_VERSION = "2026.11.13.3"
+PREBUILT_ADMISSION_VERSION = "2026.11.13.4"
 TASKS_FILENAME = "tasks.parquet"
 CONTROLS_FILENAME = "controls.jsonl"
 ORACLE_FILTER_FILENAME = "oracle-filter.json"
@@ -161,9 +161,19 @@ def validate_native_package(task: TaskSpec) -> None:
     required = {"task.toml", "instruction.md", "tests/test.sh"}
     if not isinstance(task.grader, NoGrader) or "harbor" not in task.tags or not required <= files.keys():
         raise ValueError(f"Incomplete native Harbor package: {task.id}")
-    environment = tomllib.loads(resource_bytes(files["task.toml"]).decode())["environment"]
+    environment = tomllib.loads(resource_bytes(files["task.toml"]).decode()).get("environment", {})
     if not environment.get("docker_image") and "environment/Dockerfile" not in files:
         raise ValueError(f"Harbor package declares no environment: {task.id}")
+
+
+def require_runnable_grader(task: TaskSpec) -> None:
+    """Reject ungraded tasks and validate native Harbor packages."""
+    if not isinstance(task.grader, NoGrader):
+        return
+    if "harbor" in task.tags:
+        validate_native_package(task)
+        return
+    raise ValueError(f"Admitted task has no runnable grader: {task.id}: {task.grader.reason}")
 
 
 def import_taskcompendium_cohort(config: PrebuiltCohort) -> str:
@@ -337,6 +347,8 @@ def prebuilt_artifact(
     quick = options.mode is SourceProcessingMode.QUICK
     evidence = None if quick else source.info.lexical_contamination
     if not quick:
+        if config.expected_rows <= 0:
+            raise ValueError("An admitted source requires a nonempty retained population")
         if "excluded" in source.info.tags:
             raise ValueError(f"Published cohort is excluded pending qualification: {source.name}")
         if source.admission_blockers:
@@ -371,6 +383,7 @@ def prebuilt_artifact(
                 task = TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"])
                 serialized = task.model_dump_json()
                 original_path = row["path"]
+            require_runnable_grader(task)
             assessment = assess_grading_environment(task)
             count_grading_environment(grading, assessment.model_dump(mode="json"))
             if assessment.status is GradingEnvironmentStatus.MISMATCH:

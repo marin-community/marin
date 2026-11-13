@@ -19,6 +19,7 @@ from finestore.rl.curation import (
 )
 
 from experiments.post_training.task_curation.source import SourceInfo, SourceReference
+from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
@@ -189,4 +190,36 @@ def test_reply_only_sources_require_oversight_for_selection(tmp_path):
             ),
         ),
     )
-    assert qualified.declaration.status == "Available"
+    assert with_admission_census(qualified).declaration.status == "Available"
+
+
+def test_grading_boundary_unavailability_is_not_a_missing_executable_grader(tmp_path):
+    source = with_admission_census(number_source(tmp_path / "input"))
+    grading = source.info.grading_environment.model_copy(
+        update={
+            "status_counts": {"unavailable": 1},
+            "declared_counts": {"unavailable": 1},
+            "reason_counts": {"Boundary assessment unavailable": 1},
+        }
+    )
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            grading_environment=grading,
+            oversight=OversightEvidence(level=OversightLevel.SAMPLE, verification="Executed controls"),
+        ),
+    )
+    assert source.admission_blockers == ()
+    missing = replace(
+        source,
+        info=replace(
+            source.info,
+            grading_environment=grading.model_copy(
+                update={
+                    "reason_counts": {"No executable grader is declared": 1},
+                }
+            ),
+        ),
+    )
+    assert any("without runnable graders" in reason for reason in missing.admission_blockers)

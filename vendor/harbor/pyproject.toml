@@ -7,6 +7,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "marin-rigging",
     "pydantic>=2.11.7",
     "shortuuid>=1.0.13",
     "typer>=0.16.0",

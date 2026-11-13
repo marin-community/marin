@@ -56,6 +56,10 @@ class ReviewerVersion(StrEnum):
     V3 = "v3"
 
 
+LONG_REQUEST_TIMEOUT = 1200
+REVIEW_REQUEST_TIMEOUTS = {ReviewerVersion.V2: 300, ReviewerVersion.V3: LONG_REQUEST_TIMEOUT}
+
+
 class ReviewWork(BaseModel):
     inputs_path: str
     output_path: str
@@ -69,6 +73,7 @@ class ReadyChatReviewer:
     spec: ReviewerSpec
     query_cache_root: str
     max_concurrent: int
+    request_timeout: float
 
     @property
     def identity(self) -> dict:
@@ -77,7 +82,7 @@ class ReadyChatReviewer:
     def _reviewer(self, session: RemoteInferenceSession) -> ChatReviewer:
         endpoint = session.model.endpoint
         return ChatReviewer(
-            OpenAIChatClient(endpoint.base_url, endpoint.api_key or "unused", timeout=300),
+            OpenAIChatClient(endpoint.base_url, endpoint.api_key or "unused", timeout=self.request_timeout),
             self.spec,
             query_cache_root=self.query_cache_root,
             max_concurrent=self.max_concurrent,
@@ -184,6 +189,7 @@ def main() -> None:
             spec,
             query_cache_root=args.review_cache,
             max_concurrent=32,
+            request_timeout=REVIEW_REQUEST_TIMEOUTS[args.reviewer_version],
         )
         for row, inputs in prepared:
             result = review_inputs(inputs, reviewer, REVIEW_RUBRIC, row.output_path)

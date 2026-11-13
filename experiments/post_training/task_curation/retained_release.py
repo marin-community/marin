@@ -25,9 +25,11 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.decontamination import require_private_release
+from experiments.post_training.task_curation.prebuilt import require_runnable_grader
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference
 
 RETAINED_IMPORT_VERSION = "2026.11.13.1"
+RETAINED_ADMISSION_VERSION = "2026.11.13.2"
 RETAINED_SCHEMA = NORMALIZED_SCHEMA.append(pa.field("runtime", pa.large_string()))
 
 
@@ -66,6 +68,8 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
     cohort = invocation.cohort
     admitted = invocation.mode is not SourceProcessingMode.QUICK
     if admitted:
+        if cohort.expected_rows <= 0:
+            raise ValueError("An admitted source requires a nonempty retained population")
         require_private_release(invocation.lexical_contamination, cohort.release.repo, cohort.release.revision)
     local = Path(
         hf_hub_download(cohort.release.repo, "tasks.parquet", repo_type="dataset", revision=cohort.release.revision)
@@ -81,6 +85,8 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
             for row in batch.to_pylist():
                 encoded = row["task_spec"]
                 task = TaskSpec.model_validate_json(encoded)
+                if admitted:
+                    require_runnable_grader(task)
                 if task.id in seen or hashlib.sha256(encoded.encode()).hexdigest() != row["task_sha256"]:
                     raise ValueError(f"Repeated or changed retained task: {task.id}")
                 seen.add(task.id)
@@ -162,7 +168,7 @@ def import_retained(source: RlDataSource[RetainedCohort], options: PipelineOptio
 
     return ArtifactStep(
         name=f"retained/{options.mode.value}/{config.release.repo}/{config.release.revision}",
-        version=RETAINED_IMPORT_VERSION,
+        version=RETAINED_IMPORT_VERSION if options.mode is SourceProcessingMode.QUICK else RETAINED_ADMISSION_VERSION,
         artifact_type=CampaignArtifact,
         run=run_retained_import,
         build_config=build_config,
