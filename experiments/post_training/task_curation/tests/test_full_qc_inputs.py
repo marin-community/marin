@@ -528,10 +528,10 @@ def test_owned_repair_client_follows_new_child_registration_after_preemption(rev
     assert review_server.requests == [body]
 
 
-def test_concurrent_repair_preserves_primary_uncertainty_and_replays_completed_receipts(multi_batch_inputs, tmp_path):
+def test_sparse_repair_preserves_primary_uncertainty_and_replays_completed_receipts(multi_batch_inputs, tmp_path):
     rubric = ReviewRubric("quality", "1", ("Check the complete task contract.",))
     batches = list(contract_batches(multi_batch_inputs))
-    invalid = frozenset(batch.tasks[0].id for batch in batches[:2])
+    invalid = frozenset(batch.tasks[0].id for batch in (batches[0], batches[2]))
     primary = review_inputs(
         multi_batch_inputs,
         ReviewService(invalid_task_ids=invalid, confidence=Confidence.LOW),
@@ -555,7 +555,9 @@ def test_concurrent_repair_preserves_primary_uncertainty_and_replays_completed_r
 
     output = str(tmp_path / "repair")
     result = repair_source(primary, ConcurrentRepair(), rubric, output, batch_workers=2)
-    rows = {row["task_id"]: row for row in pq.read_table(result.records_path).to_pylist()}
+    result_rows = pq.read_table(result.records_path).to_pylist()
+    assert [row["task_id"] for row in result_rows] == list(original)
+    rows = {row["task_id"]: row for row in result_rows}
     assert set(rows) == set(original)
     assert result.coverage_complete
     assert result.result.reviewed == 2
