@@ -83,6 +83,19 @@ def repository_package_roots(workspace: Path) -> dict[str, list[str]]:
             name for name in children if name not in PACKAGE_CENSUS_EXCLUDED and not name.endswith(".egg-info")
         ]
         parent = Path(directory)
+        if parent != workspace and any(Path(name).suffix == ".py" for name in files):
+            import_bases = [workspace]
+            for ancestor in parent.parents:
+                if ancestor == workspace:
+                    break
+                if ancestor.name == "src":
+                    import_bases.append(ancestor)
+            for base in import_bases:
+                if parent == base:
+                    continue
+                name = parent.relative_to(base).parts[0]
+                if name.isidentifier() and name != "src":
+                    roots.setdefault(name, set()).add(str(base / name))
         if "__init__.py" in files:
             package = parent
             while (package.parent / "__init__.py").is_file():

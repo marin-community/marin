@@ -28,6 +28,7 @@ class SharedRuntime:
     contract: SharedIntegrityContract
     site: Path
     verifyit: Path
+    candidate: Path
 
     def grade(self) -> dict:
         shared_pytest.grade(Path(self.contract.protected_root) / "contract.json", str(self.verifyit))
@@ -41,7 +42,8 @@ def shared_runtime(request):
         base.chmod(0o755)
         workspace, root, reports = (base / name for name in ("workspace", "protected", "reports"))
         workspace.mkdir()
-        (workspace / "candidate.py").write_text("VALUE = 0\n")
+        candidate = workspace / "candidate.py"
+        candidate.write_text("VALUE = 0\n")
         (workspace / "extra_guard.py").write_text("reference\n")
         (workspace / "editable.py").write_text("original\n")
         (workspace / "conftest.py").write_text("pytest_plugins: tuple[str, ...]\n")
@@ -116,11 +118,17 @@ def shared_runtime(request):
             (workspace / "candidate.py").unlink()
             package = workspace / "candidate"
             package.mkdir()
-            (package / "__init__.py").write_text("VALUE = 0\n")
+            namespace = request.param == "workspace-plugin-namespace"
+            candidate = package / ("value.py" if namespace else "__init__.py")
+            candidate.write_text("VALUE = 0\n")
             (package / "plugin.py").write_text("# Repository-owned pytest plugin\n")
             (workspace / "test_case.py").write_text(
-                "import candidate, baseline_plugin\n"
-                "def test_value():\n"
+                (
+                    "import candidate.value as candidate\nimport baseline_plugin\n"
+                    if namespace
+                    else "import candidate, baseline_plugin\n"
+                )
+                + "def test_value():\n"
                 "    assert candidate.VALUE == 1, candidate.__file__\n"
                 "    assert baseline_plugin.SENTINEL == 1\n"
             )
@@ -131,7 +139,7 @@ def shared_runtime(request):
             (product_metadata / "METADATA").write_text("Name: candidate-product\nVersion: 1\n")
             (product_metadata / "top_level.txt").write_text("candidate\n")
             (product_metadata / "RECORD").write_text(
-                "candidate/__init__.py,,\ncandidate/plugin.py,,\n"
+                f"candidate/{candidate.name},,\ncandidate/plugin.py,,\n"
                 "candidate_product-1.dist-info/METADATA,,\ncandidate_product-1.dist-info/RECORD,,\n"
             )
             if owner == workspace:
@@ -199,17 +207,17 @@ def shared_runtime(request):
             "'from verifyit.grade import main; raise SystemExit(main())' \"$@\"\n"
         )
         verifyit.chmod(0o755)
-        yield SharedRuntime(contract, site, verifyit)
+        yield SharedRuntime(contract, site, verifyit, candidate)
 
 
 @pytest.mark.parametrize(
     "shared_runtime",
-    ["workspace-plugin-editable", "workspace-plugin-wheel", "workspace-plugin-dependency"],
+    ["workspace-plugin-editable", "workspace-plugin-wheel", "workspace-plugin-dependency", "workspace-plugin-namespace"],
     indirect=True,
 )
 def test_shared_grading_keeps_repository_product_live_and_third_party_plugin_pinned(shared_runtime):
     runtime = shared_runtime
-    candidate = Path(runtime.contract.workspace) / "candidate/__init__.py"
+    candidate = runtime.candidate
     candidate.write_text("VALUE = 1\n")
     (runtime.site / "baseline_plugin.py").write_text("SENTINEL = 0\n")
     verdict = runtime.grade()
