@@ -20,6 +20,7 @@ from experiments.post_training.task_curation.full_qc import ReviewerVersion, loc
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.published_census import population_documents
 from experiments.post_training.task_curation.sample_qc import SamplePanel, panel_tasks, review_panel
+from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory
 from experiments.post_training.task_curation.sample_qc_binding import bind_sample_result
 from experiments.post_training.task_curation.sample_qc_receipts import sample_qc_receipt
 from experiments.post_training.task_curation.source import SourceOrigin, SourceReference
@@ -56,7 +57,16 @@ def sample_panel(qc_inputs, tmp_path):
         panel_sha256=file_sha256(StoragePath(str(path))),
         evidence_url=str(summary),
     )
-    summary.write_text(panel.model_dump_json())
+    inventory = SampleInventory(
+        **panel.model_dump(),
+        oracle_tasks=1,
+        execution_qualification="not_assessed",
+        runnable_grader_tasks=3,
+        no_grader_tasks=0,
+        grader_kinds={"script": 3},
+        missing_grader_reasons={},
+    )
+    summary.write_text(inventory.model_dump_json(exclude_none=True))
     return panel
 
 

@@ -22,13 +22,13 @@ from taskcompendium.pipeline.oracle_filter import has_oracle_solution
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
 from experiments.post_training.task_curation.lexical_artifacts import ActorCensus, SourceTextPopulation
-from experiments.post_training.task_curation.sample_qc_artifacts import SAMPLE_SEED, SAMPLE_SIZE
+from experiments.post_training.task_curation.sample_qc_artifacts import SAMPLE_SEED, SAMPLE_SIZE, SampleInventory
 
 LOGGER = logging.getLogger(__name__)
 PANEL_SCHEMA = pa.schema([("task_id", pa.string()), ("task_spec", pa.large_string()), ("runtime", pa.large_string())])
 
 
-def inventory_source(declaration: SourceDeclaration, output_root: str, resume_root: str | None) -> dict:
+def inventory_source(declaration: SourceDeclaration, output_root: str, resume_root: str | None) -> SampleInventory:
     """Verify the current complete population and retain its seed-zero content panel."""
     root = StoragePath(output_root) / canonical_sha256(declaration.id)[:20]
     if root.exists():
@@ -49,23 +49,23 @@ def inventory_source(declaration: SourceDeclaration, output_root: str, resume_ro
     if resume_root is not None:
         previous = StoragePath(resume_root) / canonical_sha256(declaration.id)[:20] / "summary.json"
         if previous.exists():
-            result = json.loads(previous.read_text())
+            result = SampleInventory.model_validate_json(previous.read_text())
             if (
-                result["source_id"],
-                result["dataset_id"],
-                result["dataset_revision"],
-                result["converter_version"],
-                result["task_specs_sha256"],
-                result["retained_tasks"],
+                result.source_id,
+                result.dataset_id,
+                result.dataset_revision,
+                result.converter_version,
+                result.task_specs_sha256,
+                result.retained_tasks,
             ) != (*expected, binding.task_specs_sha256, binding.measured_tasks):
                 raise ValueError(f"Completed panel belongs to another current input: {declaration.id}")
             if (
-                result["input_artifact"] != population.path
-                or result["sample_seed"] != SAMPLE_SEED
-                or result["sample_size"] != min(population.task_count, SAMPLE_SIZE)
+                result.input_artifact != population.path
+                or result.sample_seed != SAMPLE_SEED
+                or result.sample_size != min(population.task_count, SAMPLE_SIZE)
             ):
                 raise ValueError(f"Completed panel belongs to another population or sample design: {declaration.id}")
-            if file_sha256(StoragePath(result["panel_path"])) != result["panel_sha256"]:
+            if file_sha256(StoragePath(result.panel_path)) != result.panel_sha256:
                 raise ValueError(f"Completed sample panel changed: {declaration.id}")
             LOGGER.info("Reused frozen content panel: %s", declaration.id)
             return result
@@ -94,24 +94,24 @@ def inventory_source(declaration: SourceDeclaration, output_root: str, resume_ro
     panel_path = root / "panel.parquet"
     with panel_path.open("wb", auto_mkdir=True) as stream:
         pq.write_table(pa.Table.from_pylist(panel, schema=PANEL_SCHEMA), stream, compression="zstd")
-    result = {
-        "source_id": declaration.id,
-        "dataset_id": declaration.dataset_id,
-        "dataset_revision": declaration.dataset_revision,
-        "converter_version": declaration.pipeline.version,
-        "input_artifact": population.path,
-        "task_specs_sha256": population.task_specs_sha256,
-        "scanned_task_specs_sha256": digest.hexdigest(),
-        "retained_tasks": count,
-        "oracle_tasks": oracle_count,
-        "sample_seed": SAMPLE_SEED,
-        "sample_size": len(panel),
-        "panel_path": str(panel_path),
-        "panel_sha256": file_sha256(panel_path),
-        "execution_qualification": "not_assessed",
-        "evidence_url": str(root / "summary.json"),
-    }
-    (root / "summary.json").write_text(json.dumps(result, indent=2) + "\n")
+    result = SampleInventory(
+        source_id=declaration.id,
+        dataset_id=declaration.dataset_id,
+        dataset_revision=declaration.dataset_revision,
+        converter_version=declaration.pipeline.version,
+        input_artifact=population.path,
+        task_specs_sha256=population.task_specs_sha256,
+        scanned_task_specs_sha256=digest.hexdigest(),
+        retained_tasks=count,
+        oracle_tasks=oracle_count,
+        sample_seed=SAMPLE_SEED,
+        sample_size=len(panel),
+        panel_path=str(panel_path),
+        panel_sha256=file_sha256(panel_path),
+        execution_qualification="not_assessed",
+        evidence_url=str(root / "summary.json"),
+    )
+    (root / "summary.json").write_text(result.model_dump_json(indent=2, exclude_none=True) + "\n")
     LOGGER.info("%s: %d tasks, %d selected", declaration.id, count, len(panel))
     return result
 
@@ -136,8 +136,10 @@ def main() -> None:
             for row in declarations
         ]
         results = [future.result() for future in as_completed(futures)]
-    results.sort(key=lambda row: row["source_id"])
-    (StoragePath(args.output_root) / "inventory.json").write_text(json.dumps(results, indent=2) + "\n")
+    results.sort(key=lambda row: row.source_id)
+    (StoragePath(args.output_root) / "inventory.json").write_text(
+        json.dumps([row.model_dump(mode="json", exclude_none=True) for row in results], indent=2) + "\n"
+    )
 
 
 if __name__ == "__main__":

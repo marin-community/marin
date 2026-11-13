@@ -16,11 +16,11 @@ from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.models import ReviewRecord, ReviewStatus
 
-from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, ReviewerVersion, local_reviewer
+from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC
 from experiments.post_training.task_curation.full_qc_review import quality_result
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.sample_qc import panel_tasks
-from experiments.post_training.task_curation.sample_qc_artifacts import SampleQCReview
+from experiments.post_training.task_curation.sample_qc_artifacts import PINNED_REVIEWER_SHA256, SampleQCReview
 from experiments.post_training.task_curation.sample_qc_binding import SampleQCReceipt
 
 
@@ -30,10 +30,12 @@ def sample_qc_receipt(path: str) -> SampleQCReceipt:
     if record is None or record.result is None:
         raise ValueError(f"Missing sampled review artifact: {path}")
     result = SampleQCReview.model_validate({**record.result, "path": path})
-    expected_reviewer = {"mode": "chat", **local_reviewer(ReviewerVersion.V3).identity}
-    if canonical_sha256(result.reviewer) != canonical_sha256(expected_reviewer) or canonical_sha256(
-        result.rubric
-    ) != canonical_sha256(asdict(REVIEW_RUBRIC)):
+    reviewer_spec = {key: value for key, value in result.reviewer.items() if key != "mode"}
+    if (
+        result.reviewer.get("mode") != "chat"
+        or canonical_sha256(reviewer_spec) != PINNED_REVIEWER_SHA256
+        or canonical_sha256(result.rubric) != canonical_sha256(asdict(REVIEW_RUBRIC))
+    ):
         raise ValueError("Sample Result uses another reviewer or rubric")
     records_path = StoragePath(result.records_path)
     if file_sha256(records_path) != result.records_sha256:

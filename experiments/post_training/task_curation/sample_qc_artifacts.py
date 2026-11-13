@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 SAMPLE_SIZE = 100
 SAMPLE_SEED = 0
+PINNED_REVIEWER_SHA256 = "a3e17ee0607a1bf59bdbb8e0b9bffda2e8788390aaf41c7ab73c20b68325c9ea"
 
 
 class SamplePanel(BaseModel):
@@ -29,6 +30,22 @@ class SamplePanel(BaseModel):
     panel_path: str
     panel_sha256: str
     evidence_url: str
+
+
+class SampleInventory(SamplePanel):
+    """Population inventory with diagnostics kept outside the frozen QC panel."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    oracle_tasks: int = Field(ge=0)
+    execution_qualification: Literal["not_assessed"]
+    runnable_grader_tasks: int | None = None
+    no_grader_tasks: int | None = None
+    grader_kinds: dict[str, int] | None = None
+    missing_grader_reasons: dict[str, int] | None = None
+
+    def qc_panel(self) -> SamplePanel:
+        return SamplePanel(**{name: getattr(self, name) for name in SamplePanel.model_fields})
 
 
 class SampleQCReview(Artifact):
