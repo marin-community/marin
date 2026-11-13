@@ -148,7 +148,7 @@ def source_pytest_config(python: str, workspace: Path, spec: dict) -> dict:
     """Discover configuration with the task's pytest before any agent changes."""
     probe = """import json,sys
 from _pytest.config import Config
-config=Config.fromdictargs({}, ['--noconftest',*json.loads(sys.argv[1])])
+config=Config.fromdictargs({}, ['--noconftest','-o','required_plugins=',*json.loads(sys.argv[1])])
 print(json.dumps({'path':str(config.inifile) if config.inifile else None,
  'root':str(config.rootdir),'addopts':config.getini('addopts')}))"""
     config = json.loads(checked([python, "-I", "-c", probe, json.dumps(spec["paths"])], cwd=workspace, timeout=60))
@@ -236,9 +236,13 @@ def freeze_runner(contract: dict, python: str, plugins: list[str], source_config
     # Freeze pytest, explicitly allowed plugins and their implementation dependencies only.
     # Candidate dependencies remain in the live site directories recorded below.
     package_probe = """import importlib.metadata as m,json,pathlib,packaging.requirements
+from _pytest.config import _iter_rewritable_modules
 distributions=list(m.distributions())
-entrypoints={e.value for d in distributions for e in d.entry_points if e.group=='pytest11'}
-plugins=sorted(set(__import__('sys').argv[1:]) | entrypoints)
+entrypoints=[{'name':e.name,'module':e.value,'distribution':d.metadata['Name']}
+ for d in distributions for e in d.entry_points if e.group=='pytest11']
+rewrite_roots=list(_iter_rewritable_modules(str(f) for d in distributions
+ if any(e.group=='pytest11' for e in d.entry_points) for f in d.files or []))
+plugins=sorted(set(__import__('sys').argv[1:]) | {e['module'] for e in entrypoints})
 if any(':' in plugin for plugin in plugins): raise ValueError('Function-valued pytest plugins need explicit lowering')
 roots={'pytest','pytest-json-report'}
 for d in distributions:
@@ -261,7 +265,8 @@ while roots:
   p=pathlib.Path(d.locate_file(f)).resolve()
   if not str(f).startswith('..') and p.is_file(): files.append([str(f),str(p)])
 versions={d.metadata['Name'].lower().replace('_','-'):d.version for d in distributions}
-print(json.dumps({'distributions':sorted(seen),'files':files,'plugins':plugins,'entrypoints':sorted(entrypoints),
+print(json.dumps({'distributions':sorted(seen),'files':files,'plugins':plugins,'entrypoints':entrypoints,
+ 'entrypoint_rewrite_roots':rewrite_roots,
  'source_environment':{'pytest_version':versions['pytest'],
  'pytest_metadata_version':versions.get('pytest-metadata')}}))"""
     if contract["plugin_discovery"] != "pre_agent_entrypoints_and_conftests":
@@ -284,7 +289,9 @@ print(json.dumps({'distributions':sorted(seen),'files':files,'plugins':plugins,'
             "sites": info["sites"],
             "pinned_distributions": packages["distributions"],
             "plugins": packages["plugins"],
-            "preload_plugins": sorted(set(contract["pinned_plugins"]) | set(packages["entrypoints"]) | explicit_plugins),
+            "preload_plugins": sorted(set(contract["pinned_plugins"]) - {e["module"] for e in packages["entrypoints"]}),
+            "entrypoints": packages["entrypoints"],
+            "entrypoint_rewrite_roots": packages["entrypoint_rewrite_roots"],
             "pytest_config": source_config,
             "source_environment": packages["source_environment"],
         },
@@ -428,7 +435,7 @@ def pytest_process(contract: dict, arguments: list[str]) -> None:
         pinned.extend(["-p", plugin])
     arguments.extend(pinned)
     launch = """import sys,site,runpy
-runner,workspace,sites,arguments,plugins=__import__('json').loads(sys.argv[1])
+runner,workspace,sites,arguments,plugins,entrypoints,rewrite_roots=__import__('json').loads(sys.argv[1])
 sys.path[:0]=[runner,workspace]
 for directory in sites: site.addsitedir(directory)
 try: __import__('sitecustomize')
@@ -436,12 +443,38 @@ except ModuleNotFoundError as error:
  if error.name!='sitecustomize': raise
 sys.path.remove(runner);sys.path.insert(0,runner)
 import _pytest.config
+import importlib,importlib.metadata
+class PluginDistribution(importlib.metadata.Distribution):
+ def __init__(self, distribution): self.distribution=distribution
+ def read_text(self, filename): return self.distribution.read_text(filename)
+ def locate_file(self, path): return self.distribution.locate_file(path)
+ @property
+ def project_name(self): return self.metadata['Name']
 original_import = _pytest.config.PytestPluginManager.import_plugin
-allowed = set(plugins) | set(_pytest.config.builtin_plugins)
+original_consider_env = _pytest.config.PytestPluginManager.consider_env
+allowed = set(plugins) | {e['name'] for e in entrypoints} | set(_pytest.config.builtin_plugins)
+def load_pinned_entrypoints(self, group, name=None):
+ if group!='pytest11': raise ValueError('Only the frozen pytest11 entrypoint group is supported')
+ self.rewrite_hook.mark_rewrite(*rewrite_roots)
+ count=0
+ for entry in entrypoints:
+  if (name is not None and entry['name']!=name) or self.get_plugin(entry['name']) or self.is_blocked(entry['name']):
+   continue
+  plugin=importlib.import_module(entry['module'])
+  self.register(plugin,name=entry['name'])
+  self._plugin_distinfo.append((plugin,PluginDistribution(importlib.metadata.distribution(entry['distribution']))))
+  count+=1
+ return count
 def import_pinned_plugin(self, modname, consider_entry_points=False):
  if modname not in allowed: raise ImportError('Plugin is outside the pinned pre-agent baseline: '+modname)
- return original_import(self,modname,consider_entry_points=False)
+ self.rewrite_hook.mark_rewrite(*rewrite_roots)
+ return original_import(self,modname,consider_entry_points=consider_entry_points)
+def consider_pinned_env(self):
+ self.load_setuptools_entrypoints('pytest11')
+ original_consider_env(self)
+_pytest.config.PytestPluginManager.load_setuptools_entrypoints=load_pinned_entrypoints
 _pytest.config.PytestPluginManager.import_plugin=import_pinned_plugin
+_pytest.config.PytestPluginManager.consider_env=consider_pinned_env
 sys.argv=['-c',*arguments[2:]]
 if arguments[:1]==['-c']: exec(compile(arguments[1],'<string>','exec'))
 else: raise ValueError('Verifyit must invoke the structured pytest runner with -c')
@@ -457,7 +490,17 @@ else: raise ValueError('Verifyit must invoke the structured pytest runner with -
             "-S",
             "-c",
             launch,
-            json.dumps([contract["runner_directory"], str(workspace), runtime["sites"], arguments, runtime["plugins"]]),
+            json.dumps(
+                [
+                    contract["runner_directory"],
+                    str(workspace),
+                    runtime["sites"],
+                    arguments,
+                    runtime["plugins"],
+                    runtime["entrypoints"],
+                    runtime["entrypoint_rewrite_roots"],
+                ]
+            ),
         ],
         clean_environment(),
     )

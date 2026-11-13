@@ -654,8 +654,13 @@ control program. It discovers the source's own pytest configuration and root
 directory using the task interpreter and preserves its configuration and addopts.
 On every grading launch it kills agent-UID processes, restores those source files,
 and removes added tests and local-plugin initializers. Installed entrypoint plugins
-load from the protected runner; source conftest plugins load through pytest's
-normal test-path handling from restored files. The runner disables plugin autoload
+load from the protected runner using the frozen pre-agent entrypoint names and
+modules. It registers their packages for assertion rewriting before imports,
+preserves plugin registration names and honors source `-p no:...` blocks.
+Configuration discovery reads the source settings without starting plugins;
+the grading session validates required plugins after loading the frozen baseline.
+Source conftest plugins load through pytest's normal test-path handling from
+restored files. The runner disables live plugin autoload
 and clears the test environment,
 including PYTHONPATH, PYTEST_ADDOPTS, LD_PRELOAD and user-site loading. Verifyit
 classifies missing candidate modules using its exception-provenance rules.
