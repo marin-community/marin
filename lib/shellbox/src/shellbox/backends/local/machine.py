@@ -678,6 +678,7 @@ class LocalMachine:
                     if self._disk is not None:
                         config["disk_status"] = allocation_file.fileno()
                         config["disk_root"] = str(self._disk.data)
+                        config["disk_failure_headroom"] = self._disk.failure_headroom_bytes
                     group = self._new_command_cgroup()
                     config["cgroup"] = None if group is None else str(group.path / "cgroup.procs")
                     with tempfile.TemporaryFile() as configuration:
@@ -719,7 +720,9 @@ class LocalMachine:
                         finally:
                             self._commands.discard(process)
                             self._sessions.discard(session)
-                            resources.close()
+                            with resources:
+                                if self._disk is not None:
+                                    self._disk.record_report(allocation_file)
                         return
                     try:
                         os.killpg(process.pid, signal.SIGKILL)
@@ -736,11 +739,13 @@ class LocalMachine:
                     finally:
                         self._commands.discard(process)
                         self._sessions.discard(session)
-                        resources.close()
+                        with resources:
+                            if self._disk is not None:
+                                self._disk.record_report(allocation_file)
 
                 async def wait() -> int:
                     code = await process.wait()
-                    self._check_allocation(allocation_file)
+                    self._check_disk_report(allocation_file)
                     return code
 
                 session = SubprocessSession(process, stop=stop, stderr_limit=command.output_limit_bytes, wait=wait)
@@ -750,10 +755,10 @@ class LocalMachine:
 
         return await acquire_owned(asyncio.create_task(acquire()))
 
-    def _check_allocation(self, report: BinaryIO) -> None:
+    def _check_disk_report(self, report: BinaryIO) -> None:
         if self._disk is None:
             return
-        self._disk.check_limit(report)
+        self._disk.check_limit(None if report.closed else report)
 
     async def _control(
         self,
@@ -866,6 +871,7 @@ class LocalMachine:
             if self._disk is not None:
                 config["disk_status"] = allocation_file.fileno()
                 config["disk_root"] = str(self._disk.data)
+                config["disk_failure_headroom"] = self._disk.failure_headroom_bytes
             # Reports are written before the launcher exits. A nonblocking read
             # cannot be held open by a process that inherited another pipe end.
             os.set_blocking(status_read, False)
@@ -958,7 +964,7 @@ class LocalMachine:
             stderr_file.seek(0)
             stdout = stdout_file.read(command.output_limit_bytes + 1)
             stderr = stderr_file.read(command.output_limit_bytes + 1)
-            self._check_allocation(allocation_file)
+            self._check_disk_report(allocation_file)
         assert process.returncode is not None
         code = process.returncode
         return Result(

@@ -1476,14 +1476,23 @@ its service API, whose image/filesystem accounting is provider-controlled. Docke
 passes `--storage-opt size` to a supporting storage driver for the writable layer;
 its separate tmpfs and bind/volume mounts are outside that layer. LOCAL's ext4
 filesystem includes its scratch and shared-memory directories. For a foreground
-command, a disk-limit outcome requires a failed exit (nonzero or signal) and zero
-available blocks or inodes. The trusted host launcher samples the task's ext4
+command, a disk-limit outcome requires a failed exit (nonzero or signal) and
+either zero available inodes or fewer available bytes than the larger of 1 MiB
+and 0.5% of the declared filesystem size. The trusted host launcher samples the task's ext4
 filesystem immediately after reaping the command, before command spools close.
-Successful commands remain successful while full. Failed commands whose
-filesystem has space remain ordinary failures, including commands that reclaim
-space before exiting. Guest stderr text never establishes exhaustion, and output
+Successful commands remain successful while full. With inodes available,
+failed commands at or above that byte headroom threshold remain ordinary failures,
+including commands that reclaim sufficient space before exiting. Guest stderr text never establishes exhaustion, and output
 truncation or a zero output limit cannot hide the capacity sample. A private
 one-byte host report records the sample; guest code does not inherit its FD.
+Block capacity uses `f_bavail`; `f_bfree` also includes ext4's
+[reserved metadata pool](https://raw.githubusercontent.com/torvalds/linux/master/fs/ext4/super.c),
+which remains reserved even with `mkfs.ext4 -m 0`.
+`DISK_FAILURE_MIN_HEADROOM_BYTES` and `DISK_FAILURE_HEADROOM_FRACTION` define the
+classification threshold: a bulk allocation can fail while a smaller write
+still fits. Treating that near-capacity failure as disk pressure lets calibration
+double its current trial disk allocation when the task has no declared disk limit. The threshold classifies failures; it adds no
+bytes to the filesystem and gives command spools no extra storage allowance.
 
 Shellbox reports `DiskLimitExceeded` with `ResourceLimit.DISK`, translated by
 Harbor to `SandboxDiskFullError` (or `AgentDiskFullError` during the agent phase).
@@ -1497,7 +1506,7 @@ anonymous spools are open. Closing those spools releases their inodes for the
 next command. If an `open_process()` command consumes every inode using pipe
 output, the next `run()` may fail to create its spool before guest execution.
 The host samples that failure before closing other spools already created for
-the same `run()`; a failure at the block or inode limit is a typed disk failure. The host report
+the same `run()`; a failure within the capacity threshold is a typed disk failure. The host report
 is trusted launcher control metadata, like namespace configuration, outside the
 task filesystem; stdout, stderr and stdin payloads remain charged.
 

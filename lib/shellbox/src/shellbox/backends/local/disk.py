@@ -24,6 +24,8 @@ from shellbox.backends.local import disk_lifecycle
 from shellbox.machine import DiskLimitExceeded, UnsupportedMachineSpec
 
 PROBE_STORAGE_MB = 64
+DISK_FAILURE_MIN_HEADROOM_BYTES = 1024 * 1024
+DISK_FAILURE_HEADROOM_FRACTION = 0.005
 GUARD_SOURCE = Path(disk_lifecycle.__file__).read_text()
 POOL_LOCK = threading.Lock()
 
@@ -56,11 +58,16 @@ class LocalDisk:
     guardian: subprocess.Popen[bytes]
     errors: BinaryIO
     resources: ExitStack
+    storage_mb: int
     _exhausted: bool = field(default=False, init=False)
 
     @property
     def data(self) -> Path:
         return self.directory / "data"
+
+    @property
+    def failure_headroom_bytes(self) -> float:
+        return max(DISK_FAILURE_MIN_HEADROOM_BYTES, self.storage_mb * 1024 * 1024 * DISK_FAILURE_HEADROOM_FRACTION)
 
     def overlay(self, lower: Path) -> Path:
         """Mount a writable root with all copy-up and metadata charged to this disk."""
@@ -84,7 +91,9 @@ class LocalDisk:
     def record_failure(self) -> None:
         """Sample capacity immediately after a failed command or scoped host allocation."""
         filesystem = os.statvfs(self.data)
-        self._exhausted = self._exhausted or filesystem.f_bavail == 0 or filesystem.f_favail == 0
+        self._exhausted = self._exhausted or (
+            filesystem.f_favail == 0 or filesystem.f_bavail * filesystem.f_bsize < self.failure_headroom_bytes
+        )
 
     @contextmanager
     def spool(self) -> Iterator[BinaryIO]:
@@ -99,14 +108,18 @@ class LocalDisk:
                 raise
             yield output
 
+    def record_report(self, report: BinaryIO) -> None:
+        """Retain a trusted launcher's outcome before its report descriptor closes."""
+        payload = os.pread(report.fileno(), 1, 0)
+        assert payload in (b"", b"\x00", b"\x01")
+        self._exhausted = self._exhausted or payload == b"\x01"
+
     def check_limit(self, report: BinaryIO | None = None) -> None:
         """Raise the disk outcome recorded by a failure-time capacity sample."""
         if report is not None:
-            payload = os.pread(report.fileno(), 1, 0)
-            assert payload in (b"", b"\x00", b"\x01")
-            self._exhausted = self._exhausted or payload == b"\x01"
+            self.record_report(report)
         if self._exhausted:
-            raise DiskLimitExceeded("RESOURCE_LIMIT_DISK: LOCAL command failed at the filesystem block or inode limit")
+            raise DiskLimitExceeded("RESOURCE_LIMIT_DISK: LOCAL command failed at the filesystem capacity threshold")
 
     def close(self) -> None:
         """Release the filesystem and surface any guardian cleanup failure."""
@@ -182,7 +195,7 @@ class LocalDiskPool:
                     stdout=subprocess.PIPE,
                     stderr=errors,
                 )
-                disk = LocalDisk(directory, guardian, errors, resources.pop_all())
+                disk = LocalDisk(directory, guardian, errors, resources.pop_all(), storage_mb)
                 assert guardian.stdout is not None
                 try:
                     if not select.select([guardian.stdout], [], [], disk_lifecycle.COMMAND_TIMEOUT)[0]:

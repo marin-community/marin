@@ -98,7 +98,7 @@ def execute_in_namespaces(configuration_fd: int) -> None:
     if disk is not None:
         if code:
             filesystem = os.fstatvfs(disk)
-            full = filesystem.f_bavail == 0 or filesystem.f_favail == 0
+            full = filesystem.f_favail == 0 or filesystem.f_bavail * filesystem.f_bsize < config["disk_failure_headroom"]
             os.write(disk_status, bytes((full,)))
         os.close(disk)
     sys.exit(code if code >= 0 else 128 - code)

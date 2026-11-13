@@ -27,6 +27,14 @@ from shellbox.survey import ProbeRequirements
 pytestmark = [pytest.mark.manual, pytest.mark.asyncio]
 
 
+# Large ext4 writes can fail with a usable tail block remaining. Exhaust that
+# tail in the guest before asserting a failed command at the actual block limit.
+OVERFLOW_SCRIPT = (
+    '/bin/dd if=/dev/zero of="$1" bs=1048576 count=128; '
+    'while /bin/dd if=/dev/zero bs=1 count=1024 >> "$1" 2>/dev/null; do :; done; exit 1'
+)
+
+
 def disk_state(root: Path) -> dict:
     loops = json.loads(subprocess.check_output(["losetup", "--json", "--output", "NAME,BACK-FILE"], text=True))
     return {
@@ -63,6 +71,19 @@ async def test_local_disk_overflow_is_typed_and_neighbor_survives(tmp_path, exec
         )
         try:
             await session.drain_output()
+            capacity = os.statvfs(machine.root)
+            print(
+                json.dumps(
+                    {
+                        "failure_capacity": {
+                            "blocks": capacity.f_bavail,
+                            "free": capacity.f_bfree,
+                            "inodes": capacity.f_favail,
+                        }
+                    }
+                ),
+                flush=True,
+            )
             with pytest.raises(DiskLimitExceeded) as failure:
                 await session.wait()
             assert b"No space left on device" in session.stderr
@@ -148,6 +169,8 @@ async def test_local_disk_failure_state_is_independent_of_text_and_output_limits
             session = await machine.open_process(overflow)
             try:
                 await session.drain_output()
+                if output_limit == 0:
+                    await session.close()
                 with pytest.raises(DiskLimitExceeded):
                     await session.wait()
             finally:
@@ -179,6 +202,55 @@ async def test_local_disk_run_final_inode_succeeds_with_charged_spools(tmp_path,
         # remains for another guest file while the next run holds its spools.
         with pytest.raises(DiskLimitExceeded):
             await machine.run(Command(("/bin/busybox", "touch", "/app/overflow")))
+    finally:
+        await machine.close()
+    assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}
+
+
+async def test_local_disk_guest_byte_append_consumes_tail_and_reports_disk_limit(tmp_path, executable_oci_image):
+    pool = LocalDiskPool(tmp_path / "disks")
+    factory = LocalMachineFactory(disk_pool=pool, image_cache=tmp_path / "images")
+    machine = await factory.create(MachineSpec(executable_oci_image, workdir="/app", storage_mb=64))
+    try:
+        session = await machine.open_process(Command(("/bin/sh", "-c", OVERFLOW_SCRIPT, "sh", "/app/fill")))
+        try:
+            await session.drain_output()
+            assert os.statvfs(machine.root).f_bavail == 0
+            with pytest.raises(DiskLimitExceeded):
+                await session.wait()
+        finally:
+            await session.close()
+    finally:
+        await machine.close()
+    assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}
+
+
+@pytest.mark.parametrize("storage_mb", [64, 512])
+async def test_local_disk_failure_headroom_uses_declared_capacity(tmp_path, executable_oci_image, storage_mb):
+    pool = LocalDiskPool(tmp_path / "disks")
+    factory = LocalMachineFactory(disk_pool=pool, image_cache=tmp_path / "images")
+    machine = await factory.create(MachineSpec(executable_oci_image, workdir="/app", storage_mb=storage_mb))
+    # Leave about 2 MiB: above the 64 MiB filesystem's 1 MiB threshold and below
+    # the 512 MiB filesystem's 0.5% threshold. Metadata rounding is much smaller.
+    script = (
+        "free=$(/bin/busybox stat -f -c %a /app); block=$(/bin/busybox stat -f -c %S /app); "
+        "count=$((free - 2097152 / block)); "
+        '/bin/dd if=/dev/zero of=/app/fill bs="$block" count="$count" 2>/dev/null; exit 7'
+    )
+    try:
+        session = await machine.open_process(Command(("/bin/sh", "-c", script), output_limit_bytes=0))
+        try:
+            await session.drain_output()
+            remaining = os.statvfs(machine.root)
+            assert 1024 * 1024 < remaining.f_bavail * remaining.f_bsize < 5 * 1024 * 1024 / 2
+            if storage_mb == 64:
+                assert await session.wait() == 7
+                assert (await machine.run(Command(("/bin/sh", "-c", "true")))).exit_code == 0
+            else:
+                with pytest.raises(DiskLimitExceeded):
+                    await session.wait()
+        finally:
+            await session.close()
     finally:
         await machine.close()
     assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}
