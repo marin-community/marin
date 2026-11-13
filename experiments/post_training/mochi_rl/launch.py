@@ -34,6 +34,7 @@ from skyrlrecipe import RecipePatch, SkyRLRecipe, sections
 
 RECIPE_PATH = Path(__file__).with_name("recipe.yaml")
 SEED = 20261020
+COORDINATOR_QUEUE_ALLOWANCE_HOURS = 48
 ROLE_PLAN = SkyRLRolePlan(
     colocate_all=False,
     policy_num_nodes=12,
@@ -192,7 +193,9 @@ def main(
         execution=replace(
             EXECUTION,
             job_timeout_seconds=job_timeout_hours * 3600,
-            coordinator_timeout_hours=max(EXECUTION.coordinator_timeout_hours, job_timeout_hours + 1),
+            coordinator_timeout_hours=max(
+                EXECUTION.coordinator_timeout_hours, job_timeout_hours + COORDINATOR_QUEUE_ALLOWANCE_HOURS
+            ),
         ),
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=checkpoint_count, temporary_storage_ttl_days=ttl_days),
     )

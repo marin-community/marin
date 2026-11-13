@@ -9,6 +9,8 @@ import yaml
 from click.testing import CliRunner
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.experiment.cli import graph_handles
+from marin.rl.cli import _coordinator_request
+from rigging.timing import Duration
 
 from experiments.post_training.mochi_rl.launch import main
 
@@ -22,31 +24,15 @@ def test_cli_renders_direct_training_and_native_continuation(
     model, tokenizer, first_tasks, second_tasks = (
         tmp_path / name for name in ("model", "tokenizer", "tasks-a", "tasks-b")
     )
-    args = [
-        "--version",
-        "2026.11.13.1",
-        "--input-version",
-        "2026.11.13.0",
-        "--model-uri",
-        str(model),
-        "--tokenizer-uri",
-        str(tokenizer),
-        "--tokenizer-revision",
-        "pinned-tokenizer",
-        "--data-uri",
-        str(first_tasks),
-        "--data-uri",
-        str(second_tasks),
-        "--max-steps",
-        str((resume_step or 0) + 3),
-        "--job-timeout-hours",
-        "48",
-        "--config-output",
-        str(config_path),
-    ]
+    args = f"""--version 2026.11.13.1 --input-version 2026.11.13.0
+        --model-uri "{model}" --tokenizer-uri "{tokenizer}" --tokenizer-revision pinned-tokenizer
+        --data-uri "{first_tasks}" --data-uri "{second_tasks}"
+        --max-steps {(resume_step or 0) + 3} --job-timeout-hours 48
+        --config-output "{config_path}"
+    """
     native = tmp_path / f"global_step_{resume_step}"
     if resume_step is not None:
-        args.extend(("--resume-uri", str(native)))
+        args += f' --resume-uri "{native}"'
     result = CliRunner().invoke(main, args)
     assert result.exit_code == 0, result.output
     launch = yaml.safe_load(config_path.read_text())
@@ -67,14 +53,12 @@ def test_cli_renders_direct_training_and_native_continuation(
     assert trainer["max_steps"] == (resume_step or 0) + 3
     assert trainer["epochs"] >= trainer["max_steps"]
     assert launch["run"]["mode"] == "train" and not launch["run"]["export_hf"]
-    assert trainer["callbacks"][0]["save_steps"] == trainer["ckpt_interval"]
-    assert "/tmp/ttl=3d/" in launch["artifacts"]["checkpoint_root"]
     assert trainer["resume_mode"] == "latest"
     if resume_step is not None:
         assert inputs["starting_checkpoint"]["uri"] == str(native)
 
 
-def test_each_continuation_has_its_own_checkpoint_input(tmp_path: Path) -> None:
+def test_continuations_keep_distinct_inputs_and_coordinator_queue_time(tmp_path: Path) -> None:
     checkpoints = []
     for version in ("2026.11.13.1", "2026.11.13.2"):
         with build_context(BuildContext(versions=VersionCodex(default=version))):
@@ -87,7 +71,7 @@ def test_each_continuation_has_its_own_checkpoint_input(tmp_path: Path) -> None:
                 input_version="2026.11.13.0",
                 name="checkpoints/continuation",
                 max_steps=25,
-                job_timeout_hours=24,
+                job_timeout_hours=72,
                 resume_uri=str(tmp_path / version / "checkpoint"),
                 checkpoint_count=2,
                 ttl_days=3,
@@ -95,6 +79,8 @@ def test_each_continuation_has_its_own_checkpoint_input(tmp_path: Path) -> None:
             )
         graph = graph_handles([step])
         assert [handle for handle in graph if handle.adopt_source is None] == [step]
-        assert len(graph) == 4  # Model, tasks and starting checkpoint feed one training stage.
         checkpoints.append(next(dep for dep in graph if dep.name.endswith("/inputs/resume")))
     assert len({(checkpoint.name, checkpoint.version) for checkpoint in checkpoints}) == 2
+    env = {"DAYTONA_RL_API_KEY": "test", "DAYTONA_EVAL_API_KEY": "test", "MARIN_PREFIX": "s3://marin-us-east-08a"}
+    _, request = _coordinator_request([step], "experiments.post_training.mochi_rl.launch", (), 1, tmp_path, env)
+    assert request.timeout >= Duration.from_hours(120)

@@ -94,9 +94,11 @@ Find checkpoints under `artifacts.checkpoint_root` in the preview YAML, then
 append `/global_step_N` for the completed step.
 
 The GPU job defaults to a 24-hour limit. Set `--job-timeout-hours` for a longer
-run. A timeout ends the attempt without an automatic retry; recover from the
-latest completed checkpoint as above. Keep inputs and checkpoints for longer
-than the planned run and its recovery window.
+run. The coordinator timeout is at least 48 hours longer than the GPU job limit
+to allow for queueing and setup. If the GPU job reaches its limit, the attempt
+ends without an automatic retry; recover from the latest completed checkpoint
+as above. Keep inputs and checkpoints until training and any planned recovery
+are complete.
 
 Outputs use your user namespace. Recovery checkpoints and traces default to
 the regional three-day TTL, with two rolling checkpoints. `--ttl-days` and
