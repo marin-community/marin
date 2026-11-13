@@ -308,7 +308,9 @@ execution is not replayed after an ambiguous response.
 
 Harbor's Daytona adapter selects `ProviderWaitPolicy.JOB`: safe harness controls,
 artifact reads/writes and resource probes retry within the enclosing job's
-overall timeout. Each provider request has a 60-second timeout. Request duration
+overall timeout. Safe in-sandbox controls, artifact calls and named sandbox deletion
+have a 60-second per-call timeout. Snapshot operations and sandbox acquisition
+retain their SDK operation settings within the enclosing job bound. Request duration
 and retry backoff pause Harbor phase clocks and Shellbox command clocks; the declared
 source-command limits remain active during source execution. Run qualification
 under a bounded job whose overall clock continues advancing during provider
