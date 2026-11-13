@@ -1,4 +1,4 @@
-// Marin Belay admin page: approvals and controls. The server admits only listed approvers (401 signed out, 403
+// Marin Belay admin page: approvals and controls. The server admits only approvers (401 signed out, 403
 // otherwise); everyone else sees the denied page. Loaded after common.js.
 
 const API = `${BELAY_BASE}api/admin`
@@ -442,6 +442,7 @@ function fillSettings() {
   settingsLoaded = true
   const { settings } = state
   document.getElementById('set-github').checked = settings.github_posting
+  document.getElementById('set-approver-domains').value = settings.approver_domains.join(', ')
   document.getElementById('set-approvers').value = settings.approvers
     .map((a) => `${a.github} ${a.identity ?? ''}`.trim())
     .join('\n')
@@ -494,6 +495,11 @@ function wireControls() {
       'settings',
       {
         github_posting: document.getElementById('set-github').checked,
+        approver_domains: document
+          .getElementById('set-approver-domains')
+          .value.split(',')
+          .map((d) => d.trim().replace(/^@/, ''))
+          .filter(Boolean),
         approvers,
       },
       'Settings saved',

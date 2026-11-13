@@ -31,6 +31,7 @@ from belay.app import (
     decline_intake_comment,
     expect_run,
     finish_session,
+    is_approver,
     migrate,
     note_overdue_runs,
     offer_pending_work,
@@ -153,6 +154,15 @@ def test_registered_comments_map_each_comment_to_its_registry_id(conn) -> None:
     ]
     upload_registry(conn, ideas)
     assert registered_comments(conn) == {"7": "X0220"}
+
+
+def test_everyone_in_an_approver_domain_approves() -> None:
+    settings = {**DEFAULT_SETTINGS, "approvers": [{"github": "outside", "identity": "guest@example.com"}]}
+    assert is_approver(settings, "anyone@openathena.ai")
+    assert is_approver(settings, "guest@example.com")
+    assert not is_approver(settings, "someone@evil-openathena.ai")
+    assert not is_approver(settings, "openathena.ai")
+    assert not is_approver({**settings, "approver_domains": []}, "anyone@openathena.ai")
 
 
 def test_agent_endpoints_take_the_session_identity_or_an_approver() -> None:

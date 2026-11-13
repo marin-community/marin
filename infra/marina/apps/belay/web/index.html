@@ -390,7 +390,10 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
     <summary>Settings</summary>
     <form id="settings-form" class="settings">
       <label class="check"><input type="checkbox" id="set-github"> React on #9514 (👀 once an idea is approved or declined; nothing is posted)</label>
-      <label class="wide">Approvers <span class="muted small">one per line: github-login marina-identity</span>
+      <label class="wide">Approver domains <span class="muted small">everyone signed in with an identity in these
+        domains approves; comma-separated</span> <input id="set-approver-domains" spellcheck="false"></label>
+      <label class="wide">Named approvers <span class="muted small">one per line: github-login marina-identity (credits
+        decisions to the GitHub login; also admits an identity outside the domains)</span>
         <textarea id="set-approvers" rows="6" spellcheck="false"></textarea></label>
       <button type="submit" class="btn primary">Save</button>
     </form>
