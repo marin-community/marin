@@ -1991,17 +1991,32 @@ def test_sandbox_pod_enforces_exact_declared_disk_and_cpu(disk_bytes):
 
 
 @pytest.mark.parametrize(
-    "message,expected_state",
+    "message,expected_state,exit_code,disrupted",
     [
-        ("Pod ephemeral local storage usage exceeds the total limit of containers 2Gi.", job_pb2.TASK_STATE_FAILED),
-        ('Container task exceeded its local ephemeral storage limit "2Gi".', job_pb2.TASK_STATE_FAILED),
+        (
+            "Pod ephemeral local storage usage exceeds the total limit of containers 2Gi.",
+            job_pb2.TASK_STATE_FAILED,
+            137,
+            True,
+        ),
+        (
+            "Pod ephemeral local storage usage exceeds the total limit of containers 2Gi.",
+            job_pb2.TASK_STATE_FAILED,
+            0,
+            False,
+        ),
+        ('Container task exceeded its local ephemeral storage limit "2Gi".', job_pb2.TASK_STATE_FAILED, 137, True),
         (
             "The node was low on resource: ephemeral-storage. Threshold quantity: 100Gi, available: 5Gi.",
             job_pb2.TASK_STATE_PREEMPTED,
+            137,
+            True,
         ),
     ],
 )
-def test_storage_eviction_classifies_task_limit_separately_from_node_pressure(message, expected_state):
+def test_storage_eviction_classifies_task_limit_separately_from_node_pressure(
+    message, expected_state, exit_code, disrupted
+):
     k8s = InMemoryK8sService(namespace="iris")
     provider = K8sTaskProvider(
         descriptor=k8s_backend_descriptor(), kubectl=k8s, pods=pod_config(), cluster_scan_interval=0.0
@@ -2016,8 +2031,10 @@ def test_storage_eviction_classifies_task_limit_separately_from_node_pressure(me
             "phase": "Failed",
             "reason": "Evicted",
             "message": message,
-            "conditions": [{"type": "DisruptionTarget", "status": "True", "reason": "TerminationByKubelet"}],
-            "containerStatuses": [{"name": "task", "state": {"terminated": {"exitCode": 137, "reason": "Error"}}}],
+            "conditions": (
+                [{"type": "DisruptionTarget", "status": "True", "reason": "TerminationByKubelet"}] if disrupted else []
+            ),
+            "containerStatuses": [{"name": "task", "state": {"terminated": {"exitCode": exit_code, "reason": "Error"}}}],
         }
         k8s.seed_resource(K8sResource.PODS, pod["metadata"]["name"], pod)
         updates = provider.sync(

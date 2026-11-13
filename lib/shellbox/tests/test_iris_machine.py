@@ -473,13 +473,19 @@ def test_declared_storage_requires_kubernetes_before_submission(monkeypatch, bac
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
-    factory = IrisMachineFactory(controller_url="http://controller")
+    factory = IrisMachineFactory(
+        controller_url="http://controller", pool="cpu-fixture", priority_band=job_pb2.PRIORITY_BAND_BATCH
+    )
     spec = MachineSpec(RegistryImage("fixture@sha256:" + "a" * 64), storage_mb=2305)
     if backend == "kubernetes" and capabilities:
         with pytest.raises(SubmissionRecorded):
             asyncio.run(factory.create(spec))
         assert client.submitted["resources"].disk == 2305 * 1024**2
         assert client.submitted["replicas"] == 1
+        assert client.submitted["priority_band"] == job_pb2.PRIORITY_BAND_BATCH
+        [constraint] = client.submitted["constraints"]
+        assert constraint.to_proto().key == "pool"
+        assert constraint.to_proto().value.string_value == "cpu-fixture"
         assert client.submitted["max_retries_failure"] == 0
         assert client.submitted["max_retries_preemption"] == 0
     else:

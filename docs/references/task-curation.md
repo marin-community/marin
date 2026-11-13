@@ -1382,7 +1382,7 @@ uv run python -m experiments.post_training.task_curation.oracle_filter calibrate
 uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
   --output-dir /path/to/oracle-local-v2 --environment local --concurrency 4 \
-  --environment-kwargs '{"iris_cluster":"cw-us-east-02a","iris_pool":"cpu-genoa","ttl":259200}'
+  --environment-kwargs '{"iris_cluster":"cw-us-east-02a","iris_pool":"cpu-genoa","iris_priority":"batch","ttl":259200}'
 
 uv run python -m experiments.post_training.task_curation.oracle_filter collect \
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/oracle-run-v2/task-map.json \
@@ -1400,8 +1400,12 @@ advertises `sandbox-storage-limit`. Older and worker-daemon controllers are
 rejected. Each actor and each separate grader runs in its own Iris task and
 sandbox pod with its own declared resources. `ttl` is a lifetime in seconds;
 259200 gives each job a three-day timeout. `iris_pool` pins the job to a named
-Iris worker pool. On cw-us-east-02a, use the CPU pool `cpu-genoa`; H100 nodes can
-advertise gVisor while failing sandbox startup ([#10090](https://github.com/marin-community/marin/issues/10090)).
+Iris worker pool. `iris_priority` explicitly selects `batch` (the route default)
+or `production` for every sandbox child, independently of the coordinator.
+On cw-us-east-02a, `cpu-genoa` selects CPU nodes. Verify its
+runtime before use: both CPU and H100 nodes have failed gVisor startup
+([incident](https://marina.oa.dev/echo/wiki/976),
+[#10090](https://github.com/marin-community/marin/issues/10090)).
 Concurrency does not waive snapshot or CPU capacity limits.
 
 On this route Kubernetes enforces CPU and memory through the sandbox container's
@@ -1425,8 +1429,9 @@ Choose a supporting route for those requirements. Deploy the Iris controller
 changes and complete the [deployment checklist](rl-data-atlas.md#deployment-checklist)
 before qualifying tasks on this route.
 
-Use CPU Iris workers at production priority with a three-day job timeout.
-Run `collect` against the same calibrated run; there is no second oracle pass.
+Use CPU Iris jobs with a three-day job timeout. Select the campaign's approved
+priority explicitly through `iris_priority`; use production for the bounded
+disk-overflow correctness check. Run `collect` against the same calibrated run; there is no second oracle pass.
 Each attempt uses a fresh container and a fresh native package directory.
 Preserve the original packages, trials and published prefixes; select a new
 output version when rerunning.

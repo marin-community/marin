@@ -333,6 +333,7 @@ class IrisMachineFactory:
         job_ttl: int = DEFAULT_JOB_TTL,
         disk_mb: int = DEFAULT_DISK_MB,
         pool: str | None = None,
+        priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
         secret_env: Mapping[str, SecretSpec] | None = None,
     ):
         if (cluster is None) == (controller_url is None):
@@ -343,6 +344,7 @@ class IrisMachineFactory:
         self.job_ttl = job_ttl
         self.disk_mb = disk_mb
         self.pool = pool
+        self.priority_band = priority_band
         self.secret_env = dict(secret_env or {})
 
     def _check_spec(self, spec: MachineSpec) -> RegistryImage:
@@ -444,8 +446,8 @@ class IrisMachineFactory:
                 egress_policy=EGRESS_POLICIES[spec.network],
                 scheduling_timeout=Duration.from_seconds(self.scheduling_timeout),
                 timeout=Duration.from_seconds(self.job_ttl),
-                priority_band=job_pb2.PRIORITY_BAND_PRODUCTION,
                 replicas=1,
+                priority_band=self.priority_band,
                 constraints=[Constraint.create(key="pool", op=ConstraintOp.EQ, value=self.pool)] if self.pool else [],
                 max_retries_failure=0,
                 max_retries_preemption=0,

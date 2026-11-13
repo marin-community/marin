@@ -1419,7 +1419,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
     task_terminated = _task_container_terminated(pod)
     new_state = (
         job_pb2.TASK_STATE_SUCCEEDED
-        if task_terminated and exit_code == 0 and _disruption_condition(pod) is None
+        if task_terminated and exit_code == 0 and _disruption_condition(pod) is None and not _disk_limit_exceeded(pod)
         else _pod_failure_state(pod)
     )
     terminal_reason = _extract_terminal_reason(pod)
@@ -1458,7 +1458,11 @@ def _extract_exit_code(pod: dict) -> int | None:
 
 def _task_update_after_output_timeout(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
     exit_code = _extract_exit_code(pod)
-    terminal_phase = "Succeeded" if exit_code == 0 and _disruption_condition(pod) is None else "Failed"
+    terminal_phase = (
+        "Succeeded"
+        if exit_code == 0 and _disruption_condition(pod) is None and not _disk_limit_exceeded(pod)
+        else "Failed"
+    )
     terminal_pod = {**pod, "status": {**pod.get("status", {}), "phase": terminal_phase}}
     update = _task_update_from_pod(entry, terminal_pod)
     return replace(

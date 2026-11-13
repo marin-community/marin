@@ -8,7 +8,7 @@ import tempfile
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from harbor.environments.artifacts import download_artifact
 from harbor.environments.base import (
@@ -66,6 +66,7 @@ class LocalEnvironment(BaseEnvironment):
         *args,
         iris_cluster: str | None = None,
         iris_pool: str | None = None,
+        iris_priority: Literal["production", "batch"] = "batch",
         bwrap: str | None = None,
         umoci: str = "umoci",
         image_cache: str | None = None,
@@ -112,9 +113,15 @@ class LocalEnvironment(BaseEnvironment):
         self.factory: TaskFactory
         if iris_cluster:
             # This backend is optional; shared-worker LOCAL has no Iris dependency.
+            from iris.rpc.proto_display import priority_band_value  # noqa: PLC0415
             from shellbox.backends.iris.machine import IrisMachineFactory  # noqa: PLC0415
 
-            self.factory = IrisMachineFactory(cluster=iris_cluster, pool=iris_pool, job_ttl=int(ttl))
+            self.factory = IrisMachineFactory(
+                cluster=iris_cluster,
+                pool=iris_pool,
+                job_ttl=int(ttl),
+                priority_band=priority_band_value(iris_priority),
+            )
             return
         self.factory = LocalMachineFactory(
             bwrap=Path(bwrap) if bwrap is not None else None,
