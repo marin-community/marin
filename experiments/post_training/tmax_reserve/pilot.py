@@ -7,7 +7,7 @@ Runs as one CPU Iris coordinator job. It lowers the model exactly as the evaluat
 (``inference_config_for_model`` + ``remote_inference``), waits for the endpoint, and runs the policy as one Harbor
 job (``harbor_job.py``). The model's agent kwargs come from ``harbor_model_agent_kwargs``, as
 in the TBLite eval. The summary reports per-task pass@1 and pass@k, trial errors, live sandbox hours, and how
-many trials ran apt (the Ubuntu mirror is the one egress Daytona's lockdown leaves open).
+many trials ran apt.
 """
 
 import argparse

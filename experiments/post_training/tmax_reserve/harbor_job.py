@@ -6,8 +6,9 @@
 Shellbox builds one named snapshot per distinct image and resource shape and keeps it. The shared-image pilot has
 two (images A and B). Their names come from Shellbox's own naming path. Names that already exist before the job
 are reused and never deleted; the account must have a free slot under ``snapshot_quota`` for each of the others,
-with no waiting. Afterwards only those others (the snapshots this job created) are deleted, by exact name and each
-after a fresh ``get``; no other snapshot is touched.
+with no waiting. They are built one at a time before the job starts (concurrent first trials would race their
+creates against the quota). Afterwards only those others (the snapshots this job created) are deleted, by exact
+name and each after a fresh ``get``; no other snapshot is touched.
 """
 
 import datetime
@@ -76,8 +77,8 @@ def run_harbor_job(
 ) -> Path:
     """Run ``overlay.dataset_path`` as one Harbor job and return its jobs directory.
 
-    Writes ``<work>/account.json``, ``<work>/snapshots.json`` (all, pre-existing, and to-delete names) and
-    ``<work>/snapshot-deletions.json``.
+    Writes ``<work>/account.json``, ``<work>/snapshots.json`` (all, pre-existing, and to-delete names),
+    ``<work>/snapshots-prepared.json`` and ``<work>/snapshot-deletions.json``.
     """
     dataset = Path(overlay.dataset_path)
     task_dirs = sorted(str(path) for path in dataset.iterdir() if path.is_dir())
@@ -96,6 +97,9 @@ def run_harbor_job(
     if free < len(created):
         raise RuntimeError(f"{len(created)} new snapshots needed but only {free} of {snapshot_quota} slots are free")
     try:
+        (work / "snapshots-prepared.json").write_text(
+            json.dumps(snapshot_command("prepare", *task_dirs, env=driver_env), indent=1)
+        )
         run_harbor_driver(config, overlay, driver_env, backend_state)
     finally:
         deletions = snapshot_command("delete", str(to_delete), env=driver_env)

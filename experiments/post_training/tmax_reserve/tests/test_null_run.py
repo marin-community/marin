@@ -72,13 +72,15 @@ def test_sandbox_seconds_counts_trials_that_reached_environment_setup(tmp_path):
     assert sandbox_seconds(tmp_path) == 60 + 360
 
 
-def _job(tmp_path, monkeypatch, *, preexisting, non_general, driver_error=None):
+def _job(tmp_path, monkeypatch, *, preexisting, non_general, driver_error=None, prepare_error=None):
     dataset = tmp_path / "tasks"
     for task in ("t1", "t2", "t3"):
         (dataset / task).mkdir(parents=True)
     calls = []
 
     def snapshots(command, *arguments, env):
+        if command == "prepare" and prepare_error:
+            raise prepare_error
         calls.append(
             (command, json.loads(Path(arguments[0]).read_text()) if command in ("existing", "delete") else None)
         )
@@ -86,6 +88,7 @@ def _job(tmp_path, monkeypatch, *, preexisting, non_general, driver_error=None):
             "names": {"t1": "snap-a", "t2": "snap-a", "t3": "snap-b"},
             "existing": preexisting,
             "usage": {"non_general": non_general},
+            "prepare": {"snap-a": "snap-a", "snap-b": "snap-b"},
             "delete": [],
         }[command]
 
@@ -107,7 +110,20 @@ def test_harbor_job_deletes_only_snapshots_it_created_even_when_the_job_fails(tm
         run()
 
     assert ("existing", ["snap-a", "snap-b"]) in calls
-    assert calls[-2:] == [("driver", None), ("delete", ["snap-b"])]
+    # Snapshots are built before the trials start, so concurrent trials never race their creates.
+    assert calls[-3:] == [("prepare", None), ("driver", None), ("delete", ["snap-b"])]
+
+
+def test_harbor_job_deletes_created_snapshots_when_prepare_fails(tmp_path, monkeypatch):
+    calls, run = _job(
+        tmp_path, monkeypatch, preexisting=[], non_general=40, prepare_error=RuntimeError("quota exceeded")
+    )
+
+    with pytest.raises(RuntimeError, match="quota exceeded"):
+        run()
+
+    assert ("driver", None) not in calls
+    assert calls[-1] == ("delete", ["snap-a", "snap-b"])
 
 
 def test_harbor_job_refuses_to_start_without_a_free_slot_per_new_snapshot(tmp_path, monkeypatch):
