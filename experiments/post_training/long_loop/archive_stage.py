@@ -459,7 +459,9 @@ def derive_archive_plan(
         if digest(item["source"])[1] != item["sha256"]:
             raise ValueError(f"Pinned additional evidence changed: {item['name']}")
         inputs.append(_input(item["source"], prefix_join("additional", item["name"]), item["category"]))
-    sft = documents[("sft", "consumed-config.json")]["trainer"]["trainer"]
+    full_sft = documents[("sft", "consumed-config.json")]
+    shared_sft = full_sft.get("format") == "SFTSpec"
+    sft = full_sft["train_config"]["trainer"] if shared_sft else full_sft["trainer"]["trainer"]
     tracker = sft["tracker"]
     refs = [
         {
@@ -493,10 +495,9 @@ def derive_archive_plan(
     inputs.extend(wandb_inputs)
     record("wandb-status.json", {"exporter": settings["wandb"]["package"], "runs": wandb_status}, "provenance")
     missing = {}
-    full_sft = documents[("sft", "consumed-config.json")]
     expected_timing = {
         "native-sft-attempt-archive": full_sft["resources"]["replicas"],
-        "native-sft-journal": full_sft["resources"]["replicas"] * full_sft["processes_per_task"],
+        "native-sft-journal": full_sft["resources"]["replicas"] * (1 if shared_sft else full_sft["processes_per_task"]),
     }
     timing_coverage = {
         kind: {"expected": count, "observed": len({item["source"] for item in extra if item.get("kind") == kind})}

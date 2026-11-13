@@ -65,14 +65,17 @@ that has them).
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
+from functools import partial
 from typing import Protocol, runtime_checkable
 
 import click
+import draccus
 import jax.numpy as jnp
 import jmp
 from fray.types import ANY_REGION, GpuConfig, ResourceConfig
@@ -92,8 +95,9 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.checkpoints import HfToLevanterCheckpoint
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache
 from marin.processing.tokenize.tokenize import tokenize as run_tokenize
-from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
-from rigging.filesystem.storage_path import prefix_join
+from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, apply_output_path, run_levanter_train_lm
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.timing import Duration
 
 from experiments.datasets.instruction import (
     InstructionDatasetConfig,
@@ -271,9 +275,16 @@ def _levanter_pod_config(
     )
 
 
-def _levanter_train_job(pod_config: TrainLmOnPodConfig) -> None:
+def _levanter_train_job(pod_config: TrainLmOnPodConfig, *, task_timeout_seconds: int = 3 * 24 * 3600) -> None:
     """Dispatch a Levanter ``train_lm`` config as its own Fray training job."""
-    remote(run_levanter_train_lm, resources=pod_config.resources)(pod_config)
+    if pod_config.output_path is not None:
+        pod_config = replace(pod_config, train_config=apply_output_path(pod_config.train_config, pod_config.output_path))
+        (StoragePath(pod_config.output_path) / "consumed-config.json").write_text(
+            json.dumps({"format": "SFTSpec", **draccus.encode(pod_config)}, indent=2)
+        )
+    remote(run_levanter_train_lm, resources=pod_config.resources, timeout=Duration.from_seconds(task_timeout_seconds))(
+        pod_config
+    )
 
 
 @dataclass(frozen=True)
@@ -290,6 +301,7 @@ class HFModel:
     tokenizer_path: str | None = None  # defaults to model_ref
     model_type: str = "qwen3"
     eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
+    task_timeout_seconds: int = 3 * 24 * 3600
 
     def tokenizer_cache_key(self) -> str:
         return self.tokenizer_path or self.model_ref
@@ -299,7 +311,7 @@ class HFModel:
 
     @property
     def run(self) -> Callable[..., None]:
-        return _levanter_train_job
+        return partial(_levanter_train_job, task_timeout_seconds=self.task_timeout_seconds)
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
         return ()
@@ -527,6 +539,9 @@ class SFTSpec:
     chat_template: str  # any jinja carrying a {% generation %} block (completions-only mask)
     datasets: Sequence[DatasetSpec | ArtifactDatasetSpec]  # the instruction mixture
     optimizer: OptimizerConfig  # e.g. AdamConfig for the Levanter backend
+    prepared_data: LmDataConfig | None = None
+    """Already prepared caches and their complete mixture schedule; excludes message datasets."""
+    data_dependencies: tuple[ArtifactStep, ...] = ()
     mesh: MeshConfig | None = None
     seq_len: int = 4096
     pack: bool = True  # chat packs by default; a step count must count packed examples
@@ -552,6 +567,8 @@ class SFTSpec:
     """
 
     def __post_init__(self) -> None:
+        if self.prepared_data is not None and (self.datasets or self.num_train_epochs is not None):
+            raise ValueError("prepared_data requires explicit steps and excludes datasets/epochs")
         if (self.num_train_steps is None) == (self.num_train_epochs is None):
             raise ValueError("Set exactly one of num_train_steps or num_train_epochs.")
         if self.num_train_epochs is not None and len(self.datasets) != 1:
@@ -688,6 +705,7 @@ def _trainer(
         mesh=spec.mesh if spec.mesh is not None else MeshConfig(),
         tracker=WandbConfig(
             project=spec.wandb_project,
+            id=sft_run_id(spec),
             tags=["sft", "levanter", spec.name.split("/")[-1]],
         ),
         checkpointer=spec.checkpointer,
@@ -766,7 +784,29 @@ def _resolve_epoch_steps(ctx: StepContext, spec: SFTSpec, chat_cache: ArtifactSt
     return math.ceil(spec.num_train_epochs * total_tokens / (spec.seq_len * spec.batch_size))
 
 
-def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterCheckpoint]:
+class DeprecatedSFTBackend(Protocol):
+    """An explicitly selected historical backend; its original config stays intact."""
+
+    @property
+    def run(self) -> Callable[..., None]: ...
+
+    def build_train_config(self, ctx: StepContext, resources: ResourceConfig) -> object: ...
+
+
+@dataclass(frozen=True)
+class DeprecatedSFTSpec:
+    name: str
+    version: str
+    backend: DeprecatedSFTBackend
+    deps: tuple[ArtifactStep, ...] = ()
+
+
+def sft_step(
+    spec: SFTSpec | DeprecatedSFTSpec,
+    resources: ResourceConfig,
+    *,
+    acknowledge_deprecated_config_format: bool = False,
+) -> ArtifactStep[LevanterCheckpoint]:
     """The chat-SFT run as a lazy ``ArtifactStep[LevanterCheckpoint]``.
 
     ``spec.model`` supplies the backend-specific training config and dispatch; ``resources`` is a
@@ -778,7 +818,32 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
     - ``num_train_epochs`` (a single dataset): a ``chat_tokenize`` dep materializes the chat cache so
       the step count resolves from its token total, and training reads the pre-built cache.
     """
+    if isinstance(spec, DeprecatedSFTSpec):
+        if not acknowledge_deprecated_config_format:
+            raise ValueError("Legacy SFT requires --i-know-i-am-using-a-deprecated-config-format")
+        return ArtifactStep(
+            name=spec.name,
+            version=spec.version,
+            artifact_type=LevanterCheckpoint,
+            run=spec.backend.run,
+            build_config=lambda ctx: spec.backend.build_train_config(ctx, ctx.runtime_arg(_TRAIN_RESOURCES)),
+            deps=spec.deps,
+            runtime_args={_TRAIN_RESOURCES: resources},
+        )
     model = spec.model
+    if spec.prepared_data is not None:
+        assert spec.num_train_steps is not None
+        return ArtifactStep(
+            name=spec.name,
+            version=spec.version,
+            artifact_type=LevanterCheckpoint,
+            run=model.run,
+            build_config=lambda ctx: model.build_train_config(
+                ctx, spec, spec.prepared_data, ctx.runtime_arg(_TRAIN_RESOURCES), spec.num_train_steps
+            ),
+            deps=(*spec.data_dependencies, *model.init_deps()),
+            runtime_args={_TRAIN_RESOURCES: resources},
+        )
     transform_deps = _dataset_deps(spec)
 
     if spec.num_train_epochs is not None:
@@ -815,7 +880,7 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
     )
 
 
-def run_sft_cli(spec: SFTSpec) -> None:
+def run_sft_cli(spec: SFTSpec | DeprecatedSFTSpec) -> None:
     """Click entry point: launch ``spec`` on the accelerator named by ``--accelerator``.
 
     A config module ends with ``if __name__ == "__main__": run_sft_cli(SPEC)``; the user then runs
@@ -828,8 +893,19 @@ def run_sft_cli(spec: SFTSpec) -> None:
         required=True,
         help="Accelerator: '<count>x<gpu>' (e.g. '8xH100') or a TPU slice variant (e.g. 'v4-64').",
     )
-    def _cli(accelerator: str) -> None:
+    @click.option("--i-know-i-am-using-a-deprecated-config-format", is_flag=True)
+    def _cli(accelerator: str, i_know_i_am_using_a_deprecated_config_format: bool) -> None:
         resources = resources_from_accelerator(accelerator)
-        StepRunner().run([lower(sft_step(spec, resources))])
+        StepRunner().run(
+            [
+                lower(
+                    sft_step(
+                        spec,
+                        resources,
+                        acknowledge_deprecated_config_format=i_know_i_am_using_a_deprecated_config_format,
+                    )
+                )
+            ]
+        )
 
     _cli()

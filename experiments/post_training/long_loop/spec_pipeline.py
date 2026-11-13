@@ -26,7 +26,8 @@ from experiments.post_training.long_loop.finalization import after_checkpoint, r
 from experiments.post_training.long_loop.rl import configured_rl_step
 from experiments.post_training.long_loop.run_spec import stage_blockers
 from experiments.post_training.long_loop.runtime_timing import report_step, timed
-from experiments.post_training.long_loop.sft import export_sft, fresh_sft_config, sft_run
+from experiments.post_training.long_loop.sft import export_sft
+from experiments.post_training.long_loop.shared_sft import export_shared_sft, legacy_sft_step, native_sft_step
 
 
 def runtime_execution(value: dict) -> IrisSkyRLExecution:
@@ -117,19 +118,18 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         base_manifest = resolved["initializer"]
         base = ArtifactStep.adopt(f"{name}/base", version, base_manifest["uri"], config=base_manifest)
         sft_evidence.append(base)
-        run_id = f"{name.replace('/', '-')}-sft-{version}"
-        fresh_sft_config(output=f"/tmp/{name}/sft", initializer=base_manifest["uri"], recipe=recipe, run_id=run_id)
-        trained = timed(
-            apply(
-                f"{name}/sft",
-                sft_run,
-                version=version,
-                output=OUT,
-                initializer=base,
-                recipe=recipe,
-                run_id=run_id,
+        if resolved["sft_format"] == "sft_spec":
+            trained = timed(native_sft_step(f"{name}/sft", version, recipe))
+        else:
+            trained = timed(
+                legacy_sft_step(
+                    f"{name}/sft",
+                    version,
+                    recipe,
+                    base,
+                    acknowledge=resolved["acknowledge_deprecated_config_format"],
+                )
             )
-        )
     trained = replace(trained, deps=(*trained.deps, verified))
     coordinator = runtime_execution(execution["coordinator"])
     coordinator = replace(coordinator, coordinator_name=f"{coordinator.coordinator_name}-{version}")
@@ -158,7 +158,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             apply(
                 f"{name}/sft-handoff",
                 remote(
-                    export_sft,
+                    export_shared_sft if resolved["sft_format"] == "sft_spec" else export_sft,
                     resources=resources["export"],
                     env_vars={"JAX_PLATFORMS": "cpu"},
                     timeout=Duration.from_seconds(timeouts.get("export", DEFAULT_TASK_TIMEOUT_SECONDS)),
@@ -166,10 +166,16 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
                 version=version,
                 output=OUT,
                 trained=trained,
-                model=recipe["model"],
                 source_revision=resolved["marin_revision"],
-                tokenizer_uri=tokenizer["uri"],
                 context_limit=tokenizer["context_limit"],
+                **(
+                    {}
+                    if resolved["sft_format"] == "sft_spec"
+                    else {
+                        "model": recipe["model"],
+                        "tokenizer_uri": tokenizer["uri"],
+                    }
+                ),
             )
         )
     endpoint_pin = resolved.get("adopted_endpoint")

@@ -14,10 +14,31 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.optim.config import AdamConfig
 from levanter.testing.helpers import use_test_mesh
 from marin.execution.lazy import StepContext
-from marin.training.training import apply_output_path
+from marin.training.training import TrainLmOnPodConfig, apply_output_path
 from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import Duration
 
+from experiments.sft import launcher
 from experiments.sft.launcher import HFModel, SFTSpec
+
+
+@pytest.mark.parametrize("override", [None, 345600])
+def test_native_sft_dispatch_has_generous_default_and_explicit_timeout(monkeypatch, override):
+    submitted = []
+
+    def capture_remote(fn, **execution):
+        def submit(config):
+            submitted.append((execution, config))
+
+        return submit
+
+    monkeypatch.setattr(launcher, "remote", capture_remote)
+    kwargs = {} if override is None else {"task_timeout_seconds": override}
+    model = HFModel("unused-no-download", **kwargs)
+    pod = TrainLmOnPodConfig(train_config=None, resources=ResourceConfig.with_cpu())
+    model.run(pod)
+    assert submitted[0][0]["timeout"] == Duration.from_seconds(259200 if override is None else override)
+    assert submitted[0][1] is pod
 
 
 @pytest.fixture

@@ -26,6 +26,38 @@ pin `marin_revision` to the clean code commit; Iris bundles those explicit input
 Use a relative or cluster-local validation output path for a remote run.
 A printed blocked plan is not a successful dry-run or permission to launch.
 
+## Shared SFT and historical reproduction
+
+New SFT stages use `experiments.sft.launcher.SFTSpec` and the checked-in
+`experiments/sft/configs/snowball_h100.py` defaults: native Levanter Snowball,
+Adam, 32,768 positions, batch eight and one transcript per sequence. The run
+spec supplies the prepared data, training budget, execution resources and
+tracker project. Existing cache addresses remain pinned; the prepared-data
+interface preserves concatenated sources and time-varying mixture weights.
+Schedule boundaries are converted by token positions when the batch geometry
+changes. No source is replaced with the example recipe's dataset.
+
+The serialized-chat cache view masks system/user/tool text and message headers,
+retains every assistant body in the window, and leaves pretraining replay under
+full causal loss. Its one-transcript view explicitly keeps the leftmost 32K
+positions of longer traces. This differs from the historical 262K packed,
+full-text objective. The original caches are read without modification.
+
+Historical `GrugRunConfig` files remain supported through a separate typed
+backend adapter in the same shared launcher. A fresh legacy SFT launch requires
+`--i-know-i-am-using-a-deprecated-config-format`; missing acknowledgement fails
+during CPU configuration validation. The adapter preserves the original data,
+optimizer and model configuration, binding only the new run's execution and
+output locations. It does not convert a Grug configuration into chat defaults.
+Adopting an already completed checkpoint does not rerun legacy SFT.
+
+Native SFT records its submitted/consumed configuration and final selection,
+then the shared trainer's HF export supplies the RL handoff. Handoff preparation
+copies those selected weights within the same filesystem and declares the
+original model's serving context bound. The Grug and native checkpoint formats
+remain distinct in the archive. GPU smoke runs are explicit user-authorized
+invocations with the same production spec and only its duration overrides.
+
 The current execution policy removes all natural-long qualification, including
 minimum-length observations and export blockers. Run normal batches and let actual
 long inputs fail naturally. CPU config validation and data-correctness assertions

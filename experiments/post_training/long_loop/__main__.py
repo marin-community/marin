@@ -57,9 +57,20 @@ def validate_graph(terminal: ArtifactStep, directory: Path, artifact_prefix: str
 @click.option("--smoke", is_flag=True, help="Apply only the spec's explicit scale overrides.")
 @click.option("--through", type=click.Choice(["sft", "rl", "archive"]), default="archive", show_default=True)
 @click.option("--validation-output", type=click.Path(path_type=Path), required=True)
+@click.option("--i-know-i-am-using-a-deprecated-config-format", is_flag=True)
 @rl_build_options
-def main(spec: Path, smoke: bool, through: str, validation_output: Path) -> ArtifactStep:
-    resolved = resolve_spec(spec, smoke=smoke)
+def main(
+    spec: Path,
+    smoke: bool,
+    through: str,
+    validation_output: Path,
+    i_know_i_am_using_a_deprecated_config_format: bool,
+) -> ArtifactStep:
+    resolved = resolve_spec(
+        spec,
+        smoke=smoke,
+        acknowledge_deprecated_config_format=i_know_i_am_using_a_deprecated_config_format,
+    )
     os.environ["MARIN_PREFIX"] = resolved["storage"]["output_prefix"]
     os.environ["MARIN_TEMP_PREFIX"] = resolved["storage"]["temporary_prefix"]
     resolved["through"] = through

@@ -76,7 +76,7 @@ def read_pin(pin: FilePin, directory: Path) -> Any:
     return yaml.safe_load(content)
 
 
-def resolve_spec(path: Path, *, smoke: bool) -> dict:
+def resolve_spec(path: Path, *, smoke: bool, acknowledge_deprecated_config_format: bool = False) -> dict:
     """Resolve exact files; missing admission inputs remain explicit blockers."""
     spec = draccus.decode(RunSpec, yaml.safe_load(path.read_text()))
     if len(spec.marin_revision) != 40 or any(c not in "0123456789abcdef" for c in spec.marin_revision):
@@ -109,6 +109,12 @@ def resolve_spec(path: Path, *, smoke: bool) -> dict:
         sft_manifest["data"][field] = read_pin(draccus.decode(FilePin, pin), directory)
     for name in ("sft", "rl", "evaluation", "endpoint", "archive", "initializer", "tokenizer", "execution"):
         result[name] = read_pin(getattr(spec, name), directory)
+    result["sft_format"] = result["sft"].pop("format", "grug")
+    if result["sft_format"] not in {"sft_spec", "grug"}:
+        raise ValueError("Unknown SFT configuration format")
+    if result["sft_format"] == "grug" and result["adopted_sft"] is None and not acknowledge_deprecated_config_format:
+        raise ValueError("Legacy SFT requires --i-know-i-am-using-a-deprecated-config-format")
+    result["acknowledge_deprecated_config_format"] = acknowledge_deprecated_config_format
     for stage in ("rl", "evaluation"):
         validate_stage_config(result[stage]["config"], stage)
         for field in ("rendezvous_timeout", "cluster_join_timeout", "driver_liveness_timeout"):

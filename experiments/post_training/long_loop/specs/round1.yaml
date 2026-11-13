@@ -21,7 +21,7 @@ datasets:
     sha256: 0064c4384975ab758a89d27533a32c958192ff4c06f12ffd91354aa6289934e0
 sft:
   path: sft.yaml
-  sha256: 6f1d65137c4e273060dca267768d313d65df851747e7025219d872b700ca4922
+  sha256: e4ee1ddf3d22b0b9e299abab473cbc1c8d9d34e6e9c59af48493397d5b22040f
 initializer:
   path: initializer.yaml
   sha256: e08ba272421bac7fdc72750d89d46e938ed84f212677527cdddd686ca4240ca5
@@ -33,7 +33,7 @@ endpoint:
   sha256: 8368803744d250e8c2f86ca0c959214ef386876a18a8d4a598827da2f61d276d
 execution:
   path: execution.yaml
-  sha256: 711ef40851234e18763f97e454e3202d0727e05a23dbce9e68f463b8a5473b31
+  sha256: 66228f7855d9962080dd74bb901b0d31b81aafd6032019f668db45ab2b16aa36
 archive:
   path: archive.yaml
   sha256: 10412b80e40f1431eb03aec445ae93746f209e7adc5aa552f69b4cb2ce843724
@@ -44,7 +44,7 @@ evaluation:
   path: evaluation.yaml
   sha256: 63beeb89012cfd3153503e81c064084a1c8ea4ab874b9ed69a21355b668bac14
 smoke_overrides:
-  sft_steps: 2
+  sft_steps: 5
   rl_steps: 5
   eval_tasks_per_benchmark: 1
   eval_replicas: 1

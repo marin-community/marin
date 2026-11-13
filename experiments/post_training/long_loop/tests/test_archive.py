@@ -231,8 +231,9 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
 @pytest.mark.parametrize("incomplete_wandb_history", [False, True])
 @pytest.mark.parametrize("rl_state", ["succeeded", "failed"])
 @pytest.mark.parametrize("unscored", [False, True])
+@pytest.mark.parametrize("sft_format", ["GrugRunConfig", "SFTSpec"])
 def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
-    tmp_path, monkeypatch, incomplete_wandb_history, rl_state, unscored
+    tmp_path, monkeypatch, incomplete_wandb_history, rl_state, unscored, sft_format
 ):
     def document(path, value):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -300,11 +301,19 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
         monkeypatch.setenv("WANDB_SERVICE", "parent-sdk-service")
     document(
         Path(roots["sft"]) / "consumed-config.json",
-        {
-            "trainer": {"trainer": {"tracker": tracker}},
-            "resources": {"replicas": 2},
-            "processes_per_task": 4,
-        },
+        (
+            {
+                "trainer": {"trainer": {"tracker": tracker}},
+                "resources": {"replicas": 2},
+                "processes_per_task": 4,
+            }
+            if sft_format == "GrugRunConfig"
+            else {
+                "format": "SFTSpec",
+                "train_config": {"trainer": {"tracker": tracker}},
+                "resources": {"replicas": 2},
+            }
+        ),
     )
     for stage in ("rl", "eval"):
         retention = tmp_path / ("retention-" + stage)
@@ -361,7 +370,9 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
     assert any(item["name"] == "eval_inputs/selection.json" for item in plan["inputs"])
     assert sum(item["name"].endswith("trace.zip") for item in plan["inputs"]) == 2
     evidence = json.loads((tmp_path / "archive/derived-inputs/evidence-status.json").read_text())
-    assert evidence["native_sft_timing_coverage"]["native-sft-journal"]["expected"] == 8
+    assert evidence["native_sft_timing_coverage"]["native-sft-journal"]["expected"] == (
+        8 if sft_format == "GrugRunConfig" else 2
+    )
     if incomplete_wandb_history:
         manifest = seal_archive(
             str(tmp_path / "sealed"), [ArchiveInput(**item) for item in plan["inputs"]], plan["provenance"]

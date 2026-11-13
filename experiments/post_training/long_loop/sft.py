@@ -11,11 +11,7 @@ from pathlib import Path
 import draccus
 import equinox as eqx
 import jax
-import yaml
 from fray.types import ResourceConfig
-from marin.execution.lazy import OUT, ArtifactStep, apply
-from marin.execution.remote import remote
-from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -24,10 +20,8 @@ from experiments.grug.checkpointing import load_grug_checkpoint
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig  # noqa: F401 -- register optimizer
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
-from experiments.post_training.long_loop.runtime_timing import timed
 from experiments.post_training.long_loop.serving import SNOWBALL_CONTEXT_LIMIT
 from experiments.post_training.long_loop.sft_runtime.export_writer import ExportConfig, export_weights
-from experiments.post_training.long_loop.sft_runtime.import_hf import ImportConfig, convert
 from experiments.post_training.long_loop.sft_runtime.model import GrugModelConfig, Transformer
 from experiments.post_training.long_loop.sft_runtime.train import GrugRunConfig, run_grug
 
@@ -42,11 +36,6 @@ SMOKE_CONFIG = Path(__file__).with_name("sft-smoke.yaml")
 def read_json(uri: str) -> dict:
     fs, key = filesystem_for(uri)
     return json.loads(fs.cat_file(key))
-
-
-def import_base(*, output: str, model: dict, revision: str) -> None:
-    configure_coreweave_s3()
-    convert(ImportConfig(BASE_MODEL, revision, draccus.decode(GrugModelConfig, model), prefix_join(output, "native")))
 
 
 def fresh_sft_config(*, output: str, initializer: str, recipe: dict, run_id: str) -> GrugRunConfig:
@@ -70,12 +59,16 @@ def fresh_sft_config(*, output: str, initializer: str, recipe: dict, run_id: str
     return draccus.decode(GrugRunConfig, config)
 
 
-def sft_run(*, output: str, initializer: str, recipe: dict, run_id: str) -> None:
+def sft_run(
+    *, output: str, initializer: str, recipe: dict, run_id: str, resources: ResourceConfig | None = None
+) -> None:
     configure_coreweave_s3()
     verification = read_json(prefix_join(initializer, "native/verification.json"))
     if not verification["exact_parity"] or len(verification["tensors"]) != 502:
         raise ValueError("Base import did not verify all 502 tensors")
     config = fresh_sft_config(output=output, initializer=initializer, recipe=recipe, run_id=run_id)
+    if resources is not None:
+        config = replace(config, resources=resources)
     (StoragePath(output) / "consumed-config.json").write_text(json.dumps(draccus.encode(config), indent=2))
     run_grug(config)
     final_step = config.stop_after_steps or config.trainer.trainer.num_train_steps
@@ -164,64 +157,3 @@ def export_sft(
         if actual != shard["sha256"]:
             raise ValueError(f"Export hash mismatch: {shard['filename']}")
     validate_handoff(output)
-
-
-def sft_steps(
-    version: str,
-    source_revision: str,
-    prerequisites: tuple[ArtifactStep, ...] = (),
-    *,
-    recipe: dict | None = None,
-    run_kind: str = "plumbing",
-    initializer: ArtifactStep | None = None,
-) -> tuple[ArtifactStep, ArtifactStep[LevanterCheckpoint]]:
-    recipe = yaml.safe_load(SMOKE_CONFIG.read_text()) if recipe is None else recipe
-    if initializer is None:
-        initializer = apply(
-            "long-loop/base",
-            remote(
-                import_base,
-                name=f"long-loop-base-{version}",
-                resources=ResourceConfig.with_gpu(
-                    "H100", count=8, cpu=32, ram="512GB", disk="500GB", target_cluster=None
-                ),
-            ),
-            version=version,
-            output=OUT,
-            model=recipe["model"],
-            revision=BASE_REVISION,
-        )
-        initializer = timed(replace(initializer, deps=(*initializer.deps, *prerequisites)))
-    trained = apply(
-        "long-loop/sft",
-        sft_run,
-        version=version,
-        output=OUT,
-        initializer=initializer,
-        recipe=recipe,
-        run_id=f"long-loop-{run_kind}-sft-{version}",
-    )
-    trained = timed(trained)
-    return trained, sft_export_step(version, source_revision, trained, recipe["model"])
-
-
-def sft_export_step(
-    version: str, source_revision: str, trained: ArtifactStep, model: dict
-) -> ArtifactStep[LevanterCheckpoint]:
-    """Export an existing committed native SFT checkpoint into a fresh handoff."""
-    exported = apply(
-        "long-loop/sft-handoff",
-        remote(
-            export_sft,
-            name=f"long-loop-export-{version}",
-            resources=ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="512GB", disk="256GB", target_cluster=None),
-            env_vars={"JAX_PLATFORMS": "cpu"},
-        ),
-        version=version,
-        artifact_type=LevanterCheckpoint,
-        output=OUT,
-        trained=trained,
-        model=model,
-        source_revision=source_revision,
-    )
-    return timed(exported)

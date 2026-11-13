@@ -168,8 +168,10 @@ def test_actual_sft_graph_constructs_without_admitting_unprepared_rl(tmp_path, m
     terminal = build_spec_graph(resolved, "2026.11.09.12", through="sft")
     validate_graph(terminal, tmp_path, "s3://marin-us-east-02a/marin/")
     rows = json.loads((tmp_path / "graph.json").read_text())
-    assert [row["stage"].rsplit("/", 1)[-1] for row in rows] == ["base", "inputs", "sft"]
-    assert rows[0]["source"] == resolved["initializer"]["uri"]
+    assert [row["stage"].rsplit("/", 1)[-1] for row in rows] == ["inputs", "sft"]
+    assert terminal.build_config(
+        StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=terminal.runtime_args, deps=terminal.deps)
+    ).train_config.initialize_from_hf.endswith("@" + resolved["initializer"]["revision"])
     assert terminal.runtime_args["skyrl_execution"].priority == "production"
     resolved["blockers"] = ["Missing admitted agentic manifest"]
     with pytest.raises(ValueError, match="Run is not admitted"):
@@ -304,11 +306,13 @@ def test_emitted_stage_timeouts_default_to_three_days(tmp_path, monkeypatch, ove
     assert all(e.job_timeout_seconds == expected for e in executions)
     assert all(e.coordinator_timeout_hours * 3600 == expected for e in executions)
     assert dispatched == {
-        k: Duration.from_seconds(expected) for k in ("export_sft", "prepare_micro", "archive_graph_run")
+        k: Duration.from_seconds(expected) for k in ("export_shared_sft", "prepare_micro", "archive_graph_run")
     }
     trained = next(s for s in stages if s.name.endswith("/sft"))
-    context = StepContext.for_run(str(tmp_path / "sft"), str(tmp_path), deps=trained.deps)
-    assert trained.build_config(context)["recipe"]["task_timeout_seconds"] == expected
+    context = StepContext.for_run(
+        str(tmp_path / "sft"), str(tmp_path), deps=trained.deps, runtime_args=trained.runtime_args
+    )
+    assert trained.build_config(context).resources.device.kind == "gpu"
     learned = next(s for s in stages if s.name.endswith("/" + resolved["rl"]["name"]))
     rl_context = StepContext.for_run(
         str(tmp_path / "rl"), str(tmp_path), deps=learned.deps, runtime_args=learned.runtime_args

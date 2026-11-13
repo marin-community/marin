@@ -16,12 +16,10 @@ inputs:
   container_profile: null
 export:
   cpu: 32
-  ram: 512GB
+  ram: 64GB
   disk: 256GB
   device:
-    variant: H100
-    kind: gpu
-    count: 8
+    kind: cpu
   preemptible: true
   regions: null
   zone: null
