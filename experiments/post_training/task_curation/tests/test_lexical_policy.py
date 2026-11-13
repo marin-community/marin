@@ -18,6 +18,7 @@ from experiments.post_training.task_curation.datasets.skyrl import math as skyrl
 from experiments.post_training.task_curation.evaluation import EvalDataset
 from experiments.post_training.task_curation.lexical_policy import main, measurement_for_use, source_lexical_use
 from experiments.post_training.task_curation.pipeline import CurationRecipe
+from experiments.post_training.task_curation.sources import all_sources
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 
 
@@ -109,6 +110,7 @@ def test_training_use_keeps_benchmark_tagged_sources_in_remediation_review():
     assert measurement_for_use(overlap_measurement(source.dataset.name), source_lexical_use(source)).receipt is None
 
 
+@pytest.mark.data_integration
 @pytest.mark.parametrize("language", ["python-v2", "typescript-v2", "java-v3", "csharp-v4"])
 def test_crosscode_eval_keeps_its_private_population_and_measures_lexical_overlap_only(language):
     source = all_sources()[f"TaskTrove:laion__exp_rpt_crosscodeeval-{language}"]

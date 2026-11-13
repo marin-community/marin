@@ -21,6 +21,7 @@ def offline_registry(request, monkeypatch):
         raise AssertionError("Unit tests must inject local registry documents at the download boundary")
 
     monkeypatch.setattr(registry, "hf_hub_download", unavailable)
+    monkeypatch.setattr(driver, "all_sources", lambda: {})
 
 
 @pytest.fixture(scope="session")
