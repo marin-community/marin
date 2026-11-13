@@ -103,8 +103,17 @@ def frozen_source(tmp_path):
     return source, tasks
 
 
-def test_preparation_preserves_retained_identities_roles_and_reuses_completed_sources(tmp_path, frozen_source):
+@pytest.mark.parametrize("source_identity", ["current", "historical"])
+def test_preparation_preserves_retained_identities_roles_and_reuses_completed_sources(
+    tmp_path, frozen_source, source_identity
+):
     source, tasks = frozen_source
+    expected_source = source.declaration.id
+    if source_identity == "historical":
+        payload = source.model_dump(mode="json")
+        payload["declaration"].update(id="MarinSkyRL:gsm8k", origin="OpenAI", upstream_dataset="gsm8k")
+        source = FrozenCoverageSource.model_validate(payload)
+        expected_source = "OpenAI:gsm8k"
     output = tmp_path / "public"
     prepare_sources([source], str(output), workers=1)
     corpus = json.loads((output / "corpus.json").read_text())
@@ -112,6 +121,7 @@ def test_preparation_preserves_retained_identities_roles_and_reuses_completed_so
     public = json.loads((root / "public-inputs.json").read_text())
     rows = [row for path in public["paths"] for row in load_parquet(path)]
     assert {row["task_id"] for row in rows} == {"a", "c"}
+    assert {row["source_id"] for row in rows} == {expected_source}
     assert {row["intended_use"] for row in rows} == {"eval"}
     assert {row["population"] for row in rows} == {"converted"}
     manifest = json.loads((root / "manifest.json").read_text())

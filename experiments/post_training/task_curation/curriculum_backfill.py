@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from multiprocessing import get_context
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import uuid4
 
 import pyarrow as pa
@@ -24,7 +24,7 @@ from fray.types import ResourceConfig
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 from marin.execution.lazy import ArtifactStep, run
 from marin.processing.embeddings.harrier import HARRIER_DIM, HARRIER_REPO, HARRIER_REVISION, HarrierConfig, load_harrier
-from pydantic import BaseModel, ConfigDict
+from pydantic import AfterValidator, BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -35,6 +35,7 @@ from taskcompendium.pipeline.semantics import TaskInputFile, TaskSemanticInput, 
 from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.catalog_identity import canonical_declaration
 from experiments.post_training.task_curation.embedding import (
     INPUTS_VERSION,
     DescriptionEndpoint,
@@ -111,7 +112,7 @@ def fork_copied_cache_partition(
 class FrozenCoverageSource(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    declaration: SourceDeclaration
+    declaration: Annotated[SourceDeclaration, AfterValidator(canonical_declaration)]
     specs_dir: str
     task_column: str
     raw_count: int
@@ -290,7 +291,7 @@ def run_stage(
     run_graph: bool,
 ) -> None:
     corpus = json.loads(StoragePath(corpus_uri).read_text())
-    inventory = [SourceDeclaration.model_validate(row) for row in corpus["inventory"]]
+    inventory = [canonical_declaration(SourceDeclaration.model_validate(row)) for row in corpus["inventory"]]
     curated = {}
     for row in corpus["sources"]:
         manifest = json.loads((StoragePath(row["root"]) / "manifest.json").read_text())
