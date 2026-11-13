@@ -21,7 +21,6 @@ import ray
 import os
 import signal
 import time
-import hydra
 from loguru import logger
 import asyncio
 import multiprocessing as mp
@@ -782,12 +781,3 @@ def run_ray_driver(
 
 def run(cfg: DictConfig) -> None:
     run_ray_driver(cfg, skyrl_entrypoint)
-
-
-@hydra.main(config_path=config_dir, config_name="ppo_base_config", version_base=None)
-def main(cfg: DictConfig) -> None:
-    run(cfg)
-
-
-if __name__ == "__main__":
-    main()

@@ -203,7 +203,7 @@ data parallelism.
 ## Artifact and runtime boundaries
 
 Identity-bearing inputs belong in `SkyRLSpec`: model and tokenizer,
-data artifacts, topology, seed, retention, and the rendered config. Cluster routing,
+data artifacts, a starting native checkpoint, topology, seed, retention, and the rendered config. Cluster routing,
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
 not fork artifact identity.
 
@@ -250,6 +250,21 @@ After runtime changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old
 runtime. Reuse a version across runtime changes only after establishing checkpoint compatibility or
 selecting a fresh checkpoint root.
+
+### Native checkpoint inputs
+
+Set `SkyRLSpec.resume_checkpoint` to an artifact handle for a completed
+`global_step_N` directory. Use an immutable adoption name and version for each
+starting checkpoint. The launch document records its URI and identity under
+`inputs.resume_checkpoint`; the trainer reads native state directly.
+
+Automatic `resume_mode=latest` first uses the current run's latest checkpoint.
+If that run has no checkpoint marker, it uses the supplied starting checkpoint,
+or starts fresh if none was supplied. Repeat the same continuation command to
+recover its progress. A corrupt marker, missing checkpoint or load error still
+fails; it never silently falls back to older state. Explicit `from_path` always
+loads the supplied path, and `none` disables loading. A continuation writes to
+its own output root, leaving the starting run's checkpoints unchanged.
 
 ## Pre-launch review
 
