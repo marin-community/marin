@@ -15,12 +15,15 @@ RESOURCE_COUNTERS_COMMAND = (
     "for name in cpu.stat memory.events; do "
     "if test -r /sys/fs/cgroup/$name; then cat /sys/fs/cgroup/$name; fi; done"
 )
+RESOURCE_COUNTER_TIMEOUT_SEC = 5
 
 
 async def resource_counters(environment: BaseEnvironment) -> dict[str, int]:
     if environment.os != TaskOS.LINUX:
         return {}
-    result = await environment.exec(command=RESOURCE_COUNTERS_COMMAND, timeout_sec=5, user="root")
+    result = await environment.exec(
+        command=RESOURCE_COUNTERS_COMMAND, timeout_sec=RESOURCE_COUNTER_TIMEOUT_SEC, user="root"
+    )
     return {key: int(value) for line in result.stdout.splitlines() if len(parts := line.split()) == 2
             for key, value in [parts]}
 
