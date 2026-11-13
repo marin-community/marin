@@ -147,6 +147,14 @@ BASELINE_ARGS = (
 # leader starts API servers; headless followers reject the flag.
 LEADER_ARGS = ("--api-server-count", "1")
 
+# Candidate flag sets, selected with --sequence items of the form <release>:<label>. A flag here
+# replaces the same baseline flag (and its value) rather than being appended twice.
+CANDIDATE_ARGS = {
+    "mns64": ("--max-num-seqs", "64"),
+    "a2a-nvl1": ("--all2all-backend", "flashinfer_nvlink_one_sided"),
+    "a2a-nvl2": ("--all2all-backend", "flashinfer_nvlink_two_sided"),
+}
+
 
 @dataclass(frozen=True)
 class ArmConfig:
@@ -348,10 +356,13 @@ def main() -> None:
         cache_ttl_days=0,
     )
     releases = args.sequence.split(",") if args.sequence else [args.release]
-    assert all(tag in RELEASES for tag in releases), releases
+    assert all(item.split(":")[0] in RELEASES for item in releases), releases
+    assert all(item.split(":")[1] in CANDIDATE_ARGS for item in releases if ":" in item), releases
     configs = [
-        _variant_config(args, name if len(releases) == 1 else f"{name}-v{i}-{tag}", tag, geometry, iris_config)
-        for i, tag in enumerate(releases)
+        _variant_config(
+            args, name if len(releases) == 1 else f"{name}-v{i}-{item.replace(':', '-')}", item, geometry, iris_config
+        )
+        for i, item in enumerate(releases)
     ]
     config = configs[0]
     engine = config.engine
@@ -387,7 +398,19 @@ def main() -> None:
             print(f"submitted {job}")
 
 
-def _variant_config(args, name, tag, geometry, iris_config) -> ArmConfig:
+def _with_flags(base: tuple[str, ...], flags: tuple[str, ...]) -> tuple[str, ...]:
+    """Replace each (flag, value) pair of ``flags`` in ``base``, appending flags not present."""
+    out = list(base)
+    for flag, value in zip(flags[::2], flags[1::2], strict=True):
+        if flag in out:
+            out[out.index(flag) + 1] = value
+        else:
+            out += [flag, value]
+    return tuple(out)
+
+
+def _variant_config(args, name, item, geometry, iris_config) -> ArmConfig:
+    tag, _, label = item.partition(":")
     release = RELEASES[tag]
     if args.overlay_wheel:
         url_file, sha256 = args.overlay_wheel.rsplit(":", 1)
@@ -404,7 +427,7 @@ def _variant_config(args, name, tag, geometry, iris_config) -> ArmConfig:
         source=VllmSource.MARIN_FORK,
         gpu_release=release,
         startup_timeout_seconds=3600,
-        extra_args=(*_baseline_args(args.drop_arg), *args.vllm_arg),
+        extra_args=_with_flags((*_baseline_args(args.drop_arg), *args.vllm_arg), CANDIDATE_ARGS[label] if label else ()),
     )
     model = ServedModelConfig(
         weights=WEIGHTS,
