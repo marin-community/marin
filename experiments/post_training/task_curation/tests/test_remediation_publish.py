@@ -11,6 +11,7 @@ import pytest
 from finestore.rl.curation import (
     ActorCensusInput,
     DaytonaMeasurement,
+    GradingEnvironmentEvidence,
     LexicalContaminationEvidence,
     OracleValidation,
     OversightEvidence,
@@ -31,6 +32,9 @@ from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.decontamination import require_private_release
+from experiments.post_training.task_curation.grading_binding import GradingCensusReceipt, bind_grading_census
+from experiments.post_training.task_curation.grading_census import GradingCensusInput, census_source
+from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
 from experiments.post_training.task_curation.remediation_binding import (
     PublicationReceipt,
@@ -434,6 +438,78 @@ def test_retained_census_measures_new_pin_and_normalizes_unchanged_json(tmp_path
     assert grading.evidence.assessed_tasks == 1
     assert grading.evidence.required_counts == {"separate": 1}
     assert grading.evidence.status_counts == {"unavailable": 1}
+
+
+def test_final_composition_binds_grading_evidence_measured_on_the_retained_census(
+    tmp_path, retained_receipt, monkeypatch
+):
+    """The final all_sources chain keeps grading evidence from the retained census input.
+
+    A grading census measured on an earlier population input must not clear the retained
+    evidence, and one measured on the retained census must bind through the same
+    composition the catalog uses.
+    """
+    source, receipt = retained_receipt
+    original_input = source.info.actor_census_input
+    encoded = TaskSpec.model_validate(
+        json.loads(prebuilt_task("retained")["lowered_task_spec"])["task"]
+    ).model_dump_json()
+    specs = tmp_path / "published/specs"
+    specs.mkdir(parents=True)
+    tasks = specs / "part-000000.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "id": ["retained"],
+                "task_spec": [encoded],
+                "runtime": ["{}"],
+                "task_sha256": [hashlib.sha256(encoded.encode()).hexdigest()],
+            }
+        ),
+        tasks,
+    )
+    publication = receipt.publication.model_copy(
+        update={
+            "specs_output_dir": str(specs),
+            "tasks_parquet_sha256": file_sha256(StoragePath(str(tasks))),
+        }
+    )
+    monkeypatch.setattr(retained_release, "hf_hub_download", lambda *args, **kwargs: str(tasks))
+    result = census_release(publication, str(tmp_path / "census"), "retained-code-revision")
+    measured_input = ActorCensusInput.model_validate(result["actor"]["input"])
+    receipt = receipt.model_copy(
+        update={
+            "actor": receipt.actor.model_copy(update={"input": measured_input}),
+            "grading": receipt.grading.model_copy(update={"input": measured_input}),
+        }
+    )
+    bound = bind_retained_release(source, receipt)
+    stale = GradingCensusReceipt(
+        source_id=source.info.id,
+        input=original_input,
+        population_path="https://example.test/population",
+        scanned_task_specs_sha256=original_input.task_specs_sha256,
+        evidence=GradingEnvironmentEvidence(
+            assessed_tasks=3,
+            required_counts={"separate": 3},
+            declared_counts={"separate": 3},
+            status_counts={"matched": 3},
+            reason_counts={"fixture": 3},
+            evidence_url="https://example.test/stale-grading",
+        ),
+        task_evidence_uri="https://example.test/stale-tasks.parquet",
+        unassessable_reasons={},
+    )
+    assert bind_grading_census(bound, stale).info.grading_environment is None
+    census = census_source(
+        GradingCensusInput(
+            population=SourceTextPopulation.model_validate(result["population"]),
+            input=ActorCensusInput.model_validate(result["actor"]["input"]),
+        ),
+        str(tmp_path / "retained-census"),
+    )
+    final = bind_grading_census(bound, census)
+    assert final.info.grading_environment == census.evidence
 
 
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
