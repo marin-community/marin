@@ -108,10 +108,19 @@ def build_run(
     version: str,
     *,
     selection: ArtifactStep[Artifact],
+    validation_selection: ArtifactStep[Artifact] | None = None,
     steps: int = DEFAULT_STEPS,
     export_hf: bool = False,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind selected canonical tasks, pinned SFT weights and terminal outputs."""
+    if validation_selection is None:
+        validation_selection = selection
+    # The runtime stages data directories by artifact name, without their version.
+    if selection.name == validation_selection.name and (
+        selection.version != validation_selection.version
+        or selection.fingerprint() != validation_selection.fingerprint()
+    ):
+        raise ValueError("Training and validation selections must have distinct names when their artifacts differ.")
     model = ArtifactStep.adopt(
         f"models/snowball-datakit-sft-{MODEL_REVISION}",
         MODEL_VERSION,
@@ -131,7 +140,7 @@ def build_run(
                 relative_path="",
             ),
             train_data=(ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),),
-            validation_data=(ArtifactDataSource(selection, relative_path=VALIDATION_FILENAME),),
+            validation_data=(ArtifactDataSource(validation_selection, relative_path=VALIDATION_FILENAME),),
             topology=SkyRLTopology(
                 num_nodes=plan.num_nodes,
                 gpus_per_node=plan.policy_num_gpus_per_node,
@@ -161,28 +170,44 @@ def build_run(
     )
 
 
-@click.command(help=__doc__)
-@click.option(
-    "--selection-uri", default=DEFAULT_SELECTION_URI, show_default=True, help="Published task-selection artifact root."
-)
-@click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
-@click.option("--export-hf", is_flag=True, help="Export the final Hugging Face model after training.")
-@rl_build_options
-def main(selection_uri: str, steps: int, export_hf: bool) -> ArtifactStep[SkyRLRun]:
-    name = user_owned_name(ARTIFACT_NAME)
+def _adopt_selection(selection_uri: str, option: str) -> ArtifactStep[Artifact]:
     selection_uri = selection_uri.rstrip("/")
     _, marker, identity = selection_uri.rpartition(f"/{SELECTION_PREFIX}/")
     parts = identity.split("/")
     if not marker or len(parts) != 2 or not all(parts):
         raise click.BadParameter(
             "Expected a published .../rl-data/task-selection/<name>/<version> artifact root",
-            param_hint="--selection-uri",
+            param_hint=option,
         )
     selection_name, selection_version = parts
-    selection = ArtifactStep.adopt(f"{SELECTION_PREFIX}/{selection_name}", selection_version, selection_uri)
+    return ArtifactStep.adopt(f"{SELECTION_PREFIX}/{selection_name}", selection_version, selection_uri)
+
+
+@click.command(help=__doc__)
+@click.option(
+    "--selection-uri", default=DEFAULT_SELECTION_URI, show_default=True, help="Published training selection root."
+)
+@click.option(
+    "--validation-selection-uri",
+    help="Published selection root containing the fixed validation panel. Defaults to --selection-uri.",
+)
+@click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
+@click.option("--export-hf", is_flag=True, help="Export the final Hugging Face model after training.")
+@rl_build_options
+def main(
+    selection_uri: str, steps: int, export_hf: bool, validation_selection_uri: str | None = None
+) -> ArtifactStep[SkyRLRun]:
+    name = user_owned_name(ARTIFACT_NAME)
+    selection = _adopt_selection(selection_uri, "--selection-uri")
+    validation_selection = (
+        _adopt_selection(validation_selection_uri, "--validation-selection-uri")
+        if validation_selection_uri is not None
+        else None
+    )
     return build_run(
         resolve_version(name, None),
         selection=selection,
+        validation_selection=validation_selection,
         steps=steps,
         export_hf=export_hf,
     )
