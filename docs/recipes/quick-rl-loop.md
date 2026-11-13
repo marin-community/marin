@@ -1,16 +1,19 @@
 # Quick RL loop
 
 Use this loop to improve task selection and the RL recipe: curate tasks, publish
-a fixed selection, train from the pinned SFT model, and compare evaluation before
-and after training.
+a fixed selection, continue the pinned SFT model for a few updates, train RL from
+that export, and compare evaluation before and after training.
 
 The current entry points are the
 [Snowball selection recipe](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/recipes/snowball-100k.json)
 and
 [`train_quick_loop.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/inventory/train_quick_loop.py).
 The selection defines the 100k training allocation. The launcher defaults to
-25 synchronous RLOO-N updates on 40 H100s, starting from Datakit SFT revision
-`fe666478454e79fe6027a0bab0388d9abd68f51a` and its matching tokenizer. It uses
+10 SFT updates on 8 H100s, initialized from Datakit SFT revision
+`fe666478454e79fe6027a0bab0388d9abd68f51a`, followed by 25 synchronous RLOO-N
+updates on 40 H100s from the resulting export with the matching tokenizer. SFT
+uses the [Snowball H100 recipe](https://github.com/marin-community/marin/blob/main/experiments/sft/configs/snowball_h100.py);
+set its length with `--sft-steps`. RL uses
 128 prompt groups per update, four samples per group, a 24,576-token context
 and an 8,192-token response limit.
 
@@ -108,7 +111,8 @@ uv run python -m experiments.post_training.inventory.train_quick_loop \
 Set `SELECTION_URI` to the printed artifact root, including its selection name
 and version. Add `--run` to submit the graph through the maintained artifact
 entry point. After the short run succeeds, use a fresh `RUN_VERSION` and
-`--steps 25` for the normal iteration. Each run starts from the pinned SFT model.
+`--steps 25` for the normal iteration. Each run version trains its own SFT
+continuation from the pinned SFT model before RL starts.
 The selected data stays cached; training does not curate or resample it.
 
 The launcher binds `train.parquet` and `validation.parquet` from that artifact.

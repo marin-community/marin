@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Train Datakit SFT on the Snowball 100k selection and evaluate before and after RL."""
+"""Continue Datakit SFT briefly, then train on the Snowball 100k selection and evaluate before and after RL."""
 
 from dataclasses import replace
 
@@ -24,19 +24,22 @@ from marin.rl.skyrl import (
     SkyRLTopology,
     skyrl_step,
 )
-from marin.training.training import LevanterCheckpoint
 from skyrlrecipe import RecipePatch, RLEntrypoint, SkyRLRecipe, sections
 from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, training_config
 from experiments.post_training.task_curation.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
+from experiments.sft.configs.snowball_h100 import SPEC as SNOWBALL_SFT
+from experiments.sft.launcher import resources_from_accelerator, sft_step
 
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
-MODEL_VERSION = "2026.09.21"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 DEFAULT_STEPS = 25
+DEFAULT_SFT_STEPS = 10
+SFT_ACCELERATOR = "8xH100"
 ARTIFACT_NAME = "checkpoints/snowball-inventory"
+SFT_ARTIFACT_NAME = "checkpoints/snowball-inventory-sft"
 SELECTION_PREFIX = "rl-data/task-selection"
 DEFAULT_SELECTION_URI = "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04"
 CLUSTER = "cw-us-east-02a"
@@ -158,15 +161,20 @@ def build_run(
     *,
     selection: ArtifactStep[Artifact],
     steps: int = DEFAULT_STEPS,
+    sft_steps: int = DEFAULT_SFT_STEPS,
     export_hf: bool = False,
     reproducible_serving: bool = False,
 ) -> ArtifactStep[SkyRLRun]:
-    """Bind selected canonical tasks, pinned SFT weights and terminal outputs."""
-    model = ArtifactStep.adopt(
-        f"models/snowball-datakit-sft-{MODEL_REVISION}",
-        MODEL_VERSION,
-        MODEL_URI,
-        kind=LevanterCheckpoint,
+    """Bind selected canonical tasks, continued SFT weights and terminal outputs."""
+    model = sft_step(
+        replace(
+            SNOWBALL_SFT,
+            name=user_owned_name(SFT_ARTIFACT_NAME),
+            version=version,
+            model=replace(SNOWBALL_SFT.model, model_ref=MODEL_URI, tokenizer_path=MODEL_ID),
+            num_train_steps=sft_steps,
+        ),
+        resources_from_accelerator(SFT_ACCELERATOR),
     )
     plan = SNOWBALL_RECIPE.role_plan
     return skyrl_step(
@@ -181,7 +189,6 @@ def build_run(
                 step=model,
                 tokenizer_uri=MODEL_ID,
                 tokenizer_revision=MODEL_REVISION,
-                relative_path="",
             ),
             train_data=(ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(selection, relative_path=VALIDATION_FILENAME),),
@@ -219,6 +226,13 @@ def build_run(
     "--selection-uri", default=DEFAULT_SELECTION_URI, show_default=True, help="Published task-selection artifact root."
 )
 @click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
+@click.option(
+    "--sft-steps",
+    type=click.IntRange(min=1),
+    default=DEFAULT_SFT_STEPS,
+    show_default=True,
+    help="SFT updates continued from the pinned Datakit SFT weights before RL.",
+)
 @click.option("--export-hf", is_flag=True, help="Export the final Hugging Face model after training.")
 @click.option(
     "--reproducible-serving",
@@ -226,7 +240,9 @@ def build_run(
     help="Use batch-invariant serving with one sequence per rank and greedy evaluation.",
 )
 @rl_build_options
-def main(selection_uri: str, steps: int, export_hf: bool, reproducible_serving: bool) -> ArtifactStep[SkyRLRun]:
+def main(
+    selection_uri: str, steps: int, sft_steps: int, export_hf: bool, reproducible_serving: bool
+) -> ArtifactStep[SkyRLRun]:
     name = user_owned_name(ARTIFACT_NAME)
     selection_uri = selection_uri.rstrip("/")
     _, marker, identity = selection_uri.rpartition(f"/{SELECTION_PREFIX}/")
@@ -242,6 +258,7 @@ def main(selection_uri: str, steps: int, export_hf: bool, reproducible_serving: 
         resolve_version(name, None),
         selection=selection,
         steps=steps,
+        sft_steps=sft_steps,
         export_hf=export_hf,
         reproducible_serving=reproducible_serving,
     )
