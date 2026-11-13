@@ -90,7 +90,7 @@ def contamination_declarations() -> list[tuple[str, SourceDeclaration]]:
                     family="fixture",
                     tags=[],
                     task_count=count,
-                    notes="Lexical evidence fixture",
+                    notes="Lexical evidence fixture: contract-" + "a" * 128,
                     quality_result=(
                         {
                             "reviewed": 2,

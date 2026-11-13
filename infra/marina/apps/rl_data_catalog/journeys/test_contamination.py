@@ -52,6 +52,7 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         page.locator('tr[data-source-id="Marin:eval"] .source-name').click()
         expect(page.locator("#details .contamination-chip")).to_have_text("MEASURED, EVAL")
+        assert page.locator("#details").evaluate("dialog => dialog.scrollWidth <= dialog.clientWidth")
         expect(page.locator("#details")).to_contain_text("1 / 3 overlapping tasks")
         page.locator("#close-details").click()
     page.locator('tr[data-source-id="Marin:eval"] .source-name').click()

@@ -97,7 +97,7 @@ dialog::backdrop { background: #18342545; }
 .drawer-header { display: flex; align-items: center; justify-content: space-between; gap: 15px; font-size: 13px; color: var(--muted); }
 .close { border: 0; background: #f0f4f0; color: #4d6555; width: 34px; height: 34px; border-radius: 6px; font-size: 24px; }
 dialog h2 { font-size: 23px; margin: 26px 0 12px; overflow-wrap: anywhere; }
-#detail-notes { font-size: 13px; color: var(--muted); }
+#detail-notes { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 .field { display: grid; grid-template-columns: 160px 1fr; gap: 18px; border-top: 1px solid var(--line); margin: 0; padding: 12px 0; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .field dt { color: var(--muted); }
 .field dd { margin: 0; }
