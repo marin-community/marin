@@ -17,8 +17,8 @@ from marina.preview import install_preview_sources
 from marina.server import MarinaConfig
 from sqlalchemy import text
 
-from infra.marina.apps.rl_data_catalog.load import review_completeness
 from infra.marina.apps.rl_data_catalog.server.app import migrate
+from infra.marina.apps.rl_data_catalog.server.quality import review_completeness
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_declarations
 

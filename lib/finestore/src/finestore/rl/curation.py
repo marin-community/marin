@@ -155,6 +155,13 @@ def source_title(name: str, subset: str | None, variant: str | None) -> str:
     return " · ".join(part for part in (name, subset, variant) if part)
 
 
+class QualityResultFinalization(StrEnum):
+    """Explicit whole-source content Result finalization, independent of coverage."""
+
+    COMPLETE = "complete"
+    ACCEPTED_INCOMPLETE = "accepted_incomplete"
+
+
 class SourceQualityResult(CatalogRecord):
     """Informational Result over conclusive reviewed tasks; exclusions are separate."""
 
@@ -639,6 +646,7 @@ class SourceDeclaration(CatalogRecord):
     daytona_unsafe_details: dict[str, str] = Field(default_factory=dict)
     daytona_unsafe_counts: dict[str, int] = Field(default_factory=dict)
     quality_result: SourceQualityResult | None = None
+    quality_result_finalization: QualityResultFinalization | None = None
 
     @model_validator(mode="after")
     def _canonical_identity(self) -> "SourceDeclaration":
