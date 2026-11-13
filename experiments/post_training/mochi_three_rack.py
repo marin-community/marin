@@ -104,6 +104,8 @@ def build_run(
         restore_dataloader_state=False,
     )
     for role in ("policy", "ref"):
+        # Keep per-peer communication buffers small beside the full-context backward graph.
+        trainer[role]["nccl_buffer_size_bytes"] = 262144
         trainer[role]["megatron_config"].update(MEGATRON_GEOMETRY)
         # The unfused expert SwiGLU exhausted memory during 261K backward recomputation.
         trainer[role]["megatron_config"].setdefault("transformer_config_kwargs", {})["bias_activation_fusion"] = True
