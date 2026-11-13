@@ -1,25 +1,32 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Upload a completed Hero export to a private, checkpoint-specific HF branch."""
+"""Upload a completed Hero export to a checkpoint-specific HF branch."""
 
 import hashlib
 import json
 import logging
 import re
 import struct
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
+from enum import StrEnum
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import BinaryIO
 
 import draccus
-from huggingface_hub import CommitOperationAdd, HfApi, RepoFile, hf_hub_download, snapshot_download
+from huggingface_hub import CommitInfo, CommitOperationAdd, HfApi, RepoFile, hf_hub_download, snapshot_download
+from huggingface_hub.errors import HfHubHTTPError
 from levanter.compat.hf_export import HFShardRecord
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rigging.secrets import require_secret
+from rigging.timing import ExponentialBackoff, RateLimiter
 
 from experiments.grug.moe_hero_ep.ops.export_cpu import CpuExportConfig
 from experiments.grug.moe_hero_ep.ops.export_metadata import (
@@ -34,6 +41,10 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 logger = logging.getLogger(__name__)
 UPLOAD_REQUEST_FILENAME = "hf-upload-request.json"
 UPLOAD_MANIFEST_FILENAME = "hf-upload-manifest.json"
+MAX_FILES_PER_COMMIT = 8
+MIN_COMMIT_INTERVAL = 75
+MAX_RATE_LIMIT_RETRIES = 4
+REPOSITORY_COMMIT_RETRY_DELAY = 3600
 LICENSE_SHA256 = "2ab44b68365473c112f5092211a38f231cb23e50de68b75a13369adbd76a74df"
 WARNING = (
     "Research artifact. This model has not been properly tested or evaluated and is not necessarily secure. "
@@ -44,6 +55,11 @@ RESPONSIBLE_USE = (
     "They are meant to contribute to the public's understanding of science, and aid in its advancement. "
     "By using this Marin model, you agree to comply with all applicable law."
 )
+
+
+class RepositoryVisibility(StrEnum):
+    PRIVATE = "private"
+    PUBLIC = "public"
 
 
 @dataclass(frozen=True)
@@ -58,6 +74,10 @@ class UploadConfig:
     tokenizer: str
     tokenizer_revision: str
     staging_dir: str
+    max_files_per_commit: int = MAX_FILES_PER_COMMIT
+    min_commit_interval: float = MIN_COMMIT_INTERVAL
+    max_rate_limit_retries: int = MAX_RATE_LIMIT_RETRIES
+    expected_visibility: RepositoryVisibility = RepositoryVisibility.PRIVATE
 
 
 @dataclass(frozen=True)
@@ -71,8 +91,114 @@ class _UploadPlan:
     license_text: bytes
 
 
+def _rate_limit_delay(error: HfHubHTTPError) -> tuple[float, bool]:
+    """Return the retry delay and whether a repository commit quota caused the limit."""
+    headers = error.response.headers
+    delays = [0.0]
+    retry_after = headers.get("Retry-After")
+    if retry_after is not None:
+        try:
+            delays.append(float(retry_after))
+        except ValueError:
+            delays.append((parsedate_to_datetime(retry_after) - datetime.now(UTC)).total_seconds())
+    rate_limit = headers.get("RateLimit", "")
+    reset = re.search(r"(?:^|;)\s*t=(\d+(?:\.\d+)?)", rate_limit)
+    if reset is not None:
+        delays.append(float(reset[1]))
+    # Granular repository-commit quotas have no structured indicator in the Hub response.
+    text = f"{error} {error.response.text}".lower()
+    repository_limit = "commit" in text and (
+        "per hour" in text or "per-hour" in text or "hourly" in text or "repository" in text
+    )
+    if repository_limit:
+        delays.append(REPOSITORY_COMMIT_RETRY_DELAY)
+    return max(delays), repository_limit
+
+
+class _HubCommitter:
+    """Serialize commits with spacing measured after each Hub response."""
+
+    def __init__(
+        self,
+        api: HfApi,
+        config: UploadConfig,
+        clock: Callable[[], float],
+        wait: Callable[[float], None],
+    ) -> None:
+        if not 1 <= config.max_files_per_commit <= MAX_FILES_PER_COMMIT:
+            raise ValueError(f"max_files_per_commit must be between 1 and {MAX_FILES_PER_COMMIT}")
+        if config.min_commit_interval < MIN_COMMIT_INTERVAL:
+            raise ValueError(f"min_commit_interval must be at least {MIN_COMMIT_INTERVAL} seconds")
+        if not 0 <= config.max_rate_limit_retries <= MAX_RATE_LIMIT_RETRIES:
+            raise ValueError(f"max_rate_limit_retries must be between 0 and {MAX_RATE_LIMIT_RETRIES}")
+        self.api = api
+        self.config = config
+        self.clock = clock
+        self.wait = wait
+        self.limiter = RateLimiter(interval_seconds=config.min_commit_interval)
+        # A new worker must not create a burst when it replaces a finished one.
+        self.limiter.mark_run(clock())
+
+    def commit(self, operations: list[CommitOperationAdd], message: str) -> CommitInfo:
+        backoff = ExponentialBackoff(
+            initial=self.config.min_commit_interval,
+            maximum=max(self.config.min_commit_interval, REPOSITORY_COMMIT_RETRY_DELAY),
+            factor=2,
+            jitter=0,
+        )
+        for attempt in range(self.config.max_rate_limit_retries + 1):
+            delay = self.limiter.time_until_next(self.clock())
+            if delay > 0:
+                self.wait(delay)
+            try:
+                _verify_visibility(self.api, self.config)
+                result = self.api.create_commit(
+                    repo_id=self.config.repo_id,
+                    repo_type="model",
+                    revision=self.config.branch,
+                    operations=operations,
+                    commit_message=message,
+                )
+            except HfHubHTTPError as error:
+                if error.response.status_code != 429:
+                    raise
+                self.limiter.mark_run(self.clock())
+                if attempt == self.config.max_rate_limit_retries:
+                    _status(self.config, "rate_limit_exhausted", attempts=attempt + 1)
+                    raise
+                retry_delay, repository_limit = _rate_limit_delay(error)
+                retry_delay = max(retry_delay, backoff.next_interval())
+                _status(
+                    self.config,
+                    "rate_limited",
+                    retry=attempt + 1,
+                    retry_after_seconds=retry_delay,
+                    next_retry_at=(datetime.now(UTC) + timedelta(seconds=retry_delay)).isoformat(),
+                    repository_commit_limit=repository_limit,
+                )
+                logger.warning(
+                    "HF commit throttled for %s/%s; retry %d/%d in %.1f seconds",
+                    self.config.repo_id,
+                    self.config.branch,
+                    attempt + 1,
+                    self.config.max_rate_limit_retries,
+                    retry_delay,
+                )
+                self.wait(retry_delay)
+            else:
+                self.limiter.mark_run(self.clock())
+                return result
+        raise AssertionError("Unreachable commit retry state")
+
+
 def _json_bytes(value: dict) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+
+
+def _verify_visibility(api: HfApi, config: UploadConfig) -> None:
+    actual = RepositoryVisibility.PRIVATE if api.model_info(config.repo_id).private else RepositoryVisibility.PUBLIC
+    if actual != config.expected_visibility:
+        raise ValueError(f"Model repository visibility differs: expected {config.expected_visibility}, found {actual}")
 
 
 def _status(config: UploadConfig, phase: str, **fields) -> None:
@@ -152,8 +278,14 @@ def _upload_plan(config: UploadConfig) -> _UploadPlan:
     root = StoragePath(config.export.destination)
     manifest = json.loads((root / MANIFEST_FILENAME).read_text())
     request = manifest["request"]
-    expected_config = artifact_config(draccus.encode(config.export))
-    if request["export_version"] != EXPORT_VERSION or request["config"] != expected_config:
+    version = request["export_version"]
+    if version == 2:
+        expected_config = draccus.encode(config.export)
+    elif version == EXPORT_VERSION:
+        expected_config = artifact_config(draccus.encode(config.export))
+    else:
+        raise ValueError(f"Unsupported export request version: {version}")
+    if request["config"] != expected_config:
         raise ValueError("Completed export differs from the pinned export configuration")
     expected_hf_config = bf16_hf_config(config.export.model)
     if request["hf_config"] != json.loads(json.dumps(expected_hf_config)):
@@ -188,12 +320,13 @@ def _upload_plan(config: UploadConfig) -> _UploadPlan:
     )
 
 
-def _prepare_branch(api: HfApi, config: UploadConfig, plan: _UploadPlan) -> dict[str, RepoFile]:
+def _prepare_branch(
+    api: HfApi, config: UploadConfig, plan: _UploadPlan, committer: _HubCommitter
+) -> dict[str, RepoFile]:
     records = plan.records
     request = plan.manifest["request"]
     card, license_text = plan.card, plan.license_text
-    if not api.model_info(config.repo_id).private:
-        raise ValueError("Model repository must remain private")
+    _verify_visibility(api, config)
     baseline = _repo_files(api, config, config.base_revision)
     if baseline.keys() - {"README.md", "LICENSE", ".gitattributes"}:
         raise ValueError("New checkpoint branches require a metadata-only baseline")
@@ -219,16 +352,13 @@ def _prepare_branch(api: HfApi, config: UploadConfig, plan: _UploadPlan) -> dict
     else:
         if UPLOAD_MANIFEST_FILENAME in files or any(name.endswith(".safetensors") for name in files):
             raise ValueError("HF weights have no matching immutable upload request")
-        pinned = api.create_commit(
-            repo_id=config.repo_id,
-            repo_type="model",
-            revision=config.branch,
-            commit_message=f"Pin {config.branch} checkpoint upload request",
-            operations=[
+        pinned = committer.commit(
+            [
                 CommitOperationAdd(path_in_repo=UPLOAD_REQUEST_FILENAME, path_or_fileobj=_json_bytes(upload_request)),
                 CommitOperationAdd(path_in_repo="README.md", path_or_fileobj=card),
                 CommitOperationAdd(path_in_repo="LICENSE", path_or_fileobj=license_text),
             ],
+            f"Pin {config.branch} checkpoint upload request",
         )
         _verify_card(api, config, pinned.oid, card, license_text)
 
@@ -236,10 +366,16 @@ def _prepare_branch(api: HfApi, config: UploadConfig, plan: _UploadPlan) -> dict
 
 
 def _upload_shards(
-    api: HfApi, config: UploadConfig, plan: _UploadPlan, files: dict[str, RepoFile], scratch: Path
+    api: HfApi,
+    config: UploadConfig,
+    plan: _UploadPlan,
+    files: dict[str, RepoFile],
+    scratch: Path,
+    committer: _HubCommitter,
 ) -> None:
     root, records = plan.root, plan.records
     validated_payload = 0
+    pending: list[HFShardRecord] = []
     for number, record in enumerate(records, start=1):
         _status(config, "uploading", shard=number, total_shards=len(records), filename=record.filename)
         source = root / record.filename
@@ -260,24 +396,37 @@ def _upload_shards(
                 raise ValueError(f"Source shard SHA-256 differs: {record.filename}")
             stream.seek(0)
             validated_payload += _payload(stream, record)
-        api.upload_file(
-            repo_id=config.repo_id,
-            repo_type="model",
-            revision=config.branch,
-            path_in_repo=record.filename,
-            path_or_fileobj=str(local),
-            commit_message=f"Add {config.branch} BF16 shard {number}/{len(records)}",
-        )
-        remote = api.get_paths_info(config.repo_id, paths=[record.filename], repo_type="model", revision=config.branch)[
-            0
-        ]
-        _verify_hub_shards({record.filename: remote}, [record], complete=True)
-        local.unlink()
+        pending.append(record)
+        if len(pending) == config.max_files_per_commit:
+            _commit_shards(api, config, pending, scratch, committer)
+            pending = []
+    if pending:
+        _commit_shards(api, config, pending, scratch, committer)
     if validated_payload != config.expected_payload_bytes:
         raise ValueError("Validated BF16 payload differs from the expected model size")
 
 
-def _complete_upload(api: HfApi, config: UploadConfig, plan: _UploadPlan, scratch: Path) -> dict:
+def _commit_shards(
+    api: HfApi, config: UploadConfig, records: list[HFShardRecord], scratch: Path, committer: _HubCommitter
+) -> None:
+    commit = committer.commit(
+        [
+            CommitOperationAdd(path_in_repo=record.filename, path_or_fileobj=str(scratch / record.filename))
+            for record in records
+        ],
+        f"Add {config.branch} BF16 batch of {len(records)} shards",
+    )
+    remote = api.get_paths_info(
+        config.repo_id, paths=[record.filename for record in records], repo_type="model", revision=commit.oid
+    )
+    _verify_hub_shards({item.path: item for item in remote if isinstance(item, RepoFile)}, records, complete=True)
+    for record in records:
+        (scratch / record.filename).unlink()
+
+
+def _complete_upload(
+    api: HfApi, config: UploadConfig, plan: _UploadPlan, scratch: Path, committer: _HubCommitter
+) -> dict:
     records, manifest = plan.records, plan.manifest
     card, license_text = plan.card, plan.license_text
     config_text, index_text = plan.config_text, plan.index_text
@@ -318,16 +467,13 @@ def _complete_upload(api: HfApi, config: UploadConfig, plan: _UploadPlan, scratc
     (metadata / "config.json").write_text(config_text)
     (metadata / INDEX_FILENAME).write_text(index_text)
     (metadata / MANIFEST_FILENAME).write_bytes(_json_bytes(manifest))
-    commit = api.create_commit(
-        repo_id=config.repo_id,
-        repo_type="model",
-        revision=config.branch,
-        commit_message=f"Complete verified {config.branch} BF16 checkpoint",
-        operations=[
+    commit = committer.commit(
+        [
             CommitOperationAdd(path_in_repo=str(path.relative_to(metadata)), path_or_fileobj=str(path))
             for path in sorted(metadata.rglob("*"))
             if path.is_file() and ".cache" not in path.relative_to(metadata).parts
         ],
+        f"Complete verified {config.branch} BF16 checkpoint",
     )
     _verify_hub_shards(_repo_files(api, config, commit.oid), records, complete=True)
     _verify_card(api, config, commit.oid, card, license_text)
@@ -344,13 +490,9 @@ def _complete_upload(api: HfApi, config: UploadConfig, plan: _UploadPlan, scratc
         ],
         "generation_parity_tested": False,
     }
-    completion = api.upload_file(
-        repo_id=config.repo_id,
-        repo_type="model",
-        revision=config.branch,
-        path_in_repo=UPLOAD_MANIFEST_FILENAME,
-        path_or_fileobj=_json_bytes(result),
-        commit_message=f"Record verified {config.branch} upload",
+    completion = committer.commit(
+        [CommitOperationAdd(path_in_repo=UPLOAD_MANIFEST_FILENAME, path_or_fileobj=_json_bytes(result))],
+        f"Record verified {config.branch} upload",
     )
     if json.loads(_download(api, config, UPLOAD_MANIFEST_FILENAME, completion.oid)) != result:
         raise ValueError("Published upload completion marker differs")
@@ -360,17 +502,20 @@ def _complete_upload(api: HfApi, config: UploadConfig, plan: _UploadPlan, scratc
     return result
 
 
-def upload(config: UploadConfig) -> dict:
-    """Verify, resume and complete one private checkpoint upload using bounded disk staging."""
+def upload(
+    config: UploadConfig, *, clock: Callable[[], float] = time.monotonic, wait: Callable[[float], None] = time.sleep
+) -> dict:
+    """Verify, resume and complete one checkpoint upload using bounded disk staging."""
     plan = _upload_plan(config)
     api = HfApi(token=require_secret("HF_TOKEN"))
-    files = _prepare_branch(api, config, plan)
+    committer = _HubCommitter(api, config, clock, wait)
+    files = _prepare_branch(api, config, plan, committer)
     staging = Path(config.staging_dir)
     staging.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix="hero-hf-", dir=staging) as directory:
         scratch = Path(directory)
-        _upload_shards(api, config, plan, files, scratch)
-        return _complete_upload(api, config, plan, scratch)
+        _upload_shards(api, config, plan, files, scratch, committer)
+        return _complete_upload(api, config, plan, scratch, committer)
 
 
 @draccus.wrap()
