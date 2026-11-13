@@ -21,6 +21,7 @@ from finestore.rl.curation import (
     OracleValidation,
     OversightEvidence,
     OversightLevel,
+    SourceQualityResult,
     Verdict,
 )
 from taskcompendium.pipeline.models import IntendedUse
@@ -75,6 +76,7 @@ def _tasktrove_qa_release(
     notes: str,
     tags: tuple[str, ...] = ("rlvr", "single-turn", "campaign-release", "converted"),
     qc: IndependentQC | None = None,
+    quality_result: SourceQualityResult | None = None,
     reviewed: int = 24,
 ) -> RlDataSource[PrebuiltCohort]:
     """A privately published, QA-qualified TaskTrove cohort pending release.
@@ -103,6 +105,7 @@ def _tasktrove_qa_release(
             family=family,
             tags=tags,
             independent_qc=qc,
+            quality_result=quality_result,
             oracle_validation=OracleValidation.VERIFIER_EXECUTED,
             oversight=OversightEvidence(
                 campaign="RL Data Atlas",
@@ -1153,15 +1156,37 @@ def sources() -> list[RlDataSource]:
                 "retracted: the connected 20-vertex/21-edge graph is bicyclic and theta(7,7,7) attains the "
                 "recorded 147 spanning trees, confirmed by two independent Matrix-Tree determinant checks."
             ),
+            qc=IndependentQC(
+                verdict=Verdict.SOME_ISSUES,
+                method=(
+                    "Final v2 content review: 2,220 valid observations over 2,221 exact retained contracts; "
+                    "2,213 conclusive and seven uncertain. One persistent INVALID remains QC unreviewed; "
+                    "coverage_complete=false. Execution qualification is unchanged."
+                ),
+                reviewed=2220,
+                evidence_url=(
+                    "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/" "final-content/2026.11.13.1/prism.json"
+                ),
+            ),
+            quality_result=SourceQualityResult(
+                reviewed=2213,
+                issue_count=286,
+                issues=[],
+                repair_recommendation=(
+                    "Inspect the pinned task-level evidence for wrong references, ambiguity, missing context "
+                    "and rubric mismatches; qualify repairs with renewed QA."
+                ),
+                unavailable_count=1,
+                uncertain_count=7,
+            ),
             notes=(
-                "Symbolic exact compare with hidden gold references. Measured QC: blinded panel of 20 "
-                "seeded cases, 8 solvable blind; after adjudication all 8 references verified correct "
-                "(3 solver errors on the reviewer's side, each independently reconfirmed), 12 references "
-                "unverified for lack of a blind solve (coverage caveat). An earlier impossible-reference "
-                "finding was retracted after independent Matrix-Tree verification (the recorded 147 is "
-                "attainable and maximal for a bicyclic 20-vertex/21-edge graph). No confirmed reference "
-                "defects. Private release; conversation-only tasks import canonical task specs. The "
-                "pinned cohort revision was downloaded back and every task hash re-validated."
+                "Symbolic exact compare with hidden gold references. Final v2 content QC reports 286 issues "
+                "among 2,213 conclusive reviews (12.9236%, SOME_ISSUES); seven valid uncertain observations "
+                "and one unreviewed task are excluded from that denominator. "
+                "tasktrove-math_prism-2c73de38c5427048ffb943add4fee2759b8f63f8fb172c4a39f28ee94e97e0c0: "
+                "QC unreviewed: review exceeded 16,384 tokens. All 2,221 tasks remain in the private release. "
+                "The 2,220 valid primary reviews are preserved byte for byte. Content coverage remains incomplete. "
+                "The pinned cohort revision was downloaded back and every task hash re-validated."
             ),
         ),
         _tasktrove_qa_release(
