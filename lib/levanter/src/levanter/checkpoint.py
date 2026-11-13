@@ -49,6 +49,8 @@ from levanter.utils.types import FilterSpec
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_ASYNC_TIMEOUT_SECONDS = 30 * 60
+
 _CHECKPOINT_CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
 _CHECKPOINT_PHASE_DURATION_METRIC = "checkpoint_phase_duration_seconds"
 
@@ -490,7 +492,7 @@ class Checkpointer:
         debug: CheckpointDebugConfig | None = None,
         write_config: TensorStoreWriteConfig | None = None,
         metadata: Mapping[str, Any] | None = None,
-        async_timeout_seconds: float = 30 * 60,
+        async_timeout_seconds: float = DEFAULT_ASYNC_TIMEOUT_SECONDS,
     ):
         """
         Class for managing checkpoints. Saves checkpoints according to two policies: time and step.
@@ -1273,7 +1275,7 @@ def _get_fs_and_plain_path(path, fs=None):
 @dataclass
 class CheckpointerConfig:
     base_path: str = "checkpoints/"
-    async_timeout_seconds: float = 30 * 60
+    async_timeout_seconds: float = DEFAULT_ASYNC_TIMEOUT_SECONDS
     temporary_base_path: Optional[str] = None
     """Separate base path for temporary (time-policy) checkpoints. When set, temporary checkpoints
     are written here instead of base_path, allowing use of region-local storage with lifecycle TTL."""
