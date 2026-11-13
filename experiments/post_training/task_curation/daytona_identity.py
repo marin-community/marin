@@ -6,9 +6,9 @@
 Measurement runs the production naming path: each pinned task's environment
 is materialized to a build context, the shellbox ``MachineSpec`` is built
 through Harbor's own task-config mapping, and the snapshot name comes from
-``shellbox.backends.daytona.machine.snapshot_identity`` — the same function
-the Daytona factory uses to name and create snapshots. A task the production
-validation rejects is counted as a failure and reported; it is not
+``shellbox.backends.daytona.snapshot.snapshot_request_for_spec`` — the same
+derivation the Daytona factory uses to name and create snapshots. A task the
+production validation rejects is counted as a failure and reported; it is not
 Daytona-safe. No Daytona API calls are made.
 """
 
@@ -16,7 +16,6 @@ import base64
 import gzip
 import io
 import json
-import math
 import tarfile
 import tempfile
 import tomllib
@@ -25,11 +24,11 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from daytona import Resources
 from harbor.environments.daytona import machine_spec
 from harbor_config.models.task.config import EnvironmentConfig
-from shellbox.backends.daytona.machine import UnsupportedMachineSpec, snapshot_identity
+from shellbox.backends.daytona.snapshot import snapshot_request_for_spec
 from shellbox.image import RegistryImage
+from shellbox.machine import MachineSpec, UnsupportedMachineSpec
 
 ENVIRONMENT_PREFIX = "environment/"
 DOCKERFILE = "Dockerfile"
@@ -50,16 +49,6 @@ class SnapshotIdentityCount:
     distinct: int
     sizes: dict[str, int] = field(default_factory=dict)
     failures: list[tuple[str, str]] = field(default_factory=list)
-
-
-def _machine_resources(cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int = 0) -> Resources:
-    """The ``Resources`` construction mirroring ``DaytonaMachineFactory._prepare``."""
-    return Resources(
-        cpu=cpus,
-        memory=math.ceil(memory_mb / 1024) if memory_mb is not None else None,
-        disk=math.ceil(storage_mb / 1024) if storage_mb is not None else None,
-        gpu=gpus or None,
-    )
 
 
 def _write_context(root: Path, name: str, content: bytes, mode: int = 0o644) -> None:
@@ -90,7 +79,7 @@ def _unpack_environment(payload: bytes) -> tuple[list[tuple[str, bytes, int]], b
 
 def _registry_identity(reference: str) -> str:
     """Production snapshot name for a registry reference with default resources."""
-    return snapshot_identity(RegistryImage(reference), Resources())
+    return snapshot_request_for_spec(MachineSpec(source=RegistryImage(reference))).name
 
 
 def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentityCount:
@@ -114,9 +103,7 @@ def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentit
                     memory_mb=config.memory_mb,
                     storage_mb=config.storage_mb,
                 )
-                name = snapshot_identity(
-                    spec.source, _machine_resources(spec.cpus, spec.memory_mb, spec.storage_mb, spec.gpus)
-                )
+                name = snapshot_request_for_spec(spec).name
             except UnsupportedMachineSpec as error:
                 failures.append((task_id, str(error)))
                 continue
@@ -197,10 +184,7 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
                 # Identities are derived while the context exists: the production hash
                 # reads the Dockerfile and every file of the staged tree.
                 for machine in (verifier, task_machine):
-                    name = snapshot_identity(
-                        machine.source,
-                        _machine_resources(machine.cpus, machine.memory_mb, machine.storage_mb, machine.gpus),
-                    )
+                    name = snapshot_request_for_spec(machine).name
                     sizes[name] += 1
             except UnsupportedMachineSpec as error:
                 failures.append((task_id, str(error)))
