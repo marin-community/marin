@@ -47,7 +47,6 @@ def test_daytona_role_census_routes_lock_grader_locally_and_retains_its_quota_fa
 
 def test_execution_cost_census_keeps_task_specs_rejected_by_the_grading_boundary():
 
-
     def convert(row, _context):
         task = exact_answer_task(row, prompt="Repair the repository", answers=("done",), ignore_case=False)
         environment = EnvironmentRequirements(
@@ -118,7 +117,6 @@ def test_actor_unsafe_reasons_distinguish_snapshot_budget_build_and_host_image()
 
 
 def test_native_envelope_counts_original_toml_shape_without_unbuilt_lowering():
-
 
     dockerfile = "FROM ubuntu:24.04\nCOPY setup.sh /app/setup.sh\n"
     toml = (
