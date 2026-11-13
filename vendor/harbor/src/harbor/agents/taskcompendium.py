@@ -144,11 +144,11 @@ class TaskSpecResponseAgent(TaskSpecAgent):
 
 
 class TaskSpecEmptyAgent(TaskSpecAgent):
-    """Independent empty-submission liveness, not an oracle or calibration solution."""
+    """Submit an empty TaskSpec attempt for liveness control."""
 
     @staticmethod
     def name() -> str:
-        return "task-spec-empty"
+        return "nop"
 
     async def run_task(self, task: TaskSpec, machine: Machine | None, limits: RolloutLimits) -> GradingAttempt:
         self.attempt = empty_attempt(task)
@@ -193,3 +193,6 @@ class TaskSpecOracleAgent(TaskSpecAgent):
         if result.reason == ExitReason.TIMED_OUT:
             raise AgentTimeoutError("TaskSpec oracle script timed out")
         return self.attempt
+
+
+TASK_SPEC_AGENTS = {agent.name(): agent for agent in (TaskSpecChatAgent, TaskSpecResponseAgent)}

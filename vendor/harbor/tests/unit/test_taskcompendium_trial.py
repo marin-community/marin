@@ -303,7 +303,7 @@ async def test_tau_missing_original_lock_stops_before_candidate_or_machine(tmp_p
             task=TaskConfig(path=directory),
             trial_name="missing-lock",
             trials_dir=tmp_path / "trials",
-            agent=AgentConfig(name="task-spec-empty"),
+            agent=AgentConfig(name="nop"),
         )
     )
     result = await trial.run()

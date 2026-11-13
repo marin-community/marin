@@ -34,7 +34,7 @@ from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome, 
 from taskcompendium.harbor.adapter import (
     TASK_SPEC_FILE,
     actor_machine_required,
-    declared_execution_limits,
+    require_trial_budget,
     unsupported_harbor_contract,
 )
 from taskcompendium.models import (
@@ -64,7 +64,7 @@ from harbor.agents.taskcompendium import (
     empty_attempt,
 )
 from harbor.environments.base import SandboxDiskFullError
-from harbor.host_capabilities import MODEL_CREDENTIALS
+from harbor.host_capabilities import MODEL_CREDENTIALS, MODEL_RELAY_PORT
 from harbor.environments.model_relay import ModelRelay, start_model_relays
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.result import TimingInfo
@@ -221,14 +221,7 @@ class TaskSpecTrial(Trial):
             agent_timeout_sec=self.task.config.agent.timeout_sec,
             verifier_timeout_sec=self.task.config.verifier.timeout_sec,
         )
-        if (
-            self.specification.execution_requirements is not None
-            and self.specification.execution_requirements != self.shape
-        ):
-            raise ValueError("Harbor budgets conflict with the original TaskSpec")
-        for name, value in declared_execution_limits(self.specification).items():
-            if getattr(self.shape, name) != value:
-                raise ValueError(f"Harbor budget conflicts with original {name}")
+        require_trial_budget(self.specification, self.shape)
         if self.config.environment.type != EnvironmentType.LOCAL:
             raise ValueError("TaskSpec trials currently require the LOCAL backend")
         configuration = self.config.environment
@@ -419,7 +412,9 @@ class TaskSpecTrial(Trial):
                 self.judge_model,
                 authentication=self.host_capabilities.model_authentication,
             )
-            connection = JudgeConnection("http://127.0.0.1:8787/v1", "EMPTY", default_model=self.judge_model)
+            connection = JudgeConnection(
+                f"http://127.0.0.1:{MODEL_RELAY_PORT}/v1", "EMPTY", default_model=self.judge_model
+            )
         if isinstance(grader, VerifyitGrader) and (grader.environment is None or judge is not None):
             return await self._grade_in_process(relay, connection)
         assert grader.environment is not None
