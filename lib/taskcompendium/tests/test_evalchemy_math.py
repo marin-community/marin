@@ -9,8 +9,8 @@ import pytest
 from verifyit.grade import GradingInfraError
 
 from taskcompendium.importers.evalchemy.scorers import minerva
+from taskcompendium.importers.evalchemy.scorers.fewshot import score
 from taskcompendium.importers.evalchemy.scorers.harness_generation import grade_harness_generation_candidate
-from taskcompendium.importers.evalchemy.scorers.main import score
 from taskcompendium.importers.evalchemy.scorers.minerva import is_equiv
 
 
@@ -47,6 +47,7 @@ def test_gsm8k_flexible_grader_preserves_complete_final_box(response, reference,
     )
     assert verdict.detail["extracted"]["flexible-extract"] == extracted
     assert verdict.detail["metrics"]["exact_match,flexible-extract"] == expected
+    assert verdict.reward == expected
 
 
 @pytest.mark.parametrize("threaded", [False, True])

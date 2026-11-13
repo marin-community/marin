@@ -21,6 +21,7 @@ from shellbox.machine import (
     ExitReason,
     MachineSpec,
     NetworkPolicy,
+    ProcessScope,
     Result,
     UnsupportedMachineSpec,
     check_execution_requirements,
@@ -199,6 +200,9 @@ class DockerMachine:
                 raise
 
         return await acquire_owned(asyncio.create_task(acquire()))
+
+    async def open_process_scope(self) -> ProcessScope:
+        raise UnsupportedMachineSpec("Docker does not provide confirmed scoped descendant teardown")
 
     async def run(self, command: Command) -> Result:
         if self._closed:

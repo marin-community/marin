@@ -40,7 +40,7 @@ of the TaskSpec schema below.
 
 Evaluation adapters live under `taskcompendium.importers` and
 `taskcompendium.convert`. Reusable Evalchemy benchmark modules and source graders
-live in `taskcompendium.importers.evalchemy`. Experiment-owned `EvalDataset` declarations
+live in `taskcompendium.importers.evalchemy`. Experiment-owned `EvaluationCorpusRecipe` declarations
 bind them to acquisition and environment recipes. Verifyit supplies shared
 scoring and judge transport; Shellbox isolates executable graders.
 

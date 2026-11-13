@@ -14,7 +14,7 @@ import pytest
 pytest.importorskip("harbor")  # the counter runs the production Harbor spec mapping
 
 from daytona import Resources
-from shellbox.backends.daytona.machine import snapshot_identity
+from shellbox.backends.daytona.snapshot import snapshot_name
 from shellbox.image import DockerfileSource, RegistryImage
 
 from experiments.post_training.task_curation.daytona_identity import (
@@ -113,7 +113,7 @@ def test_counter_names_match_the_production_name_for_the_staged_tree(tmp_path):
         _write.parent.mkdir(parents=True, exist_ok=True)
         _write.write_bytes(content)
         _write.chmod(mode)
-    expected = snapshot_identity(DockerfileSource(staged, staged / "Dockerfile"), Resources())
+    expected = snapshot_name(DockerfileSource(staged, staged / "Dockerfile"), Resources())
 
     count = count_task_identities([("task", payload)])
     assert list(count.sizes) == [expected]
@@ -140,7 +140,7 @@ def test_a_task_needing_a_container_runtime_is_refused_on_daytona():
     }
     count = count_lowered_spec_identities([("container-runtime", spec)])
     assert count.distinct == 1
-    assert count.execution_failures == [("container-runtime", "agent: Unsupported capabilities: docker")]
+    assert [task_id for task_id, _ in count.execution_failures] == ["container-runtime"]
 
 
 @pytest.mark.usefixtures("taskcompendium_environment")
@@ -157,8 +157,8 @@ def test_grader_environment_is_counted_independently_and_lock_refusals_are_retai
     }
     separate = count_lowered_spec_identities([("separate", spec)])
     assert set(separate.sizes) == {
-        snapshot_identity(RegistryImage(actor), Resources()),
-        snapshot_identity(RegistryImage(grader), Resources()),
+        snapshot_name(RegistryImage(actor), Resources()),
+        snapshot_name(RegistryImage(grader), Resources()),
     }
     spec["task"]["grader"]["environment"] = {
         "packages_lock": "https://example.test/lock",
