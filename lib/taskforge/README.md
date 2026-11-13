@@ -50,6 +50,8 @@ import of it from any other package, along with the other wrong-way imports.
 `scripts/build_image_job.py` runs on Iris and documents its submit command in its docstring: it
 builds a directory's `DockerBuild` context with `taskforge.sandbox.image_builder` and prints the
 pinned registry digest.
+Pass `--priority`, `--timeout` and `--scheduling-timeout` explicitly; the builder
+applies the same policy to both the build and push jobs. Deadlines are in seconds.
 
 ## Proposals
 

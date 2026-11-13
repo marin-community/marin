@@ -116,8 +116,6 @@ PUSH_SOURCE = Path(image_push.__file__)
 """``image_push``, shipped to the push job as a workdir file: its pinned image has no Taskforge."""
 BUILD_SETUP_FAILED_EXIT = 125
 POLL_INTERVAL = 5.0
-JOB_TIMEOUT = 3600
-SCHEDULING_TIMEOUT = 900
 MANIFEST_TYPES = (
     "application/vnd.oci.image.manifest.v1+json",
     "application/vnd.docker.distribution.manifest.v2+json",
@@ -212,6 +210,15 @@ class Published:
     seconds_total: float
 
 
+@dataclass(frozen=True)
+class ImageJobPolicy:
+    """Scheduling priority and deadlines shared by an image build and its push."""
+
+    priority_band: job_pb2.PriorityBand
+    timeout: Duration
+    scheduling_timeout: Duration
+
+
 def manifest_readback(credential: RegistryCredential, repository: str, tag: str) -> str:
     """Return the manifest digest ``tag`` resolves to, after checking it is addressable and linux/amd64."""
     base = f"https://{credential.registry}/v2/{repository}"
@@ -256,6 +263,7 @@ def submit_job(
     env: dict[str, str],
     secrets: dict[str, str],
     target_cluster: str,
+    policy: ImageJobPolicy,
 ) -> Job:
     """Submit an image job with explicit values and the storage credentials it needs.
 
@@ -281,8 +289,9 @@ def submit_job(
         task_image=image,
         container_profile=job_pb2.CONTAINER_PROFILE_DEFAULT,
         constraints=[Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster)],
-        scheduling_timeout=Duration.from_seconds(SCHEDULING_TIMEOUT),
-        timeout=Duration.from_seconds(JOB_TIMEOUT),
+        scheduling_timeout=policy.scheduling_timeout,
+        timeout=policy.timeout,
+        priority_band=policy.priority_band,
         max_retries_failure=0,
         max_retries_preemption=0,
     )
@@ -303,6 +312,7 @@ class IrisImageBuilder:
         controller_url: str | None = None,
         target_cluster: str,
         credential: RegistryCredential,
+        policy: ImageJobPolicy,
     ):
         if (cluster is None) == (controller_url is None):
             raise ValueError("Specify exactly one Iris cluster or controller URL")
@@ -310,6 +320,7 @@ class IrisImageBuilder:
         self.controller_url = controller_url
         self.target_cluster = target_cluster
         self.credential = credential
+        self.policy = policy
 
     async def publish(self, build: DockerBuild, repository: str) -> str:
         """Publish ``build`` under ``repository`` and return its digest-pinned reference.
@@ -317,7 +328,7 @@ class IrisImageBuilder:
         The reference is ``registry/repository@sha256:...``. A failed build raises ``BuildFailed``,
         and a failure of the host or the registry raises ``ImageJobFailed``.
         """
-        # A publish waits on Iris for up to SCHEDULING_TIMEOUT + JOB_TIMEOUT seconds; keep the loop free.
+        # A publish waits through both declared deadlines; keep the event loop free.
         return (await asyncio.to_thread(self.publish_with_timings, build, repository)).image
 
     def publish_with_timings(self, build: DockerBuild, repository: str) -> Published:
@@ -355,10 +366,11 @@ class IrisImageBuilder:
                     },
                     secrets={},
                     target_cluster=self.target_cluster,
+                    policy=self.policy,
                 )
                 jobs.append(build_job)
                 logger.info("submitted build job %s for %s", build_job.job_id, destination)
-                wait_succeeded(build_job, BuildFailed)
+                wait_succeeded(build_job, BuildFailed, self.policy)
                 built = time.monotonic() - start
                 archive = output_archive(build_job)
                 logger.info("build archive %s (%d bytes)", archive.uri, archive.size_bytes)
@@ -379,10 +391,11 @@ class IrisImageBuilder:
                     },
                     secrets={image_push.REGISTRY_AUTH_SECRET: credential.docker_config()},
                     target_cluster=self.target_cluster,
+                    policy=self.policy,
                 )
                 jobs.append(push_job)
                 logger.info("submitted push job %s", push_job.job_id)
-                wait_succeeded(push_job, ImageJobFailed)
+                wait_succeeded(push_job, ImageJobFailed, self.policy)
             finally:
                 for job in jobs:
                     if not is_job_finished(job.state):
@@ -400,7 +413,7 @@ A job that ran and exited nonzero, or outran its execution timeout, ends ``FAILE
 """
 
 
-def wait_succeeded(job: Job, failed: type[BuildFailed | ImageJobFailed]) -> None:
+def wait_succeeded(job: Job, failed: type[BuildFailed | ImageJobFailed], policy: ImageJobPolicy) -> None:
     """Wait for ``job`` to succeed, raising with Iris's error, which carries the log tail, when it does not.
 
     Raises:
@@ -408,7 +421,11 @@ def wait_succeeded(job: Job, failed: type[BuildFailed | ImageJobFailed]) -> None
         BuildFailed | ImageJobFailed: ``failed``, when the job ran and ended ``FAILED``.
     """
     try:
-        status = job.wait(timeout=SCHEDULING_TIMEOUT + JOB_TIMEOUT, poll_interval=POLL_INTERVAL, raise_on_failure=False)
+        status = job.wait(
+            timeout=policy.scheduling_timeout.to_seconds() + policy.timeout.to_seconds(),
+            poll_interval=POLL_INTERVAL,
+            raise_on_failure=False,
+        )
     except TimeoutError as error:
         raise ImageJobFailed(f"job {job.job_id} did not end within its scheduling and execution timeouts") from error
     if status.state == JobState.SUCCEEDED:
