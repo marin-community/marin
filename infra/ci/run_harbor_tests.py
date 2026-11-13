@@ -48,14 +48,14 @@ def run_harbor_tests(repo_root: Path, extra_args: tuple[str, ...] = ()) -> int:
     if result.returncode:
         return result.returncode
     # The acquisition tests' neighboring conftest imports Marin and Fray, which
-    # are outside Harbor's independent environment.
+    # are outside Harbor's independent environment. CalibForge rebuild tests
+    # import those packages themselves and run in the workspace suite.
     result = subprocess.run(
         [
             *pytest_command,
             "--noconftest",
             "experiments/post_training/task_curation/tests/test_harbor_hub.py",
             "experiments/post_training/task_curation/tests/test_daytona_identity.py",
-            "experiments/post_training/task_curation/tests/test_calibforge_rebuild.py",
             *extra_args,
         ],
         cwd=repo_root,
