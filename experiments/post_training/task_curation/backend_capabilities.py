@@ -23,6 +23,7 @@ from finestore.rl.curation import CurationCatalog
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rolloutengine.machines import _machine_spec
 from rolloutengine.models import MachineRuntimeSpec
+from shellbox.backends.local.disk import LocalDiskPool
 from shellbox.machine import UnsupportedMachineSpec
 from shellbox.requirements import Requirement, Support
 from shellbox.survey import CapabilityCell, Checker, capability_matrix, production_checkers
@@ -264,6 +265,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--local-disk-root", type=Path, help="Probe ext4 loop/OverlayFS enforcement on this privileged worker."
+    )
     parser.add_argument("--catalog-root", help="Bind to the current published catalog instead of an archived inventory.")
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
@@ -284,7 +288,8 @@ def main() -> None:
             },
         }
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    survey = build_survey(manifest, production_checkers(), revision)
+    disk_pool = LocalDiskPool(args.local_disk_root) if args.local_disk_root is not None else None
+    survey = build_survey(manifest, production_checkers(local_disk_pool=disk_pool), revision)
     args.output.write_text(survey.model_dump_json(indent=2) + "\n")
     print(
         json.dumps(

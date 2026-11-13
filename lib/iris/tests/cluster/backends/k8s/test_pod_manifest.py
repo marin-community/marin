@@ -2093,12 +2093,21 @@ def test_ordinary_pod_preserves_legacy_storage_quantity(disk_bytes: int, expecte
     assert "cpu" not in resources.get("limits", {})
 
 
-@pytest.mark.parametrize("staged_workdir", [False, True])
-def test_sandbox_image_app_is_visible_unless_a_workdir_was_explicitly_staged(staged_workdir):
+@pytest.mark.parametrize("sandbox", [False, True])
+@pytest.mark.parametrize("staged_workdir", ["none", "files", "refs", "bundle"])
+def test_pod_workdir_mount_preserves_prepared_sandbox_image(sandbox: bool, staged_workdir: str) -> None:
     req = make_run_req("/prepared-image/0")
-    req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
-    if staged_workdir:
+    if sandbox:
+        req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    if staged_workdir == "files":
         req.entrypoint.workdir_files["input.txt"] = b"explicit input"
-    manifest = _build_pod_manifest(req, pod_config())
+    elif staged_workdir == "refs":
+        req.entrypoint.workdir_file_refs["input.txt"] = "abcd1234" * 8
+    elif staged_workdir == "bundle":
+        req.bundle_id = "bundle-abc"
+    manifest = _build_pod_manifest(req, pod_config(controller_address="http://ctrl:8080"))
     mounts = manifest["spec"]["containers"][0]["volumeMounts"]
-    assert any(mount["mountPath"] == "/app" for mount in mounts) is staged_workdir
+    expects_workdir = not sandbox or staged_workdir != "none"
+    assert any(mount["mountPath"] == "/app" for mount in mounts) is expects_workdir
+    volumes = manifest["spec"]["volumes"]
+    assert any(volume["name"] == "workdir" for volume in volumes) is expects_workdir
