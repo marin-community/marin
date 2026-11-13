@@ -24,12 +24,11 @@ from experiments.post_training.task_curation.sample_qc_binding import bind_sampl
 from experiments.post_training.task_curation.sample_qc_receipts import sample_qc_receipt
 from experiments.post_training.task_curation.source import SourceOrigin, SourceReference
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
-from experiments.post_training.task_curation.tests.test_full_qc_inputs import qc_inputs as qc_inputs
 
 
 @pytest.fixture
-def sample_panel(request, tmp_path):
-    config, _ = request.getfixturevalue("qc_inputs")
+def sample_panel(qc_inputs, tmp_path):
+    config, _ = qc_inputs
     population = SourceTextPopulation.raw_load(config.population_path)
     path = tmp_path / "panel.parquet"
     rows = [
