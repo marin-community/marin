@@ -51,9 +51,10 @@ def _execution() -> IrisSkyRLExecution:
     )
 
 
-def test_coordinator_request_replays_the_experiment_main() -> None:
+@pytest.mark.parametrize("preemption_retries", [0, 2])
+def test_coordinator_request_replays_the_experiment_main(preemption_retries: int) -> None:
     cluster_config, request = _coordinator_request(
-        [_step(_execution())],
+        [_step(dataclasses.replace(_execution(), max_retries_preemption=preemption_retries))],
         "experiments.test_rl",
         ("--version", "2026.09.21", "--run"),
         3,
@@ -63,6 +64,7 @@ def test_coordinator_request_replays_the_experiment_main() -> None:
 
     assert cluster_config == "lib/iris/config/marin.yaml"
     assert request.resources.target_cluster == "cw-rno2a"
+    assert request.max_retries_preemption == preemption_retries
     assert request.resources.cpu == 4
     assert request.resources.ram == "16GB"
     assert request.environment is not None

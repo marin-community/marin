@@ -48,6 +48,7 @@ class _IrisSubmissionRoute:
     container_profile: job_pb2.ContainerProfile | None
     coordinator_name: str | None
     coordinator_gpu: GpuConfig | None
+    max_retries_preemption: int
 
 
 def _module_name(module: ModuleType) -> str:
@@ -77,6 +78,7 @@ def _submission_route(executions: tuple[IrisSkyRLExecution, ...]) -> _IrisSubmis
             execution.parent_cluster_config or execution.cluster_config,
             execution.target_cluster,
             execution.container_profile,
+            execution.max_retries_preemption,
         )
         for execution in executions
     }
@@ -91,13 +93,14 @@ def _submission_route(executions: tuple[IrisSkyRLExecution, ...]) -> _IrisSubmis
     devices = {execution.coordinator_gpu for execution in executions}
     if len(devices) != 1:
         raise ValueError("one RL main must use one coordinator device allocation")
-    cluster_config, target_cluster, container_profile = routes.pop()
+    cluster_config, target_cluster, container_profile, max_retries_preemption = routes.pop()
     return _IrisSubmissionRoute(
         cluster_config=cluster_config,
         target_cluster=target_cluster,
         priority=priorities.pop(),
         coordinator_name=names.pop(),
         coordinator_gpu=devices.pop(),
+        max_retries_preemption=max_retries_preemption,
         timeout_hours=max(execution.coordinator_timeout_hours for execution in executions),
         container_profile=container_profile,
     )
@@ -140,6 +143,7 @@ def _coordinator_request(
         environment=create_environment(workspace=str(workspace), env_vars=selected_env, extras=["cpu"]),
         priority=priority_band_value(route.priority),
         timeout=Duration.from_hours(route.timeout_hours),
+        max_retries_preemption=route.max_retries_preemption,
     )
     return route.cluster_config, request
 

@@ -46,6 +46,10 @@ inside Iris, where `--run` executes the artifact graph. This preserves one const
 validation path. The submitter forwards `DAYTONA_API_KEY`, `DAYTONA_RL_API_KEY`,
 `DAYTONA_EVAL_API_KEY`, and `TOGETHER_API_KEY` when present in its environment.
 The RL and eval keys let rollout and evaluation use separate Daytona credentials.
+Set `IrisSkyRLExecution.max_retries_preemption` explicitly when configuring preemption retries.
+It defaults to zero and applies to both the coordinator and SkyRL worker jobs;
+`max_retries` controls worker failure retries separately.
+
 Iris forwards available HF/W&B/CoreWeave credentials and the current application-secret
 bundle as read-only files; ordinary child jobs inherit that bundle by default.
 See [secret delivery](https://github.com/marin-community/marin/blob/main/lib/iris/docs/secrets.md).
