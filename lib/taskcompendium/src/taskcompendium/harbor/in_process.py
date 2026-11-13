@@ -11,7 +11,7 @@ from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, Jud
 
 from taskcompendium.grading import grade_answer, grade_remote_judge_answer
 from taskcompendium.grading_result import verdict_bytes
-from taskcompendium.models import ConversationTrace, GradingAttempt, TaskSpec, grades_with_judge
+from taskcompendium.models import ConversationTrace, GradingAttempt, NoGrader, TaskSpec, grades_with_judge
 
 
 def main() -> None:
@@ -22,6 +22,8 @@ def main() -> None:
     parser.add_argument("--stop-reason")
     args = parser.parse_args()
     task = TaskSpec.model_validate_json(args.task.read_text())
+    if isinstance(task.grader, NoGrader):
+        raise ValueError("The TaskSpec has no executable grader")
     if task.grader.environment is not None and not grades_with_judge(task.grader):
         raise ValueError("The TaskSpec declares its own grading environment")
     attempt = GradingAttempt(

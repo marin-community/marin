@@ -55,7 +55,7 @@ from experiments.post_training.task_curation.tests.review_server import (
     JudgeReply,
     running_review_server,
 )
-from lib.taskcompendium.tests.test_runtime import LocalGradingMachine
+from lib.taskcompendium.tests.grading_machines import LocalGradingMachine
 
 FIXTURES = Path(__file__).parents[4] / "experiments/post_training/task_curation/tests/fixtures/harbor_task_specs"
 

@@ -25,7 +25,7 @@ class ResourceCounterSource(Protocol):
     @property
     def os(self) -> TaskOS: ...
 
-    async def exec(
+    async def exec_control(
         self, command: str, *, timeout_sec: int, user: str
     ) -> ExecResult: ...
 
@@ -38,7 +38,7 @@ class MachineResourceCounters:
     def __init__(self, machine: Machine):
         self.machine = machine
 
-    async def exec(self, command: str, *, timeout_sec: int, user: str) -> ExecResult:
+    async def exec_control(self, command: str, *, timeout_sec: int, user: str) -> ExecResult:
         return await execute_shellbox_command(
             self.machine, command, cwd=None, env={}, timeout_sec=timeout_sec, user=user
         )
@@ -47,7 +47,7 @@ class MachineResourceCounters:
 async def resource_counters(environment: ResourceCounterSource) -> dict[str, int]:
     if environment.os != TaskOS.LINUX:
         return {}
-    result = await environment.exec(
+    result = await environment.exec_control(
         command=RESOURCE_COUNTERS_COMMAND,
         timeout_sec=RESOURCE_COUNTER_TIMEOUT_SEC,
         user="root",
