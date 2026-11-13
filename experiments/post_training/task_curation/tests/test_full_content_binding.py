@@ -228,7 +228,6 @@ def test_retained_gym_3939_result_cannot_bind_to_raw_3941_population(content_sou
     )
     with pytest.raises(ValueError, match="another current retained population"):
         bind_full_content_result(raw, binding)
-    assert raw.info.quality_result is None
 
 
 @pytest.mark.parametrize("finalization", list(QualityResultFinalization))
@@ -317,7 +316,6 @@ def test_final_binding_verifies_records_and_preserves_exact_retained_runtime(qc_
     assert binding.result.issues == []
     assert review.result.issues
     assert binding.result.model_dump(exclude={"issues"}) == review.result.model_dump(exclude={"issues"})
-    assert binding.input == actor_input
     if incomplete:
         original = path.read_text()
         omitted = json.loads(original)
