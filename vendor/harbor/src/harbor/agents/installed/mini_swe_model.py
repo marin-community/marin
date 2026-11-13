@@ -173,7 +173,7 @@ class ContextLimitedModel(OpenAIModel):
         except (ContextBudgetExceeded, openai.BadRequestError) as error:
             if (
                 isinstance(error, openai.BadRequestError)
-                and error.type != "context_length_exceeded"
+                and "context_length_exceeded" not in (error.type, error.code)
             ):
                 raise
             raise LimitsExceeded(
