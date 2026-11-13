@@ -25,7 +25,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
-from skyrlrecipe import SkyRLRecipe
+from skyrlrecipe import RLEntrypoint, SkyRLRecipe
 
 from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, training_config
 from experiments.post_training.task_curation.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
@@ -117,7 +117,7 @@ def build_run(
         MODEL_URI,
         kind=LevanterCheckpoint,
     )
-    plan = replace(SNOWBALL_RECIPE.role_plan, entrypoint="taskcompendium")
+    plan = replace(SNOWBALL_RECIPE.role_plan, entrypoint=RLEntrypoint.TASKCOMPENDIUM)
     return skyrl_step(
         SkyRLSpec(
             name=user_owned_name(ARTIFACT_NAME),

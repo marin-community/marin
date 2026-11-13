@@ -64,6 +64,7 @@ from marin.rl.skyrl_records import (
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import cluster_config
+from skyrlrecipe import RLEntrypoint
 
 from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, resolve_skyrl_model
 
@@ -445,11 +446,53 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
     }
 
 
-@pytest.mark.parametrize("failure", ["extra-node", "node-width", "entrypoint"])
-def test_generation_rejects_allocation_and_entrypoint_conflicts(failure):
+@pytest.mark.parametrize("failure", ["render", "extra-node", "node-width", "entrypoint"])
+def test_generation_plan_renders_native_geometry_and_rejects_conflicts(failure, tmp_path):
     spec = _spec()
-    plan = SkyRLGenerationPlan(spec.topology.role_plan)
-    topology = dataclasses.replace(spec.topology, role_plan=plan)
+    geometry = dataclasses.replace(
+        spec.topology.role_plan, colocate_all=False, policy_num_nodes=4, entrypoint=RLEntrypoint.TASKCOMPENDIUM
+    )
+    plan = SkyRLGenerationPlan(geometry)
+    topology = dataclasses.replace(spec.topology, num_nodes=plan.num_nodes, role_plan=plan)
+    if failure == "render":
+        spec = dataclasses.replace(
+            spec,
+            topology=topology,
+            train_data=(),
+            validation_data=spec.train_data,
+            config_yaml=(
+                "context_budget: {request_window_tokens: 1024, max_new_tokens_per_turn: 256, max_turns: 1}\n"
+                "model_num_attention_heads: 8\n" + spec.config_yaml
+            ),
+        )
+        step = skyrl_step(spec, _execution())
+        config = step.build_config(
+            StepContext.for_run(str(tmp_path / "run"), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
+        )
+        path = tmp_path / "generation.yaml"
+        path.write_text(config.launch_config_yaml)
+        result = run_launcher_for_test(
+            skyrl_cpu_command(
+                "python",
+                "-c",
+                """
+import json, sys
+from cloud.iris.launch_config import load_launch_config
+from cloud.iris.rl_config_translation import RL_ENTRYPOINTS
+from skyrlrecipe import RLEntrypoint
+config = load_launch_config(sys.argv[1])
+assert config.runtime.entrypoint == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]
+print(json.dumps({"nodes": config.iris.allocation.num_nodes,
+    "policy_nodes": config.skyrl.trainer.placement.policy_num_nodes,
+    "batch": config.skyrl.trainer.train_batch_size,
+    "engines": config.skyrl.generator.num_inference_engines}))
+""",
+                str(path),
+            )
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert json.loads(result.stdout) == {"nodes": 1, "policy_nodes": 4, "batch": 16, "engines": 4}
+        return
     with pytest.raises(
         ValueError,
         match={
@@ -493,8 +536,8 @@ def _colocated_expert_block_spec(entrypoint: str | None = None) -> SkyRLSpec:
         expert_block_sync={"verify": True},
         engine_init_kwargs={"kernel_config": {"moe_backend": "triton"}},
     )
-    if entrypoint in ("generate", "terminal_bench_generate"):
-        plan = SkyRLGenerationPlan(plan, entrypoint=entrypoint)
+    if entrypoint == "generate":
+        plan = SkyRLGenerationPlan(plan)
     elif entrypoint is not None:
         plan = dataclasses.replace(plan, entrypoint=entrypoint)
 
@@ -505,7 +548,7 @@ def _colocated_expert_block_spec(entrypoint: str | None = None) -> SkyRLSpec:
     )
 
 
-@pytest.mark.parametrize("entrypoint", ["generate", "taskcompendium", "terminal_bench_generate"])
+@pytest.mark.parametrize("entrypoint", ["generate", "taskcompendium"])
 def test_expert_block_colocation_fails_before_job_submission(entrypoint: str) -> None:
     with pytest.raises(ValueError, match="colocated expert_block requires entrypoint=standard"):
         _colocated_expert_block_spec(entrypoint)
