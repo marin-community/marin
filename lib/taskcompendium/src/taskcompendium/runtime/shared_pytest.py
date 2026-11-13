@@ -587,6 +587,9 @@ def pytest_process(contract: dict, arguments: list[str]) -> None:
 runner,workspace,sites,arguments,plugins,entrypoints,rewrite_roots=__import__('json').loads(sys.argv[1])
 sys.path[:0]=[runner,workspace]
 for directory in sites: site.addsitedir(directory)
+site.setquit()
+site.setcopyright()
+site.sethelper()
 try: __import__('sitecustomize')
 except ModuleNotFoundError as error:
  if error.name!='sitecustomize': raise

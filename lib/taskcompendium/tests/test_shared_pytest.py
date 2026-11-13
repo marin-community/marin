@@ -45,6 +45,8 @@ def shared_runtime(request):
         workspace.mkdir()
         candidate = workspace / "candidate.py"
         candidate.write_text("VALUE = 0\n")
+        if request.param == "site-builtins":
+            candidate.write_text("class CandidateHelp(type(help)):\n    pass\nVALUE = 0\n")
         (workspace / "extra_guard.py").write_text("reference\n")
         (workspace / "editable.py").write_text("original\n")
         (workspace / "conftest.py").write_text("pytest_plugins: tuple[str, ...]\n")
@@ -308,6 +310,18 @@ def test_shared_grading_cannot_fake_a_pass(shared_runtime, monkeypatch, attack):
         if process is not None and process.poll() is None:
             process.kill()
             process.wait()
+
+
+@pytest.mark.parametrize("shared_runtime", ["site-builtins"], indirect=True)
+def test_shared_grading_keeps_standard_site_builtins_available_to_product(shared_runtime):
+    runtime = shared_runtime
+    verdict = runtime.grade()
+    assert verdict["status"] == "scored", verdict
+    assert verdict["reward"] == 0
+    runtime.candidate.write_text(runtime.candidate.read_text().replace("VALUE = 0", "VALUE = 1"))
+    verdict = runtime.grade()
+    assert verdict["status"] == "scored", verdict
+    assert verdict["reward"] == 1
 
 
 def test_shared_grading_sees_agent_dependency_changes_and_records_diff(shared_runtime):
