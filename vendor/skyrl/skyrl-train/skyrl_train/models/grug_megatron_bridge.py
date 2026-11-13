@@ -26,14 +26,13 @@ from megatron.bridge.utils.common_utils import extract_expert_number_from_param
 from megatron.core.pipeline_parallel.utils import is_pp_first_stage, is_pp_last_stage
 from megatron.core.utils import get_pg_rank
 
-from skyrl_train.grug_expert_layout import has_split_routed_experts
 from skyrl_train.models.grug_megatron import GrugGPTModel, grug_block_spec
 from skyrl_train.models.grug_moe import (
     GRUG_DEFAULT_GLOBAL_EVERY,
     GRUG_MOE_MODEL_TYPE,
-    GRUG_STACKED_EXPERT_SCHEMA_VERSION,
     GRUG_SPLIT_EXPERT_SCHEMA_VERSION,
     grug_long_layer_flags,
+    select_routed_expert_schema,
 )
 
 GRUG_ROTARY_PERCENT = 0.5
@@ -302,13 +301,11 @@ class GrugMoeBridge(MegatronModelBridge):
                     AutoMapping(f"{megatron}.linear_fc2.weight", f"{hf}.down_proj.weight"),
                 ]
             )
-        schema_version = config.grugmoe_artifact_schema_version
         hf_pretrained = getattr(self, "hf_pretrained", None)
         state = getattr(hf_pretrained, "state", None)
-        if state is not None:
-            split = has_split_routed_experts(set(state.source.get_all_keys()))
-            schema_version = GRUG_SPLIT_EXPERT_SCHEMA_VERSION if split else GRUG_STACKED_EXPERT_SCHEMA_VERSION
-        mappings.extend(_routed_expert_mappings(schema_version))
+        weight_keys = set(state.source.get_all_keys()) if state is not None else None
+        routed_expert_schema = select_routed_expert_schema(config.grugmoe_artifact_schema_version, weight_keys)
+        mappings.extend(_routed_expert_mappings(routed_expert_schema))
         if config.latent_dim is not None:
             mappings.extend(
                 [

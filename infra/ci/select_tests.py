@@ -44,6 +44,7 @@ SCOPES: tuple[str, ...] = (
     "finelog",
     "finestore",
     "ducky",
+    "skyrlrecipe",
     "verifyit",
     "deploy",
     "iac",
@@ -101,6 +102,7 @@ UV_PACKAGE: dict[str, str] = {
     "finelog": "marin-finelog",
     "finestore": "marin-finestore",
     "ducky": "marin-ducky",
+    "skyrlrecipe": "marin-skyrlrecipe",
     "verifyit": "marin-verifyit",
     "deploy": "marin-deploy",
     "iac": "marin-iac",
@@ -183,6 +185,7 @@ DEFAULT_LEG_TIMEOUT = 15
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "skyrl-wheel": (
+        "lib/skyrlrecipe/",
         "vendor/skyrl/",
         "vendor/harbor/",
         "lib/finelog/",
@@ -195,16 +198,6 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "lib/verifyit/",
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
-    ),
-    "evalchemy-unit": (
-        "vendor/evalchemy/",
-        "lib/finestore/",
-        "lib/rigging/",
-        "lib/marin/src/marin/evaluation/evalchemy/",
-        "experiments/evaluation/",
-        "infra/ci/select_tests.py",
-        ".github/workflows/unified-unit.yaml",
-        *DEPENDENCY_MANIFESTS,
     ),
     "harbor-unit": (
         "vendor/harbor/",
@@ -762,6 +755,12 @@ def classify(
     forced: set[str] = set()
     native_changed: set[str] = set()
     experiment_asset_areas: set[str] = set()
+
+    launch_census = "tests/rl/test_rl_launch_documents.py"
+    if (repo_root / launch_census).is_file() and any(
+        path.startswith(("vendor/skyrl/", "lib/skyrlrecipe/")) for path in changed_files
+    ):
+        direct_tests["marin"].append(launch_census)
 
     for filepath in changed_files:
         if filepath in broad_triggers:
