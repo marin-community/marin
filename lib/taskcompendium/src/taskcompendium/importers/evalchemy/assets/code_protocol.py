@@ -17,6 +17,9 @@ from verifyit.adapters.completion import END_OF_TURN
 
 HUMANEVAL_STOPS = ("\nclass", "\ndef", "\n#", "\nif", "\nprint", "\n```", *END_OF_TURN)
 HUMANEVAL_REQUEST_STOPS = HUMANEVAL_STOPS[:4]
+# The alarm for the whole test program. HumanEval and CruxEval keep their sources' alarms. HumanEval+ and MBPP+ run
+# every base and plus input in one program, so they get evalplus's 60-second limit for a whole task.
+EXECUTION_TIMEOUT = {"humaneval": 3, "humanevalplus": 60, "mbppplus": 60, "cruxeval": 10}
 PYTHON_IMPORTS = (
     "import math",
     "import re",
@@ -108,11 +111,13 @@ def crux_answer(response: str, direction: str) -> str:
 
 
 def _crux_expression(answer: str, direction: str) -> str:
-    call = CRUX_CALL.search(answer)
-    if call is not None:
-        if direction == "input":
-            return call.group(0)
-        return answer.replace(call.group(0), "").replace("=", "").replace("assert", "").strip()
+    """Read an answer block by CRUXEval's harness rule."""
+    # Split at the first "==" as CRUXEval's harness does (inference/tasks/*_prediction.py): an input answer is the
+    # call before it, and an output answer is the text after it, including any later "==" where the harness stops.
+    if "==" in answer:
+        answer = answer.split("==", 1)[0 if direction == "input" else 1].strip()
+    if direction == "input" and "assert f" in answer:
+        answer = "f" + answer.split("assert f", 1)[1].strip()
     return answer
 
 
@@ -120,6 +125,12 @@ def test_program(problem: Mapping[str, Any], response: str, suite: str, directio
     """Compile a private test program for execution only inside a grading sandbox."""
     if suite == "cruxeval":
         answer = crux_answer(response, direction)
+        # Like CRUXEval's harness (evaluation/utils_general.py), fail an output answer containing f(<input>) and an
+        # input answer without "f(" without running them.
+        if (direction == "output" and f"f({problem['input']})" in answer) or (
+            direction == "input" and "f(" not in answer
+        ):
+            return "raise AssertionError"
         # The legacy output task compares literals; it does not recompute f(input).
         return f"{problem['code']}\nassert {problem['output']} == {answer}"
     generation = generation_code(problem, response, suite)
@@ -129,3 +140,51 @@ def test_program(problem: Mapping[str, Any], response: str, suite: str, directio
     if suite == "humanevalplus":
         tests += f"\ncheck({problem['entry_point']})"
     return "\n".join(PYTHON_IMPORTS) + "\n" + generation + "\n" + tests + "\n"
+
+
+def execution_program(program: str, timeout: int) -> str:
+    """Return the grader command's script: the test program in a forked child, with an alarm after ``timeout`` seconds.
+
+    The child has one more second before it is killed, and the reward goes to reward.json beside the script.
+    The receipt and exception handler reject early exits, including os._exit(0).
+    """
+    return (
+        "import json\n"
+        "import multiprocessing\n"
+        "import signal\n"
+        "from pathlib import Path\n"
+        "import numpy\n"
+        "\n"
+        "def timeout_handler(signum, frame):\n"
+        "    raise TimeoutError('Candidate timed out')\n"
+        "\n"
+        "def execute(connection):\n"
+        "    signal.signal(signal.SIGALRM, timeout_handler)\n"
+        f"    signal.setitimer(signal.ITIMER_REAL, {timeout})\n"
+        "    try:\n"
+        f"        exec(compile({program!r}, '<candidate>', 'exec'), {{}})\n"
+        "    except BaseException:\n"
+        "        passed = False\n"
+        "    else:\n"
+        "        passed = True\n"
+        "    finally:\n"
+        "        signal.setitimer(signal.ITIMER_REAL, 0)\n"
+        "    connection.send(passed)\n"
+        "\n"
+        "context = multiprocessing.get_context('fork')\n"
+        "receiver, sender = context.Pipe(duplex=False)\n"
+        "process = context.Process(target=execute, args=(sender,))\n"
+        "process.start()\n"
+        "sender.close()\n"
+        f"process.join({timeout + 1})\n"
+        "if process.is_alive():\n"
+        "    process.kill()\n"
+        "    process.join()\n"
+        "passed = False\n"
+        "if receiver.poll():\n"
+        "    try:\n"
+        "        passed = receiver.recv() is True and process.exitcode == 0\n"
+        "    except EOFError:\n"
+        "        pass\n"
+        "Path(__file__).with_name('reward.json').write_text(json.dumps({'reward': float(passed)}))\n"
+    )
