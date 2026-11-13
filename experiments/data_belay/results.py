@@ -43,11 +43,14 @@ CHOICE_DIR = "data_belay/choice"
 
 @dataclasses.dataclass(frozen=True)
 class TrainedMix:
-    """The second cache that a run trained on, and its share of the training tokens, as the run logged them."""
+    """The second cache that a run trained on, its share of the training tokens, and those tokens, as the run logged
+    them."""
 
     share: float
     cache_root: str
     """The cache path that ``prepare`` printed, which holds the cache's manifest."""
+    train_tokens: int
+    """Tokens the run trained on: its steps times its batch of sequences."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -92,10 +95,15 @@ def _wandb_run(run_id: str):
 def trained_mix(config: Mapping[str, Any]) -> TrainedMix | None:
     """The mix in a run's W&B config, or None for a run on the base mix alone."""
     data = config["data"]
-    share = data["train_weights"].get("mix")
+    weights = data["train_weights"]
+    share = weights.get("mix")
     if share is None:
+        if weights["train"] != 1.0:
+            raise ValueError(f"the run trains the base cache at a weight of {weights['train']} without a mix component")
         return None
-    return TrainedMix(float(share), data["components"]["mix"]["cache_dir"].removesuffix("/train"))
+    trainer = config["trainer"]["trainer"]
+    tokens = trainer["num_train_steps"] * trainer["train_batch_size"] * config["model"]["max_seq_len"]
+    return TrainedMix(float(share), data["components"]["mix"]["cache_dir"].removesuffix("/train"), tokens)
 
 
 def arm_mix(run_ids: Sequence[str]) -> TrainedMix | None:

@@ -108,7 +108,7 @@ def _whole_percent(ctx: click.Context, param: click.Parameter, share: float) -> 
     """A run's label names its share in whole percent, so a share must be one for the label to be exact."""
     if not math.isclose(share * 100, round(share * 100)):
         raise click.BadParameter(f"{share:g} is not a whole percent; run labels name the share in whole percent")
-    return share
+    return round(share * 100) / 100
 
 
 def _dataset_options(command):
@@ -349,7 +349,8 @@ def report(rung: str, candidate: str, seeds: str, against: str | None) -> None:
     result, against_dilution = _rung_result(choice_root, rung, candidate, seed_list, against)
     harm_name = "dilution" if against_dilution else baseline_name
     click.echo(f"{candidate} against {baseline_name} at {rung}: {result.verdict}")
-    for name in (candidate,) if against is None else (candidate, against):
+    arms = (candidate,) if against is None else (candidate, against)
+    for name in arms:
         click.echo(_data_line(rung, name, seed_list))
     if against is None and not against_dilution:
         click.echo("no dilution references at this share and rung: harm is against the control")
@@ -372,8 +373,7 @@ def report(rung: str, candidate: str, seeds: str, against: str | None) -> None:
         results.append(_rung_result(choice_root, lower, candidate, seed_list, against)[0])
     results.append(result)
     rungs = ", ".join(
-        f"{r} {x.verdict}{_epochs_note(r, candidate, seed_list)}"
-        for r, x in zip(DATA_BELAY_RUNGS, results, strict=False)
+        f"{r} {x.verdict}{_epochs_note(r, arms, seed_list)}" for r, x in zip(DATA_BELAY_RUNGS, results, strict=False)
     )
     click.echo(f"ladder: {rungs} -> {ladder_step(results, len(DATA_BELAY_RUNGS))}")
 
@@ -384,7 +384,7 @@ def _arm_reading(rung: str, candidate: str, seeds: list[int]) -> tuple[float, Pr
     if mix is None:
         return None
     cache = PreparedCache.read(mix.cache_root)
-    return mix.share, cache, cache.reading(mix.share, rung_tokens(rung))
+    return mix.share, cache, cache.reading(mix.share, mix.train_tokens)
 
 
 def _data_line(rung: str, candidate: str, seeds: list[int]) -> str:
@@ -393,22 +393,20 @@ def _data_line(rung: str, candidate: str, seeds: list[int]) -> str:
         return f"data: {candidate} trains on the base mix alone"
     share, cache, reading = arm
     return (
-        f"data: {candidate} trained at a share of {share * 100:g}%: read {_billions(reading.tokens)} tokens, "
-        f"{reading.epochs:.2f} epochs of its {_billions(cache.tokens)}-token cache, {reading.dataset_seen:.1%} of the "
-        f"dataset's about {_billions(cache.dataset_tokens)} tokens"
+        f"data: {candidate} trained at a share of {share * 100:g}%: read {_tokens(reading.tokens)} tokens, "
+        f"{reading.epochs:.2f} epochs of its {_tokens(cache.tokens)}-token cache, {reading.dataset_seen * 100:.2g}% of "
+        f"the dataset's about {_tokens(cache.dataset_tokens)} tokens"
     )
 
 
-def _epochs_note(rung: str, candidate: str, seeds: list[int]) -> str:
-    arm = _arm_reading(rung, candidate, seeds)
-    if arm is None:
-        return ""
-    _, _, reading = arm
-    return f" ({reading.epochs:.2f} epochs)"
+def _epochs_note(rung: str, arms: tuple[str, ...], seeds: list[int]) -> str:
+    """The epochs of each arm's cache at ``rung``, leaving out an arm on the base mix alone."""
+    epochs = [f"{arm[2].epochs:.2f}" for name in arms if (arm := _arm_reading(rung, name, seeds)) is not None]
+    return f" ({' and '.join(epochs)} epochs)" if epochs else ""
 
 
-def _billions(tokens: int) -> str:
-    return f"{tokens / 1e9:#.3g}B"
+def _tokens(tokens: int) -> str:
+    return f"{tokens / 1e9:,.2f}B" if tokens >= 1e9 else f"{tokens / 1e6:,.0f}M"
 
 
 def _rung_result(

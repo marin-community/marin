@@ -184,9 +184,9 @@ class PreparedCache:
             max(int(intake["estimated_tokens"]), int(written["stats"]["total_tokens"])),
         )
 
-    def reading(self, share: float, rung_tokens: int) -> CacheReading:
-        """What a run of ``rung_tokens`` training tokens reads at ``share``; a run sees at most the whole cache."""
-        tokens = round(share * rung_tokens)
+    def reading(self, share: float, run_tokens: int) -> CacheReading:
+        """What a run of ``run_tokens`` training tokens reads at ``share``; a run sees at most the whole cache."""
+        tokens = round(share * run_tokens)
         return CacheReading(tokens, tokens / self.tokens, min(tokens, self.tokens) / self.dataset_tokens)
 
     def check_rung(self, rung: str, rung_tokens: int) -> None:

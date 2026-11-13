@@ -51,11 +51,12 @@ the training cluster's `MARIN_PREFIX` (`s3://marin-us-east-02a/marin/data_belay/
 `report` reads it from there.
 
 Under the verdict, `report` prints how much of each arm's data its runs read: the tokens, the epochs of its cache, and
-the fraction of the dataset seen. It takes the share and the cache from the runs' W&B config and the dataset's size
-from the cache's manifest. The ladder line gives the epochs at each rung, since a gain that falls off as the epochs
-pass 1 reads differently from one that falls off below 1. The share is the runs' too: a candidate is judged against
-the dilution references whose runs trained at its share, and `--against` refuses two arms at different shares.
-`--share` takes a whole percent, so that the run label (`p20`) names it exactly.
+the fraction of the dataset seen. It takes the share, the cache and the tokens trained from the runs' W&B config, and
+the dataset's size from the cache's manifest, so it needs the manifest as well as the scores. The ladder line gives
+the epochs at each rung, since a gain that falls off as the epochs pass 1 reads differently from one that falls off
+below 1. The share is the runs' too: a candidate is judged against the dilution references whose runs trained at its
+share, and `--against` refuses two arms at different shares. `--share` takes a whole percent, so that the label of the
+cache it prepares (`p20`) names the share exactly.
 
 `check` allows the licenses on the Blue Oak Council's [list of permissive licenses](https://blueoakcouncil.org/list)
 (every rating, version 16) and OpenMDW. It rejects NC and ND licenses, and refuses any other license for a person to
