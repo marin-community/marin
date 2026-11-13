@@ -176,12 +176,12 @@ and token limits:
   requests: final observations that the model never receives, the harness's data, and metrics. A turn with
   recorded observations takes no `reply`.
 
-Harnesses declare `context_recovery`: `NEVER` applies a context rejection's original error, `ALWAYS` permits
-recovery, and `AFTER_TURN` permits it after a completed model turn anywhere in the attempt.
-Model adapters report refusals with `ContextRejected(original_error, message)`; when recovery is permitted,
-the session raises `ContextWindowExceeded` without recording the refused request, spending a model turn or
-resetting cumulative limits or deadlines. SkyRL's native agent harness uses `ALWAYS`, and full Harbor trials
-use `AFTER_TURN`.
+Harnesses declare `context_recovery`: `NEVER` stops or fails the attempt using the original error, `ALWAYS`
+permits recovery, and `AFTER_TURN` permits it after a completed model turn anywhere in the attempt.
+Model adapters report context refusals by raising `ContextRejected(original_error, message)`; when recovery
+is permitted, the session raises `ContextWindowExceeded` without recording the refused request, spending a
+model turn or resetting cumulative limits or attempt deadlines. SkyRL's native agent harness uses `ALWAYS`,
+and full Harbor trials use `AFTER_TURN`.
 
 The session applies these rules:
 
