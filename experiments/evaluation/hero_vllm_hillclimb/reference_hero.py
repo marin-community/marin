@@ -4,7 +4,7 @@
 """Score the hill climb's frozen histories with the native Hero JAX implementation.
 
 The reference restores the same SFT checkpoint the served export was written from, with the export's
-pending router-bias update (``restore_weights``), and runs the training model with the dropless MoE
+pending router-bias update (``restore_bf16``), and runs the training model with the dropless MoE
 backend the native sampler uses. Each history is one batch row; the requested positions are gathered
 from a single forward pass and projected one position at a time.
 
@@ -34,7 +34,6 @@ import draccus
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import jmp
 import numpy as np
 import tensorstore as ts
 from jax.sharding import NamedSharding
@@ -43,16 +42,22 @@ from levanter.cutlass_kernel_cache import cutlass_kernel_cache, install
 from levanter.distributed import DistributedConfig
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.tensorstore_serialization import ARRAY_DRIVER, KVSTORE_DRIVER, build_kvstore_spec
+from levanter.utils.jax_utils import leaf_key_paths
 from rigging.filesystem.factory import open_url
 from rigging.log_setup import configure_logging
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.train import DEFAULT_DROPLESS_MOE_IMPLEMENTATION
-from experiments.grug.moe_hero_ep.weights import PENDING_QB_BETAS_KEY, checkpoint_weight_path, restore_weights
+from experiments.grug.moe_hero_ep.weights import (
+    PENDING_QB_BETAS_KEY,
+    checkpoint_weight_path,
+    validate_checkpoint_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
-COMPUTE_POLICY = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
+ROUTER_BIAS_PATH = "stacked_blocks/stacked/mlp/router_bias"
+READ_CONCURRENCY = 32
 PAD_TOKEN = 0
 LENGTH_QUANTUM = 128
 LONG_TAIL_POSITIONS = 512
@@ -129,26 +134,73 @@ def score_positions(model: Transformer, tokens: jax.Array, positions: jax.Array,
     )
 
 
-def router_bias_check(checkpoint: str) -> dict:
-    """Compare the stored router bias with the pending-QB-beta bias that restore and export apply."""
+def _open_store(checkpoint: str, path: str, context: ts.Context) -> ts.TensorStore:
+    spec = {
+        "driver": ARRAY_DRIVER,
+        "kvstore": {"driver": KVSTORE_DRIVER, "base": build_kvstore_spec(checkpoint), "path": path},
+    }
+    return ts.open(spec, open=True, read=True, context=context).result()
+
+
+def applied_router_bias(pending: np.ndarray) -> np.ndarray:
+    """The export's and ``apply_qb_betas``'s bias: negated, centered QB betas in FP32."""
+    bias = -pending.astype(np.float32)
+    return bias - bias.mean(axis=-1, keepdims=True)
+
+
+def restore_bf16(checkpoint: str, metadata_digest: str, config: GrugModelConfig, mesh) -> tuple[Transformer, dict]:
+    """Restore authoritative weights directly into BF16 shards, then apply the pending router bias.
+
+    ``restore_weights`` materializes the FP32 masters first (128 GiB per GPU on 16 GPUs), which does
+    not fit beside the BF16 copy. Reading each shard through a TensorStore cast avoids the FP32 copy and
+    yields the same BF16 values as the compute-policy cast.
+    """
+    validate_checkpoint_metadata(checkpoint, metadata_digest)
     weights = checkpoint_weight_path(checkpoint)
     parent = weights.rpartition("/")[0]
-
-    def read(path: str) -> np.ndarray:
-        spec = {
-            "driver": ARRAY_DRIVER,
-            "kvstore": {"driver": KVSTORE_DRIVER, "base": build_kvstore_spec(checkpoint), "path": path},
+    context = ts.Context(
+        {
+            "cache_pool": {"total_bytes_limit": 0},
+            "data_copy_concurrency": {"limit": READ_CONCURRENCY},
+            "s3_request_concurrency": {"limit": READ_CONCURRENCY},
         }
-        return ts.open(spec, open=True, read=True).result().read().result().astype(np.float32)
+    )
+    pending = _open_store(checkpoint, f"{parent}/{PENDING_QB_BETAS_KEY}" if parent else PENDING_QB_BETAS_KEY, context)
+    applied = applied_router_bias(pending.read().result())
+    template = eqx.filter_eval_shape(Transformer.init, config, key=jax.random.PRNGKey(0))
+    paths = [path.replace(".", "/") for path in jax.tree.leaves(leaf_key_paths(template))]
+    leaves = []
+    stored_bias = None
+    for path, exemplar in zip(paths, jax.tree.leaves(template), strict=True):
+        assert isinstance(exemplar.sharding, NamedSharding), (path, exemplar.sharding)
+        sharding = NamedSharding(mesh, exemplar.sharding.spec)
+        store = _open_store(checkpoint, f"{weights}/{path}", context)
+        if tuple(store.shape) != tuple(exemplar.shape):
+            raise ValueError(f"Checkpoint shape differs from model config: {path}: {store.shape} != {exemplar.shape}")
+        if path == ROUTER_BIAS_PATH:
+            stored_bias = store.read().result().astype(np.float32)
+            values = applied.astype(jnp.bfloat16)
 
-    stored = read(f"{weights}/stacked_blocks/stacked/mlp/router_bias")
-    pending = read(f"{parent}/{PENDING_QB_BETAS_KEY}" if parent else PENDING_QB_BETAS_KEY)
-    applied = -pending - (-pending).mean(axis=-1, keepdims=True)
-    return {
-        "max_abs_stored_minus_applied": float(np.abs(stored - applied).max()),
-        "max_abs_stored": float(np.abs(stored).max()),
+            def read(index, values=values):
+                return values[index]
+
+        else:
+
+            def read(index, store=store):
+                return ts.cast(store[index], ts.bfloat16).read().result()
+
+        started = time.time()
+        leaves.append(jax.make_array_from_callback(exemplar.shape, sharding, read, dtype=jnp.bfloat16))
+        logger.info("Restored %s %s %s in %.1fs", path, exemplar.shape, sharding.spec, time.time() - started)
+    assert stored_bias is not None, "checkpoint has no router bias"
+    model = jax.tree.unflatten(jax.tree.structure(template), leaves)
+    jax.block_until_ready(model)
+    check = {
+        "max_abs_stored_minus_applied": float(np.abs(stored_bias - applied).max()),
+        "max_abs_stored": float(np.abs(stored_bias).max()),
         "max_abs_applied": float(np.abs(applied).max()),
     }
+    return model, check
 
 
 def history_sha256(tokens: tuple[int, ...], position: int) -> str:
@@ -179,8 +231,6 @@ def main() -> None:
     # The native sampler's dropless backend; it cannot drop another row's assignments.
     config = dataclasses.replace(config, moe_implementation=DEFAULT_DROPLESS_MOE_IMPLEMENTATION, expert_chunks=1)
     checkpoint = request["checkpoint"]
-    bias_check = router_bias_check(checkpoint) if jax.process_index() == 0 else None
-    logger.info("Router bias check: %s", bias_check)
 
     batch_size = jax.device_count()
     mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
@@ -201,10 +251,9 @@ def main() -> None:
     stat_keys: tuple[str, ...] = ()
     with jax.set_mesh(mesh):
         restore_started = time.time()
-        model = restore_weights(checkpoint, request["metadata_digest"], config, mesh)
-        model = COMPUTE_POLICY.cast_to_compute(model)
-        jax.block_until_ready(model)
+        model, bias_check = restore_bf16(checkpoint, request["metadata_digest"], config, mesh)
         timings["restore_seconds"] = time.time() - restore_started
+        logger.info("Restored BF16 weights in %.1fs; router bias check: %s", timings["restore_seconds"], bias_check)
         for rows, length in batches:
             tokens, positions, targets = batch_arrays(rows, batch_size, length)
             arrays = [
@@ -266,7 +315,7 @@ def main() -> None:
             "router_bias_check": bias_check,
             "moe_overflow_total": overflow_total,
             "model_stat_keys": list(stat_keys),
-            "compute_policy": "params=float32,compute=bfloat16,output=bfloat16; logits fp32; log_softmax fp32",
+            "compute_policy": "BF16 weights (TensorStore cast of FP32 masters); logits fp32; log_softmax fp32",
             "jax": jax.__version__,
             "device_kind": sorted({device.device_kind for device in jax.devices()}),
             "process_count": jax.process_count(),
