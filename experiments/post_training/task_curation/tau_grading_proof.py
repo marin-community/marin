@@ -151,7 +151,7 @@ def main() -> None:
     failed = [entry for entry in records if entry["outcome"] not in PROOF_OUTCOMES]
     with StoragePath(args.output).open("w") as stream:
         for entry in records:
-            stream.write((json.dumps(entry) + "\n").encode())
+            stream.write(json.dumps(entry) + "\n")
     for entry in records:
         logger.info("%s %s %s reward=%s", entry["proof"], entry["task_id"][:72], entry["outcome"], entry["reward"])
     if failed:
