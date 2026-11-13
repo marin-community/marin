@@ -125,6 +125,11 @@ jobs and node disk pressure retain their prior classification. SANDBOX writable
 layer accounting is unqualified, so no controller currently advertises this
 capability. Restricted-profile overflow evidence is insufficient.
 
+Prepared-image submission requires the separate `sandbox-image-workdir` backend
+capability, even without declared disk. Older controllers are rejected before
+submission because they hide the image's `/app` under an empty volume. This
+capability describes image preservation and does not qualify storage enforcement.
+
 Harbor selects this backend through `--environment iris-sandbox` with `cluster`,
 `pool`, `priority` and `ttl` kwargs. It reports no storage capability and rejects
 declared disk until a real SANDBOX overflow qualifies the pinned pool and its

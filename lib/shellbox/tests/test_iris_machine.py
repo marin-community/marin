@@ -631,19 +631,22 @@ def test_interrupted_iris_command_retains_files_and_can_run_verifier(tmp_path, i
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("backend", ["kubernetes", "worker-daemon"])
-def test_prepared_iris_task_requires_kubernetes_even_without_declared_disk(monkeypatch, backend):
+@pytest.mark.parametrize(
+    "backend,capabilities",
+    [("kubernetes", ["sandbox-image-workdir"]), ("kubernetes", []), ("worker-daemon", ["sandbox-image-workdir"])],
+)
+def test_prepared_iris_task_requires_image_workdir_contract_even_without_disk(monkeypatch, backend, capabilities):
     client = RecordingClient()
     rpc = LocalRpc()
     rpc.list_backends = lambda _: controller_pb2.Controller.ListBackendsResponse(
-        backends=[controller_pb2.Controller.BackendSummary(kind=backend)]
+        backends=[controller_pb2.Controller.BackendSummary(kind=backend, capabilities=capabilities)]
     )
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
     factory = KubernetesIrisMachineFactory(controller_url="http://controller")
     spec = MachineSpec(RegistryImage("fixture@sha256:" + "a" * 64))
-    if backend == "kubernetes":
+    if backend == "kubernetes" and capabilities:
         with pytest.raises(SubmissionRecorded):
             asyncio.run(factory.create(spec))
         assert client.submitted["container_profile"] == job_pb2.CONTAINER_PROFILE_SANDBOX

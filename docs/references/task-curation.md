@@ -1433,6 +1433,11 @@ contents; commands run in separate process groups so a timeout or cancellation
 can stop a command while preserving the task filesystem for the verifier.
 Images must provide `setsid` and a readable `/proc`.
 
+Prepared-image submission requires the separate `sandbox-image-workdir` backend
+capability, even without declared disk. Older controllers are rejected before
+submission because they hide the image's `/app` under an empty volume. This
+capability describes image preservation and does not qualify storage enforcement.
+
 Iris SANDBOX storage enforcement is unqualified. Harbor reports no storage-limit
 capability and rejects declared `storage_mb` for this environment. The Shellbox
 adapter also requires a direct Kubernetes controller advertising

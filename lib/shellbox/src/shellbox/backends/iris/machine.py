@@ -14,7 +14,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -23,6 +23,7 @@ from connectrpc.errors import ConnectError
 from iris.cli.connect import ControllerEndpoint, connect_controller
 from iris.client import IrisClient, Job, Task
 from iris.cluster.constraints import Constraint, ConstraintOp
+from iris.cluster.runtime.sandbox import SANDBOX_IMAGE_WORKDIR_CAPABILITY
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.resources.limits import SANDBOX_STORAGE_LIMIT_CAPABILITY, ResourceLimitReason
 from iris.resources.state import TaskState
@@ -464,10 +465,9 @@ class IrisMachineFactory:
         machine = await self.create(spec.primary_container.machine)
         return SandboxTask({spec.primary: machine}, spec, machine.close)
 
-    def _check_backend(self, rpc: ControllerServiceClientSync, spec: MachineSpec) -> None:
+    def _check_backend(self, backends: Sequence[controller_pb2.Controller.BackendSummary], spec: MachineSpec) -> None:
         if spec.storage_mb is None:
             return
-        backends = rpc.list_backends(controller_pb2.Controller.ListBackendsRequest()).backends
         if (
             len(backends) != 1
             or backends[0].kind != "kubernetes"
@@ -492,7 +492,8 @@ class IrisMachineFactory:
                 accept_compression=IRIS_RPC_COMPRESSIONS,
                 send_compression=None,
             )
-            self._check_backend(rpc, spec)
+            backends = rpc.list_backends(controller_pb2.Controller.ListBackendsRequest()).backends
+            self._check_backend(backends, spec)
             job = client.submit(
                 # Process 1 must exit on the stop signal, or a cancelled machine keeps its node
                 # capacity for the whole termination grace period.
@@ -535,8 +536,13 @@ class IrisMachineFactory:
 class KubernetesIrisMachineFactory(IrisMachineFactory):
     """Prepared-image task pods whose /app is not masked by a worker workdir."""
 
-    def _check_backend(self, rpc: ControllerServiceClientSync, spec: MachineSpec) -> None:
-        backends = rpc.list_backends(controller_pb2.Controller.ListBackendsRequest()).backends
-        if len(backends) != 1 or backends[0].kind != "kubernetes":
-            raise UnsupportedMachineSpec("Prepared Iris tasks require a direct Kubernetes controller")
-        super()._check_backend(rpc, spec)
+    def _check_backend(self, backends: Sequence[controller_pb2.Controller.BackendSummary], spec: MachineSpec) -> None:
+        if (
+            len(backends) != 1
+            or backends[0].kind != "kubernetes"
+            or SANDBOX_IMAGE_WORKDIR_CAPABILITY not in backends[0].capabilities
+        ):
+            raise UnsupportedMachineSpec(
+                "Prepared Iris tasks require a direct Kubernetes controller advertising sandbox-image-workdir"
+            )
+        super()._check_backend(backends, spec)

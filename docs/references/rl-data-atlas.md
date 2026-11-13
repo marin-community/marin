@@ -137,7 +137,10 @@ Before selecting a new catalog load:
 2. Survey the production backends at Marin latest for their current capabilities
    with the [survey procedure](#backend-survey), and publish the matrix beside the deployment record.
    Execute this survey at each deployment; do not reuse an older deployment's matrix.
-3. Keep Iris sandbox storage admission disabled until a real
+3. Require `sandbox-image-workdir` in the direct Kubernetes backend descriptor
+   before submitting any prepared-image Iris task, even without declared disk.
+   Older controllers hide `/app` and must be rejected before submission.
+   Keep Iris sandbox storage admission disabled until a real
    `CONTAINER_PROFILE_SANDBOX` overflow succeeds on the pinned CPU pool. Record
    the node's CoreWeave-provided `runsc.toml` `overlay2` setting beside the raw
    kubelet eviction status; a restricted-profile overflow is insufficient.
