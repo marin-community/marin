@@ -96,7 +96,6 @@ def training_recipe(steps: int) -> dict:
     )
     config["generator"].update(
         eval_sampling_params={"seed": SEED},
-        max_num_seqs=1,
         enable_prefix_caching=True,
         vllm_attention_backend="TRITON_ATTN",
         engine_init_kwargs={
@@ -111,16 +110,6 @@ def training_recipe(steps: int) -> dict:
             },
         },
     )
-    # Bound task admission to the serving capacity of this one-sequence-per-rank profile.
-    generator = config["generator"]
-    config["trajectory_runner"] = {
-        **config.get("trajectory_runner", {}),
-        "max_concurrent_tasks": (
-            generator["num_inference_engines"]
-            * generator["inference_engine_data_parallel_size"]
-            * generator["max_num_seqs"]
-        ),
-    }
     trainer["policy"]["optimizer_config"].update(
         lr=1e-6,
         adam_betas=[0.9, 0.999],

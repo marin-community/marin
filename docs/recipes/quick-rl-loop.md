@@ -17,7 +17,7 @@ and an 8,192-token response limit.
 ## Serving profile
 
 The recipe uses batch-invariant arithmetic, prefix caching, TRITON_ATTN and a
-fixed evaluation seed. Task admission follows the configured serving capacity.
+fixed evaluation seed. Each inference rank schedules up to 1,024 sequences.
 See the [serving reproducibility record](https://github.com/marin-community/marin/issues/11007)
 for runtime qualification and limitations.
 
