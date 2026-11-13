@@ -105,7 +105,7 @@ def simpleqa_verified_source(*, thinking: bool) -> RlDataSource[EvaluationCorpus
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(
-                name="evalchemy-simpleqa-verified",
+                name="evalchemy-" + ("simpleqa-verified-thinking" if thinking else "simpleqa-verified"),
                 source=HfSource(
                     "google/simpleqa-verified",
                     SIMPLEQA_VERIFIED_REVISION,
