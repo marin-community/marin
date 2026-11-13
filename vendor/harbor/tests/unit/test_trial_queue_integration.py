@@ -189,7 +189,7 @@ class TestTrialQueueIntegration:
             agents=[AgentConfig(name="pi")], job_name="job", tasks=[task]
         )
 
-        resolved_task_configs = await Job._resolve_task_configs(config)
+        resolved_task_configs = await Job.resolve_task_configs(config)
         resolved_task_configs[0].ref = f"sha256:{'a' * 64}"
 
         assert config.tasks[0].ref == "latest"

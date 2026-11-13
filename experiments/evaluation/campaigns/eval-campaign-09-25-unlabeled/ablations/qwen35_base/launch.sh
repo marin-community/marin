@@ -86,7 +86,7 @@ launch_evalchemy() {
     --model-config "$STAGED_MODEL_CONFIG" \
     --federated_cluster "$FEDERATED_CLUSTER" \
     --priority "$PRIORITY" \
-    --evalchemy-config "$EVALCHEMY_CONFIG_DIR/$config.yaml"
+    --evaluation-config "$EVALUATION_CONFIG" --evals "$config"
 }
 
 launch_harbor() {
@@ -125,9 +125,8 @@ arguments=(
   --federated_cluster "$FEDERATED_CLUSTER"
   --priority "$PRIORITY"
 )
-for name in "${evalchemy_names[@]}"; do
-  arguments+=(--evalchemy-config "$EVALCHEMY_CONFIG_DIR/$name.yaml")
-done
+selection=$(IFS=,; echo "${evalchemy_names[*]}")
+arguments+=(--evaluation-config "$EVALUATION_CONFIG" --evals "$selection")
 run_campaign_launch "$submit" "${arguments[@]}"
 
 harbor_names=(

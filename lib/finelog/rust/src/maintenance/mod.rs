@@ -60,6 +60,18 @@ pub const OBJECT_ORPHAN_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
 /// it stays a minority of the cycle.
 pub const REWRITE_LAYOUT_BUDGET: Duration = Duration::from_secs(3);
 
+/// Wall-clock budget one maintenance cycle spends compacting an object-backed
+/// table's runs.
+///
+/// Every query-serving table shares the same two maintenance-cycle slots, so a
+/// table visits a slot once per round of every table. On the marin hub a round
+/// took about 12 minutes across 35 tables, and one 32-input run per visit
+/// drained 32 L0s per round while a busy table flushed several hundred.
+/// Draining runs until this budget elapses makes a visit's progress scale with
+/// its backlog. A run already in flight is never abandoned, so a cycle can
+/// overrun.
+pub const OBJECT_COMPACTION_BUDGET: Duration = Duration::from_secs(20);
+
 /// Process-wide concurrency limits every table's maintenance shares.
 ///
 /// One instance exists per store. Holding these here rather than per table is
