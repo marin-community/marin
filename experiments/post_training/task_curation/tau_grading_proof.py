@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grade real repaired tau tasks end to end through the production grader path.
+"""Grade real repaired tau tasks end to end through the production grading path.
 
 The tau repair restores the previously missing grader lock
 (``images/env-278169f50750da36/2026.10.08/requirements.lock``) and moves the tau
@@ -9,12 +9,18 @@ pivot judge temperature to the standing 0.7 policy. This module proves the repai
 on a sample of published tasks from both repaired pins:
 
 - the grader environment installs from the pinned packages lock in a fresh local
-  grading machine (``grade_empty_in_sandbox`` through ``prepare_machine_spec``),
-  and an empty submission scores 0.0 under the judge's declared ``empty_output``
-  policy without touching the judge endpoint;
+  machine (``prepare_machine_spec`` builds the uv runtime from the hash lock) and
+  the locked distributions import inside the sandbox;
+- an empty submission scores 0.0 under the judge's declared ``empty_output``
+  policy through the production judge machinery, without a provider call;
 - the judge grades a real candidate reply through the production judge path
   (``grade_task`` with a live ``JudgeConnection``), with the model and
   temperature taken from the published ``JudgeSpec``.
+
+Judged specs grade through the judge service, not in a machine; every production
+sibling grader lock (like this one) ships no ``openai``, so the in-machine path
+does not execute judge modes. The machine step therefore proves the environment
+install, and the judge steps prove the end-to-end grading.
 
 Run it in a CPU Iris job co-located with the artifacts::
 
@@ -41,7 +47,6 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import ConversationTrace, GradingAttempt, TaskSpec, TextMessage, judge_spec
-from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from taskcompendium.runtime.local import LocalGraderMachines
 from taskcompendium.runtime.task_grading import grade_task
 
@@ -60,6 +65,12 @@ CANDIDATE_REPLY = (
     "your identity before we continue?"
 )
 EMPTY_CONTROL_MEMORY_MB = 8192
+MACHINE_PROBE_TIMEOUT = 300.0
+LOCK_PROBE = (
+    "import json, sys\n"
+    "import numpy, pandas, scipy, tomli_w, jsonschema, yaml, nltk\n"
+    "print(json.dumps({'python': sys.version.split()[0], 'lock_distributions': 'ok'}))"
+)
 PROOF_OUTCOMES = ("graded", "submission_failure")
 
 
@@ -77,20 +88,63 @@ def sample_tasks(cohort, size: int) -> Iterator[TaskSpec]:
         raise ValueError(f"{cohort.repo}@{cohort.revision} has {yielded} tasks, expected {size}")
 
 
-def empty_control(task: TaskSpec) -> GradeResult:
-    """Install the grader environment from the pinned lock in a fresh machine and grade nothing."""
+async def _lock_probe(environment, factory, machine_spec) -> dict:
+    from shellbox.machine import Command
+    from taskcompendium.runtime.environment import prepare_machine_spec
+
+    prepared = prepare_machine_spec(environment, factory, machine_spec, dict(os.environ))
+    machine = await factory.create(prepared)
+    try:
+        result = await machine.run(Command(("python3", "-c", LOCK_PROBE), cwd="/", timeout=MACHINE_PROBE_TIMEOUT))
+        if result.exit_code != 0:
+            raise RuntimeError(f"Lock environment probe failed: {result.stderr.decode()[:500]}")
+        return json.loads(result.stdout.decode())
+    finally:
+        await machine.close()
+
+
+def lock_install(task: TaskSpec) -> dict:
+    """Prepare the grader machine from the pinned lock and run its environment inside.
+
+    The judged tasks grade through the judge service, not in the machine, so this
+    step proves the environment half of the grader: the machine installs the lock
+    environment (``prepare_machine_spec`` builds the uv runtime from the 127-package
+    hash lock) and the locked distributions import inside the sandbox.
+    """
     environment = task.grader.environment
     if environment is None or environment.packages_lock != TAU_REPAIR_LOCK_URL:
         raise ValueError(f"{task.id}: the grader must declare the repaired packages lock")
     factory, machine_spec = LocalGraderMachines().machine(environment, EMPTY_CONTROL_MEMORY_MB)
-    result = asyncio.run(grade_empty_in_sandbox(task, factory, machine_spec))
-    lock = StoragePath(environment.packages_lock)
+    probe = asyncio.run(_lock_probe(environment, factory, machine_spec))
+    return {
+        "packages_lock": environment.packages_lock,
+        "lock_sha256": hashlib.sha256(StoragePath(environment.packages_lock).read_bytes()).hexdigest(),
+        "machine_backend": factory.backend.value,
+        "probe": probe,
+    }
+
+
+def empty_control(task: TaskSpec) -> GradeResult:
+    """Grade an empty submission through the production judge path.
+
+    The judge's declared ``empty_output`` policy scores the empty reply 0.0 without a
+    provider call, so this is grader liveness over the production machinery.
+    """
+    judge = judge_spec(task.grader)
+    if judge is None:
+        raise ValueError(f"{task.id}: the grader must declare a judge spec")
+    attempt = GradingAttempt(
+        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))),
+        stop_reason=None,
+    )
+    result = grade_task(task, attempt)
     return replace(
         result,
         detail={
             **(result.detail or {}),
-            "packages_lock": environment.packages_lock,
-            "lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
+            "empty_output_policy": (
+                judge.empty_output.value if hasattr(judge.empty_output, "value") else judge.empty_output
+            ),
         },
     )
 
@@ -143,17 +197,23 @@ def main() -> None:
         source_id = cohort.dataset.name
         tasks = list(sample_tasks(cohort, args.sample_size))
         logger.info("%s: proving %d tasks from %s@%s", blend, len(tasks), cohort.repo, cohort.revision)
+        install = lock_install(tasks[0])
+        records.append({"source_id": source_id, "proof": "lock_install", "outcome": "graded", **install})
+        logger.info(
+            "%s: lock environment installed in a %s machine: %s", blend, install["machine_backend"], install["probe"]
+        )
         for task in tasks:
-            records.append(record(source_id, task, "empty_control_lock_install", empty_control(task)))
+            records.append(record(source_id, task, "empty_control", empty_control(task)))
         with RelayJudgeEndpoint(args.relay_job, "glm-5.3", api_key).connect() as connection:
             for task in tasks:
                 records.append(record(source_id, task, "judge_end_to_end", judge_verdict(task, connection)))
-    failed = [entry for entry in records if entry["outcome"] not in PROOF_OUTCOMES]
+    failed = [entry for entry in records if entry.get("task_id") and entry["outcome"] not in PROOF_OUTCOMES]
     with StoragePath(args.output).open("w") as stream:
         for entry in records:
             stream.write(json.dumps(entry) + "\n")
     for entry in records:
-        logger.info("%s %s %s reward=%s", entry["proof"], entry["task_id"][:72], entry["outcome"], entry["reward"])
+        name = entry.get("task_id", entry.get("packages_lock", ""))[:72]
+        logger.info("%s %s %s reward=%s", entry["proof"], name, entry["outcome"], entry.get("reward"))
     if failed:
         raise SystemExit(f"{len(failed)} proof steps did not grade: {failed[:3]}")
     print(f"proof complete: {len(records)} steps, output {args.output}")
