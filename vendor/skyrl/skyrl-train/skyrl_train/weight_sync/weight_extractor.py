@@ -29,23 +29,6 @@ def is_weight_sync_dtype_compatible(
     return wire_dtype == weight_sync_dtype(model_type, name, model_dtype)
 
 
-def prepare_weight_sync_tensor(
-    model_type: str,
-    name: str,
-    tensor: torch.Tensor,
-    target_dtype: torch.dtype,
-) -> torch.Tensor:
-    """Cast an extracted tensor and stage replicated CUDA-only state."""
-
-    if is_grug_router_bias(model_type, name):
-        return tensor.to(
-            device=torch.cuda.current_device(),
-            dtype=target_dtype,
-            non_blocking=True,
-        )
-    return tensor.to(target_dtype)
-
-
 def validate_weight_sync_mode(model_type: str, *, fuse_weights: bool) -> None:
     """Reject transport modes that cannot preserve a model's state contract."""
 

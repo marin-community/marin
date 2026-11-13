@@ -1349,10 +1349,7 @@ def _completion_response_was_aborted(response: Dict[str, Any]) -> bool:
 
 
 def _completion_engine_error_response(results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Wrap the first engine-side `/completions` error as a client-level error, else None.
-
-    If any sub-request errors, the whole request returns that error.
-    """
+    """Return the first vLLM completion error as a client error, or None."""
     for result in results:
         if is_engine_error_response(result):
             error_details = result.get("error", result)

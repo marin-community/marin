@@ -555,10 +555,8 @@ def create_app(
         """
         Takes in OpenAI's `ChatCompletionRequest` and returns OpenAI's `ChatCompletionResponse`.
 
-        Note that the specific fields inside the request and response depend on the backend you use.
-        If `config.generator.backend` is `vllm`, then the request and response will be vLLM's.
-        SkyRL does not perform field validation beyond `model` and `session_id`,
-        and otherwise depends on the underlying engines' validation.
+        Request and response fields follow vLLM's OpenAI-compatible API.
+        SkyRL validates `model` and `session_id` and delegates other fields to vLLM.
 
         Make sure you add in `session_id` (a string or an integer) to ensure load balancing and
         sticky routing. The same agentic rollout / session should share the same `session_id` so
@@ -579,10 +577,8 @@ def create_app(
         """
         Takes in OpenAI's `CompletionRequest` and returns OpenAI's `CompletionResponse`.
 
-        Note that the specific fields inside the request and response depend on the backend you use.
-        If `config.generator.backend` is `vllm`, then the request and response will be vLLM's.
-        SkyRL only validates the fields `model` and `session_id`, and otherwise offloads
-        field validation to the underlying engines.
+        Request and response fields follow vLLM's OpenAI-compatible API.
+        SkyRL validates `model` and `session_id` and delegates other fields to vLLM.
 
         Make sure you add in `session_id` to ensure load balancing and sticky routing. Since
         `request["prompt"]` can be `Union[list[int], list[list[int]], str, list[str]]`, i.e.

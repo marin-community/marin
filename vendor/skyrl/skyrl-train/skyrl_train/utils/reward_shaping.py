@@ -1948,11 +1948,6 @@ def get_trajectory_shaper(name: str, **kwargs) -> TrajectoryRewardShaper:
     return _TRAJECTORY_SHAPER_REGISTRY[name](**kwargs)
 
 
-def list_trajectory_shapers() -> List[str]:
-    """List all registered trajectory shaper names."""
-    return list(_TRAJECTORY_SHAPER_REGISTRY.keys())
-
-
 # =============================================================================
 # Registry
 # =============================================================================
@@ -2029,16 +2024,6 @@ def get_reward_shaper(name: str, **kwargs) -> RewardShaper:
         available = ", ".join(_SHAPER_REGISTRY.keys())
         raise ValueError(f"Unknown shaper '{name}'. Available: {available}")
     return _SHAPER_REGISTRY[name](**kwargs)
-
-
-def list_parsers() -> List[str]:
-    """List all registered parser names."""
-    return list(_PARSER_REGISTRY.keys())
-
-
-def list_shapers() -> List[str]:
-    """List all registered shaper names."""
-    return list(_SHAPER_REGISTRY.keys())
 
 
 # =============================================================================

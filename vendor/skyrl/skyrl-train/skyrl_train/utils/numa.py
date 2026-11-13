@@ -16,8 +16,6 @@ affinity. Topology queries and placement diagnostics remain available when it is
 import os
 import re
 import subprocess
-from collections import Counter
-from ctypes import POINTER, c_int, c_ulong, c_void_p, get_errno
 from functools import lru_cache
 from typing import Collection, Dict, List, Optional, Tuple
 
@@ -27,7 +25,6 @@ from skyrl_train.numa_policy import (
     cpu_numa_topology,
     install_host_memory_policy,
     is_numa_affinity_enabled,
-    load_libnuma,
     parse_linux_range_list,
 )
 
@@ -105,38 +102,6 @@ def _parse_nvidia_smi_topo() -> Optional[Dict[int, Tuple[List[int], int]]]:
 # ---------------------------------------------------------------------------
 # Placement diagnostics
 # ---------------------------------------------------------------------------
-
-
-def memory_nodes_for_range(address: int, length: int, *, max_pages: int = 256) -> Dict[int, int]:
-    """Return sampled physical NUMA node IDs mapped to their page counts."""
-    if address <= 0 or length <= 0:
-        raise ValueError("address and length must be positive")
-    if max_pages <= 0:
-        raise ValueError("max_pages must be positive")
-
-    page_size = os.sysconf("SC_PAGE_SIZE")
-    first_page = address - address % page_size
-    last_page = (address + length - 1) // page_size * page_size
-    page_count = (last_page - first_page) // page_size + 1
-    if page_count <= max_pages:
-        page_indices = list(range(page_count))
-    elif max_pages == 1:
-        page_indices = [page_count // 2]
-    else:
-        page_indices = sorted({index * (page_count - 1) // (max_pages - 1) for index in range(max_pages)})
-
-    pages = (c_void_p * len(page_indices))(*(first_page + index * page_size for index in page_indices))
-    statuses = (c_int * len(page_indices))()
-    libnuma = load_libnuma()
-    libnuma.move_pages.argtypes = [c_int, c_ulong, POINTER(c_void_p), POINTER(c_int), POINTER(c_int), c_int]
-    libnuma.move_pages.restype = c_int
-    if libnuma.move_pages(0, len(page_indices), pages, None, statuses, 0) != 0:
-        errno = get_errno()
-        raise OSError(errno, os.strerror(errno))
-    failed_statuses = [status for status in statuses if status < 0]
-    if failed_statuses:
-        raise OSError(-failed_statuses[0], os.strerror(-failed_statuses[0]))
-    return dict(Counter(int(status) for status in statuses))
 
 
 # ---------------------------------------------------------------------------

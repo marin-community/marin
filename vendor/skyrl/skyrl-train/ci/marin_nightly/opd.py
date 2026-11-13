@@ -67,7 +67,6 @@ def opd_config(args: argparse.Namespace) -> DictConfig:
             placement=sections.Placement(
                 colocate_all=False,
                 policy_num_gpus_per_node=1,
-                critic_num_gpus_per_node=1,
                 ref_num_gpus_per_node=1,
             ),
             resume_mode="none",

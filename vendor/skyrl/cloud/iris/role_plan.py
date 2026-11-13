@@ -23,7 +23,6 @@ from cloud.iris.runtime_environment import RuntimeProfile
 class ModelRoleKind(StrEnum):
     POLICY = "policy"
     REFERENCE = "reference"
-    CRITIC = "critic"
     ROLLOUT = "rollout"
     DRAFT_TRAINER = "draft_trainer"
     TEACHER = "teacher"
@@ -241,12 +240,10 @@ def _policy_claim(config: dict[str, Any], values: _RolePlanValues) -> ModelRoleC
 def _core_model_claims(config: dict[str, Any], values: _RolePlanValues) -> list[ModelRoleClaim]:
     placement = _at(config, "trainer.placement")
     use_reference = reference_model_required(_at(config, "trainer.algorithm"))
-    use_critic = bool(_optional_at(config, "trainer.critic.model.path"))
     strategy = derive_strategy(config) or RuntimeProfile.MEGATRON.value
     ref_num_nodes = int(placement.get("ref_num_nodes") or values.policy_num_nodes)
     ref_num_gpus_per_node = int(placement.get("ref_num_gpus_per_node") or values.policy_num_gpus_per_node)
 
-    shared_group = ALL_ROLES_COLOCATION_GROUP
     policy = _policy_claim(config, values)
     policy_group = policy.colocation_group
     claims = [policy]
@@ -267,25 +264,6 @@ def _core_model_claims(config: dict[str, Any], values: _RolePlanValues) -> list[
                 tensor_parallel_size=1,
                 pipeline_parallel_size=1,
                 data_parallel_size=ref_num_nodes * ref_num_gpus_per_node,
-                expert_parallel_size=1,
-            )
-        )
-    if use_critic:
-        critic_num_nodes = int(_at(config, "trainer.placement.critic_num_nodes"))
-        critic_num_gpus_per_node = int(_at(config, "trainer.placement.critic_num_gpus_per_node"))
-        claims.append(
-            ModelRoleClaim(
-                role_id=ModelRoleKind.CRITIC.value,
-                kind=ModelRoleKind.CRITIC,
-                execution=RoleExecution.LOCAL,
-                backend=strategy,
-                colocation_group=shared_group if values.colocate_all else ModelRoleKind.CRITIC.value,
-                num_nodes=critic_num_nodes,
-                gpus_per_node=critic_num_gpus_per_node,
-                replicas=critic_num_nodes * critic_num_gpus_per_node,
-                tensor_parallel_size=1,
-                pipeline_parallel_size=1,
-                data_parallel_size=critic_num_nodes * critic_num_gpus_per_node,
                 expert_parallel_size=1,
             )
         )

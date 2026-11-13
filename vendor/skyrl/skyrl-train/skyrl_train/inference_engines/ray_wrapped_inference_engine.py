@@ -794,9 +794,7 @@ def create_ray_wrapped_inference_engines(
         for dp_rank in range(data_parallel_size):
             # TP*PP slice reserved for a single DP rank.
             base_dp_pg_index = dp_rank_bundle_indices[dp_rank]
-            dp_rank_bundles = (
-                list(range(base_dp_pg_index, base_dp_pg_index + tp_pp_size)) if tp_pp_size > 1 else None
-            )
+            dp_rank_bundles = list(range(base_dp_pg_index, base_dp_pg_index + tp_pp_size)) if tp_pp_size > 1 else None
             if use_mp_backend:
                 # The mp executor's single actor reserves the whole TP*PP GPU slice itself
                 # (vLLM forks its workers locally, no per-worker Ray actors). It must land
@@ -933,26 +931,10 @@ def create_ray_wrapped_inference_engines(
                 kill_on_failure=False,
             )
 
-        # Readiness gate (DISAGGREGATED-mode init-deadlock fix): block until every engine
-        # actor has finished loading its model (weights + CUDA-graph capture) BEFORE the
-        # trainer opens the weight-sync NCCL group in init_weight_sync_state. In COLOCATED
-        # mode the bounded sleep barrier below already forces this wait; in
-        # DISAGGREGATED mode (inference_engine_enable_sleep=False) nothing otherwise waits,
-        # so a slow-loading engine (e.g. Qwen3.6-35B-A3B MoE) is still inside __init__ when
-        # the policy ranks post the default-group barrier (worker.py) -> the barrier ALLREDUCE
-        # hits the 20-min SKYRL_WORKER_NCCL_TIMEOUT_IN_S watchdog and SIGABRTs the job
-        # (init_weight_sync_state failed at Ray boundary). 30B loads fast enough to win the
-        # race; 35B loses it deterministically. report_engine_hosts fans a collective_rpc
-        # across every engine TP/EP worker, so the ray.get returns only once all workers are
-        # up (model fully loaded) -> closes the race for any model size / load time. It is a
-        # read-only probe (returns hostnames), no side effects. The colocated sleep
-        # barrier provides the same readiness check when sleep is enabled.
+        # Wait for every engine worker before policy weight-sync initialization.
         startup_refs = []
-        if verify_workers:
-            # The placement report is also the readiness barrier.
+        if verify_workers or not inference_engine_enable_sleep:
             startup_refs = [engine.inference_engine_actor.report_engine_placement.remote() for engine in engines]
-        elif not inference_engine_enable_sleep:
-            startup_refs = [engine.inference_engine_actor.report_engine_hosts.remote() for engine in engines]
 
         if startup_refs:
             startup_results = wait_for_inference_engine_startup(

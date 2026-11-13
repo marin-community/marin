@@ -58,7 +58,6 @@ class CollectivePhase(StrEnum):
     TRAINING_STEP_EXIT = "training_step_exit"
     FORWARD_ENTER = "forward_enter"
     FORWARD_IMPL_ENTER = "forward_impl_enter"
-    MOE_EP_A2A_FIRST = "moe_ep_a2a_first"
     FORWARD_IMPL_EXIT = "forward_impl_exit"
     FORWARD_EXIT = "forward_exit"
 
@@ -95,7 +94,6 @@ class _RegionContext:
     rank: int
     metadata: CollectiveRegionMetadata
     device_mesh: DeviceMeshLike
-    moe_boundary_logged: bool = False
     next_event_index: int = 0
 
 
@@ -216,18 +214,8 @@ def log_phase(phase: CollectivePhase) -> None:
 
 
 def start_phase(phase: CollectivePhase) -> None:
-    """Start a phase, reset its first-MoE guard, and log its entry."""
+    """Start a collective phase and log its entry."""
     context = _active_region()
     if context is None:
         return
-    context.moe_boundary_logged = False
     _log_phase(context, phase)
-
-
-def log_moe_ep_boundary_once() -> None:
-    """Log the first MoE boundary when a diagnostic phase is active."""
-    context = _active_region()
-    if context is None or context.moe_boundary_logged:
-        return
-    context.moe_boundary_logged = True
-    _log_phase(context, CollectivePhase.MOE_EP_A2A_FIRST)

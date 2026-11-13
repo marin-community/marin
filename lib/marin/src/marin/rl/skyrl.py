@@ -201,7 +201,7 @@ class SkyRLTopology:
         if plan.reference_num_nodes is not None:
             planned_gpus += plan.reference_num_nodes * plan.policy_num_gpus_per_node
         allocated_gpus = self.num_nodes * self.gpus_per_node
-        # SkyRL derives optional critic, teacher, and draft-trainer claims from the recipe
+        # SkyRL derives teacher and draft-trainer claims from the recipe
         # and validates that the complete role plan exactly consumes this allocation.
         if planned_gpus > allocated_gpus:
             placement = "colocated policy/rollout" if plan.colocate_all else "policy + rollout"
@@ -582,9 +582,6 @@ def _validate_skyrl_backend_constraints(
     use_kl_loss = _declared_config_value(config, "trainer.algorithm.use_kl_loss")
     if use_kl_loss is _MISSING_CONFIG_VALUE:
         raise ValueError("SkyRL config must explicitly set trainer.algorithm.use_kl_loss")
-    critic_path = _declared_config_value(config, "trainer.critic.model.path")
-    if critic_path is not _MISSING_CONFIG_VALUE and critic_path:
-        raise ValueError("Marin SkyRL artifact topology does not yet describe a separate critic role")
 
 
 def _validate_skyrl_recipe(

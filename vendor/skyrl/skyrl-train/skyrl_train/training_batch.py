@@ -346,7 +346,6 @@ class TrainingInput(TypedDict, total=False):
     response_mask: Integer[torch.Tensor, "batch_size seq_len"]
     action_log_probs: Float[torch.Tensor, "batch_size seq_len"]
     base_action_log_probs: Float[torch.Tensor, "batch_size seq_len"]
-    values: Optional[Float[torch.Tensor, "batch_size seq_len"]]
     returns: Float[torch.Tensor, "batch_size seq_len"]
     advantages: Float[torch.Tensor, "batch_size seq_len"]
     kl: Float[torch.Tensor, "batch_size seq_len"]
@@ -516,7 +515,6 @@ class TrainingBatchIterator(Iterator[Experience]):
             sequences=batch["sequences"],
             action_log_probs=batch["action_log_probs"],
             base_action_log_probs=batch["base_action_log_probs"],
-            values=batch["values"],
             returns=batch["returns"],
             advantages=batch["advantages"],
             attention_mask=batch["attention_mask"],

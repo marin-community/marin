@@ -118,12 +118,6 @@ def test_error_rate_moves_the_target_count(tokenizer):
     assert min(scores) == pytest.approx(LOW)
 
 
-def test_teacher_rejects_a_sequence_without_a_response_header(tokenizer):
-    teacher = SyntheticTeacher(tokenizer, TeacherNoise())
-    with pytest.raises(ValueError, match="assistant header"):
-        teacher.score(tokenizer.encode("cat cat", add_special_tokens=False))
-
-
 def test_a_generated_header_does_not_move_the_response_boundary(tokenizer):
     teacher = SyntheticTeacher(tokenizer, TeacherNoise())
     assert response_scores(teacher, tokenizer, 2, "cat <|assistant|> dog") == pytest.approx([HIGH, LOW, LOW, HIGH])

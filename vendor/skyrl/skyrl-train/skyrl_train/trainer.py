@@ -431,7 +431,6 @@ class RayPPOTrainer:
 
         # initialized in `build_models`
         self.policy_model: PPORayActorGroup = None
-        self.critic_model: Optional[PPORayActorGroup] = None
         self.ref_model: Optional[PPORayActorGroup] = None
         # used for checkpoint cleanup
         self._node_ids: Optional[List[str]] = None
@@ -575,13 +574,12 @@ class RayPPOTrainer:
     def _kill_ray_actors(self):
         """Kill all managed Ray actors (models + inference engines).
 
-        Terminates policy, critic, and ref-model actor groups as well as
-        inference engine actors (vLLM workers) that would otherwise
+        Terminates policy and ref-model actor groups as well as
+        vLLM inference engine actors that would otherwise
         keep running until the node dies.
         """
         for model_name, model in [
             ("policy_model", self.policy_model),
-            ("critic_model", self.critic_model),
             ("ref_model", self.ref_model),
         ]:
             if model is not None:
@@ -771,11 +769,7 @@ class RayPPOTrainer:
                 with Timer("save_checkpoints", self.all_timings):
                     rollout_state = await self._rollout_state()
                     snapshot = await asyncio.to_thread(self._snapshot_checkpoint, rollout_state)
-                try:
-                    await self.callback_handler.call_event_async("on_save", final_state, self._control, trainer=self)
-                except BaseException:
-                    await self._await_checkpoint_upload(snapshot)
-                    raise
+                await self.callback_handler.call_event_async("on_save", final_state, self._control, trainer=self)
                 self._start_checkpoint_upload(snapshot, final_state)
                 if await self._drain_checkpoint_upload():
                     logger.info("Saved final checkpoint.")
@@ -817,39 +811,26 @@ class RayPPOTrainer:
             self._record_checkpoint_save_failure(state)
             return
 
-        try:
-            await self.callback_handler.call_event_async("on_save", state, self._control, trainer=self)
-        except BaseException:
-            await self._await_checkpoint_upload(snapshot)
-            raise
+        await self.callback_handler.call_event_async("on_save", state, self._control, trainer=self)
         self._start_checkpoint_upload(snapshot, state)
 
     def _start_checkpoint_upload(self, snapshot: CheckpointSnapshot, state: TrainerState) -> None:
         assert getattr(self, "_pending_checkpoint_upload", None) is None
-        task = asyncio.create_task(self._finish_checkpoint_upload(snapshot, commit=True))
+        task = asyncio.create_task(self._finish_checkpoint_upload(snapshot))
         self._pending_checkpoint_upload = (task, state)
 
-    def _finish_checkpoint_upload_blocking(self, snapshot: CheckpointSnapshot, *, commit: bool) -> tuple[float, float]:
-        cleanup_duration = 0.0
-        actor_refs = self.policy_model.async_run_ray_method("pass_through", "wait_checkpoint_upload")
-        if self.critic_model is not None:
-            actor_refs.extend(self.critic_model.async_run_ray_method("pass_through", "wait_checkpoint_upload"))
-        ray.get(actor_refs)
-        if commit:
-            io.write_bytes_atomic(snapshot.trainer_state_path, snapshot.trainer_state_payload)
-            io.write_bytes_atomic(snapshot.rollout_state_path, snapshot.rollout_state_payload)
-            io.write_bytes_atomic(snapshot.marker_path, str(snapshot.step).encode())
-            self._last_saved_step = snapshot.step
-            cleanup_started = time.monotonic()
-            self._cleanup_old_checkpoints()
-            cleanup_duration = time.monotonic() - cleanup_started
+    def _finish_checkpoint_upload_blocking(self, snapshot: CheckpointSnapshot) -> tuple[float, float]:
+        io.write_bytes_atomic(snapshot.trainer_state_path, snapshot.trainer_state_payload)
+        io.write_bytes_atomic(snapshot.rollout_state_path, snapshot.rollout_state_payload)
+        io.write_bytes_atomic(snapshot.marker_path, str(snapshot.step).encode())
+        self._last_saved_step = snapshot.step
+        cleanup_started = time.monotonic()
+        self._cleanup_old_checkpoints()
+        cleanup_duration = time.monotonic() - cleanup_started
         return time.monotonic() - snapshot.upload_started_at, cleanup_duration
 
-    async def _finish_checkpoint_upload(self, snapshot: CheckpointSnapshot, *, commit: bool) -> tuple[float, float]:
-        return await asyncio.to_thread(self._finish_checkpoint_upload_blocking, snapshot, commit=commit)
-
-    async def _await_checkpoint_upload(self, snapshot: CheckpointSnapshot) -> None:
-        await self._finish_checkpoint_upload(snapshot, commit=False)
+    async def _finish_checkpoint_upload(self, snapshot: CheckpointSnapshot) -> tuple[float, float]:
+        return await asyncio.to_thread(self._finish_checkpoint_upload_blocking, snapshot)
 
     async def _drain_checkpoint_upload(self) -> bool:
         pending = getattr(self, "_pending_checkpoint_upload", None)
@@ -1834,11 +1815,11 @@ class RayPPOTrainer:
 
     def build_models(self, PolicyWorker, CriticWorker, RefWorker, policy_pg: Optional[PlacementGroup] = None):
         """
-        Initialize the actors for training, and handle colocation logic
+        Initialize policy/reference actors; CriticWorker is unused.
 
         Args:
-            policy_pg: Optional placement group reserved before inference
-                startup for the policy and colocated reference actors. When
+            policy_pg: Optional placement group supplied by the caller for
+                the policy and colocated reference actors. When
                 absent, model actors reserve their placement group lazily.
         """
         cfg = self.cfg
@@ -1859,7 +1840,6 @@ class RayPPOTrainer:
 
         if cfg.trainer.placement.colocate_all:
             num_policy_gpus = cfg.trainer.placement.policy_num_gpus_per_node * cfg.trainer.placement.policy_num_nodes
-            num_critic_gpus = cfg.trainer.placement.critic_num_gpus_per_node * cfg.trainer.placement.critic_num_nodes
             num_ref_gpus = cfg.trainer.placement.ref_num_gpus_per_node * cfg.trainer.placement.ref_num_nodes
             num_rollout_gpus = (
                 cfg.generator.num_inference_engines
@@ -1902,23 +1882,6 @@ class RayPPOTrainer:
             else:
                 ref_model = None
 
-            if cfg.trainer.critic.model.path:
-                assert num_policy_gpus == num_critic_gpus, (
-                    "num_policy_gpus and num_critic_gpus must be the same when colocating policy and critic model"
-                )
-                critic_model = PPORayActorGroup(
-                    cfg,
-                    cfg.trainer.placement.critic_num_nodes,
-                    cfg.trainer.placement.critic_num_gpus_per_node,
-                    CriticWorker,
-                    pg=pg,
-                    num_gpus_per_actor=0.2,
-                    colocate_all=True,
-                    sequence_parallel_size=cfg.trainer.critic.sequence_parallel_size,
-                )
-            else:
-                critic_model = None
-
         else:
             if cfg.trainer.placement.colocate_policy_ref and use_ref_model:
                 assert (
@@ -1941,7 +1904,7 @@ class RayPPOTrainer:
                 else:
                     pg = policy_pg
 
-            # The no-reference policy also uses the group reserved before inference.
+            # A policy without a reference model uses the caller-supplied group.
             if pg is None:
                 pg = policy_pg
 
@@ -1983,31 +1946,16 @@ class RayPPOTrainer:
             else:
                 ref_model = None
 
-            if cfg.trainer.critic.model.path:
-                critic_model = PPORayActorGroup(
-                    cfg,
-                    cfg.trainer.placement.critic_num_nodes,
-                    cfg.trainer.placement.critic_num_gpus_per_node,
-                    CriticWorker,
-                    num_gpus_per_actor=1,
-                    colocate_all=False,
-                    sequence_parallel_size=cfg.trainer.critic.sequence_parallel_size,
-                )
-            else:
-                critic_model = None
-
         self.policy_model: PPORayActorGroup = policy_model
-        self.critic_model: Optional[PPORayActorGroup] = critic_model
         self.ref_model: Optional[PPORayActorGroup] = ref_model
-        self._initialize_model_actors(cfg, policy_model, critic_model, ref_model)
+        self._initialize_model_actors(cfg, policy_model, ref_model)
 
-        logger.info("init policy/ref/critic models done")
+        logger.info("init policy/ref models done")
 
     def _initialize_model_actors(
         self,
         cfg: DictConfig,
         policy_model: PPORayActorGroup,
-        critic_model: Optional[PPORayActorGroup],
         ref_model: Optional[PPORayActorGroup],
     ) -> None:
         """Initialize all model actors within one shared wall-clock deadline."""
@@ -2023,18 +1971,10 @@ class RayPPOTrainer:
                     num_training_steps=self.total_training_steps,
                 )
             )
-            if cfg.trainer.critic.model.path:
-                assert critic_model is not None
-                refs.extend(
-                    critic_model.async_init_model(
-                        cfg.trainer.critic.model.path,
-                        num_training_steps=self.total_training_steps,
-                    )
-                )
             self._wait_for_setup_phase(
                 refs,
                 deadline=initialization_deadline,
-                phase="policy/ref/critic model initialization",
+                phase="policy/ref model initialization",
             )
             self._wait_for_setup_phase(
                 policy_model.async_run_ray_method("pass_through", "_set_pad_token_id", self.tokenizer.pad_token_id),
@@ -2071,21 +2011,6 @@ class RayPPOTrainer:
                 deadline=initialization_deadline,
                 phase="policy model offload",
             )
-            if cfg.trainer.critic.model.path:
-                assert critic_model is not None
-                self._wait_for_setup_phase(
-                    critic_model.async_init_model(
-                        cfg.trainer.critic.model.path,
-                        num_training_steps=self.total_training_steps,
-                    ),
-                    deadline=initialization_deadline,
-                    phase="critic model initialization",
-                )
-                self._wait_for_setup_phase(
-                    critic_model.offload_to_cpu(nonblocking=True),
-                    deadline=initialization_deadline,
-                    phase="critic model offload",
-                )
 
     def _wait_for_setup_phase(self, refs, *, deadline: float, phase: str):
         """Wait for one setup phase and terminate all actors if the shared deadline expires."""
@@ -2637,7 +2562,6 @@ class RayPPOTrainer:
             - `["sequences"]`: Integer[torch.Tensor, "batch_size seqlen"]
             - `["response_mask"]`: Integer[torch.Tensor, "batch_size seqlen"]
             - `["loss_mask"]`: Integer[torch.Tensor, "batch_size seqlen"]
-            - `["values"]`: Float[torch.Tensor, "batch_size seqlen"]
             - `["rewards"]`: Float[torch.Tensor, "batch_size seqlen"]
             - `.metadata["uids"]`: List[str]
 
@@ -2653,9 +2577,7 @@ class RayPPOTrainer:
             index = np.array(data.metadata["uids"])
             adv_estimator = self.cfg.trainer.algorithm.advantage_estimator
             config = self.cfg.trainer.algorithm
-            values = data["values"]
             gamma = self.cfg.trainer.algorithm.gamma
-            lambd = self.cfg.trainer.algorithm.lambd
             grpo_norm_by_std = self.cfg.trainer.algorithm.grpo_norm_by_std
             last_step_rewards = token_level_rewards[is_last_step]
             # compatible with any advantage estimator
@@ -2664,10 +2586,8 @@ class RayPPOTrainer:
                 response_mask=response_mask[is_last_step],
                 index=index[is_last_step.cpu().numpy()],
                 adv_estimator=adv_estimator,
-                values=values[is_last_step] if values is not None else None,
                 config=config,
                 gamma=gamma,
-                lambd=lambd,
                 grpo_norm_by_std=grpo_norm_by_std,
                 group_advantage_invariant=self.group_advantage_invariant,
             )
@@ -2695,9 +2615,7 @@ class RayPPOTrainer:
                 index=data.metadata["uids"],
                 adv_estimator=self.cfg.trainer.algorithm.advantage_estimator,
                 config=self.cfg.trainer.algorithm,
-                values=data["values"],
                 gamma=self.cfg.trainer.algorithm.gamma,
-                lambd=self.cfg.trainer.algorithm.lambd,
                 grpo_norm_by_std=self.cfg.trainer.algorithm.grpo_norm_by_std,
                 exclude_from_baseline=exclude_from_baseline,
                 token_level_shaping=token_level_shaping,
@@ -2810,8 +2728,6 @@ class RayPPOTrainer:
     def pad_batch(self, training_input: TrainingInputBatch) -> TrainingInputBatch:
         """Pad the batch to be divisible by dp size"""
         dp_size = self.policy_model.actor_infos[0].rank.dp_size
-        if self.critic_model is not None:
-            dp_size = math.lcm(dp_size, self.critic_model.actor_infos[0].rank.dp_size)
         if self.ref_model is not None:
             dp_size = math.lcm(dp_size, self.ref_model.actor_infos[0].rank.dp_size)
 
@@ -2859,8 +2775,7 @@ class RayPPOTrainer:
         training_input: TrainingInputBatch,
     ):
         """
-        Calculate values from the critic, log probs from the policy and ref model, and rewards from the reward model
-        and then calculate the kl divergence between the action log probs and the base action log probs.
+        Compute policy and reference log probabilities for the training batch.
 
         Expects:
             - `["sequences"]`: Integer[torch.Tensor, "batch_size seqlen"]
@@ -2870,7 +2785,6 @@ class RayPPOTrainer:
         Adds:
             - `["base_action_log_probs"]`: Float[torch.Tensor, "batch_size seqlen"]
             - `["action_log_probs"]`: Float[torch.Tensor, "batch_size seqlen"]
-            - `["values"]`: Float[torch.Tensor, "batch_size seqlen"]
         """
         # MoE router-replay (R3): the pre-update old-logprob / ref forward MUST
         # replay the SAME captured routing as the training forward, otherwise the
@@ -2896,18 +2810,6 @@ class RayPPOTrainer:
 
         reference_scores = None
         action_log_probs = None
-        values = None
-
-        # calculate critic values
-        if self.colocate_all and self.critic_model is not None:
-            self.critic_model.backload_to_gpu(backload_optimizer=False, backload_model=True)
-
-        if self.critic_model is not None:
-            value_refs = self.critic_model.async_run_ray_method("mesh", "forward", data=data_fwd_pass)
-            if self.colocate_all:
-                all_rank_values = ray.get(value_refs)
-                values = collect_results(self.critic_model.actor_infos, all_rank_values, key="output")
-                self.critic_model.offload_to_cpu(offload_optimizer=False, offload_model=True)
 
         # calculate ref log probs
         if self.ref_model is not None:
@@ -2944,13 +2846,8 @@ class RayPPOTrainer:
 
         # wait all models done
         # if not colocate_policy_ref, then need to gather reference_scores
-        # if self.critic_model is not None, then need to gather value
         if not self.colocate_all:
             if not self.cfg.trainer.placement.colocate_policy_ref:
-                if self.critic_model is not None:
-                    all_rank_values = ray.get(value_refs)
-                    values = collect_results(self.critic_model.actor_infos, all_rank_values, key="output")
-
                 if self.ref_model is not None:
                     all_rank_reference_scores: List[TrainingOutputBatch] = ray.get(reference_score_refs)
                     reference_scores = collect_results(
@@ -2959,10 +2856,6 @@ class RayPPOTrainer:
                 else:
                     reference_scores = None
 
-            elif self.critic_model is not None:
-                all_rank_values = ray.get(value_refs)
-                values = collect_results(self.critic_model.actor_infos, all_rank_values, key="output")
-
             all_rank_action_log_probs: List[TrainingOutputBatch] = ray.get(action_log_probs_refs)
             action_log_probs = collect_results(self.policy_model.actor_infos, all_rank_action_log_probs, key="output")
 
@@ -2970,15 +2863,12 @@ class RayPPOTrainer:
             empty_cache_refs = self.policy_model.async_run_ray_method("pass_through", "empty_cache")
             if self.ref_model is not None:
                 empty_cache_refs.extend(self.ref_model.async_run_ray_method("pass_through", "empty_cache"))
-            if self.critic_model is not None:
-                empty_cache_refs.extend(self.critic_model.async_run_ray_method("pass_through", "empty_cache"))
             ray.get(empty_cache_refs)
 
         sequences_all: torch.Tensor = training_input["sequences"]
         # NOTE (sumanthrh): The slicing is needed to make sure that the batch dimension doesn't change for the tensordict.
         reference_scores = reference_scores[: len(sequences_all)] if reference_scores is not None else None
         action_log_probs = action_log_probs[: len(sequences_all)]
-        values = values[: len(sequences_all)] if values is not None else None
 
         if "ftpo_chosen_mask" in training_input:
             if reference_scores is None:
@@ -2988,7 +2878,6 @@ class RayPPOTrainer:
         base_log_probs = reference_scores
         training_input["base_action_log_probs"] = base_log_probs
         training_input["action_log_probs"] = action_log_probs
-        training_input["values"] = values
 
         # Only the mismatch statistics read token staleness, so the workers never receive it.
         rollout_staleness = training_input.pop("rollout_staleness")
@@ -3095,20 +2984,10 @@ class RayPPOTrainer:
 
     def train_critic_and_policy(self, data: TrainingInputBatch):
         """
-        Run the training step for the policy and critic models (this is overlapped if colocate_all is False).
+        Run the policy training step.
         """
         data.metadata["global_step"] = self.global_step
         if self.colocate_all:
-            if self.critic_model is not None:
-                with Timer("critic_train", self.all_timings):
-                    self.critic_model.backload_to_gpu()
-                    critic_refs = self.critic_model.async_run_ray_method("mesh", "ppo_train", data)
-                    critic_statuses = collect_actor_results(
-                        self.critic_model.actor_infos,
-                        critic_refs,
-                        operation="critic ppo_train",
-                    )
-                    self.critic_model.offload_to_cpu()
             with Timer("policy_train", self.all_timings):
                 self.policy_model.backload_to_gpu()
                 policy_refs = self.policy_model.async_run_ray_method("mesh", "ppo_train", data)
@@ -3121,44 +3000,20 @@ class RayPPOTrainer:
             if self.cfg.trainer.offload_optimizer_during_rollouts:
                 with Timer("backload_policy_optimizer_to_gpu", self.all_timings):
                     self.policy_model.backload_to_gpu(backload_optimizer=True, backload_model=False)
-            if self.critic_model is not None:
-                with Timer("policy_critic_overlap_train", self.all_timings):
-                    policy_refs = self.policy_model.async_run_ray_method("mesh", "ppo_train", data)
-                    critic_refs = self.critic_model.async_run_ray_method("mesh", "ppo_train", data)
-                    all_statuses = collect_actor_results(
-                        self.policy_model.actor_infos + self.critic_model.actor_infos,
-                        policy_refs + critic_refs,
-                        operation="policy and critic ppo_train",
-                    )
-                    policy_statuses = all_statuses[: len(policy_refs)]
-                    critic_statuses = all_statuses[len(policy_refs) :]
-            else:
-                with Timer("policy_train", self.all_timings):
-                    policy_refs = self.policy_model.async_run_ray_method("mesh", "ppo_train", data)
-                    policy_statuses = collect_actor_results(
-                        self.policy_model.actor_infos,
-                        policy_refs,
-                        operation="policy ppo_train",
-                    )
-
-        empty_cache_refs = []
-        if self.critic_model is not None:
-            critic_status = critic_statuses[0].metadata["train_status"]
-            for k, v in critic_status.items():
-                self.all_metrics.update({f"critic/{k}": v})
-            empty_cache_refs += self.critic_model.async_run_ray_method("pass_through", "empty_cache")
+            with Timer("policy_train", self.all_timings):
+                policy_refs = self.policy_model.async_run_ray_method("mesh", "ppo_train", data)
+                policy_statuses = collect_actor_results(
+                    self.policy_model.actor_infos,
+                    policy_refs,
+                    operation="policy ppo_train",
+                )
 
         policy_status = policy_statuses[0].metadata["train_status"]
         for k, v in policy_status.items():
             self.all_metrics.update({f"policy/{k}": v})
-        empty_cache_refs += self.policy_model.async_run_ray_method("pass_through", "empty_cache")
-        ray.get(empty_cache_refs)
+        ray.get(self.policy_model.async_run_ray_method("pass_through", "empty_cache"))
 
         return policy_status
-
-    def _get_dp_group_models(self, rank: int, model_type: str = ""):
-        model = getattr(self, model_type)
-        return model._actor_handlers[rank]
 
     def _get_mesh_rank(self, rank: int, model_type: str = "") -> MeshRank:
         model: PPORayActorGroup = getattr(self, model_type)
@@ -3169,7 +3024,7 @@ class RayPPOTrainer:
         """Wait for prior uploads, then save and publish a complete checkpoint."""
         await self._drain_checkpoint_upload()
         snapshot = await asyncio.to_thread(self._snapshot_checkpoint, await self._rollout_state())
-        upload_duration, cleanup_duration = await self._finish_checkpoint_upload(snapshot, commit=True)
+        upload_duration, cleanup_duration = await self._finish_checkpoint_upload(snapshot)
         self.all_timings["checkpoint_upload"] = self.all_timings.get("checkpoint_upload", 0.0) + upload_duration
         self.all_timings["cleanup_old_checkpoints"] = (
             self.all_timings.get("cleanup_old_checkpoints", 0.0) + cleanup_duration
@@ -3187,7 +3042,7 @@ class RayPPOTrainer:
 
     def _snapshot_checkpoint(self, rollout_state: TrainingContextState) -> CheckpointSnapshot:
         """
-        Stage model shards and serialize trainer state for later publication.
+        Save policy shards and serialize trainer state for publication.
 
         If colocate_all is True, assumes that the policy model is currently on GPU.
         """
@@ -3195,7 +3050,6 @@ class RayPPOTrainer:
         step = self.global_step
         global_step_folder = os.path.join(self.cfg.trainer.ckpt_path, f"global_step_{step}")
         policy_save_dir = os.path.join(global_step_folder, POLICY_CHECKPOINT_SUBDIRECTORY)
-        critic_save_dir = os.path.join(global_step_folder, "critic")
 
         io.makedirs(global_step_folder, exist_ok=True)
 
@@ -3209,26 +3063,7 @@ class RayPPOTrainer:
             )
         )
 
-        # Save critic checkpoint (if it exists)
-        if self.critic_model is not None:
-            if self.colocate_all:
-                self.policy_model.offload_to_cpu()
-                self.critic_model.backload_to_gpu()
-
-            ray.get(
-                self.critic_model.async_run_ray_method(
-                    "pass_through",
-                    "save_checkpoint",
-                    ckpt_dir=critic_save_dir,
-                    tokenizer=self.tokenizer,
-                )
-            )
-
-            if self.colocate_all:
-                self.critic_model.offload_to_cpu()
-                self.policy_model.backload_to_gpu()
-
-        # Serialize rollout data state for publication after the rank uploads complete.
+        # Serialize rollout data state for publication with the trainer state.
         rollout_state_path = os.path.join(global_step_folder, "data.pt")
         rollout_state_buffer = stdlib_io.BytesIO()
         torch.save(rollout_state, rollout_state_buffer)
@@ -3273,7 +3108,7 @@ class RayPPOTrainer:
                 protected_steps.add(best["step"])
 
         if not self._node_ids:
-            self._node_ids = get_node_ids(self.policy_model, self.critic_model, self.ref_model)
+            self._node_ids = get_node_ids(self.policy_model, self.ref_model)
         try:
             run_on_each_node(
                 self._node_ids,
@@ -3357,7 +3192,6 @@ class RayPPOTrainer:
 
         # Define paths for different checkpoint components
         policy_ckpt_dir = os.path.join(checkpoint_path, POLICY_CHECKPOINT_SUBDIRECTORY)
-        critic_ckpt_dir = os.path.join(checkpoint_path, "critic")
         trainer_state_path = os.path.join(checkpoint_path, TRAINER_STATE_FILENAME)
         rollout_state_path = os.path.join(checkpoint_path, "data.pt")
 
@@ -3413,19 +3247,6 @@ class RayPPOTrainer:
             )
         )
         logger.info("Successfully loaded policy checkpoint")
-
-        # 4. Load critic checkpoint if it exists and we have a critic model
-        if self.critic_model is not None:
-            logger.info(f"Loading critic checkpoint from {critic_ckpt_dir}")
-            _ = ray.get(
-                self.critic_model.async_run_ray_method(
-                    "pass_through",
-                    "load_checkpoint",
-                    ckpt_dir=critic_ckpt_dir,
-                    load_training_state=True,
-                )
-            )
-            logger.info("Successfully loaded critic checkpoint")
 
         logger.info(f"Successfully loaded complete checkpoint state from global_step_{global_step}")
         if self.cfg.trainer.get("reset_global_step_on_resume", False):
