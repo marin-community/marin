@@ -16,7 +16,6 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.nemotron_ultra import blend_task, text_request
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
@@ -49,7 +48,7 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_resources
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 INDUCTIVE_CONFIG = "laion__nemotron-gym-arc-agi-python-inductive-v2"
 TRANSDUCTIVE_CONFIG = "laion__nemotron-gym-arc-agi-transductive-v3"
@@ -258,7 +257,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn", "language:python"),
                 count=10000,
                 notes="Agent writes a transform, graded on held-out grids. One of the best sources here.",
-                daytona_safety=DaytonaSafety.SAFE,
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
                 name="tasktrove-arc_inductive",
@@ -281,7 +280,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn"),
                 count=10000,
                 notes="Direct grid answer against gold. Subsample; the inductive variant is stronger.",
-                daytona_safety=DaytonaSafety.SAFE,
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
                 name="tasktrove-arc_transductive",
