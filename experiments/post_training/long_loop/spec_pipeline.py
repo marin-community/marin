@@ -22,6 +22,7 @@ from experiments.post_training.long_loop.adopted_sft import verify_adopted_sft
 from experiments.post_training.long_loop.archive_stage import archive_graph_run
 from experiments.post_training.long_loop.evaluation import configured_evaluation_step, prepare_micro
 from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
+from experiments.post_training.long_loop.finalization import after_checkpoint, record_finalization
 from experiments.post_training.long_loop.rl import configured_rl_step
 from experiments.post_training.long_loop.run_spec import stage_blockers
 from experiments.post_training.long_loop.runtime_timing import report_step, timed
@@ -254,6 +255,13 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
     learned = timed(replace(learned, deps=(*learned.deps, *((endpoint,) if endpoint is not None else ()))))
     if through == "rl":
         return learned
+    finalized = apply(
+        f"{name}/finalize",
+        record_finalization,
+        version=version,
+        output=OUT,
+        trained=learned,
+    )
     evaluation = resolved["evaluation"]
     data = datasets["evaluation"]
     eval_inputs = timed(
@@ -272,51 +280,58 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             tasks_per_benchmark=evaluation["tasks_per_benchmark"],
         )
     )
-    eval_inputs = replace(eval_inputs, deps=(*eval_inputs.deps, learned))
-    evaluated = timed(
-        configured_evaluation_step(
-            version,
-            learned,
-            eval_inputs,
-            name=evaluation["name"],
-            config=evaluation["config"],
-            role_plan=draccus.decode(SkyRLRolePlan, evaluation["role_plan"]),
-            execution=stage_execution(evaluation["execution"], coordinator),
-            judge=draccus.decode(ModelConfig, evaluation["judge"]),
-            seed=evaluation["seed"],
-            expected_step=None,
-            gpu_variant=evaluation["gpu_variant"],
-            capability_origin=evaluation["capability_origin"],
-            data_relative_path=evaluation["data_relative_path"],
-            judge_gpu_count=evaluation["judge_gpu_count"],
-            ray_timeouts=evaluation["ray_timeouts"],
-        )
-    )
-    report = report_step(
-        version,
-        [
-            *sft_evidence,
-            trained,
-            exported,
-            *((endpoint,) if endpoint is not None else ()),
-            learned,
-            eval_inputs,
-            evaluated,
-        ],
-        expected_rollouts=evaluation["expected_rollouts"],
-        evaluation_selection=eval_inputs,
-        additional_timing=[
-            item
-            for item in [
-                *resolved["archive"].get("additional_evidence", []),
-                *(resolved.get("adopted_sft") or {}).get("additional_evidence", []),
-            ]
-            if item["category"] == "timing" and item["source"].endswith(".jsonl")
-        ],
-        sft_geometry=(
-            f"Spec {resolved['resolved_sha256']}: {recipe['stop_after_steps']} SFT updates "
-            f"at {recipe['model']['max_seq_len']} positions."
+    eval_inputs = after_checkpoint(replace(eval_inputs, deps=(*eval_inputs.deps, finalized)), learned)
+    evaluated = after_checkpoint(
+        timed(
+            configured_evaluation_step(
+                version,
+                learned,
+                eval_inputs,
+                name=evaluation["name"],
+                config=evaluation["config"],
+                role_plan=draccus.decode(SkyRLRolePlan, evaluation["role_plan"]),
+                execution=stage_execution(evaluation["execution"], coordinator),
+                judge=draccus.decode(ModelConfig, evaluation["judge"]),
+                seed=evaluation["seed"],
+                expected_step=None,
+                gpu_variant=evaluation["gpu_variant"],
+                capability_origin=evaluation["capability_origin"],
+                data_relative_path=evaluation["data_relative_path"],
+                judge_gpu_count=evaluation["judge_gpu_count"],
+                ray_timeouts=evaluation["ray_timeouts"],
+            )
         ),
+        learned,
+    )
+    report = after_checkpoint(
+        report_step(
+            version,
+            [
+                *sft_evidence,
+                trained,
+                exported,
+                *((endpoint,) if endpoint is not None else ()),
+                learned,
+                eval_inputs,
+                evaluated,
+            ],
+            expected_rollouts=evaluation["expected_rollouts"],
+            evaluation_selection=eval_inputs,
+            rl_terminal=learned,
+            additional_timing=[
+                item
+                for item in [
+                    *resolved["archive"].get("additional_evidence", []),
+                    *(resolved.get("adopted_sft") or {}).get("additional_evidence", []),
+                ]
+                if item["category"] == "timing" and item["source"].endswith(".jsonl")
+            ],
+            sft_geometry=(
+                f"Spec {resolved['resolved_sha256']}: {recipe['stop_after_steps']} SFT updates "
+                f"at {recipe['model']['max_seq_len']} positions."
+            ),
+        ),
+        learned,
     )
     archived = apply(
         f"{name}/archive",
@@ -336,6 +351,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             "export": exported,
             **({"endpoint": endpoint} if endpoint is not None else {}),
             "rl": learned,
+            "finalization": finalized,
             "eval_inputs": eval_inputs,
             "eval": evaluated,
         },
@@ -344,7 +360,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         completed_report=report,
     )
     return replace(
-        archived,
+        after_checkpoint(archived, learned),
         runtime_args={
             **archived.runtime_args,
             "skyrl_execution": coordinator,

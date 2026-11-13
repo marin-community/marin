@@ -17,6 +17,7 @@ from rigging.filesystem.storage_path import prefix_join
 from experiments.post_training.long_loop.archive_stage import archive_step
 from experiments.post_training.long_loop.eval_runtime.audit_results import audit, require_evaluation_coverage
 from experiments.post_training.long_loop.eval_runtime.profile import SKIPPED_BENCHMARKS, SMOKE_PATH_COUNT
+from experiments.post_training.long_loop.finalization import terminal_outcome
 from experiments.post_training.long_loop.timing import Event, EventLog, report
 
 
@@ -47,6 +48,7 @@ def write_report(
     evaluation_selection: str | None = None,
     additional_timing: list[dict] | None = None,
     accepted_unscored_attempts: list[dict] | None = None,
+    rl_terminal: str | None = None,
 ) -> None:
     events = []
     sources = []
@@ -69,6 +71,9 @@ def write_report(
     text = report([replace(event, run=output) for event in events], synthetic=False)
     text += "\nOriginal stage run IDs: " + ", ".join(original_runs) + ". Raw events retain these IDs.\n"
     text += "\n" + sft_geometry + "\n"
+    if rl_terminal is not None:
+        outcome = terminal_outcome(rl_terminal)
+        text += "\nRL terminal outcome (preserved independently of finalization): " + json.dumps(outcome) + ".\n"
     text += (
         "\nStage spans include scheduling and startup; they are not active compute measurements.\n"
         "Queue wait, allocation release, native learner phases, and per-benchmark timing require the\n"
@@ -114,6 +119,7 @@ def report_step(
     additional_timing: list[dict] | None = None,
     accepted_unscored_attempts: list[dict] | None = None,
     sft_geometry: str = "Plumbing SFT (32k/32 GPU), not target: 15 updates, 125,829,120 packed token positions.",
+    rl_terminal: ArtifactStep | None = None,
 ) -> ArtifactStep:
     completed = apply(
         "long-loop/report",
@@ -126,5 +132,6 @@ def report_step(
         evaluation_selection=evaluation_selection,
         additional_timing=additional_timing,
         accepted_unscored_attempts=accepted_unscored_attempts,
+        rl_terminal=rl_terminal,
     )
     return archive_step(version, archive_plan, completed) if archive_plan is not None else completed

@@ -5,6 +5,8 @@ import hashlib
 import json
 
 import pytest
+from marin.execution.artifact import ArtifactRecord, write_record
+from marin.rl.skyrl import SkyRLRun
 
 from experiments.post_training.long_loop.runtime_timing import write_report
 from experiments.post_training.long_loop.timing import EventLog
@@ -25,6 +27,21 @@ def test_adopted_native_journal_is_verified_and_reported(tmp_path):
         "stop_reason": "stop",
     }
     (results / "results.jsonl").write_text(json.dumps(row))
+    trained = tmp_path / "trained"
+    trained.mkdir()
+    terminal = trained / "terminal.json"
+    terminal.write_text(json.dumps({"result": {"state": "failed", "failure": "GroupAdmissionStalledError"}}))
+    run = SkyRLRun(
+        hf_model_uri="selected-best-export",
+        global_step=16,
+        tokenizer_uri="tokenizer",
+        tokenizer_revision="pin",
+        checkpoint_root="native-checkpoints",
+        draft_checkpoint_root=None,
+        terminal_manifest_uri=str(terminal),
+        iris_job_id="/user/failed-rl",
+    )
+    write_record(ArtifactRecord(result=run.result_payload(), output_path=str(trained)))
     output = tmp_path / "report"
     output.mkdir()
     pin = {"source": str(journal), "sha256": hashlib.sha256(journal.read_bytes()).hexdigest()}
@@ -34,7 +51,10 @@ def test_adopted_native_journal_is_verified_and_reported(tmp_path):
         expected_rollouts=1,
         sft_geometry="CPU fixture",
         additional_timing=[pin],
+        rl_terminal=str(trained),
     )
+    assert '"state": "failed"' in (output / "timing.md").read_text()
+    assert "GroupAdmissionStalledError" in (output / "timing.md").read_text()
     assert str(journal) in json.loads((output / "timing-sources.json").read_text())
     journal.write_text(journal.read_text() + "\n")
     with pytest.raises(ValueError, match="Pinned native timing journal changed"):

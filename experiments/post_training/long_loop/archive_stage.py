@@ -370,6 +370,8 @@ def derive_archive_plan(
     if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
         raise ValueError("Source revision must be an exact commit")
     inputs, documents, limitations, blockers = [], {}, [], []
+    if "finalization" in roots:
+        inputs.append(_input(prefix_join(roots["finalization"], "finalization.json"), "finalization.json", "provenance"))
     for stage, entries in settings["stage_files"].items():
         root = roots[stage]
         for entry in entries:

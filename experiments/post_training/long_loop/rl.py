@@ -71,6 +71,7 @@ def configured_rl_step(
     def bind_runtime(context: StepContext) -> SkyRLRunConfig:
         launch = original_builder(context)
         document = yaml.safe_load(launch.launch_config_yaml)
+        document["run"]["finalization"] = "any_terminal"
         document["ray"].update(ray_timeouts)
         recipe = document["skyrl"]
         for callback in recipe["trainer"].get("callbacks", []):

@@ -36,7 +36,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from cloud.iris.artifacts import terminal_checkpoint_step
-from cloud.iris.launch_config import RunMode, SubmissionMode, load_launch_config
+from cloud.iris.launch_config import FinalizationMode, RunMode, SubmissionMode, load_launch_config
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT
 from cloud.iris.runtime_environment import RuntimeMode, runtime_profile_for_strategy
 from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX, policy_export_path, selected_export_step
@@ -111,6 +111,7 @@ def checkpoint_export_launch_config(
     strategy = str(config.skyrl.trainer.strategy)
     config.run.mode = RunMode.CHECKPOINT_EXPORT.value
     config.run.export_hf = False
+    config.run.finalization = FinalizationMode.SUCCESS.value
     config.run.submission = SubmissionMode.DETACH.value if spec.no_wait else SubmissionMode.WAIT.value
     config.run.attempt_id = f"{config.run.attempt_id}-export-{request.step}"
     config.runtime.entrypoint = CHECKPOINT_EXPORT_ENTRYPOINT

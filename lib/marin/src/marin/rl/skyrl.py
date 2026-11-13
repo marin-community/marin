@@ -21,6 +21,7 @@ from typing import Literal, Protocol, cast
 import fsspec
 import yaml
 from fray.types import GpuConfig
+from iris.resources.state import TERMINAL_JOB_STATES
 from iris.rpc import job_pb2
 from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
@@ -697,6 +698,9 @@ class _SkyRLLaunchResponse(BaseModel):
     iris_job_id: str | None = None
     failure: str | None = None
     model: _SkyRLTerminalModel | None = None
+    iris_job_state: str | None = None
+    finalization: str | None = None
+    finalization_failure: str | None = None
 
 
 def skyrl_cpu_command(*arguments: str) -> list[str]:
@@ -776,13 +780,26 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
                 f"{completed.stderr.strip() or '(the launcher wrote nothing to stderr)'}"
             )
         response = _SkyRLLaunchResponse.model_validate_json(completed.stdout)
-        if completed.returncode != 0 or response.state != "succeeded":
+        any_terminal = yaml.safe_load(config.launch_config_yaml)["run"].get("finalization") == "any_terminal"
+        finalized_terminal = (
+            any_terminal
+            and response.iris_job_state in TERMINAL_JOB_STATES
+            and response.finalization in {"completed", "skipped_no_checkpoint"}
+            and response.finalization_failure is None
+        )
+        if (completed.returncode != 0 or response.state != "succeeded") and not finalized_terminal:
             failure = response.failure or f"launcher exited {completed.returncode}"
+            if response.finalization_failure:
+                failure += f"; finalization failed: {response.finalization_failure}"
             raise RuntimeError(f"MarinSkyRL attempt {config.attempt_id} failed: {failure}\n{completed.stderr.strip()}")
         if response.iris_job_id is None:
             raise ValueError("successful MarinSkyRL response requires iris_job_id")
         model = response.model
-        if config.export_hf and model is None:
+        if (
+            config.export_hf
+            and model is None
+            and not (finalized_terminal and response.finalization == "skipped_no_checkpoint")
+        ):
             raise ValueError("successful MarinSkyRL response requires a model when export_hf is enabled")
         result = SkyRLRun(
             path=config.output.terminal_manifest_uri,
@@ -798,7 +815,7 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
     except Exception:
         _record_skyrl_run(config, "failed", response)
         raise
-    _record_skyrl_run(config, "succeeded", response)
+    _record_skyrl_run(config, response.state, response)
     return result
 
 

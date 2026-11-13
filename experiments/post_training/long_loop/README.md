@@ -94,6 +94,18 @@ adoption. Actual learner execution provides the GPU behavior evidence.
 
 ## Evaluation and archive evidence
 
+The loop sets `run.finalization: any_terminal`: once the RL child is terminal,
+the launcher exports the trainer-format checkpoint selected by validation-reward
+EMA after a completed save. This applies if RL failed, was cancelled, or was
+terminated after a stall. The evaluation, report and archive graph follows a
+successful export for every terminal outcome. Terminal status and failure details remain unchanged in the training
+record, archive provenance and timing report. If no native best checkpoint was
+committed, `finalization.json` records the skip, and downstream stages write
+`finalization-skipped.json` before dispatching any evaluation or archive work.
+Export failures still propagate; they are not treated as a missing checkpoint.
+This continuation requires the parent coordinator to remain alive; cancelling
+the coordinator itself cannot run its remaining graph.
+
 Evaluation preserves the pinned suite's published repetitions: 200 supported tasks
 produce 440 attempts, and the one-task-per-path smoke produces 44 attempts across
 20 paths. `selection.json` records task IDs, repetition indices, runtime row IDs
