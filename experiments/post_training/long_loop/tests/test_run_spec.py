@@ -399,6 +399,15 @@ def test_eval_stop_excludes_report_and_archive(monkeypatch):
 
 def test_sft_eval_evaluates_the_adopted_export_without_rl(monkeypatch, tmp_path):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
+    monkeypatch.setenv("DAYTONA_TARGET", "us")
+    remote_calls = {}
+    original_remote = spec_pipeline.remote
+
+    def recording_remote(fn, **kwargs):
+        remote_calls[fn.__name__] = kwargs
+        return original_remote(fn, **kwargs)
+
+    monkeypatch.setattr(spec_pipeline, "remote", recording_remote)
     resolved = resolve_spec(SPEC, smoke=True)
     resolved["blockers"] = ["agentic: not admitted", "archive: publication not approved"]
     assert stage_blockers(resolved, "sft-eval") == []
@@ -418,6 +427,8 @@ def test_sft_eval_evaluates_the_adopted_export_without_rl(monkeypatch, tmp_path)
     retention = launch["skyrl"]["generator"]["trajectory_retention"]
     assert retention["model_path"] == resolved["adopted_sft"]["uri"]
     assert retention["model_checkpoint_step"] is None
+    # The Daytona preflight child job does not inherit plain settings from the coordinator.
+    assert remote_calls["prepare_micro"]["env_vars"] == {"DAYTONA_TARGET": "us"}
     with pytest.raises(ValueError, match="exactly one adopted HF export"):
         build_spec_graph(
             {**resolved, "adopted_sft": {"version": "2026.11.09.12", "uri": "s3://test/committed-sft"}},

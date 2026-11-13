@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import os
 from collections.abc import Callable
 from dataclasses import replace
 
@@ -177,6 +178,8 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
                 remote(
                     prepare_micro,
                     resources=resources["eval_inputs"],
+                    # Child jobs do not inherit this plain setting; the Daytona preflight needs it.
+                    env_vars={"DAYTONA_TARGET": target} if (target := os.environ.get("DAYTONA_TARGET")) else {},
                     timeout=Duration.from_seconds(timeouts.get("eval_inputs", DEFAULT_TASK_TIMEOUT_SECONDS)),
                 ),
                 version=version,
