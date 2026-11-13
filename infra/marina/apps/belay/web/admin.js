@@ -6,10 +6,7 @@ const openBodies = new Set()
 let state = null // the admin state last read from the API
 let busy = false
 let settingsLoaded = false
-const INTAKE_ISSUE = 'https://api.github.com/repos/marin-community/marin/issues/9514'
-const BOTS = new Set(['marin-belay-bot', 'loom-oa-dev[bot]'])
-let intakeComments = null // the newest #9514 comments, read from GitHub in this browser on load and on Reload
-let intakeError = null
+let intake = null // the watch's latest #9514 snapshot (fetched_at and comments), read from the app
 
 async function api(path, body) {
   const options =
@@ -219,15 +216,15 @@ function storedText(text, removed) {
   )
 }
 
-// A #9514 comment as GitHub serves it plus the visible text this page showed: what an intake decision sends.
+// A #9514 comment as the watch read it plus the visible text this page showed: what an intake decision sends.
 function review(c) {
   return {
-    comment_id: String(c.id),
-    url: c.html_url,
-    author: c.user.login,
+    comment_id: c.comment_id,
+    url: c.url,
+    author: c.author,
     body: c.body,
     shown: c.visible.text,
-    posted_at: c.created_at,
+    posted_at: c.posted_at,
   }
 }
 
@@ -285,53 +282,46 @@ function requeueWithGrant(idea, suggested, key) {
   return approveWithGrant(key, 'Re-queue', (grant) => act(`ideas/${idea.id}/requeue`, { note: '', ...grant }, 'Re-queued'), suggested)
 }
 
-// The newest #9514 comments, read from GitHub's public API in this browser (no server keys), with the visible text
-// the server would store for each. Approving one sends the comment as GitHub serves it plus the text shown here;
-// the server stores exactly that text, refuses a comment that no longer strips to it, and refuses one the registry
+// The newest #9514 comments, which the watch reads from GitHub every pass (the app holds no GitHub credentials), with
+// the visible text the server would store for each. Approving one sends the comment plus the text shown here; the
+// server stores exactly that text, refuses a comment that no longer strips to it, and refuses one the registry
 // already holds.
 async function loadIntake() {
   try {
-    const github = async (url) => {
-      const response = await fetch(url)
-      if (!response.ok) throw new Error(response.status === 403 ? 'GitHub rate limit for this browser; Reload later' : `${response.status}`)
-      return response.json()
-    }
-    const issue = await github(INTAKE_ISSUE)
-    const last = Math.max(1, Math.ceil(issue.comments / 30))
-    const page = await github(`${INTAKE_ISSUE}/comments?per_page=30&page=${last}`)
-    const comments = page.filter((c) => c.user.type !== 'Bot' && !BOTS.has(c.user.login)).reverse()
-    const visible = await api('intake/visible', { bodies: comments.map((c) => c.body) })
-    intakeComments = comments.map((c, i) => ({ ...c, visible: visible[i] }))
-    intakeError = null
+    intake = await api('intake')
   } catch (error) {
-    intakeComments = []
-    intakeError = error.message
+    intake = { fetched_at: null, comments: [], error: error.message }
   }
   renderIntakeLive()
 }
 
 function renderIntakeLive() {
-  if (intakeComments === null) {
+  if (intake === null) {
     setChildren('intake-live', el('div', { class: 'none' }, 'Loading…'))
     return
   }
-  if (!intakeComments.length) {
-    setChildren('intake-live', el('div', { class: 'none' }, intakeError ? `GitHub unavailable: ${intakeError}` : 'No comments'))
+  const age = intake.fetched_at
+    ? el('div', { class: `muted small${watcherStale(intake.fetched_at, state.now) ? ' warn' : ''}` }, 'Read from GitHub by the watch ', when(intake.fetched_at))
+    : null
+  if (!intake.comments.length) {
+    const why = intake.error ?? (intake.fetched_at ? 'No comments' : 'The watch has not read #9514 yet')
+    setChildren('intake-live', age, el('div', { class: 'none' }, why))
     return
   }
   const known = new Map(state.ideas.filter((i) => i.comment_id).map((i) => [String(i.comment_id), i]))
-  const rows = intakeComments.map((c) => {
-    const idea = known.get(String(c.id))
-    const registered = state.registered_comments[String(c.id)]
+  const rows = intake.comments.map((c) => {
+    const idea = known.get(c.comment_id)
+    const registered = state.registered_comments[c.comment_id]
     return { c, idea, registered, waiting: !registered && (!idea || idea.state === 'pending') }
   })
   // Comments still waiting for a decision first; each group stays newest first.
   rows.sort((a, b) => Number(b.waiting) - Number(a.waiting))
   setChildren(
     'intake-live',
+    age,
     rows.map(({ c, idea, registered, waiting }) => {
       const first = c.visible.text.trim().split('\n')[0].replace(/\*\*/g, '').slice(0, 110)
-      const key = `c${c.id}`
+      const key = `c${c.comment_id}`
       const expanded = openBodies.has(key)
       const flag = c.visible.removed.length ? el('span', { class: 'warn' }, ' · stripped hidden text') : null
       return el(
@@ -352,11 +342,11 @@ function renderIntakeLive() {
               },
             },
             el('b', {}, first),
-            el('small', {}, `${c.user.login} · `, when(c.created_at), flag),
+            el('small', {}, `${c.author} · `, when(c.posted_at), flag),
           ),
-          link(c.html_url, '↗'),
+          link(c.url, '↗'),
           waiting
-            ? approveWithGrant(`c${c.id}`, 'Approve', (grant) => act('intake/approve', { ...review(c), ...grant }, 'Approved and queued'))
+            ? approveWithGrant(`c${c.comment_id}`, 'Approve', (grant) => act('intake/approve', { ...review(c), ...grant }, 'Approved and queued'))
             : registered && !idea?.registry_id
               ? el('span', { class: 'muted small' }, 'done → ', link(`${PAGES.status}/${registered}`, registered))
               : el(
@@ -364,7 +354,7 @@ function renderIntakeLive() {
                   { class: 'muted small' },
                   idea.registry_id ? `${idea.state} → ${idea.registry_id}` : idea.state === 'declined' ? idea.note : idea.state,
                 ),
-          waiting ? declineWithReason(`c${c.id}`, (note) => act('intake/decline', { ...review(c), note }, 'Declined')) : null,
+          waiting ? declineWithReason(`c${c.comment_id}`, (note) => act('intake/decline', { ...review(c), note }, 'Declined')) : null,
         ),
         expanded ? storedText(c.visible.text, c.visible.removed) : null,
       )

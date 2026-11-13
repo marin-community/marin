@@ -141,6 +141,9 @@ SCHEMA = (
     """CREATE TABLE IF NOT EXISTS watcher (
         id INTEGER PRIMARY KEY, ticked_at TIMESTAMPTZ, nodes_in_use INTEGER, storage_bytes BIGINT,
         storage_objects BIGINT, storage_at TIMESTAMPTZ, last_error TEXT)""",
+    # The newest #9514 comments as the watch last read them with its GitHub identity (the app holds none).
+    """CREATE TABLE IF NOT EXISTS intake_snapshot (
+        id INTEGER PRIMARY KEY, fetched_at TIMESTAMPTZ NOT NULL, comments JSONB NOT NULL)""",
 )
 
 
@@ -245,8 +248,10 @@ class ThreadPost(BaseModel):
     """``plan`` or ``result``: the activity entry the update adds."""
 
 
-class VisibleRequest(BaseModel):
-    bodies: list[str]
+class IntakeSnapshot(BaseModel):
+    """The newest #9514 comments by people (bots left out), newest first, as the watch read them from GitHub."""
+
+    comments: list[IntakeComment]
 
 
 class RunReport(BaseModel):
@@ -657,6 +662,30 @@ HTML_COMMENT = re.compile(r"<!--.*?(-->|$)", re.DOTALL)
 DETAILS = re.compile(r"<details\b[^>]*>(.*?)</details>", re.DOTALL | re.IGNORECASE)
 # Zero-width characters and bidirectional controls, which render as nothing but can hide or reorder text.
 INVISIBLE = re.compile("[\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]")
+
+
+def store_intake_snapshot(conn: Connection, snapshot: IntakeSnapshot) -> None:
+    """Replace the watch's #9514 snapshot."""
+    conn.execute(
+        text(
+            "INSERT INTO intake_snapshot (id, fetched_at, comments) VALUES (1, now(), CAST(:c AS JSONB)) "
+            "ON CONFLICT (id) DO UPDATE SET fetched_at = now(), comments = EXCLUDED.comments"
+        ),
+        {"c": json.dumps([c.model_dump(mode="json") for c in snapshot.comments])},
+    )
+
+
+def intake_for_review(conn: Connection) -> dict[str, Any]:
+    """The watch's latest #9514 snapshot for the admin page, each comment with what approving it would store: its
+    visible text and what was removed."""
+    rows = _rows(conn, "SELECT fetched_at, comments FROM intake_snapshot WHERE id = 1")
+    if not rows:
+        return {"fetched_at": None, "comments": []}
+    comments = []
+    for comment in rows[0]["comments"]:
+        shown, removed = visible_text(comment["body"])
+        comments.append({**comment, "visible": {"text": shown, "removed": removed}})
+    return {"fetched_at": _iso(rows[0]["fetched_at"]), "comments": comments}
 
 
 def visible_text(body: str) -> tuple[str, list[str]]:
@@ -1288,10 +1317,10 @@ def create_api(services: Services) -> RegisteredApi:
             _activity(conn, ActivityPost(kind="proposal", idea_id=idea_id, title=f"{caller} proposed: {proposal.title}"))
         return {"id": idea_id}
 
-    @admin.post("/intake/visible")
-    def intake_visible(request: VisibleRequest) -> list[dict[str, Any]]:
-        """What approving each #9514 comment would store: its visible text and what was removed."""
-        return [{"text": t, "removed": r} for t, r in map(visible_text, request.bodies)]
+    @admin.get("/intake")
+    def intake() -> dict[str, Any]:
+        with engine.connect() as conn:
+            return intake_for_review(conn)
 
     @admin.post("/intake/approve")
     def approve_intake(comment: IntakeApproval, caller: str = Depends(approver)) -> dict[str, Any]:
@@ -1497,6 +1526,12 @@ def create_api(services: Services) -> RegisteredApi:
         if not updated:
             raise HTTPException(404, f"no idea {idea_id}")
         return {"updated": ", ".join(fields)}
+
+    @agent.post("/intake")
+    def upload_intake(snapshot: IntakeSnapshot) -> dict[str, int]:
+        with engine.begin() as conn:
+            store_intake_snapshot(conn, snapshot)
+        return {"comments": len(snapshot.comments)}
 
     @agent.post("/activity")
     def post_activity(post: ActivityPost, caller: str = Depends(session)) -> dict[str, int]:

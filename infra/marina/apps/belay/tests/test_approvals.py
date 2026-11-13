@@ -12,11 +12,13 @@ from unittest.mock import ANY
 import pytest
 from belay.app import (
     DEFAULT_SETTINGS,
+    INTAKE_URL_PREFIX,
     Approval,
     IdeaReport,
     IntakeApproval,
     IntakeComment,
     IntakeDecline,
+    IntakeSnapshot,
     PriorityBand,
     RunExpectation,
     SessionFinish,
@@ -31,6 +33,7 @@ from belay.app import (
     decline_intake_comment,
     expect_run,
     finish_session,
+    intake_for_review,
     migrate,
     note_overdue_runs,
     offer_pending_work,
@@ -38,6 +41,7 @@ from belay.app import (
     record_intake_comment,
     registered_comments,
     requeue_idea,
+    store_intake_snapshot,
     visible_text,
     write_thread,
 )
@@ -518,6 +522,24 @@ def test_the_public_state_says_when_runs_last_synced_and_whether_that_sync_hit_a
     api.post("/agent/tick", json={"nodes_in_use": 0, "error": "registry checkout: /home/app/x"}, headers=agent)
     assert api.get("/public/state").json()["watcher"] == {**synced, "ok": False, "synced_at": ANY}
     assert "/home/app" not in api.get("/public/state").text  # the error text stays admin-only
+
+
+def test_the_watchs_intake_snapshot_reaches_review_with_its_visible_text(conn) -> None:
+    comment = IntakeComment(
+        comment_id="42",
+        author="someone",
+        body="Track: speedrun\nTry X.<!-- hidden -->",
+        url=f"{INTAKE_URL_PREFIX}42",
+        posted_at=datetime.datetime(2026, 11, 13, 10, tzinfo=datetime.UTC),
+    )
+    assert intake_for_review(conn) == {"fetched_at": None, "comments": []}
+    store_intake_snapshot(conn, IntakeSnapshot(comments=[comment]))
+    store_intake_snapshot(conn, IntakeSnapshot(comments=[comment]))  # a later pass replaces it
+    review = intake_for_review(conn)
+    assert review["fetched_at"] is not None
+    [shown] = review["comments"]
+    assert shown["comment_id"] == "42" and shown["visible"]["text"] == "Track: speedrun\nTry X."
+    assert shown["visible"]["removed"] == ["hidden HTML comment removed"]
 
 
 def test_a_lost_sessions_secret_is_refused(api: TestClient, database_url: str) -> None:
