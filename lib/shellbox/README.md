@@ -241,6 +241,22 @@ Before grading, stop agent command submission and call `LocalMachine.quiesce_com
 to reclaim work left by earlier successful commands, including tmux servers.
 Process sessions, relay helpers and peer containers remain alive.
 
+For agent commands that need a separate grading boundary, use
+`ProcessScopeMachine` and call
+`scope = await machine.open_process_scope()`, run those commands through
+`scope.run(command)`, then `await scope.terminate()` before collection or
+verification. Scope termination closes admission, kills detached descendants,
+and waits for confirmed exit; it raises if confirmation fails. A scoped command
+timeout or cancellation stops that command and its descendants; the scope and
+background work from earlier commands remain available. Setup, sidecar,
+and verifier commands use `machine.run` outside the scope. Local machines support
+this operation when the worker has delegated cgroup v2. Docker, gVisor, Iris,
+Daytona, QEMU, and ShellSim currently reject scope creation, so callers must
+select a separate verifier machine or fail before the agent turn on those
+backends. Declare `process_scope` in `ExecutionRequirements.capabilities` during
+execution preflight to reject unsupported hosts before allocating a machine.
+Ordinary `Machine.run` behavior is unchanged.
+
 Docker and Daytona stop the command's process group on a timeout. A successful stop preserves the machine for later commands.
 A failed stop without confirmed completion raises an infrastructure error and closes the machine.
 Docker and Daytona also stop the process group on caller cancellation. Daytona preserves the machine only after confirming the stop and removing private command files; otherwise it closes the machine.
@@ -389,7 +405,7 @@ finally:
 - Commands never inherit the host environment, which can hold cluster credentials. Host-program commands get `PATH` with `bin_dirs` ahead of the standard system directories, `HOME=/home/shellbox`, `LANG=C.UTF-8`, and `PYTHONHASHSEED` when the factory has a `hash_seed`, then `MachineSpec.env` and `Command.env`. The trusted host launcher reads configuration through a private file descriptor, keeping environment values out of host process listings, and applies task and command variables after isolation. Its own fixed environment prevents loader options such as `LD_PRELOAD` from affecting it.
 - `/bin/sh` enters the working directory and starts the program, so a missing program exits with status 127, as in the container backends. Command output goes to private temporary files, subject to the 1 GiB file-size limit; returned bytes are truncated to `output_limit_bytes` and report truncation flags.
 - Commands have no capabilities and run with `no_new_privs`, so setuid programs cannot raise their privileges. They have no core files and files of at most 1 GiB. Command deadlines reclaim the command cgroup when delegated, or close the namespace otherwise; no inherited CPU-time limit later kills a background service started by a successful command. `RLIMIT_NPROC` counts all of a user's tasks on the host, so the backend limits the command's user to the host's task count when the command starts plus 256; the kernel does not apply it to root.
-- The factory discovers the worker's writable cgroup v2 delegation and creates a machine parent with keeper and command children. `cgroup_parent` supplies an operator override. Containment requires writable `cgroup.kill` and permission to move children within the hierarchy. Each machine owns and reclaims its groups; successful commands may leave background processes in their tracked child groups, and session close reclaims only its own group. Execution preflight admits `retained_command_cancellation` only when delegation is available. Requiring this capability rejects unsupported hosts before allocation. The guest sees no writable cgroup filesystem.
+- The factory discovers the worker's writable cgroup v2 delegation and creates a machine parent with keeper and command children. `cgroup_parent` supplies an operator override. Containment requires writable `cgroup.kill` and permission to move children within the hierarchy. Each machine owns and reclaims its groups; successful commands may leave background processes in their tracked child groups, and session close reclaims only its own group. Execution preflight admits `retained_command_cancellation` and `process_scope` only when delegation is available. Declare either capability in `ExecutionRequirements.capabilities` to reject unsupported hosts before allocation. The guest sees no writable cgroup filesystem.
 - `MachineSpec.cpus` and `memory_mb` request aggregate limits across every process in a machine. The backend enables each requested controller separately and disables swapping when memory is limited. Unavailable controllers or failed limit writes produce warnings and execution continues. Process containment and cleanup still must succeed. Disk quotas and GPU allocation remain unsupported.
 - `Command.user` keeps the process's user when it is omitted or names that user. Another user requires a root process; the command then runs with that account's UID and primary group, no supplementary groups and no capabilities. A user without a host account raises `UnsupportedMachineSpec`.
 

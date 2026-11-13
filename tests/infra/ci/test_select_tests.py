@@ -389,6 +389,13 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     ]
 
 
+def test_skyrl_changes_select_the_launch_census(tmp_path: Path) -> None:
+    census = "tests/rl/test_rl_launch_documents.py"
+    write(tmp_path, census, "def test_launch(): pass\n")
+    for changed in ("vendor/skyrl/uv.lock", "lib/skyrlrecipe/src/skyrlrecipe/recipe.py"):
+        assert leg_paths(select_matrix([changed], tmp_path), "marin") == [census]
+
+
 @pytest.mark.parametrize(
     "changed_path,suites",
     [
@@ -437,7 +444,6 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         (
             "lib/rigging/src/rigging/message.py",
             [
-                "evalchemy-unit",
                 "harbor-unit",
                 "rolloutengine-unit",
                 "skyrl-wheel",
@@ -447,7 +453,7 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ),
         ("vendor/harbor/src/harbor/job.py", ["harbor-unit", "skyrl-wheel"]),
         ("vendor/harbor/uv.lock", ["harbor-unit", "skyrl-wheel"]),
-        ("lib/finestore/src/finestore/table.py", ["evalchemy-unit", "harbor-unit", "skyrl-wheel"]),
+        ("lib/finestore/src/finestore/table.py", ["harbor-unit", "skyrl-wheel"]),
         ("lib/iris/src/iris/client/client.py", ["iris-e2e-smoke", "skyrl-wheel", "taskforge-unit"]),
         ("lib/taskforge/src/taskforge/llm/glm_client.py", ["taskforge-unit"]),
         ("vendor/skyrl/skyrl-train/skyrl_train/trainer.py", ["skyrl-wheel"]),
@@ -487,25 +493,9 @@ def test_capability_environment_change_selects_the_taskforge_suite(tmp_path: Pat
 
 
 @pytest.mark.parametrize(
-    "path",
-    [
-        "vendor/evalchemy/eval/chat_benchmarks/MRCR/eval_instruct.py",
-        "vendor/evalchemy/uv.lock",
-        "lib/finestore/src/finestore/client.py",
-        "lib/marin/src/marin/evaluation/evalchemy/runner.py",
-        "experiments/evaluation/evals.py",
-    ],
-)
-def test_evaluator_changes_select_the_isolated_evalchemy_suite(tmp_path: Path, path: str) -> None:
-    selection = select_changed_tests([path], tmp_path)
-
-    assert "evalchemy-unit" in selection.suites
-
-
-@pytest.mark.parametrize(
     "suite_result, expected_exit", [("success", 0), ("skipped", 0), ("failure", 1), ("cancelled", 1)]
 )
-@pytest.mark.parametrize("suite", ["shellbox", "skyrl", "evalchemy", "harbor"])
+@pytest.mark.parametrize("suite", ["shellbox", "skyrl", "harbor"])
 def test_required_unit_check_propagates_isolated_suite_result(suite: str, suite_result: str, expected_exit: int) -> None:
     workflow_path = Path(__file__).resolve().parents[3] / ".github/workflows/unified-unit.yaml"
     aggregate = yaml.safe_load(workflow_path.read_text())["jobs"]["unit_tests"]

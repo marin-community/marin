@@ -186,4 +186,5 @@ def test_trial_trains_on_self_distilled_rows_and_evaluates_gpqa_before_and_after
     assert set(train_config.data.components) == set(CURRICULUM_IDS)
     assert trial["after"].deps == (trial["train"],)
     for stage in ("baseline", "after"):
-        assert "gpqa-diamond" in materialized_config(trial[stage], "s3://test-prefix").evals
+        selections = materialized_config(trial[stage], "s3://test-prefix").evals
+        assert "gpqa-diamond" in {selection.benchmark for selection in selections}

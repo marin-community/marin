@@ -44,12 +44,38 @@ from shellbox.backends.daytona.machine import (
     DaytonaNetworkPolicy,
 )
 from shellbox.backends.daytona.snapshot import task_snapshot_source
+from shellbox.image import DockerfileSource, RegistryImage
+from shellbox.machine import MachineSpec, NetworkPolicy
 from shellbox.process_session import (
     acquire_owned,
     await_cleanup,
     finish_owned,
     own_cleanup,
 )
+
+
+def machine_spec(task_env_config, environment_dir: Path, env: dict[str, str], *, cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int = 0) -> MachineSpec:
+    """The shellbox spec for one task environment.
+
+    Pure mapping from the task's environment config to the spec the Daytona
+    factory prepares, so measurement code can derive snapshot identities from
+    the same inputs production uses.
+    """
+    source = (
+        RegistryImage(task_env_config.docker_image)
+        if task_env_config.docker_image
+        else DockerfileSource(environment_dir, environment_dir / "Dockerfile")
+    )
+    return MachineSpec(
+        source=source,
+        workdir=task_env_config.workdir or "",
+        env=env or {},
+        network=NetworkPolicy.ALLOW if task_env_config.allow_internet else NetworkPolicy.DENY,
+        cpus=cpus,
+        memory_mb=memory_mb,
+        storage_mb=storage_mb,
+        gpus=gpus,
+    )
 
 
 class DaytonaEnvironment(BaseEnvironment):
@@ -163,7 +189,15 @@ class DaytonaEnvironment(BaseEnvironment):
             raise ValueError(
                 "Shellbox snapshots are immutable; change the prepared image or build inputs"
             )
-        environment = self._task_environment()
+        spec = machine_spec(
+            self.task_env_config,
+            self.environment_dir,
+            self._merge_env(None),
+            cpus=self._effective_cpus,
+            memory_mb=self._effective_memory_mb,
+            storage_mb=self._effective_storage_mb,
+            gpus=self._effective_gpus,
+        )
         judge, candidate = task_model_relays(
             model_endpoint=self.model_endpoint,
             model_name=self.model_name,
@@ -171,14 +205,12 @@ class DaytonaEnvironment(BaseEnvironment):
             candidate_model_name=self.candidate_model_name,
             authentication=self.host_capabilities.model_authentication,
             judge_access=self.judge_access,
-            environments=(dict(environment.env),),
+            environments=(spec.env,),
         )
         self._judge = judge
         self._stopping = None
         self.machine = await acquire_owned(
-            asyncio.create_task(
-                self.factory.create(environment.machine_spec())
-            )
+            asyncio.create_task(self.factory.create(spec))
         )
         try:
             await start_model_relays(
