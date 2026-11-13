@@ -61,6 +61,13 @@ Campaign status and evidence live in
 the replacement HF publication and evidence archive verified. Historical trace
 sampling and telemetry gaps remain documented there.
 
+## Training route selection
+
+An RL stage document may set `train_routes: [nonagentic]` to train only on the pinned
+nonagentic dataset. Omission selects both `agentic` and `nonagentic`; route names must
+be distinct. Consumed-group quotas must match the selected route pools. The selected
+data sources and route classifications are emitted in the same launch document.
+
 ## RL-only continuation
 
 After SFT commits, pin its selection, checkpoint metadata/manifest, consumed config,
