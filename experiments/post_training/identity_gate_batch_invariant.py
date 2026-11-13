@@ -12,6 +12,8 @@ the 64-case grid, the three stability rows, then the 24 primary rows four more t
 Differences from the original run, all recorded in the receipt:
 
 - ``VLLM_BATCH_INVARIANT=1`` is set on the serving job, and the band is interactive;
+- the H100 peer is chosen with ``--target-cluster``; an interactive serve on a peer that also runs
+  production work can be preempted mid-scoring, which loses the arm;
 - ``controls.jsonl`` is not archived with the experiment, so an empty file stands in. ``check``
   shows the reconstructed grid equals the original receipt's 64 cases in order;
 - model provenance is copied from the original receipt, not re-hashed.
@@ -115,9 +117,16 @@ def check_grid_matches(gate_module: ModuleType, prompt_dir: Path, gate: dict, or
     return len(jobs)
 
 
-def submit_serve(model: str, name: str, endpoint_name: str) -> str:
+def serve_args_for(target_cluster: str) -> list[str]:
+    """The serve arguments with the original gate's cw-rno2a placement replaced."""
+    args = list(SERVE_ARGS)
+    args[args.index("--target-cluster") + 1] = target_cluster
+    return args
+
+
+def submit_serve(model: str, serve_args: list[str], name: str, endpoint_name: str) -> str:
     """Submit the serve and return its job id as the CLI printed it."""
-    argv = [sys.executable, "-m", "marin.inference.iris_cli", model, *SERVE_ARGS]
+    argv = [sys.executable, "-m", "marin.inference.iris_cli", model, *serve_args]
     argv += ["--name", name, "--endpoint-name", endpoint_name]
     output = subprocess.run(argv, check=True, capture_output=True, text=True).stdout
     for line in output.splitlines():
@@ -157,9 +166,19 @@ def check(gate_path: Path, identity_path: Path, tokenizer_path: Path, original: 
 @cli.command()
 @common
 @click.option("--arm", type=click.Choice(["baseline", "candidate"]), required=True)
+@click.option("--target-cluster", required=True, help="H100 peer to serve on; the original gate used cw-rno2a.")
 @click.option("--out", required=True, type=click.Path(path_type=Path))
-def run(gate_path: Path, identity_path: Path, tokenizer_path: Path, original: Path, arm: str, out: Path):
+def run(
+    gate_path: Path,
+    identity_path: Path,
+    tokenizer_path: Path,
+    original: Path,
+    arm: str,
+    target_cluster: str,
+    out: Path,
+):
     """Serve one arm with batch invariance, score it with the gate's score_arm, release the serve."""
+    serve_args = serve_args_for(target_cluster)
     original_receipt = json.loads(original.read_text())
     assert original_receipt["arm"] == arm, original_receipt["arm"]
     with tempfile.TemporaryDirectory() as tmp:
@@ -176,8 +195,9 @@ def run(gate_path: Path, identity_path: Path, tokenizer_path: Path, original: Pa
             for key, value in original_receipt["provenance"].items()
             if key not in ("serve", "serve_args", "engine_log_markers")
         }
-        provenance["serve_args"] = SERVE_ARGS
+        provenance["serve_args"] = serve_args
         provenance["rerun"] = {
+            "target_cluster": target_cluster,
             "issue": "https://github.com/marin-community/marin/issues/10699",
             "model_provenance": "copied from the original receipt; model files were not re-hashed",
             "controls_jsonl": "unavailable; empty stand-in, grid verified against the original receipt",
@@ -190,7 +210,7 @@ def run(gate_path: Path, identity_path: Path, tokenizer_path: Path, original: Pa
 
         name = f"m16gate-bi-{arm}-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}"
         endpoint_name = f"/serve/{name}"
-        job_id = submit_serve(provenance["model"], name, endpoint_name)
+        job_id = submit_serve(provenance["model"], serve_args, name, endpoint_name)
         logger.info("Submitted %s", job_id)
         provenance["serve"] = {"job": job_id, "submitted_utc": time.time()}
         try:
