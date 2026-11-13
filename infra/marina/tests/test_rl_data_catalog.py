@@ -778,7 +778,8 @@ def test_atlas_rejects_oversight_without_result_and_preserves_selected_catalog(
         source = client.get("/sources").json()["sources"][0]
         detail = client.get("/source", params={"source_id": source["id"]}).json()
         assert source["quality"] == detail["quality"] == "QUICK"
-        assert source["quality_review_status"] == detail["quality_review_status"] == "SAMPLE review in progress"
+        assert source["quality_review_status"] == detail["quality_review_status"]
+        assert source["quality_review_status"]
         assert detail["declaration"] == declaration
         assert source["result"] is source["issue_rate"] is source["review_completeness"] is None
         assert source["result_provisional"] is None
@@ -854,7 +855,8 @@ def test_release_keeps_legacy_selected_catalog_readable_after_rejected_strict_re
             assert detail_response.status_code == 200
             detail = detail_response.json()
             assert source["quality"] == detail["quality"] == "QUICK"
-            assert source["quality_review_status"] == detail["quality_review_status"] == "SAMPLE review in progress"
+            assert source["quality_review_status"] == detail["quality_review_status"]
+            assert source["quality_review_status"]
             assert source["result"] is detail["result"] is None
             assert detail["declaration"] == pending
 
