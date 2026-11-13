@@ -96,12 +96,14 @@ def submit_reference(size: int) -> None:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--size", type=int, choices=SIZES)
     args = parser.parse_args()
+    sizes = (args.size,) if args.size is not None else SIZES
     if not args.run:
-        print(json.dumps({size: draccus.encode(reference_config(size)) for size in SIZES}))
+        print(json.dumps({size: draccus.encode(reference_config(size)) for size in sizes}))
         return
     with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = [executor.submit(contextvars.copy_context().run, submit_reference, size) for size in SIZES]
+        futures = [executor.submit(contextvars.copy_context().run, submit_reference, size) for size in sizes]
         for future in futures:
             future.result()
 

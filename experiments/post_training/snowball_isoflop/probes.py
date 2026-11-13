@@ -133,6 +133,8 @@ def build_probe_pod(probe: Probe) -> TrainLmOnPodConfig:
         for key in ("adam_lr", "momentum", "backend_steps", "muon_epsilon", "coefficient_type"):
             optimizer.pop(key)
         optimizer["nesterov"] = False
+        # Pretrain's Muon-H implementation ignored its declared decay field.
+        optimizer["weight_decay"] = 0.0
     else:
         raise ValueError(f"Unregistered ablation optimizer {probe.optimizer}")
     optimizer["type"] = probe.optimizer

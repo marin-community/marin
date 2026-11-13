@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 import subprocess
 import sys
@@ -19,16 +20,22 @@ from rigging.tunnel import terminate_process_group
 
 from levanter.data.dataset import ListAsyncDataset
 from levanter.eval import TaggedEvaluator, eval_model, lm_eval_loss
-from levanter.eval_audit import evaluation_input_audit, initial_eval_match
+from levanter.eval_audit import evaluation_input_audit, initial_eval_match, write_evaluation_result
 from levanter.models.lm_model import LmExample
 from levanter.testing.helpers import use_test_mesh
 from levanter.testing.toy_lm import ToyLmConfig, ToyLmHeadModel
 
 
-def test_reference_match_survives_batch_changes_and_rejects_changed_tokens():
+def test_reference_match_survives_batch_changes_and_rejects_changed_tokens(tmp_path):
     with use_test_mesh(tensor_parallelism=1) as mesh:
         pos = hax.Axis("position", 8)
-        examples = [LmExample.causal(hax.named(jnp.arange(i, i + 8, dtype=jnp.int32), pos)) for i in range(4)]
+        examples = [
+            LmExample.causal(
+                hax.named(jnp.arange(i, i + 8, dtype=jnp.int32), pos),
+                segment_ids=hax.named(jnp.asarray([0, 0, 0, 0, 1, 1, 1, 1]), pos),
+            )
+            for i in range(4)
+        ]
         model = ToyLmHeadModel.init(hax.Axis("vocab", 32), ToyLmConfig(), key=jax.random.key(0))
         results = []
         for batch_size in (1, 2):
@@ -46,7 +53,11 @@ def test_reference_match_survives_batch_changes_and_rejects_changed_tokens():
                     "input_audit": evaluation_input_audit(evaluator, (7,)),
                 }
             )
-        match = initial_eval_match(results[0], results[1]["metrics"], results[1]["input_audit"], 1e-5)
+        path = tmp_path / "reference.json"
+        write_evaluation_result(str(path), results[0]["metrics"], results[0]["input_audit"])
+        match = initial_eval_match(
+            json.loads(path.read_text()), results[1]["metrics"], results[1]["input_audit"], 1e-5
+        )
         assert match["passed"]
         assert match["input_audit"]["special_token_counts"] == {"7": 4}
         changed_audit = dict(results[1]["input_audit"], tokens_sha256="different-corpus")
@@ -66,7 +77,13 @@ def _audit_on_cpu_rank(coordinator):
         local_device_ids=[0],
     )
     pos = hax.Axis("position", 8)
-    examples = [LmExample.causal(hax.named(jnp.arange(i, i + 8, dtype=jnp.int32), pos)) for i in range(4)]
+    examples = [
+        LmExample.causal(
+            hax.named(jnp.arange(i, i + 8, dtype=jnp.int32), pos),
+            segment_ids=hax.named(jnp.asarray([0, 0, 0, 0, 1, 1, 1, 1]), pos),
+        )
+        for i in range(4)
+    ]
     results = []
     for shape, batch_size in (((2, 1), 2), ((1, 2), 1)):
         mesh = Mesh(np.asarray(jax.devices()).reshape(shape), ("data", "context"))

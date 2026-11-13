@@ -45,9 +45,15 @@ def evaluation_input_audit(evaluator: TaggedEvaluator, special_token_ids: tuple[
             raise ValueError("Evaluation identity auditing requires a structured attention mask")
         segment_ids = batch.attn_mask.segment_ids
         segments = (
-            np.zeros(tokens.shape, dtype=np.int64)
+            np.zeros((*tokens.shape, 2), dtype=np.int64)
             if segment_ids is None
-            else np.asarray(multihost_utils.process_allgather(segment_ids.array, tiled=True), dtype=np.int64)
+            else np.stack(
+                [
+                    np.asarray(multihost_utils.process_allgather(ids.array, tiled=True), dtype=np.int64)
+                    for ids in segment_ids
+                ],
+                axis=-1,
+            )
         )
         segments_hash.update(segments.tobytes())
         positions += tokens.size
