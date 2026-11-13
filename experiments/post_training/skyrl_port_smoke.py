@@ -25,6 +25,7 @@ from marin.rl.skyrl import (
     _materialize_role_plan_config,
     skyrl_step,
 )
+from skyrlrecipe import SkyRLRecipe
 
 from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.pipeline import EvaluationResult
@@ -105,7 +106,7 @@ def build_smoke(version: str) -> Smoke:
             SkyRLSpec(
                 name=user_owned_name(f"checkpoints/skyrl-port-smoke/{name}"),
                 version=version,
-                config_yaml=yaml.safe_dump(config),
+                config_yaml=yaml.safe_dump(SkyRLRecipe.from_document(config).to_skyrl()),
                 model=ArtifactHfModel(
                     step=qwen2_5_0_5b_instruct,
                     relative_path="",

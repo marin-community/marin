@@ -399,6 +399,48 @@ def _pin_init(pid: int, namespace: int) -> int:
         os.close(directory)
 
 
+class LocalProcessScope:
+    """Agent command scope contained by a worker-owned cgroup."""
+
+    def __init__(self, machine: "LocalMachine", group: MachineCgroup):
+        self.machine = machine
+        self.group = group
+        self._closed = False
+        self._active: set[asyncio.Task[Result]] = set()
+        self._commands: dict[MachineCgroup, asyncio.Task[asyncio.subprocess.Process]] = {}
+        self._closing: asyncio.Task[None] | None = None
+
+    async def run(self, command: Command) -> Result:
+        if self._closed:
+            raise RuntimeError("Process scope is closed")
+        self.machine._check_open()
+        environment = {**self.machine._environment, **self.machine.spec.env, **command.env}
+        task = asyncio.create_task(self.machine._execute(command, environment, scope=self))
+        self._active.add(task)
+        try:
+            return await task
+        finally:
+            self._active.discard(task)
+
+    async def terminate(self) -> None:
+        if self._closing is None:
+            self._closed = True
+            self._closing = own_cleanup(self._terminate())
+        await await_cleanup(self._closing)
+
+    async def _terminate(self) -> None:
+        async def stop(group: MachineCgroup, acquisition: asyncio.Task[asyncio.subprocess.Process]) -> None:
+            self._commands.pop(group, None)
+            process = await finish_owned(acquisition)
+            await self.machine._stop_command(process, group)
+
+        await asyncio.gather(*(stop(group, acquisition) for group, acquisition in tuple(self._commands.items())))
+        if self._active:
+            await asyncio.gather(*tuple(self._active), return_exceptions=True)
+        await self.group.close()
+        self.machine._scopes.discard(self)
+
+
 class LocalMachine:
     """A persistent bubblewrap member, with commands entering pinned namespaces."""
 
@@ -426,6 +468,7 @@ class LocalMachine:
         self._command_cgroups: set[MachineCgroup] = set()
         self._background_cgroups: set[MachineCgroup] = set()
         self._run_commands: dict[MachineCgroup, asyncio.Task[asyncio.subprocess.Process]] = {}
+        self._scopes: set[LocalProcessScope] = set()
         self._keeper_cgroup: MachineCgroup | None = None
         self._bwrap = bwrap
         self._environment = environment
@@ -647,6 +690,16 @@ class LocalMachine:
     async def run(self, command: Command) -> Result:
         return await self._execute(command, {**self._environment, **self.spec.env, **command.env})
 
+    async def open_process_scope(self) -> LocalProcessScope:
+        """Contain scoped commands and detached descendants outside the guest."""
+        self._check_open()
+        if self._cgroup is None:
+            raise UnsupportedMachineSpec("Process scopes require delegated cgroups")
+        group = self._cgroup.create_child()
+        scope = LocalProcessScope(self, group)
+        self._scopes.add(scope)
+        return scope
+
     async def open_process(self, command: Command) -> SubprocessSession:
         """Start a foreground process in the same pinned namespaces as run."""
         if command.stdin or command.timeout is not None:
@@ -808,7 +861,11 @@ class LocalMachine:
 
         await await_cleanup(own_cleanup(cleanup()))
 
-    async def _execute(self, command: Command, environment: dict[str, str]) -> Result:
+    async def _execute(
+        self, command: Command, environment: dict[str, str], *, scope: LocalProcessScope | None = None
+    ) -> Result:
+        if scope is not None and scope._closed:
+            raise RuntimeError("Process scope is closed")
         config = self._command_config(command, environment)
         # Anonymous output files let a successful foreground command finish even
         # when its background services keep stdout open. RLIMIT_FSIZE bounds writers.
@@ -828,7 +885,7 @@ class LocalMachine:
             stdin_file.write(command.stdin)
             stdin_file.seek(0)
             assert self._root_fd is not None
-            group = self._new_command_cgroup()
+            group = scope.group.create_child() if scope is not None else self._new_command_cgroup()
             config["cgroup"] = None if group is None else str(group.path / "cgroup.procs")
             configuration.write(json.dumps(config).encode())
             configuration.seek(0)
@@ -849,7 +906,10 @@ class LocalMachine:
                 )
             )
             if group is not None:
-                self._run_commands[group] = acquisition
+                if scope is None:
+                    self._run_commands[group] = acquisition
+                else:
+                    scope._commands[group] = acquisition
             process = None
             try:
                 async with asyncio.timeout(command.timeout):
@@ -869,6 +929,8 @@ class LocalMachine:
                         self._commands.add(process)
                     status_writer.close()
                     if group is not None:
+                        if scope is not None:
+                            scope._commands.pop(group, None)
                         await self._stop_command(process, group)
                     elif not self._closed:
                         await self.close()
@@ -886,7 +948,11 @@ class LocalMachine:
             finally:
                 if process is not None:
                     self._commands.discard(process)
-                if group is not None and not self._closed and group in self._command_cgroups:
+                if scope is not None and group is not None and group in scope._commands and not self._closed:
+                    if not group.populated:
+                        await group.close()
+                        scope._commands.pop(group, None)
+                if scope is None and group is not None and not self._closed and group in self._command_cgroups:
                     if group.populated:
                         self._background_cgroups.add(group)
                     else:
@@ -953,6 +1019,7 @@ class LocalMachine:
         await asyncio.shield(self._closing)
 
     async def _destroy(self) -> None:
+        await asyncio.gather(*(scope.terminate() for scope in tuple(self._scopes)))
         if self._cgroup is not None:
             self._cgroup.kill()
         # Kill the verified, pinned guest init before its host launcher. An
@@ -1040,7 +1107,7 @@ def check_local_environment(
     capabilities = LINUX_PROCESS_CAPABILITIES
     if cgroup_parent is not None:
         check_cgroup_parent(cgroup_parent)
-        capabilities = capabilities | {"retained_command_cancellation"}
+        capabilities = capabilities | {"retained_command_cancellation", "process_scope"}
     check_execution_requirements(
         requirements,
         spec,
