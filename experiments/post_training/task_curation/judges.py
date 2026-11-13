@@ -220,13 +220,13 @@ class LocalJudgeEndpoint:
         with remote_inference(config) as session:
             self.job_ids.extend(str(job.job_id) for job in session.jobs)
             logger.info("Judge serving jobs: %s", self.job_ids)
-            session.wait_until_ready()
+            session = session.ready_direct_session()
             if (
                 session.effective_serving is None
                 or session.effective_serving.max_model_len != definition.context_window_tokens
             ):
                 raise ValueError("Running inference does not confirm the tier's context window")
-            endpoint = session.direct_session().model.endpoint
+            endpoint = session.model.endpoint
             if endpoint.model != definition.spec.model:
                 raise ValueError(f"Serving endpoint returned an unexpected model {endpoint.model!r}")
             with HostedJudgeEndpoint(definition.spec.model, endpoint.base_url, endpoint.api_key or "unused").connect():
@@ -235,7 +235,7 @@ class LocalJudgeEndpoint:
     @contextmanager
     def connect(self, api_key: str | None = None) -> Iterator[JudgeConnection]:
         with self.serve() as session:
-            endpoint = session.direct_session().model.endpoint
+            endpoint = session.model.endpoint
             yield JudgeConnection(
                 endpoint.base_url, api_key or endpoint.api_key or "unused", default_model=endpoint.model
             )

@@ -11,8 +11,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
 from fray.types import ANY_REGION
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import AcceleratorChoice, Platform
@@ -84,15 +82,8 @@ class ReadyChatReviewer:
         originals: Mapping[str, TaskSpec] | None = None,
         cached: CachedRequests | None = None,
     ) -> ReviewBatchResult:
-        while True:
-            self.session.wait_until_ready()
-            try:
-                current = self.session.direct_session()
-            except ConnectError as error:
-                if error.code != Code.NOT_FOUND:
-                    raise
-                continue
-            return self._reviewer(current).review(tasks, rubric, originals=originals, cached=cached)
+        current = self.session.ready_direct_session()
+        return self._reviewer(current).review(tasks, rubric, originals=originals, cached=cached)
 
 
 def local_reviewer() -> ReviewerSpec:

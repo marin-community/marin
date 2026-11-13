@@ -181,6 +181,16 @@ class RemoteInferenceSession:
             metrics_url=f"{address}/metrics" if self.metrics_url is not None else None,
         )
 
+    def ready_direct_session(self) -> "RemoteInferenceSession":
+        """Wait for readiness and retry a registration lost before address resolution."""
+        while True:
+            self.wait_until_ready()
+            try:
+                return self.direct_session()
+            except ConnectError as error:
+                if error.code != Code.NOT_FOUND:
+                    raise
+
     def backend_state(self) -> InferenceBackendState:
         """Return broker readiness or the direct serving jobs' aggregate lifecycle state."""
         if self.broker is not None:
