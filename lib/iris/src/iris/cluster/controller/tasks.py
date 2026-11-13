@@ -326,6 +326,7 @@ def attempt_to_proto(attempt: AttemptDetailRow) -> job_pb2.TaskAttempt:
         pod_name=attempt.pod_name or "",
         pod_uid=attempt.pod_uid or "",
         node_name=attempt.node_name or "",
+        topology=attempt.topology_json,
         terminal_reason=attempt.terminal_reason or "",
     )
     if attempt.output_archive_json:
