@@ -88,8 +88,6 @@ marin-taskcompendium = { path = "../../lib/taskcompendium", editable = true }
 marin-rolloutengine = { path = "../../lib/rolloutengine", editable = true }
 marin-verifyit = { path = "../../lib/verifyit", editable = true }
 marin-finelog = { path = "../../lib/finelog", editable = true }
-marin-taskcompendium = { path = "../../lib/taskcompendium", editable = true }
-marin-verifyit = { path = "../../lib/verifyit", editable = true }
 
 [tool.pytest.ini_options]
 timeout = 60
