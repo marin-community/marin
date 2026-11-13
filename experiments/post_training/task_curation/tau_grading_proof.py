@@ -37,19 +37,21 @@ from dataclasses import replace
 from pathlib import Path
 
 import pyarrow.parquet as pq
-from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV
-from experiments.post_training.task_curation.datasets.nemotron_ultra.components import (
-    TAU_REPAIR_RELEASES,
-    TAU_REPAIR_LOCK_URL,
-)
-from experiments.post_training.task_curation.judges import RelayJudgeEndpoint
-from experiments.post_training.task_curation.prebuilt import import_taskcompendium_cohort
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import ConversationTrace, GradingAttempt, TaskSpec, TextMessage, judge_spec
+from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from taskcompendium.runtime.local import LocalGraderMachines
 from taskcompendium.runtime.task_grading import grade_task
+
+from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV
+from experiments.post_training.task_curation.datasets.nemotron_ultra.components import (
+    TAU_REPAIR_LOCK_URL,
+    TAU_REPAIR_RELEASES,
+)
+from experiments.post_training.task_curation.judges import RelayJudgeEndpoint
+from experiments.post_training.task_curation.prebuilt import import_taskcompendium_cohort
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +82,6 @@ def empty_control(task: TaskSpec) -> GradeResult:
     environment = task.grader.environment
     if environment is None or environment.packages_lock != TAU_REPAIR_LOCK_URL:
         raise ValueError(f"{task.id}: the grader must declare the repaired packages lock")
-    from taskcompendium.runtime.grading import grade_empty_in_sandbox
-
     factory, machine_spec = LocalGraderMachines().machine(environment, EMPTY_CONTROL_MEMORY_MB)
     result = asyncio.run(grade_empty_in_sandbox(task, factory, machine_spec))
     lock = StoragePath(environment.packages_lock)
