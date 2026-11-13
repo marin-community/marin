@@ -23,10 +23,11 @@ from taskcompendium.grading_environment import (
     grading_environment_census,
 )
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import NoGrader, TaskSpec
 
 from experiments.post_training.task_curation.grading_binding import GradingCensusReceipt
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
+from experiments.post_training.task_curation.prebuilt import validate_native_package
 
 LOGGER = logging.getLogger(__name__)
 TASK_SCHEMA = pa.schema(
@@ -94,9 +95,12 @@ def census_source(config: GradingCensusInput, output_root: str) -> GradingCensus
                         task_count += 1
                         document = json.loads(encoded)
                         try:
-                            assessment = assess_grading_environment(TaskSpec.model_validate(document)).model_dump(
-                                mode="json"
-                            )
+                            task = TaskSpec.model_validate(document)
+                            if isinstance(task.grader, NoGrader) and any(
+                                resource.path == "task.toml" for resource in task.resources.verifier
+                            ):
+                                validate_native_package(task)
+                            assessment = assess_grading_environment(task).model_dump(mode="json")
                         except ValueError as error:
                             reason = f"{type(error).__name__}: {error}"
                             unassessable[reason] += 1

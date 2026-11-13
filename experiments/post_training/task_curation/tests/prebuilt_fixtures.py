@@ -26,6 +26,7 @@ from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_prebuilt
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
@@ -34,7 +35,7 @@ IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
 
 def prebuilt_source(info: SourceInfo) -> RlDataSource[PrebuiltCohort]:
     count = info.count if info.count is not None else 1
-    return RlDataSource(
+    source = RlDataSource(
         info=replace(
             info,
             within_source_dedup=info.within_source_dedup
@@ -52,6 +53,8 @@ def prebuilt_source(info: SourceInfo) -> RlDataSource[PrebuiltCohort]:
         ),
         pipeline=import_taskcompendium_prebuilt,
     )
+
+    return with_admission_census(source)
 
 
 def prebuilt_task(task_id: str, *, image: str | None = IMAGE, capabilities: tuple[str, ...] = ()) -> dict:

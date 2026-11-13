@@ -154,9 +154,17 @@ def test_grading_census_retains_task_exceptions_and_clears_evidence_for_changed_
     shared = separate.model_copy(
         update={
             "id": "shared",
+            "tags": ("harbor",),
             "grader": NoGrader(reason="Native verifier or unavailable fixture"),
             "resources": separate.resources.model_copy(
-                update={"verifier": (inline_resource("task.toml", b'[verifier]\nenvironment_mode = "shared"\n'),)}
+                update={
+                    "verifier": (
+                        inline_resource("task.toml", b'[verifier]\nenvironment_mode = "shared"\n'),
+                        inline_resource("instruction.md", b"Perform the task"),
+                        inline_resource("tests/test.sh", b"#!/bin/sh\nexit 0\n"),
+                        inline_resource("environment/Dockerfile", b"FROM ubuntu:24.04\n"),
+                    )
+                }
             ),
         }
     )

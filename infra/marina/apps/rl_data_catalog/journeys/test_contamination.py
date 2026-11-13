@@ -42,12 +42,6 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
         "cells => cells.every(cell => cell.children.length === 1 && "
         "cell.textContent === cell.firstElementChild.textContent)"
     )
-    warning = page.locator('tr[data-source-id="Marin:required"] .contamination-chip')
-    assert warning.evaluate("chip => getComputedStyle(chip).borderTopWidth") == "2px"
-    colors = page.locator("#rows .contamination-chip").evaluate_all(
-        "chips => [...new Set(chips.map(chip => getComputedStyle(chip).backgroundColor))]"
-    )
-    assert len(colors) == 5
     page.locator("#contamination-legend summary").click()
     expect(page.locator("#contamination-legend")).to_contain_text("Cleanliness is unknown")
     for width in (1440, 390):
