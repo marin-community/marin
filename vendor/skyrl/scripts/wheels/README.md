@@ -39,7 +39,8 @@ bash scripts/wheels/build_native.sh transformer-engine-torch /tmp/build-te
 Use a separate build directory for each source or environment. The source and
 recursive submodules must be clean; ignored compiler outputs may remain for
 cache reuse. Each directory retains its build environment and source checkout.
-Wheels go to `dist/`; `SHA256SUMS`, `BUILD_INFO` and `BUILD_REQUIREMENTS.txt`
+Wheels go to `BUILD_DIRECTORY/dist/`; `SHA256SUMS`, `BUILD_INFO` and
+`BUILD_REQUIREMENTS.txt` stay in `BUILD_DIRECTORY/` and
 record their hashes, source, toolchain and actual build dependencies. Independent
 builds need not produce identical bytes. Publish those records and the image
 digest alongside each wheel.
@@ -54,7 +55,7 @@ and hashes only after these checks pass.
 
 The causal-conv1d and Mamba targets retain their historical Torch 2.13 build
 environment in [native-cu132.txt](native-cu132.txt). They cannot rebuild the
-adopted Torch 2.14 wheels. Those use the
+Torch 2.14 causal-conv1d and Mamba wheels. Those two packages use the
 [frozen MarinSkyRL recipes](https://github.com/marin-community/MarinSkyRL/tree/604f2c1463032ffc1f47da114f43cf1d550dd473/scripts/wheels),
 including C++20 build flags and Mamba's TileLang/TVM-FFI dependency adjustments.
 Core and Bridge patches in that archive are unused.
