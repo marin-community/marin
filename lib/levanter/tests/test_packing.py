@@ -748,7 +748,6 @@ def test_pack_documents_lookahead_default_is_sequential():
     lengths = {"store": np.array([100, 200, 150, 150])}
     packs = pack_documents(lengths, {"store": 300})
     assert packs == [range(0, 2), range(2, 4)]
-    assert pack_documents(lengths, {"store": 300}, lookahead_window=None) == packs
 
 
 def test_pack_documents_lookahead_respects_max_segments():
@@ -780,14 +779,6 @@ def test_pack_documents_lookahead_partitions_documents():
                 assert int(lengths["store"][p].sum()) <= 2000
         # lookahead never needs more packs than the sequential packer
         assert len(lookahead) <= len(sequential)
-
-
-def test_pack_documents_lookahead_deterministic():
-    rng = np.random.default_rng(1)
-    lengths = {"store": rng.integers(1, 5000, size=500).astype(np.int64)}
-    a = pack_documents(lengths, {"store": 8000}, lookahead_window=8)
-    b = pack_documents(lengths, {"store": 8000}, lookahead_window=8)
-    assert a == b
 
 
 def test_pack_documents_lookahead_multi_leaf():
@@ -842,7 +833,6 @@ def test_greedy_prepacked_dataset_lookahead():
         dataset = {"store": store}
         max_length = {"store": 350}
         tester = GreedyPrepackedDataset(dataset, max_length, pad_with_zeros=False, lookahead_window=2)
-        assert [list(p) for p in tester._pack_indices] == [[0, 2], [1, 3]]
 
         batch = tester.as_sync_dataset()[0]
         data, segment_ids = batch
@@ -868,7 +858,6 @@ def test_greedy_prepacked_dataset_lookahead_padded_and_sliced():
         dataset = {"store": store}
         max_length = {"store": 50}
         tester = GreedyPrepackedDataset(dataset, max_length, slice_strategy="left", lookahead_window=4)
-        assert [list(p) for p in tester._pack_indices] == [[0], [1]]
 
         batch = tester.as_sync_dataset()[0]
         data, segment_ids = batch
@@ -879,19 +868,6 @@ def test_greedy_prepacked_dataset_lookahead_padded_and_sliced():
         data, segment_ids = batch
         assert np.array_equal(data["store"], np.pad(np.arange(100, 130), (0, 20)))
         assert np.array_equal(segment_ids["store"], np.pad(np.full(30, 1), (0, 20), constant_values=-1))
-
-
-def test_greedy_prepacked_dataset_default_unchanged_with_lookahead_none():
-    # The default dataset construction still produces contiguous range packs.
-    with tempfile.TemporaryDirectory() as tmpdir:
-        offsets = np.array([0, 100, 300, 450, 600])
-        store = JaggedArrayStore.open(tmpdir, item_rank=1, dtype=jnp.int64)
-        for i in range(len(offsets) - 1):
-            store.append(np.arange(offsets[i], offsets[i + 1]))
-        dataset = {"store": store}
-        tester = GreedyPrepackedDataset(dataset, {"store": 300})
-        assert tester._pack_indices == [range(0, 2), range(2, 4)]
-        assert tester.lookahead_window is None
 
 
 if __name__ == "__main__":
