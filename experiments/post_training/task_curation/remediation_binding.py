@@ -34,6 +34,8 @@ from experiments.post_training.task_curation.retained_release import (
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
+RETAINED_RECEIPTS_PER_SHARD = 16
+
 
 class ArchivePin(BaseModel):
     repo: str
@@ -262,7 +264,7 @@ def main() -> None:
                 require_private_release(bound.info.lexical_contamination, publication.repo, publication.revision)
             receipts[publication.source_id] = receipt.model_dump(mode="json")
     args.output_dir.mkdir(parents=True, exist_ok=False)
-    write_receipt_shards(args.output_dir, receipts)
+    write_receipt_shards(args.output_dir, receipts, records_per_shard=RETAINED_RECEIPTS_PER_SHARD)
 
 
 if __name__ == "__main__":

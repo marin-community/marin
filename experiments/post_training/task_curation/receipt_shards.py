@@ -25,11 +25,13 @@ def read_receipt_shards[T: BaseModel](directory: Path, model: type[T], kind: str
     return receipts
 
 
-def write_receipt_shards(directory: Path, receipts: Mapping[str, Mapping[str, object]]) -> None:
+def write_receipt_shards(
+    directory: Path, receipts: Mapping[str, Mapping[str, object]], *, records_per_shard: int = RECEIPTS_PER_SHARD
+) -> None:
     entries = sorted(receipts.items())
     for old in directory.glob("part-*.json"):
         old.unlink()
-    for part, offset in enumerate(range(0, len(entries), RECEIPTS_PER_SHARD)):
+    for part, offset in enumerate(range(0, len(entries), records_per_shard)):
         (directory / f"part-{part:03d}.json").write_text(
-            json.dumps(dict(entries[offset : offset + RECEIPTS_PER_SHARD]), indent=2, sort_keys=True) + "\n"
+            json.dumps(dict(entries[offset : offset + records_per_shard]), indent=2, sort_keys=True) + "\n"
         )
