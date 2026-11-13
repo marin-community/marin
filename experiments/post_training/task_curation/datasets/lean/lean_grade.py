@@ -266,6 +266,9 @@ def close_shared_directories() -> None:
             raise GraderFailure(f"{directory} is still world-writable")
 
 
+# TODO: the candidate's own uid is what separates its compile and export from verification inside one
+# sandbox. Running those steps in their own environment, once task curation can run a post-response step
+# there, would isolate the two halves of grading properly and replace the uid switch.
 def apply_candidate_limits() -> None:
     """In each of the candidate's steps, still as root: cap files and processes; die first on OOM."""
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_FILE, MAX_FILE))

@@ -183,7 +183,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 title="marcusm117/ProofNet-Verified",
                 origin="Hugging Face",
                 family="math-proof",
-                tags=("lean", "theorem-proving", "single-turn", "benchmark", "license:apache-2.0"),
+                tags=("eval", "lean", "theorem-proving", "single-turn", "benchmark", "license:apache-2.0"),
                 count=367,
                 notes="Audited ProofNet statements for Lean and Mathlib v4.34; proofs are not public.",
             ),
