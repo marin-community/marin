@@ -2082,6 +2082,11 @@ converter version/revision, TaskSpec digest, task count and declared Use.
 `SourceInfo.lexical_contamination` receives matching metrics. Stale input or Use
 changes clear raw metrics; an existing valid current release proof is preserved.
 Training measurements alone do not supply private-release admission proof.
+For retained evaluation releases, measure the current private pin and bind its
+receipt after retained-release selection updates the actor input. An older
+upstream-pin benchmark measurement stays in lineage and cannot substitute for
+the current-pin receipt. Evaluation and benchmark receipts retain every task
+without remediation.
 
 ```bash
 uv run python -m experiments.post_training.task_curation.lexical_registration \
