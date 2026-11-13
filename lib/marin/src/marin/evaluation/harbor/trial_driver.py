@@ -48,6 +48,7 @@ from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by ex
 from harbor.models.task.config import TaskOS  # pyrefly: ignore[missing-import]
 from harbor.models.task.task import Task  # pyrefly: ignore[missing-import]
 from harbor.models.trial.paths import TrialPaths  # pyrefly: ignore[missing-import]
+from harbor.trial.trial import load_task  # pyrefly: ignore[missing-import]
 from harbor.utils.env import (  # pyrefly: ignore[missing-import]
     resolve_env_vars,
     validate_task_environment,
@@ -730,8 +731,8 @@ async def _snapshot_specs(config: JobConfig, overlay: RuntimeOverlay | None) -> 
     with tempfile.TemporaryDirectory(prefix="marin-harbor-snapshot-specs-") as jobs_dir:
         trial_paths = TrialPaths(Path(jobs_dir) / "trial")
         for task_config in await Job.resolve_task_configs(config):
-            task = Task(
-                task_config.get_local_path(),
+            task = await load_task(
+                task_config,
                 disable_verification=config.verifier.disable or config.verifier.import_path is not None,
             )
             environment = EnvironmentFactory.create_environment_from_config(
