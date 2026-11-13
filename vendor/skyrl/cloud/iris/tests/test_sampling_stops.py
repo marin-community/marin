@@ -1,3 +1,4 @@
+from omegaconf import OmegaConf
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,7 @@ def test_recipe_explicit_stops_reach_vllm(tmp_path, field):
     path.write_text(yaml.safe_dump(SkyRLRecipe.from_document(raw).to_skyrl()))
 
     topology = LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
-    config = compose_skyrl_config(parse_rl_config(str(path)), {}, topology).config
+    config = compose_skyrl_config(parse_rl_config(OmegaConf.load(path)), {}, topology).config
     actual = get_sampling_params_for_backend("vllm", config.generator[field])
 
     assert actual["skip_special_tokens"] is False

@@ -478,18 +478,25 @@ def test_shared_snapshot_keeps_tokenizers_and_templates_and_repairs_truncated_we
 
 def test_artifact_draft_staging_requires_matching_manifest_identity(tmp_path, monkeypatch) -> None:
     manifest = publish_hugging_face_snapshot(
-        memory_model_snapshot(f"artifact-draft/{tmp_path.name}"), str(tmp_path / "draft"),
-        model_id="org/draft", revision="a" * 40,
+        memory_model_snapshot(f"artifact-draft/{tmp_path.name}"),
+        str(tmp_path / "draft"),
+        model_id="org/draft",
+        revision="a" * 40,
     )
     monkeypatch.setattr(task_runtime, "load_model_manifest", lambda _uri: manifest)
     artifact_uri = "s3://draft/artifact"
     artifact = prepare_draft_model(
         SpeculatorModelConfig(source_uri=artifact_uri, source_identity=manifest.identity),
-        cache_ttl_days=14, cache_source_prefix="s3://region/run",
+        cache_ttl_days=14,
+        cache_source_prefix="s3://region/run",
     )
     assert artifact.source_uri == artifact_uri and artifact.source_identity == manifest.identity
-    mismatched = SpeculatorModelConfig(source_uri=artifact_uri, source_identity="legacy-draft-id")
+    mismatched = SpeculatorModelConfig(
+        source_uri=artifact_uri, source_identity="sha256:" + ("1" if manifest.identity[-1] != "1" else "2") * 64
+    )
     with pytest.raises(ValueError, match="identity mismatch"):
         prepare_draft_model(
-            mismatched, cache_ttl_days=14, cache_source_prefix="s3://region/run",
+            mismatched,
+            cache_ttl_days=14,
+            cache_source_prefix="s3://region/run",
         )

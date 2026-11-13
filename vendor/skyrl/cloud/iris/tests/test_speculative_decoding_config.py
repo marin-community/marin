@@ -61,7 +61,7 @@ def _write_config(tmp_path: Path, config: dict) -> Path:
 
 
 def test_managed_speculator_reaches_hydra_with_immutable_source_unchanged(tmp_path: Path) -> None:
-    parsed = parse_rl_config(str(_write_config(tmp_path, _base_config())))
+    parsed = parse_rl_config(OmegaConf.load(_write_config(tmp_path, _base_config())))
     speculator = parsed.generator["speculative_decoding"]
 
     assert speculator["model"]["source_uri"] == "hf://laion/snowball-64k-eagle3-draft-r2egym"
@@ -132,7 +132,7 @@ def test_frozen_object_store_speculator_is_supported(tmp_path: Path) -> None:
     model["source_identity"] = "sha256:" + "a" * 64
     config["generator"]["speculative_decoding"]["training"] = None
 
-    parsed = parse_rl_config(str(_write_config(tmp_path, config)))
+    parsed = parse_rl_config(OmegaConf.load(_write_config(tmp_path, config)))
 
     assert parsed.generator["speculative_decoding"]["training"] is None
     assert parsed.generator["speculative_decoding"]["model"] == model
@@ -159,7 +159,7 @@ def test_gcs_alias_is_normalized_for_vllm_runai_loading(tmp_path: Path) -> None:
     model["source_uri"] = "gcs://models/snowball/eagle3"
     model["source_identity"] = "sha256:" + "a" * 64
 
-    parsed = parse_rl_config(str(_write_config(tmp_path, config)))
+    parsed = parse_rl_config(OmegaConf.load(_write_config(tmp_path, config)))
     resolved = parse_speculative_decoding_config(
         parsed.generator["speculative_decoding"],
         backend="vllm",
@@ -178,4 +178,4 @@ def test_speculator_rejects_a_mutable_hub_revision(tmp_path: Path) -> None:
     config["generator"]["speculative_decoding"]["model"]["source_identity"] = "main"
 
     with pytest.raises(SpeculativeDecodingConfigError, match="full 40-character"):
-        parse_rl_config(str(_write_config(tmp_path, config)))
+        parse_rl_config(OmegaConf.load(_write_config(tmp_path, config)))

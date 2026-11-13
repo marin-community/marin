@@ -64,7 +64,6 @@ TYPES = MappingProxyType(
         "trainer.rollout_buffer.max_staleness_steps": "NonNegativeInt",
         "trainer.rollout_buffer.batch_policy": _literal(BatchPolicy),
         "trainer.hf_upload_mode": _literal(HFUploadMode),
-        "checkpoint_export.hf_upload_mode": _literal(HFUploadMode),
         "trainer.policy.grug_query_bias_update_mode": _literal(GrugQueryBiasUpdateMode),
         "trainer.algorithm.advantage_estimator": _literal(AdvantageEstimatorRegistry.list_available()),
         "trainer.algorithm.resolved_group_advantage.kind": _literal(GroupAdvantageKind),

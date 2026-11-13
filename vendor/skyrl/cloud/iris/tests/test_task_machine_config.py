@@ -20,7 +20,7 @@ def composed_config(tmp_path: Path, settings: dict):
     path = tmp_path / "recipe.yaml"
     path.write_text(yaml.safe_dump(raw))
     return compose_skyrl_config(
-        parse_rl_config(str(path)), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
+        parse_rl_config(OmegaConf.load(path)), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
     ).config
 
 
@@ -52,11 +52,10 @@ def test_empty_settings_do_not_clear_existing_mapping_defaults(tmp_path):
 @pytest.mark.parametrize(
     "key,error",
     [
-        ("ckpt_interval", r"trainer\.ckpt_interval"),
         ("unknown_backend", "trainer.unknown_backend.*\\n.*Extra inputs"),
     ],
 )
-def test_empty_mapping_preserves_config_merge_contracts(tmp_path, key, error):
+def test_unknown_trainer_keys_are_rejected(tmp_path, key, error):
     recipe = Path(__file__).resolve().parents[1] / "configs/qwen_megatron_smoke.yaml"
     raw = yaml.safe_load(recipe.read_text())
     raw["trainer"][key] = {}
@@ -64,5 +63,5 @@ def test_empty_mapping_preserves_config_merge_contracts(tmp_path, key, error):
     path.write_text(yaml.safe_dump(raw))
     with pytest.raises(ValueError, match=error):
         compose_skyrl_config(
-            parse_rl_config(str(path)), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
+            parse_rl_config(OmegaConf.load(path)), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
         )

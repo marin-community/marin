@@ -7,7 +7,7 @@ from types import ModuleType
 import pytest
 import skyrlrecipe as schema
 from skyrlrecipe.model import Section, thaw
-from skyrlrecipe.ownership import DERIVED_PATHS, LAUNCH_PATHS
+from skyrlrecipe.ownership import OWNER_MESSAGES
 
 from scripts import generate_recipe_schema as generator
 from scripts.recipe_schema_sidecar import OPEN
@@ -47,7 +47,7 @@ NAMES = {"trainer.policy.model": "PolicyModel", "trainer.critic.model": "CriticM
 
 
 def _skipped(path, value):
-    return path in DERIVED_PATHS | LAUNCH_PATHS or generator.following_source(value) is not None
+    return path in frozenset(OWNER_MESSAGES) or generator.following_source(value) is not None
 
 
 def _author_document(document):

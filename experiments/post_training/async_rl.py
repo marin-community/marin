@@ -357,7 +357,6 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> SkyR
         # Return the sampled token's logprob so the ratio diagnostics can compare it with the learner's.
         sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
     )
-    # Let the allocator grow segments instead of fragmenting at the memory ceiling.
     config = SkyRLRecipe(
         entrypoint=template.entrypoint,
         context_budget=budget,
@@ -365,6 +364,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> SkyR
         data=template.data,
         trainer=trainer,
         generator=generator,
+        # Let the allocator grow segments instead of fragmenting at the memory ceiling.
         extra_env={"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
     )
     for setting in settings:

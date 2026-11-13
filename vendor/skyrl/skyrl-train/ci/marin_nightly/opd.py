@@ -7,7 +7,7 @@ from omegaconf import DictConfig
 
 from skyrlrecipe import ContextBudget, SkyRLRecipe, sections
 from skyrlrecipe.declared import Teacher, TeacherEndpoint, TeacherModel, TeacherResources, TeacherRoute, TeacherRouting
-from skyrl_train.config.utils import compose_recipe
+from examples.recipe import compose_recipe
 from skyrl_train.entrypoints.main_base import run
 
 
@@ -52,6 +52,7 @@ def opd_config(args: argparse.Namespace) -> DictConfig:
             algorithm=sections.Algorithm(
                 advantage_estimator="grpo",
                 use_kl_loss=False,
+                # Stale rollouts need the behavior-policy anchor instead of the current-policy PPO anchor.
                 policy_loss_type="behavior_clip" if args.max_staleness_steps > 0 else "regular",
                 distillation=sections.Distillation(
                     objective="sampled_reverse_kl",
@@ -69,6 +70,7 @@ def opd_config(args: argparse.Namespace) -> DictConfig:
                 critic_num_gpus_per_node=1,
                 ref_num_gpus_per_node=1,
             ),
+            resume_mode="none",
             epochs=1,
             max_steps=args.steps,
             rollout_buffer=sections.RolloutBuffer(max_staleness_steps=args.max_staleness_steps),
@@ -106,7 +108,6 @@ def opd_config(args: argparse.Namespace) -> DictConfig:
     )
     config = compose_recipe(recipe)
     config.trainer.policy.model.path = args.model
-    config.trainer.resume_mode = None
     return config
 
 

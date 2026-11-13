@@ -390,13 +390,19 @@ def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) ->
     profiles = {"sampled": {"sampling_params": {"stop": ["./END"]}}}
     raw["trainer"]["callbacks"] = [
         {"type": "evaluation", "metric_groups": groups, "additional_evaluations": profiles},
-        {"type": "best_checkpoint", "selection_metric": "eval/identity_behavior_holdout/pass_at_1"},
+        {
+            "type": "best_checkpoint",
+            "selection_metric": "eval/identity_behavior_holdout/pass_at_1",
+            "initial_model_uri": "s3://models/initial",
+            "expected_tasks": 4,
+            "minimum_scored_tasks": 2,
+        },
     ]
     path = tmp_path / "evaluation.yaml"
     path.write_text(yaml.safe_dump(raw))
 
     config = compose_skyrl_config(
-        parse_rl_config(str(path)), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
+        parse_rl_config(OmegaConf.load(path)), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
     ).config
 
     assert config.trainer.callbacks[0].metric_groups == groups
@@ -520,8 +526,9 @@ def test_launch_validates_correction_and_selection_contract(tmp_path: Path, over
     path = tmp_path / "launch.yaml"
     OmegaConf.save(raw, path)
     if error is not None:
-        with pytest.raises(ValueError, match=error):
+        with pytest.raises(ValueError, match=error) as raised:
             load_launch_config(path)
+        assert "/tmp/" not in str(raised.value)
     else:
         # Explicitly uncorrected stale policies and active reward filters are valid launch contracts.
         load_launch_config(path)
@@ -586,6 +593,15 @@ def test_source_launch_rejects_conflicting_author_values(tmp_path):
         "training": None,
     }
     cases.append((raw, "artifact sources require sha256"))
+    raw = OmegaConf.create(raw_launch_config())
+    raw.iris.allocation.num_nodes = 2
+    cases.append((raw, "num_nodes"))
+    raw = OmegaConf.create(raw_launch_config())
+    raw.runtime.profile = "fsdp"
+    cases.append((raw, "runtime.profile"))
+    raw = OmegaConf.create(raw_launch_config())
+    raw.skyrl.checkpoint_export = {"hf_hub_repo_id": "authored/model"}
+    cases.append((raw, "checkpoint_export: the launch document owns export settings"))
     path = tmp_path / "invalid.yaml"
     for raw, error in cases:
         OmegaConf.save(raw, path)

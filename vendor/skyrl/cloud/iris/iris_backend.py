@@ -47,7 +47,7 @@ from cloud.iris.rl_config_translation import (
     RL_CONFIG_PAYLOAD_ENV,
     RL_CONFIG_TASK_DIR,
 )
-from marinskyrl.entrypoints import RL_ENTRYPOINTS
+from cloud.iris.rl_config_translation import RL_ENTRYPOINTS
 from skyrlrecipe import RLEntrypoint
 from marinskyrl.resource_locator import (
     is_cloud_uri,

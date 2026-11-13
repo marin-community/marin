@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import posixpath
-import tempfile
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -30,7 +29,7 @@ from marinskyrl.distillation import (
     compile_distillation_plan_from_config,
     validate_generation_logprobs,
 )
-from marinskyrl.entrypoints import RL_ENTRYPOINTS
+from cloud.iris.rl_config_translation import RL_ENTRYPOINTS
 from marinskyrl.hf_model import HuggingFaceModelCache
 from marinskyrl.resource_locator import is_cloud_uri, is_hugging_face_repo_id, join_resource_path
 from marinskyrl.runtime_options import WeightSyncTransport
@@ -196,10 +195,10 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
     model_uri = str(config.inputs.model.uri)
     model_identity = str(config.inputs.model.identity)
     model_is_cloud = is_cloud_uri(model_uri)
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as source_file:
-        OmegaConf.save(OmegaConf.create(raw_skyrl), source_file.name, resolve=False)
-        parsed = parse_rl_config(source_file.name)
-        parameters = {
+    parsed = parse_rl_config(raw_skyrl)
+    compiled = compose_skyrl_config(
+        parsed,
+        {
             "job_name": str(config.iris.job_name),
             "experiments_dir": str(config.runtime.experiments_dir),
             "num_nodes": int(config.iris.allocation.num_nodes),
@@ -216,13 +215,10 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
             "trajectory_root": join_resource_path(str(config.artifacts.attempts_root), "trajectories"),
             "export_hf_artifact": bool(config.run.export_hf),
             "seed": int(config.run.seed),
-        }
-        compiled = compose_skyrl_config(
-            parsed,
-            parameters,
-            config.iris.allocation,
-        )
-        OmegaConf.resolve(compiled.config)
+        },
+        config.iris.allocation,
+    )
+    OmegaConf.resolve(compiled.config)
     resolved = OmegaConf.create(OmegaConf.to_container(config, resolve=False))
     OmegaConf.set_struct(resolved, False)
     resolved.runtime.entrypoint = compiled.entrypoint

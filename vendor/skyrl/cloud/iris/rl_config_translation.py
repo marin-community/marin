@@ -25,11 +25,10 @@ from skyrlrecipe.documents import set_path
 from cloud.iris.paths import resolve_paths_in_dict
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT as CHECKPOINT_EXPORT_MODULE
 from marinskyrl.distillation import DistillationPlan, compile_distillation_plan, validate_distillation_runtime_support
-from marinskyrl.entrypoints import RL_ENTRYPOINTS
 from marinskyrl.environment_contract import TrainingType
 from marinskyrl.resource_locator import join_resource_path, model_source_for_path
 from marinskyrl.rollout_grading import validate_nemotron_ultra_grading
-from marinskyrl.speculative_decoding import parse_speculative_decoding_config
+from marinskyrl.speculative_decoding import STANDARD_TRAINING_ENTRYPOINT, parse_speculative_decoding_config
 
 RL_CONFIG_TASK_DIR = "/tmp/marin-rl-configs"
 RL_CONFIG_PAYLOAD_ENV = "MARIN_RL_CONFIG_B64"
@@ -48,6 +47,15 @@ TRAINER_NON_PATH_KEYS = frozenset(
 )
 
 
+RL_ENTRYPOINTS = MappingProxyType(
+    {
+        RLEntrypoint.GENERATE: "skyrl_train.entrypoints.main_generate",
+        RLEntrypoint.STANDARD: STANDARD_TRAINING_ENTRYPOINT,
+        RLEntrypoint.TASKCOMPENDIUM: "skyrl_train.entrypoints.taskcompendium",
+        RLEntrypoint.TERMINAL_BENCH: "skyrl_train.entrypoints.terminal_bench",
+        RLEntrypoint.TERMINAL_BENCH_GENERATE: "skyrl_train.entrypoints.terminal_bench_generate",
+    }
+)
 CHECKPOINT_EXPORT_ENTRYPOINT = CHECKPOINT_EXPORT_MODULE
 
 
@@ -88,9 +96,8 @@ def _materialize_context_budget(raw: Dict[str, Any], budget: ContextBudget) -> D
 
 @dataclass
 class ParsedRLConfig:
-    """Result of parsing an RL configuration YAML file."""
+    """Validated authored values and sparse launch sections."""
 
-    config_path: Path
     recipe: SkyRLRecipe
     raw: Dict[str, Any]
     entrypoint: str
@@ -125,26 +132,20 @@ def materialize_launch_config(
     return str(destination)
 
 
-def parse_rl_config(config_path: str) -> ParsedRLConfig:
-    """Validate an authored recipe and prepare its sparse launch sections."""
-    path = Path(config_path).expanduser().resolve()
-    raw = OmegaConf.to_container(OmegaConf.load(path), resolve=False) or {}
+def parse_rl_config(document: Mapping[str, Any] | DictConfig) -> ParsedRLConfig:
+    """Validate an authored recipe mapping and prepare its sparse launch sections."""
+    raw = OmegaConf.to_container(OmegaConf.create(document), resolve=False) or {}
     if not isinstance(raw, dict):
-        raise ValueError(f"{path}: RL config must contain a mapping at the document root")
+        raise ValueError("RL config must contain a mapping at the document root")
     if RESOLVED_HARBOR_CONFIG_KEY in raw:
-        raise ValueError(
-            f"{path}: {RESOLVED_HARBOR_CONFIG_KEY} is a resolved-config key; use terminal_bench in source recipes"
-        )
+        raise ValueError(f"{RESOLVED_HARBOR_CONFIG_KEY} is a resolved-config key; use terminal_bench in source recipes")
 
     config_groups = raw.get("config_groups", {})
     if "algorithm_recipe" in config_groups:
         group = _compose_config_groups({"algorithm_recipe": config_groups["algorithm_recipe"]}, config_name=None)
         raw = OmegaConf.to_container(OmegaConf.merge(OmegaConf.to_container(group, resolve=False), raw), resolve=False)
         assert isinstance(raw, dict)
-    try:
-        recipe = SkyRLRecipe.from_document(raw)
-    except ValueError as error:
-        raise ValueError(f"{path}: {error}") from error
+    recipe = SkyRLRecipe.from_document(raw)
     distillation_plan = compile_distillation_plan(raw)
     entrypoint = RL_ENTRYPOINTS[recipe.entrypoint]
     materialized_raw = _materialize_context_budget(raw, recipe.context_budget)
@@ -165,10 +166,9 @@ def parse_rl_config(config_path: str) -> ParsedRLConfig:
         tensor_parallel_size=recipe.generator.inference_engine_tensor_parallel_size,
         pipeline_parallel_size=recipe.generator.inference_engine_pipeline_parallel_size,
         engine_init_kwargs=generator.get("engine_init_kwargs", {}),
-        context=f"{path}: generator.speculative_decoding",
+        context="generator.speculative_decoding",
     )
     return ParsedRLConfig(
-        config_path=path,
         recipe=recipe,
         raw=materialized_raw,
         entrypoint=entrypoint,
@@ -323,8 +323,7 @@ def _skyrl_config_sections(
         supplied = _data_override(exp_args.get(key))
         if not supplied:
             continue
-        authored = data.get(key)
-        if authored and authored != supplied:
+        if data.get(key):
             raise ValueError(f"data.{key} conflicts with the nonempty launch inputs")
         data[key] = supplied
 
@@ -360,18 +359,6 @@ def _skyrl_config_sections(
     return sections
 
 
-def _merge_config_mapping(config: DictConfig, values: Mapping[str, Any], prefix: str = "") -> None:
-    """Merge validated recipe values and launcher settings into the composed config."""
-    for key, value in values.items():
-        path = f"{prefix}.{key}" if prefix else key
-        if isinstance(value, Mapping):
-            if not isinstance(OmegaConf.select(config, path), DictConfig):
-                OmegaConf.update(config, path, {}, merge=False, force_add=True)
-            _merge_config_mapping(config, value, path)
-        else:
-            OmegaConf.update(config, path, copy.deepcopy(value), merge=False, force_add=True)
-
-
 def _compose_config_groups(config_groups: Mapping[str, str], *, config_name: str | None) -> DictConfig:
     config_dir = Path(str(files("skyrl_train.config"))).resolve()
     group_overrides = [f"+{group_name}={config_name}" for group_name, config_name in config_groups.items()]
@@ -400,7 +387,8 @@ def compose_skyrl_config(
 ) -> CompiledSkyRLConfig:
     """Compose the final SkyRL subtree from its config groups and launch values."""
     config = _compose_config_groups(parsed.config_groups, config_name="ppo_base_config")
-    _merge_config_mapping(config, _skyrl_config_sections(parsed, exp_args, hpc))
+    OmegaConf.set_struct(config, False)
+    config = OmegaConf.merge(config, _skyrl_config_sections(parsed, exp_args, hpc))
     _resolve_max_in_flight(config)
     validate_nemotron_ultra_grading(config, parsed.distillation_plan)
     validate_objective(config)

@@ -30,7 +30,7 @@ from skyrlrecipe.declared import (
     TeacherRouting,
 )
 from skyrlrecipe.sampling import EvalSamplingParams
-from skyrl_train.config.utils import compose_recipe
+from examples.recipe import compose_recipe
 from skyrl_train.entrypoints.main_base import run
 from skyrl_train.inference_engines.vllm_teacher_oracle import tokenizer_vocabulary_fingerprint
 from skyrl_train.tokenizer import create_tokenizer

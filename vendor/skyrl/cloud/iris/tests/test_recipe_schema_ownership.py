@@ -48,7 +48,7 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_auth
     source.write_text(
         "entrypoint: terminal_bench\nterminal_bench: {}\ncontext_budget:\n  request_window_tokens: 2048\n  max_new_tokens_per_turn: 512\n  max_turns: 1\n"
     )
-    parsed = launcher.parse_rl_config(str(source))
+    parsed = launcher.parse_rl_config(OmegaConf.load(source))
     base = launcher.compose_skyrl_config(parsed, {}, SimpleNamespace(gpus_per_node=8)).config
     full = OmegaConf.to_container(base, resolve=False)
     full["terminal_bench"] = full.pop("terminal_bench_config")
@@ -76,9 +76,7 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_auth
     monkeypatch.setattr(task_runtime.tempfile, "tempdir", str(tmp_path))
     seeded = copy.deepcopy(full)
     for parts, value in leaves(full):
-        sentinel = {bool: not value, int: 31, float: 3.125, list: ["/author/B"]}.get(
-            type(value), "author-B"
-        )
+        sentinel = {bool: not value, int: 31, float: 3.125, list: ["/author/B"]}.get(type(value), "author-B")
         set_path(seeded, ".".join(parts), sentinel)
     for path in LAUNCH_PATHS:
         set_path(seeded, path, False if path == "trainer.export_hf_artifact" else "author-B")
@@ -118,8 +116,7 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_auth
     changed = {
         ".".join(parts) for parts, before in leaves(section_values) if get_path(result, ".".join(parts)) != before
     }
-    assert LAUNCH_PATHS <= changed
-    assert changed - LAUNCH_PATHS == frozenset()
+    assert changed == LAUNCH_PATHS
     for path in FILL_WHEN_UNSET | GPU_PATHS:
         assert get_path(result, path) == get_path(seeded, path)
     absent = copy.deepcopy(section_values)
@@ -155,5 +152,12 @@ def test_code_default_declarations_match_native_dataclasses_and_canonical_choice
     declared = {get_args(callback.model_fields["type"].annotation)[0]: callback for callback in callbacks}
     assert declared.keys() == CALLBACK_REGISTRY.keys()
     for name, callback in declared.items():
-        parameters = set(inspect.signature(CALLBACK_REGISTRY[name].__init__).parameters) - {"self"}
-        assert set(callback.model_fields) - {"type"} == parameters, name
+        parameters = {
+            key: parameter
+            for key, parameter in inspect.signature(CALLBACK_REGISTRY[name].__init__).parameters.items()
+            if key != "self"
+        }
+        assert set(callback.model_fields) - {"type"} == parameters.keys(), name
+        assert {key for key, field in callback.model_fields.items() if key != "type" and field.is_required()} == {
+            key for key, parameter in parameters.items() if parameter.default is inspect.Parameter.empty
+        }, name

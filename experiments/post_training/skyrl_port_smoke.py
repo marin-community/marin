@@ -86,19 +86,11 @@ def build_smoke(version: str) -> Smoke:
             train_ns=TRAIN_COUNTS,
             checkpoint=True,
             export=True,
-            settings=(f"trainer.max_steps={max_steps}", "trainer.logger=console", "trainer.update_epochs_per_batch=1"),
         )
         config = with_role_plan(config, plan)
         callbacks = tuple(
             (
-                EvaluationCallback(
-                    type="evaluation",
-                    eval_steps=callback.eval_steps,
-                    eval_before_train=callback.eval_before_train,
-                    additional_evaluations={},
-                    metric_groups={},
-                    stop_when=callback.stop_when,
-                )
+                callback.replace(additional_evaluations={}, metric_groups={})
                 if isinstance(callback, EvaluationCallback)
                 else callback
             )
@@ -112,7 +104,9 @@ def build_smoke(version: str) -> Smoke:
                     max_concurrent_tasks=4,
                     rollout_workers=sections.RolloutWorkers(num_workers=2, cpus_per_worker=2),
                 ),
-                trainer=sections.Trainer(callbacks=callbacks),
+                trainer=sections.Trainer(
+                    max_steps=max_steps, logger="console", update_epochs_per_batch=1, callbacks=callbacks
+                ),
             )
         )
         return skyrl_step(

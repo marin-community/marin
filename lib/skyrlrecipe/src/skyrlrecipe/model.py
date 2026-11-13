@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Iterator, Mapping
 from enum import Enum
@@ -127,6 +128,10 @@ class Section(BaseModel):
 
     def to_skyrl(self) -> dict[str, Any]:
         return self.model_dump(mode="json", exclude_unset=True)
+
+    def replace(self, **changes: Any) -> Self:
+        """Return a validated section with the supplied fields replaced."""
+        return type(self).model_validate_json(json.dumps({**self.to_skyrl(), **thaw(changes)}, allow_nan=False))
 
     def model_copy(self, *args: Any, **kwargs: Any) -> Self:
         raise TypeError("model_copy skips validation; use merge()")

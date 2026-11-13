@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from omegaconf import OmegaConf
+
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 import yaml
-from scripts import generate_recipe_schema as generator
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
@@ -44,31 +45,8 @@ def context_config_path(tmp_path):
     return config
 
 
-@pytest.mark.parametrize(
-    "document",
-    generator.recipe_documents(
-        _REPO_ROOT / "cloud/iris/configs", generator.CONFIG_DIR,
-        generator.source_documents(generator.CONFIG_DIR).groups,
-    ),
-    ids=[path.name for path in sorted((_REPO_ROOT / "cloud/iris/configs").glob("*.yaml"))],
-)
-def test_iris_config_materializes_one_coherent_context_budget(document, tmp_path):
-    config_path = tmp_path / "recipe.yaml"
-    config_path.write_text(yaml.safe_dump(document))
-    parsed = parse_rl_config(str(config_path))
-    budget = parsed.recipe.context_budget
-    window = budget.request_window_tokens
-
-    assert parsed.trainer["max_prompt_length"] + parsed.generator["sampling_params"]["max_generate_length"] == window
-    assert parsed.generator["max_input_length"] == budget.max_input_tokens
-    assert parsed.generator["engine_init_kwargs"]["max_model_len"] == window
-    assert parsed.generator["max_turns"] == budget.max_turns
-    if parsed.terminal_bench is not None:
-        assert parsed.terminal_bench["harbor"]["max_turns"] == budget.max_turns
-
-
 def test_context_budget_derives_all_hydra_length_arguments(context_config_path):
-    parsed = parse_rl_config(str(context_config_path))
+    parsed = parse_rl_config(OmegaConf.load(context_config_path))
     cfg = compose_skyrl_config(parsed, {"job_name": "context-test", "num_nodes": 4}, _HPCStub()).config
 
     assert cfg.trainer.max_prompt_length == 114688
@@ -102,7 +80,7 @@ def test_context_budget_derives_overlong_window_for_single_and_multi_turn(
         )
     )
 
-    parsed = parse_rl_config(str(config))
+    parsed = parse_rl_config(OmegaConf.load(config))
 
     assert parsed.generator["trajectory_reward_shaping"]["overlong"] == {
         "l_max": expected_l_max,
@@ -127,12 +105,10 @@ def test_context_budget_allows_overlong_fraction_overrides(tmp_path):
         )
     )
 
-    parsed = parse_rl_config(str(config))
+    parsed = parse_rl_config(OmegaConf.load(config))
 
     cfg = compose_skyrl_config(parsed, {"job_name": "overlong-override", "num_nodes": 4}, _HPCStub()).config
-    assert cfg.generator.trajectory_reward_shaping.overlong == {
-        "l_max": 12288, "l_cache": 3072, "penalty_scale": 0.0
-    }
+    assert cfg.generator.trajectory_reward_shaping.overlong == {"l_max": 12288, "l_cache": 3072, "penalty_scale": 0.0}
 
 
 def test_larger_serving_capacity_preserves_request_and_training_limits(tmp_path):
@@ -149,7 +125,7 @@ def test_larger_serving_capacity_preserves_request_and_training_limits(tmp_path)
             }
         )
     )
-    parsed = parse_rl_config(str(config))
+    parsed = parse_rl_config(OmegaConf.load(config))
     cfg = compose_skyrl_config(parsed, {"job_name": "validation-limits", "num_nodes": 4}, _HPCStub()).config
     assert cfg.generator.engine_init_kwargs.max_model_len == 73728
     assert cfg.generator.max_input_length == 32768

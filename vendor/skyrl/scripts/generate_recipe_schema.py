@@ -18,7 +18,7 @@ from omegaconf import OmegaConf
 import yaml
 
 from skyrlrecipe.documents import MISSING, get_path, set_path
-from skyrlrecipe.ownership import DERIVED_PATHS, LAUNCH_PATHS
+from skyrlrecipe.ownership import OWNER_MESSAGES
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = ROOT / "skyrl-train/skyrl_train/config"
@@ -200,7 +200,7 @@ def section_paths(mapping: dict, sidecar: dict, owned: frozenset, prefix: str = 
         section = (
             isinstance(value, dict) and value and path not in owned | sidecar["OPEN"] and annotation != "NumberMap"
             if prefix
-            else path not in sidecar["UNDECLARED"] and annotation not in ("OpenMap", "OpenMap | None")
+            else path not in owned | sidecar["UNDECLARED"].keys() and annotation not in ("OpenMap", "OpenMap | None")
         )
         if section:
             yield from section_paths(value, sidecar, owned, path)
@@ -333,7 +333,7 @@ def format_generated(source: str, filename: Path) -> str:
 def generate() -> dict[str, str]:
     """Return repository-formatted author code."""
     source = source_documents(CONFIG_DIR)
-    owned = DERIVED_PATHS | LAUNCH_PATHS
+    owned = frozenset(OWNER_MESSAGES)
     schema = render_schema(
         source,
         runpy.run_path(str(SIDECAR)),
