@@ -223,7 +223,8 @@ def unavailable_embedder() -> TextEmbedder:
     raise AssertionError("Instruction preparation must not run model inference")
 
 
-def test_copied_cache_fork_reads_locally_and_accepts_new_vectors(tmp_path):
+@pytest.mark.parametrize("separator", ["", "/"])
+def test_copied_cache_fork_reads_locally_and_accepts_new_vectors(tmp_path, separator):
     original = tmp_path / "original"
     with DataStore.open(str(original)) as store:
         store.write_object("existing", b"first")
@@ -238,7 +239,12 @@ def test_copied_cache_fork_reads_locally_and_accepts_new_vectors(tmp_path):
     original.rename(tmp_path / "historical")
     intermediate.rename(tmp_path / "historical-intermediate")
     output = tmp_path / "fork"
-    receipt = fork_copied_cache_partition(str(original), str(copied), str(output), reference_roots=(str(intermediate),))
+    receipt = fork_copied_cache_partition(
+        str(original) + separator,
+        str(copied) + separator,
+        str(output) + separator,
+        reference_roots=(str(intermediate) + separator,),
+    )
     assert receipt["all_metadata_paths_regional"] and receipt["all_shard_paths_regional"]
     with DataStore.open(str(output)) as store:
         store.write_object("new", b"GPU vector")

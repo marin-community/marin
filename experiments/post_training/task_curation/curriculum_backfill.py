@@ -53,17 +53,24 @@ def fork_copied_cache_partition(
     original_root: str, copied_root: str, output_root: str, *, reference_roots: tuple[str, ...] = ()
 ) -> dict:
     """Fork copied immutable shards into a writable archive with regional references."""
-    output = FineStoreLayout(output_root)
+    output_path = StoragePath(output_root)
+    copied_path = StoragePath(copied_root)
+    reference_paths = tuple(StoragePath(root) for root in (original_root, copied_root, *reference_roots))
+    output = FineStoreLayout(str(output_path))
     if StoragePath(output.head_path).exists():
         raise ValueError("Preserve existing cache forks; use a new output root")
 
     def relocated(path: str) -> str:
-        for root in (original_root, copied_root, *reference_roots):
-            if path.startswith(root + "/"):
-                return copied_root + path[len(root) :]
+        location = StoragePath(path)
+        for root in reference_paths:
+            try:
+                relative = location.relative_to(root)
+            except ValueError:
+                continue
+            return str(copied_path / relative)
         raise ValueError(f"Cache reference is outside the frozen source: {path}")
 
-    copied = FineStoreLayout(copied_root)
+    copied = FineStoreLayout(str(copied_path))
     head = HeadMetadata.model_validate_json(StoragePath(copied.head_path).read_bytes())
     manifest_bytes = StoragePath(relocated(head.manifest_path)).read_bytes()
     manifest = Manifest.model_validate_json(manifest_bytes)
@@ -93,10 +100,10 @@ def fork_copied_cache_partition(
         "shards": sum(len(table.shards) for table in tables.values()),
         "rows": sum(shard.rows for table in tables.values() for shard in table.shards),
         "all_metadata_paths_regional": all(
-            table.metadata_path.startswith(output_root + "/") for table in tables.values()
+            StoragePath(table.metadata_path).relative_to(output_path) for table in tables.values()
         ),
         "all_shard_paths_regional": all(
-            shard.path.startswith(copied_root + "/") for table in tables.values() for shard in table.shards
+            StoragePath(shard.path).relative_to(copied_path) for table in tables.values() for shard in table.shards
         ),
     }
 
