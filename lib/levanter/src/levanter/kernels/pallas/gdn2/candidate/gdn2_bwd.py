@@ -417,6 +417,13 @@ def _kernel_b4_body(
     dgc_ref[0, 0, 0] = dgc_final
 
 
+class ScoreGradients(NamedTuple):
+    dq: jax.Array
+    dk: jax.Array
+    db: jax.Array
+    dgc: jax.Array
+
+
 def intra_backward_pallas(
     dAqk, dAkk, q, k, b, g, scale, config: KernelConfig = DEFAULT_CONFIG, interpret: bool = False
 ):
@@ -459,4 +466,4 @@ def intra_backward_pallas(
         interpret=interpret or config.interpret,
     )(q_r, k_r, b_r, g_r, dAqk, dAkk)
 
-    return dq, dk, db, dgc
+    return ScoreGradients(dq, dk, db, dgc)

@@ -19,7 +19,6 @@ accepted timing. Output rows use seconds and include the exact numerical gate.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import hashlib
 import importlib
 from importlib.metadata import PackageNotFoundError, version
@@ -33,7 +32,7 @@ import subprocess
 import tempfile
 import time
 import traceback
-from typing import Any
+from typing import Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -136,8 +135,7 @@ def deviations(actual, expected, names, atol, rtol):
     return passed, metrics
 
 
-@dataclass(frozen=True)
-class CompiledCall:
+class CompiledCall(NamedTuple):
     executable: jax.stages.Compiled
     result: Any
     compile_time: float

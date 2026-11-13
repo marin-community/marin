@@ -307,6 +307,14 @@ def _kernel_c_body(
     gc_last_ref[0, 0, 0, 0] = gc_last_row
 
 
+class WyOperands(NamedTuple):
+    w_pseudo: jax.Array
+    u: jax.Array
+    kg: jax.Array
+    qg: jax.Array
+    gc_last: jax.Array
+
+
 def recompute_wy_pallas(q, k, v, w, b, g, A, config: KernelConfig = DEFAULT_CONFIG):
     bsz, L, H, D = q.shape
     n_chunks = L // config.bt
@@ -342,7 +350,7 @@ def recompute_wy_pallas(q, k, v, w, b, g, A, config: KernelConfig = DEFAULT_CONF
     )(q_r, k_r, v_r, w_r, b_r, g_r, A)
 
     gc_last = gc_last.reshape(bsz, H, n_chunks, D)
-    return w_pseudo, u, kg, qg, gc_last
+    return WyOperands(w_pseudo, u, kg, qg, gc_last)
 
 
 # ---------- Kernel D ----------
@@ -376,6 +384,17 @@ class _ChunkOperands(NamedTuple):
     gc_last: jax.Array
 
 
+class ForwardResiduals(NamedTuple):
+    Aqk: jax.Array
+    A: jax.Array
+    h_pre_all: jax.Array
+    v_new_all: jax.Array
+    w_pseudo: jax.Array
+    kg: jax.Array
+    qg: jax.Array
+    gc_last: jax.Array
+
+
 def _prepare_chunks(q, k, v, w, b, g, scale, config) -> tuple[_ChunkOperands, jax.Array]:
     Aqk, Akk = build_chunk_scores_pallas(q, k, b, g, scale, config)
     Aqk = _stage_diag("kernel_A_Aqk", Aqk, config)
@@ -384,13 +403,16 @@ def _prepare_chunks(q, k, v, w, b, g, scale, config) -> tuple[_ChunkOperands, ja
     A = wy_solve_pallas(Akk, config)
     A = _stage_diag("kernel_B_wy_inverse_A", A, config)
 
-    w_pseudo, u, kg, qg, gc_last = recompute_wy_pallas(q, k, v, w, b, g, A, config)
-    w_pseudo = _stage_diag("kernel_C_w_pseudo", w_pseudo, config)
-    u = _stage_diag("kernel_C_u", u, config)
-    kg = _stage_diag("kernel_C_kg", kg, config)
-    qg = _stage_diag("kernel_C_qg", qg, config)
-
-    return _ChunkOperands(Aqk, w_pseudo, u, kg, qg, gc_last), A
+    wy = recompute_wy_pallas(q, k, v, w, b, g, A, config)
+    operands = _ChunkOperands(
+        Aqk=Aqk,
+        w_pseudo=_stage_diag("kernel_C_w_pseudo", wy.w_pseudo, config),
+        u=_stage_diag("kernel_C_u", wy.u, config),
+        kg=_stage_diag("kernel_C_kg", wy.kg, config),
+        qg=_stage_diag("kernel_C_qg", wy.qg, config),
+        gc_last=wy.gc_last,
+    )
+    return operands, A
 
 
 def _scan_output(o_scanned, h_final, shape, config):
@@ -410,14 +432,14 @@ def gdn2_pallas_forward_with_residuals(q, k, v, w, b, g, scale, h0, config):
     chunks, A = _prepare_chunks(q, k, v, w, b, g, scale, config)
     h_final, (o_scanned, h_pre_all, v_new_all) = _inter_chunk_scan(chunks, scale, h0, retain_state=True)
     out, h_final = _scan_output(o_scanned, h_final, q.shape, config)
-    residuals = {
-        "Aqk": chunks.Aqk,
-        "A": A,
-        "h_pre_all": jnp.moveaxis(h_pre_all, 0, 2),
-        "v_new_all": jnp.moveaxis(v_new_all, 0, 2),
-        "w_pseudo": chunks.w_pseudo,
-        "kg": chunks.kg,
-        "qg": chunks.qg,
-        "gc_last": chunks.gc_last,
-    }
+    residuals = ForwardResiduals(
+        Aqk=chunks.Aqk,
+        A=A,
+        h_pre_all=jnp.moveaxis(h_pre_all, 0, 2),
+        v_new_all=jnp.moveaxis(v_new_all, 0, 2),
+        w_pseudo=chunks.w_pseudo,
+        kg=chunks.kg,
+        qg=chunks.qg,
+        gc_last=chunks.gc_last,
+    )
     return out, h_final, residuals

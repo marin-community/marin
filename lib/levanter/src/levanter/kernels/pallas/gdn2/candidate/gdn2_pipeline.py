@@ -15,6 +15,7 @@ import jax.numpy as jnp
 
 from .configs import KernelConfig, DEFAULT_CONFIG, _reshape_from_chunks, _reshape_to_chunks, validate_inputs
 from .gdn2_fwd import (
+    ForwardResiduals,
     gdn2_pallas_forward,
     gdn2_pallas_forward_with_residuals,
 )
@@ -41,37 +42,12 @@ def _gdn2_core(q, k, v, w, b, g, scale, config, h0):
 
 
 def _gdn2_core_fwd(q, k, v, w, b, g, scale, config, h0):
-    out, h_final, fwd_res = gdn2_pallas_forward_with_residuals(q, k, v, w, b, g, scale, h0=h0, config=config)
-    residuals = {
-        "q": q,
-        "k": k,
-        "v": v,
-        "w": w,
-        "b": b,
-        "g": g,
-        "h0": h0,
-        **fwd_res,
-    }
-    return (out, h_final), residuals
+    out, h_final, forward = gdn2_pallas_forward_with_residuals(q, k, v, w, b, g, scale, h0=h0, config=config)
+    return (out, h_final), ((q, k, v, w, b, g, h0), forward)
 
 
-def _gdn2_core_bwd(scale, config, residuals, cotangents):
-    q = residuals["q"]
-    k = residuals["k"]
-    v = residuals["v"]
-    w = residuals["w"]
-    b = residuals["b"]
-    g = residuals["g"]
-    h0 = residuals["h0"]
-    Aqk = residuals["Aqk"]
-    A = residuals["A"]
-    h_pre_all = residuals["h_pre_all"]
-    v_new_all = residuals["v_new_all"]
-    w_pseudo = residuals["w_pseudo"]
-    kg = residuals["kg"]
-    qg = residuals["qg"]
-    gc_last = residuals["gc_last"]
-
+def _gdn2_core_bwd(scale, config, residuals: tuple[tuple[jax.Array, ...], ForwardResiduals], cotangents):
+    (q, k, v, w, b, g, h0), forward = residuals
     do, dh_final = cotangents
     bsz, L, H, D = q.shape
     n_chunks = L // config.bt
@@ -85,10 +61,12 @@ def _gdn2_core_bwd(scale, config, residuals, cotangents):
     gc = jnp.einsum("ij,bhcjd->bhcid", tril_ones_bt, g_r, precision=_HIGHEST)
 
     # B2
-    dAqk, dv_partial = dav_backward_pallas(Aqk, v_new_all, do_r, config)
+    dAqk, dv_partial = dav_backward_pallas(forward.Aqk, forward.v_new_all, do_r, config)
 
     # B1
-    dh_all, dh0, dv_all = gdn2_dhu_backward(do_r, dv_partial, w_pseudo, qg, kg, gc_last, scale, dht=dh_final)
+    dh_all, dh0, dv_all = gdn2_dhu_backward(
+        do_r, dv_partial, forward.w_pseudo, forward.qg, forward.kg, forward.gc_last, scale, dht=dh_final
+    )
     dh_next_all = _build_dh_next_all(dh_all, dh_final)
 
     # B3
@@ -105,9 +83,9 @@ def _gdn2_core_bwd(scale, config, residuals, cotangents):
         w_r,
         v_r,
         gc,
-        A,
-        h_pre_all,
-        v_new_all,
+        forward.A,
+        forward.h_pre_all,
+        forward.v_new_all,
         do_r,
         dv_all,
         dh_next_all,
@@ -115,14 +93,14 @@ def _gdn2_core_bwd(scale, config, residuals, cotangents):
         config,
     )
 
-    dq4, dk4, db4, dgc4 = intra_backward_pallas(dAqk, b3_out.dAkk, q, k, b, g, scale, config)
+    score_grads = intra_backward_pallas(dAqk, b3_out.dAkk, q, k, b, g, scale, config)
     # B5
-    dgc_total = b3_out.dgc + dgc4
+    dgc_total = b3_out.dgc + score_grads.dgc
     dg_raw = reverse_cumsum_bwd(dgc_total, chunk_size=config.bt)
 
-    dq = _reshape_from_chunks(b3_out.dq + dq4, bsz, n_chunks, config.bt, H, D)
-    dk = _reshape_from_chunks(b3_out.dk + dk4, bsz, n_chunks, config.bt, H, D)
-    db = _reshape_from_chunks(b3_out.db + db4, bsz, n_chunks, config.bt, H, D)
+    dq = _reshape_from_chunks(b3_out.dq + score_grads.dq, bsz, n_chunks, config.bt, H, D)
+    dk = _reshape_from_chunks(b3_out.dk + score_grads.dk, bsz, n_chunks, config.bt, H, D)
+    db = _reshape_from_chunks(b3_out.db + score_grads.db, bsz, n_chunks, config.bt, H, D)
     dw = _reshape_from_chunks(b3_out.dw, bsz, n_chunks, config.bt, H, D)
     dv = _reshape_from_chunks(b3_out.dv_raw, bsz, n_chunks, config.bt, H, D)
     dg = _reshape_from_chunks(dg_raw, bsz, n_chunks, config.bt, H, D)
