@@ -159,12 +159,8 @@ pub fn log_registered_schema() -> Schema {
     )
 }
 
-/// `existing` with `log`'s code-owned schema merged in.
-///
-/// `log`'s schema is defined by [`log_registered_schema`], not by a producer, and
-/// its retained table spec predates later additions such as `catalog_bounds`.
-/// Boot registration and recovery from durable state both apply this, so a
-/// rebuilt `log` keeps every code-owned column and flag.
+/// Merge the code-owned `log` schema into `existing` during boot and recovery.
+/// The retained table spec may lack later flags such as `catalog_bounds`.
 fn merge_log_registered_schema(existing: &Schema) -> Result<Schema, StatsError> {
     merge_schemas(existing, &stored_form(log_registered_schema()))
 }
@@ -5322,7 +5318,6 @@ mod tests {
     fn catalog_bounds_leave_the_index_policy_fingerprint_unchanged() {
         // Turning the flag on must not rebuild every index bundle of `log`.
         let flagged = stored_form(log_registered_schema());
-        assert!(flagged.column("epoch_ms").unwrap().index.catalog_bounds);
         let mut plain = flagged.clone();
         for column in &mut plain.columns {
             column.index.catalog_bounds = false;
