@@ -76,7 +76,7 @@ class PolicyExclusion:
 
 @dataclass(frozen=True, kw_only=True)
 class PolicyOverride:
-    """Settings for one candidate on one evaluation; unset ones keep the evaluation's value."""
+    """Settings for one candidate on one evaluation; unset ones resolve as if there were no override."""
 
     candidate: PolicyCandidate
     evaluation: PolicyEvaluation

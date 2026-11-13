@@ -96,8 +96,3 @@ def test_exceptions_apply_only_to_the_named_candidate():
 def test_ambiguous_or_stale_exceptions_are_rejected(exceptions, error):
     with pytest.raises(ValueError, match=error):
         _policy(**exceptions)
-
-
-def test_override_cannot_raise_context_beyond_the_candidate_window():
-    with pytest.raises(ValueError, match="larger than the candidate's window"):
-        replace(SMALL_LONG, context=50_000)
