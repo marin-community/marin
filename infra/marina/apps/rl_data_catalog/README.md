@@ -14,6 +14,11 @@ even when the snapshot ID is unchanged. SAMPLE requires a complete review of a s
 the whole retained population. Execution qualification remains separate.
 The source table legend and Getting started guide define that variant and all five
 Contamination states. Keep the API, table, source details and guide consistent.
+The preview loader displays sources awaiting an exact-input SAMPLE Result as
+QUICK with “SAMPLE review in progress” in details and the Quality tooltip.
+It preserves the declaration and leaves Result, issue rate and completeness
+unmeasured. Production loads and catalog publication retain the strict Result
+requirement; preview mode still requires complete admission and grading evidence.
 Use the shared chip colors, with light and dark theme rules; a remediation warning
 also has a strong border. Phone layouts expose hidden columns through source
 details and Evidence. Do not rely on color alone to convey a state.

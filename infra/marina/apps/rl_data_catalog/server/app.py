@@ -17,7 +17,7 @@ from taskcompendium.source_fingerprints import DuplicateGroup, DuplicateReview
 from .contamination import contamination
 from .curriculum import register_curriculum_routes, source_coverage
 from .daytona import daytona
-from .quality import intended_use, issue_rate, quality, result
+from .quality import intended_use, issue_rate, result
 from .schema import SCHEMA_SQL
 from .source_identity import canonical_source_id, original_source_id
 
@@ -185,7 +185,8 @@ def create_api(services: AppletServices) -> FastAPI:
                         **row["declaration"],
                         "task_count": row["task_count"],
                         "curation": row["curation"],
-                        "quality": quality(row["declaration"], row["curation"]),
+                        "quality": row["quality_display"]["quality"],
+                        "quality_review_status": row["quality_display"]["review_status"],
                         "review_completeness": row["review_completeness"],
                         "result_provisional": (row["review_completeness"] or {}).get("provisional"),
                         "contamination_status": contamination(row["declaration"]),
@@ -441,7 +442,7 @@ def create_api(services: AppletServices) -> FastAPI:
             coverage = source_coverage(connection).get(canonical_source_id(source_id))
         declaration = source["declaration"]
         review = summaries.get("admitted")
-        level = quality(declaration, source["curation"])
+        level = source["quality_display"]["quality"]
         return {
             "declaration": declaration,
             "coverage": coverage,
@@ -460,6 +461,7 @@ def create_api(services: AppletServices) -> FastAPI:
             "cohorts": summaries,
             "archived_reviews": reviews,
             "quality": level,
+            "quality_review_status": source["quality_display"]["review_status"],
             "review_completeness": source["review_completeness"],
             "result_provisional": (source["review_completeness"] or {}).get("provisional"),
             "result": result(declaration, review),

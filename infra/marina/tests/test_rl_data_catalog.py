@@ -70,6 +70,7 @@ from experiments.post_training.task_curation.tests.admission_fixtures import (
 from experiments.post_training.task_curation.tests.admission_fixtures import (
     isolated_admission_census as isolated_admission_census,
 )
+from infra.marina.apps.rl_data_catalog.load import CatalogDisplayPolicy
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, PRODUCTION_APP_ID, prepare_preview
@@ -764,11 +765,33 @@ def test_atlas_rejects_oversight_without_result_and_preserves_selected_catalog(
         inventory = client.get("/sources").json()
         assert inventory["snapshot_id"] == "reviewed"
         assert inventory["sources"][0]["result"] == "GOOD"
+    catalog = CurationCatalog(root)
+    declaration = next(iter(catalog.sources("missing-result"))).declaration.model_dump(mode="json")
+    assert load_surveyed_catalog(
+        catalog,
+        catalog_query,
+        catalog_backend_map(catalog),
+        catalog_identity_map(catalog),
+        display_policy=CatalogDisplayPolicy.PREVIEW,
+    )["changed"]
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        source = client.get("/sources").json()["sources"][0]
+        detail = client.get("/source", params={"source_id": source["id"]}).json()
+        assert source["quality"] == detail["quality"] == "QUICK"
+        assert source["quality_review_status"] == detail["quality_review_status"] == "SAMPLE review in progress"
+        assert detail["declaration"] == declaration
+        assert source["result"] is source["issue_rate"] is source["review_completeness"] is None
+        assert source["result_provisional"] is None
+    with pytest.raises(ValueError, match="SAMPLE/FULL quality requires a computed Result"):
+        load_catalog(catalog, catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        assert client.get("/sources").json()["snapshot_id"] == "missing-result"
 
 
 @pytest.mark.parametrize("failure", ["missing", "stale", "no_grader"])
+@pytest.mark.parametrize("display_policy", list(CatalogDisplayPolicy))
 def test_atlas_blocks_invalid_admission_census_without_replacing_selected_catalog(
-    catalog_database, catalog_query, tmp_path, failure
+    catalog_database, catalog_query, tmp_path, failure, display_policy
 ):
     root = str(tmp_path / "catalog")
     publish_sample(root, "reviewed")
@@ -789,8 +812,15 @@ def test_atlas_blocks_invalid_admission_census_without_replacing_selected_catalo
         register_catalog(store)
         with store.transaction() as transaction:
             transaction.table(INVENTORY).add(changed)
+    catalog = CurationCatalog(root)
     with pytest.raises(ValueError, match=r"Admission census|Actor census input|without runnable graders"):
-        load_catalog(CurationCatalog(root), catalog_query)
+        load_surveyed_catalog(
+            catalog,
+            catalog_query,
+            catalog_backend_map(catalog),
+            catalog_identity_map(catalog),
+            display_policy=display_policy,
+        )
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         assert client.get("/sources").json()["snapshot_id"] == "reviewed"
 

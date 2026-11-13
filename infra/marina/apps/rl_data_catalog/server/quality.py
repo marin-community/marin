@@ -10,6 +10,7 @@ from typing import Any
 from finestore.rl.curation import (
     AssessmentItem,
     AssessmentPopulation,
+    CurationSummary,
     JudgmentStatus,
     SourceDeclaration,
     SourceQualityResult,
@@ -21,6 +22,22 @@ class Quality(StrEnum):
     QUICK = "QUICK"
     SAMPLE = "SAMPLE"
     FULL = "FULL"
+
+
+@dataclass(frozen=True)
+class QualityDisplay:
+    quality: Quality
+    review_status: str | None
+
+
+def quality_display(
+    declaration: SourceDeclaration, curation: CurationSummary | None, assessment_key: str | None
+) -> QualityDisplay:
+    """Keep unfinished reviews pending without changing declared oversight or evidence."""
+    level = quality(declaration.model_dump(mode="json"), curation.model_dump(mode="json") if curation else None)
+    if level != Quality.QUICK and declaration.quality_result is None and assessment_key is None:
+        return QualityDisplay(Quality.QUICK, "SAMPLE review in progress")
+    return QualityDisplay(level, None)
 
 
 @dataclass(frozen=True)

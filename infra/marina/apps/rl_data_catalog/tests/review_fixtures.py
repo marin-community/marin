@@ -8,6 +8,23 @@ from finestore.rl.curation import SourceDeclaration
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 
 
+def pending_review_declaration() -> SourceDeclaration:
+    base = contamination_declarations()[0][1].model_dump(mode="json")
+    return SourceDeclaration.model_validate(
+        {
+            **base,
+            "id": "Marin:review-pending",
+            "name": "review-pending",
+            "display_name": "review-pending",
+            "upstream_dataset": "review-pending",
+            "upstream_name": "review-pending",
+            "oversight": "sample",
+            "quality_result": None,
+            "independent_qc": None,
+        }
+    )
+
+
 def review_declarations() -> list[tuple[bool, SourceDeclaration]]:
     base = contamination_declarations()[0][1].model_dump(mode="json")
     cases = [

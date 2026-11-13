@@ -14,7 +14,7 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
     page.emulate_media(color_scheme=theme)
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-all").check()
-    expect(page.locator("#rows tr")).to_have_count(16)
+    expect(page.locator("#rows tr")).to_have_count(17)
     expected = {
         "clean": "NO ISSUES",
         "stale-clean": "NOT MEASURED",
@@ -83,4 +83,31 @@ def test_complete_sample_is_final_and_unfinished_reviews_are_provisional(journey
     page.get_by_role("link", name="All quality evidence", exact=True).click()
     expect(page.locator("#labels .result-provisional")).to_have_count(0)
     expect(page.locator("#sections")).to_contain_text("Required content review complete")
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_pending_review_is_quick_without_a_result(journey: Journey, theme: str) -> None:
+    page = journey.page
+    page.emulate_media(color_scheme=theme)
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    pending = page.locator('tr[data-source-id="Marin:review-pending"]')
+    expect(pending).to_have_count(0)
+    page.locator("#show-all").check()
+    expect(pending.locator(".level")).to_have_text("QUICK")
+    expect(pending.locator(".level")).to_have_attribute("title", "SAMPLE review in progress")
+    expect(pending.locator("td").nth(4)).to_have_text("Not assessed")
+    expect(pending.locator(".issue-rate-cell")).to_have_text("—")
+    assert pending.locator("td:has(> .chip)").evaluate_all("cells=>cells.every(c=>c.children.length===1)")
+    for width in (1440, 390):
+        page.set_viewport_size({"width": width, "height": 844})
+        pending.locator(".source-name").click()
+        expect(page.locator("#detail-fields")).to_contain_text("SAMPLE review in progress")
+        assert page.locator("#details").evaluate("d=>d.scrollWidth<=d.clientWidth")
+        page.locator("#close-details").click()
+    pending.locator(".source-name").click()
+    page.get_by_role("link", name="All quality evidence", exact=True).click()
+    expect(page.locator("#labels")).to_contain_text("Quality QUICK")
+    expect(page.locator("#labels")).to_contain_text("Result not assessed")
+    expect(page.locator("#sections")).to_contain_text("SAMPLE review in progress")
+    expect(page.locator("#sections")).not_to_contain_text("Required content review complete")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")

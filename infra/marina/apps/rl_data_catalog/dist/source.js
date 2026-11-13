@@ -51,8 +51,10 @@ async function render(data, sourceId) {
   $('title').textContent = d.display_name;
   $('message').textContent = `${d.origin} · ${d.id} · catalog snapshot ${data.catalog.snapshot_id}`;
   const result = data.result;
+  const qualityBadge = node('span', `Quality ${data.quality}`, `chip level level-${data.quality.toLowerCase()}`);
+  if (data.quality_review_status) qualityBadge.title = data.quality_review_status;
   $('labels').replaceChildren(
-    node('span', `Quality ${data.quality}`, `chip level level-${data.quality.toLowerCase()}`),
+    qualityBadge,
     node('span', result ? `Result ${resultLabels[result]}${data.result_provisional ? ' · provisional' : ''}` : 'Result not assessed', `chip quality-${result ? resultClasses[result] : 'unassessed'}${result && data.result_provisional ? ' result-provisional' : ''}`),
     contaminationChip(data.contamination_status),
     node('span', `Daytona ${daytonaLabel(data.daytona)}`, 'chip quality-unassessed'),
@@ -133,6 +135,9 @@ async function render(data, sourceId) {
     ['Evidence', pointer(progress.evidence_uri)],
   ], 'This observation does not determine FULL or Result. Partial-batch reviews may be additional.'));
   const qualityResult = d.quality_result;
+  if (data.quality_review_status) sections.push(card('Content review status', [
+    ['Status', data.quality_review_status], ['Declared oversight', d.oversight],
+  ], 'No exact-input Result is available yet. The preview displays QUICK while the review is pending.'));
   sections.push(card('Content review coverage', data.review_completeness ? [
     ['Status', data.result_provisional ? 'Provisional / incomplete' : 'Required content review complete'],
     ['Conclusive reviewed contracts', data.review_completeness?.reviewed], ['Required reviews', data.review_completeness?.required], ['Retained contracts', d.within_source_dedup?.unique_count],
