@@ -12,7 +12,7 @@
 //! the local cache, and the lowest-priority layout and index work runs last.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::errors::StatsError;
 use crate::indices::SegmentIndexConfig;
@@ -31,6 +31,9 @@ use crate::store::table::index_artifacts::{self, IndexBackfill, INDEX_BUNDLES_PE
 use crate::store::table::key_bounds;
 use crate::store::table::runtime::TableRuntime;
 use crate::store::table::spec_migration::{self, SpecMigration};
+
+/// Report an object-backed cycle's per-step breakdown when it ran this long.
+const SLOW_CYCLE_STEPS_REPORT: Duration = Duration::from_secs(5);
 
 /// Physical maintenance appropriate to the process hosting a table.
 ///
@@ -247,6 +250,7 @@ async fn cycle(
     force_compact_l0: bool,
 ) -> Result<WorkOutcome, StatsError> {
     let _cycle_guard = runtime.maint_lock.lock().await;
+    let started = Instant::now();
     run_one(runtime, TableWork::Flush).await?;
     if run_one(runtime, TableWork::SpecMigration)
         .await?
@@ -279,19 +283,25 @@ async fn cycle(
             run_one(runtime, TableWork::ObjectCollection).await?;
             return Ok(WorkOutcome::Complete);
         }
-        // The prompt re-poll that pending work earns still queues behind every
-        // other table for a shared slot, so drain runs within this visit too.
+        let mut steps = CycleSteps::new(started);
+        steps.mark("flush_and_publish");
         let bounds_pending = run_one(runtime, TableWork::KeyBounds)
             .await?
             .has_more_work();
-        let compacted = drain_object_compaction(runtime, force_compact_l0)
-            .await?
-            .has_more_work();
+        steps.mark("key_bounds");
+        // The prompt re-poll that pending work earns still queues behind every
+        // other table for a shared slot, so drain runs within this visit too.
+        let (compaction, runs) = drain_object_compaction(runtime, force_compact_l0).await?;
+        steps.mark("compaction");
         runtime.controller.gc_objects().await?;
+        steps.mark("state_gc");
         run_one(runtime, TableWork::ObjectCollection).await?;
+        steps.mark("object_collection");
         run_one(runtime, TableWork::IndexArtifacts).await?;
+        steps.mark("index_artifacts");
+        steps.report(runtime.name(), runs);
         return Ok(WorkOutcome::from_pending(
-            bounds_pending || compacted,
+            bounds_pending || compaction.has_more_work(),
             MaintenanceClass::QueryServing,
         ));
     }
@@ -389,17 +399,59 @@ async fn compact(
 }
 
 /// Compact an object-backed table's runs until none remain or
-/// [`OBJECT_COMPACTION_BUDGET`] elapses.
+/// [`OBJECT_COMPACTION_BUDGET`] elapses. Returns the last attempt's outcome and
+/// how many attempts ran.
 async fn drain_object_compaction(
     runtime: &Arc<TableRuntime>,
     force_compact_l0: bool,
-) -> Result<WorkOutcome, StatsError> {
+) -> Result<(WorkOutcome, usize), StatsError> {
     let started = Instant::now();
+    let mut attempts = 0;
     loop {
         let outcome = compact(runtime, force_compact_l0).await?;
+        attempts += 1;
         if !outcome.has_more_work() || started.elapsed() >= OBJECT_COMPACTION_BUDGET {
-            return Ok(outcome);
+            return Ok((outcome, attempts));
         }
+    }
+}
+
+/// Per-step wall time of one object-backed maintenance cycle, reported when the
+/// cycle is slow so a long turn shows which step held its shared slot.
+struct CycleSteps {
+    started: Instant,
+    last: Instant,
+    durations_ms: Vec<(&'static str, u64)>,
+}
+
+impl CycleSteps {
+    fn new(started: Instant) -> Self {
+        Self {
+            started,
+            last: started,
+            durations_ms: Vec::new(),
+        }
+    }
+
+    fn mark(&mut self, step: &'static str) {
+        let now = Instant::now();
+        self.durations_ms
+            .push((step, now.duration_since(self.last).as_millis() as u64));
+        self.last = now;
+    }
+
+    fn report(&self, table: &str, compaction_attempts: usize) {
+        let total = self.started.elapsed();
+        if total < SLOW_CYCLE_STEPS_REPORT {
+            return;
+        }
+        tracing::info!(
+            namespace = %table,
+            total_ms = total.as_millis() as u64,
+            compaction_attempts,
+            steps_ms = ?self.durations_ms,
+            "slow maintenance cycle step breakdown"
+        );
     }
 }
 

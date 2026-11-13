@@ -4528,7 +4528,7 @@ mod tests {
 
     /// Tables share two maintenance slots, so a table with an L0 backlog waits a
     /// full round of every table between visits. One visit must therefore drain
-    /// more than one 32-input run, or flushes outpace compaction on a busy hub.
+    /// more than one run, or flushes outpace compaction on a busy hub.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn object_backed_cycle_drains_more_than_one_l0_run() {
         let data_dir = crate::test_support::unique_dir("object_drain_data");
@@ -4546,7 +4546,8 @@ mod tests {
             .unwrap();
         store.publish_object_catalog("iris.worker").await.unwrap();
         let table = store.tables.require("iris.worker").unwrap();
-        let flushes = 3 * 32;
+        // Two full L0 jobs plus one flush, which stays below the count trigger.
+        let flushes = 2 * crate::store::compaction::object_driver::OBJECT_MAX_L0_INPUTS as i64 + 1;
         for index in 0..flushes {
             let (_, ipc) = worker_ipc(&[("w", index, index)]);
             store.write_rows("iris.worker", &ipc, None).unwrap();

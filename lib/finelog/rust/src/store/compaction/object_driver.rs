@@ -60,6 +60,15 @@ struct LeasedCompaction<'context, 'resources> {
     migration_backfill: bool,
 }
 
+/// Most L0 objects one compaction job merges.
+///
+/// Every input is a separate object read, upload of its replacement, and catalog
+/// commit amortized over the job, so on a hub where one 32-input job cost about
+/// 17 s under CPU contention, taking more inputs per job is what lets a flush
+/// backlog drain. 512 of the marin hub's ~135 KB flushes is about 70 MB, well
+/// under the executor's Arrow budget, which merges only the prefix that fits.
+pub(crate) const OBJECT_MAX_L0_INPUTS: usize = 512;
+
 struct MergeResult {
     swap: PlannedSwap,
     cached_inputs: usize,
@@ -136,6 +145,7 @@ pub async fn compact_once(
     }
     let config = CompactionConfig {
         level_targets: vec![compaction.target_object_bytes; compaction.config.level_targets.len()],
+        max_l0_inputs: OBJECT_MAX_L0_INPUTS,
         ..compaction.config.clone()
     };
     let Some((migration_backfill, job)) = rows_by_class.into_iter().find_map(|(backfill, rows)| {
