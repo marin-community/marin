@@ -348,8 +348,16 @@ enabled, and releases it when the bounded batch exits. The local judge uses
 batch priority and a 65,536-token context, including up to 2,048 output tokens.
 The 4,200-second client read deadline covers worker readiness and one request,
 allowing managed batch-preemption recovery to finish before the caller times out.
-Identical complete
-requests reuse cached reviews. Use a labelled duplicate/distinct fixture before
+Every model response is checkpointed before opinion validation. Invalid opinions
+receive at most three attempts with unchanged request bytes and sampling settings.
+An exhausted pair is recorded as unresolved, including all response paths and
+validation errors; the scan continues through the remaining pairs. The CLI writes
+valid verdicts to `.receipts.jsonl`, raw responses beneath `.receipts.responses/`
+and unresolved pairs to `.receipts.unresolved.jsonl` beside the selected output.
+It fails after scanning if any pair remains unresolved. Unresolved pairs receive
+no duplicate/distinct label, group edge or acknowledgement. Transport and storage
+failures propagate. Identical complete requests reuse cached reviews without a
+model lease. Use a labelled duplicate/distinct fixture before
 accepting a new model or prompt.
 
 ```bash
