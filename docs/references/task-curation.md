@@ -1717,6 +1717,45 @@ The output directory must be new; an existing directory is never replaced.
 Review the staged shards before updating the checked-in
 `datasets/lexical_measurement_receipts` registry.
 
+Approved frozen combined plans are published with `remediation_publish`. Run
+publication on CPU Iris workers in the artifacts' region, at production priority
+with a three-day timeout. The publisher reads the stored TaskSpecs, removes
+exactly the combined manifest IDs, and creates new private open-athena repositories
+through the existing TaskCompendium publisher. Existing repositories are refused.
+Task JSON and runtime bytes remain unchanged; readback verifies every retained
+hash and the plan's count. Dataset cards and manifests carry the original pin,
+duplicate and lexical evidence, combined exclusions and counts. Public training
+inputs with lexical exclusions also receive a private original archive.
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run \
+  --target-cluster cw-us-east-02a --cpu 8 --memory 64G --disk 200G \
+  --enable-extra-resources --sync-package marin-core --extra cpu \
+  --priority production --timeout 259200 --no-wait -- \
+  python -m experiments.post_training.task_curation.remediation_publish \
+  --plans s3://BUCKET/frozen-plans.json --version YYYYMMDD-v1 \
+  --evidence-root s3://BUCKET/new-publication-prefix --workers 4
+```
+
+After readback, `retained_census` measures the retained actor and integrity
+population using the existing complete census. It also writes a normalized
+`task_json` view with the original serialized bytes. `remediation_binding` joins
+these measurements to the publication receipts and stages
+`datasets/retained_release_receipts`. Registry loading validates the original
+conversion binding before selecting the retained importer and pin. Original
+pipeline, conversion, deduplication and qualification records stay in lineage.
+Active deduplication counts describe the retained pin: raw and unique both equal
+the retained count, with zero further duplicates. Execution qualification remains
+separate from this mechanical publication.
+
+Combined training receipts use disjoint duplicate-first accounting:
+`measured_tasks = retained_tasks + duplicate_dropped_tasks + dropped_tasks`.
+`duplicate_dropped_tasks` counts all original exact duplicates; `dropped_tasks`
+counts unique contracts flagged by any copy's lexical measurement. The original
+raw `contaminated_tasks` numerator is preserved. Duplicate and combined-drop
+manifests plus the original dedup census are required provenance. Evaluation
+receipts remain measurement-only and cannot certify training admission.
+
 ### Package-lock graders use the worker's local runtime
 
 A grader that declares `packages_lock` runs in the worker's local bubblewrap

@@ -29,6 +29,7 @@ from experiments.post_training.task_curation.datasets.evalchemy import simpleqa 
 from experiments.post_training.task_curation.datasets.lexical_measurements import LEXICAL_MEASUREMENTS
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
+from experiments.post_training.task_curation.datasets.retained_releases import RETAINED_RELEASE_RECEIPTS
 from experiments.post_training.task_curation.datasets.skyrl import code as skyrl_code
 from experiments.post_training.task_curation.datasets.skyrl import ifeval as skyrl_ifeval
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
@@ -48,6 +49,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import repositor
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
 from experiments.post_training.task_curation.lexical_binding import bind_lexical_measurement
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
+from experiments.post_training.task_curation.remediation_binding import bind_retained_release
 from experiments.post_training.task_curation.source import RlDataSource, TaskFormat
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
@@ -99,6 +101,14 @@ def all_sources() -> dict[str, RlDataSource]:
         for source in sources
     ]
     sources = [bind_within_source_dedup(source, WITHIN_SOURCE_DEDUP_RECEIPTS[source.info.id]) for source in sources]
+    sources = [
+        (
+            bind_retained_release(source, RETAINED_RELEASE_RECEIPTS[source.info.id])
+            if source.info.id in RETAINED_RELEASE_RECEIPTS
+            else source
+        )
+        for source in sources
+    ]
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")

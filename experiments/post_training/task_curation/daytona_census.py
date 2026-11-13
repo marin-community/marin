@@ -47,6 +47,7 @@ from experiments.post_training.task_curation.pipeline import (
     source_recipe,
 )
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
+from experiments.post_training.task_curation.retained_release import RetainedCohort
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from experiments.post_training.task_curation.sources import all_sources
 
@@ -158,7 +159,7 @@ def measure_source(source_id: str, artifact_root: str) -> DaytonaCensus:
     source_id = canonical_source_id(source_id)
     source = cached_sources()[source_id]
     config = source.config
-    if not isinstance(config, CurationRecipe | PrebuiltCohort):
+    if not isinstance(config, CurationRecipe | PrebuiltCohort | RetainedCohort):
         raise ValueError(
             "No configured converter or converted-spec artifact is registered for this inventory declaration"
         )
@@ -166,7 +167,7 @@ def measure_source(source_id: str, artifact_root: str) -> DaytonaCensus:
     admission_rejections = Counter()
     result = measure_envelopes(converted_source(source, artifact_root, rejections, admission_rejections))
     converted, machine_slots, sizes, failed_tasks, failures, mapping, roles, actor_sources, _unsafe_task_counts = result
-    if isinstance(config, PrebuiltCohort) and converted != config.expected_rows:
+    if isinstance(config, PrebuiltCohort | RetainedCohort) and converted != config.expected_rows:
         raise ValueError(f"Published cohort has {converted} TaskSpecs, expected {config.expected_rows}")
     rows = converted + sum(rejections.values())
     error = f"Registered converter emitted zero TaskSpecs from {rows} selected inputs" if not converted else None
@@ -346,6 +347,18 @@ def daytona_unsafe_counts(census: EnvelopeCensus) -> dict[str, int]:
 
 def converted_source(source, artifact_root: str, rejections: Counter, admission_rejections: Counter):
     config = source.config
+    if isinstance(config, RetainedCohort):
+        root = snapshot_download(
+            config.dataset.name,
+            repo_type="dataset",
+            revision=config.dataset.revision,
+            allow_patterns=list(config.files),
+            local_files_only=True,
+        )
+        for batch in pq.ParquetFile(Path(root) / config.files[0]).iter_batches(batch_size=16):
+            for row in batch.to_pylist():
+                yield json.loads(row["task_spec"]), json.loads(row["runtime"])
+        return
     if isinstance(config, PrebuiltCohort):
         root = snapshot_download(
             config.repo,

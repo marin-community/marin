@@ -388,6 +388,10 @@ class DecontaminatedRelease(CatalogRecord):
     drop_manifest_uri: str | None
     original_private_dataset_id: str | None
     original_private_dataset_revision: str | None = Field(pattern=r"^[0-9a-f]{40}$")
+    duplicate_manifest_uri: str | None = None
+    dedup_census_uri: str | None = None
+    original_dataset_id: str | None = None
+    original_dataset_revision: str | None = None
 
 
 class LexicalReceipt(CatalogRecord):
@@ -395,6 +399,7 @@ class LexicalReceipt(CatalogRecord):
     status: DeconReceiptStatus
     retained_tasks: int = Field(ge=0)
     dropped_tasks: int = Field(ge=0)
+    duplicate_dropped_tasks: int = Field(default=0, ge=0)
     release: DecontaminatedRelease | None
 
     @model_validator(mode="after")
@@ -404,11 +409,25 @@ class LexicalReceipt(CatalogRecord):
                 self.status is not DeconReceiptStatus.BENCHMARK_MEASURED
                 or self.release is not None
                 or self.dropped_tasks
+                or self.duplicate_dropped_tasks
             ):
                 raise ValueError("Evaluation and benchmark receipts measure the unchanged population without a release")
             return self
         if self.status is DeconReceiptStatus.BENCHMARK_MEASURED or self.release is None:
             raise ValueError("Training receipts require a clean or remediated release")
+        if self.duplicate_dropped_tasks and not (
+            self.release.duplicate_manifest_uri
+            and self.release.dedup_census_uri
+            and self.release.drop_manifest_uri
+            and self.release.original_dataset_id
+            and self.release.original_dataset_revision
+        ):
+            raise ValueError("Combined retention requires the original pin, duplicate and census provenance")
+        if self.duplicate_dropped_tasks and (self.release.dataset_id, self.release.dataset_revision) == (
+            self.release.original_dataset_id,
+            self.release.original_dataset_revision,
+        ):
+            raise ValueError("Combined retention requires a new dataset pin")
         if self.status is DeconReceiptStatus.CLEAN and self.dropped_tasks:
             raise ValueError("A clean receipt cannot drop contaminated tasks")
         if self.status is DeconReceiptStatus.REMEDIATED:
@@ -462,12 +481,16 @@ class LexicalContaminationEvidence(CatalogRecord):
         receipt = self.receipt
         if receipt is None:
             return self
-        if receipt.retained_tasks + receipt.dropped_tasks != self.measured_tasks:
+        if receipt.retained_tasks + receipt.dropped_tasks + receipt.duplicate_dropped_tasks != self.measured_tasks:
             raise ValueError("Decontamination receipt does not conserve the measured population")
         if receipt.status is DeconReceiptStatus.CLEAN and self.contaminated_tasks:
             raise ValueError("A flagged population cannot carry a clean receipt")
-        if receipt.status is DeconReceiptStatus.REMEDIATED and receipt.dropped_tasks != self.contaminated_tasks:
-            raise ValueError("Remediation must drop every flagged task")
+        if receipt.status is DeconReceiptStatus.REMEDIATED:
+            if receipt.duplicate_dropped_tasks:
+                if receipt.dropped_tasks > self.contaminated_tasks:
+                    raise ValueError("Unique lexical exclusions exceed the raw flagged population")
+            elif receipt.dropped_tasks != self.contaminated_tasks:
+                raise ValueError("Remediation must drop every flagged task")
         return self
 
     def admission_blocker(self, dataset_id: str | None, dataset_revision: str | None) -> str | None:

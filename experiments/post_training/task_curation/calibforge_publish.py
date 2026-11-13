@@ -31,24 +31,29 @@ TASKS_FILENAME = "tasks.parquet"
 CARD_FILENAME = "README.md"
 
 
-def publish(tasks: Path, card: Path, repo: str) -> str:
+def publish(tasks: Path, card: Path, repo: str, *, evidence_files: tuple[Path, ...] = ()) -> str:
     """Upload ``tasks`` and ``card`` to a private ``repo`` and return the commit revision."""
     api = HfApi()
     with tempfile.TemporaryDirectory(prefix="calibforge-publish-") as directory:
         staging = Path(directory)
         shutil.copyfile(tasks, staging / TASKS_FILENAME)
         shutil.copyfile(card, staging / CARD_FILENAME)
-        api.create_repo(repo_id=repo, repo_type="dataset", private=True, exist_ok=True)
+        for source in evidence_files:
+            shutil.copyfile(source, staging / source.name)
+        api.create_repo(repo_id=repo, repo_type="dataset", private=True, exist_ok=False)
+        if not api.repo_info(repo, repo_type="dataset").private:
+            raise ValueError(f"Publication destination must be private: {repo}")
         commit = api.upload_folder(
             repo_id=repo,
             repo_type="dataset",
             folder_path=staging,
-            commit_message="Publish the rebuilt CalibForge TaskCompendium cohort",
+            commit_message="Publish the private TaskCompendium cohort",
         )
     revision = commit.oid
     # Read the artifact back through the login that uploaded it and compare hashes, so
     # a truncated or rewritten file fails here rather than at a reader.
-    for source, name in ((tasks, TASKS_FILENAME), (card, CARD_FILENAME)):
+    files = ((tasks, TASKS_FILENAME), (card, CARD_FILENAME), *((path, path.name) for path in evidence_files))
+    for source, name in files:
         downloaded = hf_hub_download(repo_id=repo, repo_type="dataset", filename=name, revision=revision)
         if file_sha256(StoragePath(downloaded)) != file_sha256(StoragePath(str(source))):
             raise ValueError(f"{name} at {repo}@{revision} does not match the uploaded file")
