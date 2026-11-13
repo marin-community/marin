@@ -19,7 +19,11 @@ from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
 from experiments.post_training.long_loop.archive import seal_archive, verify_archive
-from experiments.post_training.long_loop.sft_accounting import sft_accounting_inputs, write_sft_accounting
+from experiments.post_training.long_loop.sft_accounting import (
+    sequence_statistics,
+    sft_accounting_inputs,
+    write_sft_accounting,
+)
 
 
 @pytest.mark.parametrize("pack", [False, True])
@@ -136,3 +140,21 @@ def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_
     (output / "realized-truncation-padding.json").write_text("{}")
     with pytest.raises(ValueError, match="artifact changed"):
         sft_accounting_inputs(str(output))
+
+
+@pytest.mark.parametrize("cap,packed_sequences", [(64, 5), (256, 2)])
+def test_sample_repacking_comparison_respects_the_configured_segment_cap(cap, packed_sequences):
+    rows = [
+        {
+            "real_tokens": 1,
+            "original_tokens": 1,
+            "loss_tokens": 1,
+            "is_sft": True,
+            "documents": [{"original_tokens": 1, "real_tokens": 1}],
+        }
+        for _ in range(257)
+    ]
+    statistics = sequence_statistics(rows, 4096, 8, 1.0, max_segments=cap)
+    assert statistics["greedy_packed_retained_sequences"] == packed_sequences
+    assert statistics["greedy_packed_update_equivalent"] == packed_sequences / 8
+    assert statistics["real_tokens"] == 257
