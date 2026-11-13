@@ -286,10 +286,7 @@ def deduplicate_cohort(tasks: Path, destination: StoragePath) -> tuple[pa.Table,
 
 
 def _quick_view(config: PrebuiltCohort, tasks: Path, destination: str) -> CampaignArtifact:
-    """Write the validated cohort as the converted view that QUICK consumers, such as embedding, read.
-
-    Exact duplicate contracts are excluded before the converted view is written.
-    """
+    """Write the deduplicated cohort as a normalized QUICK view."""
     root = StoragePath(destination)
     table, dedup = deduplicate_cohort(tasks, root)
     lowered = "lowered_task_spec" in table.column_names
