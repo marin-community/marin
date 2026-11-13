@@ -21,8 +21,8 @@ async def execute_shellbox_command(
     """Use Bash when available and preserve bounded command output metadata."""
     # Terminus uses Bash pipelines; minimal task images may provide only sh.
     shell_command = (
-        f"if [ -x /bin/bash ]; then exec /bin/bash -c {shlex.quote(command)}; "
-        f"else exec /bin/sh -c {shlex.quote(command)}; fi"
+        "if [ -x /bin/bash ]; then set -- /bin/bash; else set -- /bin/sh; fi; "
+        f'exec "$@" -c {shlex.quote(command)}'
     )
     result = await machine.run(
         Command(

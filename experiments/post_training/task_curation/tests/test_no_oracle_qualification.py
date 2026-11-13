@@ -115,7 +115,6 @@ def test_copied_destinations_resolve_against_the_native_workdir():
 
 
 def test_setup_execution_requires_every_expected_file():
-    """An executed script that misses a copied file is not a pass."""
     assert SetupExecution("task", "executed", written=2).passed
     assert not SetupExecution("task", "executed", written=1, missing=("abc:0644",)).passed
     assert not SetupExecution("task", "script_error", detail="pip3: not found").passed
