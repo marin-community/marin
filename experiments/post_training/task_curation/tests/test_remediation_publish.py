@@ -301,6 +301,9 @@ def test_duplicate_only_clean_release_requires_general_original_pin_and_keeps_pr
     document["receipt"]["release"]["original_dataset_id"] = None
     with pytest.raises(ValueError, match="original pin"):
         LexicalContaminationEvidence.model_validate(document)
+    document["receipt"]["release"]["original_dataset_id"] = "upstream/another-population"
+    with pytest.raises(ValueError, match="different measured input"):
+        LexicalContaminationEvidence.model_validate(document)
 
 
 def test_retained_import_keeps_original_serialization_runtime_and_benchmark_use(tmp_path, retained_receipt, monkeypatch):

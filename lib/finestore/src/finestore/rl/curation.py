@@ -483,6 +483,16 @@ class LexicalContaminationEvidence(CatalogRecord):
             return self
         if receipt.retained_tasks + receipt.dropped_tasks + receipt.duplicate_dropped_tasks != self.measured_tasks:
             raise ValueError("Decontamination receipt does not conserve the measured population")
+        if receipt.duplicate_dropped_tasks:
+            release = receipt.release
+            assert release is not None
+            if (release.original_dataset_id, release.original_dataset_revision) != (
+                self.input_dataset_id,
+                self.input_dataset_revision,
+            ):
+                raise ValueError("Combined retention provenance belongs to a different measured input")
+            if self.contaminated_tasks > receipt.dropped_tasks + receipt.duplicate_dropped_tasks:
+                raise ValueError("Combined retention leaves flagged tasks outside its exclusions")
         if receipt.status is DeconReceiptStatus.CLEAN and self.contaminated_tasks:
             raise ValueError("A flagged population cannot carry a clean receipt")
         if receipt.status is DeconReceiptStatus.REMEDIATED:
