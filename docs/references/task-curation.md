@@ -1600,6 +1600,21 @@ no candidate-model settings. Shared-state grading, state capture, tool providers
 unresolved image builds and oracle delivery without an explicit supported
 contract remain execution blockers; the adapter does not rewrite them.
 
+Changes to TaskSpec provisioning require the dedicated LOCAL regression below
+on a privileged Linux CPU worker with delegated cgroup v2, loop devices and
+ext4 mount tools. It executes the frozen tau and language-mixing graders using
+their original package locks and a local HTTP judge fixture. The test observes
+the actual CPU/memory controller values, exact disk-image allocation and cleanup.
+It does not provide oracle, admission or external-model quality evidence.
+Ordinary offline test selection excludes this runtime suite.
+
+~~~bash
+uv run --project vendor/harbor --frozen --extra runtime --group test python -m pytest \
+  --noconftest -c vendor/harbor/pyproject.toml \
+  vendor/harbor/tests/runtime/test_taskcompendium_local.py \
+  -m 'runtime and not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual and not windows_containers'
+~~~
+
 ~~~bash
 uv run python -m experiments.post_training.task_curation.oracle_filter map \
   --cohort /path/to/converted/tasks.parquet \

@@ -14,6 +14,7 @@ from pathlib import Path
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.machines import grading_machine_factory, task_machine
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits
+from shellbox.backends.local.disk import verified_local_disk_pool
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import (
@@ -290,7 +291,30 @@ class TaskSpecTrial(Trial):
         judge = judge_spec(task.grader)
         if judge is not None and supplied_model is not None and supplied_model != judge.model:
             raise ValueError("Judge model conflicts with the original TaskSpec")
-        for name in ("bwrap", "umoci", "image_cache", "cgroup_parent", "disk_root"):
+        options = {
+            "bwrap",
+            "umoci",
+            "image_cache",
+            "cgroup_parent",
+            "disk_root",
+            "ttl",
+            "registry_authfile",
+            "signature_policy",
+        }
+        if kwargs.keys() - options:
+            raise ValueError(f"Unsupported TaskSpec LOCAL options: {sorted(kwargs.keys() - options)}")
+        disk_root = kwargs.pop("disk_root", None)
+        if disk_root is None:
+            raise ValueError("Declared TaskSpec disk requires an explicit disk_root")
+        kwargs["disk_pool"] = await self._await_phase(
+            verified_local_disk_pool(Path(disk_root)),
+            timeout_sec=self._environment_build_timeout_sec,
+            timeout_error=EnvironmentStartTimeoutError("TaskSpec disk qualification timed out"),
+        )
+        for option, argument in (("registry_authfile", "authfile"), ("signature_policy", "policy")):
+            if option in kwargs:
+                kwargs[argument] = Path(kwargs.pop(option))
+        for name in ("bwrap", "umoci", "image_cache", "cgroup_parent"):
             if name in kwargs:
                 kwargs[name] = Path(kwargs[name])
         self.factory = LocalMachineFactory(**kwargs)

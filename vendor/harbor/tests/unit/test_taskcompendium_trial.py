@@ -4,6 +4,7 @@
 """Original converted TaskSpecs cross the production trial and grading boundaries."""
 
 import json
+import inspect
 import shutil
 import os
 import tarfile
@@ -14,6 +15,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import Backend
 from taskcompendium.harbor.adapter import write_harbor_task
 from taskcompendium.convert.answers import exact_answer_task
@@ -94,6 +96,7 @@ class Machines:
     root: Path
     backend = Backend.LOCAL
     cgroup_parent: Path = Path("/fixture/cgroup")
+    disk_pool: object | None = None
     machines: list = field(default_factory=list)
     specifications: list = field(default_factory=list)
     requirements: list = field(default_factory=list)
@@ -102,12 +105,33 @@ class Machines:
         self.requirements.append(requirements)
 
     async def create(self, spec):
+        assert self.disk_pool is not None
         root = self.root / f"machine-{len(self.machines)}"
         (root / spec.workdir.lstrip("/")).mkdir(parents=True)
         machine = FileMachine(root=root, workdir=spec.workdir, env=dict(spec.env))
         self.machines.append(machine)
         self.specifications.append(spec)
         return machine
+
+
+def bind_factory(monkeypatch, machines, disk_root):
+    pool = object()
+    qualified = []
+
+    async def qualify(root):
+        qualified.append(root)
+        return pool
+
+    def factory(**kwargs):
+        # Bind the real provider signature: forwarding disk_root used to bypass this boundary.
+        inspect.signature(LocalMachineFactory).bind(**kwargs)
+        assert qualified == [disk_root]
+        assert kwargs["disk_pool"] is pool
+        machines.disk_pool = pool
+        return machines
+
+    monkeypatch.setattr(adapter, "verified_local_disk_pool", qualify)
+    monkeypatch.setattr(adapter, "LocalMachineFactory", factory)
 
 
 def original_task(name):
@@ -131,7 +155,7 @@ async def test_converted_judge_task_preserves_contract_through_production_trial(
     assert TaskSpec.model_validate_json((directory / "task-spec.json").read_text()) == task
     assert not list(directory.rglob("Dockerfile"))
     machines = Machines(tmp_path / "sandboxes")
-    monkeypatch.setattr(adapter, "LocalMachineFactory", lambda **kwargs: machines)
+    bind_factory(monkeypatch, machines, tmp_path / "disks")
     # Frozen locks are an external artifact boundary; these tests do not qualify their availability.
     monkeypatch.setattr(adapter.StoragePath, "exists", lambda path: True)
     locks = []
@@ -221,7 +245,9 @@ async def test_converted_judge_task_preserves_contract_through_production_trial(
                         else {}
                     ),
                 ),
-                environment=EnvironmentConfig(kwargs={"model_endpoint": endpoint, "model_name": judge.model}),
+                environment=EnvironmentConfig(
+                    kwargs={"model_endpoint": endpoint, "model_name": judge.model, "disk_root": str(tmp_path / "disks")}
+                ),
             )
         )
         result = await trial.run()
@@ -296,11 +322,12 @@ async def test_environmentless_grader_runs_inside_declared_limits_without_actor(
     response = tmp_path / "response.json"
     response.write_text(json.dumps([{"role": "assistant", "content": "12"}]))
     machines = Machines(tmp_path / "sandboxes")
-    monkeypatch.setattr(adapter, "LocalMachineFactory", lambda **kwargs: machines)
+    bind_factory(monkeypatch, machines, tmp_path / "disks")
     trial = await Trial.create(
         TrialConfig(
             task=TaskConfig(path=directory),
             trial_name="text",
+            environment=EnvironmentConfig(kwargs={"disk_root": str(tmp_path / "disks")}),
             trials_dir=tmp_path / "trials",
             agent=AgentConfig(name="task-spec-response", kwargs={"response_path": str(response)}),
         )
@@ -355,13 +382,14 @@ async def test_actor_files_and_private_grader_remain_in_their_declared_roles(tmp
     response = tmp_path / "response.json"
     response.write_text(json.dumps([{"role": "assistant", "content": "42"}]))
     machines = Machines(tmp_path / "sandboxes")
-    monkeypatch.setattr(adapter, "LocalMachineFactory", lambda **kwargs: machines)
+    bind_factory(monkeypatch, machines, tmp_path / "disks")
     monkeypatch.setattr(adapter.StoragePath, "exists", lambda path: True)
     monkeypatch.setattr("taskcompendium.runtime.environment.local_runtime", lambda path: LockedRuntime(tmp_path))
     trial = await Trial.create(
         TrialConfig(
             task=TaskConfig(path=directory),
             trial_name="files",
+            environment=EnvironmentConfig(kwargs={"disk_root": str(tmp_path / "disks")}),
             trials_dir=tmp_path / "trials",
             agent=AgentConfig(name="task-spec-response", kwargs={"response_path": str(response)}),
         )
