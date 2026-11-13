@@ -26,6 +26,7 @@ from loguru import logger
 import asyncio
 import multiprocessing as mp
 
+from skyrl_train.config.validation import num_rollout_gpus
 from skyrl_train.config.utils import normalize_logging_backends
 from skyrl_train.evaluation_profiles import evaluation_profiles
 from skyrl_train.inference_engines.chat_template import get_custom_chat_template
@@ -457,7 +458,7 @@ class BasePPOExp:
         Returns:
             PlacementGroup: The placement group for colocated training.
         """
-        from skyrl_train.utils.utils import get_ray_pg_ready_with_timeout, num_rollout_gpus  # noqa: PLC0415
+        from skyrl_train.utils.utils import get_ray_pg_ready_with_timeout  # noqa: PLC0415
 
         timeout = int(self.cfg.trainer.distributed.placement_group_timeout_seconds) if timeout is None else timeout
         if self.cfg.trainer.placement.colocate_all and inference_engines_required(self.cfg):

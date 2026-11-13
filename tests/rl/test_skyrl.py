@@ -479,15 +479,14 @@ def test_generation_plan_renders_native_geometry_and_rejects_conflicts(failure, 
                 "python",
                 "-c",
                 """
-import json, sys
+import importlib, json, sys
 from cloud.iris.launch_config import load_launch_config
 from cloud.iris.rl_config_translation import RL_ENTRYPOINTS
 from skyrlrecipe import RLEntrypoint
 config = load_launch_config(sys.argv[1])
 assert config.runtime.entrypoint == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]
+assert callable(importlib.import_module(config.runtime.entrypoint).run)
 print(json.dumps({"nodes": config.iris.allocation.num_nodes,
-    "policy_nodes": config.skyrl.trainer.placement.policy_num_nodes,
-    "batch": config.skyrl.trainer.train_batch_size,
     "engines": config.skyrl.generator.num_inference_engines}))
 """,
                 str(path),

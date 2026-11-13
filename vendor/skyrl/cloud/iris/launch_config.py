@@ -267,9 +267,10 @@ def load_launch_config(path: Path) -> DictConfig:
     validate_launch_config(config)
     evaluation_profiles(config.skyrl)
     if config.run.mode == RunMode.TRAIN:
-        validate_training_settings(config.skyrl)
+        if config.runtime.entrypoint != RL_ENTRYPOINTS[RLEntrypoint.GENERATE]:
+            validate_training_settings(config.skyrl)
+            validate_batch_invariant_config(config.skyrl)
         validate_megatron_config(config.skyrl)
-        validate_batch_invariant_config(config.skyrl)
         validate_evaluation_schedule(
             config.skyrl, generation=config.runtime.entrypoint == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]
         )

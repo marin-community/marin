@@ -30,7 +30,8 @@ from skyrl_train.inference_observability import trainer_metrics
 from skyrl_train.metric_names import (
     PROMPTS_DROPPED_TOO_LONG_METRIC,
 )
-from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray, num_rollout_gpus
+from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray
+from skyrl_train.config.validation import num_rollout_gpus
 from skyrl_train.evaluate import evaluate
 from skyrl_train.trajectory_runners.trajectory_retention import make_trajectory_sink
 from skyrl_train.utils.trainer_utils import build_eval_dataloader

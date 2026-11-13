@@ -454,8 +454,6 @@ def validate_cfg(cfg: DictConfig):
         "use_kl_in_reward and use_kl_loss should be mutually exclusive"
     )
 
-    use_ref_model = reference_model_required(cfg.trainer.algorithm)
-
     validate_batch_sizes(cfg)
 
     if cfg.trainer.max_ckpts_to_keep == 0:

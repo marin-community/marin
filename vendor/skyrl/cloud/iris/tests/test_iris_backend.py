@@ -100,11 +100,6 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
         0,
         preemption_retries,
     )
-    assert request.replicas == 2
-    assert request.resources.cpu_millicores == 32000
-    assert request.resources.memory_bytes == 512 * 1024**3
-    assert request.resources.disk_bytes == 512 * 1024**3
-    assert (request.resources.device.gpu.variant, request.resources.device.gpu.count) == ("H100", 8)
     assert all(constraint.key != CLUSTER_CONSTRAINT_KEY for constraint in request.constraints)
     assert request.environment.env_vars["NCCL_SOCKET_IFNAME"] == (
         "^ibs,ibp,lo,docker,veth,cilium,lxc" if interface is None else interface

@@ -321,6 +321,13 @@ def test_composed_launch_records_whether_training_runs_ahead_of_its_updates(
     raw["skyrl"]["trainer"]["rollout_buffer"] = {"max_staleness_steps": max_staleness_steps}
     raw["skyrl"]["trainer"]["algorithm"]["off_policy_correction"] = "none"
     raw["iris"]["allocation"]["num_nodes"] = 1 if entrypoint == "generate" else 2
+    if entrypoint == "generate":
+        adapter = tmp_path / "adapter"
+        adapter.mkdir()
+        raw["skyrl"]["trainer"].setdefault("policy", {}).setdefault("model", {})["lora"] = {
+            "rank": 8,
+            "adapter_path": str(adapter),
+        }
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw, sort_keys=False))
 
@@ -486,7 +493,7 @@ def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) ->
 
 
 @pytest.mark.parametrize("consumer", ["metric_groups", "stop_when"])
-def test_callback_setup_rejects_final_metrics_during_periodic_evaluation(consumer: str) -> None:
+def test_callback_setup_rejects_final_metrics_during_periodic_evaluation(tmp_path: Path, consumer: str) -> None:
     config = get_default_config()
     metric = "eval/full_panel/all/avg_score"
     dependency = {"eval/reporting/avg_score": [metric]} if consumer == "metric_groups" else {metric: {"minimum": 0.5}}
@@ -495,12 +502,16 @@ def test_callback_setup_rejects_final_metrics_during_periodic_evaluation(consume
         {"type": "evaluation", "eval_steps": 0, "additional_evaluations": {"full_panel": {"schedule": "final"}}},
     ]
 
+    raw = raw_launch_config()
+    raw["run"]["export_hf"] = False
+    raw["skyrl"]["trainer"]["callbacks"] = OmegaConf.to_container(config.trainer.callbacks, resolve=True)
+    path = tmp_path / "periodic-final.yaml"
+    path.write_text(yaml.safe_dump(raw))
     with pytest.raises(ValueError, match=f"final-only metrics.*{metric}"):
-        create_default_callbacks(config)
-
-    # These dependencies are available when evaluation runs only at the final step.
-    config.trainer.callbacks[0].eval_steps = 0
-    create_default_callbacks(config)
+        load_launch_config(path)
+    raw["skyrl"]["trainer"]["callbacks"][0]["eval_steps"] = 0
+    path.write_text(yaml.safe_dump(raw))
+    create_default_callbacks(load_launch_config(path).skyrl)
 
 
 @pytest.mark.parametrize(
@@ -596,7 +607,6 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(
     assert {key: request[key] for key in expected_sampling} == expected_sampling
     assert recorded.schedule == ("final" if case == "final-schedule" else "every_evaluation")
     prepared = launch._prepare_config(loaded)
-    prepared.skyrl.generator.eval_sampling_params.temperature = 0.25
     task_runtime.materialize_data_sources(task_runtime._runtime_namespace(prepared).data_sources_json)
     runner = training_driver.LocalRLRunner(
         training_driver.LocalRLConfig(

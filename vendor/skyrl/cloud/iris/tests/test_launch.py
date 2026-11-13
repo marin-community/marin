@@ -169,6 +169,7 @@ def test_launch_persists_attempt_result_and_exports_only_on_opt_in(tmp_path: Pat
     result = execute_launch(path, backend=backend)
     saved = read_attempt(str(tmp_path / "exports"), "attempt-1")
     assert saved is not None
+    assert saved.iris_job_id == outcome.job_id
     attempt = saved.native.model_dump(mode="json")
     assert saved.native.result.started_at == "2026-11-07T01:00:00+00:00"
     assert saved.native.result.finished_at == "2026-11-07T02:00:00+00:00"

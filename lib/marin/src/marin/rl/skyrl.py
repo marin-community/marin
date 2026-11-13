@@ -23,7 +23,6 @@ import fsspec
 import yaml
 from finestore.rl.run_records import (
     AttemptRecord,
-    LaunchReceipt,
     LaunchResult,
     LaunchState,
 )
@@ -1182,18 +1181,9 @@ def read_skyrl_launch_receipt(run_output: str) -> AttemptRecord | None:
     state = LaunchState.SUBMITTED
     if is_job_finished(job.state):
         state = LaunchState.SUCCEEDED if job.state == job_pb2.JOB_STATE_SUCCEEDED else LaunchState.FAILED
-    receipt = LaunchReceipt.model_validate(
-        {
-            "config": config,
-            "result": {
-                "state": state,
-                "iris_job_id": str(JobName.from_wire(job.job_id)),
-                "model": None,
-            },
-        }
-    )
+    result = LaunchResult(state=state, iris_job_id=str(JobName.from_wire(job.job_id)))
     if record is not None:
-        return record.model_copy(update={"config": config, "result": receipt.result})
+        return record.model_copy(update={"config": config, "result": result})
     return AttemptRecord(
-        run_id=config["run"]["id"], attempt_id=config["run"]["attempt_id"], config=config, result=receipt.result
+        run_id=config["run"]["id"], attempt_id=config["run"]["attempt_id"], config=config, result=result
     )

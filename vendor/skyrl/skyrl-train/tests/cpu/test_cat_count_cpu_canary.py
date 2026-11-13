@@ -416,7 +416,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
 
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
-def test_cat_count_final_profile_skips_zero_progress(tmp_path, cat_count_policy, forkserver_context):
+def test_cat_count_final_profile_skips_zero_progress(tmp_path, cat_count_policy, cat_count_session, forkserver_context):
     root = tmp_path / "zero-progress"
     cfg = cat_count_config(root, cat_count_policy, steps=1)
     cfg.trainer.epochs = 0
