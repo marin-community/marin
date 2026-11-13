@@ -146,47 +146,58 @@ def repair_source(
     all_reviews = []
     receipts = []
     repair = partial(repair_batch, original=original, reviewer=reviewer, rubric=rubric, output=output)
+    pending_ids = {
+        task_id
+        for task_id, row in original.items()
+        if ReviewRecord.model_validate_json(row["review"]).status is not ReviewStatus.REVIEWED
+    }
+    pending_batches = (
+        batch for batch in contract_batches(primary.inputs) if any(task.id in pending_ids for task in batch.tasks)
+    )
+    repaired_batches: dict[int, RepairBatchResult] = {}
+    with ThreadPoolExecutor(max_workers=batch_workers) as executor:
+        for group in batched(pending_batches, batch_workers):
+            repaired_batches.update(
+                (batch.index, result) for batch, result in zip(group, executor.map(repair, group), strict=True)
+            )
     with (
-        ThreadPoolExecutor(max_workers=batch_workers) as executor,
         records_path.open("wb", auto_mkdir=True) as stream,
         pq.ParquetWriter(stream, OVERLAY_SCHEMA, compression="zstd") as writer,
     ):
-        for group in batched(contract_batches(primary.inputs), batch_workers):
-            for batch, result in zip(group, executor.map(repair, group), strict=True):
-                rows = []
-                origins = {}
-                for contract in batch.contracts:
-                    task_id = contract["task_id"]
-                    from_repair = task_id in result.repaired_task_ids
-                    origin = result.receipt if from_repair else primary_origin
-                    actual_reviewer = reviewer.identity if from_repair else primary.reviewer
-                    review_json = (
-                        result.selected[task_id].model_dump_json() if from_repair else original[task_id]["review"]
-                    )
-                    origins[task_id] = {"reviewer": actual_reviewer, "receipt": origin}
-                    rows.append(
-                        {
-                            **contract,
-                            "review": review_json,
-                            "reviewer": json.dumps(actual_reviewer),
-                            "origin": json.dumps(origin),
-                        }
-                    )
-                receipt_path = attempt / "batches" / f"{batch.index:06}.json"
-                payload = {
-                    "identity": {"contracts": batch.contracts, "rubric": asdict(rubric), "reviewer": identity},
-                    "reviews": [result.selected[task.id].model_dump(mode="json") for task in batch.tasks],
-                    "origins": origins,
-                    "primary_review": primary_origin,
-                    "repair_receipt": result.receipt,
-                }
-                with receipt_path.open("w", auto_mkdir=True) as receipt_stream:
-                    json.dump(payload, receipt_stream, ensure_ascii=False)
-                for row in rows:
-                    row["batch_receipt"] = str(receipt_path)
-                writer.write_table(pa.Table.from_pylist(rows, schema=OVERLAY_SCHEMA))
-                all_reviews.extend(result.selected[task.id] for task in batch.tasks)
-                receipts.append(str(receipt_path))
+        for batch in contract_batches(primary.inputs):
+            result = repaired_batches.pop(batch.index) if batch.index in repaired_batches else repair(batch)
+            rows = []
+            origins = {}
+            for contract in batch.contracts:
+                task_id = contract["task_id"]
+                from_repair = task_id in result.repaired_task_ids
+                origin = result.receipt if from_repair else primary_origin
+                actual_reviewer = reviewer.identity if from_repair else primary.reviewer
+                review_json = result.selected[task_id].model_dump_json() if from_repair else original[task_id]["review"]
+                origins[task_id] = {"reviewer": actual_reviewer, "receipt": origin}
+                rows.append(
+                    {
+                        **contract,
+                        "review": review_json,
+                        "reviewer": json.dumps(actual_reviewer),
+                        "origin": json.dumps(origin),
+                    }
+                )
+            receipt_path = attempt / "batches" / f"{batch.index:06}.json"
+            payload = {
+                "identity": {"contracts": batch.contracts, "rubric": asdict(rubric), "reviewer": identity},
+                "reviews": [result.selected[task.id].model_dump(mode="json") for task in batch.tasks],
+                "origins": origins,
+                "primary_review": primary_origin,
+                "repair_receipt": result.receipt,
+            }
+            with receipt_path.open("w", auto_mkdir=True) as receipt_stream:
+                json.dump(payload, receipt_stream, ensure_ascii=False)
+            for row in rows:
+                row["batch_receipt"] = str(receipt_path)
+            writer.write_table(pa.Table.from_pylist(rows, schema=OVERLAY_SCHEMA))
+            all_reviews.extend(result.selected[task.id] for task in batch.tasks)
+            receipts.append(str(receipt_path))
     return write_source_result(primary.inputs, identity, rubric, records_path, all_reviews, receipts)
 
 
