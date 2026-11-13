@@ -98,15 +98,6 @@ def _registry_identity(reference: str) -> str:
     return snapshot_request_for_spec(MachineSpec(source=RegistryImage(reference))).name
 
 
-def context_identity(context: Path, task_toml: bytes | None) -> str:
-    """Production snapshot name for one task's ``environment/`` build context and ``task.toml``."""
-    config = _task_environment_config(task_toml)
-    if not config.docker_image and not (context / DOCKERFILE).exists():
-        raise UnsupportedMachineSpec(f"missing {ENVIRONMENT_PREFIX}{DOCKERFILE}")
-    spec = machine_spec(config, context, {}, cpus=config.cpus, memory_mb=config.memory_mb, storage_mb=config.storage_mb)
-    return snapshot_request_for_spec(spec).name
-
-
 def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentityCount:
     """Count snapshot identities for native cohort tars, one per task."""
     sizes: Counter[str] = Counter()
@@ -117,7 +108,18 @@ def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentit
             try:
                 for entry in entries:
                     _write_context(Path(tmp), entry.path, entry.content, entry.mode)
-                name = context_identity(Path(tmp), task_toml)
+                config = _task_environment_config(task_toml)
+                if not config.docker_image and not (Path(tmp) / DOCKERFILE).exists():
+                    raise UnsupportedMachineSpec(f"missing {ENVIRONMENT_PREFIX}{DOCKERFILE}")
+                spec = machine_spec(
+                    config,
+                    Path(tmp),
+                    {},
+                    cpus=config.cpus,
+                    memory_mb=config.memory_mb,
+                    storage_mb=config.storage_mb,
+                )
+                name = snapshot_request_for_spec(spec).name
             except UnsupportedMachineSpec as error:
                 failures.append((task_id, str(error)))
                 continue

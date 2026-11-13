@@ -22,14 +22,14 @@ import os
 import shlex
 from pathlib import Path
 
-from daytona import AsyncDaytona, DaytonaConfig, Resources
+from daytona import AsyncDaytona, DaytonaConfig
 from harbor.environments.daytona import LOCKDOWN_PROBE_TIMEOUT
 from shellbox.backends.daytona.machine import (
     DaytonaMachineFactory,
     DaytonaNetworkMode,
     DaytonaNetworkPolicy,
-    snapshot_identity,
 )
+from shellbox.backends.daytona.snapshot import snapshot_request_for_spec
 from shellbox.image import DockerfileSource
 from shellbox.machine import Command, MachineSpec, NetworkPolicy
 
@@ -84,8 +84,7 @@ def held_rounds(log: str, locked_at: float) -> dict:
 async def smoke(source: DockerfileSource) -> dict:
     config = DaytonaConfig(api_key=os.environ["DAYTONA_API_KEY"], target=os.environ["DAYTONA_TARGET"])
     factory = DaytonaMachineFactory(lambda: AsyncDaytona(config), network_policy=SETUP_POLICY)
-    spec = MachineSpec(source=source, workdir="/", env={}, network=NetworkPolicy.ALLOW, cpus=1, memory_mb=2048)
-    machine = await factory.create(spec)
+    machine = await factory.create(smoke_spec(source))
     try:
         await run(machine, f"rm -f {HOLD_LOG}; setsid nohup bash -c {shlex.quote(HOLDER)} >/dev/null 2>&1 &")
         await asyncio.sleep(WATCH_SECONDS)
@@ -127,9 +126,13 @@ async def smoke(source: DockerfileSource) -> dict:
     }
 
 
+def smoke_spec(source: DockerfileSource) -> MachineSpec:
+    return MachineSpec(source=source, workdir="/", env={}, network=NetworkPolicy.ALLOW, cpus=1, memory_mb=2048)
+
+
 def snapshot_name(source: DockerfileSource) -> str:
-    """The name the factory gives this smoke's snapshot (1 CPU, 2 GiB, as ``smoke`` requests)."""
-    return snapshot_identity(source, Resources(cpu=1, memory=2))
+    """The name the factory gives this smoke's snapshot."""
+    return snapshot_request_for_spec(smoke_spec(source)).name
 
 
 def main() -> None:

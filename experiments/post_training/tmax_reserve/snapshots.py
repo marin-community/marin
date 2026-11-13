@@ -21,15 +21,25 @@ from daytona import AsyncDaytona, Daytona, DaytonaConfig, DaytonaNotFoundError
 from harbor.environments.daytona import machine_spec
 from harbor_config.models.task.config import TaskConfig
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
+from shellbox.backends.daytona.snapshot import snapshot_request_for_spec
+from shellbox.machine import MachineSpec
 
-from experiments.post_training.task_curation.daytona_identity import context_identity
+
+def task_spec(task_dir: Path) -> MachineSpec:
+    """The machine spec Harbor's Daytona environment builds for this task with no resource overrides."""
+    environment = TaskConfig.model_validate_toml((task_dir / "task.toml").read_text()).environment
+    return machine_spec(
+        environment,
+        task_dir / "environment",
+        {},
+        cpus=environment.cpus,
+        memory_mb=environment.memory_mb,
+        storage_mb=environment.storage_mb,
+    )
 
 
 def names(task_dirs: list[Path]) -> dict[str, str]:
-    return {
-        task.name: context_identity(task / "environment", (task / "task.toml").read_bytes())
-        for task in sorted(task_dirs)
-    }
+    return {task.name: snapshot_request_for_spec(task_spec(task)).name for task in sorted(task_dirs)}
 
 
 def usage() -> dict:
@@ -60,20 +70,9 @@ def prepare(task_dirs: list[Path]) -> dict[str, str]:
     config = DaytonaConfig(api_key=os.environ["DAYTONA_API_KEY"], target=os.environ["DAYTONA_TARGET"])
     factory = DaytonaMachineFactory(lambda: AsyncDaytona(config))
     specs = {}
-    for task, name in names(task_dirs).items():
-        task_dir = next(path for path in task_dirs if path.name == task)
-        environment = TaskConfig.model_validate_toml((task_dir / "task.toml").read_text()).environment
-        specs.setdefault(
-            name,
-            machine_spec(
-                environment,
-                task_dir / "environment",
-                {},
-                cpus=environment.cpus,
-                memory_mb=environment.memory_mb,
-                storage_mb=environment.storage_mb,
-            ),
-        )
+    for task_dir in sorted(task_dirs):
+        spec = task_spec(task_dir)
+        specs.setdefault(snapshot_request_for_spec(spec).name, spec)
     built = {name: asyncio.run(factory.prepare(spec)) for name, spec in sorted(specs.items())}
     if any(name != result for name, result in built.items()):
         raise RuntimeError(f"prepare built other names than the naming path gives: {built}")
