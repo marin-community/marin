@@ -490,7 +490,7 @@ fn opening_an_old_catalog_adds_partition_metadata_without_losing_segments() {
 }
 
 #[test]
-fn published_snapshot_rebuild_preserves_segment_artifacts() {
+fn published_snapshot_rebuild_preserves_segment_artifacts_and_column_bounds() {
     let catalog = Catalog::open(None).unwrap();
     let artifacts = ArtifactReferences {
         binding: SourceBinding {
@@ -509,6 +509,8 @@ fn published_snapshot_rebuild_preserves_segment_artifacts() {
             },
         )]),
     };
+    let column_bounds =
+        crate::store::column_bounds::ColumnBounds::from([("epoch_ms".to_string(), (1_000, 2_000))]);
     let segment = PublishedObjectSegment {
         row: SegmentRow {
             namespace: "a".to_string(),
@@ -531,6 +533,7 @@ fn published_snapshot_rebuild_preserves_segment_artifacts() {
             ..Default::default()
         },
         artifacts: artifacts.clone(),
+        column_bounds: column_bounds.clone(),
         migration_backfill: false,
         migration_source_id: None,
         migration_source_rows: None,
@@ -552,6 +555,12 @@ fn published_snapshot_rebuild_preserves_segment_artifacts() {
     let records = catalog.object_segments("a").unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].artifacts, artifacts);
+    assert_eq!(records[0].column_bounds, column_bounds);
+    assert_eq!(
+        records[0].source.object_id.as_deref(),
+        Some("_finelog/tables/a/objects/abc.parquet"),
+        "the bounds stored beside the source leave its identity intact"
+    );
 }
 
 #[test]
