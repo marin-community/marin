@@ -389,3 +389,8 @@ using the bucket registry in `config/coreweave.yaml`. RNO2A outputs must stay
 under supported `tmp/ttl=Nd` paths. The earlier recipe targeted RNO2A compute but
 required US-EAST-08A outputs, causing cross-region checkpoint writes; its default
 output paths now use RNO2A scratch. Inputs retain their separately pinned identities.
+
+RL finalization follows `trainer.hf_export_checkpoint`: `best` retains finalization
+after any training terminal outcome, while `latest` exports only after successful
+training. A two-update smoke without validation can select `latest`, disable eval,
+and write a native checkpoint after each update without a best-checkpoint callback.
