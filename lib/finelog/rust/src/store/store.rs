@@ -160,6 +160,16 @@ pub fn log_registered_schema() -> Schema {
     )
 }
 
+/// `existing` with `log`'s code-owned schema merged in.
+///
+/// `log`'s schema is defined by [`log_registered_schema`], not by a producer, and
+/// its retained table spec predates later additions such as `catalog_bounds`.
+/// Boot registration and recovery from durable state both apply this, so a
+/// rebuilt `log` keeps every code-owned column and flag.
+fn merge_log_registered_schema(existing: &Schema) -> Result<Schema, StatsError> {
+    merge_schemas(existing, &stored_form(log_registered_schema()))
+}
+
 /// One consistent view of a namespace's sealed local segments: the Arrow schema,
 /// resolved key and known bounds, paths, and lowest `seq`. Captured under one hold
 /// of the insertion lock so all segment metadata describes exactly the same paths.
@@ -693,7 +703,10 @@ impl Store {
                 "decode recovered logical schema for {namespace:?}: {error}"
             ))
         })?;
-        let schema = stored_form(schema_from_proto_view(&schema_view)?);
+        let mut schema = stored_form(schema_from_proto_view(&schema_view)?);
+        if namespace == LOG_NAMESPACE_NAME {
+            schema = merge_log_registered_schema(&schema)?;
+        }
         let policy = spec
             .operating_policy
             .as_option()
@@ -828,11 +841,12 @@ impl Store {
         resolve_key_column(&schema)?;
         let stored = stored_form(schema);
         let policy = self.catalog.get_policy(LOG_NAMESPACE_NAME)?;
-        let stored_for_merge = stored.clone();
-        self.catalog
-            .register_or_evolve(LOG_NAMESPACE_NAME, stored, policy, move |existing| {
-                merge_schemas(existing, &stored_for_merge)
-            })?;
+        self.catalog.register_or_evolve(
+            LOG_NAMESPACE_NAME,
+            stored,
+            policy,
+            merge_log_registered_schema,
+        )?;
         Ok(())
     }
 
@@ -5575,5 +5589,191 @@ mod tests {
         );
         table.assert_results_unchanged([2, 2, 2, 2, 1]).await;
         table.cleanup();
+    }
+
+    /// `log` as published before `catalog_bounds` existed: a v1 spec whose
+    /// logical schema lacks the flag, with one flushed segment.
+    async fn log_published_without_catalog_bounds(tag: &str) -> (PathBuf, PathBuf) {
+        let data_dir = crate::test_support::unique_dir(&format!("{tag}_data"));
+        let remote_dir = crate::test_support::unique_dir(&format!("{tag}_remote"));
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        let mut v1_schema = log_registered_schema();
+        for column in &mut v1_schema.columns {
+            column.index.catalog_bounds = false;
+        }
+        // Boot already flagged the namespace row; put it back to the pre-flag
+        // schema the v1 spec was published from.
+        let v1_stored = stored_form(v1_schema.clone());
+        store
+            .catalog
+            .register_or_evolve(
+                LOG_NAMESPACE_NAME,
+                v1_stored.clone(),
+                StoragePolicy::default(),
+                move |_| Ok(v1_stored.clone()),
+            )
+            .unwrap();
+        // Registration replaces log's boot runtime, which blocks; the RPC runs it
+        // on a blocking worker.
+        tokio::task::block_in_place(|| {
+            store.register_versioned_table(
+                LOG_NAMESPACE_NAME,
+                ObjectSpec::new(1).schema(v1_schema).validated(),
+            )
+        })
+        .unwrap();
+        store
+            .publish_object_catalog(LOG_NAMESPACE_NAME)
+            .await
+            .unwrap();
+        write_log_rows(&store, 1_000).await;
+        store
+            .publish_object_catalog(LOG_NAMESPACE_NAME)
+            .await
+            .unwrap();
+        store.shutdown(Duration::from_secs(1)).await;
+        (data_dir, remote_dir)
+    }
+
+    async fn write_log_rows(store: &Store, epoch_ms: i64) {
+        let batch_schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("key", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("source", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("data", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("epoch_ms", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("level", arrow::datatypes::DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["/job/a", "/job/a"])),
+                Arc::new(StringArray::from(vec!["stdout", "stdout"])),
+                Arc::new(StringArray::from(vec!["first", "second"])),
+                Arc::new(Int64Array::from(vec![epoch_ms, epoch_ms + 500])),
+                Arc::new(arrow::array::Int32Array::from(vec![0, 0])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        store.write_rows(LOG_NAMESPACE_NAME, &ipc, None).unwrap();
+        store
+            .maintain_namespace(LOG_NAMESPACE_NAME, false)
+            .await
+            .unwrap();
+    }
+
+    async fn recover_on_empty_disk(remote_dir: &Path, tag: &str) -> (Store, PathBuf) {
+        let empty_data_dir = crate::test_support::unique_dir(tag);
+        let store = Store::new(
+            Some(empty_data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store
+            .configure_ack_durability(AckDurability::ObjectStore)
+            .unwrap();
+        store.bootstrap_maintenance();
+        assert!(store.recover_tables().await.unwrap() >= 1);
+        (store, empty_data_dir)
+    }
+
+    fn log_epoch_bounds(store: &Store) -> Vec<Option<(i64, i64)>> {
+        store
+            .catalog
+            .object_segments(LOG_NAMESPACE_NAME)
+            .unwrap()
+            .into_iter()
+            .map(|record| record.column_bounds.get("epoch_ms").copied())
+            .collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn log_recovered_from_a_spec_without_catalog_bounds_keeps_recording_them() {
+        let (data_dir, remote_dir) =
+            log_published_without_catalog_bounds("log_bounds_recovery").await;
+        let (store, empty_data_dir) =
+            recover_on_empty_disk(&remote_dir, "log_bounds_recovery_target").await;
+
+        assert!(
+            store
+                .get_table_schema(LOG_NAMESPACE_NAME)
+                .unwrap()
+                .column("epoch_ms")
+                .unwrap()
+                .index
+                .catalog_bounds,
+            "recovery from a spec without the flag keeps log's code-owned flag"
+        );
+        write_log_rows(&store, 5_000).await;
+        assert!(
+            log_epoch_bounds(&store).contains(&Some((5_000, 5_500))),
+            "a segment flushed after recovery records epoch_ms bounds"
+        );
+
+        store.shutdown(Duration::from_secs(1)).await;
+        for dir in [data_dir, empty_data_dir, remote_dir] {
+            std::fs::remove_dir_all(dir).ok();
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recovered_log_flag_publishes_no_spec_on_maintenance_or_reregistration() {
+        // The recovered runtime carries `catalog_bounds` while the retained spec
+        // does not; neither later maintenance nor re-registering log's schema
+        // may turn that difference into a new spec version.
+        let (data_dir, remote_dir) =
+            log_published_without_catalog_bounds("log_bounds_spec_stable").await;
+        let (store, empty_data_dir) =
+            recover_on_empty_disk(&remote_dir, "log_bounds_spec_stable_target").await;
+        let active_version = |store: &Store| {
+            store
+                .spec_lifecycle(LOG_NAMESPACE_NAME)
+                .unwrap()
+                .active_version()
+        };
+        assert_eq!(active_version(&store), 1);
+
+        let runtime = store.tables.require(LOG_NAMESPACE_NAME).unwrap();
+        maintenance::run(&runtime, TableWork::SegmentBounds)
+            .await
+            .unwrap();
+        store
+            .maintain_namespace(LOG_NAMESPACE_NAME, false)
+            .await
+            .unwrap();
+        store.ensure_log_namespace_schema().unwrap();
+        tokio::task::block_in_place(|| {
+            store.register_table(
+                LOG_NAMESPACE_NAME,
+                log_registered_schema(),
+                store.get_policy(LOG_NAMESPACE_NAME).unwrap(),
+            )
+        })
+        .unwrap();
+
+        assert_eq!(active_version(&store), 1, "no new spec version");
+        assert!(store
+            .spec_lifecycle(LOG_NAMESPACE_NAME)
+            .unwrap()
+            .desired
+            .is_none());
+        assert_eq!(
+            log_epoch_bounds(&store),
+            vec![Some((1_000, 1_500))],
+            "the backfill records the pre-recovery segment's bounds from its footer"
+        );
+
+        store.shutdown(Duration::from_secs(1)).await;
+        for dir in [data_dir, empty_data_dir, remote_dir] {
+            std::fs::remove_dir_all(dir).ok();
+        }
     }
 }
