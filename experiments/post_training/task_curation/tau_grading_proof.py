@@ -45,8 +45,10 @@ from pathlib import Path
 import pyarrow.parquet as pq
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from shellbox.machine import Command
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import ConversationTrace, GradingAttempt, TaskSpec, TextMessage, judge_spec
+from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.local import LocalGraderMachines
 from taskcompendium.runtime.task_grading import grade_task
 
@@ -89,9 +91,6 @@ def sample_tasks(cohort, size: int) -> Iterator[TaskSpec]:
 
 
 async def _lock_probe(environment, factory, machine_spec) -> dict:
-    from shellbox.machine import Command
-    from taskcompendium.runtime.environment import prepare_machine_spec
-
     prepared = prepare_machine_spec(environment, factory, machine_spec, dict(os.environ))
     machine = await factory.create(prepared)
     try:
