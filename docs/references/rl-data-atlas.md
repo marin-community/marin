@@ -278,12 +278,18 @@ surveys each row as `{"task": …, "runtime": …}`; converted-spec shards store
 `task_spec` and `runtime` side by side, while published TaskCompendium
 `tasks.parquet` files embed both in `lowered_task_spec`. Use complete converted
 populations, not sampled assessment packets. Each entry must match the selected
-catalog's pinned source revision. Stage remote shards with `uv run fsutil cp`
-near their storage region; `experiments.post_training.task_curation.stage_survey_manifest`
-rewrites manifest paths onto the worker disk. The survey streams rows and
-records input SHA-256s. Sources without converted inputs remain explicitly
-`unassessed` with the manifest's `unassessed_reason`; a census that would leave
-sources unassessed without a declared reason fails.
+catalog's pinned source revision. On a worker near the shards' storage region,
+stage remote inputs and rewrite their manifest paths with:
+
+```bash
+uv run python -m experiments.post_training.task_curation.stage_survey_manifest \
+  --manifest survey-inputs.json --stage-dir survey-shards \
+  --output staged-survey-inputs.json
+```
+
+The survey streams staged rows and records input SHA-256s. Sources without
+converted inputs remain `unassessed` with the manifest's `unassessed_reason`;
+a census that would leave sources unassessed without a declared reason fails.
 
 Set `runtime_defaults.agent` and `runtime_defaults.grader` to the deployment's
 explicit machine settings: `network`, `cpus`, `memory_mb`, `storage_mb`, `gpus`,
@@ -295,7 +301,7 @@ it never infers missing resource or network policy from backend choice.
 uv run --prerelease allow --with-editable './lib/shellbox[daytona,qemu,shellsim,iris]' python -m \
   experiments.post_training.task_curation.backend_capabilities \
   --catalog-root s3://marin-us-east-02a/marin/rl-data/catalog/production \
-  --manifest survey-inputs.json --output backend-map.json
+  --manifest staged-survey-inputs.json --output backend-map.json
 ```
 
 On a worker workspace without git metadata, pass the code revision explicitly
