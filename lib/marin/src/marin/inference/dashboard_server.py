@@ -21,7 +21,8 @@ buffered JSON and reject streaming.
 command in a reconstructed ShellSim agent workspace. ``/web-search`` runs the
 optional Parallel web search tool when the server holds a Parallel API key; ``/info``
 reports whether it does. ``/chat-shares`` stores bounded, process-local snapshots
-for short chat links.
+for short chat links. ``/feedback`` saves a model-feedback report to Marin storage
+when the server has a feedback prefix.
 """
 
 import dataclasses
@@ -47,6 +48,7 @@ from starlette.routing import Route
 
 from marin.inference.chat_template_protocol import ChatTemplateProtocol
 from marin.inference.http_proxy import forwardable_request_headers, forwardable_response_headers
+from marin.inference.model_feedback import FeedbackStore
 from marin.inference.python_tool_routes import (
     invoke_tool_response,
     python_tool_definitions_response,
@@ -121,6 +123,7 @@ def build_dashboard_app(
     request_timeout_seconds: float = 600.0,
     shellsim_catalog: str = shellsim.DEFAULT_PYPI_CATALOG,
     web_search: ParallelWebSearch | None = None,
+    feedback_prefix: str | None = None,
 ) -> Starlette:
     """Build the dashboard and reverse proxy for a local serving backend.
 
@@ -131,9 +134,11 @@ def build_dashboard_app(
         request_timeout_seconds: Per-request timeout for upstream proxying.
         shellsim_catalog: Host-selected ports catalog for CPython and NumPy tools.
         web_search: Parallel credentials for the optional ``web_search`` tool; None disables it.
+        feedback_prefix: Storage prefix for model-feedback reports; None disables ``/feedback``.
     """
     state: dict[str, httpx.AsyncClient] = {}
     chat_shares = _ChatShareStore()
+    feedback = None if feedback_prefix is None else FeedbackStore(feedback_prefix, dataclasses.asdict(info))
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
@@ -152,7 +157,9 @@ def build_dashboard_app(
         return HTMLResponse(DASHBOARD_HTML)
 
     async def serving_info(_request: Request) -> Response:
-        return JSONResponse({**dataclasses.asdict(info), "web_search": web_search is not None})
+        return JSONResponse(
+            {**dataclasses.asdict(info), "web_search": web_search is not None, "feedback": feedback is not None}
+        )
 
     async def health(_request: Request) -> Response:
         client = state["client"]
@@ -206,6 +213,7 @@ def build_dashboard_app(
             Route("/health", health),
             Route("/chat-shares", chat_shares.create_response, methods=["POST"]),
             Route("/chat-shares/{share_id}", chat_shares.get_response),
+            *([Route("/feedback", feedback.create_response, methods=["POST"])] if feedback else []),
             Route("/tools", python_tool_definitions_response, methods=["POST"]),
             Route("/tools/{name}", invoke_tool_response, methods=["POST"]),
             Route("/shell", shell_workspace_response, methods=["POST"]),

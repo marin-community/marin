@@ -1,4 +1,4 @@
-import type { ImportedGitCommit, ServingInfo } from './types'
+import type { Conversation, ImportedGitCommit, ServingInfo } from './types'
 import type { ToolDefinition } from './python_tools'
 import type { SharedChatSnapshot } from './shared_chat'
 
@@ -85,6 +85,20 @@ export async function createChatShare(snapshot: SharedChatSnapshot): Promise<str
   const result = await postJsonResult<{ id: string }>('chat-shares', snapshot, undefined, 'chat share')
   if (typeof result.id !== 'string') throw new Error('chat share returned an invalid ID')
   return result.id
+}
+
+export interface FeedbackReport {
+  description: string
+  model: string
+  /** The saved conversation, or null when the reporter left it out. */
+  conversation: Conversation | null
+}
+
+/** Save a model-feedback report and return its storage URL. */
+export async function submitFeedback(report: FeedbackReport): Promise<string> {
+  const result = await postJsonResult<{ location: string }>('feedback', report, undefined, 'feedback report')
+  if (typeof result.location !== 'string') throw new Error('feedback report returned an invalid location')
+  return result.location
 }
 
 export async function fetchChatShare(shareId: string): Promise<unknown> {

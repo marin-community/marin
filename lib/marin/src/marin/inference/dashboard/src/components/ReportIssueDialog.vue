@@ -1,24 +1,39 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 
-const emit = defineEmits<{ submit: [includeConversation: boolean] }>()
+const props = defineProps<{
+  /** Save the report and return its storage URL. */
+  save: (description: string, includeConversation: boolean) => Promise<string>
+}>()
+
+const FILER_URL = 'https://filer.marina.oa.dev/#'
 
 const dialog = ref<HTMLDialogElement | null>(null)
+const description = ref('')
 const includeConversation = ref(true)
+const status = ref<'editing' | 'saving' | 'saved' | 'failed'>('editing')
+const location = ref('')
 
 function open() {
+  description.value = ''
   includeConversation.value = true
+  status.value = 'editing'
   dialog.value?.showModal()
 }
 
-function submit() {
-  dialog.value?.close()
-  // Emitted inside the click handler, so the caller can open a tab without a popup block.
-  emit('submit', includeConversation.value)
+async function submit() {
+  status.value = 'saving'
+  try {
+    location.value = await props.save(description.value.trim(), includeConversation.value)
+    status.value = 'saved'
+  } catch (error) {
+    console.error('Could not save the feedback report', error)
+    status.value = 'failed'
+  }
 }
 
 function onBackdropClick(event: MouseEvent) {
-  if (event.target === dialog.value) dialog.value?.close()
+  if (event.target === dialog.value && status.value !== 'saving') dialog.value?.close()
 }
 
 defineExpose({ open })
@@ -28,40 +43,70 @@ defineExpose({ open })
   <dialog
     ref="dialog"
     aria-labelledby="report-issue-title"
-    class="m-auto w-[min(28rem,calc(100vw-2rem))] rounded-xl border border-surface-border bg-surface-raised p-0 text-text shadow-xl backdrop:bg-black/50"
+    class="m-auto w-[min(32rem,calc(100vw-2rem))] rounded-xl border border-surface-border bg-surface-raised p-0 text-text shadow-xl backdrop:bg-black/50"
     @click="onBackdropClick"
   >
-    <form class="space-y-4 p-5" @submit.prevent="submit">
-      <h2 id="report-issue-title" class="text-sm font-semibold">Report a poor response</h2>
+    <div v-if="status === 'saved'" class="space-y-4 p-5">
+      <h2 id="report-issue-title" class="text-sm font-semibold">Report saved</h2>
       <p class="text-sm leading-relaxed text-text-secondary">
-        This opens a prefilled issue in the public
-        <span class="font-mono text-xs">marin-community/marin</span> repository. Nothing is posted until you
-        submit it on GitHub. Review the draft and remove private or sensitive content first.
+        Thanks. The report is stored privately in Marin storage.
+        <a
+          class="break-all text-accent hover:underline"
+          :href="FILER_URL + encodeURIComponent(location)"
+          target="_blank"
+          rel="noopener"
+        >Open it in Filer</a>.
       </p>
+      <div class="flex justify-end">
+        <button
+          type="button"
+          autofocus
+          class="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-surface transition-colors hover:bg-accent-hover"
+          @click="dialog?.close()"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+    <form v-else class="space-y-4 p-5" @submit.prevent="submit">
+      <h2 id="report-issue-title" class="text-sm font-semibold">Report a poor response</h2>
+      <label class="block space-y-1.5 text-sm text-text-secondary">
+        <span>What went wrong, and what would a good response look like?</span>
+        <textarea
+          v-model="description"
+          required
+          autofocus
+          rows="4"
+          class="w-full rounded-lg border border-surface-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+        />
+      </label>
       <label class="flex cursor-pointer items-start gap-2 text-sm text-text-secondary">
         <input v-model="includeConversation" type="checkbox" class="mt-0.5 accent-accent" />
         <span>
           Include the conversation
           <span class="block text-xs text-text-muted">
-            Uncheck to report only the model and settings. The title, transcript, and custom template
-            instructions are then omitted.
+            Uncheck to send only your description and the model and serving settings.
           </span>
         </span>
       </label>
+      <p v-if="status === 'failed'" class="text-sm text-status-danger">
+        The report could not be saved. Try again, or check the browser console.
+      </p>
       <div class="flex justify-end gap-2">
         <button
           type="button"
           class="rounded-lg px-3 py-1.5 text-sm text-text-muted transition-colors hover:text-text"
+          :disabled="status === 'saving'"
           @click="dialog?.close()"
         >
           Cancel
         </button>
         <button
           type="submit"
-          autofocus
-          class="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-surface transition-colors hover:bg-accent-hover"
+          class="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-surface transition-colors hover:bg-accent-hover disabled:opacity-50"
+          :disabled="status === 'saving' || !description.trim()"
         >
-          Open GitHub draft
+          {{ status === 'saving' ? 'Saving…' : 'Save report' }}
         </button>
       </div>
     </form>

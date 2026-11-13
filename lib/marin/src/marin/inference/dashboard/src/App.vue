@@ -8,10 +8,8 @@ import HistoryPanel from './components/HistoryPanel.vue'
 import ReportIssueDialog from './components/ReportIssueDialog.vue'
 import SamplingControls from './components/SamplingControls.vue'
 import { useServing } from './composables/useServing'
-import { createChatShare, fetchChatShare } from './lib/api'
+import { createChatShare, fetchChatShare, submitFeedback } from './lib/api'
 import { ThinkingMode } from './lib/chat_template'
-import { ISSUE_TRANSCRIPT_FILENAME, issueDraft } from './lib/github_issue'
-import { plainTextChat } from './lib/plain_text_chat'
 import { loadComparison } from './lib/comparison_storage'
 import {
   conversationFromSharedChat,
@@ -56,14 +54,7 @@ const showHistory = ref(false)
 const shareState = ref<'idle' | 'copied' | 'failed'>('idle')
 const shareImportFailed = ref(false)
 const reportDialog = ref<InstanceType<typeof ReportIssueDialog> | null>(null)
-const reportState = ref<'idle' | 'opened' | 'downloaded' | 'blocked' | 'failed'>('idle')
-const reportLabel = computed(() => {
-  if (reportState.value === 'opened') return 'Issue draft opened'
-  if (reportState.value === 'downloaded') return 'Draft opened, transcript downloaded'
-  if (reportState.value === 'blocked') return 'Popup blocked'
-  if (reportState.value === 'failed') return 'Report failed'
-  return 'Report issue'
-})
+const chatView = ref<InstanceType<typeof ChatView> | null>(null)
 const shareLabel = computed(() => {
   if (shareState.value === 'copied') return 'Link copied'
   if (shareState.value === 'failed') return 'Copy failed'
@@ -73,7 +64,6 @@ watch(
   () => [active.value.id, active.value.updatedAt],
   () => {
     shareState.value = 'idle'
-    reportState.value = 'idle'
     shareImportFailed.value = false
   },
 )
@@ -114,45 +104,13 @@ async function shareConversation() {
   }
 }
 
-function reportIssue(includeConversation: boolean) {
-  let draft
-  try {
-    draft = issueDraft(
-      active.value,
-      includeConversation ? plainTextChat(active.value) : null,
-      info.value,
-      params,
-    )
-  } catch (error) {
-    console.error('Could not build the GitHub issue draft', error)
-    reportState.value = 'failed'
-    return
-  }
-  // Open synchronously within the click so popup blockers treat it as user-initiated.
-  // Without 'noopener', window.open returns null when blocked; detach the opener afterwards.
-  const tab = window.open(draft.url, '_blank')
-  if (!tab) {
-    reportState.value = 'blocked'
-    return
-  }
-  tab.opener = null
-  if (!draft.fullTranscript) {
-    reportState.value = 'opened'
-    return
-  }
-  // A download, unlike a clipboard write, does not need this document to keep focus.
-  downloadText(ISSUE_TRANSCRIPT_FILENAME, draft.fullTranscript)
-  reportState.value = 'downloaded'
-}
-
-function downloadText(filename: string, text: string) {
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }))
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  link.click()
-  // Revoking synchronously can cancel the download in some browsers.
-  setTimeout(() => URL.revokeObjectURL(url), 0)
+function saveFeedback(description: string, includeConversation: boolean): Promise<string> {
+  const conversation = active.value
+  return submitFeedback({
+    description,
+    model: conversation.model || info.value?.model || '',
+    conversation: includeConversation ? conversation : null,
+  })
 }
 
 function persist() {
@@ -248,17 +206,16 @@ function clearHistory() {
             <span class="hidden sm:inline">{{ shareLabel }}</span>
           </button>
           <button
-            v-if="mode === 'chat'"
+            v-if="mode === 'chat' && info?.feedback"
             class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-40"
-            :class="{ 'text-accent': reportState === 'opened' || reportState === 'downloaded', 'text-status-danger': reportState === 'blocked' || reportState === 'failed' }"
-            :disabled="!active.messages.length"
-            title="Draft a public GitHub issue about a poor response; review and edit it on GitHub before submitting"
+            :disabled="!active.messages.length || chatView?.busy"
+            title="Save a private report about a poor response to Marin storage"
             @click="reportDialog?.open()"
           >
             <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M4 22V4m0 0h12l-2 4 2 4H4" />
             </svg>
-            <span class="hidden sm:inline">{{ reportLabel }}</span>
+            <span class="hidden sm:inline">Report issue</span>
           </button>
           <label class="flex items-center gap-2 whitespace-nowrap text-xs font-medium text-text-secondary">
             Max tokens
@@ -300,6 +257,7 @@ function clearHistory() {
           Could not import the shared chat. The link is invalid or was truncated.
         </div>
         <ChatView
+          ref="chatView"
           v-if="mode === 'chat'"
           :conversation="active"
           :params="params"
@@ -319,7 +277,7 @@ function clearHistory() {
           :thinking-mode="compareSettings.thinkingMode"
           :custom-instructions="compareSettings.customInstructions"
         />
-        <ReportIssueDialog ref="reportDialog" @submit="reportIssue" />
+        <ReportIssueDialog ref="reportDialog" :save="saveFeedback" />
         <CompletionView v-if="mode === 'completion'" :params="params" :model="model" :streaming="info ? info.streaming : true" />
       </main>
     </div>
