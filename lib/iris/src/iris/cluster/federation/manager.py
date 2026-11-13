@@ -360,7 +360,12 @@ class FederationManager:
     def _run_loop(self, stop_event: threading.Event, step: Callable[[], None], interval: float) -> None:
         """Run ``step`` every ``interval`` seconds until ``stop_event`` is set."""
         while not stop_event.is_set():
-            step()
+            try:
+                step()
+            except Exception:
+                # A loop that exits is never restarted: its peer's handoffs or heartbeats
+                # would silently stop for the life of the process. Log and retry instead.
+                logger.exception("Federation loop step failed; retrying in %.0fs", interval)
             stop_event.wait(timeout=interval)
 
     def _run_peer_heartbeat_loop(self, stop_event: threading.Event, peer: FederationPeer) -> None:
@@ -435,10 +440,11 @@ class FederationManager:
                 reason=f"Peer {spec.peer_id} rejected the handoff: {exc.message}",
             )
             return
-        except (ConnectionError, OSError) as exc:
-            # Also covers a blob this cluster's bundle store could not read back for
-            # the handoff; a later attempt can still succeed.
-            logger.warning("Handoff of %s to peer %s failed (will retry): %s", spec.local_job_id, spec.peer_id, exc)
+        except Exception:
+            # Anything else, e.g. a blob this cluster's bundle store could not read back,
+            # may succeed on a later attempt. Keep it pending and deliver the rest of the
+            # batch rather than failing the whole sync pass.
+            logger.exception("Handoff of %s to peer %s failed (will retry)", spec.local_job_id, spec.peer_id)
             return
         self._store.mark_handed_off(spec.local_job_id)
 

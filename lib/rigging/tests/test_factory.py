@@ -16,7 +16,13 @@ from aiobotocore.config import AioConfig
 from botocore.awsrequest import AWSRequest
 from botocore.exceptions import ReadTimeoutError
 from rigging.filesystem.cross_region import CrossRegionGuardedFS
-from rigging.filesystem.factory import _s3_filesystem_options, filesystem, open_url, url_to_fs
+from rigging.filesystem.factory import (
+    _s3_filesystem_options,
+    filesystem,
+    open_url,
+    unbudgeted_url_to_fs,
+    url_to_fs,
+)
 from rigging.filesystem.listing_cache import configure_listing_cache_defaults
 from rigging.filesystem.s3_compat import (
     TotalDeadlineAIOHTTPSession,
@@ -67,6 +73,16 @@ def test_url_to_fs_does_not_wrap_local(tmp_path):
 
     fs, _path = url_to_fs(str(test_file))
     assert not isinstance(fs, CrossRegionGuardedFS)
+
+
+def test_unbudgeted_url_to_fs_skips_only_the_transfer_guard():
+    guarded, path = url_to_fs("gs://some-bucket/state", token="anon")
+    unbudgeted, unbudgeted_path = unbudgeted_url_to_fs("gs://some-bucket/state", token="anon")
+
+    assert isinstance(guarded, CrossRegionGuardedFS)
+    assert not isinstance(unbudgeted, CrossRegionGuardedFS)
+    assert unbudgeted.protocol == guarded._fs.protocol
+    assert unbudgeted_path == path
 
 
 def test_open_url_local_file(tmp_path):
