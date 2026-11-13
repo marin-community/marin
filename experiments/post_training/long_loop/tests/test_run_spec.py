@@ -331,3 +331,29 @@ def test_emitted_stage_timeouts_default_to_three_days(tmp_path, monkeypatch, ove
     resolved["rl"]["execution"]["job_timeout_seconds"] = 32400
     with pytest.raises(ValueError, match="exceed the explicit budget"):
         build_spec_graph(resolved, "2026.11.13", through="rl")
+
+
+def test_nonagentic_training_route_excludes_agentic_input(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-rno2a/tmp/ttl=7d/test-nonagentic")
+    resolved = resolve_spec(SPEC, smoke=True)
+    resolved["adopted_sft"] = {
+        "kind": "hf_export",
+        "uri": "s3://test/model",
+        "repository": "test/model",
+        "revision": "a" * 40,
+    }
+    resolved["rl"]["train_routes"] = ["nonagentic"]
+    batch_size = resolved["rl"]["role_plan"]["train_batch_size"]
+    resolved["rl"]["config"]["trainer"]["rollout_buffer"]["consumed_route_quotas"] = {"nonagentic": batch_size}
+    terminal = build_spec_graph(resolved, "2026.11.13.43602", through="rl")
+    context = StepContext.for_run(
+        terminal.path("s3://marin-rno2a/tmp/ttl=7d/test-nonagentic"),
+        "s3://marin-rno2a/tmp/ttl=7d/test-nonagentic",
+        runtime_args=terminal.runtime_args,
+        deps=terminal.deps,
+    )
+    launch = yaml.safe_load(terminal.build_config(context).launch_config_yaml)
+    assert [(source["uri"], source["relative_path"]) for source in launch["inputs"]["train_data"]] == [
+        (resolved["datasets"]["nonagentic"]["uri"], resolved["datasets"]["nonagentic"]["data_file"])
+    ]
+    assert set(launch["skyrl"]["trainer"]["rollout_buffer"]["source_routes"].values()) == {"nonagentic"}
