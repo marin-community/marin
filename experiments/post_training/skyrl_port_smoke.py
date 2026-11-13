@@ -27,6 +27,7 @@ from marin.rl.skyrl import (
 from skyrlrecipe import RecipePatch, sections
 from skyrlrecipe.declared import DatabaseRegistrationCallback, EvaluationCallback
 
+from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.pipeline import EvaluationResult
 from experiments.models import qwen2_5_0_5b_instruct
 from experiments.post_training.cat_count_canary.data import TRAIN_FILENAME, VALIDATION_FILENAME, cat_count_data_step
@@ -162,7 +163,7 @@ def build_smoke(version: str) -> Smoke:
             serve=ServeConfig(tensor_parallel_size=1, max_model_len=4096, max_num_seqs=16),
             generation=GenerationConfig(max_gen_toks=256),
         ),
-        "gsm8k-smoke",
+        resolve_evaluations("gsm8k-smoke"),
         version=version,
         accelerator="H100x1",
         submission_cluster=CLUSTER,

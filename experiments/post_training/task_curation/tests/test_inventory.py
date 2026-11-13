@@ -38,9 +38,9 @@ from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import JudgeSpec
 from zephyr.context import ZephyrContext
 
+from experiments.evaluation.benchmarks.code import sources as code_sources
+from experiments.evaluation.benchmarks.reasoning import sources as reasoning_sources
 from experiments.post_training.task_curation.campaign import error_chain
-from experiments.post_training.task_curation.datasets.evalchemy.code import sources as code_sources
-from experiments.post_training.task_curation.datasets.evalchemy.reasoning import sources as reasoning_sources
 from experiments.post_training.task_curation.datasets.nemo_tool_calls import sources as tool_call_sources
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import BLENDS
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
