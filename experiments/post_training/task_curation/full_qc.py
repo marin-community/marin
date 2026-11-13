@@ -95,7 +95,6 @@ def qualify_inputs(inputs: FullQCInputs, receipt_path: str) -> str:
 
 
 def local_reviewer() -> ReviewerSpec:
-    """Pin the public checkpoint separately from the existing unverified relay."""
     definition = JUDGE_TIERS[JudgeTier.HEAVY]
     assert definition.qa_reviewer is not None and definition.model_revision is not None
     endpoint = LocalJudgeEndpoint(
