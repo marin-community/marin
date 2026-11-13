@@ -4,10 +4,14 @@
 """Source identity ignores row order and keeps overlap flags advisory."""
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from finestore.rl.source_identity import canonical_source_id
+from iris.rpc import job_pb2
+from marin.inference.types import OpenAIEndpoint, RunningModel
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     AnswerType,
@@ -21,7 +25,12 @@ from taskcompendium.models import (
 )
 from taskcompendium.source_fingerprints import DuplicateLabel, SourceFingerprint, SourceIdentitySurvey
 
-from experiments.post_training.task_curation.duplicate_review import DUPLICATE_MODEL, review_pairs
+from experiments.post_training.task_curation.duplicate_review import (
+    DUPLICATE_MODEL,
+    DUPLICATE_MODEL_CONFIG,
+    LocalDuplicateEndpoint,
+    review_pairs,
+)
 from experiments.post_training.task_curation.judges import HostedJudgeEndpoint
 from experiments.post_training.task_curation.source_duplicate_ci import changed_source_declarations
 from experiments.post_training.task_curation.source_fingerprints import (
@@ -128,6 +137,40 @@ def test_source_change_detection_includes_added_and_modified_declarations():
         "added": source_input_declaration("added", "b"),
     }
     assert changed_source_declarations(before, after) == {"changed", "added"}
+
+
+def test_uncached_local_review_requests_batch_gpu_capacity(review_server, monkeypatch, tmp_path):
+    model_config = tmp_path / "config.json"
+    model_config.write_text(json.dumps({"max_position_embeddings": 262144}))
+    monkeypatch.setattr("marin.evaluation.serving_config.hf_hub_download", lambda *args, **kwargs: str(model_config))
+    leases = []
+
+    @contextmanager
+    def serving_lease(config):
+        leases.append(config)
+        yield SimpleNamespace(
+            jobs=(),
+            model=RunningModel(
+                endpoint=OpenAIEndpoint(
+                    base_url=f"http://127.0.0.1:{review_server.server_port}/v1", model=DUPLICATE_MODEL
+                )
+            ),
+            wait_until_ready=lambda: None,
+        )
+
+    monkeypatch.setattr("experiments.post_training.task_curation.duplicate_review.remote_inference", serving_lease)
+    review_server.model_ids = [DUPLICATE_MODEL]
+    review_server.judge_replies = [
+        JudgeReply(json.dumps({"label": "duplicate", "overlap_fraction": 1.0, "reason": "Identical square tasks."}))
+    ]
+    rows = [task_document("square", "Compute the square of 2.")]
+    fingerprints = {"original": fingerprint_source(rows, {}), "copy": fingerprint_source(rows, {})}
+    pairs = candidate_pairs(fingerprints, {"copy"}, 1)
+    reviews = list(review_pairs(pairs, fingerprints, LocalDuplicateEndpoint(DUPLICATE_MODEL_CONFIG), [], {}))
+
+    assert reviews[0].verdict.label is DuplicateLabel.DUPLICATE
+    assert leases[0].iris.priority == job_pb2.PRIORITY_BAND_BATCH
+    assert review_server.requests[0]["temperature"] == 0.7
 
 
 @pytest.mark.parametrize("field", ["converter_revision", "task_specs_sha256"])
