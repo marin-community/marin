@@ -3,10 +3,6 @@
 
 """The no-oracle qualification checks what they claim to check."""
 
-import gzip
-import io
-import tarfile
-
 import pytest
 
 from experiments.post_training.task_curation.no_oracle_qualification import (
@@ -24,18 +20,7 @@ from experiments.post_training.task_curation.no_oracle_qualification import (
     summarize,
     workspace_expectations,
 )
-
-
-def _tar(members: dict[str, tuple[bytes, int]], gz: bool = True) -> bytes:
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w") as archive:
-        for name, (content, mode) in members.items():
-            info = tarfile.TarInfo(name)
-            info.size = len(content)
-            info.mode = mode
-            archive.addfile(info, io.BytesIO(content))
-    raw = buffer.getvalue()
-    return gzip.compress(raw, mtime=0) if gz else raw
+from experiments.post_training.task_curation.tests.task_tar_fixtures import pack_tar
 
 
 def _native(files: dict[str, bytes] | None = None, recipe: str | None = None) -> bytes:
@@ -43,18 +28,18 @@ def _native(files: dict[str, bytes] | None = None, recipe: str | None = None) ->
     members = {f"environment/files/{name}": (content, 0o644) for name, content in (files or {"a.csv": b"1\n"}).items()}
     members["environment/Dockerfile"] = (recipe.encode(), 0o644)
     members["task.toml"] = (b'[task]\nid = "x"\n', 0o644)
-    return _tar(members)
+    return pack_tar(members)
 
 
 def _rebuilt(payload_files: dict[str, tuple[bytes, int]] | None = None) -> bytes:
     files = payload_files or {"files/a.csv": (b"1\n", 0o644)}
-    payload = _tar(files, gz=False)
+    payload = pack_tar(files, gz=False)
     members = {
         "task.toml": (b'[task]\nid = "x"\n', 0o644),
         "setup_files/calibforge-fixtures.tar.gz": (payload, 0o644),
         "setup_files/calibforge-initialize.sh": (b"#!/bin/sh\n", 0o755),
     }
-    return _tar(members)
+    return pack_tar(members)
 
 
 def test_copied_paths_lists_context_sources_and_rejects_add():
@@ -128,7 +113,9 @@ def test_a_file_the_native_recipe_deletes_is_not_required_in_the_workspace():
         "COPY files/gen.py /app/\n"
         "RUN python3 /app/gen.py && rm /app/gen.py\n"
     )
-    native = _tar({"environment/Dockerfile": (recipe.encode(), 0o644), "environment/files/gen.py": (b"print(1)", 0o644)})
+    native = pack_tar(
+        {"environment/Dockerfile": (recipe.encode(), 0o644), "environment/files/gen.py": (b"print(1)", 0o644)}
+    )
     assert [item.path for item in workspace_expectations(native)] == []
 
 
@@ -141,7 +128,7 @@ def test_a_kept_file_is_still_required_when_another_is_deleted():
         "COPY files/config.py /app/config.py\n"
         "RUN rm /app/run.sh\n"
     )
-    native = _tar(
+    native = pack_tar(
         {
             "environment/Dockerfile": (recipe.encode(), 0o644),
             "environment/files/run.sh": (b"echo\n", 0o644),
