@@ -32,7 +32,6 @@ from experiments.post_training.task_curation.admission_binding import (
     require_content_result,
     require_declaration_admission,
 )
-from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from experiments.post_training.task_curation.catalog_identity import (
     backend_survey_payload,
     canonical_assessment,
@@ -41,6 +40,7 @@ from experiments.post_training.task_curation.catalog_identity import (
     canonical_snapshot_source,
     identity_survey_payload,
 )
+from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 
 MAX_BATCH_BYTES = 1_000_000
