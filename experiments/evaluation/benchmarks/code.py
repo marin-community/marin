@@ -34,6 +34,8 @@ from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_e
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
+HUMANEVAL_FEWSHOT_VERSION = "2026.11.05.3"
+
 
 def python_source(
     *,
@@ -156,14 +158,14 @@ def fewshot_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 recipe=replace(
                     dataset.recipe,
                     name="checkpoint-humaneval-10shot",
-                    version="2026.11.05.3-" + dataset.recipe.version,
+                    version=HUMANEVAL_FEWSHOT_VERSION + "-" + dataset.recipe.version,
                     source=replace(dataset.recipe.source, read=read_humaneval_fewshot),
                 ),
                 protocol=dataset.protocol.model_copy(
                     update={
                         "benchmark": "humaneval-10shot",
                         "num_fewshot": 10,
-                        "version": "2026.11.05.3",
+                        "version": HUMANEVAL_FEWSHOT_VERSION,
                     }
                 ),
             ),
