@@ -491,8 +491,8 @@ only immutable attempts and all-valid
 replace its partial-progress pointer, but overlapping coverage can duplicate
 requests. A shard
 record reports its attempted and valid counts; it makes no source-wide FULL claim.
-First-pass and final status counts are retained, and the assembly campaign
-reports the final invalid rate per source separately from its issue rate.
+The assembly campaign reports final status counts and the invalid rate per
+source separately from its issue rate.
 The `latest.json` index pins an immutable shard record by SHA-256.
 
 Assemble completed sources on CPU in the data's cluster, also at batch priority
