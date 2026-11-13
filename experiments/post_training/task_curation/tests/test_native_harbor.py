@@ -29,7 +29,8 @@ from experiments.post_training.task_curation.datasets import native_releases
 from experiments.post_training.task_curation.datasets.native_harbor import native_task, unpack_native
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
+from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
 @pytest.mark.parametrize(
@@ -183,13 +184,40 @@ def test_native_package_round_trip_keeps_state_boundary_private_files_and_modes(
     ],
 )
 def test_native_registration_requires_actor_receipt_for_its_private_pin(source_id, tmp_path, monkeypatch):
-    entry = next(
-        entry for entry in json.loads(native_releases.LEDGER.read_text())["entries"] if entry["id"] == source_id
-    )
+    entry = {
+        "id": source_id,
+        "name": source_id.split(":", 1)[1],
+        "display_name": "Native fixture",
+        "dataset_id": source_id.split(":", 1)[1] if source_id.startswith("Harbor Hub:") else "fixture/upstream",
+        "dataset_revision": "a" * 40,
+        "disposition": "quick_converted",
+        "origin": "Harbor Hub" if source_id.startswith("Harbor Hub:") else "Task Trove",
+        "url": "https://example.test/native-fixture",
+        "family": "fixture",
+        "tags": ["agentic", "excluded"],
+        "notes": "Native package fixture.",
+        "independent_qc": None,
+        "disposition_release": {
+            "repo": "open-athena/native-fixture",
+            "revision": "b" * 40,
+            "converted_rows": 1,
+            "input_rows": 1,
+            "rejections": {},
+            "converter_identity": "fixture-converter",
+            "grading_environment": {
+                "assessed_tasks": 1,
+                "required_counts": {"shared": 1},
+                "declared_counts": {"shared": 1},
+                "status_counts": {"matched": 1},
+                "reason_counts": {"Fixture workspace grading": 1},
+            },
+        },
+    }
     release = entry["disposition_release"]
     release.pop("daytona_measurement", None)
     ledger = tmp_path / "ledger.json"
     monkeypatch.setattr(native_releases, "LEDGER", ledger)
+    monkeypatch.setattr(native_releases, "read_registry_json", lambda path: json.loads(path.read_text()))
     ledger.write_text(json.dumps({"entries": [entry]}))
     assert native_releases.sources() == []
 
@@ -212,8 +240,9 @@ def test_native_registration_requires_actor_receipt_for_its_private_pin(source_i
     measurement["dataset_revision"] = release["revision"]
     ledger.write_text(json.dumps({"entries": [entry]}))
     (source,) = native_releases.sources()
-    receipts = read_dedup_receipts(Path(__file__).parents[1] / "datasets/within_source_dedup.json")
-    source = bind_within_source_dedup(source, receipts[source.info.id])
+    source = bind_within_source_dedup(
+        source, deduplication_evidence(source.dataset.name, source.dataset.revision, source.version)
+    )
     declaration = source.declaration
     assert declaration.id == source_id
     assert declaration.current_release.repo == release["repo"]

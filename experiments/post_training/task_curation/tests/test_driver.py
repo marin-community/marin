@@ -202,6 +202,9 @@ def test_gvisor_image_backend_requires_an_in_cluster_driver(tmp_path, catalog, m
 
 
 def test_quick_cli_plans_then_converts_once_in_request_order(tmp_path, monkeypatch):
+    declared = {source.name: source for source in skyrl_math.sources()}
+    sources = {name: source_with_input_evidence(declared[name]) for name in ("math500", "aime24")}
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: sources)
     monkeypatch.delenv("GLM_BULK_TOKEN", raising=False)
     output, cache = tmp_path / "output", tmp_path / "downloads"
     options = {

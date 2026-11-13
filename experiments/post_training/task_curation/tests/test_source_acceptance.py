@@ -84,6 +84,7 @@ def test_unqualified_agentic_pipeline_stays_visible_but_cannot_be_selected(monke
     assert source.declaration.status == "Not selectable"
 
 
+@pytest.mark.data_integration
 def test_existing_internal_blend_selection_does_not_require_new_audit_evidence(monkeypatch):
     source = next(source for source in all_sources().values() if source.is_grandfathered_blend)
     source_id = source.info.id
@@ -94,6 +95,7 @@ def test_existing_internal_blend_selection_does_not_require_new_audit_evidence(m
     assert source.declaration.daytona_safety is None
 
 
+@pytest.mark.data_integration
 def test_verified_retained_legacy_subset_inherits_admission_but_not_daytona_exemption(monkeypatch):
     source = next(
         source
@@ -109,6 +111,7 @@ def test_verified_retained_legacy_subset_inherits_admission_but_not_daytona_exem
 
 
 @pytest.mark.parametrize("missing", ["verified_pin", "private_receipt", "fresh_actor"])
+@pytest.mark.data_integration
 def test_retained_legacy_admission_cannot_bypass_pin_privacy_or_fresh_actor_gates(monkeypatch, missing):
     source = next(
         source

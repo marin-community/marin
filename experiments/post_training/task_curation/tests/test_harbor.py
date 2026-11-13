@@ -338,6 +338,7 @@ def test_harbor_emitted_wrapper_grades_text_and_private_resources(
         assert verdict["reward"] == expected
 
 
+@pytest.mark.data_integration
 def test_harbor_cli_joins_registry_metadata_and_accounts_for_unsupported_rows(normalized_row, tmp_path) -> None:
     row, converted = normalized_row
     source = all_sources()["TaskTrove:" + row["source_row"].split("/", 1)[0]]
