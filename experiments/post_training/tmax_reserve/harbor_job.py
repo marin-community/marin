@@ -54,6 +54,10 @@ def sandbox_seconds(jobs_dir: Path) -> float:
     return seconds
 
 
+# Characters of a failed snapshots.py run's stderr kept in the raised error.
+SNAPSHOT_STDERR_TAIL = 8000
+
+
 def snapshot_command(command: str, *arguments: str, env: Mapping[str, str]) -> Any:
     """Run one ``snapshots.py`` command in the vendored Harbor runtime and return its JSON output."""
     result = subprocess.run(
@@ -62,8 +66,11 @@ def snapshot_command(command: str, *arguments: str, env: Mapping[str, str]) -> A
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
-        check=True,
     )
+    if result.returncode:
+        raise RuntimeError(
+            f"snapshots.py {command} exited {result.returncode}:\n{result.stderr[-SNAPSHOT_STDERR_TAIL:]}"
+        )
     return json.loads(result.stdout.strip().splitlines()[-1])
 
 
