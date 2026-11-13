@@ -1329,6 +1329,42 @@ this exclusion does not establish an oracle score of zero. Unrecognized
 infrastructure failures remain unscored after the retry budget, while other
 population tasks continue. The summary counts exclusions by typed reason.
 
+#### Targeted requalification after an approved harness change
+
+An explicit source-specific decision may replace a fresh full-population pass with
+a targeted pass. Record that decision and the exact old/new payload and backend
+commits. Re-run every task without a clean prior oracle pass, including source
+environment exclusions, resource failures and unscored or hung tasks. Count a hung
+task once within the unscored set.
+
+Also re-run every prior pass whose verdict the actual trial-payload change could
+affect. Derive that set mechanically from frozen task evidence and the code delta;
+report the selection rule, coverage limitations, count and ETA before dispatch.
+The conservative static criterion includes explicit subprocess/interpreter APIs,
+pytester, xdist or virtualenv use, changed-builtin access, and unresolved local
+helper or dynamic code paths. A complete trace of every third-party dependency is
+not required; record that limitation in the release notes.
+A host-only collection change does not invalidate a trial. For example, restoring
+source dependency sites in an ordinary child interpreter concerns tasks whose tests
+invoke such an interpreter, directly or through product/helper code. Missing
+evidence of a subprocess is not proof that none ran. Include unresolved impact in
+the targeted set rather than classifying it as unaffected.
+
+Carry an unaffected pass only with its original TaskSpec, native payload, execution
+requirements and production oracle receipt. Do not attach an old verdict to a
+changed native checksum. Preserve both versions' receipts and an explicit per-task
+selection/lineage manifest; assemble the release from carried original tasks and
+newly passing targeted tasks. Keep unscored tasks pending, separately from source
+faults. Apply the final deduplication, lexical checks and SAMPLE/FULL oversight to
+that exact release union before publishing or rebinding its source pin.
+
+For SWE-rebench v14, the user decision of 2026-11-13 supersedes the earlier fresh
+full-pass convergence instruction: the baseline targeted set is all 1,567 v13
+nonpasses, plus mechanically affected clean passes. The original 5,474-task scope
+and the v13 history remain preserved. Report the breakdown before dispatch if
+more than half of the 3,907 clean passes meet the impact rule. The final targeted count belongs in its
+immutable selection manifest, not a generic policy constant.
+
 #### Replaying our infrastructure failures
 
 A backend failure is pending evidence, not a source negative. Before replay,
