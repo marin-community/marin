@@ -674,6 +674,8 @@ the grading session validates required plugins after loading the frozen baseline
 Conftest plugin imports keep pytest's normal test-path handling.
 The `-I -S` launcher restores standard `site` builtins such as `help` after
 adding dependency sites and before importing `sitecustomize`.
+Product subprocesses launched through `sys.executable` also load the source
+interpreter's live dependency sites from a protected startup-path file.
 The runner disables live plugin autoload
 and clears the test environment,
 including PYTHONPATH, PYTEST_ADDOPTS, LD_PRELOAD and user-site loading. Verifyit
@@ -1270,7 +1272,9 @@ Calibration runs inside the full-population oracle filter. Tasks with declared
 limits are validated at exactly those limits. For a task without declared limits,
 stage a new package at 1 CPU, 2 GiB memory, 2 GiB disk, a five-minute agent
 timeout and a one-minute verifier timeout. Preserve any limits already explicit
-in the native package; calibrate only missing dimensions. After a failed trial, double only the
+in the native package; calibrate only missing dimensions. Existing native TOML
+literals remain unchanged; only missing keys are inserted. Added native settings
+still require an exact content-review payload comparison before cache reuse. After a failed trial, double only the
 dimension identified by its failure: memory for an explicit OOM kill, disk for
 ENOSPC, agent timeout for an agent timeout, or verifier timeout for a verifier
 timeout. Also double CPU on an agent timeout when measured CPU use reaches 90%

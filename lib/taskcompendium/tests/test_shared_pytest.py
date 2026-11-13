@@ -53,6 +53,14 @@ def shared_runtime(request):
         (workspace / "test_case.py").write_text(
             "import candidate, dependency\ndef test_value(): assert candidate.VALUE + dependency.VALUE == 1\n"
         )
+        if request.param == "child-interpreter":
+            (workspace / "test_case.py").write_text(
+                "import candidate, subprocess, sys\n"
+                "def test_value():\n"
+                "    value = subprocess.check_output([sys.executable, '-c', "
+                "'import dependency; print(dependency.VALUE)'], text=True)\n"
+                "    assert candidate.VALUE + int(value) == 1\n"
+            )
         test_path = "test_case.py"
         if request.param in {"entrypoints", "entrypoint-block", "entrypoint-required"}:
             blocked = request.param == "entrypoint-block"
@@ -334,6 +342,18 @@ def test_shared_grading_sees_agent_dependency_changes_and_records_diff(shared_ru
     changes = json.loads((reports / "site-packages-diff.json").read_text())
     assert str(runtime.site / "dependency.py") in changes
     assert json.loads((reports / "startup-hooks-diff.json").read_text()) == {}
+
+
+@pytest.mark.parametrize("shared_runtime", ["child-interpreter"], indirect=True)
+def test_shared_grading_product_subprocess_sees_live_source_dependencies(shared_runtime):
+    runtime = shared_runtime
+    assert runtime.grade()["reward"] == 0
+    (runtime.site / "dependency.py").write_text("VALUE = 1\n")
+    verdict = runtime.grade()
+    assert verdict["status"] == "scored", verdict
+    assert verdict["reward"] == 1, verdict
+    changes = json.loads((Path(runtime.contract.report_directory) / "site-packages-diff.json").read_text())
+    assert str(runtime.site / "dependency.py") in changes
 
 
 def test_shared_controller_restores_contract_paths_and_preserves_other_files(shared_runtime):

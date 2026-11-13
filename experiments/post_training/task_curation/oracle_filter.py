@@ -541,11 +541,11 @@ def calibrated_task(
         if declared is None:
             document = tomlkit.parse((package / "task.toml").read_text())
             for name in ("cpus", "memory_mb", "storage_mb"):
-                document.setdefault("environment", {})[name] = shape.model_dump()[name]
+                document.setdefault("environment", {}).setdefault(name, shape.model_dump()[name])
                 if "environment" in document.get("verifier", {}):
                     document["verifier"]["environment"].setdefault(name, shape.model_dump()[name])
             for phase in ("agent", "verifier"):
-                document.setdefault(phase, {})["timeout_sec"] = shape.model_dump()[f"{phase}_timeout_sec"]
+                document.setdefault(phase, {}).setdefault("timeout_sec", shape.model_dump()[f"{phase}_timeout_sec"])
             (package / "task.toml").write_text(tomlkit.dumps(document))
         config = {
             "task": {"path": str(package)},
