@@ -3,7 +3,6 @@
 import asyncio
 import hashlib
 import json
-import math
 import time
 from dataclasses import asdict
 from uuid import uuid4
@@ -13,6 +12,7 @@ from daytona import AsyncDaytona, CreateSnapshotParams, DaytonaConfig, DaytonaNo
 from daytona_api_client_async import SnapshotState
 from loguru import logger
 from shellbox.backends.daytona.leases import SnapshotLease
+from shellbox.backends.daytona.snapshot import snapshot_resources
 from shellbox.image import RegistryImage
 from shellbox.machine import MachineSpec
 
@@ -30,11 +30,11 @@ class DaytonaSnapshotPool:
     async def acquire(self, spec: MachineSpec, token: str) -> str:
         if not isinstance(spec.source, RegistryImage):
             raise ValueError("Snapshot pool accepts registry images only")
-        resources = Resources(
-            cpu=spec.cpus,
-            memory=math.ceil(spec.memory_mb / 1024) if spec.memory_mb is not None else None,
-            disk=math.ceil(spec.storage_mb / 1024) if spec.storage_mb is not None else None,
-            gpu=spec.gpus or None,
+        resources = snapshot_resources(
+            cpus=spec.cpus,
+            memory_mb=spec.memory_mb,
+            storage_mb=spec.storage_mb,
+            gpus=spec.gpus,
         )
         source = (spec.source.reference, resources)
         identity = hashlib.sha256(json.dumps((spec.source.reference, asdict(resources)), sort_keys=True).encode()).hexdigest()

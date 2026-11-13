@@ -10,7 +10,7 @@ from marin.rl.skyrl import SkyRLRun
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from vendor.skyrl.marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME
+from vendor.skyrl.marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, trailing_validation_ema
 
 VALIDATION_EMA_WINDOW = 5
 VALIDATION_EMA_ALPHA = 2 / (VALIDATION_EMA_WINDOW + 1)
@@ -30,17 +30,16 @@ def validate_selection_receipts(best: dict, history: list[dict], selected_step: 
         raise ValueError("Duplicate validation steps")
     scores = {}
     interval = best.get("evaluation_interval", 1)
-    weights = [(1 - VALIDATION_EMA_ALPHA) ** age for age in reversed(range(VALIDATION_EMA_WINDOW))]
     for step in sorted(rows):
-        window = [rows.get(index) for index in range(step - (VALIDATION_EMA_WINDOW - 1) * interval, step + 1, interval)]
-        if step < VALIDATION_EMA_WINDOW * interval or step % interval or any(row is None for row in window):
+        if step < VALIDATION_EMA_WINDOW * interval or step % interval:
             continue
+        score = trailing_validation_ema(history, step, VALIDATION_EMA_WINDOW, interval=interval)
+        if score is None:
+            continue
+        window = [rows[index] for index in range(step - (VALIDATION_EMA_WINDOW - 1) * interval, step + 1, interval)]
         if any(row["attempted"] != expected or row["scored"] != expected for row in window):
             raise ValueError("Validation cohort coverage changed")
-        rewards = [row["reward"] for row in window]
-        if not all(math.isfinite(value) and 0 <= value <= 1 for value in rewards):
-            raise ValueError("Invalid normalized validation reward")
-        scores[step] = sum(value * weight for value, weight in zip(rewards, weights, strict=True)) / sum(weights)
+        scores[step] = score
     if selected_step not in scores or not math.isclose(scores[selected_step], best["accuracy"], abs_tol=1e-12):
         raise ValueError("Selection score does not match its validation window")
     winner = max(scores, key=lambda step: (scores[step], -step))

@@ -1504,10 +1504,6 @@ def _linear_inference_tensor(value: jax.Array) -> jax.Array:
     return jnp.swapaxes(value, -1, -2)
 
 
-def _unstacked_blocks(model: Transformer) -> tuple[Block, ...]:
-    return tuple(model.stacked_blocks.unstacked())
-
-
 def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) -> dict[str, jax.Array]:
     tensors: dict[str, jax.Array] = {
         "model.embed_tokens.weight": model.token_embed,
@@ -1520,7 +1516,7 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
         "lm_head.weight": _linear_inference_tensor(model.output_proj),
     }
 
-    for layer_index, block in enumerate(_unstacked_blocks(model)):
+    for layer_index, block in enumerate(model.stacked_blocks.unstacked()):
         layer_prefix = f"model.layers.{layer_index}"
         tensors.update(
             {
