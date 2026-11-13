@@ -33,7 +33,6 @@ from experiments.post_training.task_curation.judges import (
     JUDGE_TIERS,
     LocalJudgeEndpoint,
     LocalJudgeModel,
-    PinnedLocalJudgeEndpoint,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,11 +97,11 @@ class ReadyChatReviewer:
         return self._reviewer(current).review(tasks, rubric, originals=originals, cached=cached)
 
 
-def _local_endpoint(model_config: Path, context_window_tokens: int) -> LocalJudgeEndpoint:
+def _local_endpoint(model_config: Path, model: LocalJudgeModel) -> LocalJudgeEndpoint:
     return LocalJudgeEndpoint(
         tier=JudgeTier.HEAVY,
         model_config=model_config,
-        context_window_tokens=context_window_tokens,
+        model=model,
         accelerator=AcceleratorChoice(Platform.GPU, gpu_type="GB200", gpu_count=4, region=ANY_REGION),
         priority=job_pb2.PRIORITY_BAND_BATCH,
         env_vars={"MARIN_TEMP_PREFIX": "s3://marin-us-east-08a"},
@@ -126,7 +125,7 @@ def local_reviewer(version: ReviewerVersion) -> ReviewerSpec:
             tier=JudgeTier.HEAVY,
             model=pin.api_model,
             model_revision=pin.model_revision,
-            endpoint=PinnedLocalJudgeEndpoint(_local_endpoint(V3_MODEL_CONFIG, pin.context_window_tokens), pin),
+            endpoint=_local_endpoint(V3_MODEL_CONFIG, pin),
             precision="native-fp8-e4m3;kv-cache-fp8-e4m3",
             temperature=0.7,
             top_p=0.95,
@@ -145,10 +144,16 @@ def local_reviewer(version: ReviewerVersion) -> ReviewerSpec:
         raise ValueError(f"Unknown FULL-QC reviewer version: {version}")
     definition = JUDGE_TIERS[JudgeTier.HEAVY]
     assert definition.qa_reviewer is not None and definition.model_revision is not None
+    pin = LocalJudgeModel(
+        definition.model_identity,
+        definition.model_revision,
+        definition.spec.model,
+        definition.context_window_tokens,
+    )
     return replace(
         definition.qa_reviewer,
         model_revision=definition.model_revision,
-        endpoint=_local_endpoint(MODEL_CONFIG, definition.context_window_tokens),
+        endpoint=_local_endpoint(MODEL_CONFIG, pin),
         precision="native-fp8-e4m3;kv-cache-fp8-e4m3",
     )
 
@@ -177,7 +182,7 @@ def main() -> None:
         return
     campaign_path = StoragePath(args.campaign_output) / "attempts" / uuid4().hex
     endpoint = spec.endpoint
-    assert isinstance(endpoint, (LocalJudgeEndpoint, PinnedLocalJudgeEndpoint))
+    assert isinstance(endpoint, LocalJudgeEndpoint)
     with endpoint.serve() as session:
         reviewer = ReadyChatReviewer(
             session,

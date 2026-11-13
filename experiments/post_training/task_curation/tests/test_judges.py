@@ -20,6 +20,7 @@ from experiments.post_training.task_curation.judges import (
     HostedJudgeEndpoint,
     JudgeTier,
     LocalJudgeEndpoint,
+    LocalJudgeModel,
     RelayJudgeEndpoint,
 )
 from experiments.post_training.task_curation.tests.review_server import JudgeReply
@@ -129,6 +130,7 @@ def test_local_endpoint_releases_inference_after_identity_or_grading_failure(
     review_server, monkeypatch, tmp_path, advertised_model, context_window
 ):
     definition = JUDGE_TIERS[JudgeTier.MEDIUM]
+    assert definition.model_revision
     model_yaml = tmp_path / "model.yaml"
     model_yaml.write_text(
         f"name: fixture\nlocation: {definition.model_identity}\nrevision: {definition.model_revision}\n"
@@ -167,7 +169,9 @@ def test_local_endpoint_releases_inference_after_identity_or_grading_failure(
     endpoint: JudgeEndpoint = LocalJudgeEndpoint(
         tier=JudgeTier.MEDIUM,
         model_config=Path(model_yaml),
-        context_window_tokens=context_window,
+        model=LocalJudgeModel(
+            definition.model_identity, definition.model_revision, definition.spec.model, context_window
+        ),
         accelerator=AcceleratorChoice(Platform.GPU, gpu_type="H100", gpu_count=8),
         priority=0,
     )
