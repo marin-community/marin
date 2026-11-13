@@ -268,6 +268,8 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
     if canonical:
         serialized = task.model_dump_json()
         row = {"path": task.id, "task_spec": serialized, "task_sha256": hashlib.sha256(serialized.encode()).hexdigest()}
+        if task_spec_package:
+            row["runtime"] = json.dumps(envelope["runtime"])
     cohort = tmp_path / "tasks.parquet"
     pq.write_table(pa.Table.from_pylist([row]), cohort)
     native = tmp_path / "native" / "task"
@@ -372,5 +374,7 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
         else:
             retained = TaskSpec.model_validate(json.loads(retained_row["lowered_task_spec"])["task"])
         assert retained.execution_requirements.memory_mb == 4096
-        assert require_oracle_filter(retained, receipt, None if canonical else envelope["runtime"])
+        assert require_oracle_filter(
+            retained, receipt, None if canonical and not task_spec_package else envelope["runtime"]
+        )
         assert len(entry.calibration.attempts) == 2

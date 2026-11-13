@@ -248,7 +248,8 @@ class Trial(ABC):
     ) -> "Trial":
         task = await cls._load_task(config)
         if task.paths.task_spec_path.is_file():
-            from harbor.trial.taskcompendium import TaskSpecTrial
+            # TaskSpec execution requires the optional taskcompendium extra.
+            from harbor.trial.taskcompendium import TaskSpecTrial  # noqa: PLC0415
 
             trial: Trial = TaskSpecTrial(
                 config,

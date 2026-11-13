@@ -190,7 +190,10 @@ def row_task(row: dict) -> TaskSpec | None:
 
 
 def row_runtime_hash(row: dict) -> str | None:
-    return canonical_sha256(json.loads(row["lowered_task_spec"])["runtime"]) if "lowered_task_spec" in row else None
+    if "lowered_task_spec" in row:
+        return canonical_sha256(json.loads(row["lowered_task_spec"])["runtime"])
+    runtime = row.get("runtime")
+    return canonical_sha256(json.loads(runtime)) if runtime is not None else None
 
 
 def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]]:
