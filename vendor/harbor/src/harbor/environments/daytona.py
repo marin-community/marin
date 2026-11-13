@@ -127,12 +127,11 @@ class DaytonaEnvironment(BaseEnvironment):
             client_factory = (
                 connection.client_factory() if connection is not None else None
             )
-        self.provider_wait_policy = ProviderWaitPolicy.JOB
         self.factory = DaytonaMachineFactory(
             client_factory,
             ttl_minutes=ttl_minutes,
             create_timeout=create_timeout,
-            provider_wait_policy=self.provider_wait_policy,
+            provider_wait_policy=ProviderWaitPolicy.JOB,
             network_policy=policy,
         )
         self.model_endpoint, self.model_name = model_endpoint, model_name
@@ -286,11 +285,9 @@ class DaytonaEnvironment(BaseEnvironment):
         )
 
     async def exec_control(self, command: str, *, timeout_sec: int | None = None, user: str | int | None = None, cwd: str | None = None) -> ExecResult:
-        if self.provider_wait_policy is ProviderWaitPolicy.PHASE:
-            return await super().exec_control(command, timeout_sec=timeout_sec, user=user, cwd=cwd)
         return await retry_provider_call(
             "sandbox.control_command", partial(self.exec, command, timeout_sec=PROVIDER_REQUEST_TIMEOUT, user=user, cwd=cwd),
-            wait_policy=self.provider_wait_policy,
+            wait_policy=ProviderWaitPolicy.JOB,
         )
 
     async def upload_file(self, source_path: Path | str, target_path: str) -> None:

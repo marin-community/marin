@@ -535,9 +535,11 @@ class DaytonaMachine:
         try:
             await asyncio.shield(self._closing)
         except asyncio.CancelledError as error:
+            cancel_provider_waits()
+            self._closing.cancel()
             try:
-                await finish_owned(self._closing)
-            except Exception as cleanup_error:
+                await finish_owned(self._closing, timeout=INTERRUPT_TIMEOUT)
+            except BaseException as cleanup_error:
                 error.add_note(f"Daytona cleanup failed ({type(cleanup_error).__name__})")
             raise
 
@@ -547,6 +549,9 @@ class DaytonaMachine:
             results = await asyncio.gather(
                 *(session.close() for session in tuple(self._sessions)), return_exceptions=True
             )
+        except asyncio.CancelledError:
+            cancel_provider_waits()
+            raise
         finally:
             await self.resources.aclose()
         for result in results:

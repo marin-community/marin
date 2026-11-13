@@ -1705,6 +1705,75 @@ def test_daytona_job_wait_recovers_controls_without_replaying_source(tmp_path, m
     asyncio.run(scenario())
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux process and setsid contract")
+@pytest.mark.parametrize("failure", ["transient", "stalled_delete"])
+def test_daytona_job_wait_close_cancellation_has_wall_clock_cleanup_bound(monkeypatch, failure):
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        now = loop.time
+        offset = [0.0]
+        monkeypatch.setattr(loop, "time", lambda: now() + offset[0])
+        entered = asyncio.Event()
+        retrying = asyncio.Event()
+        interrupted = asyncio.Event()
+        release = asyncio.Event()
+        closed = asyncio.Event()
+
+        async def backoff(delay):
+            retrying.set()
+            await release.wait()
+
+        monkeypatch.setattr("shellbox.backends.daytona.provider.sleep", backoff)
+
+        class Client(LocalDaytona):
+            async def delete(self, sandbox):
+                entered.set()
+                if failure == "transient" and not release.is_set():
+                    raise DaytonaError("Provider deletion unavailable", status_code=503)
+                while not release.is_set():
+                    try:
+                        await release.wait()
+                    except asyncio.CancelledError:
+                        # Model an SDK request that does not finish when cancelled.
+                        interrupted.set()
+                await super().delete(sandbox)
+
+            async def __aexit__(self, *args):
+                await super().__aexit__(*args)
+                closed.set()
+
+        client = Client()
+        machine = await DaytonaMachineFactory(lambda: client, provider_wait_policy=ProviderWaitPolicy.JOB).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"))
+        )
+        pending = asyncio.create_task(machine.close())
+        await (retrying.wait() if failure == "transient" else entered.wait())
+        pending.cancel("shutdown requested")
+        try:
+            if failure == "stalled_delete":
+                # A plain asyncio.wait is the watchdog; active phase clocks cannot pause it.
+                interruption = asyncio.create_task(interrupted.wait())
+                done, _ = await asyncio.wait({interruption}, timeout=1)
+                if done:
+                    pending.cancel("shutdown repeated")
+                    offset[0] += 10
+                else:
+                    interruption.cancel()
+                    await asyncio.gather(interruption, return_exceptions=True)
+            done, _ = await asyncio.wait({pending}, timeout=1)
+            completed_before_release = bool(done)
+        finally:
+            # Release the fake service even on the old backend, so a failed regression cannot hang pytest.
+            release.set()
+            with pytest.raises(asyncio.CancelledError, match="shutdown requested"):
+                await pending
+            await asyncio.wait_for(closed.wait(), timeout=1)
+        assert completed_before_release
+        assert client.closed
+
+    asyncio.run(scenario())
+
+
 def test_daytona_job_wait_preserves_external_cancellation_when_acquisition_cleanup_fails():
     async def scenario():
         entered = asyncio.Event()
