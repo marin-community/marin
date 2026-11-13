@@ -12,6 +12,7 @@ import ast
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -119,6 +120,54 @@ def declared_plugins(reference: Path) -> list[str]:
     return sorted(plugins)
 
 
+def local_plugin_paths(workspace: Path, plugins: list[str]) -> set[str]:
+    """Locate source plugins where pytest can import each reference conftest."""
+    roots = {workspace, *(path.parent for path in workspace.rglob("conftest.py"))}
+    selected = set()
+    for plugin in plugins:
+        for base in roots:
+            module = base.joinpath(*plugin.split("."))
+            files = module.rglob("*") if module.is_dir() else (module.with_suffix(".py"),)
+            for source in files:
+                if not source.is_file():
+                    continue
+                selected.add(source.relative_to(workspace).as_posix())
+                for parent in source.parents:
+                    if parent == workspace:
+                        break
+                    initializer = parent / "__init__.py"
+                    if initializer.is_file():
+                        selected.add(initializer.relative_to(workspace).as_posix())
+                    shadow = parent.with_suffix(".py")
+                    if shadow.is_file():
+                        selected.add(shadow.relative_to(workspace).as_posix())
+    return selected
+
+
+def source_pytest_config(python: str, workspace: Path, spec: dict) -> dict:
+    """Discover configuration with the task's pytest before any agent changes."""
+    probe = """import json,sys
+from _pytest.config import Config
+config=Config.fromdictargs({}, ['--noconftest',*json.loads(sys.argv[1])])
+print(json.dumps({'path':str(config.inifile) if config.inifile else None,
+ 'root':str(config.rootdir),'addopts':config.getini('addopts')}))"""
+    config = json.loads(checked([python, "-I", "-c", probe, json.dumps(spec["paths"])], cwd=workspace, timeout=60))
+    for key in ("path", "root"):
+        if config[key] is not None:
+            config[key] = Path(config[key]).relative_to(workspace.resolve()).as_posix()
+    return config
+
+
+def config_plugins(arguments: list[str]) -> set[str]:
+    plugins = set()
+    iterator = iter(arguments)
+    for argument in iterator:
+        plugin = next(iterator) if argument == "-p" else argument[2:] if argument.startswith("-p") else ""
+        if plugin and not plugin.startswith("no:"):
+            plugins.add(plugin)
+    return plugins
+
+
 def remove_path(path: Path) -> None:
     if path.is_symlink() or path.is_file():
         path.unlink()
@@ -171,61 +220,9 @@ def stop_agent_processes(uid: int) -> None:
         time.sleep(0.01)
 
 
-def bootstrap(input_path: Path) -> None:
-    payload = json.loads(input_path.read_text())
-    contract, spec = payload["contract"], payload["spec"]
-    root, workspace = Path(contract["protected_root"]), Path(contract["workspace"])
-    if root.exists():
-        raise FileExistsError(f"Shared controller already bootstrapped: {root}")
-    root.mkdir(mode=0o750, parents=True)
-    tests = root / "tests"
-    tests.mkdir()
-    for name, content in payload["test_files"].items():
-        target = tests / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(bytes.fromhex(content))
-    write_json(root / "contract.json", contract)
-    shutil.copy2(__file__, contract["harness"])
-    if hashlib.sha256(Path(contract["harness"]).read_bytes()).hexdigest() != contract["harness_sha256"]:
-        raise ValueError("Published harness hash differs from installed controller")
-    reference_digest = hashlib.sha256(json.dumps(payload["test_files"], sort_keys=True).encode()).hexdigest()
-    if reference_digest != contract["reference_sha256"]:
-        raise ValueError("Published test reference differs from bootstrap payload")
-
-    # Capture the agent-visible test tree before applying the source's trusted test patch.
-    original = {name: (workspace / name).read_bytes() for name in selected_tests(workspace, contract, tests, spec)}
-    if spec.get("setup"):
-        environment = {**clean_environment(), "VERIFYIT_WORKSPACE": str(workspace), "VERIFYIT_TESTS_DIR": str(tests)}
-        checked(
-            ["bash", "-euo", "pipefail", "-c", spec["setup"]], cwd=workspace, timeout=spec["timeout"], env=environment
-        )
-    reference = Path(contract["reference_directory"])
-    reference.mkdir()
-    paths = selected_tests(workspace, contract, tests, spec)
-    for name in paths:
-        target = reference / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(workspace / name, target)
-    write_json(root / "reference-paths.json", paths)
-    plugins = sorted(set(contract["pinned_plugins"]) | set(declared_plugins(reference)))
-    plugin_files = {}
-    for plugin in plugins:
-        module = workspace.joinpath(*plugin.split("."))
-        selected = list(module.rglob("*")) if module.is_dir() else [module.with_suffix(".py")]
-        selected.extend(parent / "__init__.py" for parent in module.parents if parent.is_relative_to(workspace))
-        for source in selected:
-            if source.is_file():
-                plugin_files[source.relative_to(workspace).as_posix()] = source.read_bytes()
-    for name in paths:
-        target = workspace / name
-        remove_path(target)
-        if name in original:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(original[name])
-
-    python = shutil.which(spec["python"])
-    if python is None:
-        raise FileNotFoundError(f"Task interpreter is missing: {spec['python']}")
+def freeze_runner(contract: dict, python: str, plugins: list[str], source_config: dict) -> list[str]:
+    """Freeze the test interpreter and plugin dependencies; return the live dependency roots."""
+    root = Path(contract["protected_root"])
     probe = (
         "import json,sys,sysconfig;print(json.dumps({'sites':"
         "list({sysconfig.get_path('purelib'),sysconfig.get_path('platlib')}),'executable':sys.executable}))"
@@ -240,8 +237,8 @@ def bootstrap(input_path: Path) -> None:
     # Candidate dependencies remain in the live site directories recorded below.
     package_probe = """import importlib.metadata as m,json,pathlib,packaging.requirements
 distributions=list(m.distributions())
-plugins=sorted(set(__import__('sys').argv[1:]) | {
- e.value for d in distributions for e in d.entry_points if e.group=='pytest11'})
+entrypoints={e.value for d in distributions for e in d.entry_points if e.group=='pytest11'}
+plugins=sorted(set(__import__('sys').argv[1:]) | entrypoints)
 if any(':' in plugin for plugin in plugins): raise ValueError('Function-valued pytest plugins need explicit lowering')
 roots={'pytest','pytest-json-report'}
 for d in distributions:
@@ -263,26 +260,97 @@ while roots:
  for f in d.files or []:
   p=pathlib.Path(d.locate_file(f)).resolve()
   if not str(f).startswith('..') and p.is_file(): files.append([str(f),str(p)])
-print(json.dumps({'distributions':sorted(seen),'files':files,'plugins':plugins}))"""
+versions={d.metadata['Name'].lower().replace('_','-'):d.version for d in distributions}
+print(json.dumps({'distributions':sorted(seen),'files':files,'plugins':plugins,'entrypoints':sorted(entrypoints),
+ 'source_environment':{'pytest_version':versions['pytest'],
+ 'pytest_metadata_version':versions.get('pytest-metadata')}}))"""
     if contract["plugin_discovery"] != "pre_agent_entrypoints_and_conftests":
         raise ValueError("Unsupported plugin-discovery contract")
-    packages = json.loads(checked([python, "-I", "-c", package_probe, *plugins], cwd=root, timeout=60))
+    explicit_plugins = config_plugins(source_config["addopts"])
+    packages = json.loads(
+        checked([python, "-I", "-c", package_probe, *plugins, *sorted(explicit_plugins)], cwd=root, timeout=60)
+    )
     runner = Path(contract["runner_directory"])
     runner.mkdir()
     for relative, source in packages["files"]:
         destination = runner / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
-    for relative, content in plugin_files.items():
-        destination = runner / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(content)
-    Path(contract["pytest_config"]).write_text("[pytest]\naddopts =\n")
+    if source_config["path"] is None:
+        Path(contract["pytest_config"]).write_text("[pytest]\n")
     write_json(
         root / "runtime.json",
-        {"sites": info["sites"], "pinned_distributions": packages["distributions"], "plugins": packages["plugins"]},
+        {
+            "sites": info["sites"],
+            "pinned_distributions": packages["distributions"],
+            "plugins": packages["plugins"],
+            "preload_plugins": sorted(set(contract["pinned_plugins"]) | set(packages["entrypoints"]) | explicit_plugins),
+            "pytest_config": source_config,
+            "source_environment": packages["source_environment"],
+        },
     )
     write_json(root / "site-packages-baseline.json", inventory(info["sites"]))
+    return info["sites"]
+
+
+def bootstrap(input_path: Path) -> None:
+    payload = json.loads(input_path.read_text())
+    contract, spec = payload["contract"], payload["spec"]
+    root, workspace = Path(contract["protected_root"]), Path(contract["workspace"])
+    if root.exists():
+        raise FileExistsError(f"Shared controller already bootstrapped: {root}")
+    root.mkdir(mode=0o750, parents=True)
+    tests = root / "tests"
+    tests.mkdir()
+    for name, content in payload["test_files"].items():
+        target = tests / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(bytes.fromhex(content))
+    write_json(root / "contract.json", contract)
+    shutil.copy2(__file__, contract["harness"])
+    if hashlib.sha256(Path(contract["harness"]).read_bytes()).hexdigest() != contract["harness_sha256"]:
+        raise ValueError("Published harness hash differs from installed controller")
+    reference_digest = hashlib.sha256(json.dumps(payload["test_files"], sort_keys=True).encode()).hexdigest()
+    if reference_digest != contract["reference_sha256"]:
+        raise ValueError("Published test reference differs from bootstrap payload")
+
+    python = shutil.which(spec["python"])
+    if python is None:
+        raise FileNotFoundError(f"Task interpreter is missing: {spec['python']}")
+    source_config = source_pytest_config(python, workspace, spec)
+    original_paths = set(selected_tests(workspace, contract, tests, spec))
+    original_paths.update(local_plugin_paths(workspace, declared_plugins(workspace)))
+    if source_config["path"] is not None:
+        original_paths.add(source_config["path"])
+    # Capture the agent-visible tree before applying the source's trusted test patch.
+    original = {name: (workspace / name).read_bytes() for name in original_paths}
+    if spec.get("setup"):
+        environment = {**clean_environment(), "VERIFYIT_WORKSPACE": str(workspace), "VERIFYIT_TESTS_DIR": str(tests)}
+        checked(
+            ["bash", "-euo", "pipefail", "-c", spec["setup"]], cwd=workspace, timeout=spec["timeout"], env=environment
+        )
+    reference = Path(contract["reference_directory"])
+    reference.mkdir()
+    source_config = source_pytest_config(python, workspace, spec)
+    plugins = sorted(set(contract["pinned_plugins"]) | set(declared_plugins(workspace)))
+    paths = set(selected_tests(workspace, contract, tests, spec))
+    paths.update(local_plugin_paths(workspace, plugins))
+    if source_config["path"] is not None:
+        paths.add(source_config["path"])
+    paths = sorted(paths)
+    for name in paths:
+        target = reference / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(workspace / name, target)
+    write_json(root / "reference-paths.json", paths)
+    for name in paths:
+        target = workspace / name
+        remove_path(target)
+        if name in original:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(original[name])
+
+    sites = freeze_runner(contract, python, plugins, source_config)
     spec.update({"setup": "", "python": str(root / "pytest-python")})
     write_json(root / "spec.json", spec)
     (tests / "verifier.toml").write_text(payload["verifier_spec"])
@@ -297,7 +365,7 @@ print(json.dumps({'distributions':sorted(seen),'files':files,'plugins':plugins})
         os.chown(directory, 0, contract["grader_uid"])
         directory.chmod(0o750 if directory.is_dir() or os.access(directory, os.X_OK) else 0o640)
     checked(["chown", "-R", f"{contract['agent_uid']}:{contract['agent_uid']}", str(workspace)], cwd=root, timeout=120)
-    for site in info["sites"]:
+    for site in sites:
         checked(["chgrp", "-R", str(contract["agent_uid"]), site], cwd=root, timeout=120)
         checked(["chmod", "-R", "g+rwX", site], cwd=root, timeout=120)
 
@@ -315,11 +383,14 @@ def prepare_grading(contract: dict) -> None:
     reports.chmod(0o750)
     write_json(reports / contract["audit_probes"][0], inventory_diff(before, after))
     write_json(reports / contract["audit_probes"][1], inventory_diff(hook_inventory(before), hook_inventory(after)))
-    # Remove every newly introduced conftest as well as restoring every reference conftest.
+    write_json(reports / "source-environment.json", runtime["source_environment"])
     paths = json.loads((root / "reference-paths.json").read_text())
-    for path in workspace.rglob("conftest.py"):
-        if path.relative_to(workspace).as_posix() not in paths:
-            remove_path(path)
+    spec = json.loads((root / "spec.json").read_text())
+    current = set(selected_tests(workspace, contract, root / "tests", spec))
+    current.update(local_plugin_paths(workspace, runtime["plugins"]))
+    # Agent-added tests and package initializers cannot alter reference plugin loading.
+    for name in current - set(paths):
+        remove_path(workspace / name)
     for name in paths:
         restore_path(workspace, name, Path(contract["reference_directory"]) / name)
     checked(["chgrp", "-R", str(contract["grader_uid"]), str(workspace)], cwd=root, timeout=120)
@@ -342,17 +413,18 @@ def pytest_process(contract: dict, arguments: list[str]) -> None:
                 raise ValueError(f"Unexpected structured report namespace: {parent}")
             os.chown(parent, 0, contract["grader_uid"])
             parent.chmod(0o770)
+    source_config = runtime["pytest_config"]
     pinned = [
         "-c",
-        contract["pytest_config"],
+        str(workspace / source_config["path"]) if source_config["path"] is not None else contract["pytest_config"],
         "--rootdir",
-        str(workspace),
+        str(workspace / source_config["root"]),
         "--confcutdir",
         str(workspace),
         "-o",
-        "addopts=",
+        "addopts=" + shlex.join(source_config["addopts"]),
     ]
-    for plugin in runtime["plugins"]:
+    for plugin in runtime["preload_plugins"]:
         pinned.extend(["-p", plugin])
     arguments.extend(pinned)
     launch = """import sys,site,runpy

@@ -40,6 +40,8 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
         "infra",
         "source-env",
         "unmatched-env",
+        "observed-env",
+        "newer-env",
         "invalid-reward",
         "calibration-only",
         "live",
@@ -82,7 +84,9 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
             "task_sha256": canonical_sha256(task.model_dump(mode="json")),
             "runtime_sha256": canonical_sha256(envelope["runtime"]),
         }
-        for attempt in range(3 if task_id in {"infra", "source-env", "unmatched-env"} else 1):
+        for attempt in range(
+            3 if task_id in {"infra", "source-env", "unmatched-env", "observed-env", "newer-env"} else 1
+        ):
             root = tmp_path / "jobs" / f"{task_id}-{attempt}"
             (root / "verifier").mkdir(parents=True)
             (root / "agent").mkdir()
@@ -130,12 +134,21 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
                         )
                     },
                 }
-                if task_id in {"source-env", "unmatched-env"}
+                if task_id in {"source-env", "unmatched-env", "observed-env", "newer-env"}
                 else {"status": "scored", "reward": 1}
             )
             if task_id == "invalid-reward":
                 verdict["reward"] = True
             (root / "verifier/verdict.json").write_text(json.dumps(verdict))
+            if task_id in {"observed-env", "newer-env"}:
+                (root / "verifier/source-environment.json").write_text(
+                    json.dumps(
+                        {
+                            "pytest_version": "6.2.4" if task_id == "observed-env" else "7.4.0",
+                            "pytest_metadata_version": "3.1.1",
+                        }
+                    )
+                )
             if task_id != "missing-exit":
                 (root / "agent/exit-code.txt").write_text("7" if task_id == "failed-solution" else "0")
     cohort = tmp_path / "cohort.parquet"
@@ -160,9 +173,9 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
     conversion_manifest.write_text(
         json.dumps(
             {
-                "input_rows": 11,
-                "converted_rows": 9,
-                "within_source_dedup": {"raw_count": 11, "unique_count": 9, "within_source_duplicates": 2},
+                "input_rows": 13,
+                "converted_rows": 11,
+                "within_source_dedup": {"raw_count": 13, "unique_count": 11, "within_source_duplicates": 2},
                 "oracle_recipe_identity": "fixture-recipe",
             }
         )
@@ -171,7 +184,7 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
         cohort, task_map, tmp_path / "jobs", output, conversion_manifest=conversion_manifest, no_oracle_liveness=liveness
     )
     assert [row["path"] for row in pq.read_table(output).to_pylist()] == ["pass", "live"]
-    assert receipt.input_rows == 9
+    assert receipt.input_rows == 11
     assert receipt.conversion_rejections == 0
     assert receipt.tasks["invalid-reward"].exclusion_reason is OracleExclusionReason.INFRASTRUCTURE
     incompatible = receipt.tasks["source-env"]
@@ -185,6 +198,13 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
     unmatched = receipt.tasks["unmatched-env"]
     assert unmatched.exclusion_reason is OracleExclusionReason.INFRASTRUCTURE
     assert unmatched.source_environment_incompatibility is None
+    observed = receipt.tasks["observed-env"]
+    assert observed.exclusion_reason is OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER
+    assert observed.source_environment_incompatibility.signature == "pytest-before-7/pytest-metadata-stashkey"
+    assert observed.source_environment_incompatibility.source_environment_sha256 == canonical_sha256(
+        {"pytest_version": "6.2.4", "pytest_metadata_version": "3.1.1"}
+    )
+    assert receipt.tasks["newer-env"].exclusion_reason is OracleExclusionReason.INFRASTRUCTURE
     calibration_only = receipt.tasks["calibration-only"]
     assert calibration_only.calibration.passed and not calibration_only.passed
     assert calibration_only.exclusion_reason == "no_oracle_liveness_missing_or_failed"

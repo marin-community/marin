@@ -55,6 +55,14 @@ class InfrastructureRetryContext(BaseModel):
     backend_fix_revision: str
 
 
+class SourcePytestEnvironment(BaseModel):
+    """Versions frozen with the protected runner before the agent starts."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    pytest_version: str = Field(pattern=r"^\d+\.\d+")
+    pytest_metadata_version: str | None
+
+
 class OracleTrialReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     path: str
@@ -67,6 +75,7 @@ class OracleTrialReceipt(BaseModel):
     verifier_resource_usage: ResourceUsage = Field(default_factory=ResourceUsage)
     failure_log: str = ""
     infrastructure_retry: InfrastructureRetryContext | None = None
+    source_environment: SourcePytestEnvironment | None = None
 
     @model_validator(mode="after")
     def validate_result_hash(self):
@@ -327,9 +336,12 @@ class OracleExclusionReason(StrEnum):
 
 class SourceEnvironmentIncompatibility(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    signature: Literal["pytest-6.2.5/pytest-metadata-stashkey"] = "pytest-6.2.5/pytest-metadata-stashkey"
+    signature: Literal["pytest-6.2.5/pytest-metadata-stashkey", "pytest-before-7/pytest-metadata-stashkey"] = (
+        "pytest-6.2.5/pytest-metadata-stashkey"
+    )
     source_setup_sha256: str
     verdict_sha256: str
+    source_environment_sha256: str | None = None
 
 
 def source_environment_incompatibility(
@@ -341,11 +353,22 @@ def source_environment_incompatibility(
     if (
         trial.oracle_exit_code != 0
         or verdict.get("status") != "infra_error"
-        or "pip install -q pytest==6.2.5" not in source_setup.splitlines()
         or "pytest wrote no json report (exit 1)" not in error
         or "/opt/taskcompendium-shared/runner/pytest_metadata/plugin.py" not in error
         or "AttributeError: module 'pytest' has no attribute 'StashKey'" not in error
     ):
+        return None
+    observation = trial.source_environment
+    if observation is not None:
+        if int(observation.pytest_version.partition(".")[0]) >= 7 or observation.pytest_metadata_version is None:
+            return None
+        return SourceEnvironmentIncompatibility(
+            signature="pytest-before-7/pytest-metadata-stashkey",
+            source_setup_sha256=hashlib.sha256(source_setup.encode()).hexdigest(),
+            verdict_sha256=canonical_sha256(verdict),
+            source_environment_sha256=canonical_sha256(observation.model_dump(mode="json")),
+        )
+    if "pip install -q pytest==6.2.5" not in source_setup.splitlines():
         return None
     return SourceEnvironmentIncompatibility(
         source_setup_sha256=hashlib.sha256(source_setup.encode()).hexdigest(),
@@ -374,9 +397,19 @@ class OracleTaskReceipt(BaseModel):
         ):
             raise ValueError("Source environment exclusions require their measured incompatibility evidence")
         if evidence is not None:
-            verdict = self.calibration.attempts[-1].verdict
+            trial = self.calibration.attempts[-1]
+            verdict = trial.verdict
             if verdict is None or evidence.verdict_sha256 != canonical_sha256(verdict):
                 raise ValueError("Source environment evidence belongs to another verdict")
+            observation_hash = (
+                canonical_sha256(trial.source_environment.model_dump(mode="json"))
+                if trial.source_environment is not None
+                else None
+            )
+            if evidence.source_environment_sha256 != observation_hash:
+                raise ValueError("Source environment evidence differs from the frozen pre-agent versions")
+            if evidence.signature == "pytest-before-7/pytest-metadata-stashkey" and observation_hash is None:
+                raise ValueError("General pytest incompatibility evidence requires frozen pre-agent versions")
         return self
 
     @model_validator(mode="after")

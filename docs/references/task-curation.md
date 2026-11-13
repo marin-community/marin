@@ -650,17 +650,22 @@ with its pytest child running as a separate UID, 10002.
 
 Before agent access, the harness captures the task-reference tests and conftests,
 pytest and its declared plugin implementations, the test interpreter and the
-control program. On every grading launch it kills agent-UID processes, overwrites
-the reference tests, removes added conftests, and supplies a protected pytest
-configuration with an explicit root directory. The runner imports protected
-pytest/plugins first, disables plugin autoload, and clears the test environment,
+control program. It discovers the source's own pytest configuration and root
+directory using the task interpreter and preserves its configuration and addopts.
+On every grading launch it kills agent-UID processes, restores those source files,
+and removes added tests and local-plugin initializers. Installed entrypoint plugins
+load from the protected runner; source conftest plugins load through pytest's
+normal test-path handling from restored files. The runner disables plugin autoload
+and clears the test environment,
 including PYTHONPATH, PYTEST_ADDOPTS, LD_PRELOAD and user-site loading. Verifyit
 classifies missing candidate modules using its exception-provenance rules.
 
 The root controller owns the structured verdict directory. Test stdout is
 retained as diagnostic output and cannot serve as the verdict. Per-trial
 `site-packages-diff.json` and `startup-hooks-diff.json` compare dependency files
-and startup hooks to the pre-agent baseline. The contract records these audit
+and startup hooks to the pre-agent baseline. `source-environment.json` records the
+pytest and pytest-metadata versions captured with the protected runner before
+agent access. The contract records these audit
 probes and the known open `.pth` and `sitecustomize` hook gaps.
 
 This policy temporarily gives greater weight to avoiding bad RL signal from
@@ -1176,12 +1181,13 @@ failure at its declared memory or disk limit stops calibration without increasin
 the actor's allocation; a shared grader uses the task's container budget.
 
 `SOURCE_ENV_INCOMPATIBLE_WITH_GRADER` identifies a measured source-environment defect.
-The current signature requires a source setup explicitly installing
-`pytest==6.2.5`, an oracle `solve.sh` exit of zero, and a verifier startup
-failure in `pytest_metadata/plugin.py` because `pytest.StashKey` is absent.
-That plugin implementation was captured before the agent ran.
-The exclusion records the signature and hashes of the unchanged setup and raw
-verdict. Preserve the declared environment and the raw infrastructure verdict;
+The measured conflict requires an oracle `solve.sh` exit of zero and a verifier
+startup failure in `pytest_metadata/plugin.py` because `pytest.StashKey` is absent.
+New controller receipts also require protected pre-agent versions showing pytest
+before 7 and an installed pytest-metadata plugin. Historical receipts without that
+observation require the measured explicit `pytest==6.2.5` setup line.
+The exclusion records hashes of the unchanged setup, raw verdict and, when
+available, the protected version observation. Preserve the declared environment and the raw infrastructure verdict;
 this exclusion does not establish an oracle score of zero. Unrecognized
 infrastructure failures remain unscored after the retry budget, while other
 population tasks continue. The summary counts exclusions by typed reason.

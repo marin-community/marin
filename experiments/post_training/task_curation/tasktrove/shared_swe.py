@@ -94,7 +94,11 @@ def harden_shared_swe(
         + f"rm {BOOTSTRAP_INPUT}\n"
     )
     config["environment"]["setup"] = {"command": bootstrap_command, "timeout_sec": 1800.0}
-    config["environment"]["env"] = {**dict(config["environment"].get("env", {})), "HOME": "/home/taskcompendium-agent"}
+    source_user = str(config["agent"].get("user", "root"))
+    source_environment = dict(config["environment"].get("env", {}))
+    if source_user in {str(contract.agent_uid), "taskcompendium-agent"}:
+        source_environment.setdefault("HOME", "/home/taskcompendium-agent")
+    config["environment"]["env"] = source_environment
     config["agent"]["user"] = str(contract.agent_uid)
     config["verifier"]["user"] = "root"
     config["verifier"]["restart_environment"] = False
