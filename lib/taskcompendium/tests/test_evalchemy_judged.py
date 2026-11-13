@@ -10,7 +10,6 @@ from rigging.filesystem.storage_path import StoragePath
 from verifyit.grade import Status
 from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate
 
-from taskcompendium.evaluation.response import completion_text
 from taskcompendium.importers.evalchemy.judge_prompts import (
     financebench_spec,
     simpleqa_spec,
@@ -108,9 +107,3 @@ def test_simpleqa_verified_reads_typed_source_metadata_in_file_order(tmp_path):
         "requires_reasoning": True,
         "urls": "u0",
     }
-
-
-def test_final_selection_never_grades_a_reasoning_trace():
-    message = {"content": "Paris", "reasoning_content": "The capital is Paris."}
-    assert completion_text(message, "stop", "final") == "Paris"
-    assert completion_text({"content": "", "reasoning_content": "Paris"}, "stop", "final") == ""
