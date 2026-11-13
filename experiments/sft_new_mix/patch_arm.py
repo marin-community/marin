@@ -11,6 +11,7 @@ the Hugging Face layout that vLLM serves; ``catalog`` writes a patched catalog.
 """
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import logging
@@ -25,9 +26,16 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.post_training.long_loop.serving import SNOWBALL_CONTEXT_LIMIT
-from experiments.post_training.long_loop.sft import TOKENIZER_URI, read_json, restore_frozen, sft_run, validate_handoff
+from experiments.post_training.long_loop.sft import (
+    TOKENIZER_URI,
+    fresh_sft_config,
+    read_json,
+    restore_frozen,
+    validate_handoff,
+)
 from experiments.post_training.long_loop.sft_runtime.export_writer import ExportConfig, export_weights
 from experiments.post_training.long_loop.sft_runtime.model import GrugModelConfig
+from experiments.post_training.long_loop.sft_runtime.train import run_grug
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +45,8 @@ RECIPE_PATH = EXPERIMENT_DIR / "sft-262k-legacy.yaml"
 INITIALIZER = "s3://marin-us-east-02a/marin/long-loop/base/2026.11.08.8"
 CONTROL_CATALOG = "s3://marin-us-east-02a/marin/grug-sft/sft-pipe-repro/full-mixture/2026.10.24.2/cache_catalog.json"
 WANDB_PROJECT = "sft-data-patch-11188"
+PREEMPTION_RETRIES = 20
+FAILURE_RETRIES = 2
 GENERATION_CONFIG = {"bos_token_id": 128000, "eos_token_id": [128001, 128009], "pad_token_id": 128001}
 
 
@@ -57,8 +67,27 @@ def arm_recipe(catalog: str, steps: int, replicas: int, arm: str) -> dict:
 
 
 def train(arm: str, catalog: str, output: str, steps: int, replicas: int) -> None:
+    """Train one arm, resuming from its own latest checkpoint after a preemption.
+
+    The long-loop's ``sft_run`` never resumes, so one evicted node restarts the run
+    from the base. Arms here run at interactive priority beside production work,
+    so the gang gets a preemption retry budget and restores from the checkpoints
+    under ``output`` when any exist.
+    """
+    configure_coreweave_s3()
     recipe = arm_recipe(catalog, steps, replicas, arm)
-    sft_run(output=output, initializer=INITIALIZER, recipe=recipe, run_id=f"sft-patch-11188-{arm}")
+    recipe["max_retries_preemption"] = PREEMPTION_RETRIES
+    recipe["max_retries_failure"] = FAILURE_RETRIES
+    # One evicted node fails its coscheduled siblings, and each counts as a task failure.
+    recipe["max_task_failures"] = replicas * (PREEMPTION_RETRIES + FAILURE_RETRIES)
+    config = fresh_sft_config(output=output, initializer=INITIALIZER, recipe=recipe, run_id=f"sft-patch-11188-{arm}")
+    resumable = dataclasses.replace(config.trainer.trainer, load_checkpoint=None, load_checkpoint_path=None)
+    config = dataclasses.replace(config, trainer=dataclasses.replace(config.trainer, trainer=resumable))
+    (StoragePath(output) / "consumed-config.json").write_text(json.dumps(draccus.encode(config), indent=2))
+    run_grug(config)
+    metadata = read_json(prefix_join(output, f"checkpoints/step-{steps}/metadata.json"))
+    if metadata.get("step") != steps or metadata.get("is_temporary") is not False:
+        raise ValueError(f"SFT did not commit permanent step {steps}")
 
 
 def export(trained: str, step: int, output: str, source_revision: str) -> None:
