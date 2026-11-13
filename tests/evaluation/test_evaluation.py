@@ -258,7 +258,7 @@ def _patch_inference_runtime(monkeypatch: pytest.MonkeyPatch, remote) -> None:
     """Point the batch runner at a fake inference runtime with ``remote`` as its session factory."""
     monkeypatch.setattr("marin.evaluation.runner.configure_coreweave_s3", lambda: None)
     monkeypatch.setattr(
-        "marin.evaluation.runner.iris_ctx",
+        "iris.client.client.get_iris_ctx",
         lambda: SimpleNamespace(
             job_id="/orchestrator",
             client=SimpleNamespace(resolve_endpoint=lambda _name: "http://10.0.0.1:8000"),
@@ -319,7 +319,7 @@ def _evaluate_with_session(
     )
     with (
         patch("marin.evaluation.runner.configure_coreweave_s3", lambda: None),
-        patch("marin.evaluation.runner.iris_ctx", lambda: context),
+        patch("iris.client.client.get_iris_ctx", lambda: context),
         patch("marin.evaluation.runner.remote_inference", lambda _config: nullcontext(session)),
         patch(
             "marin.evaluation.runner.inference_config_for_model",
@@ -452,7 +452,7 @@ def test_evaluation_steps_refresh_direct_endpoint_between_evaluations(tmp_path, 
         lambda _config: nullcontext(_remote_session()),
     )
     monkeypatch.setattr(
-        "marin.evaluation.runner.iris_ctx",
+        "iris.client.client.get_iris_ctx",
         lambda: SimpleNamespace(
             job_id="/orchestrator",
             client=SimpleNamespace(resolve_endpoint=lambda _name: next(addresses)),
@@ -668,7 +668,7 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
     monkeypatch.setattr("marin.evaluation.inference_metrics.time", SimpleNamespace(monotonic=lambda: next(clock)))
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _row: None)
     monkeypatch.setattr(
-        "marin.evaluation.runner.iris_ctx",
+        "iris.client.client.get_iris_ctx",
         lambda: SimpleNamespace(client=SimpleNamespace(resolve_endpoint=lambda _name: "http://10.0.0.1:8000")),
     )
     speculative = SpeculativeServingConfig(

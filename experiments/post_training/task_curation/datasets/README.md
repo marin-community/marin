@@ -2,7 +2,7 @@
 
 Every RL dataset is one `RlDataSource` declared here, and every declaring module
 exports `sources()`, which [sources.py](../sources.py) collects into the catalog.
-Each source combines source information, its typed `config` and one optional
+Each source combines source information, its typed `config` and one registered
 pipeline callable. The callable owns ingestion and stages. The reusable
 `process_rows` callable accepts `CurationRecipe` for pinned row conversion,
 optional review and grader controls. See the [reference](../../../../docs/references/task-curation.md#declarations)
@@ -10,31 +10,31 @@ for declaration fields and artifact outputs.
 
 ## Adding a dataset
 
-1. Add an `RlDataSource` to the closest family module for runnable sources; for
-   inventory-only entries use [unconverted.py](unconverted.py) when the conversion is
-   unfinished or excluded, or [campaign_releases.py](campaign_releases.py) when the
-   entry records an externally published campaign release whose admission lives in the
-   release itself and must not be re-converted.
-   Set `SourceInfo`'s stable `id`, display `title`, `origin`, family and tags.
-   Leave `count=None` unless the pinned input population has been counted.
-   Keep an existing ID when updating a source so its Atlas reviews remain linked.
-2. For a runnable source, supply `config` and a callable accepting the source
-   and `PipelineOptions`. To use the common row processor, set
-   `config=CurationRecipe(...)` and `pipeline=process_rows`;
-   [skyrl/math.py](skyrl/math.py) is an example. Reuse
-   `taskcompendium.convert` helpers where they fit. Inventory-only sources use
-   `info.dataset=SourceReference(...)` and no pipeline. Use the `excluded` tag
-   when the entry is deprecated or excluded from use.
-3. If adding a module, import it and include its `sources()` results in
-   [all_sources()](../sources.py). Add a behavioral conversion test in the family
-   test module, and run it with [test_catalog.py](../tests/test_catalog.py).
-4. Run a SAMPLE or FULL campaign to publish the updated inventory. Any campaign
-   includes all source declarations; select the new source to also curate and
-   assess it. Inspect its records through `finestore.rl.curation.CurationCatalog`.
-   Commit the Python declarations. Update the dashboard with the
-   [Atlas loader](../../../../docs/references/rl-data-atlas.md#updating-atlas).
-
-See [offline parquet counts](../README.md#declaring-a-dataset) for count regeneration.
+1. Add an `RlDataSource` to the closest family module. Declare the upstream
+   `SourceOrigin`, `upstream_dataset`, `upstream_name` and any subset or variant;
+   put the internal conversion path in `build_path`. IDs and titles are generated
+   from those fields. Preserve historical aliases when changing metadata. Leave
+   `count=None` until a complete pinned population establishes its count.
+2. Supply both `config` and a pipeline accepting the source and `PipelineOptions`.
+   The common row converter uses `CurationRecipe` and `process_rows`;
+   [skyrl/math.py](skyrl/math.py) is an example. A source importing a qualified
+   pinned release uses the registered importer in
+   [campaign_releases.py](campaign_releases.py). Reuse `taskcompendium.convert`
+   helpers. Excluded or deprecated sources retain their converter and history;
+   an inventory-only declaration cannot replace conversion.
+3. Import a new module and include its `sources()` results in
+   [all_sources()](../sources.py). Register the mandatory exact-input census,
+   deduplication and lexical evidence through the
+   [receipt procedure](../../../../docs/references/task-curation.md#updating-pinned-registry-receipts).
+   Add a behavioral conversion test in the family test module.
+4. Use QUICK for conversion diagnostics and SAMPLE or FULL for qualification and
+   content QA. Oracle filtering covers every oracle-bearing task in both modes,
+   with exclusions and the final retained population recorded separately from QC.
+   Follow the [curation reference](../../../../docs/references/task-curation.md)
+   for admission gates and inspect records through `CurationCatalog`. Commit the
+   declarations and verified receipt references, then use the
+   [Atlas loader](../../../../docs/references/rl-data-atlas.md#updating-atlas)
+   for an authorized catalog update.
 
 ## Script graders
 
