@@ -10,6 +10,7 @@ from harbor.environments.capabilities import EnvironmentResourceCapabilities
 from harbor.environments.prepared import PreparedEnvironment
 from harbor.environments.resource_policies import validate_local_resources
 from harbor.models.environment_type import EnvironmentType
+from shellbox.backends.local.disk import LocalDiskPool
 from shellbox.backends.local.machine import LocalMachine, LocalMachineFactory
 
 
@@ -25,10 +26,12 @@ class LocalEnvironment(PreparedEnvironment):
         registry_authfile: str | None = None,
         signature_policy: str | None = None,
         cgroup_parent: str | None = None,
+        disk_root: str | None = None,
         ttl: float = 3600,
         **kwargs,
     ):
         self.cgroup_parent = Path(cgroup_parent) if cgroup_parent is not None else None
+        self.disk_pool = LocalDiskPool(Path(disk_root)) if disk_root is not None else None
         super().__init__(*args, **kwargs)
         self.factory = LocalMachineFactory(
             bwrap=Path(bwrap) if bwrap is not None else None,
@@ -38,6 +41,7 @@ class LocalEnvironment(PreparedEnvironment):
             policy=Path(signature_policy) if signature_policy is not None else None,
             cgroup_parent=self.cgroup_parent,
             ttl=ttl,
+            disk_pool=self.disk_pool,
         )
 
     @staticmethod
@@ -53,6 +57,7 @@ class LocalEnvironment(PreparedEnvironment):
             self.task_env_config,
             cpu_enforcement_policy=self._cpu_resource_mode,
             memory_enforcement_policy=self._memory_resource_mode,
+            disk_pool=self.disk_pool,
         )
 
     async def quiesce_agent_commands(self) -> None:

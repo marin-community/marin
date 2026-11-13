@@ -1460,36 +1460,6 @@ def test_repeated_download_preserves_existing_host_directory_permissions(
     assert (downloaded / "unrelated").read_text() == "host-owned"
 
 
-@pytest.fixture
-def executable_oci_image(oci_image):
-    busybox = shutil.which("busybox")
-    if busybox is None:
-        pytest.skip("The offline executable image requires busybox-static; the Shellbox CI lane installs it")
-    archive = io.BytesIO()
-    with tarfile.open(fileobj=archive, mode="w") as output:
-        binary = Path(busybox).read_bytes()
-        entry = tarfile.TarInfo("bin/busybox")
-        entry.mode, entry.size = 0o755, len(binary)
-        output.addfile(entry, io.BytesIO(binary))
-        for applet in ("sh", "sleep", "mkdir", "cat", "tar", "httpd", "wget", "dirname", "basename", "id"):
-            entry = tarfile.TarInfo(f"bin/{applet}")
-            entry.type, entry.linkname = tarfile.SYMTYPE, "busybox"
-            output.addfile(entry)
-        entry = tarfile.TarInfo("etc")
-        entry.type, entry.mode = tarfile.DIRTYPE, 0o755
-        output.addfile(entry)
-    return oci_image(
-        (archive.getvalue(),),
-        {
-            "Env": ["PATH=/bin", "IMAGE_VALUE=from-image"],
-            "WorkingDir": "/app",
-            "Entrypoint": ["/bin/sh", "-c"],
-            "Cmd": ['printf "%s" "$IMAGE_VALUE" >index.html; exec httpd -f -p 8123 -h .'],
-            "User": "0:0",
-        },
-    )
-
-
 @pytest.mark.parametrize(
     "entrypoint,arguments,expected",
     [

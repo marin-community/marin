@@ -1418,6 +1418,13 @@ uv run python -m experiments.post_training.task_curation.oracle_filter calibrate
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
   --output-dir /path/to/oracle-run-v2 --environment daytona --concurrency 128
 
+# LOCAL: prepared digest-pinned images via umoci and shellbox-images.json,
+# in PRIVILEGED Iris CPU workers with loop devices. This route supports only root commands.
+uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
+  --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
+  --output-dir /path/to/oracle-local-v2 --environment local --concurrency 4 \
+  --environment-kwargs '{"image_cache":"/cache/shellbox-images","cgroup_parent":"/sys/fs/cgroup/marin-liveness","disk_root":"/cache/shellbox-disks"}'
+
 # IRIS-SANDBOX: intended invocation after SANDBOX disk qualification.
 # Currently rejects declared storage; do not use for calibrated cohorts.
 uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
@@ -1441,13 +1448,60 @@ contents; commands run in separate process groups so a timeout or cancellation
 can stop a command while preserving the task filesystem for the verifier.
 Images must provide `setsid` and a readable `/proc`.
 
-Prepared-image submission requires the separate `sandbox-image-workdir` backend
+LOCAL accepts declared `storage_mb` only with an explicit `disk_root` whose
+`LocalDiskPool` host probe passes. The worker needs Linux root in the existing
+PRIVILEGED pod, `/dev/loop-control`, available loop devices, ext4 and OverlayFS,
+and `mkfs.ext4`, `mount`, `umount`, `losetup`, `findmnt` and `umoci`. The disk root
+must be root-owned mode 0700 in a private or slave mount namespace. Missing
+capabilities fail before task acquisition; an unconfigured LOCAL worker continues
+to reject storage declarations. This route requires no controller change or gVisor.
+
+Each container gets a sparse image of exactly `storage_mb * 1024 * 1024` bytes,
+formatted as ext4 with no reserved root blocks. Filesystem metadata and journal
+consume part of that capacity. Prepared image contents are shared read-only
+OverlayFS lower layers outside the budget. Copy-up, whiteouts, new root files,
+`/tmp`, workdirs, `/dev/shm`, uploads and command stdout/stderr/input spool files
+consume the container's ext4 budget. `/dev` permits device I/O but disallows
+creating regular files; `/dev/shm` binds back to ext4. Read-only package/program
+mounts remain outside the budget. Provision the worker disk for the sum of active
+limits plus image caches and host artifacts; sparse images do not reserve that
+physical capacity.
+
+This accounting differs by backend: Daytona requests whole GiB rounded up through
+its service API, whose image/filesystem accounting is provider-controlled. Docker
+passes `--storage-opt size` to a supporting storage driver for the writable layer;
+its separate tmpfs and bind/volume mounts are outside that layer. LOCAL's ext4
+filesystem includes its scratch and shared-memory directories. A failed allocation
+with ENOSPC or EDQUOT produces Shellbox `DiskLimitExceeded` with `ResourceLimit.DISK`,
+translated by Harbor to `SandboxDiskFullError` (or `AgentDiskFullError` during
+the agent phase). Calibration classifies the explicit disk signal before
+infrastructure verdicts and doubles only missing disk limits. A declared fixed
+disk limit remains fixed and records a resource exclusion when exceeded.
+Successfully using the final block or inode remains within the declared quota;
+fullness alone does not mark a sandbox terminal.
+
+A guardian owns each filesystem until task teardown unmounts OverlayFS and ext4
+and releases the autoclear loop device. Closing the owner pipe on driver death
+also invokes cleanup. Startup reclaims allocations with released leases and
+leaves live neighbours intact. Cleanup errors retain the allocation for recovery
+and fail visibly; cleanup never lazily unmounts or detaches unrelated loop devices.
+Run the bounded disk correctness tests explicitly in an authorized privileged
+CPU worker:
+
+```bash
+uv run --package marin-shellbox --group test pytest \
+  lib/shellbox/tests/test_local_disk.py -o addopts='' -m manual -q -s
+```
+
+LOCAL honors `allow_internet` and supports only root commands.
+
+Iris prepared-image submission requires the separate `sandbox-image-workdir` backend
 capability, even without declared disk. Older controllers are rejected before
 submission because they hide the image's `/app` under an empty volume. This
 capability describes image preservation and does not qualify storage enforcement.
 
-Iris SANDBOX storage enforcement is unqualified. Harbor reports no storage-limit
-capability and rejects declared `storage_mb` for this environment. The Shellbox
+Iris SANDBOX storage enforcement has not been validated. Harbor reports no
+storage-limit capability and rejects declared `storage_mb` for `iris-sandbox`. The Shellbox
 adapter also requires a direct Kubernetes controller advertising
 `sandbox-storage-limit` before submitting any declared disk; current controllers
 do not advertise it. Sandbox-profile pods cannot start on the pinned CPU pool
