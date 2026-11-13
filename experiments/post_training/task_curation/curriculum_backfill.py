@@ -7,8 +7,9 @@ import argparse
 import hashlib
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from functools import partial
+from multiprocessing import get_context
 from typing import Literal
 from uuid import uuid4
 
@@ -151,6 +152,13 @@ def prepare_source(source: FrozenCoverageSource, output_root: str) -> dict:
     return result
 
 
+def initialize_preparation_worker() -> None:
+    logging.basicConfig(level=logging.INFO)
+    configure_coreweave_s3()
+    pa.set_cpu_count(1)
+    pa.set_io_thread_count(1)
+
+
 def prepare_sources(sources: list[FrozenCoverageSource], output_root: str, workers: int) -> None:
     """Write a restartable public corpus without publishing or modifying task contracts."""
     selection_key = canonical_sha256([source.model_dump(mode="json") for source in sources])
@@ -160,7 +168,9 @@ def prepare_sources(sources: list[FrozenCoverageSource], output_root: str, worke
         if json.loads(corpus_path.read_text())["selection_key"] != selection_key:
             raise ValueError("A changed source selection requires a new output root")
         return
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    with ProcessPoolExecutor(
+        max_workers=workers, mp_context=get_context("spawn"), initializer=initialize_preparation_worker
+    ) as pool:
         results = list(pool.map(partial(prepare_source, output_root=output_root), sources))
     paths = []
     for result in results:
