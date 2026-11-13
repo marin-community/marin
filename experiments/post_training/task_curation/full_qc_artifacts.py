@@ -7,6 +7,7 @@ from typing import Literal
 
 from finestore.rl.curation import SourceQualityResult
 from marin.execution.artifact import Artifact
+from pydantic import BaseModel
 
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.retention_plan import RetentionPlan
@@ -39,3 +40,24 @@ class FullQCReview(Artifact):
     records_path: str
     records_sha256: str
     batch_receipts: list[str]
+
+
+class BatchReviewReceipt(BaseModel):
+    batch_index: int
+    path: str
+    sha256: str
+
+
+class FullQCReviewShard(Artifact):
+    inputs: FullQCInputs
+    reviewer: dict
+    worker_jobs: list[str]
+    rubric: dict
+    shard_index: int
+    shard_count: int
+    batch_offset: int
+    attempted_count: int
+    reviewed_count: int
+    first_pass_status_counts: dict[str, int]
+    status_counts: dict[str, int]
+    receipts: list[BatchReviewReceipt]

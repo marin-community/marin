@@ -6,19 +6,16 @@
 import argparse
 import json
 import logging
-from contextlib import ExitStack
 from functools import partial
 from pathlib import Path
 
 from finestore.rl.source_identity import original_source_id
-from fray.current_client import set_current_client
-from fray.local_backend import LocalClient
 from marin.execution.lazy import ArtifactStep, run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training.task_curation.lexical_artifacts import IntegrityCensus, SourceTextPopulation
-from experiments.post_training.task_curation.local import artifact_prefix
+from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from experiments.post_training.task_curation.published_census import (
     CensusConfig,
     ContractCensus,
@@ -79,10 +76,7 @@ def main() -> None:
     if any(not population.path for population in populations):
         raise ValueError("Integrity inputs require concrete population artifact paths")
     with artifact_prefix(args.artifact_root):
-        with ExitStack() as cleanup:
-            client = LocalClient()
-            cleanup.callback(client.shutdown)
-            cleanup.enter_context(set_current_client(client))
+        with local_client():
             results = run(*integrity_steps(populations, args.artifact_version), max_concurrent=2)
         args.output.write_text(json.dumps([result.model_dump(mode="json") for result in results], indent=2) + "\n")
 
