@@ -135,14 +135,16 @@ through Fray. Use a unique `IRIS_PORT_JAX` per concurrent gang. The timeout
 includes queueing, and stopping the coordinator stops its children.
 `SchedulingGated` means Kueue has not admitted the gang. See [CoreWeave](docs/coreweave.md).
 
-### Sandbox disk limits
+### Sandbox prepared-image workdirs
 
-Kubernetes composition advertises `sandbox-image-workdir` as a task capability.
-It guarantees that SANDBOX pods without explicitly staged workdir inputs preserve
-the prepared image's `/app`, without an empty workdir volume hiding it. Harbor
-requires that capability before submission even when disk is unset. It is
-independent of the unqualified storage capability described below; old controllers
-must be upgraded through a separately authorized rollout before using this route.
+The Kubernetes backend advertises `sandbox-image-workdir` as a task capability.
+SANDBOX pods without a bundle, inline workdir files, or workdir file references
+preserve the prepared image's `/app`; an empty workdir volume would hide those
+files. Explicitly staged inputs and non-sandbox jobs retain their workdir mounts.
+Harbor requires this capability before submitting prepared-image tasks. Older
+controllers need a separately authorized rollout before submitting prepared-image tasks.
+
+### Sandbox disk limits
 
 Kubernetes sandbox pod manifests set CPU and memory container limits. A nonzero
 `ResourceSpec.disk` sets the storage request and limit in exact bytes; omitting
@@ -190,11 +192,32 @@ iris attempt events /user/job/0:2
 iris task exec /user/job/0 --timeout 300 -- python -c 'import jax; print(jax.devices())'
 ```
 
-Events retain backend observations and controller decisions across attempts for
-up to 30 days, including deleted Pods. Inspect output archives before repeating
-a workload whose runtime verdict disagrees with its application result; see
-[evaluation audit](../../docs/tutorials/run-lm-evals.md#audit-an-evalchemy-run-before-its-record-appears).
-Exec buffers output, is non-interactive, and defaults to a 60-second timeout.
+`task events` is the first stop when a pod or Kubernetes Event has already been
+garbage-collected. It queries `iris.task_event` across every retained attempt in
+the task's current job incarnation in one call and shows both backend
+observations (`k8s/kueue`, `k8s/container`) and controller decisions
+(`iris/controller`) in chronological order. Events are retained for up to 30
+days. Kubernetes `DisruptionTarget` conditions are recorded as
+`k8s/disruption` events with the pod and node identity plus a snapshot of the
+node's taints, conditions, hardware/topology labels, and CoreWeave health
+annotations.
+
+For an evaluator that retries after a `Completed` container event and a later
+`PodDeleted` worker-failure verdict, inspect its durable result archive before
+rerunning or accepting the retry. The evaluator may already have written a
+complete, sealed result even though its parent lacks a canonical record. See
+[Auditing a curated run](../../docs/tutorials/run-lm-evals.md#audit-a-curated-run-before-its-record-appears)
+for the archive checks. The Iris verdict alone does not establish whether the
+application result is complete.
+
+Default timeout is 60s. Use `--timeout 300` for slow commands, `--timeout -1` for no timeout (last resort).
+
+The exec session is non-interactive and buffers output. To run a command that survives disconnect, wrap with `nohup` + `&`:
+
+```bash
+iris task exec /user/job/0 -- bash -c "nohup bash -c 'your-command > /tmp/out.log 2>&1' &"
+iris task exec /user/job/0 -- cat /tmp/out.log   # check later
+```
 
 ### Task with no logs or W&B progress
 

@@ -33,12 +33,13 @@ from finestore.rl.curation import (
     CurationCatalog,
     CurationSummary,
     CurrentCatalog,
+    GradingEnvironmentEvidence,
+    OversightLevel,
     SnapshotSource,
     SourceDeclaration,
     SourceOrigin,
     register_catalog,
 )
-from finestore.rl.source_identity import canonical_source_id
 from finestore.store import DataStore
 from marina.applets import (
     AppletServices,
@@ -59,14 +60,17 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
 
+from experiments.post_training.task_curation.catalog_identity import backend_survey_payload, canonical_backend_survey
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
-from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, prepare_preview
+from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, PRODUCTION_APP_ID, prepare_preview
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
 from infra.marina.apps.rl_data_catalog.server.quality import result
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
+from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_declarations
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
@@ -101,7 +105,11 @@ def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:
                 resource_ranges={},
                 backends={},
                 role_backend_assignments={},
-                grading_environment=None,
+                grading_environment=(
+                    source.declaration.grading_environment.model_dump(mode="json")
+                    if source.declaration.grading_environment is not None
+                    else None
+                ),
             )
             for source in catalog.sources(snapshot.snapshot_id)
         ],
@@ -149,6 +157,25 @@ def test_backend_survey_refresh_and_failed_staging_preserve_selected_map(catalog
     assert not load_surveyed_catalog(catalog, catalog_query, second, identities)["changed"]
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         assert client.get("/backends").json()["generated_at"] == second.generated_at
+
+
+def test_grading_census_survives_catalog_loader_and_backend_projection(catalog_database, catalog_query, tmp_path):
+    evidence = GradingEnvironmentEvidence(
+        assessed_tasks=3,
+        required_counts={"shared": 1, "separate": 2},
+        declared_counts={"separate": 3},
+        status_counts={"matched": 2, "mismatch": 1},
+        reason_counts={"workspace state": 1, "submitted answer": 2},
+        evidence_url="s3://fixture/grading/receipt.json",
+    )
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "graded", grading_environment=evidence)
+    catalog = CurationCatalog(root)
+    load_catalog(catalog, catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        source = client.get("/sources").json()["sources"][0]
+        assert source["grading_environment"] == evidence.model_dump(mode="json")
+        assert source["backend_capabilities"]["grading_environment"] == evidence.model_dump(mode="json")
 
 
 def test_source_fingerprint_is_stored_separately_and_failed_refresh_keeps_previous(
@@ -228,6 +255,9 @@ def publish_sample(
     source_id: str = "Marin:math",
     origin: SourceOrigin = SourceOrigin.MARIN,
     duplicates: int = 0,
+    grading_environment: GradingEnvironmentEvidence | None = None,
+    admitted_verdicts: tuple[str, str] = ("good", "unknown"),
+    oversight: OversightLevel = OversightLevel.NONE,
 ) -> None:
     declaration = SourceDeclaration(
         id=source_id,
@@ -243,6 +273,7 @@ def publish_sample(
         daytona_machine_slots=0,
         daytona_execution_failures=0,
         daytona_count_basis="Fixture tasks contain no actor environment.",
+        grading_environment=grading_environment,
         family="Marin:math",
         tags=[],
         task_count=3 - duplicates,
@@ -250,6 +281,7 @@ def publish_sample(
             update={"unique_count": 3 - duplicates, "within_source_duplicates": duplicates}
         ),
         notes="",
+        oversight=oversight,
         dataset_id="fixture",
         dataset_revision="1",
         url=None,
@@ -277,8 +309,8 @@ def publish_sample(
         register_catalog(store)
         items = []
         for task_id, cohort, verdict, has_task in (
-            ("one", "admitted", "good", True),
-            ("two", "admitted", "unknown", False),
+            ("one", "admitted", admitted_verdicts[0], True),
+            ("two", "admitted", admitted_verdicts[1], admitted_verdicts[1] != "unknown"),
             ("three", "excluded", "bad", True),
         ):
             packet = {"task": {"id": task_id, "prompt": "Null: \u0000; Unicode: π"}} if has_task else {}
@@ -705,6 +737,48 @@ def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(
         assert client.get("/archive/reviews/legacy/artifacts/nested/trace.txt").text == "saved trace"
 
 
+@pytest.mark.parametrize("verdicts, provisional", [(("good", "good"), False), (("good", "unknown"), True)])
+def test_loaded_sample_result_uses_required_review_completeness(
+    catalog_database, catalog_query, tmp_path, verdicts, provisional
+):
+    root = str(tmp_path / "sample")
+    publish_sample(root, "sample", admitted_verdicts=verdicts, oversight=OversightLevel.SAMPLE)
+    load_catalog(CurationCatalog(root), catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        source = client.get("/sources").json()["sources"][0]
+        detail = client.get("/source", params={"source_id": source["id"]}).json()
+        assert source["quality"] == "SAMPLE" and source["result"] == "GOOD"
+        assert source["result_provisional"] is detail["result_provisional"] is provisional
+        assert (
+            source["review_completeness"]
+            == detail["review_completeness"]
+            == {
+                "required": 2,
+                "reviewed": 1 if provisional else 2,
+                "coverage_complete": True,
+                "provisional": provisional,
+            }
+        )
+        # The execution scope is FULL, but the required review panel is smaller than the retained source.
+        assert source["assessment"]["scope"] == "full"
+        assert source["within_source_dedup"]["unique_count"] == 3
+
+
+def test_unchanged_catalog_refreshes_pre_completeness_load(catalog_database, catalog_query, tmp_path):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "sample", admitted_verdicts=("good", "good"), oversight=OversightLevel.SAMPLE)
+    catalog = CurationCatalog(root)
+    load_catalog(catalog, catalog_query)
+    catalog_query("UPDATE atlas_loads SET review_completeness_version=0", {})
+    catalog_query("UPDATE atlas_sources SET review_completeness=NULL", {})
+    assert load_catalog(catalog, catalog_query)["changed"] is True
+    assert load_catalog(catalog, catalog_query)["changed"] is False
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        source = client.get("/sources").json()["sources"][0]
+        assert source["review_completeness"]["required"] == source["review_completeness"]["reviewed"] == 2
+        assert source["result_provisional"] is False
+
+
 def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, catalog_query, tmp_path):
     root = str(tmp_path / "lexical-catalog")
     cases = contamination_declarations()
@@ -745,6 +819,49 @@ def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, c
         assert sources["Marin:unmeasured"]["lexical_contamination"] is None
         assert sources["Marin:unmeasured"]["issue_rate"] is None
         assert sources["Marin:eval"]["issue_rate"] == 0.0
+
+
+def test_loaded_assemblies_keep_inflight_and_uncertain_results_provisional(catalog_database, catalog_query, tmp_path):
+    root = str(tmp_path / "lexical-catalog")
+    cases = review_declarations()
+    with DataStore.open(root, writer_id="lexical") as store:
+        register_catalog(store)
+        with store.transaction() as tx:
+            tx.table(INVENTORY).extend(
+                SnapshotSource(
+                    snapshot_id="lexical",
+                    id=declaration.id,
+                    declaration=declaration,
+                    assessment_key=None,
+                    latest_attempt_key=None,
+                    latest_attempt_status="skipped",
+                    reason=None,
+                    curation=None,
+                ).model_dump(mode="json")
+                for _, declaration in cases
+            )
+            tx.table(SNAPSHOTS).add(
+                CatalogSnapshot(
+                    snapshot_id="lexical",
+                    created_at="2026-11-13T00:00:00Z",
+                    source_count=len(cases),
+                ).model_dump()
+            )
+            tx.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id="lexical").model_dump())
+    load_catalog(CurationCatalog(root), catalog_query)
+    shutil.rmtree(root)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        sources = {row["id"]: row for row in client.get("/sources").json()["sources"]}
+        for provisional, declaration in cases:
+            source = sources[declaration.id]
+            detail = client.get("/source", params={"source_id": declaration.id}).json()
+            assert source["result_provisional"] is detail["result_provisional"] is provisional
+            assert source["review_completeness"] == detail["review_completeness"]
+            assert declaration.quality_result is not None
+            assert source["review_completeness"]["reviewed"] == declaration.quality_result.reviewed
+        assert sources["Marin:sample-complete"]["quality"] == sources["Marin:sample-uncertain"]["quality"] == "SAMPLE"
+        assert sources["Marin:full-uncertain"]["quality"] == "FULL"
+        assert sources["Marin:full-inflight"]["review_completeness"]["coverage_complete"] is False
 
 
 def test_a_competing_atlas_cutover_prevents_an_older_load_from_being_selected(catalog_query, tmp_path):
@@ -895,6 +1012,35 @@ def test_source_grade_uses_sample_fractions_and_zero_output(catalog_database, ve
 def test_historical_alias_urls_keep_assessments_packets_and_sql_counts(catalog_database, catalog_query, tmp_path):
     old = "MarinSkyRL:aime24"
     current = canonical_source_id(old)
+    peer = "MarinSkyRL:math500"
+    group = {
+        "group_id": "historical-math",
+        "canonical_source_id": old,
+        "members": [
+            {"source_id": old, "overlap_with_canonical": None},
+            {"source_id": peer, "overlap_with_canonical": 0.8},
+        ],
+    }
+    duplicate_review = {
+        "similarity": {
+            "left": old,
+            "right": peer,
+            "rank_score": 0.8,
+            "instruction_similarity": 0.8,
+            "instruction_overlap": 0.8,
+            "reference_overlap": 0.8,
+            "test_overlap": 0.8,
+            "task_id_overlap": 0.8,
+            "url_overlap": 0.8,
+            "shared_lineage": False,
+        },
+        "verdict": {"label": "partial_overlap", "overlap_fraction": 0.8, "reason": "Shared math tasks"},
+        "prompt_sha256": "a" * 64,
+        "model": "fixture",
+        "completion_id": "legacy",
+        "prompt_tokens": 1,
+        "completion_tokens": 1,
+    }
     root = str(tmp_path / "catalog")
     publish_sample(root, "frozen", source_id=current, origin=SourceOrigin.HUGGINGFACEH4)
     with DataStore.open(root) as store:
@@ -945,10 +1091,30 @@ def test_historical_alias_urls_keep_assessments_packets_and_sql_counts(catalog_d
             {"old": old},
         )
         connection.execute(text("UPDATE atlas_assessments SET source_id=:old"), {"old": old})
+        connection.execute(
+            text("UPDATE atlas_sources SET duplicate_group=CAST(:duplicate_group AS JSONB)"),
+            {"duplicate_group": json.dumps(group)},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO atlas_duplicate_reviews SELECT load_id, :left, :right, CAST(:review AS JSONB) "
+                "FROM atlas_current WHERE name='latest'"
+            ),
+            {"left": old, "right": peer, "review": json.dumps(duplicate_review)},
+        )
     shutil.rmtree(root)
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         source = client.get("/sources").json()["sources"][0]
         assert source["id"] == source["backend_capabilities"]["source_id"] == current
+        assert source["duplicate_group"]["canonical_source_id"] == current
+        assert [member["source_id"] for member in source["duplicate_group"]["members"]] == [
+            current,
+            canonical_source_id(peer),
+        ]
+        duplicates = client.get("/source-duplicates").json()
+        assert duplicates["groups"] == [source["duplicate_group"]]
+        assert duplicates["reviews"][0]["similarity"]["left"] == current
+        assert duplicates["reviews"][0]["similarity"]["right"] == canonical_source_id(peer)
         for identifier in (old, current):
             report = client.get("/assessment", params={"source_id": identifier}).json()["report"]
             assert report["source_id"] == current and report["pipeline_key"] == "frozen"
@@ -961,6 +1127,48 @@ def test_historical_alias_urls_keep_assessments_packets_and_sql_counts(catalog_d
             assert detail["assessment"]["pipeline_key"] == "frozen"
             assert detail["backend_capabilities"]["basis"] == "unassessed"
             assert detail["result"] == "GOOD"
+
+    with catalog_database.connect() as connection:
+        assert connection.execute(text("SELECT duplicate_group FROM atlas_sources")).scalar_one() == group
+        assert connection.execute(text("SELECT review FROM atlas_duplicate_reviews")).scalar_one() == duplicate_review
+
+
+def test_historical_curriculum_artifacts_load_without_rewriting_inputs(catalog_database, catalog_query, tmp_path):
+    old = "MarinSkyRL:aime24"
+    current = canonical_source_id(old)
+    path = curriculum_release(tmp_path)
+    release = json.loads(path.read_text())
+    for row in release["sources"]:
+        if row["source_id"] == "Marin:a":
+            row["source_id"] = old
+    for row in release["inventory"]:
+        if row["id"] == "Marin:a":
+            row.update(id=old, origin=SourceOrigin.HUGGINGFACEH4, upstream_dataset="aime24")
+    path.write_text(json.dumps(release))
+    inputs = [path, tmp_path / "coverage.json", tmp_path / "tasks.parquet", tmp_path / "statistics.parquet"]
+    for parquet in inputs[2:]:
+        table = pq.read_table(parquet)
+        rows = table.to_pylist()
+        for row in rows:
+            if row["source_id"] == "Marin:a":
+                row["source_id"] = old
+        pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), parquet)
+    original_bytes = {file: file.read_bytes() for file in inputs}
+    loaded = load_curriculum(str(path), str(tmp_path / "coverage.json"), catalog_query)
+    assert loaded["population_tasks"] == 400
+    assert {file: file.read_bytes() for file in inputs} == original_bytes
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        for identifier in (old, current):
+            coverage = client.get("/curriculum", params={"source_id": identifier}).json()
+            assert coverage["totals"]["denominator"] == 300
+            source = next(row for row in coverage["sources"] if row["source_id"] == current)
+            assert source["alignment"]["source_id"] == current
+            tasks = client.get("/curriculum/tasks", params={"source_id": identifier, "limit": 3}).json()["tasks"]
+            assert [(row["source_id"], row["task_id"]) for row in tasks] == [
+                (current, "one"),
+                (current, "three"),
+                (current, "two"),
+            ]
 
 
 def test_historical_curriculum_alias_keeps_counts_samples_and_pagination(catalog_database, catalog_query, tmp_path):
@@ -1029,25 +1237,27 @@ def test_frozen_backend_survey_digest_survives_canonical_source_projection(tmp_p
     publish_sample(root, "frozen", source_id="HuggingFaceH4:aime24", origin=SourceOrigin.HUGGINGFACEH4)
     raw = catalog_backend_map(CurationCatalog(root)).model_dump(mode="json")
     raw["sources"][0]["source_id"] = "MarinSkyRL:aime24"
-    survey = BackendSurvey.model_validate(raw)
+    survey = canonical_backend_survey(raw)
     assert survey.sources[0].source_id == "HuggingFaceH4:aime24"
-    assert canonical_sha256(survey.identity_payload()) == canonical_sha256(raw)
+    assert canonical_sha256(backend_survey_payload(survey)) == canonical_sha256(raw)
 
 
-def test_preview_package_imports_canonical_models_without_new_shared_runtime_modules(tmp_path, monkeypatch):
+@pytest.mark.parametrize("preview", [False, True])
+def test_atlas_packages_resolve_aliases_without_repository_imports(tmp_path, monkeypatch, preview):
     checkout = Path(__file__).resolve().parents[3]
-    output = tmp_path / "preview"
-    prepare_preview(checkout, output)
+    output = checkout / "infra/marina/apps/rl_data_catalog"
+    if preview:
+        output = tmp_path / "preview"
+        prepare_preview(checkout, output)
     package = read_applet_package(package_applet(output))
-    assert package.manifest.applet_id == PREVIEW_APP_ID
+    assert package.manifest.applet_id == (PREVIEW_APP_ID if preview else PRODUCTION_APP_ID)
     original_import = builtins.__import__
 
     def old_runtime_import(name, global_namespace=None, local_namespace=None, fromlist=(), level=0):
-        if level == 0 and name in {
-            "finestore.rl.curation",
-            "finestore.rl.source_identity",
-            "taskcompendium.source_fingerprints",
-        }:
+        if level == 0 and (
+            name.startswith(("experiments.", "infra.marina.apps."))
+            or (preview and name in {"finestore.rl.curation", "taskcompendium.source_fingerprints"})
+        ):
             raise ModuleNotFoundError(name)
         return original_import(name, global_namespace, local_namespace, fromlist, level)
 

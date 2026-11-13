@@ -21,6 +21,7 @@ iris = [
 
 [project.scripts]
 shellbox-stage = "shellbox.backends.qemu.bundle:main"
+shellbox-daytona-snapshots = "shellbox.backends.daytona.snapshot_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/shellbox"]

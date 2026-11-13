@@ -5,15 +5,19 @@
 
 import asyncio
 import json
+import math
 import os
 import shlex
 import shutil
 import signal
 import stat
+import subprocess
 import sys
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,12 +30,16 @@ pytest.importorskip("daytona")
 from daytona import (
     AsyncDaytona,
     CreateSandboxFromSnapshotParams,
+    DaytonaAuthorizationError,
     DaytonaConfig,
     DaytonaConflictError,
+    DaytonaError,
     DaytonaNotFoundError,
     Resources,
 )
 from daytona_api_client_async import SnapshotState
+from rigging.timing import ExponentialBackoff
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.machine import (
     PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
     DaytonaMachine,
@@ -39,17 +47,42 @@ from shellbox.backends.daytona.machine import (
     DaytonaNetworkMode,
     DaytonaNetworkPolicy,
     _create_sandbox,
-    snapshot_identity,
+)
+from shellbox.backends.daytona.snapshot import (
+    SnapshotRequest,
+    ensure_snapshot,
+    list_snapshots,
+    purge_stale_snapshots,
+    snapshot_name,
+    snapshot_request_for_spec,
+    snapshot_resources,
 )
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.image import DockerfileSource, RegistryImage
-from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec, UnsupportedMachineSpec
+from shellbox.machine import (
+    Command,
+    DockerImage,
+    ExitReason,
+    MachineSpec,
+    UnsupportedMachineSpec,
+)
 
 
-@pytest.mark.parametrize("failure", ["rejected_post", "late_get", "prolonged_throttle", "deadline", "cancelled"])
-def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, failure):
+@pytest.mark.parametrize(
+    ("failure", "status"),
+    [
+        ("rejected_post", 429),
+        ("accepted_post", 502),
+        ("late_get", 503),
+        ("prolonged_throttle", 429),
+        ("deadline", 502),
+        ("cancelled", 429),
+    ],
+)
+def test_daytona_creation_recovers_named_sandbox_after_transient_errors(monkeypatch, failure, status):
     async def scenario():
         requests = []
+        names = []
         delays = []
         waiting = asyncio.Event()
 
@@ -59,7 +92,7 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
             if failure in {"deadline", "cancelled"}:
                 await asyncio.Future()
 
-        monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
+        monkeypatch.setattr("shellbox.backends.daytona.provider.sleep", wait)
 
         created = False
 
@@ -72,6 +105,11 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
                     pass
                 return websocket
             requests.append(request.method)
+            if request.method == "POST":
+                names.append((await request.json())["name"])
+                if failure == "accepted_post" and requests.count("POST") == 1:
+                    created = True
+                    return web.json_response({"message": "ambiguous creation"}, status=status)
             if request.method == "POST" and created:
                 return web.json_response({"message": "name already exists"}, status=409)
             if (request.method == "GET" and created and requests.count("GET") > 1) or (
@@ -107,7 +145,7 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
                     }
                 )
             return web.json_response(
-                {"message": "rate limited"}, status=429, headers={"Retry-After-sandbox-create": "17"}
+                {"message": "transient provider error"}, status=status, headers={"Retry-After-sandbox-create": "17"}
             )
 
         app = web.Application()
@@ -147,8 +185,150 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
                 else:
                     sandbox = await _create_sandbox(client, params, 60)
                     assert sandbox.id == "created-once"
-                    assert requests == ["POST", "GET", "POST", "GET"]
-                    assert len(delays) == 1 and delays[0] >= 17
+                    assert requests == (
+                        ["POST", "POST", "GET", "POST", "GET"]
+                        if failure == "accepted_post"
+                        else ["POST", "GET", "POST", "GET"]
+                    )
+                    assert len(delays) == (2 if failure == "accepted_post" else 1)
+                    assert all(0 < delay <= 120 for delay in delays)
+                    assert delays[-1] >= 17
+                assert set(names) == {"fixture"}
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", ["rejected_create", "accepted_create", "metadata", "list", "transport", "forbidden"])
+def test_daytona_snapshot_recovers_transient_http_without_duplicate_images(monkeypatch, failure):
+    async def scenario():
+        # Advance the backoff clock without real waiting.
+        monkeypatch.setattr(ExponentialBackoff, "next_interval", lambda self: 0)
+        request = SnapshotRequest(
+            RegistryImage("fixture.invalid/image@sha256:" + "0" * 64), Resources(cpu=2, memory=4, disk=10)
+        )
+        snapshots = {}
+        attempts = Counter()
+
+        def snapshot():
+            return {
+                "id": request.name,
+                "name": request.name,
+                "general": False,
+                "state": SnapshotState.ACTIVE.value,
+                "size": None,
+                "entrypoint": None,
+                "cpu": 2,
+                "gpu": 0,
+                "mem": 4,
+                "disk": 10,
+                "errorReason": None,
+                "createdAt": "2026-11-13T15:00:00Z",
+                "updatedAt": "2026-11-13T15:00:00Z",
+                "lastUsedAt": None,
+            }
+
+        async def endpoint(http):
+            operation = "create" if http.method == "POST" else "list" if http.path.endswith("/snapshots") else "get"
+            attempts[operation] += 1
+            if failure == "forbidden":
+                return web.json_response({"message": "forbidden"}, status=403)
+            if failure == "transport" and operation == "get" and attempts[operation] == 1:
+                assert http.transport is not None
+                http.transport.close()
+                return web.Response()
+            if (failure == "metadata" and operation == "get" and attempts[operation] <= 5) or (
+                failure == "list" and operation == "list" and attempts[operation] <= 5
+            ):
+                return web.Response(text="<html>Bad Gateway</html>", status=502)
+            if operation == "create":
+                name = (await http.json())["name"]
+                if failure == "rejected_create" and attempts[operation] == 1:
+                    return web.Response(text="Unavailable", status=503)
+                if name in snapshots:
+                    return web.json_response({"message": "name already exists"}, status=409)
+                snapshots[name] = snapshot()
+                if failure == "accepted_create" and attempts[operation] == 1:
+                    return web.Response(text="<html>Bad Gateway</html>", status=502)
+                return web.json_response(snapshots[name])
+            if operation == "list":
+                return web.json_response(
+                    {"items": list(snapshots.values()), "total": len(snapshots), "page": 1, "totalPages": 1}
+                )
+            name = http.path.rsplit("/", 1)[-1]
+            if name not in snapshots:
+                return web.json_response({"message": "missing"}, status=404)
+            return web.json_response(snapshots[name])
+
+        app = web.Application()
+        app.router.add_route("*", "/{path:.*}", endpoint)
+        async with TestServer(app) as server:
+            async with AsyncDaytona(
+                DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/"))
+            ) as client:
+                if failure == "forbidden":
+                    with pytest.raises(DaytonaAuthorizationError):
+                        await ensure_snapshot(client, request)
+                    assert not snapshots
+                    return
+                assert await ensure_snapshot(client, request) == request.name
+                assert [row.name for row in await list_snapshots(client)] == [request.name]
+        assert set(snapshots) == {request.name}
+        if failure == "accepted_create":
+            assert attempts["create"] == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("operation", ["prepare", "create_snapshot", "create_sandbox"])
+@pytest.mark.parametrize("status", [429, 502])
+def test_daytona_startup_retry_deadline_preserves_provider_diagnostics(operation, status):
+    async def scenario():
+        request = SnapshotRequest(RegistryImage("ubuntu:24.04"), Resources(cpu=1, memory=1, disk=1))
+
+        async def endpoint(http):
+            if http.path.startswith("/snapshots") and operation == "create_sandbox":
+                return web.json_response(
+                    {
+                        "id": request.name,
+                        "name": request.name,
+                        "general": False,
+                        "state": "active",
+                        "cpu": 1,
+                        "gpu": 0,
+                        "mem": 1,
+                        "disk": 1,
+                        "createdAt": "2026-11-13T15:00:00Z",
+                        "updatedAt": "2026-11-13T15:00:00Z",
+                    }
+                )
+            if http.method == "GET" and not http.path.startswith("/snapshots"):
+                return web.json_response({"message": "not created"}, status=404)
+            return web.json_response(
+                {"message": "provider outage"},
+                status=status,
+                headers={"Retry-After": "120", "X-RateLimit-Remaining": "0"},
+            )
+
+        app = web.Application()
+        app.router.add_route("*", "/{path:.*}", endpoint)
+        async with TestServer(app) as server:
+            factory = DaytonaMachineFactory(
+                lambda: AsyncDaytona(
+                    DaytonaConfig(
+                        api_key="fixture",
+                        api_url=str(server.make_url("")).rstrip("/"),
+                    )
+                )
+            )
+            spec = MachineSpec(request.source, startup_timeout=0.05)
+            with pytest.raises(DaytonaError) as failure:
+                if operation == "prepare":
+                    await factory.prepare(spec)
+                else:
+                    await factory.create(spec)
+            assert failure.value.status_code == status
+            assert failure.value.headers["X-RateLimit-Remaining"] == "0"
+            assert failure.value.headers["Retry-After"] == "120"
 
     asyncio.run(scenario())
 
@@ -1160,31 +1340,257 @@ def test_daytona_failed_snapshot_closes_client_without_starting_sandbox() -> Non
     assert client.closed
 
 
-def test_snapshot_identity_names_the_snapshot_production_would_create(tmp_path: Path) -> None:
-    context = tmp_path / "context"
-    (context / "files").mkdir(parents=True)
-    (context / "Dockerfile").write_text("FROM ubuntu:24.04\nCOPY files/ /app/files\n")
-    (context / "files" / "data.csv").write_bytes(b"a,b\n1,2\n")
-    source = DockerfileSource(context, context / "Dockerfile")
+def _account_snapshot(name: str, *, last_used_at, general: bool = False) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        general=general,
+        last_used_at=last_used_at,
+        state=SnapshotState.ACTIVE,
+        cpu=2,
+        mem=4,
+        disk=10,
+        gpu=0,
+        organization_id="fixture",
+        error_reason=None,
+    )
 
-    name = snapshot_identity(source, Resources())
 
-    assert name.startswith("shellbox-") and len(name) == len("shellbox-") + 40
-    assert name == snapshot_identity(DockerfileSource(context, context / "Dockerfile"), Resources())
+class SnapshotAccount:
+    """Paginated, mutable snapshot inventory for operational tests."""
+
+    def __init__(self, snapshots=()):
+        self.snapshots = {snapshot.name: snapshot for snapshot in snapshots}
+        self.used_on_get = None
+
+    async def get(self, name):
+        if name not in self.snapshots:
+            raise DaytonaNotFoundError("Snapshot does not exist", status_code=404)
+        snapshot = self.snapshots[name]
+        if self.used_on_get is not None:
+            snapshot.last_used_at = self.used_on_get
+        return snapshot
+
+    async def list(self, page=None, limit=None):
+        size = limit or 100
+        current = page or 1
+        ordered = list(self.snapshots.values())
+        return SimpleNamespace(
+            items=ordered[(current - 1) * size : current * size],
+            total=len(ordered),
+            page=current,
+            total_pages=max(1, math.ceil(len(ordered) / size)),
+        )
+
+    async def delete(self, snapshot):
+        del self.snapshots[snapshot.name]
 
 
-def test_snapshot_identity_rejects_add_and_misplaced_dockerfiles(tmp_path: Path) -> None:
+class SandboxLister:
+    """Async-iterable sandbox source with an injectable failure mode."""
+
+    def __init__(self, snapshot_names=(), error=None):
+        self.snapshot_names = list(snapshot_names)
+        self.error = error
+
+    def __call__(self, query=None):
+        return self
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.error is not None:
+            raise self.error
+        if not self.snapshot_names:
+            raise StopAsyncIteration
+        return SimpleNamespace(snapshot=self.snapshot_names.pop(0))
+
+
+def test_snapshot_identity_tracks_rounded_resources_and_image_source() -> None:
+    image = RegistryImage("fixture@sha256:" + "a" * 64)
+    rounded = snapshot_resources(cpus=2, memory_mb=2049, storage_mb=1025, gpus=0)
+    assert (rounded.cpu, rounded.memory, rounded.disk, rounded.gpu) == (2, 3, 2, None)
+
+    name = snapshot_name(image, rounded)
+    assert name == snapshot_name(
+        RegistryImage(image.reference),
+        snapshot_resources(cpus=2, memory_mb=3072, storage_mb=2048, gpus=0),
+    )
+    assert name != snapshot_name(image, snapshot_resources(cpus=2, memory_mb=3073, storage_mb=2048, gpus=0))
+    assert name != snapshot_name(image, snapshot_resources(cpus=2, memory_mb=3072, storage_mb=2049, gpus=0))
+    assert name != snapshot_name(image, snapshot_resources(cpus=2, memory_mb=3072, storage_mb=2048, gpus=1))
+
+
+def test_machine_spec_uses_known_snapshot_identity() -> None:
+    spec = MachineSpec(
+        source=RegistryImage("fixture:tag"),
+        cpus=2,
+        memory_mb=2049,
+        storage_mb=1025,
+    )
+
+    request = snapshot_request_for_spec(spec)
+    assert request.name == "shellbox-63d11f0b74739ee18b90a963a6db6e078db4e468"
+
+
+def test_list_snapshots_reads_every_page(monkeypatch) -> None:
+    monkeypatch.setattr("shellbox.backends.daytona.snapshot.SNAPSHOT_PAGE_SIZE", 2)
+    account = SnapshotAccount([_account_snapshot(f"snapshot-{index}", last_used_at=None) for index in range(5)])
+
+    names = [snapshot.name for snapshot in asyncio.run(list_snapshots(SimpleNamespace(snapshot=account)))]
+
+    assert names == [f"snapshot-{index}" for index in range(5)]
+
+
+def test_purge_stale_snapshots_deletes_only_stale_account_entries() -> None:
+    now = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    account = SnapshotAccount(
+        [
+            _account_snapshot("stale", last_used_at=now - timedelta(hours=2)),
+            _account_snapshot("boundary", last_used_at=now - timedelta(hours=1)),
+            _account_snapshot("fresh", last_used_at=now - timedelta(minutes=10)),
+            _account_snapshot("general", last_used_at=now - timedelta(hours=5), general=True),
+            _account_snapshot("unknown", last_used_at=None),
+        ]
+    )
+
+    report = asyncio.run(purge_stale_snapshots(SimpleNamespace(snapshot=account, list=SandboxLister()), now=now))
+
+    assert report.deleted == ("stale",)
+    assert report.unclassified == ("unknown",)
+    assert report.remaining == ()
+    assert set(account.snapshots) == {"boundary", "fresh", "general", "unknown"}
+
+
+def test_purge_revalidates_last_use_before_deleting() -> None:
+    now = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    account = SnapshotAccount([_account_snapshot("candidate", last_used_at=now - timedelta(hours=2))])
+    account.used_on_get = now
+    client = SimpleNamespace(snapshot=account, list=SandboxLister())
+
+    report = asyncio.run(purge_stale_snapshots(client, now=now))
+
+    assert report.deleted == ()
+    assert report.skipped == ("candidate",)
+    assert "candidate" in account.snapshots
+
+
+def test_purge_continues_when_a_target_loses_its_last_use_evidence() -> None:
+    now = datetime(2026, 1, 1, 12, tzinfo=UTC)
+
+    class VanishingEvidence(SnapshotAccount):
+        async def get(self, name):
+            snapshot = await super().get(name)
+            if name == "vanishing":
+                snapshot.last_used_at = None
+            return snapshot
+
+    account = VanishingEvidence(
+        [
+            _account_snapshot("vanishing", last_used_at=now - timedelta(hours=2)),
+            _account_snapshot("still-stale", last_used_at=now - timedelta(hours=2)),
+        ]
+    )
+    client = SimpleNamespace(snapshot=account, list=SandboxLister())
+
+    report = asyncio.run(purge_stale_snapshots(client, now=now))
+
+    assert report.deleted == ("still-stale",)
+    assert report.unclassified == ("vanishing",)
+    assert set(account.snapshots) == {"vanishing"}
+
+
+def test_purge_preserves_a_stale_snapshot_that_a_live_sandbox_references() -> None:
+    now = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    account = SnapshotAccount(
+        [
+            _account_snapshot("referenced", last_used_at=now - timedelta(hours=2)),
+            _account_snapshot("unused", last_used_at=now - timedelta(hours=2)),
+        ]
+    )
+    client = SimpleNamespace(snapshot=account, list=SandboxLister(snapshot_names=["referenced"]))
+
+    report = asyncio.run(purge_stale_snapshots(client, now=now))
+
+    assert report.referenced == ("referenced",)
+    assert report.deleted == ("unused",)
+    assert set(account.snapshots) == {"referenced"}
+
+
+def test_purge_fails_closed_when_sandbox_references_cannot_be_enumerated() -> None:
+    now = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    account = SnapshotAccount([_account_snapshot("stale", last_used_at=now - timedelta(hours=2))])
+    client = SimpleNamespace(
+        snapshot=account,
+        list=SandboxLister(error=DaytonaNotFoundError("listing failed", status_code=500)),
+    )
+
+    with pytest.raises(RuntimeError, match="Cannot enumerate sandbox references"):
+        asyncio.run(purge_stale_snapshots(client, now=now))
+
+    assert set(account.snapshots) == {"stale"}
+
+
+def test_daytona_network_policy_parses_declarative_fields() -> None:
+    assert DaytonaNetworkPolicy.from_config({"mode": "block_all"}).parameters() == {"network_block_all": True}
+    assert DaytonaNetworkPolicy.from_config({"mode": "domain_allow_list", "value": "example.org"}).parameters() == {
+        "domain_allow_list": "example.org"
+    }
+    with pytest.raises(ValueError, match="Unknown Daytona network policy fields"):
+        DaytonaNetworkPolicy.from_config({"mode": "block_all", "extra": "value"})
+
+
+def test_connection_hides_the_api_key_from_every_representation() -> None:
+    connection = DaytonaConnection(
+        api_key="synthetic-secret-key", api_url="https://fixture.invalid/api", target="fixture"
+    )
+    factory = connection.client_factory()
+
+    assert "synthetic-secret-key" not in repr(connection)
+    assert "synthetic-secret-key" not in repr(factory)
+    with pytest.raises(ValueError, match="explicit api_key, api_url and target"):
+        DaytonaConnection(api_url="https://fixture.invalid/api", target="fixture").client_factory()
+
+
+def test_connection_module_imports_without_the_daytona_sdk() -> None:
+    script = "\n".join(
+        (
+            "import sys",
+            "sys.modules['daytona'] = None  # the optional extra is absent",
+            "import shellbox.backends.daytona.connection",
+            "connection = shellbox.backends.daytona.connection.DaytonaConnection(",
+            "    api_key='synthetic-secret-key', api_url='https://fixture.invalid/api', target='fixture'",
+            ")",
+            "factory = connection.client_factory()",
+            "assert callable(factory)",
+            "print('resolved')",
+        )
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert "resolved" in result.stdout
+
+
+def test_snapshot_request_interchange_round_trips_the_identity() -> None:
+    image = RegistryImage("fixture:tag")
+    request = SnapshotRequest(
+        source=image,
+        resources=snapshot_resources(cpus=2, memory_mb=2049, storage_mb=1025, gpus=0),
+    )
+
+    assert SnapshotRequest.from_dict(request.as_dict()) == request
+
+
+def test_snapshot_request_interchange_rejects_a_mismatched_name(tmp_path) -> None:
     context = tmp_path / "context"
     context.mkdir()
-    (context / "Dockerfile").write_text("FROM ubuntu:24.04\nADD files/ /app/files\n")
-    source = DockerfileSource(context, context / "Dockerfile")
-    with pytest.raises(UnsupportedMachineSpec, match="ADD"):
-        snapshot_identity(source, Resources())
+    (context / "Dockerfile").write_text("FROM ubuntu:24.04\n")
+    request = SnapshotRequest(source=DockerfileSource(context, context / "Dockerfile"), resources=Resources())
 
-    nested = tmp_path / "nested"
-    nested.mkdir()
-    (nested / "sub").mkdir()
-    (nested / "Dockerfile").write_text("FROM ubuntu:24.04\n")
-    misplaced = DockerfileSource(nested, nested / "sub" / "Dockerfile")
-    with pytest.raises(UnsupportedMachineSpec, match="context root"):
-        snapshot_identity(misplaced, Resources())
+    spec = request.as_dict()
+    spec["name"] = "shellbox-" + "0" * 40
+    with pytest.raises(ValueError, match="does not match the derived name"):
+        SnapshotRequest.from_dict(spec)
+
+    del spec["name"]
+    assert SnapshotRequest.from_dict(spec) == request

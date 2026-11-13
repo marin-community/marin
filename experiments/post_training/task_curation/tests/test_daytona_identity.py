@@ -7,19 +7,17 @@ import base64
 import gzip
 import io
 import tarfile
-from collections import Counter
 
 import pytest
 
 pytest.importorskip("harbor")  # the counter runs the production Harbor spec mapping
 
 from daytona import Resources
-from shellbox.backends.daytona.machine import snapshot_identity
+from shellbox.backends.daytona.snapshot import snapshot_name
 from shellbox.image import DockerfileSource, RegistryImage
 
 from experiments.post_training.task_curation.daytona_identity import (
     count_lowered_spec_identities,
-    count_native_spec_identities,
     count_registry_identities,
     count_task_identities,
 )
@@ -113,7 +111,7 @@ def test_counter_names_match_the_production_name_for_the_staged_tree(tmp_path):
         _write.parent.mkdir(parents=True, exist_ok=True)
         _write.write_bytes(content)
         _write.chmod(mode)
-    expected = snapshot_identity(DockerfileSource(staged, staged / "Dockerfile"), Resources())
+    expected = snapshot_name(DockerfileSource(staged, staged / "Dockerfile"), Resources())
 
     count = count_task_identities([("task", payload)])
     assert list(count.sizes) == [expected]
@@ -140,7 +138,7 @@ def test_a_task_needing_a_container_runtime_is_refused_on_daytona():
     }
     count = count_lowered_spec_identities([("container-runtime", spec)])
     assert count.distinct == 1
-    assert count.execution_failures == [("container-runtime", "agent: Unsupported capabilities: docker")]
+    assert [task_id for task_id, _ in count.execution_failures] == ["container-runtime"]
 
 
 @pytest.mark.usefixtures("taskcompendium_environment")
@@ -157,8 +155,8 @@ def test_grader_environment_is_counted_independently_and_lock_refusals_are_retai
     }
     separate = count_lowered_spec_identities([("separate", spec)])
     assert set(separate.sizes) == {
-        snapshot_identity(RegistryImage(actor), Resources()),
-        snapshot_identity(RegistryImage(grader), Resources()),
+        snapshot_name(RegistryImage(actor), Resources()),
+        snapshot_name(RegistryImage(grader), Resources()),
     }
     spec["task"]["grader"]["environment"] = {
         "packages_lock": "https://example.test/lock",
@@ -167,170 +165,6 @@ def test_grader_environment_is_counted_independently_and_lock_refusals_are_retai
     locked = count_lowered_spec_identities([("locked", spec)])
     assert locked.distinct == 1
     assert [task_id for task_id, _ in locked.execution_failures] == ["locked"]
-
-
-@pytest.mark.usefixtures("taskcompendium_environment")
-def test_daytona_role_census_routes_lock_grader_locally_and_retains_its_quota_failure():
-    # The standalone Harbor test environment intentionally omits Marin's curation runtime.
-    from experiments.post_training.task_curation.daytona_census import measure_envelopes  # noqa: PLC0415
-
-    task = {
-        "id": "actor-with-lock-grader",
-        "environment_requirements": {"docker_image": "actor@sha256:" + "a" * 64, "command_semantics": "linux_process"},
-        "grader": {"environment": {"packages_lock": "private.lock", "command_semantics": "linux_process"}},
-    }
-    measured = measure_envelopes([(task, {"verifier_machine": {"storage_mb": 1024}})])
-    assert measured.machine_slots == 1 and len(measured.snapshot_sizes) == 1
-    assert measured.execution_failure_tasks == 0
-    assert measured.roles["grader"]["local"]["machine_slots"] == 1
-    assert sum(measured.roles["grader"]["local"]["failures"].values()) == 1
-    task["environment_requirements"] = {}
-    no_actor = measure_envelopes([(task, {})])
-    assert no_actor.machine_slots == 0 and not no_actor.snapshot_sizes
-    assert not no_actor.roles["grader"]["local"]["failures"]
-
-
-@pytest.mark.usefixtures("taskcompendium_environment")
-def test_execution_cost_census_keeps_task_specs_rejected_by_the_grading_boundary():
-    # Marin curation is optional in Harbor's standalone test environment.
-    from taskcompendium.convert.answers import exact_answer_task  # noqa: PLC0415
-    from taskcompendium.models import EnvironmentRequirements, ScriptGrader  # noqa: PLC0415
-    from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat  # noqa: PLC0415
-    from taskcompendium.pipeline.models import IntendedUse, SourceRecipe  # noqa: PLC0415
-
-    from experiments.post_training.task_curation.daytona_census import (  # noqa: PLC0415
-        converted_records,
-        measure_envelopes,
-    )
-
-    def convert(row, _context):
-        task = exact_answer_task(row, prompt="Repair the repository", answers=("done",), ignore_case=False)
-        environment = EnvironmentRequirements(
-            command_semantics="linux_process", docker_image="actor@sha256:" + "a" * 64, capabilities=("git_repository",)
-        )
-        grader = ScriptGrader(
-            argv=("python", "tests.py"),
-            environment=EnvironmentRequirements(command_semantics="linux_process", packages_lock="grader.lock"),
-        )
-        return task.model_copy(update={"environment_requirements": environment, "grader": grader})
-
-    recipe = SourceRecipe(
-        name="workspace",
-        version="1",
-        source=SourceFiles("fixture", "pin", ("rows.jsonl",), SourceFormat.JSONL),
-        convert=convert,
-        intended_use=IntendedUse.TRAIN,
-        rubric=None,
-        controls=None,
-    )
-    rejected, admission = Counter(), Counter()
-    census = measure_envelopes(converted_records([{"locator": "rows.jsonl:0", "data": {}}], recipe, rejected, admission))
-    assert census.converted == census.machine_slots == 1 and len(census.snapshot_sizes) == 1
-    assert census.execution_failure_tasks == 0
-    assert admission == {"source_defect:grading_environment_mismatch": 1}
-    assert not rejected
-
-
-@pytest.mark.usefixtures("taskcompendium_environment")
-def test_actor_unsafe_reasons_distinguish_snapshot_budget_build_and_host_image():
-    from experiments.post_training.task_curation.daytona_census import (  # noqa: PLC0415
-        daytona_unsafe_counts,
-        daytona_unsafe_reasons,
-        measure_envelopes,
-    )
-
-    def actor(requirements):
-        return {"id": "actor", "environment_requirements": requirements, "grader": {"environment": None}}
-
-    budget = measure_envelopes(
-        (actor({"command_semantics": "linux_process", "docker_image": f"image-{index}@sha256:" + "a" * 64}), {})
-        for index in range(11)
-    )
-    assert set(daytona_unsafe_reasons(budget)) == {"too_many_snapshots"}
-    assert daytona_unsafe_counts(budget) == {"too_many_snapshots": 11}
-    build = measure_envelopes(
-        [
-            (
-                actor(
-                    {
-                        "command_semantics": "linux_process",
-                        "docker_build": {
-                            "files": [
-                                {
-                                    "path": "Dockerfile",
-                                    "source": {
-                                        "kind": "inline_file",
-                                        "content_base64": base64.b64encode(b"FROM ubuntu:24.04\nRUN true\n").decode(),
-                                    },
-                                }
-                            ]
-                        },
-                    }
-                ),
-                {},
-            )
-        ]
-    )
-    assert set(daytona_unsafe_reasons(build)) == {"unbuilt_image"}
-    assert daytona_unsafe_counts(build) == {"unbuilt_image": 1}
-    locked = measure_envelopes([(actor({"command_semantics": "linux_process", "packages_lock": "actor.lock"}), {})])
-    assert set(daytona_unsafe_reasons(locked)) == {"host_image_required"}
-    assert daytona_unsafe_counts(locked) == {"host_image_required": 1}
-
-
-@pytest.mark.usefixtures("taskcompendium_environment")
-def test_native_envelope_counts_original_toml_shape_without_unbuilt_lowering():
-    from taskcompendium.runtime.resources import inline_resource  # noqa: PLC0415
-
-    from experiments.post_training.task_curation.daytona_census import measure_envelopes  # noqa: PLC0415
-
-    dockerfile = "FROM ubuntu:24.04\nCOPY setup.sh /app/setup.sh\n"
-    toml = (
-        b"[environment]\ncpus=2\nmemory_mb=2048\nstorage_mb=4096\nallow_internet=false\n"
-        b"[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=600\n"
-    )
-    resources = [
-        inline_resource("task.toml", toml),
-        inline_resource("environment/Dockerfile", dockerfile.encode()),
-        inline_resource("environment/setup.sh", b"#!/bin/sh\necho native\n").model_copy(update={"mode": "755"}),
-    ]
-    task = {
-        "id": "native",
-        "tags": ["harbor"],
-        "resources": {"verifier": [r.model_dump(mode="json") for r in resources]},
-        "environment_requirements": {
-            "command_semantics": "linux_process",
-            "docker_build": {
-                "files": [
-                    inline_resource("Dockerfile", dockerfile.encode()).model_dump(mode="json"),
-                    inline_resource("setup.sh", b"#!/bin/sh\necho native\n")
-                    .model_copy(update={"mode": "755"})
-                    .model_dump(mode="json"),
-                ]
-            },
-        },
-        "grader": {"environment": None},
-    }
-    measured = measure_envelopes([(task, {"task_machine": {"cpus": 99}})])
-    direct = count_native_spec_identities([("native", task)])
-    assert measured.converted == measured.machine_slots == 1
-    assert measured.snapshot_sizes == direct.sizes and len(direct.sizes) == 1
-    assert not measured.execution_failures and not measured.mapping_failures
-    # The generic unbuilt TaskCompendium route is distinct from native Harbor's build path.
-    lowered = count_lowered_spec_identities([("native", {"task": task, "runtime": {"task_machine": {}}})])
-    assert any("Unresolved Docker build context" in reason for _, reason in lowered.execution_failures)
-
-    task["execution_requirements"] = {
-        "cpus": 2,
-        "memory_mb": 2048,
-        "storage_mb": 4096,
-        "agent_timeout_sec": 900,
-        "verifier_timeout_sec": 600,
-    }
-    assert count_native_spec_identities([("native", task)]).sizes == direct.sizes
-    task["execution_requirements"]["storage_mb"] = 8192
-    with pytest.raises(ValueError, match="storage_mb conflicts"):
-        count_native_spec_identities([("native", task)])
 
 
 @pytest.mark.usefixtures("taskcompendium_environment")

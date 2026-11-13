@@ -15,7 +15,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from finestore.layout import BlobTables, OnConflict, parse_uri
 from finestore.reader import ReadView
-from finestore.rl.source_identity import SourceId
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 
@@ -115,6 +114,7 @@ class SourceOrigin(StrEnum):
     GRETEL = "Gretel"
     HARBOR_HUB = "Harbor Hub"
     HUGGINGFACEH4 = "HuggingFaceH4"
+    LM_EVAL = "lm-eval"
     MARIN = "Marin"
     NEMOTRON = "Nemotron"
     OPEN_R1 = "Open-R1"
@@ -593,7 +593,7 @@ class WithinSourceDedupEvidence(CatalogRecord):
 
 
 class SourceDeclaration(CatalogRecord):
-    id: SourceId
+    id: str
     name: str
     display_name: str
     origin: SourceOrigin
@@ -658,8 +658,6 @@ class SourceDeclaration(CatalogRecord):
             != (self.dataset_id, self.dataset_revision, self.pipeline.version)
         ):
             raise ValueError("Actor census input or converter version differs from the declaration")
-        if self.id != source_identifier(self.origin, self.upstream_dataset, self.subset, self.variant):
-            raise ValueError("Source ID differs from generated identity")
         if self.display_name != source_title(self.upstream_name, self.subset, self.variant):
             raise ValueError("Source title differs from generated title")
         if self.daytona_safety is not None:
@@ -747,7 +745,7 @@ class ArchivedFile(CatalogRecord):
 class AssessmentAttempt(CatalogRecord):
     run_id: str
     name: str
-    source_id: SourceId | None
+    source_id: str | None
     pipeline_key: str | None
     status: AssessmentStatus
     reason: str | None
@@ -757,7 +755,7 @@ class AssessmentAttempt(CatalogRecord):
 
 class Assessment(CatalogRecord):
     pipeline_key: str
-    source_id: SourceId
+    source_id: str
     scope: str
     model: ModelReference
     rubric: str
@@ -789,7 +787,7 @@ class AssessmentItem(CatalogRecord):
 
 class SnapshotSource(CatalogRecord):
     snapshot_id: str
-    id: SourceId
+    id: str
     declaration: SourceDeclaration
     assessment_key: str | None
     latest_attempt_key: str | None

@@ -6,9 +6,10 @@
 import json
 import subprocess
 import sys
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event, Lock
 from types import SimpleNamespace
 
 import pyarrow as pa
@@ -44,6 +45,7 @@ from experiments.post_training.task_curation.full_qc_repair import OwnedServingC
 from experiments.post_training.task_curation.full_qc_review import (
     assemble_shards,
     contract_batches,
+    review_batch,
     review_inputs,
     review_shard,
 )
@@ -327,11 +329,98 @@ def source_shards(inputs, tmp_path, shard_count, reviewer):
             shard_count=shard_count,
             batch_offset=5,
             max_passes=2,
+            batch_workers=2,
             worker_jobs=(),
         )
         for index in range(shard_count)
     ]
     return reviewer, rubric, output, [FullQCReviewShard.raw_load(shard.path) for shard in shards]
+
+
+def test_shard_replenishes_batches_before_slow_tail_finishes_and_preserves_cached_review(multi_batch_inputs, tmp_path):
+    inputs = multi_batch_inputs
+    batches = list(contract_batches(inputs))
+    rubric = ReviewRubric("quality", "1", ("Check the complete task contract.",))
+    output = StoragePath(str(tmp_path / "batches"))
+    cached_id = batches[0].tasks[0].id
+    pending_id = batches[0].tasks[1].id
+    final_id = batches[-1].tasks[0].id
+    _, initial_path = review_batch(
+        batches[0].tasks,
+        batches[0].contracts,
+        rubric,
+        ReviewService(
+            invalid_task_ids=frozenset(task.id for task in batches[0].tasks if task.id != cached_id),
+            confidence=Confidence.LOW,
+        ),
+        output,
+    )
+    saved = json.loads(StoragePath(initial_path).read_text())["reviews"][0]
+    final_started = Event()
+    lock = Lock()
+    active = peak = 0
+    submitted = []
+    task_context = ContextVar("review_task_context")
+    task_context.set("fixture-context")
+
+    class OverlapReviewer:
+        identity = ReviewService().identity
+
+        def review(self, tasks, rubric, *, originals=None, cached=None):
+            nonlocal active, peak
+            assert task_context.get() == "fixture-context"
+            with lock:
+                active += 1
+                peak = max(peak, active)
+                submitted.extend(task.id for task in tasks)
+            try:
+                if any(task.id == pending_id for task in tasks):
+                    assert final_started.wait(5), "Later batches stalled behind the first batch's tail"
+                if any(task.id == final_id for task in tasks):
+                    final_started.set()
+                return ReviewService().review(tasks, rubric)
+            finally:
+                with lock:
+                    active -= 1
+
+        def read_cache(self, batches, rubric):
+            return [None] * len(batches)
+
+    shard = review_shard(
+        inputs,
+        OverlapReviewer(),
+        rubric,
+        str(output),
+        str(tmp_path / "shard"),
+        shard_index=0,
+        shard_count=1,
+        batch_offset=5,
+        max_passes=2,
+        batch_workers=2,
+        worker_jobs=(),
+    )
+    assert final_started.is_set() and peak == 2
+    assert cached_id not in submitted and len(submitted) == inputs.retained_count - 1
+    assert [receipt.batch_index for receipt in shard.receipts] == [0, 1, 2]
+    result = assemble_shards(inputs, [shard], shard.reviewer, rubric, str(tmp_path / "assembled"))
+    rows = pq.read_table(result.records_path).to_pylist()
+    assert result.coverage_complete and result.result.uncertain_count == 1
+    assert json.loads(next(row["review"] for row in rows if row["task_id"] == cached_id)) == saved
+    assert [row["task_id"] for row in rows] == [task.id for batch in batches for task in batch.tasks]
+    replay = review_shard(
+        inputs,
+        ReviewService(available=False),
+        rubric,
+        str(output),
+        str(tmp_path / "replay"),
+        shard_index=0,
+        shard_count=1,
+        batch_offset=5,
+        max_passes=2,
+        batch_workers=1,
+        worker_jobs=(),
+    )
+    assert replay.receipts == shard.receipts and replay.status_counts == shard.status_counts
 
 
 @pytest.mark.parametrize("shard_count", [3, 5])
@@ -528,10 +617,10 @@ def test_owned_repair_client_follows_new_child_registration_after_preemption(rev
     assert review_server.requests == [body]
 
 
-def test_concurrent_repair_preserves_primary_uncertainty_and_replays_completed_receipts(multi_batch_inputs, tmp_path):
+def test_sparse_repair_preserves_primary_uncertainty_and_replays_completed_receipts(multi_batch_inputs, tmp_path):
     rubric = ReviewRubric("quality", "1", ("Check the complete task contract.",))
     batches = list(contract_batches(multi_batch_inputs))
-    invalid = frozenset(batch.tasks[0].id for batch in batches[:2])
+    invalid = frozenset(batch.tasks[0].id for batch in (batches[0], batches[2]))
     primary = review_inputs(
         multi_batch_inputs,
         ReviewService(invalid_task_ids=invalid, confidence=Confidence.LOW),
@@ -555,7 +644,9 @@ def test_concurrent_repair_preserves_primary_uncertainty_and_replays_completed_r
 
     output = str(tmp_path / "repair")
     result = repair_source(primary, ConcurrentRepair(), rubric, output, batch_workers=2)
-    rows = {row["task_id"]: row for row in pq.read_table(result.records_path).to_pylist()}
+    result_rows = pq.read_table(result.records_path).to_pylist()
+    assert [row["task_id"] for row in result_rows] == list(original)
+    rows = {row["task_id"]: row for row in result_rows}
     assert set(rows) == set(original)
     assert result.coverage_complete
     assert result.result.reviewed == 2

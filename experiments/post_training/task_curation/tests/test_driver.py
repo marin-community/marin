@@ -116,6 +116,41 @@ def arguments(tmp_path) -> list[str]:
     return [item for pair in options.items() for item in pair]
 
 
+def test_historical_corpus_inventory_keeps_the_current_embedding_plan(tmp_path, monkeypatch):
+    source = number_source(tmp_path / "numbers")
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            id="HuggingFaceH4:math500",
+            origin=SourceOrigin.HUGGINGFACEH4,
+            upstream_dataset="math500",
+            upstream_name="math500",
+            title=None,
+        ),
+    )
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.all_sources", lambda: {source.info.id: source})
+    options = ["--embed", "coverage", "--cache-dir", str(tmp_path / "cache")]
+    plans = []
+    for identifier in (source.info.id, "MarinSkyRL:math500"):
+        corpus = tmp_path / (identifier.replace(":", "-") + ".json")
+        corpus.write_text(
+            json.dumps(
+                {
+                    "population": "converted",
+                    "sources": [],
+                    "inventory": [{**source.declaration.model_dump(mode="json"), "id": identifier}],
+                }
+            )
+        )
+        frozen = corpus.read_bytes()
+        result = CliRunner().invoke(main, [*options, "--corpus", str(corpus)])
+        assert result.exit_code == 0, result.output
+        plans.append(json.loads(result.output))
+        assert corpus.read_bytes() == frozen
+    assert plans[0] == plans[1]
+
+
 def test_source_option_selects_catalog_order_without_changing_identity(tmp_path, catalog):
     runner = CliRunner()
     full = runner.invoke(main, arguments(tmp_path))
@@ -156,7 +191,8 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     install_fake_build_tools(tmp_path, monkeypatch)
     # The factory probes for a working bubblewrap; CI hosts cannot build sandboxes.
     monkeypatch.setattr(
-        "shellbox.backends.local.machine._working_bwrap", lambda candidates, system_directories: Path("/usr/bin/bwrap")
+        "shellbox.backends.local.machine._working_bwrap",
+        lambda candidates, system_directories, mounts, environment: Path("/usr/bin/bwrap"),
     )
     environment = Environment(
         requirements=REQUIREMENTS,
@@ -191,6 +227,47 @@ def test_remote_planning_uses_cw_instead_of_ambient_gcs(tmp_path, catalog, monke
     assert plan["chunk_storage_prefix"] == f"{root or 's3://marin-us-east-02a/marin'}/.zephyr/rl-data-campaign"
     assert os.environ["MARIN_PREFIX"] == previous
     assert not (tmp_path / "report.json").exists()
+
+
+def test_remote_campaign_plans_with_canonical_execution_defaults(tmp_path, catalog):
+    # An Iris campaign uses its pinned reviewer and resolves execution defaults once.
+    root = "s3://marin-us-east-02a/marin/curation-trial"
+    minimal = [
+        "--mode",
+        "sample",
+        "--report-path",
+        str(tmp_path / "report.json"),
+        "--artifact-root",
+        root,
+    ]
+    result = CliRunner().invoke(main, minimal)
+    assert result.exit_code == 0, result.output
+    plan = json.loads(result.output)
+    assert plan["max_workers"] == 64
+    assert plan["coordinator_resources"]["ram"] == "16g"
+    # No image override: Iris starts the workers from the cluster's configured task image.
+    assert plan["worker_resources"]["image"] is None
+    assert plan["review_cache"] == f"{root}/rl-data/review-cache"
+
+    overrides = ["--max-workers", "8", "--coordinator-memory", "8g", "--worker-image", "fixture-image"]
+    overrides += ["--review-cache", str(tmp_path / "cache")]
+    result = CliRunner().invoke(main, [*minimal, *overrides])
+    assert result.exit_code == 0, result.output
+    plan = json.loads(result.output)
+    assert plan["max_workers"] == 8
+    assert plan["coordinator_resources"]["ram"] == "8g"
+    assert plan["worker_resources"]["image"] == "fixture-image"
+    assert plan["review_cache"] == str(tmp_path / "cache")
+
+
+def test_local_campaign_keeps_its_review_cache_in_the_cache_directory(tmp_path, catalog):
+    cache = tmp_path / "canary"
+    options = ["--mode", "sample"]
+    result = CliRunner().invoke(main, [*options, "--cache-dir", str(cache)])
+    assert result.exit_code == 0, result.output
+    plan = json.loads(result.output)
+    assert plan["review_cache"] == str(cache.resolve() / "review-cache")
+    assert plan["max_workers"] == 4
 
 
 def test_gvisor_image_backend_requires_an_in_cluster_driver(tmp_path, catalog, monkeypatch):

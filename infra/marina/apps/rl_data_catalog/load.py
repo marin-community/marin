@@ -7,27 +7,46 @@ import json
 import time
 import uuid
 from collections.abc import Iterable
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import click
-from finestore.rl.curation import MAX_UNAVAILABLE_JUDGMENT_SHARE, CurationCatalog, JudgmentStatus, validate_items
+from finestore.rl.curation import (
+    MAX_UNAVAILABLE_JUDGMENT_SHARE,
+    AssessmentItem,
+    AssessmentPopulation,
+    CurationCatalog,
+    JudgmentStatus,
+    SourceDeclaration,
+    Verdict,
+    validate_items,
+)
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from taskcompendium.backend_requirements import BackendSurvey, backend_schema_sha256
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
+from experiments.post_training.task_curation.catalog_identity import (
+    backend_survey_payload,
+    canonical_assessment,
+    canonical_backend_survey,
+    canonical_identity_survey,
+    canonical_snapshot_source,
+    identity_survey_payload,
+)
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 
 MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
 DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
+REVIEW_COMPLETENESS_VERSION = 1
 TABLE_COLUMNS = {
     "sources": (
         "id TEXT, declaration JSONB, assessment_key TEXT, latest_attempt_key TEXT, "
         "latest_attempt_status TEXT, reason TEXT, curation JSONB, diagnostics JSONB, "
-        "source_fingerprint JSONB, duplicate_group JSONB"
+        "source_fingerprint JSONB, duplicate_group JSONB, review_completeness JSONB"
     ),
     "assessments": (
         "pipeline_key TEXT, source_id TEXT, scope TEXT, model JSONB, rubric TEXT, "
@@ -45,6 +64,45 @@ TABLE_COLUMNS = {
     "identity_surveys": "survey_id TEXT, metadata JSONB",
     "duplicate_reviews": "left_source TEXT, right_source TEXT, review JSONB",
 }
+
+
+@dataclass(frozen=True)
+class ReviewCompleteness:
+    reviewed: int
+    required: int
+    coverage_complete: bool
+
+    @property
+    def provisional(self) -> bool:
+        return not self.coverage_complete or self.reviewed < self.required
+
+
+def review_completeness(
+    declaration: SourceDeclaration, populations: list[AssessmentPopulation], items: list[AssessmentItem]
+) -> dict[str, Any] | None:
+    """Bind Result completeness to its required review panel, independently of Quality."""
+    aggregate = declaration.quality_result
+    if aggregate is not None:
+        assert aggregate.sample_count is not None
+        completeness = ReviewCompleteness(
+            reviewed=aggregate.reviewed,
+            required=aggregate.sample_count,
+            coverage_complete=aggregate.unavailable_count == 0,
+        )
+    elif populations:
+        required = next(row.sample_count for row in populations if row.cohort == "admitted")
+        panel = [row for row in items if row.cohort == "admitted"]
+        completeness = ReviewCompleteness(
+            reviewed=sum(
+                row.status == JudgmentStatus.REVIEWED and row.has_task and row.verdict != Verdict.UNKNOWN
+                for row in panel
+            ),
+            required=required,
+            coverage_complete=len(panel) == required and all(row.status == JudgmentStatus.REVIEWED for row in panel),
+        )
+    else:
+        return None
+    return {**asdict(completeness), "provisional": completeness.provisional}
 
 
 def batches(rows: Iterable[dict[str, Any]]) -> Iterable[str]:
@@ -85,6 +143,8 @@ def load_catalog(
 ) -> dict[str, Any]:
     """Stage and validate a snapshot, then select it if the serving pointer is unchanged."""
     started = time.monotonic()
+    backend_map = canonical_backend_survey(backend_map.model_dump(mode="json"))
+    identities = canonical_identity_survey(identities.model_dump(mode="json"))
     snapshot = catalog.current()
     if (backend_map.catalog_root, backend_map.snapshot_id) != (catalog.root, snapshot.snapshot_id):
         raise ValueError("Backend map belongs to another catalog snapshot; survey the selected catalog")
@@ -92,11 +152,12 @@ def load_catalog(
         raise ValueError("Backend map uses another requirement schema; rerun the survey")
     if (identities.catalog_root, identities.snapshot_id) != (catalog.root, snapshot.snapshot_id):
         raise ValueError("Source identity map belongs to another catalog snapshot")
-    identity_id = canonical_sha256(identities.identity_payload())
-    survey_id = canonical_sha256(backend_map.identity_payload())
+    identity_id = canonical_sha256(identity_survey_payload(identities))
+    survey_id = canonical_sha256(backend_survey_payload(backend_map))
     current = query(
         """
-        SELECT c.load_id, l.catalog_root, l.snapshot_id, b.survey_id, i.survey_id AS identity_id FROM atlas_current c
+        SELECT c.load_id, l.catalog_root, l.snapshot_id, l.review_completeness_version,
+            b.survey_id, i.survey_id AS identity_id FROM atlas_current c
         JOIN atlas_loads l USING (load_id)
         LEFT JOIN atlas_backend_surveys b USING (load_id)
         LEFT JOIN atlas_identity_surveys i USING (load_id) WHERE c.name = 'latest'
@@ -108,11 +169,13 @@ def load_catalog(
         current[0]["snapshot_id"],
         current[0]["survey_id"],
         current[0]["identity_id"],
+        current[0]["review_completeness_version"],
     ) == (
         catalog.root,
         snapshot.snapshot_id,
         survey_id,
         identity_id,
+        REVIEW_COMPLETENESS_VERSION,
     ):
         return {"changed": False, "snapshot_id": snapshot.snapshot_id}
     expected_load_id = current[0]["load_id"] if current else None
@@ -130,17 +193,18 @@ def load_catalog(
 
     execute(
         """
-        INSERT INTO atlas_loads (load_id, catalog_root, snapshot_id, created_at)
-        VALUES (:load_id, :catalog_root, :snapshot_id, :created_at)
+        INSERT INTO atlas_loads (load_id, catalog_root, snapshot_id, created_at, review_completeness_version)
+        VALUES (:load_id, :catalog_root, :snapshot_id, :created_at, :review_completeness_version)
     """,
         {
             "load_id": load_id,
             "catalog_root": catalog.root,
             "snapshot_id": snapshot.snapshot_id,
             "created_at": snapshot.created_at,
+            "review_completeness_version": REVIEW_COMPLETENESS_VERSION,
         },
     )
-    sources = list(catalog.sources(snapshot.snapshot_id))
+    sources = [canonical_snapshot_source(source) for source in catalog.sources(snapshot.snapshot_id)]
     if len(sources) != snapshot.source_count:
         raise ValueError("Catalog inventory does not cover its declared source count")
     if {source.id for source in sources} != {source.source_id for source in backend_map.sources}:
@@ -197,15 +261,17 @@ def load_catalog(
         ],
     }
     all_items = []
-    for source in sources:
+    for source, record in zip(sources, metadata["sources"], strict=True):
         key = source.assessment_key
+        record["review_completeness"] = review_completeness(source.declaration, [], [])
         if key is None:
             continue
-        assessment = catalog.assessment(key)
+        assessment = canonical_assessment(catalog.assessment(key))
         if assessment.source_id != source.id:
             raise ValueError("Selected assessment belongs to another source")
         populations, items = catalog.populations(key), list(catalog.items(key))
         validate_items(populations, items)
+        record["review_completeness"] = review_completeness(source.declaration, populations, items)
         unavailable = sum(1 for item in items if item.status != JudgmentStatus.REVIEWED)
         if items and unavailable / len(items) > MAX_UNAVAILABLE_JUDGMENT_SHARE:
             raise ValueError(f"Selected assessment exceeds the unavailable-judgment threshold: {key}")
@@ -283,8 +349,8 @@ def load_catalog(
 @click.option("--source-identities", type=click.Path(exists=True, path_type=Path), required=True)
 def main(catalog_root: str, applet_id: str, service_url: str, backend_map: Path, source_identities: Path) -> None:
     configure_coreweave_s3()
-    survey = BackendSurvey.model_validate_json(backend_map.read_text())
-    identities = SourceIdentitySurvey.model_validate_json(source_identities.read_text())
+    survey = canonical_backend_survey(json.loads(backend_map.read_text()))
+    identities = canonical_identity_survey(json.loads(source_identities.read_text()))
     click.echo(
         json.dumps(load_catalog(CurationCatalog(catalog_root), applet_query(service_url, applet_id), survey, identities))
     )

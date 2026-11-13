@@ -4,11 +4,10 @@
 """Precompute Atlas statistics without scanning task rows while serving views."""
 
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 
-from finestore.rl.source_identity import original_source_id
 from finestore.schema import arrow_schema
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
@@ -88,11 +87,18 @@ def _sample_groups(
         yield {"kind": "area", "scope_id": subject + "/" + node, "task": row}
 
 
-def _sample_tasks(key: tuple[str, str], rows: Iterator[dict], *, source_size: int, area_size: int) -> Iterator[dict]:
+def _sample_tasks(
+    key: tuple[str, str],
+    rows: Iterator[dict],
+    *,
+    source_size: int,
+    area_size: int,
+    sampling_source_ids: Mapping[str, str],
+) -> Iterator[dict]:
     _, selected = seeded_sample(
         rows,
         size=source_size if key[0] == "source" else area_size,
-        key=lambda row: seeded_order(original_source_id(row["task"]["source_id"]) + "\0" + row["task"]["task_id"], 0),
+        key=lambda row: seeded_order(sampling_source_ids[row["task"]["source_id"]] + "\0" + row["task"]["task_id"], 0),
     )
     yield from selected
 
@@ -107,6 +113,7 @@ def build_curriculum_coverage(
     capability_distance: float,
     source_sample_size: int,
     area_sample_size: int,
+    sampling_source_ids: Mapping[str, str],
 ) -> AtlasData:
     """Export full-population counts and bounded, overlapping task samples."""
     by_id = {(node.subject_id, node.node_id): node for node in nodes}
@@ -137,7 +144,12 @@ def build_curriculum_coverage(
         ),
         name="curriculum-coverage-statistics",
     )
-    sample = partial(_sample_tasks, source_size=source_sample_size, area_size=area_sample_size)
+    sample = partial(
+        _sample_tasks,
+        source_size=source_sample_size,
+        area_size=area_sample_size,
+        sampling_source_ids=sampling_source_ids,
+    )
     samples = context.execute(
         Dataset.from_list(list(task_paths))
         .load_parquet()

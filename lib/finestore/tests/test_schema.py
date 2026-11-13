@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+from typing import Annotated
 
 import pyarrow as pa
 import pytest
-from finestore.rl.source_identity import SourceId
 from finestore.schema import arrow_schema
-from pydantic import BaseModel
+from pydantic import BaseModel, BeforeValidator
 
 
 class Color(enum.StrEnum):
@@ -69,16 +69,19 @@ def test_unsupported_input_raises():
         arrow_schema(42)
 
 
-class AliasedSourceRow(BaseModel):
-    source_id: SourceId | None
-    related: list[SourceId]
+TrimmedId = Annotated[str, BeforeValidator(str.strip)]
+
+
+class AnnotatedRow(BaseModel):
+    source_id: TrimmedId | None
+    related: list[TrimmedId]
 
 
 def test_annotated_optional_source_ids_preserve_the_arrow_storage_contract():
-    rows = [{"source_id": "MarinSkyRL:aime24", "related": ["MarinSkyRL:svamp"]}, {"source_id": None, "related": []}]
-    table = pa.Table.from_pylist(rows, schema=arrow_schema(AliasedSourceRow))
+    rows = [{"source_id": " first ", "related": [" second "]}, {"source_id": None, "related": []}]
+    table = pa.Table.from_pylist(rows, schema=arrow_schema(AnnotatedRow))
     assert table.to_pylist() == rows
-    decoded = [AliasedSourceRow.model_validate(row) for row in table.to_pylist()]
-    assert decoded[0].source_id == "HuggingFaceH4:aime24"
-    assert decoded[0].related == ["ChilleD:svamp"]
+    decoded = [AnnotatedRow.model_validate(row) for row in table.to_pylist()]
+    assert decoded[0].source_id == "first"
+    assert decoded[0].related == ["second"]
     assert decoded[1].source_id is None

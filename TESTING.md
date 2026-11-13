@@ -19,6 +19,10 @@ uv run --no-project infra/ci/run_tests.py
 The affected-test runner checks Harbor's standalone lock and runs its offline
 runtime suite when vendored Harbor or its local Rigging or FineStore dependencies
 change. Run those checks directly with `uv run --no-project infra/ci/run_harbor_tests.py`.
+That entry point also runs curation census and rebuild tests in the Marin workspace
+with the local Harbor package and Daytona SDK available; their production imports
+require both environments. Snapshot identity and acquisition tests remain in the
+standalone Harbor environment.
 
 The repository defaults exclude `slow`, `integration`, `data_integration`,
 `cluster`, `requires_cluster`, `docker`, and `manual` tests. Do not pass a
@@ -49,10 +53,9 @@ When adding a new `lib/<name>/` package, run its unit tests through
 These registrations include the library in pull request, push, and full-suite
 runs.
 
-`vendor/evalchemy` is excluded from the workspace and uses its own `uv.lock`.
-Its dedicated `evalchemy-unit` lane checks that lock and runs the retained tests
-in the independent evaluator environment. Run them locally with
-`uv run --directory vendor/evalchemy --frozen --all-extras --group test pytest`.
+Harbor's isolated test environment includes TaskCompendium for task-curation
+rebuild and snapshot-identity checks; rebuild tests skip in environments without
+Harbor.
 
 Root `pyproject.toml` and `uv.lock` changes run the broad CPU matrix. The
 Levanter TPU lane runs for those changes when the resolved dependencies of

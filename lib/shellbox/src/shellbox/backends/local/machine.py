@@ -9,6 +9,7 @@ writable directories such as ``/app``, ``/tmp``, and ``HOME``.
 """
 
 import asyncio
+import errno
 import fcntl
 import io
 import json
@@ -24,14 +25,16 @@ import tarfile
 import tempfile
 from collections.abc import Awaitable, Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import cast
+from typing import BinaryIO, cast
 
-from shellbox.backends.local import launch
+from shellbox.backends.local import launch, nix
 from shellbox.backends.local.cgroup import MachineCgroup, check_cgroup_parent, delegated_cgroup_parent
-from shellbox.backends.local.images import PreparedLocalImage, prepare_local_image
+from shellbox.backends.local.disk import LocalDisk, LocalDiskPool
+from shellbox.backends.local.images import PreparedLocalImage, cached_local_image, prepare_local_image
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
 from shellbox.backends.local.transfers import unpack_local_archive
 from shellbox.image import PreparedImage, RegistryImage, process_image_cache
@@ -228,6 +231,7 @@ def _sandbox_argv(
     layers: Path | None,
     mounts: Iterable[Mount],
     network: NetworkPolicy,
+    disk: LocalDisk | None = None,
 ) -> list[str]:
     """The bwrap invocation that runs a program over ``root`` with the system directories and ``mounts``.
 
@@ -257,6 +261,8 @@ def _sandbox_argv(
     for point in read_only_system_mounts() if overlaid else ():
         argv += ["--ro-bind", point, point]
     argv += ["--dev", "/dev", "--tmpfs", SHARED_MEMORY, "--proc", "/proc"]
+    if disk is not None:
+        argv += ["--bind", str(disk.data / "shm"), SHARED_MEMORY, "--remount-ro", "/dev"]
     for mount in mounts:
         argv += ["--ro-bind", str(mount.host), str(mount.guest)]
     return argv
@@ -275,7 +281,9 @@ def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
     return (bwrap_path(), *(() if system is None else (Path(system),)))
 
 
-def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str | None:
+def _prepare_sandbox(
+    bwrap: Path, system_directories: SystemDirectories, mounts: tuple[Mount, ...], environment: dict[str, str]
+) -> str | None:
     """Return why namespace creation or command entry fails, or None when both work."""
 
     async def probe() -> str | None:
@@ -285,17 +293,23 @@ def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str 
             bwrap=bwrap,
             root=root,
             layers=layers,
-            mounts=(),
-            environment=CONTROL_ENVIRONMENT,
+            mounts=mounts,
+            environment=environment,
         )
         try:
-            async with asyncio.timeout(PROBE_TIMEOUT):
-                await machine._start_keeper()
-                result = await machine._control("exit 0", PurePosixPath("/"))
+            try:
+                async with asyncio.timeout(PROBE_TIMEOUT):
+                    await machine._start_keeper()
+                    result = await machine._control("exit 0", PurePosixPath("/"))
+            finally:
+                await machine.close()
         except (OSError, RuntimeError, TimeoutError) as error:
+            if machine._keeper is not None:
+                assert machine._keeper.stderr is not None
+                stderr = (await machine._keeper.stderr.read()).decode(errors="replace").strip()
+                if stderr:
+                    return stderr
             return str(error) or type(error).__name__
-        finally:
-            await machine.close()
         if result.exit_code == 0:
             return None
         return result.stderr.decode(errors="replace").strip() or f"exit status {result.exit_code}"
@@ -305,10 +319,15 @@ def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str 
         return executor.submit(asyncio.run, probe()).result()
 
 
-def _working_bwrap(candidates: Iterable[Path], system_directories: SystemDirectories) -> Path:
+def _working_bwrap(
+    candidates: Iterable[Path],
+    system_directories: SystemDirectories,
+    mounts: tuple[Mount, ...],
+    environment: dict[str, str],
+) -> Path:
     errors = []
     for candidate in candidates:
-        error = _prepare_sandbox(candidate, system_directories)
+        error = _prepare_sandbox(candidate, system_directories, mounts, environment)
         if error is None:
             return candidate
         errors.append(f"{candidate}: {error}")
@@ -324,11 +343,11 @@ def _working_bwrap(candidates: Iterable[Path], system_directories: SystemDirecto
     )
 
 
-def _resource_limits() -> list[tuple[int, int]]:
+def _resource_limits(file_size_limit: int = FILE_SIZE_LIMIT) -> list[tuple[int, int]]:
     host_tasks = int(Path("/proc/loadavg").read_text().split()[3].split("/")[1])
     return [
         (resource.RLIMIT_NPROC, host_tasks + NPROC_HEADROOM),
-        (resource.RLIMIT_FSIZE, FILE_SIZE_LIMIT),
+        (resource.RLIMIT_FSIZE, file_size_limit),
         (resource.RLIMIT_CORE, 0),
     ]
 
@@ -399,6 +418,48 @@ def _pin_init(pid: int, namespace: int) -> int:
         os.close(directory)
 
 
+class LocalProcessScope:
+    """Agent command scope contained by a worker-owned cgroup."""
+
+    def __init__(self, machine: "LocalMachine", group: MachineCgroup):
+        self.machine = machine
+        self.group = group
+        self._closed = False
+        self._active: set[asyncio.Task[Result]] = set()
+        self._commands: dict[MachineCgroup, asyncio.Task[asyncio.subprocess.Process]] = {}
+        self._closing: asyncio.Task[None] | None = None
+
+    async def run(self, command: Command) -> Result:
+        if self._closed:
+            raise RuntimeError("Process scope is closed")
+        self.machine._check_open()
+        environment = {**self.machine._environment, **self.machine.spec.env, **command.env}
+        task = asyncio.create_task(self.machine._execute(command, environment, scope=self))
+        self._active.add(task)
+        try:
+            return await task
+        finally:
+            self._active.discard(task)
+
+    async def terminate(self) -> None:
+        if self._closing is None:
+            self._closed = True
+            self._closing = own_cleanup(self._terminate())
+        await await_cleanup(self._closing)
+
+    async def _terminate(self) -> None:
+        async def stop(group: MachineCgroup, acquisition: asyncio.Task[asyncio.subprocess.Process]) -> None:
+            self._commands.pop(group, None)
+            process = await finish_owned(acquisition)
+            await self.machine._stop_command(process, group)
+
+        await asyncio.gather(*(stop(group, acquisition) for group, acquisition in tuple(self._commands.items())))
+        if self._active:
+            await asyncio.gather(*tuple(self._active), return_exceptions=True)
+        await self.group.close()
+        self.machine._scopes.discard(self)
+
+
 class LocalMachine:
     """A persistent bubblewrap member, with commands entering pinned namespaces."""
 
@@ -414,6 +475,7 @@ class LocalMachine:
         image: PreparedLocalImage | None = None,
         bundle: Path | None = None,
         cgroup_parent: Path | None = None,
+        disk: LocalDisk | None = None,
     ):
         self.spec = spec
         self.root = root
@@ -421,11 +483,13 @@ class LocalMachine:
         self.mounts = mounts
         self.image = image
         self._bundle = bundle
+        self._disk = disk
         self._cgroup_parent = cgroup_parent
         self._cgroup: MachineCgroup | None = None
         self._command_cgroups: set[MachineCgroup] = set()
         self._background_cgroups: set[MachineCgroup] = set()
         self._run_commands: dict[MachineCgroup, asyncio.Task[asyncio.subprocess.Process]] = {}
+        self._scopes: set[LocalProcessScope] = set()
         self._keeper_cgroup: MachineCgroup | None = None
         self._bwrap = bwrap
         self._environment = environment
@@ -446,6 +510,8 @@ class LocalMachine:
     def _check_open(self) -> None:
         if self._closed:
             raise MachineTerminated("Machine is closed")
+        if self._disk is not None:
+            self._disk.check_limit()
 
     async def _start_keeper(self, peer: "LocalMachine | None" = None) -> None:
         if self._cgroup_parent is not None:
@@ -464,6 +530,7 @@ class LocalMachine:
                 layers=self.layers,
                 mounts=self.mounts,
                 network=self.spec.network if peer is None else NetworkPolicy.ALLOW,
+                disk=self._disk,
             )
         else:
             arguments = [
@@ -493,6 +560,8 @@ class LocalMachine:
             ]
             if peer is None and self.spec.network is NetworkPolicy.DENY:
                 arguments.append("--unshare-net")
+            if self._disk is not None:
+                arguments += ["--bind", str(self._disk.data / "shm"), SHARED_MEMORY, "--remount-ro", "/dev"]
         # A new user namespace is needed for each independent mount namespace,
         # including members that inherit a peer's network namespace.
         if os.geteuid() != 0 and "--unshare-user" not in arguments:
@@ -541,7 +610,7 @@ class LocalMachine:
                 "--clearenv",
                 "--setenv",
                 "PATH",
-                DEFAULT_PATH,
+                self._environment["PATH"],
                 "/bin/sh",
                 "-c",
                 'read -r ready && [ "$ready" = shellbox-ready ] || exit 1; exec sleep 2147483647',
@@ -647,6 +716,16 @@ class LocalMachine:
     async def run(self, command: Command) -> Result:
         return await self._execute(command, {**self._environment, **self.spec.env, **command.env})
 
+    async def open_process_scope(self) -> LocalProcessScope:
+        """Contain scoped commands and detached descendants outside the guest."""
+        self._check_open()
+        if self._cgroup is None:
+            raise UnsupportedMachineSpec("Process scopes require delegated cgroups")
+        group = self._cgroup.create_child()
+        scope = LocalProcessScope(self, group)
+        self._scopes.add(scope)
+        return scope
+
     async def open_process(self, command: Command) -> SubprocessSession:
         """Start a foreground process in the same pinned namespaces as run."""
         if command.stdin or command.timeout is not None:
@@ -656,66 +735,96 @@ class LocalMachine:
         config = self._command_config(command, environment)
 
         async def acquire() -> SubprocessSession:
-            group = self._new_command_cgroup()
-            config["cgroup"] = None if group is None else str(group.path / "cgroup.procs")
-            # Keep all private descriptors alive until asyncio returns the child
-            # handle. The launcher closes them before executing guest code.
-            try:
-                with tempfile.TemporaryFile() as configuration:
-                    configuration.write(json.dumps(config).encode())
-                    configuration.seek(0)
-                    assert self._root_fd is not None
-                    process = await asyncio.create_subprocess_exec(
-                        sys.executable,
-                        "-I",
-                        "-S",
-                        "-c",
-                        LAUNCH_SOURCE,
-                        str(configuration.fileno()),
-                        pass_fds=(configuration.fileno(), self._root_fd, *dict.fromkeys(self._namespaces)),
-                        env=CONTROL_ENVIRONMENT,
-                        stdin=asyncio.subprocess.PIPE,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                        start_new_session=True,
-                    )
-            except BaseException:
-                if group is not None:
-                    await finish_owned(own_cleanup(group.close()))
-                    self._command_cgroups.discard(group)
-                raise
-            self._commands.add(process)
+            with ExitStack() as resources:
+                group = None
+                # Keep all private descriptors alive until asyncio returns the child
+                # handle. The launcher closes them before executing guest code.
+                try:
+                    allocation_file = resources.enter_context(tempfile.TemporaryFile())
+                    if self._disk is not None:
+                        config["disk_status"] = allocation_file.fileno()
+                        config["disk_root"] = str(self._disk.data)
+                        config["disk_failure_headroom"] = self._disk.failure_headroom_bytes
+                    group = self._new_command_cgroup()
+                    config["cgroup"] = None if group is None else str(group.path / "cgroup.procs")
+                    with tempfile.TemporaryFile() as configuration:
+                        configuration.write(json.dumps(config).encode())
+                        configuration.seek(0)
+                        assert self._root_fd is not None
+                        process = await asyncio.create_subprocess_exec(
+                            sys.executable,
+                            "-I",
+                            "-S",
+                            "-c",
+                            LAUNCH_SOURCE,
+                            str(configuration.fileno()),
+                            pass_fds=(
+                                configuration.fileno(),
+                                *((allocation_file.fileno(),) if self._disk is not None else ()),
+                                self._root_fd,
+                                *dict.fromkeys(self._namespaces),
+                            ),
+                            env=CONTROL_ENVIRONMENT,
+                            stdin=asyncio.subprocess.PIPE,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                            start_new_session=True,
+                        )
+                except BaseException:
+                    resources.close()
+                    if group is not None:
+                        await finish_owned(own_cleanup(group.close()))
+                        self._command_cgroups.discard(group)
+                    raise
+                self._commands.add(process)
 
-            async def stop() -> None:
-                if group is not None:
+                async def stop() -> None:
+                    if group is not None:
+                        try:
+                            await self._stop_command(process, group)
+                            await session.drain_output()
+                        finally:
+                            self._commands.discard(process)
+                            self._sessions.discard(session)
+                            with resources:
+                                if self._disk is not None:
+                                    self._disk.record_report(allocation_file)
+                        return
                     try:
-                        await self._stop_command(process, group)
-                        await session.drain_output()
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        async with asyncio.timeout(PROCESS_STOP_TIMEOUT):
+                            await process.wait()
+                            await session.drain_output()
+                    except TimeoutError:
+                        # A command can detach from its launcher's process group
+                        # and retain the pipes. Reclaim its entire task namespace.
+                        await self.close()
                     finally:
                         self._commands.discard(process)
                         self._sessions.discard(session)
-                    return
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                try:
-                    async with asyncio.timeout(PROCESS_STOP_TIMEOUT):
-                        await process.wait()
-                        await session.drain_output()
-                except TimeoutError:
-                    # A command can detach from its launcher's process group
-                    # and retain the pipes. Reclaim its entire task namespace.
-                    await self.close()
-                finally:
-                    self._commands.discard(process)
-                    self._sessions.discard(session)
+                        with resources:
+                            if self._disk is not None:
+                                self._disk.record_report(allocation_file)
 
-            session = SubprocessSession(process, stop=stop, stderr_limit=command.output_limit_bytes)
-            self._sessions.add(session)
-            return session
+                async def wait() -> int:
+                    code = await process.wait()
+                    self._check_disk_report(allocation_file)
+                    return code
+
+                session = SubprocessSession(process, stop=stop, stderr_limit=command.output_limit_bytes, wait=wait)
+                self._sessions.add(session)
+                resources = resources.pop_all()
+                return session
 
         return await acquire_owned(asyncio.create_task(acquire()))
+
+    def _check_disk_report(self, report: BinaryIO) -> None:
+        if self._disk is None:
+            return
+        self._disk.check_limit(None if report.closed else report)
 
     async def _control(
         self,
@@ -729,7 +838,7 @@ class LocalMachine:
             Command(
                 ("/bin/sh", "-c", script, "sh", str(path)), cwd="/", stdin=stdin, output_limit_bytes=output_limit_bytes
             ),
-            CONTROL_ENVIRONMENT,
+            {**CONTROL_ENVIRONMENT, "PATH": self._environment["PATH"]},
         )
 
     def _command_config(self, command: Command, environment: dict[str, str]) -> dict:
@@ -748,7 +857,9 @@ class LocalMachine:
         config = {
             "namespaces": self._namespaces,
             "root": self._root_fd,
-            "limits": _resource_limits(),
+            "limits": _resource_limits(
+                self.spec.storage_mb * 1024 * 1024 if self.spec.storage_mb is not None else FILE_SIZE_LIMIT
+            ),
             "account": account,
             "script": RUN_SCRIPT,
             "cwd": command.cwd or self.spec.workdir or "/",
@@ -808,7 +919,11 @@ class LocalMachine:
 
         await await_cleanup(own_cleanup(cleanup()))
 
-    async def _execute(self, command: Command, environment: dict[str, str]) -> Result:
+    async def _execute(
+        self, command: Command, environment: dict[str, str], *, scope: LocalProcessScope | None = None
+    ) -> Result:
+        if scope is not None and scope._closed:
+            raise RuntimeError("Process scope is closed")
         config = self._command_config(command, environment)
         # Anonymous output files let a successful foreground command finish even
         # when its background services keep stdout open. RLIMIT_FSIZE bounds writers.
@@ -817,18 +932,29 @@ class LocalMachine:
             os.fdopen(status_read, "rb", buffering=0) as status,
             os.fdopen(status_write, "wb", buffering=0) as status_writer,
             tempfile.TemporaryFile() as configuration,
-            tempfile.TemporaryFile() as stdout_file,
-            tempfile.TemporaryFile() as stderr_file,
-            tempfile.TemporaryFile() as stdin_file,
+            tempfile.TemporaryFile() as allocation_file,
+            self._disk.spool() if self._disk is not None else tempfile.TemporaryFile() as stdout_file,
+            self._disk.spool() if self._disk is not None else tempfile.TemporaryFile() as stderr_file,
+            self._disk.spool() if self._disk is not None else tempfile.TemporaryFile() as stdin_file,
         ):
             config["status"] = status_write
+            if self._disk is not None:
+                config["disk_status"] = allocation_file.fileno()
+                config["disk_root"] = str(self._disk.data)
+                config["disk_failure_headroom"] = self._disk.failure_headroom_bytes
             # Reports are written before the launcher exits. A nonblocking read
             # cannot be held open by a process that inherited another pipe end.
             os.set_blocking(status_read, False)
-            stdin_file.write(command.stdin)
-            stdin_file.seek(0)
+            try:
+                stdin_file.write(command.stdin)
+                stdin_file.seek(0)
+            except OSError as error:
+                if self._disk is not None and error.errno in (errno.ENOSPC, errno.EDQUOT):
+                    self._disk.record_failure()
+                    self._disk.check_limit()
+                raise
             assert self._root_fd is not None
-            group = self._new_command_cgroup()
+            group = scope.group.create_child() if scope is not None else self._new_command_cgroup()
             config["cgroup"] = None if group is None else str(group.path / "cgroup.procs")
             configuration.write(json.dumps(config).encode())
             configuration.seek(0)
@@ -840,7 +966,13 @@ class LocalMachine:
                     "-c",
                     LAUNCH_SOURCE,
                     str(configuration.fileno()),
-                    pass_fds=(configuration.fileno(), status_write, self._root_fd, *dict.fromkeys(self._namespaces)),
+                    pass_fds=(
+                        configuration.fileno(),
+                        status_write,
+                        *((allocation_file.fileno(),) if self._disk is not None else ()),
+                        self._root_fd,
+                        *dict.fromkeys(self._namespaces),
+                    ),
                     env=CONTROL_ENVIRONMENT,
                     stdin=stdin_file,
                     stdout=stdout_file,
@@ -849,7 +981,10 @@ class LocalMachine:
                 )
             )
             if group is not None:
-                self._run_commands[group] = acquisition
+                if scope is None:
+                    self._run_commands[group] = acquisition
+                else:
+                    scope._commands[group] = acquisition
             process = None
             try:
                 async with asyncio.timeout(command.timeout):
@@ -869,6 +1004,8 @@ class LocalMachine:
                         self._commands.add(process)
                     status_writer.close()
                     if group is not None:
+                        if scope is not None:
+                            scope._commands.pop(group, None)
                         await self._stop_command(process, group)
                     elif not self._closed:
                         await self.close()
@@ -886,7 +1023,11 @@ class LocalMachine:
             finally:
                 if process is not None:
                     self._commands.discard(process)
-                if group is not None and not self._closed and group in self._command_cgroups:
+                if scope is not None and group is not None and group in scope._commands and not self._closed:
+                    if not group.populated:
+                        await group.close()
+                        scope._commands.pop(group, None)
+                if scope is None and group is not None and not self._closed and group in self._command_cgroups:
                     if group.populated:
                         self._background_cgroups.add(group)
                     else:
@@ -902,6 +1043,7 @@ class LocalMachine:
             stderr_file.seek(0)
             stdout = stdout_file.read(command.output_limit_bytes + 1)
             stderr = stderr_file.read(command.output_limit_bytes + 1)
+            self._check_disk_report(allocation_file)
         assert process.returncode is not None
         code = process.returncode
         return Result(
@@ -953,6 +1095,7 @@ class LocalMachine:
         await asyncio.shield(self._closing)
 
     async def _destroy(self) -> None:
+        await asyncio.gather(*(scope.terminate() for scope in tuple(self._scopes)))
         if self._cgroup is not None:
             self._cgroup.kill()
         # Kill the verified, pinned guest init before its host launcher. An
@@ -990,9 +1133,12 @@ class LocalMachine:
             os.close(descriptor)
         if self._root_fd is not None:
             os.close(self._root_fd)
-        await asyncio.to_thread(_remove, self._bundle or self.root)
-        if self.layers is not None:
-            await asyncio.to_thread(_remove, self.layers)
+        if self._disk is not None:
+            await asyncio.to_thread(self._disk.close)
+        else:
+            await asyncio.to_thread(_remove, self._bundle or self.root)
+            if self.layers is not None:
+                await asyncio.to_thread(_remove, self.layers)
 
 
 def _check_mounts(mounts: tuple[Mount, ...]) -> None:
@@ -1012,14 +1158,18 @@ def _check_mounts(mounts: tuple[Mount, ...]) -> None:
             raise UnsupportedMachineSpec(f"The local backend's mount {mount.guest} lies inside another mount")
 
 
-def _check_spec(spec: MachineSpec) -> HostImage | PackageSpec | PreparedImage | RegistryImage:
+def _check_spec(
+    spec: MachineSpec, disk_pool: LocalDiskPool | None = None
+) -> HostImage | PackageSpec | PreparedImage | RegistryImage:
     if not isinstance(spec.source, (HostImage, PackageSpec, PreparedImage, RegistryImage)):
         raise UnsupportedMachineSpec(
             "The local backend requires HostImage, PackageSpec, or a prepared/pinned OCI image, "
             f"not {type(spec.source).__name__}"
         )
-    if spec.storage_mb is not None or spec.gpus:
-        raise UnsupportedMachineSpec("The local backend does not provide disk quotas or GPU allocations")
+    if spec.storage_mb is not None and disk_pool is None:
+        raise UnsupportedMachineSpec("LOCAL storage_mb requires an explicitly configured, host-verified disk_root")
+    if spec.gpus:
+        raise UnsupportedMachineSpec("The local backend does not provide GPU allocations")
     if spec.memory_mb is not None and spec.memory_mb <= 0:
         raise ValueError("Local memory_mb must be positive")
     if (
@@ -1031,16 +1181,20 @@ def _check_spec(spec: MachineSpec) -> HostImage | PackageSpec | PreparedImage | 
 
 
 def check_local_environment(
-    requirements: ExecutionRequirements, spec: MachineSpec, *, cgroup_parent: Path | None = None
+    requirements: ExecutionRequirements,
+    spec: MachineSpec,
+    *,
+    cgroup_parent: Path | None = None,
+    disk_pool: LocalDiskPool | None = None,
 ) -> None:
     """Check local execution support without acquiring a bubblewrap sandbox."""
-    source = _check_spec(spec)
+    source = _check_spec(spec, disk_pool)
     origin = source.source if isinstance(source, PreparedImage) else source
     reference = origin.reference if isinstance(origin, RegistryImage) else None
     capabilities = LINUX_PROCESS_CAPABILITIES
     if cgroup_parent is not None:
         check_cgroup_parent(cgroup_parent)
-        capabilities = capabilities | {"retained_command_cancellation"}
+        capabilities = capabilities | {"retained_command_cancellation", "process_scope"}
     check_execution_requirements(
         requirements,
         spec,
@@ -1067,7 +1221,8 @@ class LocalMachineFactory:
     command's variables. ``bin_dirs`` only sets ``PATH``; a directory outside the mounted ones is not
     visible to commands. The factory discovers a writable cgroup delegation for command containment
     and attempts aggregate CPU and memory limits there. Unavailable limits produce warnings.
-    ``cgroup_parent`` overrides discovery. Disk quotas remain unsupported.
+    ``cgroup_parent`` overrides discovery. ``disk_pool`` enables host-probed ext4
+    loop filesystems for declared storage_mb, including all writable layers.
 
     ``bwrap`` names the executable to use. By default the factory takes the first of the bundled bwrap
     and any bwrap on ``PATH`` that can build a sandbox on this host, and raises ``SandboxUnavailable``
@@ -1097,10 +1252,12 @@ class LocalMachineFactory:
         policy: Path | None = None,
         umoci: Path = Path("umoci"),
         cgroup_parent: Path | None = None,
+        disk_pool: LocalDiskPool | None = None,
     ):
         if ttl is not None and ttl <= 0:
             raise ValueError("Local machine TTL must be positive")
         self.ttl = ttl
+        self.disk_pool = disk_pool
         self.cgroup_parent = delegated_cgroup_parent() if cgroup_parent is None else cgroup_parent.resolve()
         if self.cgroup_parent is not None:
             check_cgroup_parent(self.cgroup_parent)
@@ -1115,11 +1272,17 @@ class LocalMachineFactory:
         self.package_cache = package_cache if package_cache is not None else Path.home() / ".cache/shellbox/python"
         self.python_version = python_version
         self.system_directories = system_directories
-        self.bwrap = _working_bwrap(_bwrap_candidates(bwrap), system_directories)
+        candidates = _bwrap_candidates(bwrap)
+        self._system_mounts, self._system_bin_dirs = nix.system_programs()
+        environment = {
+            **CONTROL_ENVIRONMENT,
+            "PATH": os.pathsep.join((DEFAULT_PATH, *map(str, self._system_bin_dirs))),
+        }
+        self.bwrap = _working_bwrap(candidates, system_directories, self._system_mounts, environment)
         logger.info("Local backend sandboxes commands with %s, system directories %s", self.bwrap, system_directories)
 
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
-        check_local_environment(requirements, spec, cgroup_parent=self.cgroup_parent)
+        check_local_environment(requirements, spec, cgroup_parent=self.cgroup_parent, disk_pool=self.disk_pool)
 
     async def create(self, spec: MachineSpec) -> LocalMachine:
         task = await self.create_task(single_container_task(spec))
@@ -1128,7 +1291,7 @@ class LocalMachineFactory:
     async def create_task(self, spec: TaskSpec) -> Task:
         """Start named containers with private filesystems and one network."""
         for container in spec.containers:
-            _check_spec(container.machine)
+            _check_spec(container.machine, self.disk_pool)
         if len(spec.containers) > 1 and spec.network is not NetworkPolicy.DENY:
             raise UnsupportedMachineSpec("Local multi-container tasks require denied external networking")
         if any(re.fullmatch(r"[a-z][a-z0-9_-]{0,62}", container.name) is None for container in spec.containers):
@@ -1192,7 +1355,7 @@ class LocalMachineFactory:
     async def _create(
         self, spec: MachineSpec, peer: LocalMachine | None = None, aliases: str | None = None
     ) -> LocalMachine:
-        source = _check_spec(spec)
+        source = _check_spec(spec, self.disk_pool)
         if isinstance(source, (PreparedImage, RegistryImage)):
             return await self._create_image(spec, source, peer, aliases)
 
@@ -1207,6 +1370,7 @@ class LocalMachineFactory:
         mounts = tuple(
             dict.fromkeys(
                 (
+                    *self._system_mounts,
                     *(Mount(directory, PurePosixPath(directory)) for directory in read_only),
                     *(Mount(mount.host.absolute(), mount.guest) for mount in host.mounts),
                 )
@@ -1221,31 +1385,52 @@ class LocalMachineFactory:
         ):
             raise UnsupportedMachineSpec(f"The local backend's workdir {spec.workdir} is a read-only host path")
         # A workdir in an overlaid directory is made by a command once the machine runs, so it lands in the layer.
-        root, layers = _machine_directories(None if overlaid_workdir else workdir, copy_on_write=copy_on_write)
-        if aliases is not None:
-            (root / "etc/hosts").write_text(aliases)
-        environment = {
-            "PATH": os.pathsep.join(
-                [
-                    *(str(directory.absolute()) for directory in host.bin_dirs),
-                    *map(str, self.bin_dirs),
-                    DEFAULT_PATH,
-                ]
-            ),
-            "HOME": str(HOME),
-            "LANG": "C.UTF-8",
-        }
-        if self.hash_seed is not None:
-            environment["PYTHONHASHSEED"] = self.hash_seed
-        machine = LocalMachine(
-            spec,
-            bwrap=self.bwrap,
-            root=root,
-            layers=layers,
-            mounts=mounts,
-            environment=environment,
-            cgroup_parent=self.cgroup_parent,
-        )
+        disk = await self._allocate_disk(spec)
+        try:
+            root, layers = _machine_directories(
+                None if overlaid_workdir else workdir, copy_on_write=copy_on_write, disk=disk
+            )
+        except BaseException:
+            if disk is not None:
+                await finish_owned(own_cleanup(asyncio.to_thread(disk.close)))
+            raise
+        try:
+            if aliases is not None:
+                # The copied host file can be read-only, as on NixOS.
+                (root / "etc/hosts").unlink(missing_ok=True)
+                (root / "etc/hosts").write_text(aliases)
+            environment = {
+                "PATH": os.pathsep.join(
+                    [
+                        *(str(directory.absolute()) for directory in host.bin_dirs),
+                        *map(str, self.bin_dirs),
+                        DEFAULT_PATH,
+                        *map(str, self._system_bin_dirs),
+                    ]
+                ),
+                "HOME": str(HOME),
+                "LANG": "C.UTF-8",
+            }
+            if self.hash_seed is not None:
+                environment["PYTHONHASHSEED"] = self.hash_seed
+            machine = LocalMachine(
+                spec,
+                bwrap=self.bwrap,
+                root=root,
+                layers=layers,
+                mounts=mounts,
+                environment=environment,
+                cgroup_parent=self.cgroup_parent,
+                disk=disk,
+            )
+        except BaseException:
+            if disk is not None:
+                await finish_owned(own_cleanup(asyncio.to_thread(disk.close)))
+            else:
+                _remove(root)
+                if layers is not None:
+                    _remove(layers)
+            raise
         tools = source.tools if isinstance(source, PackageSpec) else ()
         try:
             await machine._start_keeper(peer)
@@ -1260,7 +1445,8 @@ class LocalMachineFactory:
     ) -> LocalMachine:
         if self.read_only or self.bin_dirs or self.system_directories is not SystemDirectories.READ_ONLY:
             raise UnsupportedMachineSpec("Prepared local images cannot use host program mounts or overlays")
-        parent = Path(tempfile.mkdtemp(prefix="shellbox-image-"))
+        disk = await self._allocate_disk(spec)
+        parent = disk.directory if disk is not None else Path(tempfile.mkdtemp(prefix="shellbox-image-"))
         bundle = parent / "bundle"
         machine = None
 
@@ -1270,7 +1456,13 @@ class LocalMachineFactory:
                 if isinstance(source, PreparedImage)
                 else await asyncio.to_thread(self.image_cache.prepare, source)
             )
-            return await asyncio.to_thread(prepare_local_image, prepared, bundle, umoci=self.umoci)
+            if disk is None:
+                return await asyncio.to_thread(prepare_local_image, prepared, bundle, umoci=self.umoci)
+            image = await asyncio.to_thread(
+                cached_local_image, prepared, self.image_cache.directory / "local-lowers", umoci=self.umoci
+            )
+            root = await asyncio.to_thread(disk.overlay, image.root)
+            return replace(image, root=root)
 
         preparation = asyncio.create_task(prepare())
         try:
@@ -1288,6 +1480,7 @@ class LocalMachineFactory:
                 image=image,
                 bundle=parent,
                 cgroup_parent=self.cgroup_parent,
+                disk=disk,
             )
             await machine._start_keeper(peer)
             if aliases is not None:
@@ -1310,13 +1503,32 @@ class LocalMachineFactory:
                     if machine is not None:
                         await machine._close_local()
                     else:
-                        await asyncio.to_thread(_remove, parent)
+                        if disk is not None:
+                            await asyncio.to_thread(disk.close)
+                        else:
+                            await asyncio.to_thread(_remove, parent)
 
             try:
                 await finish_owned(own_cleanup(cleanup()))
             except BaseException as cleanup_error:
                 if cleanup_error is not error:
                     error.add_note(f"Local image cleanup failed ({type(cleanup_error).__name__})")
+            raise
+
+    async def _allocate_disk(self, spec: MachineSpec) -> LocalDisk | None:
+        if spec.storage_mb is None:
+            return None
+        assert self.disk_pool is not None
+        allocation = asyncio.create_task(asyncio.to_thread(self.disk_pool.create, spec.storage_mb))
+        try:
+            return await asyncio.shield(allocation)
+        except BaseException:
+
+            async def cleanup() -> None:
+                disk = await allocation
+                await asyncio.to_thread(disk.close)
+
+            await finish_owned(own_cleanup(cleanup()))
             raise
 
 
@@ -1340,14 +1552,17 @@ def _companion_finished(task: Task, monitor: asyncio.Task[Result], closing_tasks
     reclaim.add_done_callback(_log_task_failure)
 
 
-def _machine_directories(workdir: PurePosixPath | None, *, copy_on_write: bool) -> tuple[Path, Path | None]:
+def _machine_directories(
+    workdir: PurePosixPath | None, *, copy_on_write: bool, disk: LocalDisk | None = None
+) -> tuple[Path, Path | None]:
     """A new machine's root, with ``workdir`` made in it, and its layers when its system directories are overlaid."""
-    root = Path(tempfile.mkdtemp(prefix="shellbox-local-"))
+    root = disk.data / "root" if disk is not None else Path(tempfile.mkdtemp(prefix="shellbox-local-"))
+    root.mkdir(exist_ok=True)
     layers = None
     try:
         _prepare_root(root, workdir)
         if copy_on_write:
-            layers = Path(tempfile.mkdtemp(prefix="shellbox-layers-"))
+            layers = disk.data / "layers" if disk is not None else Path(tempfile.mkdtemp(prefix="shellbox-layers-"))
             _prepare_layers(layers)
     except BaseException:
         _remove(root)

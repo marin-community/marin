@@ -39,7 +39,7 @@ def quality(declaration: dict[str, Any], curation: dict[str, Any] | None) -> Qua
 
 
 def measured_result(declaration: dict[str, Any], review: dict[str, Any] | None) -> SourceQualityResult | None:
-    """Read the conclusive issue counts used by both Result and issue rate."""
+    """Return the current quality result, or None when no review is recorded."""
     stored = declaration.get("quality_result")
     if stored is not None:
         measured = SourceQualityResult.model_validate(stored)
@@ -67,7 +67,7 @@ def issue_rate(declaration: dict[str, Any], review: dict[str, Any] | None) -> fl
 
 
 def intended_use(declaration: dict[str, Any]) -> str:
-    """Use the declaration's lexical policy and explicit benchmark marker."""
+    """Return eval for benchmark or evaluation evidence, otherwise train."""
     receipt = (declaration.get("lexical_contamination") or {}).get("receipt")
     if declaration["is_benchmark"] or (receipt is not None and receipt["use"] in {"eval", "benchmark"}):
         return "eval"

@@ -10,9 +10,8 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from finestore.rl.source_identity import canonical_source_id
 from iris.rpc import job_pb2
-from marin.evaluation.evalchemy.client import EVALCHEMY_REQUEST_TIMEOUT_SECONDS
+from marin.evaluation.eval_env import EVALUATION_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.model_config import load_model_config
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem.storage_path import StoragePath
@@ -29,6 +28,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.source_fingerprints import DuplicateLabel, DuplicateReview, SourceFingerprint, SourceIdentitySurvey
 
+from experiments.post_training.task_curation.catalog_identity import canonical_identity_survey, identity_survey_payload
 from experiments.post_training.task_curation.duplicate_review import (
     DUPLICATE_MAX_TOKENS,
     DUPLICATE_MODEL,
@@ -46,6 +46,7 @@ from experiments.post_training.task_curation.source_fingerprints import (
     fingerprint_source,
 )
 from experiments.post_training.task_curation.tests.review_server import JudgeReply
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 
 def task_document(identifier: str, instruction: str) -> dict:
@@ -197,7 +198,7 @@ def test_uncached_local_review_covers_batch_gpu_recovery(review_server, monkeypa
     assert isinstance(reviews[0], DuplicateReview) and reviews[0].verdict.label is DuplicateLabel.DUPLICATE
     assert leases[0].iris.priority == job_pb2.PRIORITY_BAND_BATCH
     assert request_timeouts[0]["read"] >= (
-        leases[0].iris.endpoint_ready_timeout_seconds + EVALCHEMY_REQUEST_TIMEOUT_SECONDS
+        leases[0].iris.endpoint_ready_timeout_seconds + EVALUATION_REQUEST_TIMEOUT_SECONDS
     )
     assert review_server.requests[0]["temperature"] == 0.7
 
@@ -298,6 +299,6 @@ def test_frozen_survey_digest_survives_canonical_source_projection():
         "groups": [],
         "judge": None,
     }
-    survey = SourceIdentitySurvey.model_validate(raw)
+    survey = canonical_identity_survey(raw)
     assert set(survey.fingerprints) == {"HuggingFaceH4:aime24", "ChilleD:svamp"}
-    assert canonical_sha256(survey.identity_payload()) == canonical_sha256(raw)
+    assert canonical_sha256(identity_survey_payload(survey)) == canonical_sha256(raw)

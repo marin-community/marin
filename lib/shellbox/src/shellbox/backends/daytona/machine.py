@@ -4,7 +4,6 @@
 """Run the machine contract on a Daytona sandbox."""
 
 import asyncio
-import hashlib
 import json
 import logging
 import math
@@ -14,10 +13,9 @@ import stat
 import tarfile
 import tempfile
 import uuid
-from asyncio import sleep
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AsyncExitStack
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
@@ -25,21 +23,18 @@ from daytona import (
     AsyncDaytona,
     AsyncSandbox,
     CreateSandboxFromSnapshotParams,
-    CreateSnapshotParams,
     DaytonaConflictError,
-    DaytonaError,
     DaytonaNotFoundError,
-    DaytonaRateLimitError,
-    Image,
-    Resources,
 )
-from daytona.common.snapshot import Snapshot
-from daytona_api_client_async import SnapshotState
-from rigging.timing import ExponentialBackoff
 
 from shellbox.backends.daytona.process import DaytonaProcessSession
+from shellbox.backends.daytona.provider import retry_provider_call
+from shellbox.backends.daytona.snapshot import (
+    ensure_snapshot,
+    snapshot_request_for_spec,
+)
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
-from shellbox.image import DockerfileSource, RegistryImage, image_source_key
+from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
     LINUX_PROCESS_CAPABILITIES,
     Backend,
@@ -49,6 +44,7 @@ from shellbox.machine import (
     ExitReason,
     MachineSpec,
     NetworkPolicy,
+    ProcessScope,
     Result,
     UnsupportedMachineSpec,
     check_execution_requirements,
@@ -84,93 +80,21 @@ def _control_command(script: str) -> str:
     )
 
 
-def _validated_source(source: RegistryImage | DockerfileSource) -> RegistryImage | DockerfileSource:
-    if isinstance(source, RegistryImage):
-        return source
-    source = DockerfileSource(source.context.resolve(), source.dockerfile.resolve())
-    if source.dockerfile.parent != source.context:
-        raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
-    if re.search(r"^\s*ADD(?:\s|$)", source.dockerfile.read_text(), re.IGNORECASE | re.MULTILINE):
-        raise UnsupportedMachineSpec("Daytona Dockerfiles with ADD require a prebuilt registry image")
-    return source
-
-
-def snapshot_resources(spec: MachineSpec) -> Resources:
-    """Return the production Daytona resource shape for a machine specification."""
-    return Resources(
-        cpu=spec.cpus,
-        memory=math.ceil(spec.memory_mb / 1024) if spec.memory_mb is not None else None,
-        disk=math.ceil(spec.storage_mb / 1024) if spec.storage_mb is not None else None,
-        gpu=spec.gpus or None,
-    )
-
-
-def snapshot_identity(source: RegistryImage | DockerfileSource, resources: Resources) -> str:
-    """Return the deterministic Daytona snapshot name for a validated source."""
-    source = _validated_source(source)
-    identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
-    return f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
-
-
-async def _snapshot_metadata(client: AsyncDaytona, name: str) -> Snapshot:
-    """Retry transient snapshot metadata reads within the caller's startup deadline."""
-    backoff = ExponentialBackoff(initial=1, maximum=2, factor=2, jitter=0)
-    attempts = 0
-    while True:
-        try:
-            return await client.snapshot.get(name)
-        except DaytonaError as error:
-            attempts += 1
-            if error.status_code not in (502, 503, 504) or attempts == 3:
-                raise
-            await sleep(backoff.next_interval())
-
-
-async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSource, resources: Resources) -> str:
-    """Build or await a snapshot identified by its source and resource requirements."""
-    name = snapshot_identity(source, resources)
-    try:
-        snapshot = await _snapshot_metadata(client, name)
-    except DaytonaNotFoundError:
-        image = source.reference if isinstance(source, RegistryImage) else Image.from_dockerfile(source.dockerfile)
-        try:
-            snapshot = await client.snapshot.create(CreateSnapshotParams(name=name, image=image, resources=resources))
-        except DaytonaConflictError:
-            # Another rollout can create this image through a separate client or event loop.
-            snapshot = await _snapshot_metadata(client, name)
-    backoff = ExponentialBackoff(initial=1, maximum=10)
-    while snapshot.state != SnapshotState.ACTIVE:
-        if snapshot.state in (SnapshotState.ERROR, SnapshotState.BUILD_FAILED, SnapshotState.INACTIVE):
-            raise RuntimeError(f"Daytona snapshot {name} is {snapshot.state}: {snapshot.error_reason}")
-        await asyncio.sleep(backoff.next_interval())
-        snapshot = await _snapshot_metadata(client, name)
-    return name
-
-
-async def _create_sandbox(client: AsyncDaytona, params: CreateSandboxFromSnapshotParams, timeout: float) -> AsyncSandbox:
-    """Retry throttling using a caller-owned name to recover an accepted creation."""
+async def _create_sandbox(
+    client: AsyncDaytona, params: CreateSandboxFromSnapshotParams, timeout: float, *, deadline: float | None = None
+) -> AsyncSandbox:
+    """Recover transient or ambiguous creation under the caller-owned name."""
     assert params.name is not None
-    backoff = ExponentialBackoff(initial=1, maximum=30, factor=2, jitter=0.5)
-    while True:
+
+    async def create() -> AsyncSandbox:
         try:
-            try:
-                return await client.create(params, timeout=timeout)
-            except DaytonaConflictError:
-                sandbox = await client.get(params.name)
-                await sandbox.wait_for_sandbox_start(timeout=timeout)
-                return sandbox
-        except DaytonaRateLimitError as error:
-            retry_after = max(
-                (
-                    int(value)
-                    for name, value in (error.headers or {}).items()
-                    if name.lower().startswith("retry-after") and str(value).isdecimal()
-                ),
-                default=0,
-            )
-            delay = max(retry_after, backoff.next_interval())
-            logger.warning("Retrying throttled Daytona creation: delay=%.3f", delay)
-            await sleep(delay)
+            return await client.create(params, timeout=timeout)
+        except DaytonaConflictError:
+            sandbox = await client.get(params.name)
+            await sandbox.wait_for_sandbox_start(timeout=timeout)
+            return sandbox
+
+    return await retry_provider_call("sandbox.create", create, deadline=deadline)
 
 
 async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
@@ -193,6 +117,13 @@ class DaytonaNetworkMode(StrEnum):
 class DaytonaNetworkPolicy:
     mode: DaytonaNetworkMode
     value: str | None = None
+
+    @classmethod
+    def from_config(cls, policy: Mapping[str, str]) -> "DaytonaNetworkPolicy":
+        """Parse a declarative policy, rejecting unknown fields."""
+        if policy.keys() - {"mode", "value"}:
+            raise ValueError("Unknown Daytona network policy fields")
+        return cls(DaytonaNetworkMode(policy["mode"]), policy.get("value"))
 
     def parameters(self) -> dict[str, str | bool]:
         """Return the provider's mutually exclusive network policy fields."""
@@ -346,6 +277,9 @@ class DaytonaMachine:
                 await finish_owned(own_cleanup(self.close()))
             except BaseException as close_error:
                 cancellation.add_note(f"Daytona machine cleanup failed ({type(close_error).__name__})")
+
+    async def open_process_scope(self) -> ProcessScope:
+        raise UnsupportedMachineSpec("Daytona does not provide confirmed scoped descendant teardown")
 
     async def run(self, command: Command) -> Result:
         if self._closed:
@@ -567,7 +501,7 @@ class DaytonaMachineFactory:
 
     def __init__(
         self,
-        client_factory: Callable[[], AsyncDaytona] = AsyncDaytona,
+        client_factory: Callable[[], AsyncDaytona] | None = AsyncDaytona,
         *,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
@@ -577,6 +511,12 @@ class DaytonaMachineFactory:
         self.ttl_minutes = ttl_minutes
         self.create_timeout = create_timeout
         self.network_policy = network_policy
+
+    def _clients(self) -> Callable[[], AsyncDaytona]:
+        """Resolve the configured client factory for one provider session."""
+        if self.client_factory is None:
+            raise ValueError("Daytona requires an explicit host connection")
+        return self.client_factory
 
     def _check_spec(self, spec: MachineSpec) -> DockerfileSource | RegistryImage:
         source: DockerfileSource | RegistryImage
@@ -606,19 +546,19 @@ class DaytonaMachineFactory:
             image_reference=reference,
         )
 
-    async def _prepare(self, client: AsyncDaytona, spec: MachineSpec) -> str:
-        source = _validated_source(self._check_spec(spec))
-        resources = snapshot_resources(spec)
-        return await _snapshot(client, source, resources)
+    async def _prepare(self, client: AsyncDaytona, spec: MachineSpec, deadline: float | None) -> str:
+        self._check_spec(spec)
+        return await ensure_snapshot(client, snapshot_request_for_spec(spec), deadline=deadline)
 
     async def prepare(self, spec: MachineSpec) -> str:
         """Prepare the snapshot used by create without starting a sandbox.
 
         Pin registry sources by digest to reuse immutable image content.
         """
+        client_factory = self._clients()
         timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
-        async with self.client_factory() as client, asyncio.timeout(timeout):
-            return await self._prepare(client, spec)
+        async with client_factory() as client, asyncio.timeout(timeout) as deadline:
+            return await self._prepare(client, spec, deadline.when())
 
     async def create(self, spec: MachineSpec) -> DaytonaMachine:
         network = (
@@ -627,10 +567,10 @@ class DaytonaMachineFactory:
             else self.network_policy.parameters()
         )
         async with AsyncExitStack() as lifetime:
-            client = await lifetime.enter_async_context(self.client_factory())
+            client = await lifetime.enter_async_context(self._clients()())
             timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
-            async with asyncio.timeout(timeout):
-                snapshot = await self._prepare(client, spec)
+            async with asyncio.timeout(timeout) as deadline:
+                snapshot = await self._prepare(client, spec, deadline.when())
                 name = f"shellbox-{uuid.uuid4().hex}"
                 lifetime.push_async_callback(_delete_named_sandbox, client, name)
                 sandbox = await _create_sandbox(
@@ -644,6 +584,7 @@ class DaytonaMachineFactory:
                         ttl_minutes=self.ttl_minutes,
                     ),
                     timeout=timeout,
+                    deadline=deadline.when(),
                 )
             prepared = await sandbox.process.exec(
                 _control_command("command -v setsid"), cwd=CONTROL_CWD, timeout=INTERRUPT_TIMEOUT

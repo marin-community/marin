@@ -27,7 +27,6 @@ function value(row, key) {
   if (key === 'updated') return row.updated_at;
   return row[key];
 }
-// The default view keeps sources whose QA executed and did not find them defective.
 function shownByDefault(row) { return row.quality !== 'QUICK' && row.result !== 'BAD'; }
 function filtered() {
   const search = $('search').value.trim().toLowerCase();
@@ -163,7 +162,7 @@ function sourceRow(row, others, canonical) {
     const use = node('td', useLabels[value(row, 'use')], 'use-cell');
     const quality = node('td'); quality.append(node('span', row.quality, `chip level level-${row.quality.toLowerCase()}`));
     const result = node('td'), key = resultKey(row);
-    const provisional = row.result && row.quality !== 'FULL';
+    const provisional = row.result && row.result_provisional;
     const badge = node('span', resultLabels[key] + (provisional ? ' · provisional' : ''), `chip quality-${resultClasses[key]}${provisional ? ' result-provisional' : ''}`);
     result.append(badge);
     const issueRate = node('td', row.issue_rate == null || !row.result ? '—' : `${(100 * row.issue_rate).toFixed(2)}%`, 'num issue-rate-cell');
@@ -188,7 +187,7 @@ function details(row) {
   $('detail-name').textContent = row.display_name; $('detail-notes').textContent = row.notes;
   const controls = row.curation?.verification;
   const fields = [
-    ['Origin', originOf(row)], ['Build path', row.build_path], ['Status', row.status], ['Quality', row.quality], ['Result', resultLabels[resultKey(row)]],
+    ['Origin', originOf(row)], ['Build path', row.build_path], ['Status', row.status], ['Quality', row.quality], ['Result', resultLabels[resultKey(row)] + (row.result && row.result_provisional ? ' · provisional' : '')],
     ['Unique examples', row.within_source_dedup?.unique_count], ['Raw converted tasks', row.within_source_dedup?.raw_count], ['Within-source duplicates dropped', row.within_source_dedup?.within_source_duplicates], ['Use', useLabels[value(row, 'use')]],
     ['Coverage basis', row.coverage?.basis], ['Coverage gap', row.coverage?.unavailable_reason],
     ['Oracle validation', row.oracle_validation && (oracleValidationLabels[row.oracle_validation] ?? row.oracle_validation)],
