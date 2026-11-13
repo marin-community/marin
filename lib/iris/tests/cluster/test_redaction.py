@@ -168,8 +168,21 @@ def test_redact_submit_argv_keeps_flags_not_named_like_a_secret():
         ("https://made-up-token@example.com:8443/repo", "https://example.com:8443/repo"),
         ("https://github.com/org/repo.git", "https://github.com/org/repo.git"),
         ("git@github.com:org/repo.git", "git@github.com:org/repo.git"),
+        ("https://made-up-user:made-up-pw@example.com:abc/repo", "https://example.com:abc/repo"),
+        ("https://made-up-user:made-up-pw@[::1]:8080/repo", "https://[::1]:8080/repo"),
+        ("https://made-up-user:made-up-pw@[::1/repo", "https://[::1/repo"),
+        ("https://made-up-host/repo?ref=made-up@tag", "https://made-up-host/repo?ref=made-up@tag"),
     ],
-    ids=["user-and-password", "token-and-port", "no-userinfo", "scp-style"],
+    ids=[
+        "user-and-password",
+        "token-and-port",
+        "no-userinfo",
+        "scp-style",
+        "bad-port",
+        "ipv6",
+        "unclosed-ipv6",
+        "at-sign-after-host",
+    ],
 )
 def test_strip_url_userinfo(url, expected):
     assert strip_url_userinfo(url) == expected

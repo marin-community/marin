@@ -13,7 +13,6 @@ import dataclasses
 import json
 from collections.abc import Callable, Mapping
 from typing import cast
-from urllib.parse import urlsplit, urlunsplit
 
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance
 from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
@@ -54,13 +53,19 @@ def _sensitive_flag_name(token: str) -> str | None:
 
 
 def strip_url_userinfo(url: str) -> str:
-    """*url* without its ``user:password@`` part, which can hold a credential."""
-    parts = urlsplit(url)
-    if parts.username is None and parts.password is None:
+    """*url* without its ``user:password@`` part, which can hold a credential.
+
+    Only the text up to the last ``@`` of the authority is removed. Nothing else
+    is parsed, so a malformed port or host is kept as is and this never raises.
+    """
+    scheme, separator, rest = url.partition("://")
+    if not separator:
         return url
-    host = parts.hostname or ""
-    netloc = f"{host}:{parts.port}" if parts.port is not None else host
-    return urlunsplit(parts._replace(netloc=netloc))
+    authority_end = min((index for index in map(rest.find, "/?#") if index >= 0), default=len(rest))
+    authority = rest[:authority_end]
+    if "@" not in authority:
+        return url
+    return f"{scheme}://{authority.rpartition('@')[2]}{rest[authority_end:]}"
 
 
 def redact_request_env_vars(

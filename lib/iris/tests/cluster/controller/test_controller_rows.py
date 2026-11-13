@@ -444,6 +444,19 @@ def test_job_config_redacts_a_secret_under_an_allowed_key(state):
     assert provenance["command_line"] == ["python", "train.py", "[REDACTED]"]
 
 
+def test_job_config_row_is_written_despite_a_malformed_git_remote(state):
+    rows = _attach(state, "marin")
+    request = make_job_request("train")
+    request.environment.env_vars["MARIN_PROVENANCE"] = _provenance_json(
+        git_remote="https://made-up-user:made-up-password@example.com:abc/repo.git"
+    )
+
+    submit_job(state, "train", request)
+
+    provenance = json.loads(rows.job_configs[0].env_inputs)["MARIN_PROVENANCE"]
+    assert provenance["git_remote"] == "https://example.com:abc/repo.git"
+
+
 def test_job_config_drops_an_unparseable_launch_provenance(state):
     rows = _attach(state, "marin")
     request = make_job_request("train")
