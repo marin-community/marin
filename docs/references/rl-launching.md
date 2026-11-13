@@ -171,6 +171,12 @@ within it. An expert group may communicate across the interconnect between hosts
 Check placement and communication-backend support before running a new layout. Accepting a
 72-GPU policy in the planner does not establish a full-rack NVL72 trainer with inference elsewhere.
 
+The [Mochi full-context experiment](../../experiments/post_training/mochi_three_rack.py)
+requests 64 trainer GPUs and two 64-GPU inference engines in three separate NVLink domains.
+It supports fresh Hero MuonH state and native checkpoint continuation at a 262,144-token cap.
+Its inputs use a pinned, three-day artifact prefix; check their identity and expiry before launch.
+The [one-rack recipe](../../experiments/post_training/mochi_one_rack/README.md) remains available.
+
 Engines that fit on one host retain whole-engine packing: each host holds
 `floor(GPUs per host / engine ranks)` engines. Other disaggregated engines must still fit
 on one host. For colocated roles, each TP-by-PP slice must fit within and divide a policy node;
