@@ -93,8 +93,6 @@ def catalog(monkeypatch, tmp_path):
 def arguments(tmp_path) -> list[str]:
     options = {
         "--mode": "sample",
-        "--review-mode": "chat",
-        "--model-revision": "fixture-revision",
         "--review-cache": str(tmp_path / "cache"),
         "--max-workers": "1",
         "--coordinator-memory": "16g",
@@ -320,7 +318,7 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
 
 @pytest.mark.parametrize("mode", ["sample", "full"])
 @pytest.mark.parametrize("rubric", [None, "Check the reference answer."])
-def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path, monkeypatch, mode, rubric):
+def test_recipe_cli_plans_pinned_review_and_requires_credentials_only_for_execution(tmp_path, monkeypatch, mode, rubric):
     monkeypatch.delenv(GLM_BULK_TOKEN_ENV, raising=False)
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
@@ -386,7 +384,7 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
     runner = CliRunner()
     options += write_fixture_receipt(source.config, remote, tmp_path / "resource-receipt.json")
     planned = runner.invoke(main, options)
-    assert planned.exit_code == (2 if rubric is not None else 0), planned.output
+    assert planned.exit_code == 0, planned.output
     assert not (tmp_path / "artifacts").exists()
     assert not report.exists()
     client = LocalClient()
@@ -427,7 +425,7 @@ def test_shell_only_campaign_does_not_load_ports_catalog(tmp_path):
     asyncio.run(check())
 
 
-def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, monkeypatch, review_server):
+def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, monkeypatch, review_server, qa_reviewer):
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
     declared = replace(
         declared,
@@ -481,14 +479,8 @@ def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, 
         "2",
         "--max-workers",
         "1",
-        "--review-mode",
-        "chat",
         "--review-concurrency",
         "1",
-        "--model-revision",
-        "fixture",
-        "--base-url",
-        f"http://127.0.0.1:{review_server.server_address[1]}/v1",
         "--run",
     ]
     runner = CliRunner()
@@ -507,7 +499,7 @@ def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, 
     assert len(review_server.requests) == 2
 
 
-def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, review_server):
+def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, review_server, qa_reviewer):
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
     declared = replace(
         declared,
@@ -556,12 +548,6 @@ def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, r
         "2",
         "--assessment-sample-size",
         "1",
-        "--review-mode",
-        "chat",
-        "--model-revision",
-        "fixture",
-        "--base-url",
-        f"http://127.0.0.1:{review_server.server_address[1]}/v1",
         "--run",
     ]
     args += write_fixture_receipt(source.config, staged, tmp_path / "resource-receipt.json")
@@ -587,7 +573,7 @@ def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, r
     assert len(review_server.requests) == 1
 
 
-def test_full_campaign_requires_qa_transport_availability(tmp_path, monkeypatch, review_server):
+def test_full_campaign_requires_qa_transport_availability(tmp_path, monkeypatch, review_server, qa_reviewer):
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
     declared = replace(
         declared,
@@ -633,14 +619,8 @@ def test_full_campaign_requires_qa_transport_availability(tmp_path, monkeypatch,
         "1",
         "--quality-sample-size",
         "1",
-        "--review-mode",
-        "chat",
-        "--model-revision",
-        "fixture",
         "--review-concurrency",
         "1",
-        "--base-url",
-        f"http://127.0.0.1:{review_server.server_address[1]}/v1",
         "--run",
     ]
     args += write_fixture_receipt(source.config, staged, tmp_path / "resource-receipt.json")

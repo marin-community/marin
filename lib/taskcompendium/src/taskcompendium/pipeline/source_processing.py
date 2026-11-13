@@ -146,7 +146,7 @@ class SourcePipelineConfig:
 
     ``machines`` runs sandbox grader controls. Remote judge controls use ``judge_connection``
     without a grading machine; other external graders require ``machines``.
-    ``review=None`` supports recipes without a model-review rubric.
+    SAMPLE/FULL require a reviewer spec even when the recipe has no model-review rubric.
     ``normalized_shards`` caps the export partitions; small populations use fewer shards.
     """
 
@@ -518,7 +518,14 @@ def _gate_quality(run: _SourceRun, panel: _Panel, review: ReviewConfig | None) -
     config = run.config
     with run.telemetry.phase("quality_review") as phase:
         if review is None:
-            decision = skip_source_review(str(prepared), str(quality), config.quality_policy, coverage=panel.coverage)
+            assert config.review is not None
+            decision = skip_source_review(
+                str(prepared),
+                str(quality),
+                config.quality_policy,
+                reviewer_spec=config.review.spec,
+                coverage=panel.coverage,
+            )
         else:
             decision = assess_source_quality(
                 str(prepared),
@@ -965,8 +972,8 @@ def run_source_pipeline(
     if config is None or config.mode != mode:
         raise ValueError("Reviewed modes require a matching source pipeline configuration")
     require_decontamination(config.lexical_contamination, recipe.source.dataset, recipe.source.revision)
-    if recipe.rubric is not None and config.review is None:
-        raise ValueError("A recipe with a rubric requires review configuration")
+    if config.review is None:
+        raise ValueError("SAMPLE/FULL require a ReviewerSpec")
     output = StoragePath(output_path)
     if any(
         (output / name).exists()

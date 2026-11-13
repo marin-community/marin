@@ -11,12 +11,11 @@ identity and actual prompt-token usage against them before admitting a source.
 import hashlib
 import logging
 from collections.abc import Iterator, Mapping
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
-from typing import Protocol
+from typing import Any
 
 import httpx
 from marin.evaluation.hardware import AcceleratorChoice
@@ -25,18 +24,13 @@ from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.config import VllmEngineConfig, VllmLauncherType
 from marin.inference.iris import remote_inference
 from rigging.timing import Duration
+from taskcompendium.pipeline.reviewer_spec import JudgeTier, ReviewerSpec
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import RUBRIC_LABELS, JudgeCompletionPolicy, JudgeSpec
 
-from experiments.post_training.glm import resolve_glm_base_url
+from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, resolve_glm_base_url
 
 logger = logging.getLogger(__name__)
-
-
-class JudgeTier(StrEnum):
-    LIGHT = "LIGHT"
-    MEDIUM = "MEDIUM"
-    HEAVY = "HEAVY"
 
 
 @dataclass(frozen=True)
@@ -48,6 +42,7 @@ class JudgeTierDefinition:
     model_identity: str
     model_revision: str | None
     reasoning_policy: str
+    qa_reviewer: ReviewerSpec | None = None
 
 
 JUDGE_SYSTEM_PROMPT = (
@@ -84,66 +79,6 @@ JUDGE_CONTRACT = JudgeSpec(
     temperature=0.7,
 )
 
-JUDGE_TIERS: Mapping[JudgeTier, JudgeTierDefinition] = MappingProxyType(
-    {
-        JudgeTier.LIGHT: JudgeTierDefinition(
-            spec=replace(
-                JUDGE_CONTRACT,
-                model="openai/gpt-oss-120b",
-                max_completion_tokens=8192,
-                reasoning_effort="low",
-                request_timeout=120,
-                transport_attempts=3,
-                transport_budget=360,
-                parse_attempts=2,
-            ),
-            context_window_tokens=131_072,
-            model_identity="openai/gpt-oss-120b",
-            model_revision=None,
-            reasoning_policy="low",
-        ),
-        JudgeTier.MEDIUM: JudgeTierDefinition(
-            spec=replace(
-                JUDGE_CONTRACT,
-                model="MiniMaxAI/MiniMax-M3-MXFP8",
-                max_completion_tokens=2048,
-                chat_template_kwargs={"thinking_mode": "adaptive"},
-                request_timeout=300,
-                transport_attempts=6,
-                transport_budget=1800,
-                parse_attempts=1,
-            ),
-            context_window_tokens=262_144,
-            model_identity="MiniMaxAI/MiniMax-M3-MXFP8",
-            model_revision="c5454eb03678d8710e54a4e0fc681b9f3b4a3dba",
-            reasoning_policy="adaptive, explicit MiniMax thinking_mode",
-        ),
-        JudgeTier.HEAVY: JudgeTierDefinition(
-            spec=replace(
-                JUDGE_CONTRACT,
-                model="glm-5.3",
-                max_completion_tokens=4096,
-                incomplete_retry_tokens=8192,
-                chat_template_kwargs={"reasoning_effort": "low"},
-                request_timeout=300,
-                transport_attempts=3,
-                transport_budget=900,
-                parse_attempts=3,
-            ),
-            context_window_tokens=262_144,
-            model_identity="zai-org/GLM-5.3",
-            model_revision="aca966e4e02791568aa6a4ced368624b3d897f42",
-            reasoning_policy="low, explicit GLM chat-template setting",
-        ),
-    }
-)
-
-
-class JudgeEndpoint(Protocol):
-    """Bind a tier to a checked connection for the lifetime of a grading run."""
-
-    def connect(self) -> AbstractContextManager[JudgeConnection]: ...
-
 
 def _validate_model(connection: JudgeConnection, expected: str) -> None:
     response = httpx.get(
@@ -167,9 +102,15 @@ class HostedJudgeEndpoint:
     base_url: str
     api_key: str = field(repr=False)
 
+    @property
+    def identity(self) -> dict[str, Any]:
+        return {"kind": "hosted", "model": self.model, "base_url": self.base_url}
+
     @contextmanager
-    def connect(self) -> Iterator[JudgeConnection]:
-        connection = JudgeConnection(self.base_url, self.api_key, default_model=self.model)
+    def connect(self, api_key: str | None = None) -> Iterator[JudgeConnection]:
+        connection = JudgeConnection(
+            self.base_url, api_key if api_key is not None else self.api_key, default_model=self.model
+        )
         _validate_model(connection, self.model)
         yield connection
 
@@ -179,12 +120,19 @@ class RelayJudgeEndpoint:
     """Discover an existing GLM relay through its Iris job registration."""
 
     relay_job: str
+    model: str
     api_key: str = field(repr=False)
 
+    @property
+    def identity(self) -> dict[str, Any]:
+        return {"kind": "relay", "relay_job": self.relay_job, "model": self.model}
+
     @contextmanager
-    def connect(self) -> Iterator[JudgeConnection]:
+    def connect(self, api_key: str | None = None) -> Iterator[JudgeConnection]:
         with HostedJudgeEndpoint(
-            JUDGE_TIERS[JudgeTier.HEAVY].spec.model, resolve_glm_base_url(self.relay_job), self.api_key
+            self.model,
+            resolve_glm_base_url(self.relay_job),
+            api_key if api_key is not None else self.api_key,
         ).connect() as connection:
             yield connection
 
@@ -207,7 +155,7 @@ class LocalJudgeEndpoint:
     job_ids: list[str] = field(default_factory=list, repr=False, compare=False)
 
     @property
-    def identity(self) -> dict:
+    def identity(self) -> dict[str, Any]:
         return {
             "kind": "local",
             "tier": self.tier,
@@ -217,7 +165,7 @@ class LocalJudgeEndpoint:
         }
 
     @contextmanager
-    def connect(self) -> Iterator[JudgeConnection]:
+    def connect(self, api_key: str | None = None) -> Iterator[JudgeConnection]:
         definition = JUDGE_TIERS[self.tier]
         model = load_model_config(self.model_config)
         if definition.model_revision is None:
@@ -278,3 +226,74 @@ class LocalJudgeEndpoint:
                 definition.spec.model, endpoint.base_url, endpoint.api_key or "unused"
             ).connect() as connection:
                 yield connection
+
+
+def _heavy_tier() -> JudgeTierDefinition:
+    spec = replace(
+        JUDGE_CONTRACT,
+        model="glm-5.3",
+        max_completion_tokens=4096,
+        incomplete_retry_tokens=8192,
+        chat_template_kwargs={"reasoning_effort": "low"},
+        request_timeout=300,
+        transport_attempts=3,
+        transport_budget=900,
+        parse_attempts=3,
+    )
+    return JudgeTierDefinition(
+        spec=spec,
+        context_window_tokens=262_144,
+        model_identity="zai-org/GLM-5.3",
+        model_revision="aca966e4e02791568aa6a4ced368624b3d897f42",
+        reasoning_policy="low, explicit GLM chat-template setting",
+        qa_reviewer=ReviewerSpec(
+            tier=JudgeTier.HEAVY,
+            model=spec.model,
+            model_revision="unverified:ortet-glm-5.3-fp8",
+            endpoint=RelayJudgeEndpoint(DEFAULT_GLM_RELAY_JOB, spec.model, ""),
+            temperature=spec.temperature,
+            reasoning_effort=spec.chat_template_kwargs["reasoning_effort"],
+            max_tokens=spec.max_completion_tokens,
+            retry_max_tokens=spec.incomplete_retry_tokens,
+            max_attempts=spec.parse_attempts,
+        ),
+    )
+
+
+JUDGE_TIERS: Mapping[JudgeTier, JudgeTierDefinition] = MappingProxyType(
+    {
+        JudgeTier.LIGHT: JudgeTierDefinition(
+            spec=replace(
+                JUDGE_CONTRACT,
+                model="openai/gpt-oss-120b",
+                max_completion_tokens=8192,
+                reasoning_effort="low",
+                request_timeout=120,
+                transport_attempts=3,
+                transport_budget=360,
+                parse_attempts=2,
+            ),
+            context_window_tokens=131_072,
+            model_identity="openai/gpt-oss-120b",
+            model_revision=None,
+            reasoning_policy="low",
+        ),
+        JudgeTier.MEDIUM: JudgeTierDefinition(
+            spec=replace(
+                JUDGE_CONTRACT,
+                model="MiniMaxAI/MiniMax-M3-MXFP8",
+                max_completion_tokens=2048,
+                chat_template_kwargs={"thinking_mode": "adaptive"},
+                request_timeout=300,
+                transport_attempts=6,
+                transport_budget=1800,
+                parse_attempts=1,
+            ),
+            context_window_tokens=262_144,
+            model_identity="MiniMaxAI/MiniMax-M3-MXFP8",
+            model_revision="c5454eb03678d8710e54a4e0fc681b9f3b4a3dba",
+            reasoning_policy="adaptive, explicit MiniMax thinking_mode",
+        ),
+        JudgeTier.HEAVY: _heavy_tier(),
+    }
+)

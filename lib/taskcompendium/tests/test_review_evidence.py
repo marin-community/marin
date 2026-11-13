@@ -20,6 +20,7 @@ from taskcompendium.pipeline.review import completion_body
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from .pipeline_stages import SVAMP_RUBRIC, svamp_row_task
+from .reviewer_specs import reviewer_spec
 
 
 def test_review_can_inspect_verifier_text_without_changing_task_bytes():
@@ -30,7 +31,9 @@ def test_review_can_inspect_verifier_text_without_changing_task_bytes():
     assert isinstance(task, TaskSpec)
     resource = inline_resource("tests/cases.json", b'{"input":"two","output":"2"}')
     task = task.model_copy(update={"resources": ResourceGroups(verifier=(resource,))})
-    payload = json.loads(completion_body(task, SVAMP_RUBRIC, "reviewer", 100)["messages"][1]["content"])
+    payload = json.loads(
+        completion_body(task, SVAMP_RUBRIC, reviewer_spec("reviewer", max_tokens=100))["messages"][1]["content"]
+    )
     assert payload["resources"][0]["text"] == '{"input":"two","output":"2"}'
     assert payload["resources"][0]["role"] == "verifier"
     assert resource_bytes(task.resources.verifier[0]) == resource_bytes(resource)
@@ -53,7 +56,9 @@ def test_review_bounds_private_and_build_files_without_changing_the_task():
         }
     )
     original = task.model_dump_json()
-    payload = json.loads(completion_body(task, SVAMP_RUBRIC, "reviewer", 100)["messages"][1]["content"])
+    payload = json.loads(
+        completion_body(task, SVAMP_RUBRIC, reviewer_spec("reviewer", max_tokens=100))["messages"][1]["content"]
+    )
     assert "content_base64" not in json.dumps(payload)
     previews = {resource["role"]: resource for resource in payload["resources"] if resource["path"] == "large"}
     assert previews.keys() == {"verifier", "actor_build", "grader_build"}
@@ -76,7 +81,7 @@ def test_fixture_heavy_review_keeps_public_inputs_and_oracle_visible():
         oracle=(inline_resource("solution/solve.sh", b"Private oracle"),),
     )
     task = task.model_copy(update={"resources": resources})
-    body = completion_body(task, SVAMP_RUBRIC, "reviewer", 100)
+    body = completion_body(task, SVAMP_RUBRIC, reviewer_spec("reviewer", max_tokens=100))
     payload = json.loads(body["messages"][1]["content"])
     previews = {resource["path"]: resource["text"] for resource in payload["resources"]}
     assert previews["input.txt"] == "Public input"
@@ -87,7 +92,7 @@ def test_fixture_heavy_review_keeps_public_inputs_and_oracle_visible():
         update={"verifier": (*resources.verifier[:-1], inline_resource("tests/case-299.txt", b"edit"))}
     )
     changed_task = task.model_copy(update={"resources": changed_resources})
-    changed_body = completion_body(changed_task, SVAMP_RUBRIC, "reviewer", 100)
+    changed_body = completion_body(changed_task, SVAMP_RUBRIC, reviewer_spec("reviewer", max_tokens=100))
     changed_payload = json.loads(changed_body["messages"][1]["content"])
     assert changed_payload["resources"] == payload["resources"]
     assert changed_payload["resource_manifest"]["sha256"] != payload["resource_manifest"]["sha256"]
@@ -111,7 +116,9 @@ def test_review_exposes_late_small_cases_that_can_violate_the_public_domain():
         )
     )
     task = task.model_copy(update={"resources": resources})
-    payload = json.loads(completion_body(task, SVAMP_RUBRIC, "reviewer", 100)["messages"][1]["content"])
+    payload = json.loads(
+        completion_body(task, SVAMP_RUBRIC, reviewer_spec("reviewer", max_tokens=100))["messages"][1]["content"]
+    )
     previews = {resource["path"]: resource["text"] for resource in payload["resources"]}
     assert previews["tests/input_80.txt"] == "0"
     assert previews["tests/output_80.txt"] == "1"
@@ -133,7 +140,9 @@ def test_large_public_files_do_not_hide_later_oracle_and_test_prefixes():
         ),
     )
     task = task.model_copy(update={"resources": resources})
-    payload = json.loads(completion_body(task, SVAMP_RUBRIC, "reviewer", 100)["messages"][1]["content"])
+    payload = json.loads(
+        completion_body(task, SVAMP_RUBRIC, reviewer_spec("reviewer", max_tokens=100))["messages"][1]["content"]
+    )
     previews = {resource["path"]: resource for resource in payload["resources"]}
     text_previews = [resource for resource in previews.values() if resource["encoding"] == "utf-8"]
     assert all(len(resource["text"]) >= 100 for resource in text_previews)

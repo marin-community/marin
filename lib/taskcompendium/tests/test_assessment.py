@@ -20,7 +20,6 @@ from taskcompendium.pipeline.assessment import (
 )
 from taskcompendium.pipeline.assessment_review import (
     ASSESSMENT_RUBRIC,
-    AssessmentModel,
     IncompleteAssessment,
     grade_assessment,
 )
@@ -31,11 +30,12 @@ from taskcompendium.pipeline.review_requests import RequestObservation, RequestO
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode, run_source_pipeline
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
-from taskcompendium.pipeline.stages import AuditExecution
+from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
 
 from .decontamination_fixtures import decontamination_evidence
 from .oracle_filter_fixtures import oracle_receipt
 from .pipeline_stages import convert_svamp, fixture_recipe
+from .reviewer_specs import reviewer_spec
 
 
 @pytest.fixture
@@ -67,7 +67,7 @@ def curated_source(context, root, rows):
             SourceProcessingMode.FULL,
             SourceQualityPolicy(sample_size=10),
             SourceVerificationPolicy(20, 0, 1, 0.95),
-            None,
+            ReviewConfig(reviewer_spec(), mode=ReviewMode.CHAT),
             AuditExecution(),
             2,
             None,
@@ -188,12 +188,13 @@ def test_assessment_recovers_identity_mismatch_without_misattributing_grade(cont
         curated_root=str(curated),
         inputs_root=str(inputs),
         rubric=ASSESSMENT_RUBRIC,
-        model=AssessmentModel("fixture", "revision"),
+        model=reviewer_spec("fixture", "revision"),
         submit=MismatchedIdentityTransport(str(tmp_path)),
         cache_root=str(tmp_path / "cache"),
         output_root=str(judgments),
     )
     manifest = assessment_judgments(str(judgments))
+    assert json.loads(manifest.model.reviewer_spec_json) == reviewer_spec("fixture", "revision").identity
     rows = [row for path in manifest.grade_paths for row in load_parquet(path)]
     expected = {row.task_id for row in assessment_inputs(str(inputs)).sample}
     assert {(row["task_id"], row["status"], row["verdict"]) for row in rows} == {
@@ -227,7 +228,7 @@ def test_assessment_recovers_truncated_judgment_with_larger_retry_budget(context
         curated_root=str(curated),
         inputs_root=str(inputs),
         rubric=ASSESSMENT_RUBRIC,
-        model=AssessmentModel("fixture", "revision", max_tokens=100, retry_max_tokens=200),
+        model=reviewer_spec("fixture", "revision", max_tokens=100, retry_max_tokens=200),
         submit=TruncatedAssessmentTransport(str(tmp_path), token_limit=100),
         cache_root=str(tmp_path / "cache"),
         output_root=str(judgments),
@@ -276,7 +277,7 @@ def test_assessment_retains_curation_evidence_and_retries_only_uncached_requests
         curated_root=str(curated),
         inputs_root=str(inputs),
         rubric=ASSESSMENT_RUBRIC,
-        model=AssessmentModel("fixture", "revision"),
+        model=reviewer_spec("fixture", "revision"),
         submit=AssessmentTransport(str(tmp_path)),
         cache_root=str(tmp_path / "cache"),
         output_root=str(judgments),
@@ -339,7 +340,7 @@ def test_empty_release_keeps_excluded_diagnosis(context, tmp_path):
         curated_root=str(curated),
         inputs_root=str(inputs),
         rubric=ASSESSMENT_RUBRIC,
-        model=AssessmentModel("fixture", "revision"),
+        model=reviewer_spec("fixture", "revision"),
         submit=AssessmentTransport(str(tmp_path)),
         cache_root=str(tmp_path / "cache"),
         output_root=str(judgments),
@@ -514,7 +515,7 @@ def test_assessment_repairs_stringified_evidence_ids_and_records_the_coercion(co
         curated_root=str(curated),
         inputs_root=str(inputs),
         rubric=ASSESSMENT_RUBRIC,
-        model=AssessmentModel("fixture", "revision"),
+        model=reviewer_spec("fixture", "revision"),
         submit=StringifiedEvidenceTransport(str(tmp_path), shape),
         cache_root=str(tmp_path / "cache"),
         output_root=str(judgments),
@@ -550,7 +551,7 @@ def test_assessment_publishes_below_the_unavailable_threshold(context, tmp_path)
         curated_root=str(curated),
         inputs_root=str(inputs),
         rubric=ASSESSMENT_RUBRIC,
-        model=AssessmentModel("fixture", "revision"),
+        model=reviewer_spec("fixture", "revision"),
         submit=AssessmentTransport(str(tmp_path)),
         cache_root=str(tmp_path / "cache"),
         output_root=str(judgments),
@@ -611,7 +612,7 @@ def test_assessment_cross_claimed_coercion_does_not_stick_to_the_other_task(cont
         curated_root=str(curated),
         inputs_root=str(inputs),
         rubric=ASSESSMENT_RUBRIC,
-        model=AssessmentModel("fixture", "revision"),
+        model=reviewer_spec("fixture", "revision"),
         submit=CrossClaimStringifiedTransport(str(tmp_path)),
         cache_root=str(tmp_path / "cache"),
         output_root=str(judgments),
