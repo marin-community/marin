@@ -163,7 +163,7 @@ function sourceRow(row, others, canonical) {
     const use = node('td', useLabels[value(row, 'use')], 'use-cell');
     const quality = node('td'); quality.append(node('span', row.quality, `chip level level-${row.quality.toLowerCase()}`));
     const result = node('td'), key = resultKey(row);
-    const provisional = row.result && row.quality !== 'FULL';
+    const provisional = row.result && row.result_provisional;
     const badge = node('span', resultLabels[key] + (provisional ? ' · provisional' : ''), `chip quality-${resultClasses[key]}${provisional ? ' result-provisional' : ''}`);
     result.append(badge);
     const issueRate = node('td', row.issue_rate == null || !row.result ? '—' : `${(100 * row.issue_rate).toFixed(2)}%`, 'num issue-rate-cell');

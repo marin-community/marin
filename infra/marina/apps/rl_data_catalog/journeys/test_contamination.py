@@ -14,7 +14,7 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
     page.emulate_media(color_scheme=theme)
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-all").check()
-    expect(page.locator("#rows tr")).to_have_count(11)
+    expect(page.locator("#rows tr")).to_have_count(16)
     expected = {
         "clean": "NO ISSUES",
         "stale-clean": "NOT MEASURED",
@@ -37,7 +37,7 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
     expect(page.locator('tr[data-source-id="Marin:unmeasured"] .overlap-cell')).to_have_text("—")
     expect(page.locator('tr[data-source-id="Marin:stale-clean"] .overlap-cell')).to_have_text("—")
     expect(page.locator('tr[data-source-id="Marin:unmeasured"] .issue-rate-cell')).to_have_text("—")
-    expect(page.locator('tr[data-source-id="Marin:eval"] .result-provisional')).to_have_text("Good · provisional")
+    expect(page.locator('tr[data-source-id="Marin:eval"] .result-provisional')).to_have_count(0)
     assert page.locator("#rows td:has(> .chip)").evaluate_all(
         "cells => cells.every(cell => cell.children.length === 1 && "
         "cell.textContent === cell.firstElementChild.textContent)"
@@ -64,4 +64,24 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
     expect(page.locator("#sections")).to_contain_text("Flagged tasks")
     page.get_by_role("link", name="Getting started", exact=True).click()
     expect(page.locator("#contamination")).to_contain_text("NOT MEASURED")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_complete_sample_is_final_and_unfinished_reviews_are_provisional(journey: Journey, theme: str) -> None:
+    page = journey.page
+    page.emulate_media(color_scheme=theme)
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    page.locator("#show-all").check()
+    complete = page.locator('tr[data-source-id="Marin:sample-complete"]')
+    expect(complete.locator(".level")).to_have_text("SAMPLE")
+    expect(complete.locator(".result-provisional")).to_have_count(0)
+    expect(complete.locator("td").nth(4)).to_have_text("Good")
+    for name in ("sample-uncertain", "full-inflight", "full-uncertain"):
+        expect(page.locator(f'tr[data-source-id="Marin:{name}"] .result-provisional')).to_have_text("Good · provisional")
+    page.set_viewport_size({"width": 390, "height": 844})
+    complete.locator(".source-name").click()
+    page.get_by_role("link", name="All quality evidence", exact=True).click()
+    expect(page.locator("#labels .result-provisional")).to_have_count(0)
+    expect(page.locator("#sections")).to_contain_text("Required content review complete")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")

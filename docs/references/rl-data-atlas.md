@@ -71,13 +71,17 @@ assessment page shows the curation associated with its selected grade.
 
 **By source** lists each source's unique example count, training/evaluation use,
 Quality, Result, lexical contamination, actor-only Daytona verdict and leading
-curriculum area. Quality is QUICK for conversion without executed oversight and
-SAMPLE for recorded execution oversight. FULL requires a complete content-review
-assembly: independent QC and valid reviews cover every unique retained
-contract, with no unavailable observations. Uncertain reviews count toward coverage
-and remain separate from the conclusive Result denominator. The source details keep
-execution qualification separate. Partial content reviews show their coverage as
-provisional/incomplete. Result uses the inclusive issue-rate boundaries above.
+curriculum area. The levels define required content-review scope: QUICK converts
+without content review, SAMPLE requires a complete review of the selected sample,
+and FULL requires a complete review of the whole retained population. Execution qualification is recorded separately. Result uses the
+inclusive issue-rate boundaries above.
+
+The loader records required and conclusive reviewed counts plus coverage
+completeness. Result is provisional if coverage is incomplete or any required
+observation remains unreviewed or uncertain. A completed SAMPLE review is final
+for its sample; the Quality label alone never makes Result provisional. These
+counts follow the selected Result's review panel, not the execution campaign's
+processing mode or the source's entire population when only a sample is required.
 
 The default view hides QUICK and BAD entries and folds advisory duplicate groups.
 Expand a group to inspect matching members, or enable **Show QUICK-quality and
