@@ -674,10 +674,10 @@ def test_harbor_hub_download_reuses_cache_and_separates_release_pins(tmp_path, m
         client.shutdown()
 
 
-@pytest.mark.parametrize("mode", [SourceProcessingMode.QUICK])
-def test_harbor_hub_input_override_bypasses_acquisition_and_tracks_content(tmp_path, config, mode):
+def test_harbor_hub_input_override_bypasses_acquisition_and_reads_archive(tmp_path, config):
     source = HarborHubSource("fixture/tasks", "sha256:" + "a" * 64, read=archive_rows)
     recipe = replace(math500(), source=source, convert=convert_fixture, rubric=None, controls=None, grader=None)
+    mode = SourceProcessingMode.QUICK
     options = PipelineOptions(mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=replace(config, mode=mode)))
     automatic = source_step(recipe, options)
     assert len(automatic.deps) == 1
@@ -693,14 +693,8 @@ def test_harbor_hub_input_override_bypasses_acquisition_and_tracks_content(tmp_p
     rows = list(staged_file_rows(str(root), shard, spec, ConversionContext({}, None)))
     assert rows[0]["data"] == {"prompt": "one", "answer": "1"}
     local_options = replace(options, inputs=InputOverrides(root=str(root)))
-    first = source_step(recipe, local_options)
-    assert first.deps == ()
-    instruction.write_text("two")
-    with tarfile.open(payload, "w:gz") as archive:
-        archive.add(instruction, arcname="instruction.md")
-    second = source_step(recipe, local_options)
-    if mode != SourceProcessingMode.QUICK:
-        assert first.name != second.name
+    overridden = source_step(recipe, local_options)
+    assert overridden.deps == ()
 
 
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
