@@ -32,7 +32,6 @@ from taskcompendium.pipeline.models import (
     ReviewVerdict,
 )
 from taskcompendium.pipeline.review import ReviewBatchResult
-from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation import full_qc_repair
 from experiments.post_training.task_curation.full_qc_artifacts import (
@@ -51,67 +50,8 @@ from experiments.post_training.task_curation.full_qc_review import (
 )
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
-from experiments.post_training.task_curation.retention_plan import RetentionPlan
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
 from experiments.post_training.task_curation.tests.review_server import running_review_server
-
-
-@pytest.fixture
-def qc_inputs(tmp_path):
-    documents = [
-        json.loads(prebuilt_task(name)["lowered_task_spec"])["task"] for name in ("kept", "dropped", "unshaped")
-    ]
-    oracle = TaskSpec.model_validate(documents[0])
-    documents[0] = oracle.model_copy(
-        update={
-            "resources": oracle.resources.model_copy(update={"oracle": (inline_resource("solution/solve.sh", b"true"),)})
-        }
-    ).model_dump(mode="json")
-    documents[2]["execution_requirements"] = None
-    files = write_text_population(((task, {"deployment": 1}) for task in documents), str(tmp_path / "population"))
-    population = SourceTextPopulation(
-        path=str(tmp_path / "population"),
-        source_id="TaskTrove:fixture",
-        dataset_id="open-athena/fixture",
-        dataset_revision="pin",
-        source_version="1",
-        converter_revision="converter-pin",
-        text_renderer_version="fixture",
-        task_count=files.task_count,
-        text_sha256=files.text_sha256,
-        task_specs_sha256=files.task_specs_sha256,
-        main_output_dir=files.main_output_dir,
-        specs_output_dir=files.specs_output_dir,
-        converter_rejections={},
-        admission_rejections={},
-    )
-    write_record(
-        ArtifactRecord(
-            output_path=population.path,
-            result_type=result_type_name(type(population)),
-            result=population.result_payload(),
-        )
-    )
-    drop_path = tmp_path / "drops.parquet"
-    pq.write_table(pa.table({"task_id": ["dropped"]}), drop_path)
-    plan = RetentionPlan(
-        source_id=population.source_id,
-        source_dataset_id=population.dataset_id,
-        source_revision=population.dataset_revision,
-        converter_revision=population.converter_revision,
-        converter_version=population.source_version,
-        input_artifact=population.path,
-        task_specs_sha256=population.task_specs_sha256,
-        raw_count=3,
-        combined_drop_count=1,
-        retained_count=2,
-        combined_drop_manifest_uri=str(drop_path),
-        lexical_use="train",
-    )
-    return (
-        InputConfig(population.path, plan, file_sha256(StoragePath(str(drop_path))), str(tmp_path / "prepared")),
-        documents,
-    )
 
 
 def test_prepared_contracts_cover_only_retained_tasks_and_keep_qualification_diagnostics(qc_inputs):
