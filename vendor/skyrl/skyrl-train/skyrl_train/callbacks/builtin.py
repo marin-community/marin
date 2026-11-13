@@ -31,6 +31,7 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
 from skyrl_train.evaluation_profiles import (
+    PeriodicEvaluation,
     DEFAULT_EVALUATION_STEPS,
     validate_periodic_evaluation_inputs,
     EvaluationProfile,
@@ -1266,7 +1267,13 @@ def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
             logger.error(f"Failed to create callback: {e}")
             raise
 
-    evaluations = [callback for callback in callbacks if isinstance(callback, EvaluationCallback)]
+    evaluations = [
+        PeriodicEvaluation(
+            callback.eval_steps, callback.additional_evaluations, callback.metric_groups, callback.stop_when
+        )
+        for callback in callbacks
+        if isinstance(callback, EvaluationCallback)
+    ]
     validate_periodic_evaluation_inputs(evaluations)
 
     return callbacks

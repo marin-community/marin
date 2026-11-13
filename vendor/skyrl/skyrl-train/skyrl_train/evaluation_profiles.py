@@ -4,9 +4,8 @@ Named results use eval/<name>/ metrics and <trainer.export_path>/<name>/ outputs
 """
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
 import json
-from typing import Any, Protocol
+from typing import Any, NamedTuple
 
 from marinskyrl.resource_locator import join_resource_path
 from omegaconf import DictConfig, OmegaConf
@@ -16,16 +15,9 @@ from skyrlrecipe.declared import EvaluationSampling as EvaluationProfile
 DEFAULT_EVALUATION_STEPS = 5
 
 
-def _declared_profiles(config: Mapping[str, Any]) -> dict[str, EvaluationProfile]:
+def _declared_profiles(config: Mapping[str, Any]) -> dict[str, Any]:
     profiles = {}
-    callbacks = config.get("trainer", {}).get("callbacks")
-    if callbacks is None:
-        callbacks = ()
-    if not isinstance(callbacks, Sequence) or isinstance(callbacks, str):
-        raise ValueError("trainer.callbacks must be a sequence")
-    for index, callback in enumerate(callbacks):
-        if not isinstance(callback, Mapping):
-            raise ValueError(f"trainer.callbacks[{index}] must be a mapping")
+    for callback in config.get("trainer", {}).get("callbacks") or ():
         if callback.get("type") != "evaluation":
             continue
         declarations = callback.get("additional_evaluations")
@@ -38,14 +30,9 @@ def _declared_profiles(config: Mapping[str, Any]) -> dict[str, EvaluationProfile
                 raise ValueError(f"evaluation name must be an identifier: {name!r}")
             if name in profiles:
                 raise ValueError(f"duplicate evaluation profile: {name}")
-            try:
-                document = (
-                    OmegaConf.to_container(parameters, resolve=True) if OmegaConf.is_config(parameters) else parameters
-                )
-                profile = EvaluationProfile.model_validate_json(json.dumps(document))
-            except (TypeError, ValueError) as error:
-                raise ValueError(f"evaluation profile {name}: {error}") from error
-            profiles[name] = profile
+            profiles[name] = (
+                OmegaConf.to_container(parameters, resolve=True) if OmegaConf.is_config(parameters) else parameters
+            )
     return profiles
 
 
@@ -55,32 +42,41 @@ def validate_evaluation_data(config: DictConfig, *, source_recipe: bool) -> None
     for name in config.inputs.get("evaluation_data", {}):
         if name not in profiles:
             raise ValueError(f"evaluation data has no additional evaluation profile: {name}")
-        if source_recipe and profiles[name].data_files is not None:
-            raise ValueError(f"evaluation profile {name} has both data_files and evaluation_data")
+        if source_recipe and isinstance(profiles[name], Mapping) and profiles[name].get("data_files") is not None:
+            raise ValueError(f"evaluation profile {name}: both data_files and evaluation_data")
 
 
 def evaluation_profiles(
     config: DictConfig, *, evaluation_data: tuple[tuple[str, tuple[str, ...]], ...] = ()
 ) -> dict[str, EvaluationProfile]:
     """Resolve and record named requests in one complete native SkyRL configuration."""
-    profiles = _declared_profiles(config)
-    for name, paths in evaluation_data:
-        profiles[name] = EvaluationProfile.model_validate_json(
-            json.dumps(profiles[name].to_skyrl() | {"data_files": paths})
-        )
+    staged = dict(evaluation_data)
     resolved = {}
-    for name, profile in profiles.items():
-        merged = evaluation_profile_config(config, profile, name)
-        resolved[name] = EvaluationProfile.model_validate_json(
-            json.dumps(
-                {
-                    "sampling_params": OmegaConf.to_container(merged.generator.eval_sampling_params, resolve=True),
-                    "n_samples_per_prompt": int(merged.generator.eval_n_samples_per_prompt),
-                    "data_files": profile.data_files,
-                    "schedule": profile.schedule,
-                }
-            )
-        )
+    for name, declaration in _declared_profiles(config).items():
+        document = declaration
+        if isinstance(declaration, Mapping):
+            sampling = declaration.get("sampling_params")
+            if sampling is None or isinstance(sampling, Mapping):
+                sampling = OmegaConf.to_container(config.generator.eval_sampling_params, resolve=True) | (
+                    sampling or {}
+                )
+            document = {
+                "schedule": "every_evaluation",
+                "data_files": None,
+                **declaration,
+                "sampling_params": sampling,
+                "n_samples_per_prompt": (
+                    int(config.generator.eval_n_samples_per_prompt)
+                    if declaration.get("n_samples_per_prompt") is None
+                    else declaration["n_samples_per_prompt"]
+                ),
+            }
+            if name in staged:
+                document["data_files"] = staged[name]
+        try:
+            resolved[name] = EvaluationProfile.model_validate_json(json.dumps(document))
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"evaluation profile {name}: {error}") from error
     for callback in config.get("trainer", {}).get("callbacks") or []:
         if callback.get("type") == "evaluation":
             for name in callback.get("additional_evaluations") or {}:
@@ -98,31 +94,20 @@ def validate_generation_profiles(profiles: Mapping[str, EvaluationProfile]) -> N
         raise ValueError("final evaluation profiles require training updates")
 
 
-class PeriodicEvaluation(Protocol):
-    @property
-    def eval_steps(self) -> int: ...
-    @property
-    def additional_evaluations(self) -> Mapping[str, EvaluationProfile]: ...
-    @property
-    def metric_groups(self) -> Mapping[str, Sequence[str]]: ...
-    @property
-    def stop_when(self) -> Mapping[str, object]: ...
+class PeriodicEvaluation(NamedTuple):
+    eval_steps: int
+    additional_evaluations: Mapping[str, EvaluationProfile]
+    metric_groups: Mapping[str, Sequence[str]]
+    stop_when: Mapping[str, object]
 
 
-@dataclass(frozen=True)
-class PeriodicEvaluationConfig:
-    eval_steps: int = DEFAULT_EVALUATION_STEPS
-    additional_evaluations: Mapping[str, EvaluationProfile] = field(default_factory=dict)
-    metric_groups: Mapping[str, Sequence[str]] = field(default_factory=dict)
-    stop_when: Mapping[str, object] = field(default_factory=dict)
-
-
-def validate_evaluation_schedule(config: DictConfig, *, generation: bool) -> None:
-    profiles = _declared_profiles(config)
+def validate_evaluation_schedule(
+    config: DictConfig, profiles: Mapping[str, EvaluationProfile], *, generation: bool
+) -> None:
     if generation:
         validate_generation_profiles(profiles)
     evaluations = [
-        PeriodicEvaluationConfig(
+        PeriodicEvaluation(
             eval_steps=callback.get("eval_steps", DEFAULT_EVALUATION_STEPS),
             additional_evaluations={name: profiles[name] for name in callback.get("additional_evaluations") or {}},
             metric_groups=callback.get("metric_groups") or {},

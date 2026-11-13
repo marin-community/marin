@@ -60,6 +60,7 @@ from marin.rl.skyrl_records import (
     read_skyrl_metrics,
     read_stored_skyrl_attempts,
     read_stored_skyrl_receipt,
+    recorded_launch,
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import cluster_config
@@ -997,7 +998,18 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     assert fallback.native.config["skyrl"]["runtime"]["iris_job_id"] == "/local/training"
     with DataStore.open(run_records_root(str(tmp_path / "exports"))) as store:
         update_attempt(store, AttemptRecord(run_id=receipt.run_id, attempt_id=receipt.attempt_id, result=receipt.result))
-    tracking = attempt_tracking(receipt)
+    stored = receipt.model_copy(deep=True)
+    stored.config["future_runtime"] = {"version": 2}
+    stored.config["skyrl"]["generator"]["future_engine_option"] = True
+    tracking = attempt_tracking(stored, recorded_launch(stored))
+    for field, value in (("model_dtype", 7), ("backend", None)):
+        malformed = stored.model_copy(deep=True)
+        if value is None:
+            del malformed.config["skyrl"]["generator"][field]
+        else:
+            malformed.config["skyrl"]["generator"][field] = value
+        with pytest.raises(ValueError, match=f"{receipt.attempt_id}.*{field}"):
+            recorded_launch(malformed)
     assert tracking["attempt_id"] == config.attempt_id
     assert tracking["wandb_url"] == f"https://wandb.ai/tests-team/tests-project/runs/{config.attempt_id}"
     assert tracking["engine"]["vllm_version"] == "fixture-vllm"
