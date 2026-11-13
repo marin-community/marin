@@ -4526,7 +4526,7 @@ mod tests {
         std::fs::remove_dir_all(remote_dir).ok();
     }
 
-    /// Tables share four maintenance slots, so a table with an L0 backlog waits a
+    /// Tables share two maintenance slots, so a table with an L0 backlog waits a
     /// full round of every table between visits. One visit must therefore drain
     /// more than one run, or flushes outpace compaction on a busy hub.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

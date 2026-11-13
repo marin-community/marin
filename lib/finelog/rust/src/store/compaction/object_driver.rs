@@ -66,7 +66,7 @@ struct LeasedCompaction<'context, 'resources> {
 /// hub a 32-input job took about 17 s under CPU contention, which drained fewer
 /// L0s than busy tables flushed. 512 of the hub's ~135 KB flushes is about
 /// 70 MB, under the executor's Arrow budget, which merges only the prefix that
-/// fits. A larger cap lengthens a job, and a job in flight holds one of the four
+/// fits. A larger cap lengthens a job, and a job in flight holds one of the two
 /// shared maintenance slots until it finishes.
 pub(crate) const OBJECT_MAX_L0_INPUTS: usize = 512;
 

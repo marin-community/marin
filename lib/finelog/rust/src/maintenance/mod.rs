@@ -71,7 +71,7 @@ pub const REWRITE_LAYOUT_BUDGET: Duration = Duration::from_secs(3);
 /// Wall-clock budget one maintenance cycle spends compacting an object-backed
 /// table's runs.
 ///
-/// Every query-serving table shares the same four maintenance-cycle slots, so a
+/// Every query-serving table shares the same two maintenance-cycle slots, so a
 /// table visits a slot once per round of every table. On the marin hub a round
 /// took about 12 minutes across 35 tables, and one 32-input run per visit
 /// drained 32 L0s per round while a busy table flushed several hundred.
@@ -104,7 +104,7 @@ pub struct MaintenanceLimits {
     spec_migration: tokio::sync::Mutex<()>,
     /// Object-backed relays perform catalog publication and object collection,
     /// but no compaction or index construction. Keep that I/O backlog out of the
-    /// four query-serving maintenance slots.
+    /// two query-serving maintenance slots.
     relay_io: tokio::sync::Semaphore,
     /// How many tables may flush concurrently. Flushes are short and are the
     /// durability path, so this is looser than the maintenance limit.
@@ -112,7 +112,7 @@ pub struct MaintenanceLimits {
 }
 
 /// Concurrent maintenance cycles across all tables.
-const MAX_CONCURRENT_MAINTENANCE_CYCLES: usize = 4;
+const MAX_CONCURRENT_MAINTENANCE_CYCLES: usize = 2;
 // Physical relay collection is intentionally low priority. A cycle can walk a
 // large remote catalog tree; concurrent walks compete with durability flushes
 // and forwarding settlements for the same object-store budget.

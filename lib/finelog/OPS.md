@@ -308,7 +308,7 @@ commit, and L0s are single flushes of a few hundred KB. Partitioned table specs
 still form one independent stream per exact partition. A cycle repeats object
 compaction while work remains, for up to 20 seconds, and resumes after 100 ms
 while progress remains, returning to the 30-second cadence at quiescence. The
-resumed cycle queues for the same four `QueryServing` slots as every other table,
+resumed cycle queues for the same two `QueryServing` slots as every other table,
 so on a hub with many busy tables one visit's 20 seconds is what bounds L0
 growth. A cycle that ends with compaction work remaining skips index backfill
 and runs object collection at most once an hour, so the slot returns to the
