@@ -85,7 +85,8 @@ uv run python -m experiments.post_training.task_curation.curriculum_backfill pre
   --selection FROZEN_SELECTION.json --output-root PUBLIC_INPUT_ROOT --workers 8
 uv run python -m experiments.post_training.task_curation.curriculum_backfill embed \
   --corpus PUBLIC_INPUT_ROOT/corpus.json --artifact-root ARTIFACT_ROOT \
-  --cache-root VECTOR_CACHE_ROOT --stage descriptions --device cpu --workers 16 --run
+  --cache-root VECTOR_CACHE_ROOT --stage descriptions --device cpu \
+  --workers 2 --worker-memory 64g --run
 ```
 
 Then run `task_embeddings` and `curriculum_embeddings` with one CUDA worker
@@ -95,6 +96,11 @@ release and coverage hashes, source/task counts and embedding specification.
 Changed selections require a new output root; interrupted source attempts are
 preserved and completed source projections can be reused. Coverage measures
 converted populations and supplies no training admission or quality review.
+Size the enclosing job for its worker memory and coordinator. With an in-process
+worker pool, the shuffle samples the shared process RSS; an 8 GB worker budget
+below that baseline forces two-way spill merges even when the enclosing job has
+free memory. Choose the budget from measured reducer payloads and preserve the
+shuffle's existing memory-safety model.
 
 | Part | Implementation and data models |
 |---|---|

@@ -200,6 +200,7 @@ def run_stage(
     stage: str,
     device: Literal["cpu", "cuda"],
     workers: int,
+    worker_memory: str,
     run_graph: bool,
 ) -> None:
     corpus = json.loads(StoragePath(corpus_uri).read_text())
@@ -259,7 +260,7 @@ def run_stage(
             ZephyrContext(
                 client=client,
                 max_workers=workers,
-                resources=ResourceConfig(cpu=4, ram="8g"),
+                resources=ResourceConfig(cpu=4, ram=worker_memory),
                 coordinator_resources=ResourceConfig(cpu=1, ram="8g", preemptible=False),
                 chunk_storage_prefix=str(StoragePath(artifact_root) / "chunks"),
                 name="atlas-curriculum-backfill",
@@ -316,6 +317,7 @@ def main() -> None:
     embed.add_argument("--stage", choices=STAGES, required=True)
     embed.add_argument("--device", choices=("cpu", "cuda"), required=True)
     embed.add_argument("--workers", type=int, required=True)
+    embed.add_argument("--worker-memory", required=True)
     embed.add_argument("--run", action="store_true")
     args = parser.parse_args()
     configure_coreweave_s3()
@@ -328,7 +330,16 @@ def main() -> None:
             raise ValueError("Selection requires distinct frozen sources")
         prepare_sources(sources, args.output_root, args.workers)
         return
-    run_stage(args.corpus, args.artifact_root, args.cache_root, args.stage, args.device, args.workers, args.run)
+    run_stage(
+        args.corpus,
+        args.artifact_root,
+        args.cache_root,
+        args.stage,
+        args.device,
+        args.workers,
+        args.worker_memory,
+        args.run,
+    )
 
 
 if __name__ == "__main__":
