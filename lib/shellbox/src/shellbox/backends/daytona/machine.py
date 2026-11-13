@@ -325,6 +325,12 @@ class DaytonaMachine:
             if removed.exit_code:
                 raise RuntimeError("Cannot remove Daytona command files")
 
+    async def _close_preserving_failure(self, failure: BaseException) -> None:
+        try:
+            await self.close()
+        except Exception as cleanup_error:
+            failure.add_note(f"Daytona machine cleanup failed: {cleanup_error!r}")
+
     async def _cleanup_cancelled_command(
         self, prefix: str, pidfile: str, completed_path: str, started: bool, cancellation: asyncio.CancelledError
     ) -> None:
@@ -442,8 +448,9 @@ class DaytonaMachine:
                 await self._cleanup_cancelled_command(prefix, pidfile, completed_path, started, cancellation)
                 raise
             except Exception as error:
-                await self.close()
-                raise RuntimeError("Cannot stop the Daytona command process group") from error
+                primary_error = RuntimeError("Cannot stop the Daytona command process group")
+                await self._close_preserving_failure(primary_error)
+                raise primary_error from error
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
         except asyncio.CancelledError as cancellation:
             primary_error = cancellation
@@ -456,14 +463,16 @@ class DaytonaMachine:
             if not self._closed and not isinstance(primary_error, asyncio.CancelledError):
                 try:
                     await self._remove_command_files(prefix)
-                except asyncio.CancelledError:
-                    await self.close()
+                except asyncio.CancelledError as cancellation:
+                    await self._close_preserving_failure(cancellation)
                     raise
                 except Exception as error:
-                    await self.close()
                     if primary_error is None:
-                        raise RuntimeError("Cannot remove Daytona command files") from error
+                        primary_error = RuntimeError("Cannot remove Daytona command files")
+                        await self._close_preserving_failure(primary_error)
+                        raise primary_error from error
                     primary_error.add_note(f"Daytona command cleanup failed: {error}")
+                    await self._close_preserving_failure(primary_error)
 
     async def upload(self, source: Path, target: str) -> None:
         if self._closed:

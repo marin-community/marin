@@ -27,6 +27,7 @@ from daytona import (
     AsyncDaytona,
     CreateSandboxFromSnapshotParams,
     DaytonaConfig,
+    DaytonaConflictError,
     DaytonaNotFoundError,
     Resources,
 )
@@ -286,6 +287,16 @@ class LocalDaytona:
 
     async def __aexit__(self, _exc_type, _exc, _traceback):
         self.closed = True
+
+
+class FailedDeletion(LocalDaytona):
+    def __init__(self, failure):
+        super().__init__()
+        self.failure = failure
+
+    async def delete(self, sandbox):
+        await sandbox.process.close()
+        raise self.failure
 
 
 @pytest.mark.parametrize("error_type", [RuntimeError, asyncio.CancelledError])
@@ -676,8 +687,10 @@ def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, comm
     asyncio.run(scenario())
 
 
-def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation():
+@pytest.mark.parametrize("deletion_failure", [False, True])
+def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation(deletion_failure):
     entered = asyncio.Event()
+    deletion_error = DaytonaConflictError("Sandbox state change in progress", status_code=409)
 
     class BlockedCleanup(LocalProcess):
         async def exec(self, command, **kwargs):
@@ -689,17 +702,20 @@ def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation
             return await super().exec(command, **kwargs)
 
     async def scenario():
-        client = LocalDaytona()
+        client = FailedDeletion(deletion_error) if deletion_failure else LocalDaytona()
         client.sandbox.process = BlockedCleanup()
         machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir="")
         )
         pending = asyncio.create_task(machine.run(Command(("candidate-fail",))))
         await asyncio.wait_for(entered.wait(), timeout=5)
-        pending.cancel()
-        with pytest.raises(asyncio.CancelledError):
+        pending.cancel("grading deadline")
+        with pytest.raises(asyncio.CancelledError) as caught:
             await pending
-        assert client.closed and client.deleted
+        assert caught.value.args == ("grading deadline",)
+        if deletion_failure:
+            assert any(str(deletion_error) in note for note in caught.value.__notes__)
+        assert client.closed and client.deleted == (not deletion_failure)
 
     asyncio.run(scenario())
 
@@ -814,11 +830,17 @@ def test_daytona_completion_between_probe_and_stop_preserves_the_machine(tmp_pat
 
 @pytest.mark.parametrize("primary_failure", [False, True])
 @pytest.mark.parametrize("cleanup_failure", ["timeout", "exit"])
-def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error(primary_failure, cleanup_failure):
+@pytest.mark.parametrize("deletion_failure", [False, True])
+def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error(
+    primary_failure, cleanup_failure, deletion_failure
+):
+    provider_error = OSError("Provider command failed")
+    deletion_error = DaytonaConflictError("Sandbox state change in progress", status_code=409)
+
     class FailedCleanup(LocalProcess):
         async def exec(self, command, **kwargs):
             if "candidate-fail" in command_script(command) and primary_failure:
-                raise OSError("Provider command failed")
+                raise provider_error
             if "rm -rf /tmp/.shellbox-" in command:
                 if cleanup_failure == "timeout":
                     raise TimeoutError("Provider cleanup timed out")
@@ -826,7 +848,7 @@ def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error
             return await super().exec(command, **kwargs)
 
     async def scenario():
-        client = LocalDaytona()
+        client = FailedDeletion(deletion_error) if deletion_failure else LocalDaytona()
         client.sandbox.process = FailedCleanup()
         machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir="")
@@ -835,9 +857,11 @@ def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error
         with pytest.raises(error_type) as caught:
             await machine.run(Command(("printf", "candidate-fail")))
         if primary_failure:
-            assert str(caught.value) == "Provider command failed"
+            assert caught.value is provider_error
             assert "Daytona command cleanup failed" in caught.value.__notes__[0]
-        assert client.closed and client.deleted
+        if deletion_failure:
+            assert any(str(deletion_error) in note for note in caught.value.__notes__)
+        assert client.closed and client.deleted == (not deletion_failure)
 
     asyncio.run(scenario())
 
