@@ -79,7 +79,7 @@ import click
 import draccus
 import jax.numpy as jnp
 import jmp
-from fray.types import ANY_REGION, GpuConfig, ResourceConfig
+from fray.types import ANY_REGION, CpuConfig, GpuConfig, ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
 from levanter.data.text.formats import ChatLmDatasetFormat
@@ -118,6 +118,7 @@ _GPU_HOST_CPU_PER_DEVICE = 8
 _GPU_HOST_RAM_GB_PER_DEVICE = 96
 _GPU_HOST_DISK_GB_PER_DEVICE = 48
 LLAMA3_CHAT_EOS_TOKEN_IDS = (128001, 128009)  # <|end_of_text|> and <|eot_id|>
+DEFAULT_SFT_TASK_TIMEOUT_SECONDS = 3 * 24 * 3600
 
 
 @dataclass(frozen=True)
@@ -276,7 +277,9 @@ def _levanter_pod_config(
     )
 
 
-def _levanter_train_job(pod_config: TrainLmOnPodConfig, *, task_timeout_seconds: int = 3 * 24 * 3600) -> None:
+def _levanter_train_job(
+    pod_config: TrainLmOnPodConfig, *, task_timeout_seconds: int = DEFAULT_SFT_TASK_TIMEOUT_SECONDS
+) -> None:
     """Dispatch a Levanter ``train_lm`` config as its own Fray training job."""
     if pod_config.output_path is not None:
         pod_config = replace(pod_config, train_config=apply_output_path(pod_config.train_config, pod_config.output_path))
@@ -296,7 +299,10 @@ def _levanter_train_job(pod_config: TrainLmOnPodConfig, *, task_timeout_seconds:
         for key in ("MARIN_PREFIX", "MARIN_TEMP_PREFIX", "JAX_COMPILATION_CACHE_DIR")
         if key in os.environ
     }
-    environment["JAX_PLATFORMS"] = "cuda,cpu" if isinstance(pod_config.resources.device, GpuConfig) else "cpu"
+    if isinstance(pod_config.resources.device, GpuConfig):
+        environment["JAX_PLATFORMS"] = "cuda,cpu"
+    elif isinstance(pod_config.resources.device, CpuConfig):
+        environment["JAX_PLATFORMS"] = "cpu"
     remote(
         run_levanter_train_lm,
         resources=pod_config.resources,
@@ -319,7 +325,7 @@ class HFModel:
     tokenizer_path: str | None = None  # defaults to model_ref
     model_type: str = "qwen3"
     eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
-    task_timeout_seconds: int = 3 * 24 * 3600
+    task_timeout_seconds: int = DEFAULT_SFT_TASK_TIMEOUT_SECONDS
 
     def tokenizer_cache_key(self) -> str:
         return self.tokenizer_path or self.model_ref
