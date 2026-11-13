@@ -38,7 +38,7 @@ from sqlalchemy.engine.cursor import CursorResult
 from iris.cluster.constraints import get_device_variant
 from iris.cluster.controller.codec import proto_from_json
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
-from iris.cluster.redaction import redact_env_inputs, redact_string
+from iris.cluster.redaction import redact_controller_row_env_vars, redact_string
 from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisJobTask, IrisTaskAttempt, stats_timestamp
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
@@ -308,7 +308,7 @@ def _snapshot_configs(cur: RowCursor, tables: ControllerRowTables, marked: _Mark
                     fail_if_exists=bool(r.fail_if_exists),
                     container_profile=job_pb2.ContainerProfile.Name(r.container_profile),
                     egress_policy=job_pb2.EgressPolicy.Name(r.egress_policy),
-                    env_inputs=redact_env_inputs(
+                    env_vars=redact_controller_row_env_vars(
                         proto_from_json(r.environment_json, job_pb2.EnvironmentConfig).env_vars
                     ),
                     ts=ts,

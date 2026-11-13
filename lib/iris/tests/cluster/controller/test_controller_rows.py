@@ -385,7 +385,7 @@ def test_job_config_stores_no_environment_command_lines_or_other_user_text(state
         "made-up-argv-value",
     ]:
         assert value not in written
-    assert rows.job_configs[0].env_inputs is None
+    assert rows.job_configs[0].env_vars is None
 
 
 _MADE_UP_TOKEN = "ghp_madeUpToken0123456789abcdefghijkl"
@@ -414,7 +414,7 @@ def test_job_config_keeps_launch_provenance_redacted_field_by_field(state):
 
     submit_job(state, "train", request)
 
-    assert json.loads(rows.job_configs[0].env_inputs) == {
+    assert json.loads(rows.job_configs[0].env_vars) == {
         "MARIN_PROVENANCE": {
             "tree_hash": "1a2b3c4d5e",
             "base_commit": "6f7a8b9c0d",
@@ -437,9 +437,9 @@ def test_job_config_redacts_a_secret_under_an_allowed_key(state):
 
     submit_job(state, "train", request)
 
-    env_inputs = rows.job_configs[0].env_inputs
-    assert _MADE_UP_TOKEN not in env_inputs
-    provenance = json.loads(env_inputs)["MARIN_PROVENANCE"]
+    env_vars = rows.job_configs[0].env_vars
+    assert _MADE_UP_TOKEN not in env_vars
+    provenance = json.loads(env_vars)["MARIN_PROVENANCE"]
     assert "[REDACTED]" in provenance["branch"]
     assert provenance["command_line"] == ["python", "train.py", "[REDACTED]"]
 
@@ -453,7 +453,7 @@ def test_job_config_row_is_written_despite_a_malformed_git_remote(state):
 
     submit_job(state, "train", request)
 
-    provenance = json.loads(rows.job_configs[0].env_inputs)["MARIN_PROVENANCE"]
+    provenance = json.loads(rows.job_configs[0].env_vars)["MARIN_PROVENANCE"]
     assert provenance["git_remote"] == "https://example.com:abc/repo.git"
 
 
@@ -464,7 +464,7 @@ def test_job_config_drops_an_unparseable_launch_provenance(state):
 
     submit_job(state, "train", request)
 
-    assert rows.job_configs[0].env_inputs is None
+    assert rows.job_configs[0].env_vars is None
 
 
 @dataclass(frozen=True)
@@ -537,8 +537,8 @@ _COLUMNS: dict[str, _Classified] = {
             "container_profile": "container_profile",
             "egress_policy": "egress_policy",
             # Only the allowlisted variables, redacted; other variables and every
-            # secret are dropped (iris.cluster.redaction.CONTROLLER_ROW_ENV_INPUTS).
-            "environment_json": "env_inputs",
+            # secret are dropped (iris.cluster.redaction.CONTROLLER_ROW_ENV_VARS).
+            "environment_json": "env_vars",
         },
         {
             "name": "duplicate",

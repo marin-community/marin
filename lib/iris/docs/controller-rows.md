@@ -28,14 +28,14 @@ know what ran; a container runtime rejects credentials in a reference, and
 registry auth comes from the node's credential helper. There are two
 exceptions, both below and both redacted: the free-text `error` and
 `status_message` columns, and the allowlisted environment variables in
-`env_inputs`. Rows are kept forever, so any other column that fails the rule is
+`env_vars`. Rows are kept forever, so any other column that fails the rule is
 left out, not redacted and kept.
 
 Not copied, all from `job_config`:
 
 | DB column | Why |
 | --- | --- |
-| `environment_json` | Environment variables and secrets, except the allowlisted variables copied to `env_inputs` (below) |
+| `environment_json` | Environment variables and secrets, except the allowlisted variables copied to `env_vars` (below) |
 | `entrypoint_json`, `submit_argv_json` | Command lines and setup commands the user wrote |
 | `bundle_id`, `ports_json`, `egress_allow_json` | User-written ids, ports and hosts |
 | `name` | Same as `iris.controller_db__jobs.name` |
@@ -46,7 +46,7 @@ Copied columns that differ from the controller DB:
 | --- | --- |
 | `iris.controller_db__jobs.placement` | The DB's `jobs.cluster` ("local" or the peer the job was handed to), renamed because `cluster` here is the writing controller |
 | `iris.controller_db__job_config.accelerator_*` | Added: the device request flattened (below) |
-| `iris.controller_db__job_config.env_inputs` | From `environment_json`: only the allowlisted environment variables, redacted (below) |
+| `iris.controller_db__job_config.env_vars` | From `environment_json`: only the allowlisted environment variables, redacted (below) |
 | `iris.controller_db__tasks.placement` | The DB's `tasks.cluster`, as for jobs |
 | `iris.controller_db__tasks.task_submitted_at` | The DB's `tasks.submitted_at_ms`, renamed because `submitted_at_ms` here is the job key |
 
@@ -67,9 +67,9 @@ Retired columns (DB column → Finelog field, NULL since): none yet.
 a scheduler or Kueue message), stay readable, with token-like strings redacted. That redaction is
 best-effort: an error can still echo a short value or URL from a command.
 
-**Environment inputs:** `iris.controller_db__job_config.env_inputs` is a JSON
+**Environment variables:** `iris.controller_db__job_config.env_vars` is a JSON
 object holding the job's allowlisted environment variables, or NULL when it sets
-none. The allowlist is `CONTROLLER_ROW_ENV_INPUTS` in
+none. The allowlist is `CONTROLLER_ROW_ENV_VARS` in
 `iris/cluster/redaction.py`, the module the dashboard's masking also uses. Every
 other variable, and every secret, is dropped. It holds one variable,
 `MARIN_PROVENANCE`, the launch's git provenance, which is stored as its parsed
