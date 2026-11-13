@@ -26,7 +26,6 @@ from .configs import (
     ScoreLayout,
     _reshape_from_chunks,
     _reshape_to_chunks,
-    _stage_diag,
 )
 
 _HIGHEST = jax.lax.Precision.HIGHEST
@@ -397,41 +396,37 @@ class ForwardResiduals(NamedTuple):
 
 def _prepare_chunks(q, k, v, w, b, g, scale, config) -> tuple[_ChunkOperands, jax.Array]:
     Aqk, Akk = build_chunk_scores_pallas(q, k, b, g, scale, config)
-    Aqk = _stage_diag("kernel_A_Aqk", Aqk, config)
-    Akk = _stage_diag("kernel_A_Akk", Akk, config)
 
     A = wy_solve_pallas(Akk, config)
-    A = _stage_diag("kernel_B_wy_inverse_A", A, config)
 
     wy = recompute_wy_pallas(q, k, v, w, b, g, A, config)
     operands = _ChunkOperands(
         Aqk=Aqk,
-        w_pseudo=_stage_diag("kernel_C_w_pseudo", wy.w_pseudo, config),
-        u=_stage_diag("kernel_C_u", wy.u, config),
-        kg=_stage_diag("kernel_C_kg", wy.kg, config),
-        qg=_stage_diag("kernel_C_qg", wy.qg, config),
+        w_pseudo=wy.w_pseudo,
+        u=wy.u,
+        kg=wy.kg,
+        qg=wy.qg,
         gc_last=wy.gc_last,
     )
     return operands, A
 
 
-def _scan_output(o_scanned, h_final, shape, config):
+def _scan_output(o_scanned, shape, config):
     bsz, length, heads, dim = shape
-    o_chunks = _stage_diag("kernel_D_o", jnp.moveaxis(o_scanned, 0, 2), config)
-    out = _reshape_from_chunks(o_chunks, bsz, length // config.bt, config.bt, heads, dim)
-    return out, _stage_diag("kernel_D_h_final", h_final, config)
+    o_chunks = jnp.moveaxis(o_scanned, 0, 2)
+    return _reshape_from_chunks(o_chunks, bsz, length // config.bt, config.bt, heads, dim)
 
 
 def gdn2_pallas_forward(q, k, v, w, b, g, scale, h0, config):
     chunks, _ = _prepare_chunks(q, k, v, w, b, g, scale, config)
     h_final, o_scanned = _inter_chunk_scan(chunks, scale, h0, retain_state=False)
-    return _scan_output(o_scanned, h_final, q.shape, config)
+    return _scan_output(o_scanned, q.shape, config), h_final
 
 
 def gdn2_pallas_forward_with_residuals(q, k, v, w, b, g, scale, h0, config):
     chunks, A = _prepare_chunks(q, k, v, w, b, g, scale, config)
     h_final, (o_scanned, h_pre_all, v_new_all) = _inter_chunk_scan(chunks, scale, h0, retain_state=True)
-    out, h_final = _scan_output(o_scanned, h_final, q.shape, config)
+    out = _scan_output(o_scanned, q.shape, config)
     residuals = ForwardResiduals(
         Aqk=chunks.Aqk,
         A=A,

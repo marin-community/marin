@@ -5,7 +5,7 @@
 # The original MIT copyright and permission notice are retained in ../LICENSE.
 
 """
-Central configuration, numerical diagnostics, and shape validation
+Central configuration and shape validation
 shared across the forward/backward Pallas kernels.
 """
 
@@ -36,7 +36,6 @@ class KernelConfig:
     mb: int = 16
     interpret: bool = False
     score_layout: ScoreLayout = ScoreLayout.FEATURE_LAST
-    diagnostics: bool = False
 
     @property
     def bc(self) -> int:
@@ -64,40 +63,6 @@ def _reshape_to_chunks(t, bsz, n_chunks, H, D, bt):
 def _reshape_from_chunks(t, bsz, n_chunks, bt, H, D):
     t2 = jnp.moveaxis(t, (1, 2, 3), (3, 1, 2))
     return t2.reshape(bsz, n_chunks * bt, H, D)
-
-
-_LARGE_THRESHOLD = 1e6  # suspiciously large but still-finite trigger level
-
-
-def _stage_diag(tag: str, x, config: KernelConfig):
-    if not config.diagnostics:
-        return x
-
-    finite_mask = jnp.isfinite(x)
-    all_finite = jnp.all(finite_mask)
-    n_nonfinite = jnp.sum(jnp.logical_not(finite_mask))
-    safe_x = jnp.where(finite_mask, x, 0.0)
-    max_abs = jnp.max(jnp.abs(safe_x))
-
-    def _report_nonfinite():
-        jax.debug.print(
-            "[GDN2-FWD-DIAG] non-finite at " + tag + ": n_nonfinite={n} max_abs_finite={m:.3e}",
-            n=n_nonfinite,
-            m=max_abs,
-        )
-
-    def _report_large():
-        jax.debug.print(
-            "[GDN2-FWD-DIAG] suspiciously large (still finite) at " + tag + ": max_abs={m:.3e}",
-            m=max_abs,
-        )
-
-    jax.lax.cond(
-        jnp.logical_not(all_finite),
-        _report_nonfinite,
-        lambda: jax.lax.cond(max_abs > _LARGE_THRESHOLD, _report_large, lambda: None),
-    )
-    return x
 
 
 def validate_inputs(q, k, v, w, b, g, h0, config: KernelConfig):

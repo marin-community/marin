@@ -25,11 +25,14 @@ def test_gdn2_rejects_bfloat16_initial_state_before_scan():
         jax.eval_shape(forward, tokens, tokens, tokens, tokens, tokens, tokens, state)
 
 
-@pytest.mark.slow
 @pytest.mark.timeout(180)
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
-@pytest.mark.parametrize("decay", [0.005, 0.5, 5.0])
-@pytest.mark.parametrize("score_layout", list(ScoreLayout))
+@pytest.mark.parametrize("dtype", [jnp.float32, pytest.param(jnp.bfloat16, marks=pytest.mark.slow)])
+@pytest.mark.parametrize(
+    "decay", [0.005, pytest.param(0.5, marks=pytest.mark.slow), pytest.param(5.0, marks=pytest.mark.slow)]
+)
+@pytest.mark.parametrize(
+    "score_layout", [ScoreLayout.FEATURE_LAST, pytest.param(ScoreLayout.FEATURE_FIRST, marks=pytest.mark.slow)]
+)
 def test_gdn2_output_state_and_all_input_gradients_match_recurrence(dtype, decay, score_layout):
     shape = (1, 64, 1, 128)
     keys = jax.random.split(jax.random.PRNGKey(17), 9)
