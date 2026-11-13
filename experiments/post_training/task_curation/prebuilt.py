@@ -167,7 +167,7 @@ def validate_native_package(task: TaskSpec) -> None:
 
 
 def require_runnable_grader(task: TaskSpec) -> None:
-    """Require an executable grader contract before admitting a published task."""
+    """Reject ungraded tasks and validate native Harbor packages."""
     if not isinstance(task.grader, NoGrader):
         return
     if "harbor" in task.tags:

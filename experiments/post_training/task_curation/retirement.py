@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Source retirements preserve declarations and artifacts in the historical ledger."""
+"""Look up sources retired from admission in the historical ledger."""
 
 from functools import cache
 from pathlib import Path
