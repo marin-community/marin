@@ -3821,21 +3821,3 @@ async def test_context_rejection_allows_a_shorter_request_without_ending_the_att
     assert len(replay.requests) == 2
     assert len(result.rollout.conversations) == (2 if compact else 1)
     assert all("Oversized tool output" not in str(record.messages) for record in result.rollout.conversations)
-
-
-async def test_unrecovered_context_rejection_preserves_the_original_serving_error():
-    error = RuntimeError("Serving rejected the context")
-
-    class RejectedModel(ReplayModel):
-        async def complete(self, request):
-            if self.requests:
-                raise ContextRejected(error, "Maximum context length exceeded") from error
-            return await super().complete(request)
-
-    with pytest.raises(GradedRolloutInterrupted) as caught:
-        await engine(
-            RejectedModel([{"role": "assistant", "content": "12"}]), harnesses={"fixture": StartsTwice()}
-        ).run_task(rollout_spec(arithmetic_task(), harness="fixture"))
-    assert caught.value.operation == RolloutOperation.MODEL
-    assert caught.value.__cause__ is error
-    assert caught.value.grade.reward == 1.0

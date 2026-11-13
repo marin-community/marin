@@ -1,6 +1,7 @@
 """Context rejection must reach the installed agent without disabling its endpoint."""
 
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import numpy as np
@@ -84,6 +85,50 @@ class ScriptedClient:
         return reply
 
 
+class HarborTrials:
+    def __init__(self, trial_error=None):
+        self.trial_error = trial_error
+
+    def original_harness(self, *args):
+        async def trial(complete):
+            try:
+                await complete(Prompt(({"role": "user", "content": "Start"},), {"max_tokens": 8}))
+                await complete(Prompt(({"role": "user", "content": "Longer history"},), {"max_tokens": 1}))
+            except (ContextWindowExceeded, AgentGenerationStopped):
+                pass
+            return SimpleNamespace(
+                trial_uri="fixture/trial",
+                exception_info=None if self.trial_error is None else SimpleNamespace(exception_type=self.trial_error),
+                verifier_result=SimpleNamespace(rewards={"reward": 0.75}),
+            )
+
+        return HarborTrialHarness(trial, "reward")
+
+    async def shutdown(self):
+        pass
+
+
+@pytest.fixture
+def open_worker(worker_config):
+    @asynccontextmanager
+    async def create(installed_agents, replies, *, harbor):
+        worker = TaskRolloutWorker(
+            worker_config,
+            WholeTaskProjection(worker_config, WorkerTokenizer()),
+            ScriptedClient(replies),
+            {},
+            harbor=HarborTaskSettings.from_config(OmegaConf.create({"harbor": harbor})),
+            installed_agents=installed_agents,
+            shutdown_timeout=5,
+        )
+        try:
+            yield worker
+        finally:
+            await worker.shutdown()
+
+    return create
+
+
 @pytest.mark.asyncio
 async def test_agent_can_retry_after_receiving_a_typed_context_error():
     calls = 0
@@ -149,22 +194,9 @@ async def test_native_step_harness_keeps_length_stopped_rollout():
         async def close(self):
             pass
 
-    class Client:
-        calls = 0
-
-        async def generate(self, _request):
-            self.calls += 1
-            if self.calls == 2:
-                raise GenerationBudgetExceededError([1, 2, 3, 4])
-            return {
-                "token_provenance": TokenProvenance.ENGINE,
-                "assistant_messages": [{"role": "assistant", "content": "Working"}],
-                "prompt_ids": [[1, 2]],
-                "response_ids": [[3]],
-                "stop_reasons": ["stop"],
-            }
-
-    client = Client()
+    reply = sampled_reply()
+    del reply["response_logprobs"]
+    client = ScriptedClient([reply, GenerationBudgetExceededError([1, 2, 3, 4])])
 
     async def model(request):
         return await _model_turn(
@@ -191,59 +223,21 @@ async def test_native_step_harness_keeps_length_stopped_rollout():
     ids=["sampled-turn", "first-request", "agent-error-policy"],
 )
 async def test_original_harbor_trial_keeps_sampled_tokens_and_grade_after_context_rejection(
-    worker_config, reject_call, trial_error
+    open_worker, reject_call, trial_error
 ):
     """A reduced output budget starts a new prompt; rejecting it must retain the prior turn."""
-
-    class Client:
-        calls = 0
-
-        async def generate(self, _request):
-            self.calls += 1
-            if self.calls == reject_call:
-                raise GenerationBudgetExceededError([1, 2, 3, 4])
-            return sampled_reply()
-
-    async def trial(complete):
-        try:
-            await complete(Prompt(({"role": "user", "content": "Start"},), {"max_tokens": 8}))
-            await complete(Prompt(({"role": "user", "content": "Longer history"},), {"max_tokens": 1}))
-        except (ContextWindowExceeded, AgentGenerationStopped):
-            pass
-        return SimpleNamespace(
-            trial_uri="fixture/trial",
-            exception_info=None if trial_error is None else SimpleNamespace(exception_type=trial_error),
-            verifier_result=SimpleNamespace(rewards={"reward": 0.75}),
-        )
-
-    class InstalledAgents:
-        def original_harness(self, *args):
-            return HarborTrialHarness(trial, "reward")
-
-        async def shutdown(self):
-            pass
 
     task = text_task().model_copy(update={"tags": ("harbor",), "grader": NoGrader(reason="Harbor grades the trial")})
     request = TaskRequestBatch(
         rows=(task_input(lowered_task(task, "harbor_trial", max_turns=8)),),
         trajectory_ids=(TrajectoryID("harbor", 0),),
     )
-    worker = TaskRolloutWorker(
-        worker_config,
-        WholeTaskProjection(worker_config, WorkerTokenizer()),
-        Client(),
-        {},
-        harbor=HarborTaskSettings.from_config(
-            OmegaConf.create({"harbor": {"max_retries": 0, "enable_error_classification": True}})
-        ),
-        installed_agents=InstalledAgents(),
-        shutdown_timeout=5,
-    )
-    try:
+    replies = [sampled_reply()] * (reject_call - 1) + [GenerationBudgetExceededError([1, 2, 3, 4])]
+    async with open_worker(
+        HarborTrials(trial_error), replies, harbor={"max_retries": 0, "enable_error_classification": True}
+    ) as worker:
         (result,) = await worker.generate(request)
         batch = await worker.training_batch(request, [result])
-    finally:
-        await worker.shutdown()
     if reject_call == 1:
         assert result.stop_reason == "length"
         assert result.failure is None
@@ -260,7 +254,7 @@ async def test_original_harbor_trial_keeps_sampled_tokens_and_grade_after_contex
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sample_first", [False, True], ids=["first-budget", "later-serving"])
-async def test_native_worker_recovers_without_spending_a_turn(worker_config, sample_first):
+async def test_native_worker_recovers_without_spending_a_turn(open_worker, sample_first):
     rejection = (
         ContextLengthExceededError("context_overflow", "fixture", 400)
         if sample_first
@@ -285,20 +279,9 @@ async def test_native_worker_recovers_without_spending_a_turn(worker_config, sam
     request = TaskRequestBatch(
         rows=(task_input(lowered_task(task, max_turns=2 if sample_first else 1)),),
     )
-    worker = TaskRolloutWorker(
-        worker_config,
-        WholeTaskProjection(worker_config, WorkerTokenizer()),
-        ScriptedClient(replies),
-        {},
-        harbor=HarborTaskSettings.from_config(OmegaConf.create({"harbor": {"max_retries": 0}})),
-        installed_agents=InstalledAgents(),
-        shutdown_timeout=5,
-    )
-    try:
+    async with open_worker(InstalledAgents(), replies, harbor={"max_retries": 0}) as worker:
         (result,) = await worker.generate(request)
         batch = await worker.training_batch(request, [result])
-    finally:
-        await worker.shutdown()
     assert result.failure is None
     assert result.grade.status == Outcome.GRADED
     assert batch["response_ids"] == [[3]]
@@ -308,53 +291,33 @@ async def test_native_worker_recovers_without_spending_a_turn(worker_config, sam
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("retry", [False, True], ids=["first-serving-error", "fresh-retry-budget"])
-async def test_harbor_worker_preserves_first_request_failure_after_retry(worker_config, retry):
-    async def trial(complete):
-        try:
-            await complete(Prompt(({"role": "user", "content": "Start"},), {}))
-            await complete(Prompt(({"role": "user", "content": "Next"},), {"max_tokens": 1}))
-        except (ContextWindowExceeded, AgentGenerationStopped):
-            pass
-        return SimpleNamespace(
-            trial_uri="fixture/trial", exception_info=None, verifier_result=SimpleNamespace(rewards={"reward": 0.75})
-        )
-
-    class InstalledAgents:
-        def original_harness(self, *args):
-            return HarborTrialHarness(trial, "reward")
-
-        async def shutdown(self):
-            pass
-
-    replies = (
-        [sampled_reply(), ModelServerError("server_error", "fixture", 503), GenerationBudgetExceededError([1, 2, 3, 4])]
-        if retry
-        else [ContextLengthExceededError("context_overflow", "fixture", 400)]
-    )
+async def test_harbor_worker_keeps_the_original_first_request_serving_error(open_worker):
     task = text_task().model_copy(update={"tags": ("harbor",)})
     request = TaskRequestBatch(rows=(task_input(lowered_task(task, "harbor_trial")),))
-    worker = TaskRolloutWorker(
-        worker_config,
-        WholeTaskProjection(worker_config, WorkerTokenizer()),
-        ScriptedClient(replies),
-        {},
-        harbor=HarborTaskSettings.from_config(
-            OmegaConf.create({"harbor": {"max_retries": int(retry), "min_wait_sec": 0, "max_wait_sec": 0}})
-        ),
-        installed_agents=InstalledAgents(),
-        shutdown_timeout=5,
-    )
-    try:
+    async with open_worker(
+        HarborTrials(), [ContextLengthExceededError("context_overflow", "fixture", 400)], harbor={"max_retries": 0}
+    ) as worker:
         (result,) = await worker.generate(request)
-    finally:
-        await worker.shutdown()
     assert result.response_token_ids == ()
-    if retry:
-        assert result.stop_reason == "length"
-        assert result.failure is None
-        assert result.metrics["rollout_retries"] == 1
-    else:
-        assert result.stop_reason == "error"
-        assert result.failure.exception_type == "ContextLengthExceededError"
-        assert result.failure.diagnostics["request_id"] == "fixture"
+    assert result.stop_reason == "error"
+    assert result.failure.exception_type == "ContextLengthExceededError"
+    assert result.failure.diagnostics["request_id"] == "fixture"
+
+
+@pytest.mark.asyncio
+async def test_harbor_worker_resets_recovery_state_before_retrying(open_worker):
+    task = text_task().model_copy(update={"tags": ("harbor",)})
+    request = TaskRequestBatch(rows=(task_input(lowered_task(task, "harbor_trial")),))
+    replies = [
+        sampled_reply(),
+        ModelServerError("server_error", "fixture", 503),
+        GenerationBudgetExceededError([1, 2, 3, 4]),
+    ]
+    async with open_worker(
+        HarborTrials(), replies, harbor={"max_retries": 1, "min_wait_sec": 0, "max_wait_sec": 0}
+    ) as worker:
+        (result,) = await worker.generate(request)
+    assert result.response_token_ids == ()
+    assert result.stop_reason == "length"
+    assert result.failure is None
+    assert result.metrics["rollout_retries"] == 1
