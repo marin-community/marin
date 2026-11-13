@@ -15,6 +15,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval import TaggedEvaluator
+from levanter.layers.attention import AttentionMask
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,7 @@ def evaluation_input_audit(evaluator: TaggedEvaluator, special_token_ids: tuple[
     """Hash the global token stream and masks, independently of evaluation batch size."""
     tokens_hash = hashlib.sha256()
     weights_hash = hashlib.sha256()
+    segments_hash = hashlib.sha256()
     positions = 0
     scored_tokens = 0.0
     counts = {str(token): 0 for token in special_token_ids}
@@ -39,6 +41,15 @@ def evaluation_input_audit(evaluator: TaggedEvaluator, special_token_ids: tuple[
         weights = np.asarray(multihost_utils.process_allgather(batch.loss_weight.array), dtype=np.float32)
         tokens_hash.update(tokens.tobytes())
         weights_hash.update(weights.tobytes())
+        if not isinstance(batch.attn_mask, AttentionMask):
+            raise ValueError("Evaluation identity auditing requires a structured attention mask")
+        segment_ids = batch.attn_mask.segment_ids
+        segments = (
+            np.zeros(tokens.shape, dtype=np.int64)
+            if segment_ids is None
+            else np.asarray(multihost_utils.process_allgather(segment_ids.array), dtype=np.int64)
+        )
+        segments_hash.update(segments.tobytes())
         positions += tokens.size
         scored_tokens += float(weights.sum(dtype=np.float64))
         for token in special_token_ids:
@@ -48,6 +59,7 @@ def evaluation_input_audit(evaluator: TaggedEvaluator, special_token_ids: tuple[
     return {
         "tokens_sha256": tokens_hash.hexdigest(),
         "weights_sha256": weights_hash.hexdigest(),
+        "segments_sha256": segments_hash.hexdigest(),
         "positions": positions,
         "scored_tokens": scored_tokens,
         "special_token_counts": counts,
@@ -61,7 +73,7 @@ def initial_eval_match(reference: dict, metrics: dict, audit: dict, absolute_tol
     expected = float(reference["metrics"]["eval/loss"])
     actual = float(metrics["eval/loss"])
     delta = actual - expected
-    if not math.isfinite(actual) or abs(delta) > absolute_tolerance:
+    if not math.isfinite(expected) or not math.isfinite(actual) or abs(delta) > absolute_tolerance:
         raise ValueError(f"Initial loss mismatch: reference={expected}, actual={actual}, delta={delta}")
     return {
         "passed": True,

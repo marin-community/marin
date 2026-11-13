@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
 import draccus
-from fray import current_client
+from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, create_environment
 from iris.rpc.proto_display import priority_band_value
 from levanter.compat.hf_checkpoints import RepoRef
