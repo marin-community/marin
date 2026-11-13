@@ -18,7 +18,25 @@ import signal
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
+
+SOURCE_DIRECTORY_EXCLUSIONS = {
+    ".git",
+    ".tox",
+    ".cache",
+    "__pycache__",
+    "node_modules",
+    "build",
+    "dist",
+}
+PACKAGE_CENSUS_EXCLUDED = SOURCE_DIRECTORY_EXCLUSIONS | {"tests", "test", "docs"}
+
+
+@dataclass(frozen=True)
+class RepositoryPackages:
+    roots: dict[str, list[str]]
+    dependency_roots: tuple[str, ...]
 
 
 def write_json(path: Path, value: object) -> None:
@@ -52,12 +70,67 @@ def checked(argv: list[str], *, cwd: Path, timeout: float, env: dict[str, str] |
 def inventory(roots: list[str]) -> dict[str, str]:
     result = {}
     for root in roots:
-        for path in sorted(Path(root).rglob("*")):
+        source = Path(root)
+        for path in (source,) if source.is_file() or source.is_symlink() else sorted(source.rglob("*")):
             if path.is_symlink():
                 result[str(path)] = "symlink:" + os.readlink(path)
             elif path.is_file():
                 result[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
     return result
+
+
+def repository_packages(workspace: Path, dependency_roots: list[Path]) -> RepositoryPackages:
+    """Census repository source while excluding interpreter dependencies and virtualenvs."""
+    roots: dict[str, set[str]] = {}
+    excluded = {path.resolve() for path in dependency_roots}
+    for directory, children, files in os.walk(workspace):
+        parent = Path(directory).resolve()
+        if "pyvenv.cfg" in files:
+            excluded.add(parent)
+        if any(parent.is_relative_to(path) for path in excluded):
+            children[:] = []
+            continue
+        children[:] = [
+            name
+            for name in children
+            if name not in PACKAGE_CENSUS_EXCLUDED
+            and not name.endswith(".egg-info")
+            and not any((parent / name).resolve().is_relative_to(path) for path in excluded)
+        ]
+        if parent != workspace and any(Path(name).suffix == ".py" for name in files):
+            import_bases = [workspace]
+            for ancestor in parent.parents:
+                if ancestor == workspace:
+                    break
+                if ancestor.name == "src":
+                    import_bases.append(ancestor)
+            for base in import_bases:
+                if parent == base:
+                    continue
+                name = parent.relative_to(base).parts[0]
+                if name.isidentifier() and name != "src":
+                    roots.setdefault(name, set()).add(str(base / name))
+        if "__init__.py" in files:
+            package = parent
+            while (package.parent / "__init__.py").is_file():
+                package = package.parent
+            # A src layout may contain namespace parents without __init__.py.
+            for ancestor in parent.parents:
+                if ancestor == workspace:
+                    break
+                if ancestor.name == "src":
+                    package = ancestor / parent.relative_to(ancestor).parts[0]
+                    break
+            roots.setdefault(package.name, set()).add(str(package))
+        if parent == workspace or parent.name == "src":
+            for name in files:
+                path = parent / name
+                if path.suffix == ".py" and path.stem not in {"setup", "conftest", "__init__"}:
+                    roots.setdefault(path.stem, set()).add(str(path))
+    return RepositoryPackages(
+        {name: sorted(paths) for name, paths in sorted(roots.items())},
+        tuple(sorted(str(path) for path in excluded)),
+    )
 
 
 def inventory_diff(before: dict[str, str], after: dict[str, str]) -> dict:
@@ -221,51 +294,94 @@ def stop_agent_processes(uid: int) -> None:
 
 
 def freeze_runner(contract: dict, python: str, plugins: list[str], source_config: dict) -> list[str]:
-    """Freeze the test interpreter and plugin dependencies; return the live dependency roots."""
+    """Freeze third-party grader code; keep repository-owned distributions live."""
     root = Path(contract["protected_root"])
-    probe = (
-        "import json,sys,sysconfig;print(json.dumps({'sites':"
-        "list({sysconfig.get_path('purelib'),sysconfig.get_path('platlib')}),'executable':sys.executable}))"
-    )
+    workspace = Path(contract["workspace"]).resolve()
+    probe = """import json,sys,sysconfig,site
+sites={sysconfig.get_path('purelib'),sysconfig.get_path('platlib')}
+print(json.dumps({'sites':sorted(sites),'executable':sys.executable,
+ 'dependency_sites':sorted(sites | set(site.getsitepackages()) | {site.getusersitepackages()}),
+ 'prefixes':[sys.prefix,sys.base_prefix]}))"""
     info = json.loads(checked([python, "-I", "-c", probe], cwd=root, timeout=30))
+    packages_census = repository_packages(
+        workspace, [Path(path) for path in (*info["dependency_sites"], *info["prefixes"])]
+    )
+    package_roots = packages_census.roots
+    package_roots_path = root / "repository-packages.json"
+    write_json(
+        package_roots_path,
+        {
+            "packages": package_roots,
+            "dependency_roots": packages_census.dependency_roots,
+            "excluded_directory_names": sorted(SOURCE_DIRECTORY_EXCLUSIONS),
+        },
+    )
     checked(
         [python, "-I", "-m", "venv", "--copies", "--without-pip", str(Path(contract["interpreter"]).parent.parent)],
         cwd=root,
         timeout=120,
     )
-    # Freeze pytest, explicitly allowed plugins and their implementation dependencies only.
-    # Candidate dependencies remain in the live site directories recorded below.
+    # Repository-owned plugins are product code, including editable/path installs.
     package_probe = """import importlib.metadata as m,json,pathlib,packaging.requirements
+from packaging.utils import canonicalize_name
 from _pytest.config import _iter_rewritable_modules
+workspace=pathlib.Path(__import__('sys').argv[1]).resolve()
+census=json.loads(pathlib.Path(__import__('sys').argv[2]).read_text())
+package_roots=census['packages']
+dependency_roots=[pathlib.Path(path) for path in census['dependency_roots']]
+excluded_names=set(census['excluded_directory_names'])
 distributions=list(m.distributions())
 entrypoints=[{'name':e.name,'module':e.value,'distribution':d.metadata['Name']}
  for d in distributions for e in d.entry_points if e.group=='pytest11']
 rewrite_roots=list(_iter_rewritable_modules(str(f) for d in distributions
  if any(e.group=='pytest11' for e in d.entry_points) for f in d.files or []))
-plugins=sorted(set(__import__('sys').argv[1:]) | {e['module'] for e in entrypoints})
+plugins=sorted(set(__import__('sys').argv[3:]) | {e['module'] for e in entrypoints})
 if any(':' in plugin for plugin in plugins): raise ValueError('Function-valued pytest plugins need explicit lowering')
 roots={'pytest','pytest-json-report'}
+owned={}; owned_paths=set()
 for d in distributions:
  top=set((d.read_text('top_level.txt') or '').splitlines())
  top.update(
   str(f).split('/')[0].split('.')[0] for f in d.files or []
   if not str(f).startswith('..') and '.dist-info/' not in str(f) and '.egg-info/' not in str(f))
+ top.update(e.value.split('.')[0] for e in d.entry_points if e.group=='pytest11')
+ inside=[]
+ for f in d.files or []:
+  path=pathlib.Path(d.locate_file(f)).resolve()
+  if not path.is_relative_to(workspace): continue
+  if any(path.is_relative_to(root) for root in dependency_roots): continue
+  if excluded_names.intersection(path.relative_to(workspace).parts): continue
+  inside.append(str(path))
+ matching=sorted(top & package_roots.keys())
+ if inside or matching:
+  key=canonicalize_name(d.metadata['Name'])
+  owned[key]={'distribution':d.metadata['Name'],'top_level_packages':sorted(top),
+   'workspace_files':inside,'matching_repository_roots':matching}
+  owned_paths.update(inside)
+  for name in matching: owned_paths.update(package_roots[name])
  if any(plugin.split('.')[0] in top for plugin in plugins): roots.add(d.metadata['Name'])
 for d in distributions:
  if any(e.group=='pytest11' and e.value.split(':')[0] in plugins for e in d.entry_points): roots.add(d.metadata['Name'])
-seen=set(); files=[]
+seen=set(); pinned=set(); files=[]
 while roots:
- name=roots.pop(); key=name.lower().replace('_','-')
+ name=roots.pop(); key=canonicalize_name(name)
  if key in seen: continue
  seen.add(key); d=m.distribution(name)
+ if key in owned: continue
+ pinned.add(key)
  for requirement in d.requires or []:
   r=packaging.requirements.Requirement(requirement)
   if r.marker is None or r.marker.evaluate({'extra':''}): roots.add(r.name)
  for f in d.files or []:
   p=pathlib.Path(d.locate_file(f)).resolve()
   if not str(f).startswith('..') and p.is_file(): files.append([str(f),str(p)])
-versions={d.metadata['Name'].lower().replace('_','-'):d.version for d in distributions}
-print(json.dumps({'distributions':sorted(seen),'files':files,'plugins':plugins,'entrypoints':entrypoints,
+versions={canonicalize_name(d.metadata['Name']):d.version for d in distributions}
+for key,row in owned.items(): row['grader_dependency']=key in seen
+owned_top={name for row in owned.values() for name in row['top_level_packages']}
+print(json.dumps({'distributions':sorted(pinned),'files':files,'plugins':plugins,'entrypoints':entrypoints,
+ 'workspace_owned_distributions':sorted(owned.values(),key=lambda row:row['distribution']),
+ 'workspace_owned_paths':sorted(owned_paths),
+ 'protected_local_plugins':[plugin for plugin in plugins if plugin.split('.')[0] not in owned_top],
  'entrypoint_rewrite_roots':rewrite_roots,
  'source_environment':{'pytest_version':versions['pytest'],
  'pytest_metadata_version':versions.get('pytest-metadata')}}))"""
@@ -273,7 +389,20 @@ print(json.dumps({'distributions':sorted(seen),'files':files,'plugins':plugins,'
         raise ValueError("Unsupported plugin-discovery contract")
     explicit_plugins = config_plugins(source_config["addopts"])
     packages = json.loads(
-        checked([python, "-I", "-c", package_probe, *plugins, *sorted(explicit_plugins)], cwd=root, timeout=60)
+        checked(
+            [
+                python,
+                "-I",
+                "-c",
+                package_probe,
+                str(workspace),
+                str(package_roots_path),
+                *plugins,
+                *sorted(explicit_plugins),
+            ],
+            cwd=root,
+            timeout=60,
+        )
     )
     runner = Path(contract["runner_directory"])
     runner.mkdir()
@@ -294,6 +423,11 @@ print(json.dumps({'distributions':sorted(seen),'files':files,'plugins':plugins,'
             "entrypoint_rewrite_roots": packages["entrypoint_rewrite_roots"],
             "pytest_config": source_config,
             "source_environment": packages["source_environment"],
+            "repository_package_roots": package_roots,
+            "dependency_roots": packages_census.dependency_roots,
+            "workspace_owned_distributions": packages["workspace_owned_distributions"],
+            "workspace_owned_paths": packages["workspace_owned_paths"],
+            "protected_local_plugins": packages["protected_local_plugins"],
         },
     )
     write_json(root / "site-packages-baseline.json", inventory(info["sites"]))
@@ -340,8 +474,10 @@ def bootstrap(input_path: Path) -> None:
     reference.mkdir()
     source_config = source_pytest_config(python, workspace, spec)
     plugins = sorted(set(contract["pinned_plugins"]) | set(declared_plugins(workspace)))
+    sites = freeze_runner(contract, python, plugins, source_config)
+    runtime = json.loads((root / "runtime.json").read_text())
     paths = set(selected_tests(workspace, contract, tests, spec))
-    paths.update(local_plugin_paths(workspace, plugins))
+    paths.update(local_plugin_paths(workspace, runtime["protected_local_plugins"]))
     if source_config["path"] is not None:
         paths.add(source_config["path"])
     paths = sorted(paths)
@@ -357,7 +493,7 @@ def bootstrap(input_path: Path) -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(original[name])
 
-    sites = freeze_runner(contract, python, plugins, source_config)
+    write_json(root / "workspace-owned-baseline.json", inventory(runtime["workspace_owned_paths"]))
     spec.update({"setup": "", "python": str(root / "pytest-python")})
     write_json(root / "spec.json", spec)
     (tests / "verifier.toml").write_text(payload["verifier_spec"])
@@ -391,10 +527,23 @@ def prepare_grading(contract: dict) -> None:
     write_json(reports / contract["audit_probes"][0], inventory_diff(before, after))
     write_json(reports / contract["audit_probes"][1], inventory_diff(hook_inventory(before), hook_inventory(after)))
     write_json(reports / "source-environment.json", runtime["source_environment"])
+    owned_before = json.loads((root / "workspace-owned-baseline.json").read_text())
+    write_json(
+        reports / "workspace-owned-diff.json",
+        inventory_diff(owned_before, inventory(runtime["workspace_owned_paths"])),
+    )
+    write_json(
+        reports / "workspace-owned-distributions.json",
+        {
+            "package_roots": runtime["repository_package_roots"],
+            "dependency_roots": runtime["dependency_roots"],
+            "distributions": runtime["workspace_owned_distributions"],
+        },
+    )
     paths = json.loads((root / "reference-paths.json").read_text())
     spec = json.loads((root / "spec.json").read_text())
     current = set(selected_tests(workspace, contract, root / "tests", spec))
-    current.update(local_plugin_paths(workspace, runtime["plugins"]))
+    current.update(local_plugin_paths(workspace, runtime["protected_local_plugins"]))
     # Agent-added tests and package initializers cannot alter reference plugin loading.
     for name in current - set(paths):
         remove_path(workspace / name)

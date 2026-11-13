@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,8 @@ class SharedRuntime:
     contract: SharedIntegrityContract
     site: Path
     verifyit: Path
+    candidate: Path
+    plugin: Path
 
     def grade(self) -> dict:
         shared_pytest.grade(Path(self.contract.protected_root) / "contract.json", str(self.verifyit))
@@ -40,7 +43,8 @@ def shared_runtime(request):
         base.chmod(0o755)
         workspace, root, reports = (base / name for name in ("workspace", "protected", "reports"))
         workspace.mkdir()
-        (workspace / "candidate.py").write_text("VALUE = 0\n")
+        candidate = workspace / "candidate.py"
+        candidate.write_text("VALUE = 0\n")
         (workspace / "extra_guard.py").write_text("reference\n")
         (workspace / "editable.py").write_text("original\n")
         (workspace / "conftest.py").write_text("pytest_plugins: tuple[str, ...]\n")
@@ -72,7 +76,7 @@ def shared_runtime(request):
             (workspace / test_path).write_text(
                 "import candidate\ndef test_value(source_value): assert candidate.VALUE == source_value\n"
             )
-        elif request.param != "base":
+        elif request.param in {"pyproject.toml", "setup.cfg", "pytest.ini"}:
             (workspace / "extras").mkdir()
             (workspace / "extras/source_dependency.py").write_text("VALUE = 1\n")
             (workspace / "test_case.py").write_text(
@@ -86,7 +90,7 @@ def shared_runtime(request):
             else:
                 configuration = "[pytest]\npythonpath = extras\n"
             (workspace / request.param).write_text(configuration)
-        task_python = base / "task-python"
+        task_python = workspace / "runtime" if request.param == "workspace-plugin-interpreter" else base / "task-python"
         source_python = request.config.getoption("--shared-source-python") or sys.executable
         subprocess.run(
             [Path(source_python).resolve(), "-m", "venv", "--copies", "--without-pip", str(task_python)], check=True
@@ -102,7 +106,8 @@ def shared_runtime(request):
         ).strip()
         (site / "test-dependencies.pth").write_text(source_site + "\n")
         (site / "dependency.py").write_text("VALUE = 0\n")
-        (site / "baseline_plugin.py").write_text("# Source-required pytest plugin\n")
+        plugin_path = site / "baseline_plugin.py"
+        plugin_path.write_text("# Source-required pytest plugin\n")
         metadata = site / "baseline_plugin-1.dist-info"
         metadata.mkdir()
         (metadata / "METADATA").write_text("Name: baseline-plugin\nVersion: 1\n")
@@ -111,6 +116,52 @@ def shared_runtime(request):
             "baseline_plugin.py,,\nbaseline_plugin-1.dist-info/METADATA,,\n"
             "baseline_plugin-1.dist-info/entry_points.txt,,\nbaseline_plugin-1.dist-info/RECORD,,\n"
         )
+        if request.param.startswith("workspace-plugin-"):
+            (workspace / "candidate.py").unlink()
+            package = workspace / "candidate"
+            package.mkdir()
+            namespace = request.param == "workspace-plugin-namespace"
+            candidate = package / ("value.py" if namespace else "__init__.py")
+            candidate.write_text("VALUE = 0\n")
+            (package / "plugin.py").write_text("# Repository-owned pytest plugin\n")
+            (workspace / "test_case.py").write_text(
+                (
+                    "import candidate.value as candidate\nimport baseline_plugin\n"
+                    if namespace
+                    else "import candidate, baseline_plugin\n"
+                )
+                + "def test_value():\n"
+                "    assert candidate.VALUE == 1, candidate.__file__\n"
+                "    assert baseline_plugin.SENTINEL == 1\n"
+            )
+            (site / "baseline_plugin.py").write_text("SENTINEL = 1\n")
+            if request.param == "workspace-plugin-interpreter":
+                plugin_path.unlink()
+                plugin_path = site / "baseline_plugin/__init__.py"
+                plugin_path.parent.mkdir()
+                plugin_path.write_text("SENTINEL = 1\n")
+                (metadata / "RECORD").write_text(
+                    (metadata / "RECORD").read_text().replace("baseline_plugin.py", "baseline_plugin/__init__.py")
+                )
+            owner = workspace if request.param == "workspace-plugin-editable" else site
+            product_metadata = owner / "candidate_product-1.dist-info"
+            product_metadata.mkdir()
+            (product_metadata / "METADATA").write_text("Name: candidate-product\nVersion: 1\n")
+            (product_metadata / "top_level.txt").write_text("candidate\n")
+            (product_metadata / "RECORD").write_text(
+                f"candidate/{candidate.name},,\ncandidate/plugin.py,,\n"
+                "candidate_product-1.dist-info/METADATA,,\ncandidate_product-1.dist-info/RECORD,,\n"
+            )
+            if owner == workspace:
+                (site / "source-product.pth").write_text(str(workspace) + "\n")
+            else:
+                shutil.copytree(package, site / "candidate")
+            if request.param == "workspace-plugin-dependency":
+                (metadata / "METADATA").write_text(
+                    "Name: baseline-plugin\nVersion: 1\nRequires-Dist: candidate-product\n"
+                )
+            else:
+                (product_metadata / "entry_points.txt").write_text("[pytest11]\nproduct = candidate.plugin\n")
         if request.param in {"entrypoints", "entrypoint-block", "entrypoint-required"}:
             (site / "baseline_plugin.py").unlink()
             package = site / "baseline_plugin"
@@ -121,6 +172,7 @@ def shared_runtime(request):
                 "def pytest_addoption(parser): parser.addoption('--baseline-enabled', action='store_true')\n"
                 "@pytest.fixture\ndef source_value(): return 1\n"
             )
+            plugin_path = package / "a.py"
             (package / "z.py").write_text("VALUE = 1\n")
             (metadata / "entry_points.txt").write_text(
                 "[pytest11]\nbaseline = baseline_plugin.a\nbaseline-z = baseline_plugin.z\n"
@@ -166,7 +218,36 @@ def shared_runtime(request):
             "'from verifyit.grade import main; raise SystemExit(main())' \"$@\"\n"
         )
         verifyit.chmod(0o755)
-        yield SharedRuntime(contract, site, verifyit)
+        yield SharedRuntime(contract, site, verifyit, candidate, plugin_path)
+
+
+@pytest.mark.parametrize(
+    "shared_runtime",
+    [
+        "workspace-plugin-editable",
+        "workspace-plugin-wheel",
+        "workspace-plugin-dependency",
+        "workspace-plugin-namespace",
+        "workspace-plugin-interpreter",
+    ],
+    indirect=True,
+)
+def test_shared_grading_keeps_repository_product_live_and_third_party_plugin_pinned(shared_runtime):
+    runtime = shared_runtime
+    candidate = runtime.candidate
+    candidate.write_text("VALUE = 1\n")
+    runtime.plugin.write_text("SENTINEL = 0\n")
+    verdict = runtime.grade()
+    assert verdict["reward"] == 1.0, verdict
+    reports = Path(runtime.contract.report_directory)
+    ownership = json.loads((reports / "workspace-owned-distributions.json").read_text())
+    product = next(row for row in ownership["distributions"] if row["distribution"] == "candidate-product")
+    assert product["grader_dependency"]
+    changes = json.loads((reports / "workspace-owned-diff.json").read_text())
+    assert changes[str(candidate)] == {
+        "before": hashlib.sha256(b"VALUE = 0\n").hexdigest(),
+        "after": hashlib.sha256(b"VALUE = 1\n").hexdigest(),
+    }
 
 
 @pytest.mark.parametrize(
