@@ -51,7 +51,8 @@ def stage_execution(value: dict, coordinator: IrisSkyRLExecution) -> IrisSkyRLEx
     """Bind stage resources to the loop's single parent allocation."""
     if {"coordinator_name", "coordinator_gpu", "coordinator_timeout_hours"} & value.keys():
         raise ValueError("Coordinator settings belong only in execution.coordinator")
-    return replace(coordinator, **{**value, "required_env_vars": tuple(value["required_env_vars"])})
+    required = tuple(dict.fromkeys((*coordinator.required_env_vars, *value["required_env_vars"])))
+    return replace(coordinator, **{**value, "required_env_vars": required})
 
 
 def verify_inputs(*, output: str, manifests: dict) -> None:
