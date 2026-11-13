@@ -647,3 +647,18 @@ potential:
   model: claude-opus-5-5
   date: '2026-11-13'
   inputs_digest: bcf53a6150ce
+projection:
+  delta: 0.0074
+  multiplier: 0.85
+  alpha: 0.0846
+  recipe_alpha: 0.08657
+  hero_flops: 9.234e+23
+  extrapolation: 4023
+  protocol: equal_steps
+  trials:
+  - t029
+  - t030
+  - t031
+  - t032
+  basis: Belay Ckpt Oct 20 2026 (s7n) fit of 2026-11-01, on s7n-d512, s7n-d768, s7n-d1024 and s7n-d1280L16
+  date: '2026-11-13'
