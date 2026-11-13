@@ -268,15 +268,16 @@ Model commands that run as root can stop other root-owned processes.
 
 For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
 Alternatively, supply a function that creates a configured `AsyncDaytona` client to `DaytonaMachineFactory`.
-Each machine owns and closes its client. The factory creates sandboxes from shared
-snapshots. Snapshot names derive from the registry reference or build-context contents
-and the requested resources. Use immutable image references. A mutable tag can
-select a snapshot built from an earlier image. Snapshot creation requires available organization quota.
+Each machine owns and closes its client. In the default build mode, the factory
+creates sandboxes from shared snapshots. Snapshot names derive from the registry
+reference or build-context contents and the requested resources. Use immutable
+image references. A mutable tag can select a snapshot built from an earlier image.
+Snapshot creation requires available organization quota.
 Machine cleanup deletes the sandbox and retains the snapshot for reuse.
 The factory accepts `DaytonaNetworkPolicy` with `block_all`, `unrestricted`,
 `network_allow_list`, or `domain_allow_list`. The two allow-list modes require a
 `value`. Without a policy override, the factory uses `MachineSpec.network`.
-`MachineSpec.startup_timeout` bounds snapshot preparation and sandbox creation. Without
+`MachineSpec.startup_timeout` bounds image preparation and sandbox creation. Without
 this value, the factory uses its `create_timeout` setting.
 The pinned Daytona SDK does not upload local `ADD` inputs. Dockerfiles with `ADD`
 require a prebuilt registry image.

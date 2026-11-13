@@ -108,7 +108,7 @@ class SnapshotPurgeReport:
 def validate_source(
     source: RegistryImage | DockerfileSource,
 ) -> RegistryImage | DockerfileSource:
-    """Reject Daytona build inputs it cannot snapshot."""
+    """Reject Daytona build inputs the provider cannot use."""
     if isinstance(source, RegistryImage):
         return source
     source = DockerfileSource(source.context.resolve(), source.dockerfile.resolve())

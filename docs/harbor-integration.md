@@ -93,10 +93,10 @@ Removed provider names and custom environment import paths fail validation.
 Agent import paths load trusted harness code. Harbor cannot select Shellbox's Docker backend.
 
 Daytona accepts `network_policy` (`mode` and optional `value`), `ttl_minutes`,
-`create_timeout` and `image_build`. Shellbox derives the snapshot from the task image or
-Dockerfile and the task's resource request; snapshot names, automatic snapshots, forced
-rebuilds and policy-level target overrides are not policy settings. Inventory, preflight and
-reclamation use `shellbox-daytona-snapshots`; see the
+`create_timeout` and `image_build`. In snapshot mode, Shellbox derives the snapshot
+from the task image or Dockerfile and the task's resource request. Snapshot names,
+automatic snapshots, forced rebuilds and policy-level target overrides are not
+policy settings. Inventory, preflight and reclamation use `shellbox-daytona-snapshots`; see the
 [Daytona operations runbook](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#snapshot-preflight-and-reclamation).
 
 `image_build` selects how each sandbox gets its image. The default, `snapshot`, builds each

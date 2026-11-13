@@ -55,7 +55,7 @@ from shellbox.process_session import (
 
 
 def task_snapshot_source(docker_image: str | None, environment_dir: Path) -> RegistryImage | DockerfileSource:
-    """Select a Harbor task's snapshot source from its image or environment."""
+    """Select a Harbor task's image source from its image or environment."""
     if docker_image:
         return RegistryImage(docker_image)
     dockerfile = environment_dir / "Dockerfile"
@@ -70,7 +70,7 @@ def machine_spec(task_env_config, environment_dir: Path, env: dict[str, str], *,
     Pure projection from the task's environment config, so measurement code
     can derive snapshot identities from the same inputs production uses.
     Source validation happens once per boundary: environment construction
-    rejects unusable definitions, and snapshot preparation validates what it
+    rejects unusable definitions, and sandbox creation validates what it
     is about to build.
     """
     source = (
@@ -188,7 +188,7 @@ class DaytonaEnvironment(BaseEnvironment):
         )
 
     def snapshot_request(self) -> SnapshotRequest:
-        """The snapshot that this task's sandbox starts from."""
+        """Return this task's snapshot request in snapshot build mode."""
         if self.factory.image_build != DaytonaImageBuild.SNAPSHOT:
             raise ValueError(
                 f"{self.factory.image_build} image builds start sandboxes without a snapshot"
