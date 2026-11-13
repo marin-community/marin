@@ -9,9 +9,11 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import draccus
 import yaml
+from rigging.filesystem.cluster_config import load_cluster_config
 
 from experiments.post_training.long_loop.stage_config import validate_stage_config
 
@@ -76,14 +78,32 @@ def read_pin(pin: FilePin, directory: Path) -> Any:
     return yaml.safe_load(content)
 
 
+def validate_output_locality(storage: StorageConfig, executions: tuple[dict, ...]) -> None:
+    """Require outputs in the execution region and RNO2A's lifecycle-managed scratch."""
+    clusters = {execution["target_cluster"] or execution["cluster"] for execution in executions}
+    if len(clusters) != 1:
+        raise ValueError("Long-loop stages must share one execution cluster for region-local outputs")
+    cluster = clusters.pop()
+    config = load_cluster_config("coreweave")
+    region = cluster.removeprefix("cw-")
+    if not cluster.startswith("cw-") or region not in config.region_buckets:
+        raise ValueError(f"Unknown CoreWeave output region for execution cluster {cluster}")
+    bucket = config.region_buckets[region].name
+    ttl_paths = {f"ttl={days}d" for days in config.ttl_days}
+    for prefix in (storage.output_prefix, storage.temporary_prefix):
+        parsed = urlsplit(prefix)
+        if parsed.scheme != "s3" or parsed.netloc != bucket:
+            raise ValueError(f"Long-loop outputs for {cluster} must use region-local bucket s3://{bucket}/")
+        segments = parsed.path.lstrip("/").split("/")
+        if region == "rno2a" and (len(segments) < 2 or segments[0] != "tmp" or segments[1] not in ttl_paths):
+            raise ValueError("RNO2A outputs must use tmp/ttl=Nd with a supported storage lifetime")
+
+
 def resolve_spec(path: Path, *, smoke: bool) -> dict:
     """Resolve exact files; missing admission inputs remain explicit blockers."""
     spec = draccus.decode(RunSpec, yaml.safe_load(path.read_text()))
     if len(spec.marin_revision) != 40 or any(c not in "0123456789abcdef" for c in spec.marin_revision):
         raise ValueError("marin_revision must be a full Git commit")
-    for prefix in (spec.storage.output_prefix, spec.storage.temporary_prefix):
-        if not prefix.startswith("s3://marin-us-east-08a/"):
-            raise ValueError("New long-loop outputs must use s3://marin-us-east-08a/")
     directory = path.resolve().parent
     result = {
         "storage": vars(spec.storage),
@@ -109,6 +129,10 @@ def resolve_spec(path: Path, *, smoke: bool) -> dict:
         sft_manifest["data"][field] = read_pin(draccus.decode(FilePin, pin), directory)
     for name in ("sft", "rl", "evaluation", "endpoint", "archive", "initializer", "tokenizer", "execution"):
         result[name] = read_pin(getattr(spec, name), directory)
+    validate_output_locality(
+        spec.storage,
+        (result["execution"]["coordinator"], result["rl"]["execution"], result["evaluation"]["execution"]),
+    )
     for stage in ("rl", "evaluation"):
         validate_stage_config(result[stage]["config"], stage)
         for field in ("rendezvous_timeout", "cluster_join_timeout", "driver_liveness_timeout"):
