@@ -110,8 +110,10 @@ def megatron_grug_route(name: str, parameter: Tensor) -> MegatronGrugRoute:
 
 
 def megatron_grug_expert_bank(name: str) -> str | None:
-    """Identify one layer's routed expert projection, excluding shared experts."""
+    """Identify a routed projection; reject unsupported routed expert names."""
     match = re.fullmatch(r"(.*\.mlp\.experts\.(?:experts\.)?linear_fc[12])\.weight\d*", name)
+    if match is None and ".mlp.experts." in name:
+        raise ValueError(f"Unsupported routed expert parameter for whole-bank normalization: {name}")
     return match[1] if match is not None else None
 
 
