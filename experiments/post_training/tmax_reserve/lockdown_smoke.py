@@ -30,7 +30,7 @@ from shellbox.backends.daytona.machine import (
     DaytonaNetworkPolicy,
     snapshot_identity,
 )
-from shellbox.image import RegistryImage
+from shellbox.image import DockerfileSource
 from shellbox.machine import Command, MachineSpec, NetworkPolicy
 
 from experiments.post_training.tmax_reserve import snapshots
@@ -74,12 +74,10 @@ def held_rounds(log: str, locked_at: float) -> dict:
     }
 
 
-async def smoke(image: str) -> dict:
+async def smoke(source: DockerfileSource) -> dict:
     config = DaytonaConfig(api_key=os.environ["DAYTONA_API_KEY"], target=os.environ["DAYTONA_TARGET"])
     factory = DaytonaMachineFactory(lambda: AsyncDaytona(config), network_policy=SETUP_POLICY)
-    spec = MachineSpec(
-        source=RegistryImage(image), workdir="/", env={}, network=NetworkPolicy.ALLOW, cpus=1, memory_mb=2048
-    )
+    spec = MachineSpec(source=source, workdir="/", env={}, network=NetworkPolicy.ALLOW, cpus=1, memory_mb=2048)
     machine = await factory.create(spec)
     try:
         await run(machine, f"rm -f {HOLD_LOG}; setsid nohup bash -c {shlex.quote(HOLDER)} >/dev/null 2>&1 &")
@@ -97,7 +95,7 @@ async def smoke(image: str) -> dict:
         await machine.close()
     rounds = held_rounds(log, float(locked_at.strip()))
     return {
-        "image": image,
+        "environment": str(source.context),
         "held_connection": rounds,
         "held_log": log.splitlines(),
         "new_connection_probe_exit": probe,
@@ -112,20 +110,23 @@ async def smoke(image: str) -> dict:
     }
 
 
-def snapshot_name(image: str) -> str:
+def snapshot_name(source: DockerfileSource) -> str:
     """The name the factory gives this smoke's snapshot (1 CPU, 2 GiB, as ``smoke`` requests)."""
-    return snapshot_identity(RegistryImage(image), Resources(cpu=1, memory=2))
+    return snapshot_identity(source, Resources(cpu=1, memory=2))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--image", required=True, help="Shared image A, registry/repo@sha256:<digest>.")
+    parser.add_argument(
+        "--environment", type=Path, required=True, help="A template-A task's environment/ (the image A context)."
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    name = snapshot_name(args.image)
+    source = DockerfileSource(args.environment, args.environment / "Dockerfile")
+    name = snapshot_name(source)
     preexisting = bool(snapshots.existing([name]))
     try:
-        result = asyncio.run(smoke(args.image))
+        result = asyncio.run(smoke(source))
     finally:
         deletion = [] if preexisting else snapshots.delete([name])
     result["snapshot"] = {"name": name, "preexisting": preexisting, "deletion": deletion}

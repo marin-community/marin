@@ -8,8 +8,10 @@ Every packaged pilot Dockerfile is one of two templates (see ``parse_dockerfile`
 * **A**: ``FROM ubuntu:22.04``, ``ENV DEBIAN_FRONTEND=noninteractive``, tmux, then the task's post_install.sh;
 * **B**: A plus four ``ENV`` lines, the shared base_install.sh, and the task's fixture ``COPY`` lines.
 
-Image A or B holds everything except the per-task steps. Those move into Harbor's hidden ``task_setup/``, which
-runs as root before the agent starts and leaves nothing in the sandbox: ``files/`` holds the fixtures at the
+Each task's ``environment/`` becomes its template's build context (Daytona builds the snapshot from that
+Dockerfile), written with fixed file modes so all tasks of a template share one snapshot key. The per-task steps
+move into Harbor's hidden ``task_setup/``, which runs as root before the agent starts and leaves nothing in the
+sandbox: ``files/`` holds the fixtures at the
 paths their ``COPY`` lines name, and ``setup.sh`` runs the unchanged post_install.sh from ``/`` with the
 template's ``ENV`` values, as the image build did. Setup has network, so apt, pip and URL fetches behave as
 they did in the build; a failed run is retried once.
@@ -24,6 +26,8 @@ import shutil
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+
+from experiments.post_training.tmax_reserve import harbor_job
 
 PILOT_BASE = "FROM ubuntu:22.04"
 COMMON_STEPS = frozenset(
@@ -56,7 +60,8 @@ IMAGE_B_ENV_LINES = frozenset(
 )
 POST_INSTALL_RUN = "RUN bash /tmp/post_install.sh && rm /tmp/post_install.sh"
 FIXTURE_COPY = re.compile(r"COPY _fixtures/(\S+) /(\S+)")
-PINNED_IMAGE = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}")
+# Mode of every template context file, so the snapshot key does not depend on the umask.
+CONTEXT_FILE_MODE = 0o644
 SETUP_ATTEMPTS = 2
 
 
@@ -125,46 +130,52 @@ def task_digest(task_dir: Path) -> str:
     return digest.hexdigest()
 
 
-def task_toml(text: str, image: str) -> str:
-    """Point the task at its shared image."""
-    lines = text.splitlines()
-    if any(line.startswith("docker_image") for line in lines):
-        raise ValueError("task.toml already sets docker_image")
-    lines.insert(lines.index("[environment]") + 1, f"docker_image = {json.dumps(image)}")
-    return "\n".join(lines) + "\n"
+def write_context(context: Path, dest: Path) -> None:
+    """Copy a template's build context flat into ``dest`` with fixed modes, so equal contexts share a snapshot key."""
+    dest.mkdir(mode=0o755)
+    for path in sorted(context.iterdir()):
+        if not path.is_file():
+            raise ValueError(f"template context {context} holds a non-file {path.name}")
+        shutil.copyfile(path, dest / path.name)
+        (dest / path.name).chmod(CONTEXT_FILE_MODE)
 
 
-def convert_task(source: Path, dest: Path, images: dict[Template, str]) -> BuildSteps:
-    """Write one shared-image task; environment/ becomes a one-line Dockerfile for its image."""
+def convert_task(source: Path, dest: Path, contexts: dict[Template, Path]) -> BuildSteps:
+    """Write one shared-image task: environment/ is its template's context, task_setup/ its own build step."""
     environment = source / "environment"
     steps = parse_dockerfile((environment / "Dockerfile").read_text())
     expected = {"Dockerfile", "post_install.sh"}
     if steps.template is Template.B:
         expected |= {"base_install.sh"} | ({"_fixtures"} if steps.fixtures else set())
+        if (environment / "base_install.sh").read_bytes() != (contexts[Template.B] / "base_install.sh").read_bytes():
+            raise ValueError(f"{source.name}: base_install.sh differs from template B's")
     present = {path.name for path in environment.iterdir()}
     if present != expected:
         raise ValueError(f"{source.name}: environment files {sorted(present)}, expected {sorted(expected)}")
-    image = images[steps.template]
-    shutil.copytree(source, dest, ignore=shutil.ignore_patterns("environment", "task.toml"))
-    (dest / "task.toml").write_text(task_toml((source / "task.toml").read_text(), image))
-    (dest / "environment").mkdir()
-    (dest / "environment" / "Dockerfile").write_text(f"FROM {image}\n")
+    shutil.copytree(source, dest, ignore=shutil.ignore_patterns("environment"))
+    write_context(contexts[steps.template], dest / "environment")
     setup = dest / "task_setup"
     setup.mkdir()
     for relative, target in steps.fixtures:
         out = setup / "files" / target
         out.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(environment / "_fixtures" / relative, out)
-    shutil.copyfile(environment / "post_install.sh", setup / "post_install.sh")
+        # COPY keeps the context file's mode, so the copy keeps it too.
+        shutil.copy(environment / "_fixtures" / relative, out)
+    shutil.copy(environment / "post_install.sh", setup / "post_install.sh")
     (setup / "setup.sh").write_text(setup_script(steps.env))
     return steps
 
 
-def package_shared(source: Path, images: dict[Template, str], dest: Path) -> dict:
-    """Convert a packaged pilot (verified against its manifest) into shared-image tasks under ``dest``."""
-    for template, image in images.items():
-        if not PINNED_IMAGE.fullmatch(image):
-            raise ValueError(f"image {template} must be pinned by digest: {image!r}")
+def file_hashes(context: Path) -> dict[str, str]:
+    return {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(context.iterdir())}
+
+
+def package_shared(source: Path, contexts: dict[Template, Path], dest: Path) -> dict:
+    """Convert a packaged pilot (verified against its manifest) into shared-image tasks under ``dest``.
+
+    Fails unless the 200 tasks name exactly one Daytona snapshot per template, computed through Shellbox's own
+    naming path (``snapshots.py names``).
+    """
     source_manifest = json.loads((source.parent / f"{source.name}.manifest.json").read_text())
     for task, digest in source_manifest["tasks"].items():
         if task_digest(source / task) != digest:
@@ -172,12 +183,20 @@ def package_shared(source: Path, images: dict[Template, str], dest: Path) -> dic
     dest.mkdir(parents=True)
     tasks = {}
     for task in sorted(source_manifest["tasks"]):
-        steps = convert_task(source / task, dest / task, images)
+        steps = convert_task(source / task, dest / task, contexts)
         tasks[task] = {"sha256": task_digest(dest / task), "template": steps.template.value}
+    names = snapshot_names(sorted(str(dest / task) for task in tasks))
+    keys = {
+        template.value: sorted({names[task] for task, row in tasks.items() if row["template"] == template.value})
+        for template in Template
+    }
+    if any(len(template_keys) != 1 for template_keys in keys.values()) or keys["A"] == keys["B"]:
+        raise ValueError(f"expected one distinct snapshot key per template, got {keys}")
     manifest = {
         "source": source.name,
         "source_sha256": source_manifest["sha256"],
-        "images": {template.value: image for template, image in images.items()},
+        "contexts": {template.value: file_hashes(context) for template, context in contexts.items()},
+        "snapshot_keys": {template: template_keys[0] for template, template_keys in keys.items()},
         "tasks": tasks,
         "sha256": hashlib.sha256(json.dumps(tasks, sort_keys=True).encode()).hexdigest(),
     }
@@ -185,16 +204,26 @@ def package_shared(source: Path, images: dict[Template, str], dest: Path) -> dic
     return manifest
 
 
+def snapshot_names(task_dirs: list[str]) -> dict[str, str]:
+    """``{task: snapshot name}`` from Shellbox's naming path, run in the vendored Harbor runtime (no API calls)."""
+    return harbor_job.snapshot_command("names", *task_dirs, env={})
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--source", type=Path, required=True, help="Packaged pilot directory (with its manifest).")
-    parser.add_argument("--image-a", required=True, help="Image A, registry/repo@sha256:<digest>.")
-    parser.add_argument("--image-b", required=True, help="Image B, registry/repo@sha256:<digest>.")
+    parser.add_argument("--context-a", type=Path, required=True, help="Template A build context (Dockerfile).")
+    parser.add_argument(
+        "--context-b", type=Path, required=True, help="Template B context (Dockerfile, base_install.sh)."
+    )
     parser.add_argument("--dest", type=Path, required=True, help="New directory for the shared-image tasks.")
     args = parser.parse_args()
-    images = {Template.A: args.image_a, Template.B: args.image_b}
-    manifest = package_shared(args.source, images, args.dest)
-    print(json.dumps({"tasks": len(manifest["tasks"]), "sha256": manifest["sha256"]}))
+    manifest = package_shared(args.source, {Template.A: args.context_a, Template.B: args.context_b}, args.dest)
+    print(
+        json.dumps(
+            {"tasks": len(manifest["tasks"]), "snapshot_keys": manifest["snapshot_keys"], "sha256": manifest["sha256"]}
+        )
+    )
 
 
 if __name__ == "__main__":

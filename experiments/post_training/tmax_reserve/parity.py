@@ -3,8 +3,9 @@
 
 """Check, under local Docker, that a shared-image task reproduces its per-task image.
 
-For each task: build the per-task reference image from the packaged pilot, and start the task's shared image (A or
-B) and apply its ``task_setup/`` with Harbor's own ``task_setup_command``, as the trial does. Then compare:
+For each task: build the per-task reference image from the packaged pilot, and build the task's shared image (A or
+B) from its converted ``environment/``, then apply its ``task_setup/`` with Harbor's own ``task_setup_command``, as
+the trial does. Then compare:
 
 - the filesystem under ``STATE_ROOTS`` (type, mode, owner, size, content hash, link target);
 - installed packages (``dpkg-query``, ``pip freeze``) and the image environment;
@@ -26,12 +27,10 @@ from pathlib import Path
 
 from harbor.trial.trial import TASK_SETUP_GUEST_PREFIX, task_setup_command
 
-from experiments.post_training.tmax_reserve.shared_image import Template, parse_dockerfile
-
 logger = logging.getLogger(__name__)
 
 BUILDER = "tmax-parity"
-# The image a docker-container buildx builder runs.
+# The image a docker-container buildx builder runs; removed at the end if this run pulled it.
 BUILDKIT_IMAGE = "moby/buildkit:buildx-stable-1"
 STATE_ROOTS = ("/home", "/app", "/root", "/opt", "/srv", "/usr/local", "/etc", "/tmp")
 # Per-container files and caches that differ between any two containers or builds.
@@ -115,17 +114,18 @@ def diff(reference: dict, shared: dict) -> dict:
     }
 
 
-def check_task(task: str, source: Path, shared: Path, images: dict[Template, str]) -> dict:
+def check_task(task: str, template: str, source: Path, shared: Path) -> dict:
     environment = source / task / "environment"
-    template = parse_dockerfile((environment / "Dockerfile").read_text()).template
-    reference_image = f"{BUILDER}-ref:{task}"
+    reference_image, shared_image = f"{BUILDER}-ref:{task}", f"{BUILDER}-shared:{task}"
     started = time.monotonic()
     docker("buildx", "build", "--builder", BUILDER, "--load", "-t", reference_image, str(environment))
     build_seconds = time.monotonic() - started
+    # Tasks of one template share a context, so after the first this build is a cache hit.
+    docker("buildx", "build", "--builder", BUILDER, "--load", "-t", shared_image, str(shared / task / "environment"))
     containers = {"reference": f"{BUILDER}-ref-{task}", "shared": f"{BUILDER}-shared-{task}"}
     try:
         docker("run", "-d", "--name", containers["reference"], reference_image, "sleep", "infinity")
-        docker("run", "-d", "--name", containers["shared"], images[template], "sleep", "infinity")
+        docker("run", "-d", "--name", containers["shared"], shared_image, "sleep", "infinity")
         docker("cp", str(shared / task / "task_setup"), f"{containers['shared']}:{GUEST}")
         started = time.monotonic()
         setup = docker("exec", "-w", "/", containers["shared"], "bash", "-c", task_setup_command(GUEST), check=False)
@@ -133,13 +133,13 @@ def check_task(task: str, source: Path, shared: Path, images: dict[Template, str
         docker("exec", containers["shared"], "rm", "-rf", GUEST)
         states = {side: state(container) for side, container in containers.items()}
         rewards = {side: noop_reward(container, source / task / "tests") for side, container in containers.items()}
-        env_equal = image_env(reference_image) == image_env(images[template])
+        env_equal = image_env(reference_image) == image_env(shared_image)
     finally:
         docker("rm", "-f", *containers.values(), check=False)
-        docker("rmi", "-f", reference_image, check=False)
+        docker("rmi", "-f", reference_image, shared_image, check=False)
     return {
         "task": task,
-        "template": template.value,
+        "template": template,
         "setup_exit": setup.returncode,
         "setup_stderr_tail": setup.stderr[-2000:],
         "build_seconds": round(build_seconds),
@@ -159,28 +159,24 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     manifest = json.loads((args.shared.parent / f"{args.shared.name}.manifest.json").read_text())
-    images = {Template(template): image for template, image in manifest["images"].items()}
     results = []
-    output = {"docker_system_df_before": docker("system", "df").stdout, "results": results}
-    # Only images this run pulled are removed afterwards.
-    present = {
-        image
-        for image in [*images.values(), BUILDKIT_IMAGE]
-        if docker("image", "inspect", image, check=False).returncode == 0
+    output = {
+        "shared_manifest_sha256": manifest["sha256"],
+        "contexts": manifest["contexts"],
+        "docker_system_df_before": docker("system", "df").stdout,
+        "results": results,
     }
+    had_buildkit = docker("image", "inspect", BUILDKIT_IMAGE, check=False).returncode == 0
     docker("buildx", "create", "--name", BUILDER, "--driver", "docker-container")
     try:
-        for template_image in images.values():
-            docker("pull", template_image)
         for task in args.tasks.split(","):
             logger.info("checking %s", task)
-            results.append(check_task(task, args.source, args.shared, images))
+            results.append(check_task(task, manifest["tasks"][task]["template"], args.source, args.shared))
             args.output.write_text(json.dumps(output, indent=1))
     finally:
         docker("buildx", "rm", "--force", BUILDER, check=False)
-        pulled = [image for image in [*images.values(), BUILDKIT_IMAGE] if image not in present]
-        if pulled:
-            docker("rmi", "-f", *pulled, check=False)
+        if not had_buildkit:
+            docker("rmi", "-f", BUILDKIT_IMAGE, check=False)
         output["docker_system_df_after"] = docker("system", "df").stdout
         args.output.write_text(json.dumps(output, indent=1))
     print(json.dumps([{key: row[key] for key in ("task", "setup_exit", "noop_rewards")} for row in results], indent=1))

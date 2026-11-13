@@ -2,17 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
+from experiments.post_training.tmax_reserve import shared_image
 from experiments.post_training.tmax_reserve.shared_image import (
+    CONTEXT_FILE_MODE,
     IMAGE_B_ENV,
     Template,
     package_shared,
     parse_dockerfile,
     setup_script,
     task_digest,
+    write_context,
 )
 
 COMMON_HEAD = "FROM ubuntu:22.04\n\nENV DEBIAN_FRONTEND=noninteractive\n"
@@ -28,7 +33,6 @@ TEMPLATE_B = (
     + POST_INSTALL
     + TMUX
 )
-IMAGES = {Template.A: "r.example/a@sha256:" + "a" * 64, Template.B: "r.example/b@sha256:" + "b" * 64}
 
 
 def test_dockerfiles_classify_into_the_two_templates():
@@ -97,21 +101,68 @@ def _source_task(root, name, dockerfile, fixtures=False):
         (environment / "_fixtures" / "app" / "fixtures" / "image.png").write_bytes(b"png")
 
 
-def test_package_shared_converts_verified_tasks_and_hides_build_inputs(tmp_path):
-    source = tmp_path / "pilot"
+def _contexts(root):
+    a, b = root / "context-a", root / "context-b"
+    a.mkdir()
+    b.mkdir()
+    (a / "Dockerfile").write_text("FROM ubuntu\n")
+    (b / "Dockerfile").write_text("FROM ubuntu\nCOPY base_install.sh /tmp/\n")
+    (b / "base_install.sh").write_text("echo base\n")
+    return {Template.A: a, Template.B: b}
+
+
+def _fake_names(monkeypatch, keys):
+    def names(task_dirs):
+        return {Path(task).name: keys[Path(task, "environment", "Dockerfile").read_text()] for task in task_dirs}
+
+    monkeypatch.setattr(shared_image, "snapshot_names", names)
+
+
+def _pilot(root, b_base_install="echo base\n"):
+    source = root / "pilot"
     _source_task(source, "task_a", TEMPLATE_A)
     _source_task(source, "task_b", TEMPLATE_B, fixtures=True)
+    (source / "task_b" / "environment" / "base_install.sh").write_text(b_base_install)
     digests = {name: task_digest(source / name) for name in ("task_a", "task_b")}
-    (tmp_path / "pilot.manifest.json").write_text(json.dumps({"tasks": digests, "sha256": "src"}))
+    (root / "pilot.manifest.json").write_text(json.dumps({"tasks": digests, "sha256": "src"}))
+    return source
 
-    manifest = package_shared(source, IMAGES, tmp_path / "shared")
 
+def test_package_shared_writes_template_contexts_and_hides_build_inputs(tmp_path, monkeypatch):
+    contexts = _contexts(tmp_path)
+    _fake_names(monkeypatch, {"FROM ubuntu\n": "snap-a", "FROM ubuntu\nCOPY base_install.sh /tmp/\n": "snap-b"})
+
+    manifest = package_shared(_pilot(tmp_path), contexts, tmp_path / "shared")
+
+    assert manifest["snapshot_keys"] == {"A": "snap-a", "B": "snap-b"}
     assert {task: row["template"] for task, row in manifest["tasks"].items()} == {"task_a": "A", "task_b": "B"}
     b = tmp_path / "shared" / "task_b"
+    assert sorted(path.name for path in (b / "environment").iterdir()) == ["Dockerfile", "base_install.sh"]
     assert (b / "task_setup" / "files" / "app" / "fixtures" / "image.png").read_bytes() == b"png"
     assert (b / "task_setup" / "post_install.sh").read_text() == "echo hi\n"
-    assert sorted(path.name for path in (b / "environment").iterdir()) == ["Dockerfile"]
-    assert f'docker_image = "{IMAGES[Template.B]}"' in (b / "task.toml").read_text()
+    assert (b / "task.toml").read_text() == (tmp_path / "pilot" / "task_b" / "task.toml").read_text()
+
+
+def test_package_shared_requires_one_snapshot_key_per_template(tmp_path, monkeypatch):
+    contexts = _contexts(tmp_path)
+    _fake_names(monkeypatch, {"FROM ubuntu\n": "snap-same", "FROM ubuntu\nCOPY base_install.sh /tmp/\n": "snap-same"})
+
+    with pytest.raises(ValueError, match="one distinct snapshot key per template"):
+        package_shared(_pilot(tmp_path), contexts, tmp_path / "shared")
+
+
+def test_package_shared_refuses_a_task_whose_base_install_differs_from_template_b(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match=r"base_install\.sh differs"):
+        package_shared(_pilot(tmp_path, b_base_install="echo other\n"), _contexts(tmp_path), tmp_path / "shared")
+
+
+def test_context_modes_do_not_depend_on_the_umask(tmp_path):
+    previous = os.umask(0o002)
+    try:
+        write_context(_contexts(tmp_path)[Template.B], tmp_path / "environment")
+    finally:
+        os.umask(previous)
+    assert {path.stat().st_mode & 0o777 for path in (tmp_path / "environment").iterdir()} == {CONTEXT_FILE_MODE}
 
 
 def test_package_shared_refuses_a_source_that_drifted_from_its_manifest(tmp_path):
@@ -120,4 +171,4 @@ def test_package_shared_refuses_a_source_that_drifted_from_its_manifest(tmp_path
     (tmp_path / "pilot.manifest.json").write_text(json.dumps({"tasks": {"task_a": "0" * 64}, "sha256": "src"}))
 
     with pytest.raises(ValueError, match="does not match"):
-        package_shared(source, IMAGES, tmp_path / "shared")
+        package_shared(source, _contexts(tmp_path), tmp_path / "shared")

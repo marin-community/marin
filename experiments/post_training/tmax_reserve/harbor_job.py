@@ -17,6 +17,7 @@ import os
 import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import Any
 
 from marin.evaluation.harbor.driver_config import (
     HarborRuntimeOverlay,
@@ -52,7 +53,8 @@ def sandbox_seconds(jobs_dir: Path) -> float:
     return seconds
 
 
-def _snapshots(command: str, *arguments: str, env: Mapping[str, str]) -> object:
+def snapshot_command(command: str, *arguments: str, env: Mapping[str, str]) -> Any:
+    """Run one ``snapshots.py`` command in the vendored Harbor runtime and return its JSON output."""
     result = subprocess.run(
         harbor_runtime_command(SNAPSHOTS_SCRIPT, command, *arguments),
         env={**os.environ, **env, "PYTHONPATH": str(REPO_ROOT)},
@@ -79,15 +81,15 @@ def run_harbor_job(
     """
     dataset = Path(overlay.dataset_path)
     task_dirs = sorted(str(path) for path in dataset.iterdir() if path.is_dir())
-    names = sorted(set(_snapshots("names", *task_dirs, env=driver_env).values()))
+    names = sorted(set(snapshot_command("names", *task_dirs, env=driver_env).values()))
     all_names = work / "snapshot-names.json"
     all_names.write_text(json.dumps(names))
-    preexisting = _snapshots("existing", str(all_names), env=driver_env)
+    preexisting = snapshot_command("existing", str(all_names), env=driver_env)
     created = [name for name in names if name not in preexisting]
     to_delete = work / "snapshots-to-delete.json"
     to_delete.write_text(json.dumps(created))
     (work / "snapshots.json").write_text(json.dumps({"names": names, "preexisting": preexisting, "to_delete": created}))
-    account = _snapshots("usage", env=driver_env)
+    account = snapshot_command("usage", env=driver_env)
     (work / "account.json").write_text(json.dumps(account, indent=1))
     free = snapshot_quota - account["non_general"]
     logger.info("Daytona: %d new snapshots needed, %d of %d slots free", len(created), free, snapshot_quota)
@@ -96,6 +98,6 @@ def run_harbor_job(
     try:
         run_harbor_driver(config, overlay, driver_env, backend_state)
     finally:
-        deletions = _snapshots("delete", str(to_delete), env=driver_env)
+        deletions = snapshot_command("delete", str(to_delete), env=driver_env)
         (work / "snapshot-deletions.json").write_text(json.dumps(deletions, indent=1))
     return Path(overlay.jobs_dir)

@@ -94,7 +94,7 @@ def _job(tmp_path, monkeypatch, *, preexisting, non_general, driver_error=None):
         if driver_error:
             raise driver_error
 
-    monkeypatch.setattr(harbor_job, "_snapshots", snapshots)
+    monkeypatch.setattr(harbor_job, "snapshot_command", snapshots)
     monkeypatch.setattr(harbor_job, "run_harbor_driver", driver)
     overlay = SimpleNamespace(dataset_path=str(dataset), jobs_dir=str(tmp_path / "jobs"))
     return calls, lambda: harbor_job.run_harbor_job(None, overlay, {}, None, 45, tmp_path)
