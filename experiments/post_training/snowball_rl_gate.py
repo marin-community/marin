@@ -51,6 +51,7 @@ from tabulate import tabulate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_recipe as recipe
 from experiments.post_training.snowball_rl_command import EXIT_CODES, SnowballCommand
+from experiments.post_training.snowball_rl_presets import RUN_PREFIX
 from experiments.post_training.snowball_rl_scoring import GATE_INPUTS_FILENAME as GATE_INPUTS_FILENAME
 from experiments.post_training.snowball_rl_scoring import (
     GateInputs,
@@ -674,6 +675,10 @@ def _write_gate(
     return report
 
 
+def control_name(preset: str, commit: str, replicate: int) -> str:
+    return f"{RUN_PREFIX}/control/{preset}-{commit}-r{replicate}"
+
+
 def control_pins(preset: presets.Preset) -> tuple[ControlPin, ...]:
     control_preset = preset.shared_control or preset.name
     known = CONTROLS.get(control_preset, ())
@@ -690,9 +695,7 @@ def control_pins(preset: presets.Preset) -> tuple[ControlPin, ...]:
 
 
 def control_path(preset: presets.Preset, pin: ControlPin, index: int) -> str:
-    return presets.run_path(
-        preset.recipe.layout.cluster, presets.control_name(pin.preset, pin.commit, index), pin.revision
-    )
+    return presets.run_path(preset.recipe.layout.cluster, control_name(pin.preset, pin.commit, index), pin.revision)
 
 
 def _gate_artifact(
@@ -712,7 +715,7 @@ def _gate_artifact(
     controls = tuple(
         tuple(
             (
-                f"{presets.control_name(pin.preset, pin.commit, index)}@{pin.revision}",
+                f"{control_name(pin.preset, pin.commit, index)}@{pin.revision}",
                 control_path(preset, pin, index),
             )
             for index in range(pin.runs)
@@ -826,7 +829,7 @@ def main(
         if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= pins[0].runs:
             raise click.BadParameter(f"choose r0 through r{pins[0].runs - 1}", param_hint="--leave-out")
         index = int(leave_out[1:])
-        candidate_name = presets.control_name(pins[0].preset, pins[0].commit, index)
+        candidate_name = control_name(pins[0].preset, pins[0].commit, index)
     name, separator, version = candidate_name.partition("@")
     source = presets.run_path(preset.recipe.layout.cluster, name, version if separator else preset.revision)
     namespace = user_owned_name(

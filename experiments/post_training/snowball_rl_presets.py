@@ -957,6 +957,8 @@ PRESETS = MappingProxyType(
 
 def run_name(preset: Preset, provenance: Provenance, inputs_hash: str, replicate: int, *, control: bool) -> str:
     if control:
+        from experiments.post_training.snowball_rl_gate import control_name  # noqa: PLC0415
+
         return control_name(preset.name, provenance.base_commit, replicate)
     name = f"{RUN_PREFIX}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
     if preset.accepts_replicates:
@@ -1101,10 +1103,6 @@ def published_artifact(value: str) -> ArtifactStep:
         kind = SkyRLRun if record.result_type == result_type_name(SkyRLRun) else LevanterCheckpoint
         return ArtifactStep.adopt(name, version, record.source or root, kind=kind, config=record.config)
     raise click.BadParameter(f"no published artifact record for {name}@{version}")
-
-
-def control_name(preset: str, commit: str, replicate: int) -> str:
-    return f"{RUN_PREFIX}/control/{preset}-{commit}-r{replicate}"
 
 
 def run_path(cluster: str, name: str, version: str) -> str:

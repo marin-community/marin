@@ -50,7 +50,7 @@ def controls(write, name, **kwargs):
     return [
         write(
             name,
-            presets.control_name(pin.preset, pin.commit, i),
+            gate.control_name(pin.preset, pin.commit, i),
             speed=100 + i,
             score=0.49 + i * 0.01,
             legacy=True,
@@ -157,9 +157,7 @@ def test_verdict_labels_use_objectives_and_guards(
 ):
     pin = gate.control_pins(presets.PRESETS["speed-medium"])[0]
     for i, value in enumerate(control_values):
-        recorded_runs(
-            "speed-medium", presets.control_name(pin.preset, pin.commit, i), speed=100 + i, metrics={VLLM: value}
-        )
+        recorded_runs("speed-medium", gate.control_name(pin.preset, pin.commit, i), speed=100 + i, metrics={VLLM: value})
     recorded_runs("speed-medium", "users/test/telemetry", speed=speed, metrics={VLLM: telemetry, KL: kl})
     report = rescore("speed-medium", "--candidate", "users/test/telemetry")
     assert (report["verdict"], report["label"]) == (verdict, label)
@@ -173,15 +171,13 @@ def test_zero_spread_is_unavailable_and_required_guards_are_invalid(recorded_run
     pin = gate.control_pins(presets.PRESETS["learning-medium"])[0]
     for i in range(pin.runs):
         value = (i + 1) / 4
-        recorded_runs(
-            "learning-medium", presets.control_name(pin.preset, pin.commit, i), score=value, initial_score=value
-        )
+        recorded_runs("learning-medium", gate.control_name(pin.preset, pin.commit, i), score=value, initial_score=value)
     recorded_runs("learning-medium", "users/test/zero-objective", score=0.625, initial_score=0)
     report = rescore("learning-medium", "--candidate", "users/test/zero-objective")
     row = comparisons(report, "objective")["eval_lite/family_mean/gain_per_h100_hour"]
     assert (row["sd"], row["noise_percent"], row["change"], report["label"]) == (0, None, "unavailable", "no change")
     for i in range(pin.runs):
-        recorded_runs("learning-medium", presets.control_name(pin.preset, pin.commit, i), score=0.5)
+        recorded_runs("learning-medium", gate.control_name(pin.preset, pin.commit, i), score=0.5)
     recorded_runs("learning-medium", "users/test/zero-guard")
     report = rescore("learning-medium", "--candidate", "users/test/zero-guard")
     assert report["verdict"] == "invalid" and "variation is zero" in report["reason"]
@@ -192,7 +188,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     pin = gate.control_pins(presets.PRESETS["speed-medium"])[0]
     for i in range(pin.runs):
         recorded_runs(
-            "speed-medium", presets.control_name(pin.preset, pin.commit, i), speed=100 + i, metrics={key: 100 + i}
+            "speed-medium", gate.control_name(pin.preset, pin.commit, i), speed=100 + i, metrics={key: 100 + i}
         )
     recorded_runs("speed-medium", "users/test/borderline", speed=108, metrics={key: 1})
     base = rescore("speed-medium", "--candidate", "users/test/borderline")

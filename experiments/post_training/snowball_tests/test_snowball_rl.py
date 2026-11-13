@@ -447,7 +447,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     )
     pin = snowball.snowball_rl_gate.control_pins(presets.PRESETS["learning-medium"])[0]
     for index in range(pin.runs):
-        recorded_runs("learning-medium", presets.control_name(pin.preset, pin.commit, index))
+        recorded_runs("learning-medium", gate.control_name(pin.preset, pin.commit, index))
     first = snowball.build_run(learning, requirements=("eval_lite/mean>=0",))
     second = snowball.build_run(learning, requirements=("eval_lite/mean>=0.1",))
     assert first.runs[0].name == second.runs[0].name == name()
