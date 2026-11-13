@@ -93,7 +93,7 @@
   .coverage-totals strong, .breadcrumb[aria-current], .domain-title,
   .outcome-button b { color: #c5ead3; }
   .domain-count, .outcome-button { background: #243c2d; color: #c5ead3; }
-  .map-area.zero { border-color: var(--line); }
+  .map-area.zero { background: #24352a; color: #a1b3a7; border-color: var(--line); }
   .domain-count:hover { background: #34593f; }
   .outcome-button { border-color: var(--line); }
 }

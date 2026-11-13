@@ -3,12 +3,19 @@
 
 """Compute execution oversight and informational review results for Atlas."""
 
+from enum import StrEnum
 from typing import Any
 
 from finestore.rl.curation import SourceQualityResult
 
 
-def quality(declaration: dict[str, Any], curation: dict[str, Any] | None) -> str:
+class Quality(StrEnum):
+    QUICK = "QUICK"
+    SAMPLE = "SAMPLE"
+    FULL = "FULL"
+
+
+def quality(declaration: dict[str, Any], curation: dict[str, Any] | None) -> Quality:
     """Reserve FULL for a separately verified complete content-review assembly."""
     review = declaration.get("quality_result")
     qc = declaration.get("independent_qc")
@@ -21,14 +28,14 @@ def quality(declaration: dict[str, Any], curation: dict[str, Any] | None) -> str
         and review["reviewed"] + review.get("uncertain_count", 0) == retained
         and review.get("unavailable_count", 0) == 0
     ):
-        return "FULL"
+        return Quality.FULL
     if declaration.get("oversight") in {"sample", "full"}:
-        return "SAMPLE"
+        return Quality.SAMPLE
     if (curation or {}).get("mode") in {"sample", "full"}:
         controls = (curation or {}).get("verification") or {}
         if controls.get("status") in {"passed", "validated"}:
-            return "SAMPLE"
-    return "QUICK"
+            return Quality.SAMPLE
+    return Quality.QUICK
 
 
 def result(declaration: dict[str, Any], review: dict[str, Any] | None) -> str | None:
