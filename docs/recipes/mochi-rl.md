@@ -72,7 +72,7 @@ at training end, so this smoke produces `global_step_2` when it completes. A new
 output version starts fresh MuonH state. Repeating an interrupted run with the same version recovers
 its latest completed native checkpoint when one exists.
 
-To extend a run or recover into a new output version, set `NATIVE` to the exact
+To continue from a completed checkpoint under a new output version, set `NATIVE` to the exact
 completed native checkpoint directory, such as your run's
 `checkpoints/global_step_2`, then run:
 
@@ -87,10 +87,9 @@ must exceed the restored step. Native continuation restores model, optimizer,
 scheduler, trainer counter and available rollout state. It writes new checkpoints
 under the new output version. Recover an interrupted continuation by repeating
 its command with the same version and inputs, including `--resume-uri`.
-Automatic recovery loads that output's latest completed checkpoint first; it
-uses the supplied starting checkpoint only while the output has none. A corrupt
-marker, missing selected checkpoint or load failure stops recovery. Keep the
-model, tokenizer, data and topology compatible.
+See [native checkpoint recovery](../references/rl-launching.md#native-checkpoint-inputs)
+for selection and failure behavior. Keep the model, tokenizer, data and topology
+compatible.
 Find checkpoints under `artifacts.checkpoint_root` in the preview YAML, then
 append `/global_step_N` for the completed step.
 

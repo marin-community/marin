@@ -118,7 +118,7 @@ def build_run(
             topology=topology,
             retention=retention,
             seed=SEED,
-            resume_checkpoint=resume,
+            starting_checkpoint=resume,
         ),
         execution,
         export_hf=False,

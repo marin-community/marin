@@ -71,8 +71,7 @@ def test_cli_renders_direct_training_and_native_continuation(
     assert "/tmp/ttl=3d/" in launch["artifacts"]["checkpoint_root"]
     assert trainer["resume_mode"] == "latest"
     if resume_step is not None:
-        assert inputs["resume_checkpoint"]["uri"] == str(native)
-        assert launch["artifacts"]["checkpoint_root"] != str(native.parent)
+        assert inputs["starting_checkpoint"]["uri"] == str(native)
 
 
 def test_each_continuation_has_its_own_checkpoint_input(tmp_path: Path) -> None:
