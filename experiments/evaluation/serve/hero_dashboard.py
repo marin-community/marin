@@ -123,6 +123,8 @@ def _vllm_args(config: HeroDashboardConfig, task_index: int, primary_host: str, 
         "--generation-config",
         str(GENERATION_CONFIG_DIR),
         "--no-enable-prefix-caching",
+        # The dashboard's Request stats panel shows TTFT, queue and decode timings only with this flag.
+        "--enable-per-request-metrics",
         "--api-server-count",
         "1" if task_index == 0 else "0",
     )
