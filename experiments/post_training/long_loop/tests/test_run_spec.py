@@ -60,6 +60,9 @@ def test_emitted_rl_validation_and_eval_settings_come_from_the_pinned_spec(tmp_p
         for key, value in resolved[stage]["ray_timeouts"].items():
             assert compiled["ray"][key] == value
         emitted = compiled["skyrl"]
+        assert emitted["trainer"]["seed"] == resolved[stage]["seed"]
+        if stage == "rl":
+            assert emitted["trainer"]["max_ckpts_to_keep"] == resolved[stage]["retained"]
         source = yaml.safe_load(yaml.safe_dump(resolved[stage]["config"]))
         if stage == "rl" and resolved[stage].get("wall_clock_budget") is not None:
             source["trainer"]["callbacks"].append(

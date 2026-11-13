@@ -158,13 +158,7 @@ def _activation_spec(x: Float[Array, "B S D"]) -> P:
 
 
 def _flatten_tokens(x: jax.Array) -> jax.Array:
-    """Merge ``[B, S, ...]`` into the token axis without moving data between devices.
-
-    Each device flattens its own block of rows and sequence shard. With a context-sharded sequence the
-    token order is therefore shard-major rather than the global ``(b s)`` order; with an unsharded
-    sequence the two orders agree. Per-token computations do not depend on the order, and
-    `_unflatten_tokens` inverts it.
-    """
+    """Flatten ``[B, S, ...]`` in device-local order; invert with `_unflatten_tokens`."""
     mesh = get_abstract_mesh()
     trailing = (None,) * (x.ndim - 2)
     residual_spec = P(_BATCH_AXES, _seq_axis(mesh), *trailing)

@@ -24,6 +24,7 @@ from marin.execution.remote import remote
 from marin.rl.skyrl import SkyRLRun
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.redaction import redact_string
 from rigging.secrets import require_secret
 from wandb.apis.public.runhistory.downloads import IncompleteRunHistoryError
 
@@ -48,6 +49,7 @@ from vendor.skyrl.marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME
 
 REQUIRED_CATEGORIES = {"source", "config", "dataset", "timing", "eval_trace", "wandb"}
 INCOMPLETE_HISTORY_EXCEPTION = "wandb.apis.public.runhistory.downloads.IncompleteRunHistoryError"
+EXPORT_ERROR_TAIL_BYTES = 8192
 
 
 def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
@@ -286,7 +288,13 @@ def _wandb_export(refs: list[dict], settings: dict, destination: str) -> tuple[l
                     line.decode().partition(":")[0] == INCOMPLETE_HISTORY_EXCEPTION
                     for line in backup.stderr.splitlines()
                 ):
-                    backup.check_returncode()
+                    try:
+                        backup.check_returncode()
+                    except subprocess.CalledProcessError as error:
+                        detail = backup.stderr[-EXPORT_ERROR_TAIL_BYTES:].decode(errors="replace")
+                        detail = detail.replace(env["WANDB_API_KEY"], "[REDACTED]")
+                        error.add_note("Strict W&B export stderr: " + redact_string(detail))
+                        raise
                 receipt = _scan_wandb_history(run_path, local)
                 files = []
                 for name in ("scan-history.jsonl", "scan-history-receipt.json"):

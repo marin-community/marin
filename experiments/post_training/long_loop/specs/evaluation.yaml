@@ -19,7 +19,6 @@ config:
     eval_interval: 1
     eval_batch_size: 32
     resume_mode: none
-    seed: 20261030
     algorithm:
       use_kl_loss: false
     policy:
@@ -93,7 +92,6 @@ config:
     n_samples_per_prompt: 1
     trajectory_retention:
       enabled: true
-      output_path: s3://marin-us-east-08a/marin/long-loop/traces/2026.11.09/eval
       run_id: 2026.11.09
       phases:
       - eval
@@ -250,7 +248,6 @@ judge:
     thinking_off_template_kwargs: {}
   agent:
     agent_kwargs: {}
-  evalchemy_num_concurrent: null
 tasks_per_benchmark: 10
 expected_source_rows: 200
 expected_expanded_attempt_count: 440

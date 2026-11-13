@@ -39,8 +39,6 @@ config:
     eval_batch_size: 256
     eval_interval: 2
     resume_mode: none
-    max_ckpts_to_keep: 3
-    seed: 20261020
     logger: wandb
     project_name: marin-long-loop
     tracker_commit_each_step: true
@@ -208,7 +206,6 @@ config:
     n_samples_per_prompt: 8
     trajectory_retention:
       enabled: true
-      output_path: PENDING_RUN_TRACE_URI
       run_id: PENDING_RUN_ID
       phases:
       - train

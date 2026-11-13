@@ -378,17 +378,23 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
 
 def test_wandb_export_propagates_unrelated_export_failure(tmp_path, monkeypatch):
     monkeypatch.setenv("WANDB_API_KEY", "fake-for-offline-test")
+    monkeypatch.setattr(archive_stage, "require_secret", lambda name: "never-log-this-value")
     monkeypatch.setattr(
         archive_stage.subprocess,
         "run",
-        lambda args, **kwargs: subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"PermissionError: denied\n"),
+        lambda args, **kwargs: subprocess.CompletedProcess(
+            args, 1, stdout=b"", stderr=b"PermissionError: api_key=never-log-this-value\n"
+        ),
     )
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(subprocess.CalledProcessError) as caught:
         archive_stage._wandb_export(
             [{"stage": "sft", "entity": "test", "project": "test", "id": "run"}],
             {"package": "fake-exporter", "include": {}},
             str(tmp_path),
         )
+    details = "\n".join(caught.value.__notes__)
+    assert "PermissionError" in details
+    assert "never-log-this-value" not in details
     assert not list(tmp_path.glob("*.json"))
 
 

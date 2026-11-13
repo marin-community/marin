@@ -79,7 +79,6 @@ def configured_rl_step(
         traces = prefix_join(document["artifacts"]["attempts_root"], "traces")
         retention = recipe["generator"].get("trajectory_retention")
         if retention is not None:
-            retention["output_path"] = prefix_join(traces, "rl")
             retention["run_id"] = document["run"]["id"]
         installed = recipe.get("terminal_bench", {}).get("installed_agent")
         if installed is not None:

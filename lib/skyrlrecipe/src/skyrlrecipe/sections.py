@@ -781,9 +781,9 @@ class TrajectoryRetention(Section):
     accepted_stop_reasons: tuple[str, ...] = unset_field()
     reward_below: int | float | None = field(None)
     reward_above: int | float | None = field(None)
-    max_bytes_per_step: int = field(838860800)
+    max_bytes_per_step: int | None = field(838860800)
     "Set either bound to null to make that dimension unlimited."
-    max_bytes_per_run: int = field(26843545600)
+    max_bytes_per_run: int | None = field(26843545600)
     required: bool = field(False)
     publish_timeout_seconds: int = field(120)
     shutdown_timeout_seconds: int = field(30)
