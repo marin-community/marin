@@ -106,6 +106,8 @@ def build_run(
             callback["save_steps"] = resume_step + updates
     recipe["environment"]["task_sessions"]["task_spec"]["session"]["model_turn_timeout"] = 600
     recipe["generator"]["expert_block_sync"].update(verify=True, timeout_seconds=1800)
+    # At 0.75 the full-context KV cache missed its startup requirement by 0.47 GiB.
+    recipe["generator"]["gpu_memory_utilization"] = 0.80
     recipe["generator"]["trajectory_retention"].update(
         max_bytes_per_step=256 * 1024**2,
         max_bytes_per_run=1024**3,
