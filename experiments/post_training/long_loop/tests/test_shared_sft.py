@@ -43,6 +43,7 @@ def test_native_sft_retains_sources_and_token_schedule_while_using_shared_defaul
     assert config.optimizer == SNOWBALL_SFT.optimizer
     assert config.train_seq_len == resolved["sft"]["seq_len"]
     assert config.trainer.train_batch_size == resolved["sft"]["batch_size"]
+    assert config.trainer.per_device_parallelism == resolved["sft"]["per_device_parallelism"]
     assert config.trainer.num_train_steps * config.train_seq_len * config.trainer.train_batch_size == 50063212544
     before = resolved["datasets"]["sft"]["data"]
     after = config.data
@@ -152,3 +153,28 @@ def test_chat_recipe_packs_256_documents_without_changing_replay_or_loss_masks(t
         for leaf in leaves:
             if name.startswith("pretrain/"):
                 assert leaf["pack"] is None and leaf["format"]["type"] == "text"
+
+
+@pytest.mark.parametrize("per_device_parallelism", [1, 2])
+def test_large_global_batch_preserves_explicit_microbatch_and_native_mesh(tmp_path, per_device_parallelism):
+    resolved = resolve_spec(SPEC, smoke=False)
+    recipe = resolved["sft"]
+    recipe.update(
+        batch_size=256,
+        per_device_parallelism=per_device_parallelism,
+        target_positions=204 * 256 * 262144,
+        stop_after_steps=204,
+    )
+    spec = shared_sft_spec("test/sft", "2026.11.13.11", recipe)
+    step = sft_step(spec, draccus.decode(ResourceConfig, recipe["resources"]))
+    pod = step.build_config(StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=step.runtime_args))
+    trainer = pod.train_config.trainer
+    assert trainer.train_batch_size == 256
+    assert trainer.per_device_parallelism == per_device_parallelism
+    assert trainer.num_train_steps == 204
+    assert pod.train_config.optimizer == SNOWBALL_SFT.optimizer
+    ici, dcn = trainer.mesh.axis_shapes(num_devices=256, num_slices=32)
+    assert ici["expert"] == 8 and dcn["context"] == 32 and dcn["replica_dcn"] == 1
+    assert trainer.compute_axis_mapping["batch"] == ("replica_dcn", "data", "expert")
+    assert trainer.compute_axis_mapping["position"] == "context"
+    assert pod.train_config.data.train_weights[1][0] == 250
