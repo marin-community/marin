@@ -8,6 +8,7 @@ not provider request parameters. Qualification must check the endpoint's model
 identity and actual prompt-token usage against them before admitting a source.
 """
 
+import hashlib
 import logging
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -20,7 +21,9 @@ import httpx
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.model_config import load_model_config
 from marin.evaluation.serving_config import inference_config_for_model
+from marin.inference.config import VllmEngineConfig, VllmLauncherType
 from marin.inference.iris import remote_inference
+from rigging.timing import Duration
 from taskcompendium.pipeline.reviewer_spec import JudgeTier, ReviewerSpec
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import RUBRIC_LABELS, JudgeCompletionPolicy, JudgeSpec
@@ -147,10 +150,19 @@ class LocalJudgeEndpoint:
     accelerator: AcceleratorChoice
     priority: int
     env_vars: Mapping[str, str] = field(default_factory=dict)
+    worker_image: str | None = None
+    worker_timeout: Duration | None = None
+    job_ids: list[str] = field(default_factory=list, repr=False, compare=False)
 
     @property
     def identity(self) -> dict[str, Any]:
-        return {"kind": "local", "tier": self.tier, "model_config": str(self.model_config)}
+        return {
+            "kind": "local",
+            "tier": self.tier,
+            "model_config": str(self.model_config),
+            "model_config_sha256": hashlib.sha256(self.model_config.read_bytes()).hexdigest(),
+            "worker_image": self.worker_image,
+        }
 
     @contextmanager
     def connect(self, api_key: str | None = None) -> Iterator[JudgeConnection]:
@@ -167,10 +179,41 @@ class LocalJudgeEndpoint:
         config = inference_config_for_model(
             model, self.accelerator, env_vars=self.env_vars, priority=self.priority, api_model=definition.spec.model
         )
+        engine = config.engine
+        if self.worker_image is not None:
+            if not isinstance(engine, VllmEngineConfig):
+                raise ValueError("A preinstalled judge image requires the vLLM engine")
+            engine = replace(engine, launcher=VllmLauncherType.PREINSTALLED)
+        if self.worker_timeout is not None and isinstance(engine, VllmEngineConfig):
+            engine = replace(engine, startup_timeout_seconds=int(self.worker_timeout.to_seconds()))
+        config = replace(
+            config,
+            engine=engine,
+            iris=replace(
+                config.iris,
+                worker_resources=replace(
+                    config.iris.worker_resources,
+                    target_cluster=self.accelerator.target_cluster,
+                    image=self.worker_image or config.iris.worker_resources.image,
+                ),
+                worker_timeout=self.worker_timeout,
+                endpoint_ready_timeout_seconds=(
+                    self.worker_timeout.to_seconds()
+                    if self.worker_timeout is not None
+                    else config.iris.endpoint_ready_timeout_seconds
+                ),
+                endpoint_health_timeout_seconds=(
+                    self.worker_timeout.to_seconds()
+                    if self.worker_timeout is not None
+                    else config.iris.endpoint_health_timeout_seconds
+                ),
+            ),
+        )
         if config.model.max_model_len != definition.context_window_tokens:
             raise ValueError("Resolved serving configuration changed the tier's context window")
         with remote_inference(config) as session:
-            logger.info("Judge serving jobs: %s", [str(job.job_id) for job in session.jobs])
+            self.job_ids.extend(str(job.job_id) for job in session.jobs)
+            logger.info("Judge serving jobs: %s", self.job_ids)
             session.wait_until_ready()
             if (
                 session.effective_serving is None
@@ -201,8 +244,8 @@ def _heavy_tier() -> JudgeTierDefinition:
     return JudgeTierDefinition(
         spec=spec,
         context_window_tokens=262_144,
-        model_identity="Ortet GLM-5.3 FP8; immutable checkpoint identity unverified",
-        model_revision=None,
+        model_identity="zai-org/GLM-5.3",
+        model_revision="aca966e4e02791568aa6a4ced368624b3d897f42",
         reasoning_policy="low, explicit GLM chat-template setting",
         qa_reviewer=ReviewerSpec(
             tier=JudgeTier.HEAVY,

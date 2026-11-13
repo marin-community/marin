@@ -861,7 +861,7 @@ def _populate_model_cache(entries: list[str], iris: IrisConfig) -> None:
             if check_local and resolve_model_path(entry, iris.cache_ttl_days, cache_mode=CacheMode.READ_ONLY) != entry:
                 continue
             jobs.append(_submit_model_prepare_job(entry, iris))
-        wait_all(jobs, timeout=_MODEL_PREPARE_TIMEOUT.to_seconds())
+        wait_all(jobs, timeout=(iris.worker_timeout or _MODEL_PREPARE_TIMEOUT).to_seconds())
     except Exception as exc:
         for job in jobs:
             try:
@@ -894,7 +894,7 @@ def _submit_model_prepare_job(entry: str, iris: IrisConfig) -> JobHandle:
                 secret_behavior=iris.worker_environment.secret_behavior,
             ),
             priority=iris.priority,
-            timeout=_MODEL_PREPARE_TIMEOUT,
+            timeout=iris.worker_timeout or _MODEL_PREPARE_TIMEOUT,
             max_retries_failure=1,
         )
     )
@@ -912,7 +912,7 @@ def _start_direct_inference(
         engine=config.engine,
         iris=iris,
         endpoint_name=endpoint_name,
-        timeout_hours=24 * 365,
+        timeout_hours=iris.worker_timeout.to_seconds() / 3600 if iris.worker_timeout is not None else 24 * 365,
         port_name=None,
     )
     device = iris.worker_resources.device
@@ -928,6 +928,7 @@ def _start_direct_inference(
             max_retries_preemption=iris.max_retries_preemption,
             max_task_failures=iris.max_retries_failure,
             priority=iris.priority,
+            timeout=iris.worker_timeout,
         )
     )
     try:
@@ -1069,6 +1070,7 @@ def _submit_broker_workers(
                     max_retries_preemption=broker.max_retries_preemption,
                     max_task_failures=broker.max_retries_failure,
                     priority=iris.priority,
+                    timeout=iris.worker_timeout,
                 )
             )
             cleanup.callback(_terminate_job, job)

@@ -1150,6 +1150,44 @@ Oracle filtering is never sampled, even when the other checks use SAMPLE.
    stale or incomplete receipt blocks admission. Admit the remaining rows and write
    the outputs.
 
+### Prepare retained contracts for a complete quality review
+
+Before reviewing a proposed remediated population, freeze its combined
+within-source duplicate and lexical drop plan. The preparation command indexes
+every retained TaskSpec and deployment runtime by separate SHA-256 values,
+checks the complete population against its pinned conversion and drop manifest,
+and records oracle, resource-declaration and grading-boundary diagnostics:
+
+```bash
+uv run --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.full_qc_inputs \
+  --retention-plans IMMUTABLE_COMBINED_PLANS.json --source-ids SOURCE_IDS.json \
+  --artifact-root s3://marin-us-east-02a/marin \
+  --artifact-version YYYY.MM.DD.N --output inputs.json --run
+```
+
+Both input arguments accept local paths or object-storage URLs. Omit `--run`
+to inspect the planned artifact paths. Run preparation on CPU workers in the data's
+cluster, with an explicit target cluster, authorized priority and a three-day
+timeout. Completed source indexes are reused; interrupted attempts retain their
+partial files under distinct attempt directories.
+
+An index establishes the proposed review population. It supplies no model
+judgments, execution qualification, admission or publication receipt. Reuse QA
+evidence only for identical task and runtime hashes after calibration or repair.
+Hugging Face publication and Atlas loading remain separate operations.
+
+Content-only campaigns may use `full_qc` to review every retained task while
+execution qualification remains pending. The resulting evidence explicitly
+records `qualification_status=pending`; complete content review does not imply
+SAMPLE/FULL execution admission. Payload revision 4 excludes top-level execution
+requirements and actor/grader package-lock artifact locations. Deployment runtime
+remains in audit hashes rather than the content rubric. Exact requests can be
+reused after changes confined to those fields. Images, grader settings,
+instructions and resource bytes remain model-visible; modifying them invalidates
+the request, including edits to resource settings embedded in native task.toml.
+See the [campaign command](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#complete-retained-population-review).
+
 ### Full-population oracle filter
 
 Every admitted TaskSpec must declare `execution_requirements`: `cpus`,
@@ -1171,8 +1209,10 @@ of its allocated capacity. A bare exit 137 does not establish OOM, and unavailab
 CPU counters do not establish CPU saturation.
 
 Stop increasing at 16 CPU, 64 GiB memory, 128 GiB disk, a four-hour agent timeout
-and a 30-minute verifier timeout. A failure at its applicable cap, or a
-non-resource failure, becomes an exclusion with its signal and trial evidence.
+and a 30-minute verifier timeout. A failure at its applicable cap becomes an
+exclusion with its resource signal and trial evidence. For every task, including
+tasks without retries, a scored non-resource failure is `oracle_failed`; an
+unscored non-resource failure is `resource_calibration:infrastructure`.
 The receipt retains every attempt and the final per-task shape. It reports a
 uniform source shape only when every task passed at that shape. A failure in an
 explicitly fixed dimension is excluded at its declared limit.
@@ -1361,13 +1401,21 @@ list does not advertise `glm-5.3`. A provider that cannot accept temperature may
 `temperature=None` to retain its API default; zero is disallowed.
 
 The spec pins base rubric `task-quality-v1`, its SHA-256 content hash, and review
-payload revision `3`. To change the base rubric, edit `BASE_RUBRIC` and bump
+payload revision `4`. To change the base rubric, edit `BASE_RUBRIC` and bump
 `BASE_RUBRIC_VERSION` in `taskcompendium.pipeline.reviewer_spec`; the content
 hash is computed from that text. Bump `REVIEW_PAYLOAD_REVISION` when changing the
 task evidence projected into the request. Quality review appends per-source
 `ReviewRubric` criteria to the base rubric and includes its ID and version in the
 request and quality manifest. Assessments use and retain their separate full
 assessment rubric text.
+
+Revision 4 separates content quality from execution qualification: it excludes
+top-level `execution_requirements`, actor/grader `packages_lock` artifact paths,
+and deployment-runtime rubric text. Its semantic task ID hashes the same
+projection, so calibration-only changes reuse exact requests. Full task and
+runtime hashes remain in the audit. Images, grader settings and resource bytes
+remain visible; edits to native task.toml or verifier code invalidate requests.
+The spec records serving precision as part of reviewer identity.
 
 Quality manifests and assessment model metadata record the complete spec identity.
 The request-cache namespace includes every spec field, including deployment and

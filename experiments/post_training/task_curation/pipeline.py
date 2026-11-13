@@ -391,7 +391,7 @@ def _pipeline_config(
 
 
 def _source_config(
-    settings: RecipeSettings, mode: SourceProcessingMode, controls: Controls | None, rubric: str | None
+    settings: RecipeSettings, mode: SourceProcessingMode, controls: Controls | None
 ) -> SourcePipelineConfig:
     review = settings.config.review if settings.config is not None else settings.review
     decontamination = (
@@ -475,7 +475,7 @@ def process_rows(source: RlDataSource[CurationRecipe], options: PipelineOptions)
         return _quick_step(recipe, options)
     if options.recipe_settings is None:
         raise ValueError(f"Source processing requires recipe settings: {source.name}")
-    config = _source_config(options.recipe_settings, options.mode, recipe.controls, recipe.rubric)
+    config = _source_config(options.recipe_settings, options.mode, recipe.controls)
     if config.lexical_contamination is None:
         config = replace(config, lexical_contamination=source.info.lexical_contamination)
     dataset = source.dataset

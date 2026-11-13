@@ -328,7 +328,6 @@ class OracleExclusionReason(StrEnum):
     DISK_FULL = "resource_calibration:disk_full"
     AGENT_TIMEOUT = "resource_calibration:agent_timeout"
     VERIFIER_TIMEOUT = "resource_calibration:verifier_timeout"
-    NON_RESOURCE = "resource_calibration:non_resource"
     INFRASTRUCTURE = "resource_calibration:infrastructure"
     NO_ORACLE_LIVENESS = "no_oracle_liveness_missing_or_failed"
     SOURCE_ENV_INCOMPATIBLE_WITH_GRADER = "SOURCE_ENV_INCOMPATIBLE_WITH_GRADER"
