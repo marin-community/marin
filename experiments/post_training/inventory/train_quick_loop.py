@@ -105,7 +105,6 @@ def training_recipe(steps: int) -> dict:
             },
         },
     )
-    # Bound task admission to the serving capacity of this one-sequence-per-rank profile.
     generator = config["generator"]
     config["trajectory_runner"] = {
         **config.get("trajectory_runner", {}),
