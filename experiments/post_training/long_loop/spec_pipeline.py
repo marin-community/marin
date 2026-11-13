@@ -21,19 +21,20 @@ from rigging.timing import Duration
 from experiments.post_training.long_loop.adopted_sft import verify_adopted_sft
 from experiments.post_training.long_loop.archive_stage import archive_graph_run
 from experiments.post_training.long_loop.evaluation import configured_evaluation_step, prepare_micro
-from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
+from experiments.post_training.long_loop.execution_policy import COORDINATOR_TIMEOUT_SECONDS, STAGE_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.finalization import after_checkpoint, record_finalization
 from experiments.post_training.long_loop.rl import configured_rl_step
 from experiments.post_training.long_loop.run_spec import stage_blockers
 from experiments.post_training.long_loop.runtime_timing import report_step, timed
 from experiments.post_training.long_loop.sft import export_sft
+from experiments.post_training.long_loop.sft_accounting import write_sft_accounting
 from experiments.post_training.long_loop.shared_sft import export_shared_sft, legacy_sft_step, native_sft_step
 
 
 def runtime_execution(value: dict) -> IrisSkyRLExecution:
     value = {
-        "job_timeout_seconds": DEFAULT_TASK_TIMEOUT_SECONDS,
-        "coordinator_timeout_hours": DEFAULT_TASK_TIMEOUT_SECONDS // 3600,
+        "job_timeout_seconds": COORDINATOR_TIMEOUT_SECONDS,
+        "coordinator_timeout_hours": COORDINATOR_TIMEOUT_SECONDS // 3600,
         **value,
     }
     gpu = value.get("coordinator_gpu")
@@ -83,11 +84,11 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         for key, value in execution.items()
         if key not in {"coordinator", "task_timeouts"}
     }
-    timeouts = execution.get("task_timeouts", {})
+    timeouts = {**STAGE_TIMEOUT_SECONDS, **execution.get("task_timeouts", {})}
     verified = timed(
         apply(
             f"{name}/inputs",
-            verify_inputs,
+            remote(verify_inputs, resources=resources["inputs"], timeout=Duration.from_seconds(timeouts["inputs"])),
             version=version,
             output=OUT,
             manifests=(
@@ -96,7 +97,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         )
     )
     sft_evidence = [verified]
-    recipe = {**resolved["sft"], "task_timeout_seconds": timeouts.get("sft", DEFAULT_TASK_TIMEOUT_SECONDS)}
+    recipe = {**resolved["sft"], "task_timeout_seconds": timeouts["sft"]}
     sft_pin = resolved.get("adopted_sft")
     if sft_pin is not None:
         if through == "sft":
@@ -161,7 +162,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
                     export_shared_sft if resolved["sft_format"] == "sft_spec" else export_sft,
                     resources=resources["export"],
                     env_vars={"JAX_PLATFORMS": "cpu"},
-                    timeout=Duration.from_seconds(timeouts.get("export", DEFAULT_TASK_TIMEOUT_SECONDS)),
+                    timeout=Duration.from_seconds(timeouts["export"]),
                 ),
                 version=version,
                 output=OUT,
@@ -276,7 +277,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             remote(
                 prepare_micro,
                 resources=resources["eval_inputs"],
-                timeout=Duration.from_seconds(timeouts.get("eval_inputs", DEFAULT_TASK_TIMEOUT_SECONDS)),
+                timeout=Duration.from_seconds(timeouts["eval_inputs"]),
             ),
             version=version,
             output=OUT,
@@ -339,12 +340,31 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         ),
         learned,
     )
+    accounting_artifacts = {}
+    if "sft_data_accounting" in resolved["archive"]:
+        accounting = timed(
+            apply(
+                f"{name}/sft-data-accounting",
+                remote(
+                    write_sft_accounting,
+                    resources=resources["archive"],
+                    env_vars={"JAX_PLATFORMS": "cpu"},
+                    timeout=Duration.from_seconds(timeouts["accounting"]),
+                ),
+                version=version,
+                output=OUT,
+                trained=sft_pin["uri"] if sft_pin else trained,
+                settings=resolved["archive"]["sft_data_accounting"],
+            )
+        )
+        accounting = after_checkpoint(replace(accounting, deps=(*accounting.deps, report)), learned)
+        accounting_artifacts["sft_data_accounting"] = accounting
     archived = apply(
         f"{name}/archive",
         remote(
             archive_graph_run,
             resources=resources["archive"],
-            timeout=Duration.from_seconds(timeouts.get("archive", DEFAULT_TASK_TIMEOUT_SECONDS)),
+            timeout=Duration.from_seconds(timeouts["archive"]),
         ),
         version=version,
         output=OUT,
@@ -360,6 +380,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             "finalization": finalized,
             "eval_inputs": eval_inputs,
             "eval": evaluated,
+            **accounting_artifacts,
         },
         trained=learned,
         evaluated=evaluated,

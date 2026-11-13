@@ -46,6 +46,7 @@ from experiments.post_training.long_loop.hf_archive import (
     verify_hf_checkpoint,
 )
 from experiments.post_training.long_loop.rl_selection import VALIDATION_EMA_WINDOW
+from experiments.post_training.long_loop.sft_accounting import sft_accounting_inputs
 from vendor.skyrl.marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME
 
 REQUIRED_CATEGORIES = {"source", "config", "dataset", "timing", "eval_trace", "wandb"}
@@ -370,6 +371,10 @@ def derive_archive_plan(
     if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
         raise ValueError("Source revision must be an exact commit")
     inputs, documents, limitations, blockers = [], {}, [], []
+    sft_accounting = None
+    if "sft_data_accounting" in roots:
+        accounting_inputs, sft_accounting = sft_accounting_inputs(roots["sft_data_accounting"])
+        inputs.extend(vars(item) for item in accounting_inputs)
     if "finalization" in roots:
         inputs.append(_input(prefix_join(roots["finalization"], "finalization.json"), "finalization.json", "provenance"))
     for stage, entries in settings["stage_files"].items():
@@ -526,6 +531,7 @@ def derive_archive_plan(
         {
             "missing_evidence": missing,
             "limitations": limitations,
+            "sft_data_accounting": sft_accounting,
             "native_sft_timing_coverage": timing_coverage,
             "cleanup_blockers": blockers,
         },
@@ -562,6 +568,7 @@ def derive_archive_plan(
         "native_checkpoint_ttl": settings["native_checkpoint_ttl"],
         "provenance": {
             "marin_commit": revision,
+            "experimental_controls": resolved_spec.get("experimental_controls"),
             "rl_terminal": documents[("rl", "terminal.json")]["result"],
             "evaluation_complete": evaluation["all_verified"],
             "wandb_runs": wandb_status,

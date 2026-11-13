@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 import draccus
 from fray.types import ResourceConfig
 from levanter.data.text.datasets import LmDataConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -75,10 +76,10 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         raise ValueError("The long-loop shared SFT adapter requires the snowball_h100 profile")
     data = copy.deepcopy(recipe["data"])
     steps = min(
-        math.ceil(recipe["target_positions"] / (SNOWBALL_SFT.seq_len * SNOWBALL_SFT.batch_size)),
+        math.ceil(recipe["target_positions"] / (recipe["seq_len"] * recipe["batch_size"])),
         recipe["stop_after_steps"],
     )
-    new_step_positions = SNOWBALL_SFT.seq_len * SNOWBALL_SFT.batch_size
+    new_step_positions = recipe["seq_len"] * recipe["batch_size"]
     data["train_weights"] = [
         (step * recipe["source_step_positions"] // new_step_positions, weights)
         for step, weights in data["train_weights"]
@@ -91,10 +92,8 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         children = component["children"].values() if component["type"] == "concat" else (component,)
         for child in children:
             child["format"] = {"type": "serialized_chat", **recipe["serialized_chat"]}
-            child["pack"] = SNOWBALL_SFT.pack
-    # The native Snowball backend uses causal attention within one transcript;
-    # pretraining replay remains a continuous causal text stream.
-    data["block_cross_document_attention"] = False
+            child["pack"] = recipe["pack"]
+    data["block_cross_document_attention"] = recipe["pack"]
     data_config = draccus.decode(LmDataConfig, data)
     return replace(
         SNOWBALL_SFT,
@@ -106,6 +105,10 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         ),
         prepared_data=data_config,
         num_train_steps=steps,
+        seq_len=recipe["seq_len"],
+        batch_size=recipe["batch_size"],
+        mesh=draccus.decode(MeshConfig, recipe["mesh"]),
+        pack=recipe["pack"],
         wandb_project=recipe["wandb_project"],
     )
 

@@ -28,7 +28,7 @@ import jax.random as random
 import jmp
 import numpy as np
 import pytest
-from haliax import Axis, named_jit
+from haliax import Axis
 from haliax.partitioning import set_mesh
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
 from jax.extend import core as jax_core
@@ -758,11 +758,9 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
                 expert_spec = restored.transformer.blocks[0].mlp.expert_mlp.w_gate.sharding.spec
                 assert expert_spec == P("expert", ("data", "context"), "model"), expert_spec
                 optimizer = AdamConfig(learning_rate=5e-5).build(1)
-                state = named_jit(
-                    lambda model: TrainerState.init(optimizer, model, key=random.key(1)),
-                    axis_resources=trainer_cfg.parameter_axis_mapping,
-                    out_axis_resources=trainer_cfg.parameter_axis_mapping,
-                )(restored)
+                # Exercise concrete HF/native initialization, where Adam used
+                # to allocate each moment eagerly before the first update.
+                state = TrainerState.init(optimizer, restored, key=random.key(1))
                 expert_shape = restored.transformer.blocks[0].mlp.expert_mlp.w_gate.shape
                 moment_specs = [
                     leaf.sharding.spec
@@ -772,6 +770,9 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
                 assert moment_specs and all(
                     "expert" in spec and ("data", "context") in spec for spec in moment_specs
                 ), moment_specs
+                for leaf in jax.tree.leaves(state.opt_state):
+                    if isinstance(leaf, jax.Array) and leaf.shape == expert_shape:
+                        np.testing.assert_array_equal(np.asarray(leaf), np.zeros(expert_shape))
             with local_cpu_mesh():
                 examples = [GrugLmExample.causal(jnp.arange(8, dtype=jnp.int32) + 2) for _ in range(16)]
             data = LmDataConfig(

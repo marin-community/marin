@@ -27,8 +27,8 @@ def test_native_sft_retains_sources_and_token_schedule_while_using_shared_defaul
     pod = step.build_config(context)
     config = pod.train_config
     assert config.optimizer == SNOWBALL_SFT.optimizer
-    assert config.train_seq_len == SNOWBALL_SFT.seq_len
-    assert config.trainer.train_batch_size == SNOWBALL_SFT.batch_size
+    assert config.train_seq_len == resolved["sft"]["seq_len"]
+    assert config.trainer.train_batch_size == resolved["sft"]["batch_size"]
     assert config.trainer.num_train_steps * config.train_seq_len * config.trainer.train_batch_size == 50063212544
     before = resolved["datasets"]["sft"]["data"]
     after = config.data

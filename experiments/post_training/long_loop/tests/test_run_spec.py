@@ -15,7 +15,7 @@ from rigging.timing import Duration
 
 from experiments.post_training.long_loop import spec_pipeline
 from experiments.post_training.long_loop.__main__ import validate_graph
-from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
+from experiments.post_training.long_loop.execution_policy import COORDINATOR_TIMEOUT_SECONDS, STAGE_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.launch_validation import validate_launch
 from experiments.post_training.long_loop.run_spec import resolve_spec, stage_blockers
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
@@ -283,20 +283,20 @@ def test_rl_keeps_child_execution_profile_without_gpu_probe_jobs():
         build_spec_graph(resolved, "2026.11.10.4", through="rl")
 
 
-@pytest.mark.parametrize("override", [None, 345600])
-def test_emitted_stage_timeouts_default_to_three_days(tmp_path, monkeypatch, override):
+def test_controlled_stage_allocations_and_deadlines_reach_dispatched_jobs(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
     resolved = resolve_spec(SPEC, smoke=False)
-    resolved["rl"].pop("wall_clock_budget", None)
-    expected = DEFAULT_TASK_TIMEOUT_SECONDS if override is None else override
-    if override is not None:
-        resolved["execution"]["coordinator"].update(
-            job_timeout_seconds=override, coordinator_timeout_hours=override // 3600
-        )
-        resolved["rl"]["execution"]["job_timeout_seconds"] = override
-        resolved["evaluation"]["execution"]["job_timeout_seconds"] = override
-        resolved["execution"]["task_timeouts"] = {k: override for k in ("sft", "export", "eval_inputs", "archive")}
+    assert sum(seconds for stage, seconds in STAGE_TIMEOUT_SECONDS.items() if stage != "evaluation") == 36 * 3600
+    assert resolved["gpu_peaks"] == {
+        "inputs": 0,
+        "sft": 256,
+        "export": 0,
+        "rl": 256,
+        "eval_inputs": 0,
+        "archive": 0,
+        "evaluation": 136,
+    }
     remote = spec_pipeline.remote
     dispatched = {}
 
@@ -306,39 +306,48 @@ def test_emitted_stage_timeouts_default_to_three_days(tmp_path, monkeypatch, ove
         return result
 
     monkeypatch.setattr(spec_pipeline, "remote", collect)
-    terminal = build_spec_graph(resolved, "2026.11.12", through="archive")
+    terminal = build_spec_graph(resolved, "2026.11.13", through="archive")
     stages = graph_handles([terminal])
-    executions = [s.runtime_args["skyrl_execution"] for s in stages if "skyrl_execution" in s.runtime_args]
-    assert executions
-    assert all(e.job_timeout_seconds == expected for e in executions)
-    assert all(e.coordinator_timeout_hours * 3600 == expected for e in executions)
     assert dispatched == {
-        k: Duration.from_seconds(expected) for k in ("export_shared_sft", "prepare_micro", "archive_graph_run")
+        name: Duration.from_seconds(STAGE_TIMEOUT_SECONDS[stage])
+        for name, stage in {
+            "verify_inputs": "inputs",
+            "export_shared_sft": "export",
+            "prepare_micro": "eval_inputs",
+            "archive_graph_run": "archive",
+        }.items()
     }
-    trained = next(s for s in stages if s.name.endswith("/sft"))
+    for stage_name, expected_stage in [(resolved["rl"]["name"], "rl"), (resolved["evaluation"]["name"], "evaluation")]:
+        step = next(s for s in stages if s.name == stage_name or s.name.endswith("/" + stage_name))
+        execution = step.runtime_args["skyrl_execution"]
+        assert execution.job_timeout_seconds == STAGE_TIMEOUT_SECONDS[expected_stage]
+        assert execution.coordinator_timeout_hours * 3600 == COORDINATOR_TIMEOUT_SECONDS
+
+
+def test_changed_stage_controls_require_acknowledgement_and_archive_the_decision(tmp_path):
+    root = tmp_path / "specs"
+    shutil.copytree(SPEC.parent, root)
+    resource_path = root / "execution.yaml"
+    execution = yaml.safe_load(resource_path.read_text())
+    execution["task_timeouts"] = {"archive": 7200}
+    resource_path.write_text(yaml.safe_dump(execution))
+    document = yaml.safe_load((root / "round1.yaml").read_text())
+    document["execution"]["sha256"] = hashlib.sha256(resource_path.read_bytes()).hexdigest()
+    (root / "round1.yaml").write_text(yaml.safe_dump(document))
+    with pytest.raises(ValueError, match="i-know-i-am-breaking-experimental-controls"):
+        resolve_spec(root / "round1.yaml", smoke=False)
+    resolved = resolve_spec(
+        root / "round1.yaml",
+        smoke=False,
+        acknowledge_experimental_controls=True,
+        experimental_controls_reason="Allow extra archival time for this experiment",
+    )
+    receipt = resolved["experimental_controls"]
+    assert receipt["changes"] == [{"control": "timeout/archive", "default": 5400, "actual": 7200}]
+    assert receipt["reason"] == "Allow extra archival time for this experiment"
+    terminal = build_spec_graph(resolved, "2026.11.13", through="archive")
     context = StepContext.for_run(
-        str(tmp_path / "sft"), str(tmp_path), deps=trained.deps, runtime_args=trained.runtime_args
+        str(tmp_path / "archive"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
     )
-    assert trained.build_config(context).resources.device.kind == "gpu"
-    learned = next(s for s in stages if s.name.endswith("/" + resolved["rl"]["name"]))
-    rl_context = StepContext.for_run(
-        str(tmp_path / "rl"), str(tmp_path), deps=learned.deps, runtime_args=learned.runtime_args
-    )
-    launch = learned.build_config(replace(rl_context, is_fingerprint=True))
-    emitted = yaml.safe_load(launch.launch_config_yaml)["skyrl"]["trainer"]["callbacks"]
-    assert not any(c["type"] == "wall_time_budget" for c in emitted)
-    resolved["rl"]["wall_clock_budget"] = {"seconds": 43200, "drain_margin": 1800}
-    budgeted = build_spec_graph(resolved, "2026.11.13", through="rl")
-    budget_context = StepContext.for_run(
-        str(tmp_path / "budgeted"), str(tmp_path), deps=budgeted.deps, runtime_args=budgeted.runtime_args
-    )
-    budget_launch = budgeted.build_config(replace(budget_context, is_fingerprint=True))
-    actual = [
-        c
-        for c in yaml.safe_load(budget_launch.launch_config_yaml)["skyrl"]["trainer"]["callbacks"]
-        if c["type"] == "wall_time_budget"
-    ]
-    assert actual == [{"type": "wall_time_budget", "seconds": 43200, "drain_margin": 1800, "groups_per_step": 64}]
-    resolved["rl"]["execution"]["job_timeout_seconds"] = 32400
-    with pytest.raises(ValueError, match="exceed the explicit budget"):
-        build_spec_graph(resolved, "2026.11.13", through="rl")
+    config = terminal.build_config(replace(context, is_fingerprint=True))
+    assert config["resolved_spec"]["experimental_controls"] == receipt

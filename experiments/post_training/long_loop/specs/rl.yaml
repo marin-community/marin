@@ -301,7 +301,7 @@ execution:
   - MARIN_TEMP_PREFIX
   container_profile: 4
 wall_clock_budget:
-  seconds: 43200
+  seconds: 36000
   drain_margin: 1800
 ray_timeouts:
   rendezvous_timeout: 259200

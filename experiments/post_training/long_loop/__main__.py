@@ -61,6 +61,10 @@ def validate_graph(
 @click.option("--through", type=click.Choice(["sft", "rl", "archive"]), default="archive", show_default=True)
 @click.option("--validation-output", type=click.Path(path_type=Path), required=True)
 @click.option("--i-know-i-am-using-a-deprecated-config-format", is_flag=True)
+@click.option("--i-know-i-am-breaking-experimental-controls", is_flag=True)
+@click.option(
+    "--experimental-controls-reason", help="Decision recorded in the archive for nonstandard allocations/deadlines."
+)
 @rl_build_options
 def main(
     spec: Path,
@@ -68,11 +72,15 @@ def main(
     through: str,
     validation_output: Path,
     i_know_i_am_using_a_deprecated_config_format: bool,
+    i_know_i_am_breaking_experimental_controls: bool,
+    experimental_controls_reason: str | None,
 ) -> ArtifactStep:
     resolved = resolve_spec(
         spec,
         smoke=smoke,
         acknowledge_deprecated_config_format=i_know_i_am_using_a_deprecated_config_format,
+        acknowledge_experimental_controls=i_know_i_am_breaking_experimental_controls,
+        experimental_controls_reason=experimental_controls_reason,
     )
     os.environ["MARIN_PREFIX"] = resolved["storage"]["output_prefix"]
     os.environ["MARIN_TEMP_PREFIX"] = resolved["storage"]["temporary_prefix"]

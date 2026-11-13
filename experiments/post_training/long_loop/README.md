@@ -238,13 +238,12 @@ Missing or failed verification remains masked. The turn limit stays at128 and
 best-checkpoint selection still requires all120validation tasks to be scored.
 
 
-New submissions default to three-day task/coordinator deadlines, from
-`execution_policy.DEFAULT_TASK_TIMEOUT_SECONDS`. RL has no wall-time callback
-unless its pinned stage document explicitly supplies:
+Stage deadlines follow the controlled envelope described below. RL has no
+wall-time callback unless its pinned stage document explicitly supplies:
 
 ```yaml
 wall_clock_budget:
-  seconds: 43200
+  seconds: 36000
   drain_margin: 1800
 ```
 
@@ -298,7 +297,7 @@ uses captured Pi 0.87 round-trip messages for 60 turns, verifies one conversatio
 and loss on every assistant action, and verifies a genuine compaction starts a
 new conversation.
 
-The next trial explicitly budgets 12 hours from its first optimizer step. Native
+The next trial explicitly budgets 10 hours from its first optimizer step. Native
 checkpoints save every two updates and retain the latest three plus the selected
 best; the selection uses five validation observations at two-update intervals.
 Final evaluation, HF export and archive use that same selected best checkpoint.
@@ -341,3 +340,31 @@ and stopped-run evidence remain unchanged.
 The published task package is exactly the one whose controls ran. Sealing adds
 no untested dependency constraints; the observed package versions remain available
 for reproduction, while each new trial freezes its own grading environment.
+
+## Controlled stage allocations and deadlines
+
+New loops use 256 H100s for SFT, 80 learner plus 176 rollout H100s for RL,
+and 128 candidate plus 8 judge H100s for final evaluation. Input preparation,
+HF handoff export, accounting and archive use CPUs. These controls are defined in
+[execution_policy.py](execution_policy.py) and checked before submission.
+
+The stage deadlines excluding final evaluation sum to 36 hours: inputs 30 minutes,
+SFT 20 hours, handoff export 1 hour, RL 12 hours, evaluation preparation 30 minutes,
+SFT accounting 30 minutes and archive 90 minutes. Final evaluation has a separate
+72-hour deadline. The enclosing coordinator has 109 hours so it cannot undercut
+the serial deadlines. The nominal 36-hour experiment target still includes
+evaluation; the longer eval deadline allows slow evaluations to finish.
+
+Changing a stage allocation or deadline requires both
+`--i-know-i-am-breaking-experimental-controls` and
+`--experimental-controls-reason "reason for the deviation"`. The resolved spec
+and archive provenance record the baseline, effective values and decision.
+A smoke shortens updates while retaining the SFT topology, context, packing and
+optimizer. It must complete a native checkpoint and HF export before its timing
+is used to size the full run.
+
+Experiment 2 explicitly selects packed 262,144-token context, batch 8 and a
+CP32/EP8 mesh on 256 H100s. Adam and the pinned historical mixture remain unchanged.
+The archive includes the population truncation/padding census and an exact-loader
+replay of the committed SFT sample, with per-source counts, token hashes, loss
+coverage and estimates of packing efficiency.

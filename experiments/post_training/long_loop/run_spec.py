@@ -13,6 +13,7 @@ from typing import Any
 import draccus
 import yaml
 
+from experiments.post_training.long_loop.execution_policy import bind_stage_timeouts, experimental_controls
 from experiments.post_training.long_loop.stage_config import validate_stage_config
 
 
@@ -76,7 +77,14 @@ def read_pin(pin: FilePin, directory: Path) -> Any:
     return yaml.safe_load(content)
 
 
-def resolve_spec(path: Path, *, smoke: bool, acknowledge_deprecated_config_format: bool = False) -> dict:
+def resolve_spec(
+    path: Path,
+    *,
+    smoke: bool,
+    acknowledge_deprecated_config_format: bool = False,
+    acknowledge_experimental_controls: bool = False,
+    experimental_controls_reason: str | None = None,
+) -> dict:
     """Resolve exact files; missing admission inputs remain explicit blockers."""
     spec = draccus.decode(RunSpec, yaml.safe_load(path.read_text()))
     if len(spec.marin_revision) != 40 or any(c not in "0123456789abcdef" for c in spec.marin_revision):
@@ -115,6 +123,11 @@ def resolve_spec(path: Path, *, smoke: bool, acknowledge_deprecated_config_forma
     if result["sft_format"] == "grug" and result["adopted_sft"] is None and not acknowledge_deprecated_config_format:
         raise ValueError("Legacy SFT requires --i-know-i-am-using-a-deprecated-config-format")
     result["acknowledge_deprecated_config_format"] = acknowledge_deprecated_config_format
+    bind_stage_timeouts(result)
+    result["gpu_peaks"] = allocation_peaks(result)
+    result["experimental_controls"] = experimental_controls(
+        result, acknowledge=acknowledge_experimental_controls, reason=experimental_controls_reason
+    )
     for stage in ("rl", "evaluation"):
         validate_stage_config(result[stage]["config"], stage)
         for field in ("rendezvous_timeout", "cluster_join_timeout", "driver_liveness_timeout"):
@@ -181,7 +194,7 @@ def allocation_peaks(resolved: dict) -> dict[str, int]:
         raise ValueError("Endpoint priority must remain production")
     coordinator_gpu = execution["coordinator"]["coordinator_gpu"]
     coordinator_count = coordinator_gpu["count"] if coordinator_gpu else 0
-    resources = {key: execution[key] for key in ("export", "eval_inputs", "archive")}
+    resources = {key: execution[key] for key in ("inputs", "export", "eval_inputs", "archive")}
     resources["sft"] = resolved["sft"]["resources"]
     peaks = {
         key: value["replicas"] * value["device"]["count"] if value["device"]["kind"] == "gpu" else 0

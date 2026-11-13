@@ -24,11 +24,21 @@ def mask_serialized_chat(
     header_end = positions >= len(assistant_prefix) - 1
     for offset, token in enumerate(assistant_prefix):
         header_end &= jnp.roll(tokens, len(assistant_prefix) - 1 - offset, axis=-1) == token
+    segments = None
+    if example.attn_mask.segment_ids is not None:
+        segments = example.attn_mask.segment_ids[0]
+        header_end &= segments == jnp.roll(segments, len(assistant_prefix) - 1)
     latest_message = jax.lax.associative_scan(
         jnp.maximum, jnp.where(tokens == message_start_id, positions, -1), axis=-1
     )
     latest_assistant = jax.lax.associative_scan(jnp.maximum, jnp.where(header_end, positions, -1), axis=-1)
+    if segments is not None:
+        boundary = (positions == 0) | (segments != jnp.roll(segments, 1))
+        latest_boundary = jax.lax.associative_scan(jnp.maximum, jnp.where(boundary, positions, -1), axis=-1)
+        latest_message = jnp.maximum(latest_message, latest_boundary)
     assistant = (latest_assistant >= latest_message) & (positions > latest_assistant) & (latest_assistant >= 0)
     # GrugLmExample weights index the prediction of the following token.
     weights = example.loss_weight * jnp.roll(assistant, -1, axis=-1)
+    if segments is not None:
+        weights *= segments == jnp.roll(segments, -1)
     return replace(example, loss_weight=weights.at[-1].set(0))

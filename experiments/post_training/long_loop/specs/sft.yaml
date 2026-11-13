@@ -1,8 +1,9 @@
 format: sft_spec
 profile: snowball_h100
+pack: true
 target_positions: 50063212544
 source_step_positions: 67108864
-stop_after_steps: 190976
+stop_after_steps: 23872
 serialized_chat:
   message_start_id: 128006
   assistant_prefix:
@@ -25,7 +26,7 @@ model:
   latent_dim: null
   layer_norm_eps: 1.0e-05
   local_kv_heads: null
-  max_seq_len: 32768
+  max_seq_len: 262144
   moe_implementation: sonic
   num_expert_waves: 1
   num_experts: 256
@@ -65,7 +66,22 @@ resources:
   image: null
   preemptible: false
   ram: 1500GB
-  replicas: 4
+  replicas: 32
   target_cluster: null
   zone: null
-task_timeout_seconds: 259200
+task_timeout_seconds: 72000
+seq_len: 262144
+batch_size: 8
+mesh:
+  axes:
+    data: 1
+    replica: 1
+    model: 1
+    context: 32
+    expert: 8
+  compute_mapping:
+    batch:
+    - replica_dcn
+    - data
+    - expert
+    position: context
