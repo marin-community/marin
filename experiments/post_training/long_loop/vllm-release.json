@@ -1,274 +1,42 @@
 {
-  "abi": {
-    "cuda_runtime_version": "13.2",
-    "cuda_toolkit_version": "13.2.1",
-    "cuda_variant": "cu132",
-    "python_version": "3.12",
-    "torch_index_url": "https://download.pytorch.org/whl/cu132",
-    "torch_version": "2.13.0+cu132"
+  "source_manifest": {
+    "url": "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261106-5fa2e9bad66d/marin-vllm-gpu-manifest.json",
+    "sha256": "e3c0ac92f81c1b981d8f2f7ca06841bb3097fe819fa983eb763fb5e5781cfb53"
+  },
+  "release": {
+    "tag": "marin-vllm-gpu-20261106-5fa2e9bad66d",
+    "status": "released"
+  },
+  "source": {
+    "fork_commit": "5fa2e9bad66dcc2b9836e657323214aefc179a7f"
   },
   "distribution": {
-    "name": "vllm",
-    "requires_python": "<3.15,>=3.10",
-    "torch_metadata_requirement": "torch==2.13.0",
-    "version": "0.0.0.dev20260929+marin.39e62869693c.cu132"
+    "version": "0.0.0.dev20261106+marin.5fa2e9bad66d.cu132"
+  },
+  "abi": {
+    "cuda_variant": "cu132",
+    "torch_version": "2.14.1+cu132"
   },
   "platforms": [
     {
       "architecture": "aarch64",
-      "build": {
-        "base_image": "pytorch/manylinuxaarch64-builder:cuda13.2@sha256:b6294ee66020334c6cb80c4392b2cf88b0722a49ac30ada9ed2126c9c453384d",
-        "base_image_digest": "pytorch/manylinuxaarch64-builder:cuda13.2@sha256:b6294ee66020334c6cb80c4392b2cf88b0722a49ac30ada9ed2126c9c453384d",
-        "built_at": "2026-09-29T04:55:18Z",
-        "cuda_toolkit_version": "13.2.1",
-        "cuda_variant": "cu132",
-        "provenance": {
-          "base_image": "pytorch/manylinuxaarch64-builder:cuda13.2@sha256:b6294ee66020334c6cb80c4392b2cf88b0722a49ac30ada9ed2126c9c453384d",
-          "base_image_digest": "pytorch/manylinuxaarch64-builder:cuda13.2@sha256:b6294ee66020334c6cb80c4392b2cf88b0722a49ac30ada9ed2126c9c453384d",
-          "job": "build",
-          "run_attempt": "1",
-          "run_id": "36523688100",
-          "run_url": "https://github.com/marin-community/vllm/actions/runs/36523688100",
-          "runner_arch": "ARM64",
-          "system": "GitHub Actions",
-          "workflow_ref": "marin-community/vllm/.github/workflows/marin-gpu-candidate.yaml@refs/heads/main"
-        },
-        "python_version": "3.12",
-        "torch_index_url": "https://download.pytorch.org/whl/cu132",
-        "torch_version": "2.13.0+cu132"
-      },
-      "filename_tag": "cp38-abi3-manylinux_2_28_aarch64",
-      "packaged": {
-        "GrugMoeForCausalLM": "included",
-        "vllm._C_stable_libtorch": "included",
-        "vllm.cumem_allocator": "included"
-      },
       "sm_targets": [
         "10.0"
       ],
       "wheel": {
-        "filename": "vllm-0.0.0.dev20260929+marin.39e62869693c.cu132-cp38-abi3-manylinux_2_28_aarch64.whl",
-        "sha256": "8a3ba6d09d43c779d67775ee9be0e54febcad724bce5192021b005407df0fdf8",
-        "size_bytes": 225828225,
-        "url": "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260929-39e62869693c/vllm-0.0.0.dev20260929+marin.39e62869693c.cu132-cp38-abi3-manylinux_2_28_aarch64.whl"
-      },
-      "wheel_tags": [
-        "cp38-abi3-manylinux_2_28_aarch64"
-      ]
+        "url": "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261106-5fa2e9bad66d/vllm-0.0.0.dev20261106+marin.5fa2e9bad66d.cu132-cp38-abi3-manylinux_2_28_aarch64.whl",
+        "sha256": "78225da21b0b6fb7b20af1fe2a51e635a6586ceeac4685a2cae0817d0bb78eee"
+      }
     },
     {
       "architecture": "x86_64",
-      "build": {
-        "base_image": "pytorch/manylinux2_28-builder:cuda13.2@sha256:313d3fa7551f14335d7d3196fb00b94acd97550faf81923b610dfac87dd028af",
-        "base_image_digest": "pytorch/manylinux2_28-builder:cuda13.2@sha256:313d3fa7551f14335d7d3196fb00b94acd97550faf81923b610dfac87dd028af",
-        "built_at": "2026-09-29T04:55:42Z",
-        "cuda_toolkit_version": "13.2.1",
-        "cuda_variant": "cu132",
-        "provenance": {
-          "base_image": "pytorch/manylinux2_28-builder:cuda13.2@sha256:313d3fa7551f14335d7d3196fb00b94acd97550faf81923b610dfac87dd028af",
-          "base_image_digest": "pytorch/manylinux2_28-builder:cuda13.2@sha256:313d3fa7551f14335d7d3196fb00b94acd97550faf81923b610dfac87dd028af",
-          "job": "build",
-          "run_attempt": "1",
-          "run_id": "36523688100",
-          "run_url": "https://github.com/marin-community/vllm/actions/runs/36523688100",
-          "runner_arch": "X64",
-          "system": "GitHub Actions",
-          "workflow_ref": "marin-community/vllm/.github/workflows/marin-gpu-candidate.yaml@refs/heads/main"
-        },
-        "python_version": "3.12",
-        "torch_index_url": "https://download.pytorch.org/whl/cu132",
-        "torch_version": "2.13.0+cu132"
-      },
-      "filename_tag": "cp38-abi3-manylinux_2_28_x86_64",
-      "packaged": {
-        "GrugMoeForCausalLM": "included",
-        "vllm._C_stable_libtorch": "included",
-        "vllm.cumem_allocator": "included"
-      },
       "sm_targets": [
         "9.0"
       ],
       "wheel": {
-        "filename": "vllm-0.0.0.dev20260929+marin.39e62869693c.cu132-cp38-abi3-manylinux_2_28_x86_64.whl",
-        "sha256": "93da77d0d4bb6f2f5ac8611efd09aa2e4654d4cacb5d21eab5dd2ec34186e27b",
-        "size_bytes": 257403426,
-        "url": "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260929-39e62869693c/vllm-0.0.0.dev20260929+marin.39e62869693c.cu132-cp38-abi3-manylinux_2_28_x86_64.whl"
-      },
-      "wheel_tags": [
-        "cp38-abi3-manylinux_2_28_x86_64"
-      ]
-    }
-  ],
-  "release": {
-    "brand": "Marin vLLM",
-    "candidate_tag": "marin-vllm-gpu-candidate-39e62869693c",
-    "provenance": {
-      "job": "publish",
-      "run_attempt": "1",
-      "run_id": "36610285937",
-      "run_url": "https://github.com/marin-community/vllm/actions/runs/36610285937",
-      "runner_arch": "X64",
-      "system": "GitHub Actions",
-      "workflow_ref": "marin-community/vllm/.github/workflows/marin-gpu-release.yaml@refs/heads/main"
-    },
-    "published_at": "2026-09-29T18:18:48Z",
-    "repository": "marin-community/vllm",
-    "status": "released",
-    "tag": "marin-vllm-gpu-20260929-39e62869693c"
-  },
-  "schema_version": 1,
-  "source": {
-    "fork_commit": "39e62869693c46402b1a95fde4fc55ca1aab9ae1",
-    "repository": "https://github.com/marin-community/vllm",
-    "upstream_base": "9d88ceb02694c6e3df182ec3c87201284f50e2c6",
-    "upstream_repository": "https://github.com/vllm-project/vllm"
-  },
-  "validation": {
-    "status": "passed",
-    "targets": [
-      {
-        "architecture": "aarch64",
-        "candidate_tag": "marin-vllm-gpu-candidate-39e62869693c",
-        "environment": {
-          "attention_backend": "FLASH_ATTN",
-          "machine": "aarch64",
-          "python_version": "3.12.13",
-          "task_image": "ghcr.io/marin-community/iris-task@sha256:9af9a3d38f57c2ed8dfe1d6f6657a9f4a00c582ec06a5ac2af8fcddbe51da03c",
-          "torch_cuda_runtime": "13.2",
-          "torch_version": "2.13.0+cu132",
-          "torchaudio_version": "2.11.0+cpu",
-          "vllm_package_path": "/tmp/marin-vllm-release-w48js_if/venv/lib/python3.12/site-packages/vllm/__init__.py"
-        },
-        "gates": {
-          "GrugMoeForCausalLM": {
-            "status": "passed"
-          },
-          "cumem_allocator": {
-            "allocated_bytes": 2097152,
-            "checksum": 8386560.0,
-            "status": "passed"
-          },
-          "distribution_metadata": {
-            "status": "passed"
-          },
-          "serve_smoke": {
-            "metrics": {
-              "completions": 4,
-              "min_completion_tokens": 65,
-              "output_tokens_per_second": 720.1646345626697
-            },
-            "status": "passed"
-          },
-          "source_tests": {
-            "detail": "source behavior suite runs on the H100 lane",
-            "status": "not_run"
-          },
-          "sparse_nccl_contract": {
-            "backend": "sparse_nccl",
-            "checkpoint_shape": [
-              2,
-              2
-            ],
-            "patch_entries": 2,
-            "status": "passed"
-          },
-          "torchaudio.resample": {
-            "max_error": 2.384185791015625e-07,
-            "status": "passed"
-          },
-          "vllm._C_stable_libtorch": {
-            "status": "passed"
-          },
-          "wheel_sha256": {
-            "status": "passed"
-          }
-        },
-        "hardware": {
-          "compute_capability": "10.0",
-          "name": "NVIDIA GB200",
-          "requested": "GB200",
-          "status": "passed"
-        },
-        "result": "passed",
-        "schema_version": 1,
-        "source_commit": "39e62869693c46402b1a95fde4fc55ca1aab9ae1",
-        "wheel": {
-          "filename": "vllm-0.0.0.dev20260929+marin.39e62869693c.cu132-cp38-abi3-manylinux_2_28_aarch64.whl",
-          "sha256": "8a3ba6d09d43c779d67775ee9be0e54febcad724bce5192021b005407df0fdf8",
-          "url": "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-candidate-39e62869693c/vllm-0.0.0.dev20260929+marin.39e62869693c.cu132-cp38-abi3-manylinux_2_28_aarch64.whl"
-        }
-      },
-      {
-        "architecture": "x86_64",
-        "candidate_tag": "marin-vllm-gpu-candidate-39e62869693c",
-        "environment": {
-          "attention_backend": "FLASH_ATTN",
-          "machine": "x86_64",
-          "python_version": "3.12.14",
-          "task_image": "ghcr.io/marin-community/iris-task@sha256:9af9a3d38f57c2ed8dfe1d6f6657a9f4a00c582ec06a5ac2af8fcddbe51da03c",
-          "torch_cuda_runtime": "13.2",
-          "torch_version": "2.13.0+cu132",
-          "torchaudio_version": "2.11.0+cpu",
-          "vllm_package_path": "/tmp/marin-vllm-release-33mzb9p2/venv/lib/python3.12/site-packages/vllm/__init__.py"
-        },
-        "gates": {
-          "GrugMoeForCausalLM": {
-            "status": "passed"
-          },
-          "cumem_allocator": {
-            "allocated_bytes": 2097152,
-            "checksum": 8386560.0,
-            "status": "passed"
-          },
-          "distribution_metadata": {
-            "status": "passed"
-          },
-          "serve_smoke": {
-            "metrics": {
-              "completions": 4,
-              "min_completion_tokens": 65,
-              "output_tokens_per_second": 631.5885787728063
-            },
-            "status": "passed"
-          },
-          "source_tests": {
-            "status": "passed"
-          },
-          "sparse_nccl_contract": {
-            "backend": "sparse_nccl",
-            "checkpoint_shape": [
-              2,
-              2
-            ],
-            "patch_entries": 2,
-            "status": "passed"
-          },
-          "torchaudio.resample": {
-            "max_error": 2.980232238769531e-07,
-            "status": "passed"
-          },
-          "vllm._C_stable_libtorch": {
-            "status": "passed"
-          },
-          "wheel_sha256": {
-            "status": "passed"
-          }
-        },
-        "hardware": {
-          "compute_capability": "9.0",
-          "name": "NVIDIA H100 80GB HBM3",
-          "requested": "H100",
-          "status": "passed"
-        },
-        "result": "passed",
-        "schema_version": 1,
-        "source_commit": "39e62869693c46402b1a95fde4fc55ca1aab9ae1",
-        "wheel": {
-          "filename": "vllm-0.0.0.dev20260929+marin.39e62869693c.cu132-cp38-abi3-manylinux_2_28_x86_64.whl",
-          "sha256": "93da77d0d4bb6f2f5ac8611efd09aa2e4654d4cacb5d21eab5dd2ec34186e27b",
-          "url": "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-candidate-39e62869693c/vllm-0.0.0.dev20260929+marin.39e62869693c.cu132-cp38-abi3-manylinux_2_28_x86_64.whl"
-        }
+        "url": "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261106-5fa2e9bad66d/vllm-0.0.0.dev20261106+marin.5fa2e9bad66d.cu132-cp38-abi3-manylinux_2_28_x86_64.whl",
+        "sha256": "7acf9799328bbbfe9735178f23d1ebea67e77453b855dd51f76e0e8ecf9ee378"
       }
-    ]
-  }
+    }
+  ]
 }

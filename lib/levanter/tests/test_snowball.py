@@ -48,7 +48,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.layers.attention import AttentionMask
 from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
 from levanter.main.train_lm import TrainLmConfig, main, preserve_hf_runtime_settings
-from levanter.models.lm_model import LmConfig
+from levanter.models.lm_model import LmConfig, LmExample
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
     GRUG_MOE_MODEL_TYPE,
@@ -919,6 +919,83 @@ def test_snowball_packed_conversations_are_isolated(separate_key_axis):
         np.testing.assert_array_equal(observe(model, changed), after)
     assert not np.allclose(before[:, :4], after[:, :4])
     np.testing.assert_allclose(before[:, 4:], after[:, 4:], atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.timeout(180)
+@pytest.mark.multidevice
+@pytest.mark.parametrize(
+    "implementation,sequence_length,head_dim",
+    [
+        ("reference", 48, 12),
+        # 48 forces three blocks of 16, so xla_flash cannot fall back to reference attention.
+        ("xla_flash", 48, 12),
+        pytest.param("tpu_splash", 512, 64, marks=pytest.mark.tpu),
+        ("gpu_fa4_cute", 1024, 64),
+    ],
+)
+def test_snowball_packed_context_parallel_hidden_states_and_loss_are_isolated(
+    implementation, sequence_length, head_dim
+):
+    if implementation == "tpu_splash" and jax.default_backend() != "tpu":
+        pytest.skip("Splash requires TPU hardware")
+    if implementation == "gpu_fa4_cute" and jax.default_backend() != "gpu":
+        pytest.skip("FA4/CuTe requires GPU hardware")
+    with use_test_devices(4) as devices:
+        cfg = _tiny_config(
+            num_layers=2,  # One sliding-window layer and one full-causal layer.
+            head_dim=head_dim,
+            max_seq_len=sequence_length,
+            sliding_window=sequence_length // 2,
+            attention_implementation=implementation,
+            moe_implementation="ring",
+            # Eliminate capacity drops, which couple tokens independently of attention.
+            moe_capacity_factor=4,
+        )
+        Batch, Pos = Axis("batch", 4), Axis("position", sequence_length)
+        ids = hax.named(jnp.arange(Batch.size * Pos.size).reshape(Batch.size, Pos.size) % cfg.vocab_size, (Batch, Pos))
+        # Different boundaries per row, away from CP shard and kernel tile boundaries.
+        boundaries = jnp.array([sequence_length // 3 + i for i in range(Batch.size)])[:, None]
+        later = jnp.arange(Pos.size)[None, :] >= boundaries
+        segments = hax.named(later.astype(jnp.int32), ids.axes)
+        packed = AttentionMask.causal().with_segment_ids(segments, segments.rename({"position": "key_position"}))
+        single = AttentionMask.causal().with_segment_ids(hax.zeros(ids.axes, dtype=jnp.int32))
+        changed = hax.named(jnp.where(later, ids.array, (ids.array + 13) % cfg.vocab_size), ids.axes)
+        # Score only next-token predictions wholly inside the second document.
+        weights = hax.named((later & (jnp.arange(Pos.size)[None, :] < Pos.size - 1)).astype(jnp.float32), ids.axes)
+        for context in (1, 4):
+            mesh = Mesh(
+                np.asarray(devices[:context]).reshape(1, 1, 1, context, 1),
+                ("replica_dcn", "data", "expert", "context", "model"),
+                axis_types=(AxisType.Explicit,) * 5,
+            )
+            with jax.set_mesh(mesh):
+                model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(9))
+                if implementation in ("tpu_splash", "gpu_fa4_cute"):
+                    model = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16").cast_to_compute(model)
+
+                # BF16 MoE scatters can vary between identical GPU runs. Compile deterministically
+                # so their rounding noise cannot masquerade as a cross-document dependency.
+                @eqx.filter_jit(compiler_options={"xla_gpu_exclude_nondeterministic_ops": True})
+                def forward(model, tokens, mask):
+                    hidden = model.activations(tokens, mask).array
+                    loss = model.compute_next_token_loss(LmExample(tokens, weights, mask), reduction=None)
+                    return hidden, loss.array
+
+                before = tuple(np.asarray(x) for x in forward(model, ids, packed))
+                repeated = forward(model, ids, packed)
+                for expected, actual in zip(before, repeated, strict=True):
+                    np.testing.assert_array_equal(expected, actual, err_msg="Identical inputs must be deterministic")
+                after = tuple(np.asarray(x) for x in forward(model, changed, packed))
+                assert not np.allclose(before[0][~np.asarray(later)], after[0][~np.asarray(later)])
+                np.testing.assert_array_equal(before[0][np.asarray(later)], after[0][np.asarray(later)])
+                np.testing.assert_array_equal(before[1], after[1])
+                assert np.all(before[1][np.asarray(weights.array, dtype=bool)] > 0)
+
+                # A single document must preserve the pre-packing causal path bit for bit.
+                unpacked = forward(model, ids, None)
+                one_document = forward(model, ids, single)
+                for expected, actual in zip(unpacked, one_document, strict=True):
+                    np.testing.assert_array_equal(expected, actual)
 
 
 @pytest.mark.timeout(120)

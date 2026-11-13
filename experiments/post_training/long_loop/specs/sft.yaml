@@ -74,6 +74,7 @@ resources:
 task_timeout_seconds: 72000
 seq_len: 262144
 batch_size: 8
+per_device_parallelism: 1
 mesh:
   axes:
     data: 1

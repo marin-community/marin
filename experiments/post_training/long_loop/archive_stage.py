@@ -195,8 +195,7 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
 
 
 def _read_document(uri: str) -> Any:
-    fs, key = filesystem_for(uri)
-    return yaml.safe_load(fs.cat_file(key))
+    return yaml.safe_load(StoragePath(uri).read_bytes())
 
 
 def _input(source: str, name: str, category: str) -> dict:

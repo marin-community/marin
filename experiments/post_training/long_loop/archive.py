@@ -135,9 +135,7 @@ def checkpoint_cleanup(root: str, checkpoint_root: str, selected: str, candidate
     for _, fs, key in planned:
         if fs.exists(key):
             fs.rm(key)
-    fs, key = filesystem_for(prefix_join(root, "cleanup-completed.json"))
-    fs.pipe_file(
-        key,
+    StoragePath(prefix_join(root, "cleanup-completed.json")).write_bytes(
         json.dumps(
             {"selected": selected, "removed": candidates, "completed_at": datetime.now(UTC).isoformat()}
         ).encode(),
