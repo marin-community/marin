@@ -67,7 +67,7 @@ function collapsed(rows) {
     entry.others = entry.members.filter(row => row !== canonical).sort((a, b) => (sourceOverlap(b) ?? 0) - (sourceOverlap(a) ?? 0));
     delete entry.members;
   }
-  return entries;
+  return entries.sort((a, b) => rows.indexOf(a.row) - rows.indexOf(b.row));
 }
 const expandedGroups = new Set();
 
@@ -145,7 +145,8 @@ function sourceRow(row, others, canonical) {
     const datasets = datasetLinks(row);
     if (datasets) name.append(datasets);
     if (canonical) {
-      name.append(node('span', `${sourceOverlap(row) == null ? "Unmeasured overlap" : `${Math.round(100 * sourceOverlap(row))}% overlap · ${sourceOverlap(row) === 1 ? "duplicate" : "partial overlap"}`} with ${canonical.display_name}`, 'source-subtitle duplicate-note'));
+      const reference = state.sources.find(item => item.id === row.duplicate_group.canonical_source_id);
+      name.append(node('span', `${sourceOverlap(row) == null ? "Unmeasured overlap" : `${Math.round(100 * sourceOverlap(row))}% overlap · ${sourceOverlap(row) === 1 ? "duplicate" : "partial overlap"}`} with ${reference.display_name}`, 'source-subtitle duplicate-note'));
     } else if (others.length) {
       const groupId = row.duplicate_group.group_id, expanded = expandedGroups.has(groupId);
       const toggle = node('button', expanded ? '▾' : '▸', 'text-button duplicate-toggle');
