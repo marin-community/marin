@@ -85,6 +85,14 @@ class LaunchModelLocator:
 
 
 @dataclass
+class NativeCheckpointLocator:
+    """Completed native state read by the trainer without staging a model export."""
+
+    uri: str = MISSING
+    identity: str = MISSING
+
+
+@dataclass
 class IrisAllocationConfig:
     """Explicit whole-node resources checked against SkyRL placement."""
 
@@ -150,13 +158,14 @@ class ArtifactsConfig:
 
 @dataclass
 class InputsConfig:
-    """Immutable model and data locators resolved by Marin."""
+    """Immutable model, data and starting-checkpoint locators resolved by Marin."""
 
     model: LaunchModelLocator = field(default_factory=LaunchModelLocator)
     hugging_face_models: list[HuggingFaceModelCache] = field(default_factory=list)
     data_kind: str = MISSING
     train_data: list[dict[str, Any]] = field(default_factory=list)
     validation_data: list[dict[str, Any]] = field(default_factory=list)
+    resume_checkpoint: NativeCheckpointLocator | None = None
 
 
 @dataclass
@@ -192,6 +201,10 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
     raw_skyrl = OmegaConf.to_container(config.skyrl, resolve=False)
     if not isinstance(raw_skyrl, dict):
         raise TypeError("skyrl must be a mapping")
+    if config.inputs.resume_checkpoint is not None:
+        trainer = raw_skyrl.setdefault("trainer", {})
+        trainer["resume_path"] = str(config.inputs.resume_checkpoint.uri)
+        trainer.setdefault("resume_mode", "latest")
     model_uri = str(config.inputs.model.uri)
     model_identity = str(config.inputs.model.identity)
     model_is_cloud = is_cloud_uri(model_uri)

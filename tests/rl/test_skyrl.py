@@ -499,6 +499,34 @@ def test_skyrl_step_declares_model_and_data_dependencies() -> None:
     ]
 
 
+def test_starting_checkpoint_binds_dependency_identity_and_path() -> None:
+    spec = _spec()
+    checkpoints = [
+        ArtifactStep.adopt("tests/native", f"2026.11.13.{step}", f"s3://checkpoints/global_step_{step}")
+        for step in (2, 5)
+    ]
+    runs = [
+        skyrl_step(dataclasses.replace(spec, resume_checkpoint=checkpoint), _execution()) for checkpoint in checkpoints
+    ]
+    for run, checkpoint in zip(runs, checkpoints, strict=True):
+        config = run.build_config(
+            StepContext.for_run(
+                output_path="s3://marin-us-east-08a/users/tester/continuation",
+                prefix="s3://marin-us-east-08a",
+                runtime_args=run.runtime_args,
+                deps=run.deps,
+            )
+        )
+        launch = yaml.safe_load(config.launch_config_yaml)
+        assert checkpoint in run.deps
+        assert launch["inputs"]["resume_checkpoint"] == {
+            "uri": checkpoint.adopt_source,
+            "identity": f"{checkpoint.name}@{checkpoint.version}:{checkpoint.fingerprint()}",
+        }
+        assert config.output.checkpoint_root != checkpoint.adopt_source
+    assert runs[0].fingerprint() != runs[1].fingerprint()
+
+
 def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

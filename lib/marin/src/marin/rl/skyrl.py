@@ -245,6 +245,12 @@ class ResolvedModelLocator:
 
 
 @dataclass(frozen=True)
+class ResolvedNativeCheckpoint:
+    uri: str
+    identity: str
+
+
+@dataclass(frozen=True)
 class ResolvedDirectoryDataSource:
     uri: str
     identity: str
@@ -418,6 +424,7 @@ class SkyRLSpec:
     topology: SkyRLTopology
     retention: SkyRLRetentionPolicy
     seed: int
+    resume_checkpoint: ArtifactStep[Artifact] | None = None
 
     def __post_init__(self) -> None:
         _validate_skyrl_recipe(self.config_yaml, self.topology)
@@ -831,6 +838,7 @@ def _launch_config_yaml(
     train_data: tuple[ResolvedDataSource, ...],
     validation_data: tuple[ResolvedDataSource, ...],
     output: SkyRLOutputPaths,
+    resume_checkpoint: ResolvedNativeCheckpoint | None,
 ) -> str:
     recipe = _parsed_config(spec.config_yaml)
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
@@ -897,6 +905,8 @@ def _launch_config_yaml(
         },
         "skyrl": recipe,
     }
+    if resume_checkpoint is not None:
+        launch["inputs"]["resume_checkpoint"] = asdict(resume_checkpoint)
     if execution.container_profile is not None:
         launch["iris"]["container_profile"] = job_pb2.ContainerProfile.Name(execution.container_profile)
     return yaml.safe_dump(launch, sort_keys=False)
@@ -916,6 +926,7 @@ def skyrl_step(
                 *spec.model.deps(),
                 *(dep for source in spec.train_data for dep in source.deps()),
                 *(dep for source in spec.validation_data for dep in source.deps()),
+                *((spec.resume_checkpoint,) if spec.resume_checkpoint is not None else ()),
             )
         )
     )
@@ -949,6 +960,14 @@ def skyrl_step(
         model = spec.model.resolve(ctx)
         train_data = tuple(source.resolve(ctx) for source in spec.train_data)
         validation_data = tuple(source.resolve(ctx) for source in spec.validation_data)
+        resume_checkpoint = (
+            ResolvedNativeCheckpoint(
+                uri=ctx.artifact_path(spec.resume_checkpoint),
+                identity=artifact_identity(spec.resume_checkpoint),
+            )
+            if spec.resume_checkpoint is not None
+            else None
+        )
         execution = (
             _FINGERPRINT_EXECUTION if ctx.is_fingerprint else cast(IrisSkyRLExecution, ctx.runtime_arg(_EXECUTION))
         )
@@ -963,6 +982,7 @@ def skyrl_step(
                 train_data=train_data,
                 validation_data=validation_data,
                 output=output,
+                resume_checkpoint=resume_checkpoint,
             ),
             run_id=run_id,
             attempt_id=attempt_id,

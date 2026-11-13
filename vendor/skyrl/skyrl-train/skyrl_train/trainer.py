@@ -3313,24 +3313,25 @@ class RayPPOTrainer:
         # first, let's get resume_path
         elif self.resume_mode == ResumeMode.LATEST:
             latest_checkpoint_file = os.path.join(self.cfg.trainer.ckpt_path, LATEST_CHECKPOINT_FILE)
-            if not io.exists(latest_checkpoint_file):
+            if io.exists(latest_checkpoint_file):
+                with io.open_file(latest_checkpoint_file, "r") as f:
+                    ckpt_iteration = int(f.read().strip())
+                checkpoint_path = os.path.join(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{ckpt_iteration}")
+                # A corrupt or incomplete current-run checkpoint must still fail validation.
+                validate_consistency_for_latest_checkpoint(
+                    self.cfg.trainer.ckpt_path,
+                    ckpt_iteration,
+                    checkpoint_path,
+                    latest_checkpoint_file,
+                    self.cfg.trainer.ckpt_interval,
+                )
+            elif not self.cfg.trainer.get("resume_path"):
                 logger.warning(
                     f"resume_mode=latest found no checkpoint marker at {latest_checkpoint_file}; "
                     "starting training from global_step 0"
                 )
                 return 0, None
-            with io.open_file(latest_checkpoint_file, "r") as f:
-                ckpt_iteration = int(f.read().strip())
-            checkpoint_path = os.path.join(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{ckpt_iteration}")
-            # Run validation: Make sure ckpt folder is consistent with latest_ckpt_global_step.txt
-            validate_consistency_for_latest_checkpoint(
-                self.cfg.trainer.ckpt_path,
-                ckpt_iteration,
-                checkpoint_path,
-                latest_checkpoint_file,
-                self.cfg.trainer.ckpt_interval,
-            )
-        else:
+        if checkpoint_path is None:
             # Get and validate resume path
             checkpoint_path = self.cfg.trainer.resume_path
             if not checkpoint_path:

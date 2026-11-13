@@ -32,6 +32,24 @@ from skyrl_train.config.rollout_validation import EntrypointOperation, validate_
 from skyrl_train.inference_engines import placement as inference_placement
 
 
+@pytest.mark.parametrize("mode", [None, "latest", "from_path", "none"])
+def test_starting_checkpoint_resolves_without_overriding_resume_mode(tmp_path: Path, mode: str | None) -> None:
+    raw = raw_launch_config()
+    checkpoint = {"uri": "s3://seed/checkpoints/global_step_2", "identity": "seed@2026.11.13:abc"}
+    raw["inputs"]["resume_checkpoint"] = checkpoint
+    if mode is not None:
+        raw["skyrl"]["trainer"]["resume_mode"] = mode
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+
+    resolved = load_launch_config(path)
+
+    assert resolved.skyrl.trainer.resume_mode == (mode or "latest")
+    assert resolved.skyrl.trainer.resume_path == checkpoint["uri"]
+    assert OmegaConf.to_container(resolved.inputs.resume_checkpoint) == checkpoint
+    assert resolved.artifacts.checkpoint_root == raw["artifacts"]["checkpoint_root"]
+
+
 def test_training_channels_require_compatible_weight_transport() -> None:
     config = get_default_config()
     config.trainer.algorithm.batch_invariant = True
