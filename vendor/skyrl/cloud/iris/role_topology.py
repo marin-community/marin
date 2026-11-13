@@ -7,6 +7,7 @@ import xml.etree.ElementTree as ET
 
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_NVLINK_DOMAIN_SLICED,
+    NVL72_GPUS_PER_NODE,
     gpu_gang_coscheduling_level,
     gpu_gang_rack_slice_size,
     is_rack_based,
@@ -50,6 +51,8 @@ def derive_role_topology(config: Mapping[str, Any]) -> RoleTopology | None:
     rack_based = is_rack_based(variant)
     mode = gpu_gang_coscheduling_level(variant, width, nodes)
     if rack_based:
+        if width != NVL72_GPUS_PER_NODE:
+            raise ValueError(f"NVLink role placement requires whole NVL72 hosts ({NVL72_GPUS_PER_NODE} GPUs each)")
         domain_nodes = gpu_gang_rack_slice_size(width, nodes) if mode == COSCHEDULE_NVLINK_DOMAIN_SLICED else nodes
     elif variant.upper().startswith("H100") and width == 8:
         domain_nodes = 1

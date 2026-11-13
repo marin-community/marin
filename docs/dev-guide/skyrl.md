@@ -136,12 +136,12 @@ places each complete group within one slice; smaller engines can share one.
 For example, 64 trainer GPUs and two 64-GPU engines use 48 four-GPU hosts in
 three 16-host rack slices. A 64-GPU trainer and two 32-GPU engines fit two
 16-host slices, with both engines in the second rack. Groups that cannot fit
-the allocated slices fail validation before submission. This option does not
+the allocated slices fail validation before GPU submission. This option does not
 expand a slice or change Iris's rack availability policy.
 
-Before model actors start, every host reports its GPU UUIDs and NVIDIA fabric
-identity. The head checks that each native slice has one physical domain and
-that slices occupy distinct domains, then writes `role-topology.json` to its
+Before model actors start, every host reports its GPU UUIDs. NVL72 hosts also
+report NVIDIA fabric identities. The head checks that each native slice has
+one physical domain and that slices occupy distinct domains, then writes `role-topology.json` to its
 Iris task output. Ray reserves the trainer and each engine with their assigned
 role resources and checks the ready bundles' actual nodes against those domains.
 Wrong physical placement fails startup; a cluster join or placement timeout
