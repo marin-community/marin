@@ -1,17 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Regression test for issue #11289: superseded PREEMPTED attempts never finalized.
-
-A preempted worker-bound attempt keeps ``finished_at_ms`` NULL, and so keeps its
-capacity charge, until the worker confirms termination. When a retry assigns the
-task a newer attempt first, the old attempt must stay in the worker's reconcile
-plan; the worker's KILLED or MISSING report for it must stamp only that attempt.
-Before the fix the reconcile read joined on the current attempt, so the old one
-left the plan, its report was dropped, and the host stayed charged forever: a
-full-slice gang could never be admitted onto that slice again.
-"""
-
 from dataclasses import replace
 
 import pytest
@@ -93,7 +82,6 @@ def _tpu_used(state: ControllerTestState, worker_id: WorkerId) -> int:
 
 
 def _schedule(state: ControllerTestState) -> list[tuple[JobName, WorkerId]]:
-    """Run one scheduling decision over the pending tasks and commit its assignments."""
     tasks = [task for task in schedulable_tasks(state) if check_task_can_be_scheduled(task)]
     jobs = {}
     for task in tasks:
@@ -160,7 +148,6 @@ def _desired_by_uid(plan: WorkerReconcilePlan) -> dict[str, worker_pb2.Worker.De
 
 
 def _report(state: ControllerTestState, plan: WorkerReconcilePlan, attempt_uid: str, observed: int) -> None:
-    """The worker answers its reconcile plan with one observation for ``attempt_uid``."""
     result = WorkerReconcileResult(
         worker_id=plan.worker_id,
         observations=[worker_pb2.Worker.AttemptObservation(attempt_uid=attempt_uid, state=observed)],
@@ -183,16 +170,13 @@ def test_superseded_preempted_attempt_is_finalized_by_worker_report(state, obser
     # Capacity stays reserved until the worker confirms the process is gone.
     assert _tpu_used(state, old_worker) == CHIPS_PER_HOST
 
-    # The retry assigns attempt 1 before attempt 0's termination is observed.
     assign_task(state, task, new_worker)
     assert query_task(state, task.task_id).current_attempt_id == 1
     old_attempt = query_attempt(state, task.task_id, 0)
-    # Persisted pre-deployment shape: the old attempt still holds its worker.
     assert old_attempt.state == job_pb2.TASK_STATE_PREEMPTED
     assert old_attempt.finished_at_ms is None
     assert old_attempt.worker_id == old_worker
 
-    # The superseded attempt stays in its worker's plan, as a stop of its own process.
     plan = _plan_for(state, old_worker)
     desired = _desired_by_uid(plan)[old_attempt.attempt_uid]
     assert desired.stop == worker_pb2.Worker.STOP_REASON_PREEMPTED
@@ -238,7 +222,6 @@ def test_superseded_preempted_gang_member_blocks_full_slice_until_confirmed(stat
         _report(state, plan, query_attempt(state, task.task_id, 0).attempt_uid, job_pb2.TASK_STATE_KILLED)
     assert _tpu_used(state, leaked.current_worker_id) == CHIPS_PER_HOST
 
-    # The gang retries on the other slice: attempt 1 supersedes the unconfirmed attempt 0.
     assert {wid for _tid, wid in _schedule(state)} == other_slice
     assert query_task(state, leaked.task_id).current_attempt_id == 1
 
@@ -254,7 +237,6 @@ def test_superseded_preempted_gang_member_blocks_full_slice_until_confirmed(stat
 
     assert {wid for _tid, wid in _schedule(state)} == first_slice
     assert {task.current_worker_id for task in query_tasks_for_job(state, gang_b)} == first_slice
-    # Gang A's retried attempts keep their placement on the other slice.
     retried = query_tasks_for_job(state, gang_a)
     assert {task.current_worker_id for task in retried} == other_slice
     assert all(task.current_attempt_id == 1 for task in retried)

@@ -72,8 +72,7 @@ class ReconcileRow:
     attempt_state: int
     job_id: JobName
     attempt_uid: AttemptUid
-    # True when a retry has moved the task to a newer attempt. The task state then
-    # describes the newer attempt, so this row's intent comes from its own state.
+    # The task state belongs to the newer attempt when this is true.
     superseded: bool = False
 
 
@@ -259,14 +258,7 @@ def _reconcile_worker(
 
 
 def _superseded_attempt_intent(row: ReconcileRow) -> worker_pb2.Worker.DesiredAttempt:
-    """Intent for an unfinished attempt whose task has moved on to a newer attempt.
-
-    The task row describes the newer attempt, so copying its run intent would
-    target the wrong process. A terminal old attempt (normally PREEMPTED) gets a
-    stop matching its own state; the worker tears the process down and its terminal
-    or MISSING observation stamps ``finished_at_ms``, which releases the capacity
-    the attempt still holds. A nonterminal old attempt gets a bare status probe.
-    """
+    """Build a stop or status probe from the old attempt's state."""
     if row.attempt_state not in TERMINAL_TASK_STATES:
         return worker_pb2.Worker.DesiredAttempt(attempt_uid=row.attempt_uid, run=worker_pb2.Worker.AttemptSpec())
     if row.attempt_state == job_pb2.TASK_STATE_PREEMPTED:

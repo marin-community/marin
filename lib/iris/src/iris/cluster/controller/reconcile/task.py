@@ -276,14 +276,7 @@ def _finalize_superseded_attempt(
     current_attempt_id: int,
     now_ms: int,
 ) -> None:
-    """Stamp a superseded attempt's finish time on a terminal worker observation.
-
-    A preempted worker-bound attempt keeps ``finished_at_ms`` NULL (and its
-    capacity charge) until the worker confirms termination, even after a retry
-    assigns the task a newer attempt. The worker's terminal or MISSING report for
-    the old attempt finalizes only that attempt; the task and its newer attempt
-    are untouched. Nonterminal reports for an old attempt are stale and dropped.
-    """
+    """Finalize a superseded attempt after a terminal worker observation."""
     stale_state = state.attempt_state(update.task_id, update.attempt_id)
     if stale_state is None:
         return
@@ -332,8 +325,7 @@ def apply_one_transition(
     if task is None:
         return None
 
-    # A superseded attempt's report only finalizes that attempt; the task row and
-    # its newer attempt are independent of it, so this precedes every task guard.
+    # Handle old-attempt reports before guards that apply to the current task.
     if update.attempt_id != task.current_attempt_id:
         _finalize_superseded_attempt(state, snapshot, update, task.current_attempt_id, now_ms)
         return None
