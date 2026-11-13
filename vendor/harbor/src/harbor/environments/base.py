@@ -9,6 +9,7 @@ import time
 import uuid
 import warnings
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from collections.abc import AsyncIterator, Generator, Mapping, Sequence
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Literal
@@ -83,6 +84,16 @@ class ContainerRegistryThrottledError(Exception):
 
 class NetworkLockdownError(RuntimeError):
     """The agent's network policy could not be applied or confirmed after task setup."""
+
+
+@dataclass(frozen=True)
+class NetworkLockdown:
+    """When the agent's network policy was requested and applied (UTC ISO times), and the probe that confirmed it."""
+
+    requested_at: str
+    applied_at: str
+    probe: str
+    probe_exit_code: int
 
 
 class SandboxDiskFullError(RuntimeError):
@@ -756,8 +767,12 @@ class BaseEnvironment(ABC):
     async def collect_runtime_logs(self) -> None:
         """Copy declared runtime output into the actor before grading or recovery."""
 
-    async def apply_agent_network_policy(self) -> None:
-        """Switch from the task-setup network to the agent's, for backends that start setup with more access."""
+    async def apply_agent_network_policy(self) -> NetworkLockdown | None:
+        """Switch from the task-setup network to the agent's, for backends that start setup with more access.
+
+        Returns the lockdown record, or ``None`` when the setup network already was the agent's.
+        """
+        return None
 
     async def quiesce_agent_commands(self) -> None:
         """Stop retained agent commands before granting verifier-only authority."""

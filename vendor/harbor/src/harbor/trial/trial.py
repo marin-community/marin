@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import dataclasses
 import hashlib
 import json
 import logging
@@ -1356,22 +1357,30 @@ class Trial(ABC):
         self.result.environment_setup = TimingInfo(started_at=self._now())
         try:
             await self._start_agent_environment()
-            await self._run_task_setup()
-            await self.agent_environment.apply_agent_network_policy()
+            setup_record = await self._run_task_setup()
+            lockdown = await self.agent_environment.apply_agent_network_policy()
+            if setup_record is not None and lockdown is not None:
+                # Each trial records its own lockdown time and probe beside its setup output.
+                setup_record["network_lockdown"] = dataclasses.asdict(lockdown)
+                self._write_task_setup_record(setup_record)
         finally:
             self.result.environment_setup.finished_at = self._now()
 
-    async def _run_task_setup(self) -> None:
+    def _write_task_setup_record(self, record: dict) -> None:
+        (self.paths.trial_dir / TASK_SETUP_RECORD).write_text(json.dumps(record, indent=1))
+
+    async def _run_task_setup(self) -> dict | None:
         """Run the task's hidden ``task_setup/`` step as root before the agent sees the environment.
 
         ``files/`` is copied onto ``/`` and ``setup.sh`` runs from ``/``, matching an image build's
         ``COPY`` then ``RUN``. The setup inputs are removed afterwards, and the output is written only
         to the host trial directory (``task_setup.json``). A nonzero exit or a timeout is a
-        ``TaskSetupError``: the agent never ran, so the trial is not a model failure.
+        ``TaskSetupError``: the agent never ran, so the trial is not a model failure. Returns the record,
+        or ``None`` when the task has no setup step.
         """
         source = self.task.paths.task_setup_dir
         if not source.is_dir():
-            return
+            return None
         if not (source / "setup.sh").is_file():
             raise ValueError(f"{source} has no setup.sh")
         if resolve_task_verifier_mode(self.task.config) == VerifierEnvironmentMode.SEPARATE:
@@ -1393,20 +1402,17 @@ class Trial(ABC):
                 raise TaskSetupError(f"Task setup timed out after {timeout_sec} seconds") from error
         finally:
             await environment.exec(f"rm -rf {guest}", cwd="/", user="root")
-        (self.paths.trial_dir / TASK_SETUP_RECORD).write_text(
-            json.dumps(
-                {
-                    "exit_code": result.return_code,
-                    "stdout": (result.stdout or "")[-TASK_SETUP_OUTPUT_LIMIT:],
-                    "stderr": (result.stderr or "")[-TASK_SETUP_OUTPUT_LIMIT:],
-                },
-                indent=1,
-            )
-        )
+        record = {
+            "exit_code": result.return_code,
+            "stdout": (result.stdout or "")[-TASK_SETUP_OUTPUT_LIMIT:],
+            "stderr": (result.stderr or "")[-TASK_SETUP_OUTPUT_LIMIT:],
+        }
+        self._write_task_setup_record(record)
         if result.return_code:
             raise TaskSetupError(
                 f"Task setup exited {result.return_code}: {(result.stderr or result.stdout or '')[-500:]}"
             )
+        return record
 
     async def _start_agent_environment(self) -> None:
         assert self._service_tasks is not None

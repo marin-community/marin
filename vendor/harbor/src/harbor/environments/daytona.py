@@ -4,6 +4,7 @@
 """Harbor's single-container adapter for Shellbox Daytona machines."""
 
 import asyncio
+import datetime
 import re
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
@@ -16,6 +17,7 @@ from harbor.environments.base import (
     BASE_ENVIRONMENT_ARGUMENTS,
     BaseEnvironment,
     ExecResult,
+    NetworkLockdown,
     NetworkLockdownError,
 )
 from harbor.environments.capabilities import (
@@ -75,6 +77,10 @@ def task_snapshot_source(docker_image: str | None, environment_dir: Path) -> Reg
 # Seconds the post-lockdown probe waits for a TCP connection that must not succeed.
 LOCKDOWN_PROBE_TIMEOUT = 10
 LOCKDOWN_PROBE = re.compile(r"[A-Za-z0-9.-]+:[0-9]{1,5}")
+
+
+def _utc_now() -> str:
+    return datetime.datetime.now(datetime.UTC).isoformat()
 
 
 def machine_spec(task_env_config, environment_dir: Path, env: dict[str, str], *, cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int = 0) -> MachineSpec:
@@ -268,15 +274,17 @@ class DaytonaEnvironment(BaseEnvironment):
                 )
             raise
 
-    async def apply_agent_network_policy(self) -> None:
+    async def apply_agent_network_policy(self) -> NetworkLockdown | None:
         """Apply the agent policy after an open setup, then require that the probe host is unreachable."""
         if self.setup_network_policy is None:
-            return
+            return None
         if self.machine is None:
             raise RuntimeError("Daytona environment is not running")
         assert self.agent_network_policy is not None and self.lockdown_probe is not None
+        requested_at = _utc_now()
         try:
             await self.machine.update_network(self.agent_network_policy)
+            applied_at = _utc_now()
         except Exception as error:
             raise NetworkLockdownError("Could not apply the agent network policy") from error
         host, port = self.lockdown_probe.rsplit(":", 1)
@@ -290,6 +298,12 @@ class DaytonaEnvironment(BaseEnvironment):
             raise NetworkLockdownError(
                 f"{self.lockdown_probe} is still reachable after the agent network policy"
             )
+        return NetworkLockdown(
+            requested_at=requested_at,
+            applied_at=applied_at,
+            probe=self.lockdown_probe,
+            probe_exit_code=probe.return_code,
+        )
 
     @property
     def requires_agent_quiescence_for_verifier(self) -> bool:

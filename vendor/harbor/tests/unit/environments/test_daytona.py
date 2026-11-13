@@ -856,12 +856,14 @@ async def test_open_setup_switches_to_the_agent_policy_and_requires_the_probe_to
     adapter, probes = _lockdown_adapter(tmp_path, probe_exit_code, machine, **LOCKDOWN)
 
     assert adapter.factory.network_policy.mode == "unrestricted"
-    await adapter.apply_agent_network_policy()
+    lockdown = await adapter.apply_agent_network_policy()
 
     assert [policy.parameters() for policy in machine.policies] == [
         {"domain_allow_list": "iris.oa.dev"}
     ]
     assert probes == ["timeout 10 bash -c 'exec 3<>/dev/tcp/pypi.org/443'"]
+    assert (lockdown.probe, lockdown.probe_exit_code) == ("pypi.org:443", probe_exit_code)
+    assert lockdown.requested_at <= lockdown.applied_at
 
 
 async def test_a_reachable_probe_after_lockdown_is_a_lockdown_error(tmp_path):
@@ -886,7 +888,7 @@ async def test_without_a_setup_policy_the_creation_policy_stays_and_nothing_chan
         tmp_path, 0, machine, network_policy=LOCKDOWN["network_policy"]
     )
 
-    await adapter.apply_agent_network_policy()
+    assert await adapter.apply_agent_network_policy() is None
 
     assert adapter.factory.network_policy.mode == "domain_allow_list"
     assert machine.policies == [] and probes == []

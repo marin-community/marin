@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from harbor.environments.base import ExecResult
+from harbor.environments.base import ExecResult, NetworkLockdown
 from harbor.models.task.task import Task
 from harbor.models.trial.paths import TrialPaths
 from harbor.trial.errors import TaskSetupError
@@ -116,6 +116,7 @@ def test_setup_runs_after_start_and_before_the_agent_network_lockdown(tmp_path):
 
     async def setup():
         calls.append("task_setup")
+        return None
 
     trial._emit = lambda _event: _noop()
     trial._result = SimpleNamespace(environment_setup=None)
@@ -130,6 +131,35 @@ def test_setup_runs_after_start_and_before_the_agent_network_lockdown(tmp_path):
 
     asyncio.run(trial._setup_agent_environment())
     assert calls == ["start", "task_setup", "network_lockdown"]
+
+
+def test_the_lockdown_times_and_probe_are_added_to_the_task_setup_record(tmp_path):
+    trial = _trial(tmp_path, RecordingEnvironment(ExecResult(return_code=0, stdout="ok", stderr="")))
+    lockdown = NetworkLockdown(
+        requested_at="2026-11-13T07:08:40+00:00",
+        applied_at="2026-11-13T07:08:41+00:00",
+        probe="pypi.org:443",
+        probe_exit_code=1,
+    )
+    trial._emit = lambda _event: _noop()
+    trial._result = SimpleNamespace(environment_setup=None)
+    trial._now = lambda: None
+    trial._start_agent_environment = _noop
+
+    async def apply():
+        return lockdown
+
+    trial.agent_environment.apply_agent_network_policy = apply
+
+    asyncio.run(trial._setup_agent_environment())
+    record = json.loads((trial.paths.trial_dir / TASK_SETUP_RECORD).read_text())
+    assert record["stdout"] == "ok"
+    assert record["network_lockdown"] == {
+        "requested_at": "2026-11-13T07:08:40+00:00",
+        "applied_at": "2026-11-13T07:08:41+00:00",
+        "probe": "pypi.org:443",
+        "probe_exit_code": 1,
+    }
 
 
 async def _noop():
