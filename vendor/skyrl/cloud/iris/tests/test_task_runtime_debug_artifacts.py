@@ -48,6 +48,7 @@ def test_supervisors_share_worker_diagnostics_with_uploader(
     )
     args = Namespace(
         ray_log_dir=None,
+        ray_resources={},
         rendezvous_dir=str(tmp_path),
         rendezvous_timeout=1,
         ray_spill_backend=RaySpillBackend.LOCAL,
