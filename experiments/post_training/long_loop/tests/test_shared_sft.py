@@ -33,6 +33,7 @@ def test_native_sft_retains_sources_and_token_schedule_while_using_shared_defaul
     context = StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=step.runtime_args)
     pod = step.build_config(context)
     config = pod.train_config
+    assert pod.env_vars["XLA_FLAGS"].split() == resolved["sft"]["xla_flags"]
     assert config.optimizer == SNOWBALL_SFT.optimizer
     assert config.train_seq_len == resolved["sft"]["seq_len"]
     assert config.trainer.train_batch_size == resolved["sft"]["batch_size"]

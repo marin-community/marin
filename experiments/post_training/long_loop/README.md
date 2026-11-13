@@ -368,3 +368,12 @@ CP32/EP8 mesh on 256 H100s. Adam and the pinned historical mixture remain unchan
 The archive includes the population truncation/padding census and an exact-loader
 replay of the committed SFT sample, with per-source counts, token hashes, loss
 coverage and estimates of packing efficiency.
+
+Experiment 2 sets `sft.xla_flags: [--xla_gpu_shard_autotuning=false]` for
+training and its native validation callbacks. Smoke runs completed updates but
+blocked in XLA ConfigAssigner's cross-host autotune-result exchange during
+validation. Each host now autotunes independently; compilation, autotuning and
+CUDA graphs stay enabled. Cold tuning work may increase. The requested flags
+and accelerator environment are recorded in `consumed-config.json`; the run
+spec and that receipt are archived. This setting does not change the RL or
+final policy-evaluation runtime.

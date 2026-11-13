@@ -96,7 +96,13 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.checkpoints import HfToLevanterCheckpoint
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache
 from marin.processing.tokenize.tokenize import tokenize as run_tokenize
-from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, apply_output_path, run_levanter_train_lm
+from marin.training.training import (
+    LevanterCheckpoint,
+    TrainLmOnPodConfig,
+    apply_output_path,
+    resolve_training_env,
+    run_levanter_train_lm,
+)
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import Duration
 
@@ -273,6 +279,7 @@ def _levanter_pod_config(
         ),
         resources=resources,
         output_path=ctx.output_path,
+        env_vars={"XLA_FLAGS": " ".join(spec.xla_flags)} if spec.xla_flags else None,
         auto_build_caches=data_config.auto_build_caches,
     )
 
@@ -281,12 +288,29 @@ def _levanter_train_job(
     pod_config: TrainLmOnPodConfig, *, task_timeout_seconds: int = DEFAULT_SFT_TASK_TIMEOUT_SECONDS
 ) -> None:
     """Dispatch a Levanter ``train_lm`` config as its own Fray training job."""
+    environment = resolve_training_env(pod_config.env_vars, pod_config.resources)
+    environment.update(
+        {
+            key: os.environ[key]
+            for key in ("MARIN_PREFIX", "MARIN_TEMP_PREFIX", "JAX_COMPILATION_CACHE_DIR")
+            if key in os.environ
+        }
+    )
+    if isinstance(pod_config.resources.device, GpuConfig):
+        environment["JAX_PLATFORMS"] = "cuda,cpu"
+    elif isinstance(pod_config.resources.device, CpuConfig):
+        environment["JAX_PLATFORMS"] = "cpu"
     if pod_config.output_path is not None:
         pod_config = replace(pod_config, train_config=apply_output_path(pod_config.train_config, pod_config.output_path))
         (StoragePath(pod_config.output_path) / "consumed-config.json").write_text(
             json.dumps(
                 {
                     "format": "SFTSpec",
+                    "dispatch_environment": {
+                        name: environment[name]
+                        for name in ("XLA_FLAGS", "JAX_PLATFORMS", "JAX_COMPILATION_CACHE_DIR")
+                        if name in environment
+                    },
                     "train_config": draccus.encode(pod_config.train_config),
                     "resources": draccus.encode(pod_config.resources),
                     "output_path": pod_config.output_path,
@@ -294,15 +318,6 @@ def _levanter_train_job(
                 indent=2,
             )
         )
-    environment = {
-        key: os.environ[key]
-        for key in ("MARIN_PREFIX", "MARIN_TEMP_PREFIX", "JAX_COMPILATION_CACHE_DIR")
-        if key in os.environ
-    }
-    if isinstance(pod_config.resources.device, GpuConfig):
-        environment["JAX_PLATFORMS"] = "cuda,cpu"
-    elif isinstance(pod_config.resources.device, CpuConfig):
-        environment["JAX_PLATFORMS"] = "cpu"
     remote(
         run_levanter_train_lm,
         resources=pod_config.resources,
@@ -578,6 +593,8 @@ class SFTSpec:
     num_train_steps: int | None = None
     num_train_epochs: int | None = None
     hf_save_dtype: str | None = None
+    xla_flags: Sequence[str] = ()
+    """Explicit compiler flags for the training process and its validation callbacks."""
     wandb_project: str = "marin-sft-launcher"
     checkpointer: CheckpointerConfig = field(
         default_factory=lambda: CheckpointerConfig(

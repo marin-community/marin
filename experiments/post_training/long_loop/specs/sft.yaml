@@ -1,5 +1,7 @@
 format: sft_spec
 profile: snowball_h100
+xla_flags:
+- --xla_gpu_shard_autotuning=false
 pack: true
 target_positions: 50063212544
 source_step_positions: 67108864
