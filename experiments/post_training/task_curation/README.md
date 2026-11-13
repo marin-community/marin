@@ -414,7 +414,10 @@ advertise an iris.region label. A cluster target on these local children would
 request another federation handoff. The immutable public checkpoint, serving image, precision, model
 YAML digest, explicit worker setup scripts, sampling settings, and endpoint identity participate in reviewer
 evidence and request caches. The existing relay retains its separate unverified
-checkpoint identity. The upstream vLLM image needs Git installed before Marin\nworker imports; the explicit setup command is part of local endpoint identity.\n\nPayload revision 4 omits top-level execution requirements and actor/grader lock
+checkpoint identity. The upstream vLLM image needs Git installed before Marin
+worker imports; the explicit setup command is part of local endpoint identity.
+
+Payload revision 4 omits top-level execution requirements and actor/grader lock
 artifact locations. Deployment runtime is retained in audit hashes rather than
 appended to the content rubric. Calibration-only changes to these fields reuse
 identical reviewer requests. Public instructions, grader settings, images and
@@ -436,3 +439,68 @@ failed and preempted attempts remain in versioned output paths. Each source
 completion writes task-level observations, computed Result and repair guidance,
 and a campaign record identifying serving jobs and pending qualification. This
 command does not publish datasets or alter Atlas admission.
+
+### Parallel retained-batch review
+
+Use `full_qc_shards` when a source needs more than one model replica. A worker
+owns original 32-task batches whose `(batch_offset + batch_index) % shard_count`
+equals its `shard_index`. All workers use the same immutable work manifest and
+shard count. Set each source's `batch_offset` to the cumulative number of batches
+in earlier manifest rows. The last batch may contain fewer than 32 tasks.
+
+Each manifest row has these fields:
+
+```json
+{
+  "inputs_path": "s3://bucket/contracts/source/v1",
+  "batch_output_path": "s3://bucket/reviews/source/v1",
+  "shard_output_path": "s3://bucket/shards/source/v1",
+  "assembly_output_path": "s3://bucket/assembled/source/v1",
+  "batch_offset": 0,
+  "prompt_budget": 512000
+}
+```
+
+Wrap the rows in a JSON list. `batch_output_path` may reuse an existing full-QC
+campaign: source sharding preserves the batch and exact-request identities.
+`prompt_budget` sets both the initial and retry character budgets for that source;
+changing it changes the reviewer identity. Keep the pinned model, rubric and
+sampling settings unchanged when resuming.
+
+Run one batch-priority CPU coordinator on cw-us-east-08a for every shard index
+from zero through `shard_count - 1`, with a three-day timeout. Its local GLM
+children also use batch priority and three-day timeouts:
+
+```bash
+uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.full_qc_shards review \
+  --work s3://bucket/campaign/shard-work.json --shard-index 0 --shard-count 48 \
+  --max-passes 3 --review-cache s3://bucket/campaign/request-cache \
+  --campaign-output s3://bucket/campaign/worker-000 --run
+```
+
+Each pass retries invalid or unavailable observations under the pinned review
+protocol. Valid observations in partially completed batches are retained,
+successful batches are reused, and every attempt remains available. A shard
+record reports its attempted and valid counts; it makes no source-wide FULL claim.
+First-pass and final status counts are retained, and the assembly campaign
+reports the final invalid rate per source separately from its issue rate.
+The `latest.json` index pins an immutable shard record by SHA-256.
+
+Assemble completed sources on CPU in the data's cluster, also at batch priority
+with a three-day timeout. Assembly makes no model calls and skips sources still
+missing shard records:
+
+```bash
+uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.full_qc_shards assemble \
+  --work s3://bucket/campaign/shard-work.json --shard-count 48 \
+  --campaign-output s3://bucket/campaign/assembly --run
+```
+
+Assembly requires evidence for every distinct retained task and verifies every
+shard, receipt digest, reviewer identity, task/runtime hash and batch assignment
+before writing the source result. Missing, overlapping or foreign evidence is
+rejected. Invalid observations
+remain unavailable in the computed Result and leave `coverage_complete=false`.
+Execution qualification remains pending.
