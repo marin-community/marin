@@ -10,6 +10,7 @@ from experiments.post_training.task_curation.admission_binding import AdmissionC
 from experiments.post_training.task_curation.receipt_shards import read_receipt_shards
 from experiments.post_training.task_curation.registry import read_registry_json
 
+
 @cache
 def admission_census_receipts() -> dict[str, AdmissionCensusReceipt]:
     return read_receipt_shards(

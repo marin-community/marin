@@ -30,7 +30,9 @@ class AdmissionCensusReceipt(BaseModel):
             self.retained_tasks != self.input.measured_tasks
             or self.runnable_grader_tasks + self.no_grader_tasks != self.retained_tasks
             or sum(self.grader_kinds.values()) != self.retained_tasks
+            or self.grader_kinds.get("none", 0) != self.no_grader_tasks
             or sum(self.missing_grader_reasons.values()) != self.no_grader_tasks
+            or any(count < 0 for count in (*self.grader_kinds.values(), *self.missing_grader_reasons.values()))
         ):
             raise ValueError("Admission census does not account for its complete input population")
         return self
