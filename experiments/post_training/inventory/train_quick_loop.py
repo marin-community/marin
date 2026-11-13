@@ -12,6 +12,7 @@ from enum import StrEnum
 
 import click
 import yaml
+from click.core import ParameterSource
 from iris.rpc import job_pb2
 from levanter.utils.mesh import MeshConfig
 from marin.execution.artifact import Artifact
@@ -25,6 +26,7 @@ from marin.rl.skyrl import (
     ArtifactHfModel,
     IrisSkyRLExecution,
     SkyRLRetentionPolicy,
+    SkyRLRun,
     SkyRLSpec,
     SkyRLTopology,
     skyrl_step,
@@ -73,6 +75,14 @@ class Stage(StrEnum):
     ALL = "all"  # SFT from the pre-trained base, then RL from that SFT
     SFT = "sft"  # SFT only
     RL = "rl"  # RL only, from the frozen Datakit SFT checkpoint
+
+
+# Options a stage never reads; passing one is rejected so a setting cannot be silently dropped.
+UNUSED_OPTIONS = {
+    Stage.ALL: (),
+    Stage.SFT: ("rl_steps", "export_hf", "reproducible_serving"),
+    Stage.RL: ("sft_steps",),
+}
 
 
 def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLRecipe:
@@ -188,7 +198,7 @@ def build_run(
     sft_steps: int = DEFAULT_SFT_STEPS,
     export_hf: bool = False,
     reproducible_serving: bool = False,
-) -> ArtifactStep:
+) -> ArtifactStep[SkyRLRun] | ArtifactStep[LevanterCheckpoint]:
     """Bind the stage's model source, selected canonical tasks and terminal outputs.
 
     Args:
@@ -300,7 +310,12 @@ def main(
     rl_steps: int,
     export_hf: bool,
     reproducible_serving: bool,
-) -> ArtifactStep:
+) -> ArtifactStep[SkyRLRun] | ArtifactStep[LevanterCheckpoint]:
+    context = click.get_current_context()
+    for option in UNUSED_OPTIONS[Stage(stage)]:
+        if context.get_parameter_source(option) is not ParameterSource.DEFAULT:
+            flag = f"--{option.replace('_', '-')}"
+            raise click.BadParameter(f"{flag} has no effect with --stage {stage}", param_hint=flag)
     name = user_owned_name(ARTIFACT_NAME)
     selection_uri = selection_uri.rstrip("/")
     _, marker, identity = selection_uri.rpartition(f"/{SELECTION_PREFIX}/")
