@@ -2105,6 +2105,7 @@ provides-extras = ["runtime", "qemu", "shellsim", "sotopia", "analysis", "archiv
 test = [
     { name = "anthropic", specifier = ">=1.11.0" },
     { name = "harbor", extras = ["shellsim"] },
+    { name = "marin-taskcompendium", editable = "../../lib/taskcompendium" },
     { name = "mini-swe-agent", specifier = "==2.1.0" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-asyncio", specifier = ">=1.2.0" },
@@ -3192,6 +3193,7 @@ test = [
     { name = "pytest-json-report", specifier = ">=1.5" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "setuptools" },
 ]
 
 [[package]]

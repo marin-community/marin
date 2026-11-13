@@ -314,6 +314,61 @@ verdict publication ([#11240](https://github.com/marin-community/marin/issues/11
 Repair the budget nesting in a new task release and preserve partial output;
 do not alter a running dataset's grading semantics.
 
+## Making a dataset Daytona-safe
+
+A dataset is Daytona-safe when it runs on the RL org as configured: its tasks
+require at most `DAYTONA_SAFE_SNAPSHOT_LIMIT` (ten) unique environments, and no
+task's declared execution requirements are refused by
+`shellbox.machine.check_execution_requirements` with the Daytona capability set
+(`{shell, filesystem, python, process, network, git_repository}`; no Docker-in-
+Docker, no privileged mode, no host mounts). The count and the verdict come from
+the tasks' own specs. Never substitute a shared image for an environment a task
+specifies: the spec is part of the data.
+
+Only these options are faithful. Each ends with a new dataset version and a
+re-measurement; none changes a task's own instruction, files or grader.
+
+1. **Lower onto a few fixed digest-pinned bases.** Keep the archived recipe's
+   `RUN` and `COPY` behavior by emitting a TaskCompendium spec whose resources
+   carry the copied files and whose `environment_requirements.setup_commands`
+   stage them, as `experiments/post_training/task_curation/calibforge_rebuild.py`
+   does. Pin every base by digest; a floating tag fails spec validation. A step
+   the lowering cannot express (a multi-stage build, a user creation, an
+   unsupported interpreter) defers the task instead of approximating it.
+2. **Normalize the machine shape.** Identity includes the machine resources, so
+   declare one shape (for example 2 CPU / 4096 MB / 10240 MB) for task and
+   verifier machines. Differing shapes multiply snapshot names without changing
+   the environment.
+3. **Keep the archive's environment in the converted task.** A converted task
+   runs in the environment its archive specifies:
+   `environment_fidelity.environment_unused` rejects a spec that replaces the
+   archive's recipe with another image, and a replayed recipe must lower onto the
+   digest-pinned base with the archive's steps, working directory and variables.
+   A conversion that changes the environment is a rewrite, so it ships as a new
+   dataset version whose declaration records the basis.
+4. **Build the archived environment as the task image.** When lowering cannot
+   express the recipe and the image is available to the RL org, build it, pin the
+   resulting digest, and count each distinct image as one identity.
+
+Re-measure with the production path, not a reimplementation:
+`experiments/post_training/task_curation/daytona_identity.py` materializes each
+task's environment and builds native-task `MachineSpec` values through Harbor's
+mapping (`harbor.environments.daytona.machine_spec`). Lowered TaskCompendium specs
+use their declared agent and grader environments. Both paths derive names through
+`shellbox.backends.daytona.snapshot.snapshot_request_for_spec(...).name`; lowered
+specs also check the factory's environment capabilities and reject unresolved
+build contexts. Record the resulting count, the ten-snapshot
+threshold and the basis on the source; the verdict
+(`finestore.rl.curation.daytona_verdict`) is derived from them. Nothing in this
+procedure creates or deletes a snapshot; cleanup stays with the operator
+procedure above.
+
+Publish the converted cohort to the `open-athena` Hugging Face org as a **private**
+repository (`experiments/post_training/task_curation/calibforge_publish.py`), with a
+card that states it is private pending release, and read the upload back through the
+same login to compare hashes. Keep the Atlas entry pinned to that repository and
+revision.
+
 ## Source provenance
 
 Transferred from MarinSkyRL revision
