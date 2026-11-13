@@ -8,6 +8,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 
 import pyarrow as pa
@@ -40,7 +41,12 @@ from experiments.post_training.task_curation.full_qc_artifacts import (
 )
 from experiments.post_training.task_curation.full_qc_inputs import InputConfig, prepare_inputs
 from experiments.post_training.task_curation.full_qc_repair import OwnedServingClient, repair_source
-from experiments.post_training.task_curation.full_qc_review import assemble_shards, review_inputs, review_shard
+from experiments.post_training.task_curation.full_qc_review import (
+    assemble_shards,
+    contract_batches,
+    review_inputs,
+    review_shard,
+)
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
 from experiments.post_training.task_curation.retention_plan import RetentionPlan
@@ -419,7 +425,7 @@ def test_repair_overlay_preserves_primary_reviews_and_records_both_origins(qc_in
     primary = FullQCReview.raw_load(primary.path)
     before = {p: p.read_bytes() for p in (tmp_path / "primary").rglob("*") if p.is_file()}
     repair = ReviewService(max_tokens=8192, retry_max_tokens=16384, unavailable_task_ids=frozenset({"kept"}))
-    overlay = repair_source(primary, repair, rubric, str(tmp_path / "repair"))
+    overlay = repair_source(primary, repair, rubric, str(tmp_path / "repair"), batch_workers=2)
     rows = {r["task_id"]: r for r in pq.read_table(overlay.records_path).to_pylist()}
     original = {r["task_id"]: r for r in pq.read_table(primary.records_path).to_pylist()}
     assert overlay.coverage_complete
@@ -437,7 +443,7 @@ def test_repair_overlay_preserves_primary_reviews_and_records_both_origins(qc_in
         assert row["task_sha256"] == original[row["task_id"]]["task_sha256"]
         assert row["runtime_sha256"] == original[row["task_id"]]["runtime_sha256"]
     assert before == {p: p.read_bytes() for p in before}
-    replay = repair_source(primary, replace(repair, available=False), rubric, str(tmp_path / "repair"))
+    replay = repair_source(primary, replace(repair, available=False), rubric, str(tmp_path / "repair"), batch_workers=2)
     assert replay.result == overlay.result
     assert {r["task_id"]: r["review"] for r in pq.read_table(replay.records_path).to_pylist()} == {
         task_id: row["review"] for task_id, row in rows.items()
@@ -449,11 +455,11 @@ def test_repair_overlay_keeps_failed_repairs_incomplete_until_provider_recovers(
     rubric = ReviewRubric("quality", "1", ("Check the complete task contract.",))
     primary = review_inputs(prepare_inputs(config), ReviewService(available=False), rubric, str(tmp_path / "primary"))
     repair = ReviewService(max_tokens=8192, retry_max_tokens=16384, available=False)
-    incomplete = repair_source(primary, repair, rubric, str(tmp_path / "repair"))
+    incomplete = repair_source(primary, repair, rubric, str(tmp_path / "repair"), batch_workers=2)
     assert not incomplete.coverage_complete
     assert incomplete.result.reviewed == 0
     assert incomplete.result.unavailable_count == 2
-    complete = repair_source(primary, replace(repair, available=True), rubric, str(tmp_path / "repair"))
+    complete = repair_source(primary, replace(repair, available=True), rubric, str(tmp_path / "repair"), batch_workers=2)
     assert complete.coverage_complete
     assert complete.result.reviewed == 2
     assert file_sha256(StoragePath(incomplete.records_path)) == incomplete.records_sha256
@@ -475,7 +481,7 @@ def test_repair_overlay_rejects_changed_primary_evidence_before_inference(qc_inp
         primary = primary.model_copy(update={"records_sha256": file_sha256(StoragePath(str(path)))})
     repair = ReviewService(max_tokens=8192, retry_max_tokens=16384)
     with pytest.raises(ValueError, match=r"observations changed|exact retained contract"):
-        repair_source(primary, repair, rubric, str(tmp_path / "repair"))
+        repair_source(primary, repair, rubric, str(tmp_path / "repair"), batch_workers=2)
     assert not (tmp_path / "repair").exists()
 
 
@@ -500,7 +506,7 @@ def test_owned_repair_client_follows_new_child_registration_after_preemption(rev
         ]
     )
     monkeypatch.setattr(full_qc_repair, "iris_ctx", lambda: SimpleNamespace(client=registry))
-    client = OwnedServingClient(root, "fixture")
+    client = OwnedServingClient((root,), "fixture")
     body = {
         "model": "fixture",
         "messages": [{"role": "user", "content": json.dumps({"id": "task"})}],
@@ -520,3 +526,85 @@ def test_owned_repair_client_follows_new_child_registration_after_preemption(rev
         assert client.complete(body) == first
         assert replacement.requests == [body]
     assert review_server.requests == [body]
+
+
+def test_concurrent_repair_preserves_primary_uncertainty_and_replays_completed_receipts(multi_batch_inputs, tmp_path):
+    rubric = ReviewRubric("quality", "1", ("Check the complete task contract.",))
+    batches = list(contract_batches(multi_batch_inputs))
+    invalid = frozenset(batch.tasks[0].id for batch in batches[:2])
+    primary = review_inputs(
+        multi_batch_inputs,
+        ReviewService(invalid_task_ids=invalid, confidence=Confidence.LOW),
+        rubric,
+        str(tmp_path / "primary"),
+    )
+    original = {row["task_id"]: row for row in pq.read_table(primary.records_path).to_pylist()}
+    repair = ReviewService(max_tokens=8192, retry_max_tokens=16384)
+    rendezvous = Barrier(2, timeout=10)
+
+    class ConcurrentRepair:
+        identity = repair.identity
+
+        def review(self, tasks, rubric, *, originals=None, cached=None):
+            assert {task.id for task in tasks} <= invalid
+            rendezvous.wait()
+            return repair.review(tasks, rubric, originals=originals, cached=cached)
+
+        def read_cache(self, batches, rubric):
+            return repair.read_cache(batches, rubric)
+
+    output = str(tmp_path / "repair")
+    result = repair_source(primary, ConcurrentRepair(), rubric, output, batch_workers=2)
+    rows = {row["task_id"]: row for row in pq.read_table(result.records_path).to_pylist()}
+    assert set(rows) == set(original)
+    assert result.coverage_complete
+    assert result.result.reviewed == 2
+    assert result.result.uncertain_count == 64
+    for task_id in set(original) - invalid:
+        assert rows[task_id]["review"] == original[task_id]["review"]
+        assert json.loads(rows[task_id]["reviewer"]) == primary.reviewer
+    replay = repair_source(primary, replace(repair, available=False), rubric, output, batch_workers=2)
+    assert replay.result == result.result
+    assert {row["task_id"]: row["review"] for row in pq.read_table(replay.records_path).to_pylist()} == {
+        task_id: row["review"] for task_id, row in rows.items()
+    }
+    assert file_sha256(StoragePath(primary.records_path)) == primary.records_sha256
+
+
+def test_owned_repair_pool_spreads_requests_and_skips_unregistered_or_foreign_workers(review_server, monkeypatch):
+    roots = ("/owner/first", "/owner/second")
+    first_address = f"http://127.0.0.1:{review_server.server_port}"
+    with running_review_server() as second:
+        second_address = f"http://127.0.0.1:{second.server_port}"
+        registry = ServingRegistry(
+            [
+                controller_pb2.Controller.Endpoint(
+                    name=f"/serve/inference-{index}",
+                    task_id=root + "/inference-child/0",
+                    address=address,
+                    metadata={"kind": "marin-serve", "model": "fixture"},
+                )
+                for index, (root, address) in enumerate(
+                    (
+                        *zip(roots, (first_address, second_address), strict=True),
+                        ("/foreign/worker", "http://127.0.0.1:1"),
+                    )
+                )
+            ]
+        )
+        monkeypatch.setattr(full_qc_repair, "iris_ctx", lambda: SimpleNamespace(client=registry))
+        client = OwnedServingClient(roots, "fixture")
+        for index in range(16):
+            body = {
+                "model": "fixture",
+                "messages": [{"role": "user", "content": json.dumps({"id": f"task-{index}"})}],
+                "tool_choice": {"function": {"name": "review_task"}},
+            }
+            client.complete(body)
+        assert review_server.requests and second.requests
+        assert len(review_server.requests) + len(second.requests) == 16
+        registry.endpoints = registry.endpoints[1:]
+        review_server.review_available = False
+        client.complete(body)
+        assert second.requests[-1] == body
+        assert len(review_server.requests) + len(second.requests) == 17
