@@ -68,11 +68,10 @@ their current contents. Memory and disk round up to whole GiB. The name is
 `shellbox-` plus the first 40 hex characters of
 `sha256(image_source_key(source) + json(resources))`.
 
-`DaytonaTaskEnvironment` takes task-level inputs (an environment directory with
-an optional registry image, workdir, environment, internet policy and resources)
-and produces the `MachineSpec` and snapshot identity. Harbor supplies those
-values from its task configuration and does not select sources, round resources
-or name snapshots itself.
+`snapshot_request_for_spec` derives the snapshot identity from a `MachineSpec`,
+and `SnapshotRequest.as_dict`/`from_dict` are the JSON interchange for preflight.
+Harbor builds that machine spec from its task configuration and does not select
+sources, round resources or name snapshots itself.
 
 `shellbox-daytona-snapshots` inventories an account, compares it with a required
 set, creates missing snapshots and reclaims stale ones. See the
