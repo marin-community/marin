@@ -676,7 +676,23 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     }
 
 
-def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "output_path,ttl_days,expected",
+    [
+        (
+            "s3://marin-us-east-02a/marin/users/alice/run",
+            14,
+            "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/alice/run",
+        ),
+        ("s3://marin-us-east-08a/tmp/ttl=3d/alice/run", 3, "s3://marin-us-east-08a/tmp/ttl=3d/alice/run"),
+    ],
+)
+def test_skyrl_temporary_run_path_preserves_the_requested_lifecycle_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+    output_path: str,
+    ttl_days: int,
+    expected: str,
+) -> None:
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
     monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
     monkeypatch.setattr(
@@ -684,13 +700,7 @@ def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytes
     )
     cluster_config.reset_data_config_cache()
     try:
-        assert (
-            skyrl_temporary_run_path(
-                "s3://marin-us-east-02a/marin/users/alice/run",
-                ttl_days=14,
-            )
-            == "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/alice/run"
-        )
+        assert skyrl_temporary_run_path(output_path, ttl_days=ttl_days) == expected
     finally:
         cluster_config.reset_data_config_cache()
 
