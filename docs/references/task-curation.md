@@ -1266,6 +1266,14 @@ SAMPLE and FULL admission require it and a population-complete resource receipt.
 Harbor export writes these values into the task package. Trials must use them
 without resource overrides or timeout multipliers.
 
+Native Harbor ingestion and the TaskTrove archive wrapper lift all five explicit
+`task.toml` limits into `execution_requirements`. Partial declarations remain in
+the original package; ingestion supplies no defaults. An existing top-level
+declaration that conflicts with an explicit source limit is an error. Frozen
+releases need a separately versioned projection preserving task IDs, provenance
+and resource bytes. Only an identical content-review payload can reuse a review;
+reconversion can change importer provenance even when task files stay identical.
+
 Calibration runs inside the full-population oracle filter. Tasks with declared
 limits are validated at exactly those limits. For a task without declared limits,
 stage a new package at 1 CPU, 2 GiB memory, 2 GiB disk, a five-minute agent

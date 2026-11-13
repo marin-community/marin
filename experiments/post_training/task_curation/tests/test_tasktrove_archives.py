@@ -11,6 +11,7 @@ from dataclasses import replace
 import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import MachineSpec, PackageSpec
+from taskcompendium.harbor.execution import native_execution_limits, task_with_declared_execution_requirements
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -26,6 +27,7 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.conversion import convert_row as convert_mechanical_row
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, RawRow
+from taskcompendium.pipeline.review import review_payload
 from taskcompendium.runtime.shell import upload_resources
 from verifyit.grade import Status
 from verifyit.modes import grade_pytest
@@ -302,3 +304,48 @@ async def test_archive_oracle_can_stage_existing_and_appended_resources_without_
         SOLVE_SH: "0751",
         INSTRUCTION: "0640",
     }
+
+
+@pytest.mark.parametrize("complete", [False, True])
+def test_archive_conversion_lifts_only_complete_original_limits(complete):
+    native = b"[environment]\ncpus = 2\nmemory_mb = 4096\nstorage_mb = 8192\n[agent]\ntimeout_sec = 900\n"
+    if complete:
+        native += b"[verifier]\ntimeout_sec = 60\n"
+    data = archive_data({"task.toml": native})
+    data["path"] = "source-limits"
+    data["file_metadata"] = {path: {"mode": "0644", "mtime_ns": 123} for path in data["files"]}
+    source = Source(dataset="fixture", revision="pinned", row=data["path"], importer_revision="1")
+    task = TaskSpec(
+        id="source-limits",
+        source=source,
+        context=ConversationInput(events=(TextMessage(role="user", content="Reply."),)),
+        environment_requirements=EnvironmentRequirements(),
+        answer_type=AnswerType.TEXT,
+        answer_format=PlainText(),
+        grader=NoGrader(reason="fixture"),
+    )
+
+    def convert(_row, _context):
+        return task
+
+    converted = TaskTroveConverter("fixture", convert)(RawRow(task.id, source, data), ConversionContext({}, None))
+    assert isinstance(converted, TaskSpec)
+    original = converted.model_copy(update={"execution_requirements": None})
+    assert review_payload(converted) == review_payload(original)
+    assert converted.source == task.source
+    assert converted.id == task.id
+    assert (converted.execution_requirements is not None) == complete
+    if complete:
+        assert converted.execution_requirements.model_dump() == {
+            "cpus": 2,
+            "memory_mb": 4096,
+            "storage_mb": 8192,
+            "agent_timeout_sec": 900,
+            "verifier_timeout_sec": 60,
+        }
+        with pytest.raises(ValueError, match="cpus conflicts"):
+            task_with_declared_execution_requirements(converted, native_execution_limits({"environment": {"cpus": 3}}))
+    assert (
+        next(resource for resource in converted.resources.oracle if resource.path == "task.toml").source.content_base64
+        == base64.b64encode(native).decode()
+    )

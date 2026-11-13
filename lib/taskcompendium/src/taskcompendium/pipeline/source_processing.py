@@ -120,7 +120,7 @@ from taskcompendium.pipeline.stages import (
 )
 from taskcompendium.pipeline.transforms import admit_converted_row
 
-SOURCE_PIPELINE_REVISION = "19"
+SOURCE_PIPELINE_REVISION = "20"
 ROWS_PER_SHARD = 1000
 MAX_PREPARATION_SHARDS = 64
 OUTPUT_VIEWS = ("download", "normalize", "review", "verify", "final")
