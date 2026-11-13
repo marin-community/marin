@@ -3,7 +3,6 @@
 
 """Storage-backed curation stages; experiment modules bind their artifact graph."""
 
-import hashlib
 import json
 import time
 from collections import Counter
@@ -44,11 +43,6 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.query_cache import CachedRequests
 from taskcompendium.pipeline.review import (
-    BASE_RUBRIC,
-    DEFAULT_PROMPT_CHARACTERS,
-    DEFAULT_REVIEW_MAX_ATTEMPTS,
-    DEFAULT_REVIEW_MAX_TOKENS,
-    DEFAULT_REVIEW_RETRY_MAX_TOKENS,
     BatchReviewer,
     ChatReviewer,
     ReviewBatchResult,
@@ -57,6 +51,7 @@ from taskcompendium.pipeline.review import (
     review_tasks,
 )
 from taskcompendium.pipeline.review_requests import DEFAULT_MAX_BATCH_BYTES
+from taskcompendium.pipeline.reviewer_spec import ReviewerSpec
 from taskcompendium.pipeline.shard_outputs import ShardOutput, write_shard_outputs
 from taskcompendium.pipeline.source_quality import (
     QualitySampleCoverage,
@@ -100,16 +95,13 @@ class ReviewMode(StrEnum):
 
 @dataclass(frozen=True)
 class ReviewConfig:
-    model: str
-    model_revision: str
+    spec: ReviewerSpec
     mode: ReviewMode = field(kw_only=True)
-    prompt_budget: int = DEFAULT_PROMPT_CHARACTERS
-    max_tokens: int = DEFAULT_REVIEW_MAX_TOKENS
-    max_attempts: int = DEFAULT_REVIEW_MAX_ATTEMPTS
-    retry_max_tokens: int = DEFAULT_REVIEW_RETRY_MAX_TOKENS
-    retry_prompt_budget: int = DEFAULT_PROMPT_CHARACTERS
-    base_rubric_sha256: str = hashlib.sha256(BASE_RUBRIC.encode()).hexdigest()
     max_batch_bytes: int = DEFAULT_MAX_BATCH_BYTES
+
+    @property
+    def identity(self) -> dict[str, Any]:
+        return {"spec": self.spec.identity, "mode": self.mode, "max_batch_bytes": self.max_batch_bytes}
 
 
 @dataclass(frozen=True)
@@ -317,17 +309,11 @@ def _executing_reviewer(execution: AuditExecution, review: ReviewConfig) -> Revi
     _check_execution(execution)
     if isinstance(reviewer, (BatchReviewer, ChatReviewer)):
         actual = ReviewConfig(
-            reviewer.model,
-            reviewer.model_revision,
-            reviewer.max_prompt_characters,
-            reviewer.max_tokens,
-            reviewer.max_attempts,
-            reviewer.retry_max_tokens,
-            reviewer.retry_max_prompt_characters,
+            reviewer.spec,
             mode=ReviewMode(reviewer.identity["mode"]),
             max_batch_bytes=reviewer.max_batch_bytes,
         )
-        if actual != review:
+        if actual.identity != review.identity:
             raise ValueError("Review configuration differs from the executing reviewer")
     return reviewer
 
@@ -568,8 +554,9 @@ def assess_source_quality(
         output / "manifest.json",
         {
             "source_quality": report.model_dump(mode="json"),
-            "review": asdict(review),
+            "review": review.identity,
             "reviewer": reviewer.identity,
+            "reviewer_spec": review.spec.identity,
             "rubric": asdict(rubric),
             "prepared_source": str(prepared),
         },
@@ -578,7 +565,12 @@ def assess_source_quality(
 
 
 def skip_source_review(
-    prepared_path: str, output_path: str, policy: SourceQualityPolicy, *, coverage: QualitySampleCoverage
+    prepared_path: str,
+    output_path: str,
+    policy: SourceQualityPolicy,
+    *,
+    reviewer_spec: ReviewerSpec,
+    coverage: QualitySampleCoverage,
 ) -> SourceQualityReport:
     """Gate a source that declares no rubric on its conversion and check failures alone.
 
@@ -590,7 +582,12 @@ def skip_source_review(
     _write_json(output / "report.json", report.model_dump(mode="json"))
     _write_json(
         output / "manifest.json",
-        {"source_quality": report.model_dump(mode="json"), "review": None, "prepared_source": str(prepared)},
+        {
+            "source_quality": report.model_dump(mode="json"),
+            "review": None,
+            "reviewer_spec": reviewer_spec.identity,
+            "prepared_source": str(prepared),
+        },
     )
     return report
 
@@ -745,7 +742,7 @@ def audit_prepared_source(
         report = SourceQualityReport.model_validate(_read_json(quality / "report.json"))
         quality_manifest = _read_json(quality / "manifest.json")
         if StoragePath(quality_manifest["prepared_source"]) != prepared or quality_manifest["review"] != (
-            asdict(review) if review is not None else None
+            review.identity if review is not None else None
         ):
             raise ValueError("Source quality evidence belongs to different prepared data or review configuration")
         sampled = _sampled_reviews(quality, report.population.task_ids if review is not None else ())
@@ -781,7 +778,7 @@ def audit_prepared_source(
         **counts,
         "recipe": recipe.name,
         "recipe_version": recipe.version,
-        "review": asdict(review) if review is not None else None,
+        "review": review.identity if review is not None else None,
         "reviewer": reviewer.identity if reviewer is not None else None,
         "rubric": asdict(recipe.rubric) if recipe.rubric is not None else None,
         "source_quality": report.model_dump(mode="json") if report else None,

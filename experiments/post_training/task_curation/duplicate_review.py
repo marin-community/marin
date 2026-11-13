@@ -10,6 +10,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import openai
 from finestore.rl.source_identity import canonical_source_map, original_source_id
@@ -19,10 +20,11 @@ from marin.evaluation.model_config import load_model_config
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import remote_inference
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.pipeline.reviewer_spec import JudgeEndpoint
 from taskcompendium.source_fingerprints import DuplicateReview, PairSimilarity, PairVerdict, SourceFingerprint
 from verifyit.modes.grade_judge import JudgeConnection
 
-from experiments.post_training.task_curation.judges import HostedJudgeEndpoint, JudgeEndpoint
+from experiments.post_training.task_curation.judges import HostedJudgeEndpoint
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +59,12 @@ class LocalDuplicateEndpoint:
     job_ids: list[str] = field(default_factory=list)
     lease_seconds: float = 0
 
+    @property
+    def identity(self) -> dict[str, Any]:
+        return {"kind": "local", "model_config": str(self.model_config)}
+
     @contextmanager
-    def connect(self) -> Iterator[JudgeConnection]:
+    def connect(self, api_key: str | None = None) -> Iterator[JudgeConnection]:
         model = load_model_config(self.model_config)
         if (model.location, model.revision) != (DUPLICATE_MODEL, DUPLICATE_MODEL_REVISION):
             raise ValueError("Duplicate judge must use the pinned Qwen 27B checkpoint")

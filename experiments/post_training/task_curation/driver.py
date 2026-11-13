@@ -27,7 +27,7 @@ from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.assessment import AssessmentSampling
-from taskcompendium.pipeline.assessment_review import ASSESSMENT_RUBRIC, AssessmentModel
+from taskcompendium.pipeline.assessment_review import ASSESSMENT_RUBRIC
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.curriculum.models import EmbeddingSpec
 from taskcompendium.pipeline.query_cache import compact_query_cache
@@ -64,8 +64,9 @@ from experiments.post_training.task_curation.embedding import (
     curation_embedding_pipeline,
 )
 from experiments.post_training.task_curation.inventory import SelectionRecipe, task_selection_step
+from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
-from experiments.post_training.task_curation.pipeline import CampaignMachines
+from experiments.post_training.task_curation.pipeline import CampaignMachines, CurationRecipe
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
 from experiments.post_training.task_curation.sources import all_sources, runnable_sources
 from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM
@@ -381,12 +382,14 @@ def _embedding_pass(
 
 
 @click.command(help=__doc__)
-@click.option("--model", default=GLM_MODEL, show_default=True)
-@click.option("--model-revision", help="Required when a recipe uses model review.")
-@click.option("--base-url", help="OpenAI-compatible review endpoint; defaults to the relay job's endpoint.")
-@click.option("--relay-job", default=DEFAULT_GLM_RELAY_JOB, show_default=True, help="Iris GLM relay job to resolve.")
+@click.option("--description-model", "model", default=GLM_MODEL, show_default=True)
+@click.option("--description-model-revision", "model_revision", help="Required for description rewrites.")
+@click.option("--description-base-url", "base_url", help="OpenAI-compatible description rewrite endpoint.")
+@click.option("--description-relay-job", "relay_job", default=DEFAULT_GLM_RELAY_JOB, show_default=True)
 @click.option("--review-cache", help="Required when a recipe uses model review.")
-@click.option("--review-mode", type=click.Choice(["batch", "chat"]), help="Required when a recipe uses model review.")
+@click.option(
+    "--reviewer-tier", type=click.Choice([tier.value for tier in JudgeTier]), default="HEAVY", show_default=True
+)
 @click.option(
     "--review-concurrency",
     type=click.IntRange(min=1, max=MAX_DIRECT_CONCURRENT_REQUESTS),
@@ -453,7 +456,6 @@ def _embedding_pass(
 @click.option(
     "--assessment-rubric", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Extra rubric criteria."
 )
-@click.option("--assessment-model-revision", help="Grading model revision; defaults to the curation review revision.")
 @click.option("--report-path", help="SAMPLE/FULL report; defaults under --cache-dir. QUICK writes under --output-root.")
 @click.option(
     "--publish-catalog",
@@ -502,7 +504,7 @@ def main(
     base_url: str | None,
     relay_job: str,
     review_cache: str | None,
-    review_mode: str | None,
+    reviewer_tier: str,
     review_concurrency: int,
     mode: str | None,
     corpus: str | None,
@@ -532,7 +534,6 @@ def main(
     assessment_sample_size: int,
     excluded_sample_size: int,
     assessment_rubric: Path | None,
-    assessment_model_revision: str | None,
     report_path: str | None,
     publication_catalog: str | None,
     sources: tuple[str, ...],
@@ -596,7 +597,7 @@ def main(
         if review_cache is None:
             raise click.UsageError("Embedding requires --review-cache (or --cache-dir)")
         if representation == "rewrite" and model_revision is None:
-            raise click.UsageError("Rewrites require --model-revision")
+            raise click.UsageError("Rewrites require --description-model-revision")
     description_model = (
         DescriptionModel(model, model_revision) if representation == "rewrite" and model_revision else None
     )
@@ -736,17 +737,14 @@ def main(
         raise click.UsageError("SAMPLE/FULL requires --worker-image")
     if report_path is None and cache_dir is None:
         raise click.UsageError("SAMPLE/FULL requires --report-path")
-    review = (
-        ReviewConfig(model=model, model_revision=model_revision, mode=ReviewMode(review_mode))
-        if model_revision is not None and review_mode is not None
-        else None
-    )
+    reviewer_spec = JUDGE_TIERS[JudgeTier(reviewer_tier)].qa_reviewer
+    if reviewer_spec is None:
+        raise click.UsageError(f"No QA ReviewerSpec is pinned for tier {reviewer_tier}")
+    review = ReviewConfig(reviewer_spec, mode=ReviewMode.CHAT)
     recipe_settings = RecipeSettings(
         review=review,
         review_cache=review_cache or (str(cache_dir / "review-cache") if cache_dir else None),
-        base_url=base_url,
         api_key=os.environ.get(GLM_BULK_TOKEN_ENV),
-        relay_job=relay_job,
         review_concurrency=review_concurrency,
         normalized_shards=(
             normalized_shards if normalized_shards is not None else (LOCAL_NORMALIZED_SHARDS if cache_dir else None)
@@ -766,18 +764,25 @@ def main(
     options = PipelineOptions(processing_mode, runtime, inputs=inputs, recipe_settings=recipe_settings)
     assessment = None
     if assess:
-        if review is None or recipe_settings.review_cache is None:
+        if recipe_settings.review_cache is None:
             raise click.UsageError(
-                "Assessment requires --model-revision, --review-mode and a review cache; use --skip-assessment to skip"
+                "Assessment requires a ReviewerSpec and a review cache; use --skip-assessment to skip"
             )
         rubric = ASSESSMENT_RUBRIC
         if assessment_rubric is not None:
             rubric += "\nAdditional criteria:\n" + assessment_rubric.read_text()
         assessment = AssessmentSettings(
             AssessmentSampling(assessment_sample_size, excluded_sample_size, seed),
-            AssessmentModel(review.model, assessment_model_revision or review.model_revision),
+            review.spec,
             rubric,
         )
+    needs_review = assess or any(
+        isinstance(source.config, CurationRecipe) and source.config.rubric is not None for source in selected.values()
+    )
+    if do_run and needs_review and recipe_settings.api_key is None:
+        raise click.UsageError("QA review requires an API key")
+    if do_run and needs_review and recipe_settings.review_cache is None:
+        raise click.UsageError("QA review requires --review-cache")
     with ExitStack() as scope:
         if cache_dir is not None:
             scope.enter_context(artifact_prefix(str(cache_dir)))
