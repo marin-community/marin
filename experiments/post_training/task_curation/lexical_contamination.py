@@ -44,6 +44,7 @@ from experiments.post_training.task_curation.pipeline import (
     source_recipe,
 )
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
+from experiments.post_training.task_curation.retained_release import RetainedCohort
 from experiments.post_training.task_curation.sources import all_sources
 
 logger = logging.getLogger(__name__)
@@ -77,15 +78,17 @@ class TextPopulationFiles(NamedTuple):
 def source_documents(config: SourceTextConfig, rejected: Counter, admission: Counter) -> Iterable[tuple[dict, dict]]:
     source = all_sources()[canonical_source_id(config.source_id)]
     definition = source.config
-    if isinstance(definition, PrebuiltCohort):
+    if isinstance(definition, PrebuiltCohort | RetainedCohort):
         with (StoragePath(config.source_input) / definition.files[0]).open("rb") as stream:
             parquet = pq.ParquetFile(stream)
             lowered = "lowered_task_spec" in parquet.schema_arrow.names
             column = "lowered_task_spec" if lowered else "task_spec"
-            for batch in parquet.iter_batches(batch_size=32, columns=[column]):
-                for encoded in batch.column(0).to_pylist():
-                    document = json.loads(encoded)
-                    yield (document["task"], document["runtime"]) if lowered else (document, {})
+            columns = [column, "runtime"] if isinstance(definition, RetainedCohort) else [column]
+            for batch in parquet.iter_batches(batch_size=32, columns=columns):
+                for row in batch.to_pylist():
+                    document = json.loads(row[column])
+                    runtime = json.loads(row["runtime"]) if isinstance(definition, RetainedCohort) else {}
+                    yield (document["task"], document["runtime"]) if lowered else (document, runtime)
         return
     recipe_config = definition.recipe if isinstance(definition, EvalDataset) else definition
     if not isinstance(recipe_config, CurationRecipe):
@@ -235,9 +238,10 @@ def text_steps(
         source_id = canonical_source_id(source_id)
         source = sources[source_id]
         config = source.config.recipe if isinstance(source.config, EvalDataset) else source.config
-        if isinstance(config, PrebuiltCohort):
+        if isinstance(config, PrebuiltCohort | RetainedCohort):
             primary = download_step(
-                HfSource(config.repo, config.revision, config.files, format=SourceFormat.PARQUET), runtime
+                HfSource(config.dataset.name, config.dataset.revision, config.files, format=SourceFormat.PARQUET),
+                runtime,
             )
             inputs = {}
         elif isinstance(config, CurationRecipe):

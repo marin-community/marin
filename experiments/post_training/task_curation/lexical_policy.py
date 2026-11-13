@@ -15,6 +15,7 @@ from taskcompendium.pipeline.models import IntendedUse
 from experiments.post_training.task_curation.evaluation import EvalDataset
 from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.prebuilt import COHORT_INTENDED_USE, PrebuiltCohort
+from experiments.post_training.task_curation.retained_release import RetainedCohort
 from experiments.post_training.task_curation.source import RlDataSource
 
 
@@ -37,6 +38,8 @@ def source_lexical_use(source: RlDataSource) -> LexicalUse:
         intended = config.intended_use
     elif isinstance(config, PrebuiltCohort):
         intended = IntendedUse(COHORT_INTENDED_USE)
+    elif isinstance(config, RetainedCohort):
+        intended = config.intended_use
     else:
         raise ValueError(f"No registered conversion Use: {source.info.id}")
     if intended is IntendedUse.TRAIN:

@@ -34,12 +34,12 @@ from experiments.post_training.task_curation.full_qc_artifacts import (
     FullQCInputs,
     FullQCReview,
     FullQCReviewShard,
-    RetentionPlan,
 )
 from experiments.post_training.task_curation.full_qc_inputs import InputConfig, prepare_inputs
 from experiments.post_training.task_curation.full_qc_review import assemble_shards, review_inputs, review_shard
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
+from experiments.post_training.task_curation.retention_plan import RetentionPlan
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
 
 

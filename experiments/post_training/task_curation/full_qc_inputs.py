@@ -24,10 +24,11 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import has_oracle_solution
 
-from experiments.post_training.task_curation.full_qc_artifacts import FullQCInputs, RetentionPlan
+from experiments.post_training.task_curation.full_qc_artifacts import FullQCInputs
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from experiments.post_training.task_curation.published_census import population_documents
+from experiments.post_training.task_curation.retention_plan import RetentionPlan
 
 logger = logging.getLogger(__name__)
 INDEX_SCHEMA = pa.schema([("task_id", pa.string()), ("task_sha256", pa.string()), ("runtime_sha256", pa.string())])

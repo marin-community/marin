@@ -7,24 +7,10 @@ from typing import Literal
 
 from finestore.rl.curation import SourceQualityResult
 from marin.execution.artifact import Artifact
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
-
-
-class RetentionPlan(BaseModel):
-    source_id: str
-    source_dataset_id: str
-    source_revision: str
-    converter_revision: str
-    converter_version: str
-    input_artifact: str
-    task_specs_sha256: str
-    raw_count: int = Field(ge=0)
-    combined_drop_count: int = Field(ge=0)
-    retained_count: int = Field(ge=0)
-    combined_drop_manifest_uri: str
-    lexical_use: str
+from experiments.post_training.task_curation.retention_plan import RetentionPlan
 
 
 class FullQCInputs(Artifact):

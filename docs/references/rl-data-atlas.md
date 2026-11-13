@@ -78,8 +78,11 @@ includes the filtered rows in the displayed order.
 
 **Daytona safe** measures the actor only: SAFE requires at most ten snapshot
 identities and no refused actor requirements. Sources without an actor show N/A;
-grandfathered blends show a dash. Package-lock graders run on LOCAL with separate
-compatibility evidence. A source without a measured actor verdict cannot enter
+grandfathered blends still using the legacy internal format show a dash. Retained
+TaskCompendium releases use their new actor measurements. A verified byte-identical
+subset may retain an admitted original's qualification through its recorded
+remediation lineage; changed task bytes require new qualification. Package-lock
+graders run on LOCAL with separate compatibility evidence. A source without a measured actor verdict cannot enter
 new ingestion. The backend map records each role's demands and blockers.
 
 Example counts describe unique converted task contracts after mandatory within-source
