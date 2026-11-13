@@ -5,7 +5,8 @@
 
 ``names TASK_DIR...`` prints ``{task: snapshot name}`` through Shellbox's own naming path. ``delete NAMES_JSON``
 deletes each named snapshot after a fresh ``get``, skipping names that no longer exist, and prints what it did.
-``usage`` prints the account's non-general snapshot count and their organization ids.
+``usage`` prints the account's non-general snapshot count and their organization ids. ``existing NAMES_JSON`` prints
+which of the named snapshots exist now.
 Only names computed from our own task folders are ever passed to ``delete``.
 """
 
@@ -44,6 +45,18 @@ def usage() -> dict:
     }
 
 
+def existing(snapshot_names: list[str]) -> list[str]:
+    client = Daytona(DaytonaConfig(api_key=os.environ["DAYTONA_API_KEY"]))
+    found = []
+    for name in sorted(set(snapshot_names)):
+        try:
+            client.snapshot.get(name)
+        except DaytonaNotFoundError:
+            continue
+        found.append(name)
+    return found
+
+
 def delete(snapshot_names: list[str]) -> list[dict]:
     client = Daytona(DaytonaConfig(api_key=os.environ["DAYTONA_API_KEY"]))
     log = []
@@ -66,6 +79,8 @@ def main() -> None:
         print(json.dumps(names([Path(arg) for arg in arguments])))
     elif command == "usage":
         print(json.dumps(usage()))
+    elif command == "existing":
+        print(json.dumps(existing(json.loads(Path(arguments[0]).read_text()))))
     elif command == "delete":
         print(json.dumps(delete(json.loads(Path(arguments[0]).read_text()))))
     else:

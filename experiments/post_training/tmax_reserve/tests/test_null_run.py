@@ -2,7 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+
+from experiments.post_training.tmax_reserve import harbor_job
 from experiments.post_training.tmax_reserve.harbor_job import sandbox_seconds
 from experiments.post_training.tmax_reserve.null_run import ALLOWED_HOST, PROBE_KEYSTROKES, ScriptedModel, summarize
 
@@ -65,3 +70,50 @@ def test_sandbox_seconds_counts_trials_that_reached_environment_setup(tmp_path):
     trial("ran", {"environment_setup": span, "agent_setup": span, "agent_execution": span, "verifier": None})
     trial("never_started", {"environment_setup": None, "exception_info": {"exception_type": "DaytonaError"}})
     assert sandbox_seconds(tmp_path) == 60 + 360
+
+
+def _job(tmp_path, monkeypatch, *, preexisting, non_general, driver_error=None):
+    dataset = tmp_path / "tasks"
+    for task in ("t1", "t2", "t3"):
+        (dataset / task).mkdir(parents=True)
+    calls = []
+
+    def snapshots(command, *arguments, env):
+        calls.append(
+            (command, json.loads(Path(arguments[0]).read_text()) if command in ("existing", "delete") else None)
+        )
+        return {
+            "names": {"t1": "snap-a", "t2": "snap-a", "t3": "snap-b"},
+            "existing": preexisting,
+            "usage": {"non_general": non_general},
+            "delete": [],
+        }[command]
+
+    def driver(*_):
+        calls.append(("driver", None))
+        if driver_error:
+            raise driver_error
+
+    monkeypatch.setattr(harbor_job, "_snapshots", snapshots)
+    monkeypatch.setattr(harbor_job, "run_harbor_driver", driver)
+    overlay = SimpleNamespace(dataset_path=str(dataset), jobs_dir=str(tmp_path / "jobs"))
+    return calls, lambda: harbor_job.run_harbor_job(None, overlay, {}, None, 45, tmp_path)
+
+
+def test_harbor_job_deletes_only_snapshots_it_created_even_when_the_job_fails(tmp_path, monkeypatch):
+    calls, run = _job(tmp_path, monkeypatch, preexisting=["snap-a"], non_general=44, driver_error=RuntimeError("x"))
+
+    with pytest.raises(RuntimeError, match="x"):
+        run()
+
+    assert ("existing", ["snap-a", "snap-b"]) in calls
+    assert calls[-2:] == [("driver", None), ("delete", ["snap-b"])]
+
+
+def test_harbor_job_refuses_to_start_without_a_free_slot_per_new_snapshot(tmp_path, monkeypatch):
+    calls, run = _job(tmp_path, monkeypatch, preexisting=[], non_general=44)
+
+    with pytest.raises(RuntimeError, match="2 new snapshots needed but only 1 of 45"):
+        run()
+
+    assert all(command not in ("driver", "delete") for command, _ in calls)

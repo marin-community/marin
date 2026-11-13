@@ -11,8 +11,8 @@ HTTP connection to ``HELD_HOST`` and logs each round trip. The script then appli
 - a new connection to ``HELD_HOST`` fails, using the trial's own probe command;
 - ``ALLOWED_URL`` (the allow-listed model host) still answers.
 
-The sandbox is closed and the snapshot it created is deleted at the end. Runs in the vendored Harbor runtime with
-``DAYTONA_API_KEY`` and ``DAYTONA_TARGET`` set; writes ``--output`` as JSON.
+The sandbox is closed at the end. Its snapshot is deleted only if it did not exist before the run. Runs in the
+vendored Harbor runtime with ``DAYTONA_API_KEY`` and ``DAYTONA_TARGET`` set; writes ``--output`` as JSON.
 """
 
 import argparse
@@ -22,7 +22,7 @@ import os
 import shlex
 from pathlib import Path
 
-from daytona import AsyncDaytona, Daytona, DaytonaConfig, DaytonaNotFoundError, Resources
+from daytona import AsyncDaytona, DaytonaConfig, Resources
 from harbor.environments.daytona import LOCKDOWN_PROBE_TIMEOUT
 from shellbox.backends.daytona.machine import (
     DaytonaMachineFactory,
@@ -32,6 +32,8 @@ from shellbox.backends.daytona.machine import (
 )
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec, NetworkPolicy
+
+from experiments.post_training.tmax_reserve import snapshots
 
 HELD_HOST = "pypi.org"
 ALLOWED_URL = "https://iris.oa.dev/"
@@ -110,17 +112,9 @@ async def smoke(image: str) -> dict:
     }
 
 
-def delete_snapshot(image: str) -> str:
-    name = snapshot_identity(RegistryImage(image), Resources(cpu=1, memory=2))
-    client = Daytona(DaytonaConfig(api_key=os.environ["DAYTONA_API_KEY"], target=os.environ["DAYTONA_TARGET"]))
-    try:
-        snapshot = client.snapshot.get(name)
-    except DaytonaNotFoundError:
-        return "absent"
-    if snapshot.name != name or snapshot.general:
-        raise ValueError(f"refusing to delete {name}")
-    client.snapshot.delete(snapshot)
-    return f"deleted {name}"
+def snapshot_name(image: str) -> str:
+    """The name the factory gives this smoke's snapshot (1 CPU, 2 GiB, as ``smoke`` requests)."""
+    return snapshot_identity(RegistryImage(image), Resources(cpu=1, memory=2))
 
 
 def main() -> None:
@@ -128,11 +122,13 @@ def main() -> None:
     parser.add_argument("--image", required=True, help="Shared image A, registry/repo@sha256:<digest>.")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    name = snapshot_name(args.image)
+    preexisting = bool(snapshots.existing([name]))
     try:
         result = asyncio.run(smoke(args.image))
     finally:
-        deletion = delete_snapshot(args.image)
-    result["snapshot"] = deletion
+        deletion = [] if preexisting else snapshots.delete([name])
+    result["snapshot"] = {"name": name, "preexisting": preexisting, "deletion": deletion}
     args.output.write_text(json.dumps(result, indent=1))
     print(
         json.dumps(

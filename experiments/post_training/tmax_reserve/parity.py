@@ -31,7 +31,7 @@ from experiments.post_training.tmax_reserve.shared_image import Template, parse_
 logger = logging.getLogger(__name__)
 
 BUILDER = "tmax-parity"
-# The image a docker-container buildx builder runs; removed at the end only if this run pulled it.
+# The image a docker-container buildx builder runs.
 BUILDKIT_IMAGE = "moby/buildkit:buildx-stable-1"
 STATE_ROOTS = ("/home", "/app", "/root", "/opt", "/srv", "/usr/local", "/etc", "/tmp")
 # Per-container files and caches that differ between any two containers or builds.
@@ -161,7 +161,13 @@ def main() -> None:
     manifest = json.loads((args.shared.parent / f"{args.shared.name}.manifest.json").read_text())
     images = {Template(template): image for template, image in manifest["images"].items()}
     results = []
-    had_buildkit = docker("image", "inspect", BUILDKIT_IMAGE, check=False).returncode == 0
+    output = {"docker_system_df_before": docker("system", "df").stdout, "results": results}
+    # Only images this run pulled are removed afterwards.
+    present = {
+        image
+        for image in [*images.values(), BUILDKIT_IMAGE]
+        if docker("image", "inspect", image, check=False).returncode == 0
+    }
     docker("buildx", "create", "--name", BUILDER, "--driver", "docker-container")
     try:
         for template_image in images.values():
@@ -169,10 +175,14 @@ def main() -> None:
         for task in args.tasks.split(","):
             logger.info("checking %s", task)
             results.append(check_task(task, args.source, args.shared, images))
-            args.output.write_text(json.dumps(results, indent=1))
+            args.output.write_text(json.dumps(output, indent=1))
     finally:
         docker("buildx", "rm", "--force", BUILDER, check=False)
-        docker("rmi", "-f", *images.values(), *([] if had_buildkit else [BUILDKIT_IMAGE]), check=False)
+        pulled = [image for image in [*images.values(), BUILDKIT_IMAGE] if image not in present]
+        if pulled:
+            docker("rmi", "-f", *pulled, check=False)
+        output["docker_system_df_after"] = docker("system", "df").stdout
+        args.output.write_text(json.dumps(output, indent=1))
     print(json.dumps([{key: row[key] for key in ("task", "setup_exit", "noop_rewards")} for row in results], indent=1))
 
 
