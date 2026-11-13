@@ -14,7 +14,7 @@ from haliax.nn.ragged_dot import ragged_dot
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from levanter.grug._moe import ep_ring, ep_ring_filtered
 from levanter.grug._moe.ep_ring_filtered import destination_hit_fraction
-from levanter.grug.grug_moe import moe_mlp
+from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES, moe_mlp
 from levanter.testing.devices import use_test_devices
 
 
@@ -314,22 +314,29 @@ def _ring_filtered_loss(*, hidden, dtype, experts, mesh, shards=4, tokens_per_sh
 
 
 _GATHER_KERNELS = {"grug_gather_rows", "grug_gather_sum"}
+_ROUTING_KERNELS = {"grug_send_slots", "grug_expert_rows"}
 
 
 @pytest.mark.skipif(jax.default_backend() == "tpu", reason="Pallas-Triton kernels need a GPU or CPU")
 @pytest.mark.parametrize(
-    ("hidden", "dtype", "kernels_on_instinct"),
-    [(16, jnp.float32, _GATHER_KERNELS), (16, jnp.bfloat16, _GATHER_KERNELS), (24, jnp.float32, set())],
-    ids=["tileable_f32", "tileable_bf16", "untileable_f32"],
+    ("hidden", "dtype", "experts", "kernels_on_instinct"),
+    [
+        (16, jnp.float32, 16, _GATHER_KERNELS | _ROUTING_KERNELS),
+        (16, jnp.bfloat16, 16, _GATHER_KERNELS | _ROUTING_KERNELS),
+        (24, jnp.float32, 16, _ROUTING_KERNELS),
+        (16, jnp.float32, 12, _GATHER_KERNELS),
+    ],
+    ids=["tileable_f32", "tileable_bf16", "untileable_f32", "three_local_experts_f32"],
 )
 @pytest.mark.multidevice
-def test_ring_filtered_on_amd_instinct_matches_xla_bitwise(hidden, dtype, kernels_on_instinct, monkeypatch):
-    """On AMD Instinct, ring_filtered moves rows with the Pallas-Triton gathers when they can tile the hidden width
-    and with XLA otherwise. Either way it gives the outputs, gradients and drop counts of the XLA gathers used on
-    other devices, bit for bit, with sender and receiver drops and uneven padding."""
+def test_ring_filtered_on_amd_instinct_matches_xla_bitwise(hidden, dtype, experts, kernels_on_instinct, monkeypatch):
+    """On AMD Instinct, ring_filtered moves rows with the Pallas-Triton gathers when they can tile the hidden width,
+    and builds its routing maps with the Pallas-Triton sorts when the shard and local expert counts are powers of two;
+    XLA does the rest. Either way it gives the outputs, gradients and drop counts of the XLA path used on other
+    devices, bit for bit, with sender and receiver drops and uneven padding."""
     with use_test_devices(4) as devices:
         mesh = _expert_mesh(devices)
-        loss, args = _ring_filtered_loss(hidden=hidden, dtype=dtype, experts=16, mesh=mesh)
+        loss, args = _ring_filtered_loss(hidden=hidden, dtype=dtype, experts=experts, mesh=mesh)
 
         def run(amd_instinct):
             monkeypatch.setattr(ep_ring_filtered, "is_amd_instinct", lambda: amd_instinct)
@@ -337,7 +344,7 @@ def test_ring_filtered_on_amd_instinct_matches_xla_bitwise(hidden, dtype, kernel
                 traced = jax.jit(jax.value_and_grad(loss, argnums=(0, 1, 2, 3), has_aux=True)).trace(*args)
                 # Which kernels run: without this, the bitwise comparison passes trivially.
                 jaxpr = str(traced.jaxpr)
-                kernels = {name for name in _GATHER_KERNELS if name in jaxpr}
+                kernels = {name for name in _GATHER_KERNELS | _ROUTING_KERNELS if name in jaxpr}
                 (_, (out, counts)), grads = traced.lower().compile()(*args)
             return kernels, out, counts, grads
 
@@ -353,4 +360,35 @@ def test_ring_filtered_on_amd_instinct_matches_xla_bitwise(hidden, dtype, kernel
         np.testing.assert_array_equal(_bits(out), _bits(xla_out))
         for a, e in zip(grads, xla_grads, strict=True):
             assert np.any(np.asarray(e).astype(np.float32) != 0)
+            np.testing.assert_array_equal(_bits(a), _bits(e))
+
+
+@pytest.mark.skipif(jax.default_backend() == "tpu", reason="Pallas-Triton kernels need a GPU or CPU")
+@pytest.mark.parametrize("amd_instinct", [False, True], ids=["xla_maps", "pallas_maps"])
+@pytest.mark.multidevice
+def test_ring_filtered_under_save_moe_saves_its_routing_maps_with_the_same_gradients(amd_instinct, monkeypatch):
+    """The save_moe remat policy (save_only_these_names(*MOE_REMAT_SAVE_NAMES)) keeps ring_filtered's integer routing
+    maps for the backward instead of rebuilding them, and the gradients match rebuilding them bit for bit."""
+    monkeypatch.setattr(ep_ring_filtered, "is_amd_instinct", lambda: amd_instinct)
+    with use_test_devices(4) as devices:
+        mesh = _expert_mesh(devices)
+        loss, args = _ring_filtered_loss(hidden=24, dtype=jnp.float32, experts=16, mesh=mesh)
+        without_routing = tuple(name for name in MOE_REMAT_SAVE_NAMES if name != "grug_moe_routing")
+
+        def run(saved_names):
+            remat_loss = jax.checkpoint(loss, policy=jax.checkpoint_policies.save_only_these_names(*saved_names))
+            with jax.set_mesh(mesh):
+                _, vjp_fn, (out, _) = jax.jit(lambda *a: jax.vjp(remat_loss, *a, has_aux=True))(*args)
+                # The vjp closes over exactly what the forward saved for the backward.
+                saved_integer = sum(jnp.issubdtype(x.dtype, jnp.integer) for x in jax.tree.leaves(vjp_fn))
+                grads = jax.jit(vjp_fn)(jnp.float32(1.0))
+            return saved_integer, out, grads
+
+        saved_integer, out, grads = run(MOE_REMAT_SAVE_NAMES)
+        rebuilt_saved_integer, rebuilt_out, rebuilt_grads = run(without_routing)
+        # Both save the routed expert ids, an input; only save_moe also saves the routing maps.
+        assert saved_integer > rebuilt_saved_integer
+        np.testing.assert_array_equal(_bits(out), _bits(rebuilt_out))
+        for a, e in zip(grads, rebuilt_grads, strict=True):
+            assert np.any(np.asarray(e) != 0)
             np.testing.assert_array_equal(_bits(a), _bits(e))
