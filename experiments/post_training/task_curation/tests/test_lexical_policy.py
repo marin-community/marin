@@ -13,6 +13,8 @@ from finestore.rl.curation import DeconReceiptStatus, LexicalContaminationEviden
 from finestore.schema import arrow_schema
 from taskcompendium.pipeline.models import IntendedUse
 
+from experiments.post_training.task_curation.datasets.evalchemy import math as eval_math
+from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.evaluation import EvalDataset
 from experiments.post_training.task_curation.lexical_policy import main, measurement_for_use, source_lexical_use
 from experiments.post_training.task_curation.pipeline import CurationRecipe
@@ -52,7 +54,7 @@ def test_benchmark_self_match_preserves_population_pin_and_eval_evidence(use):
 
 
 def test_evaluation_use_comes_from_recipe_even_without_evaluation_tags():
-    source = next(source for source in all_sources().values() if isinstance(source.config, EvalDataset))
+    source = next(source for source in eval_math.sources() if isinstance(source.config, EvalDataset))
     source = replace(source, info=replace(source.info, tags=()))
     assert source_lexical_use(source) is LexicalUse.EVAL
 
@@ -98,7 +100,7 @@ def test_report_keeps_benchmarks_out_of_the_training_review_table(tmp_path, monk
 
 
 def test_training_use_keeps_benchmark_tagged_sources_in_remediation_review():
-    source = next(source for source in all_sources().values() if isinstance(source.config, CurationRecipe))
+    source = next(source for source in skyrl_math.sources() if isinstance(source.config, CurationRecipe))
     source = replace(
         source,
         config=replace(source.config, intended_use=IntendedUse.TRAIN),
@@ -108,6 +110,7 @@ def test_training_use_keeps_benchmark_tagged_sources_in_remediation_review():
     assert measurement_for_use(overlap_measurement(source.dataset.name), source_lexical_use(source)).receipt is None
 
 
+@pytest.mark.data_integration
 @pytest.mark.parametrize("language", ["python-v2", "typescript-v2", "java-v3", "csharp-v4"])
 def test_crosscode_eval_keeps_its_private_population_and_measures_lexical_overlap_only(language):
     source = all_sources()[f"TaskTrove:laion__exp_rpt_crosscodeeval-{language}"]

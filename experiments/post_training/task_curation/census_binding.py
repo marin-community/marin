@@ -186,7 +186,7 @@ def main() -> None:
             receipts[receipt.source_id] = receipt.model_dump(mode="json")
     if unknown := set(integrities) - set(receipts):
         raise ValueError(f"Integrity censuses have no actor receipt: {sorted(unknown)}")
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    args.output_dir.mkdir(parents=True, exist_ok=False)
     write_receipt_shards(args.output_dir, receipts)
 
 

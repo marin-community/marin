@@ -17,6 +17,7 @@ from experiments.post_training.task_curation.lexical_artifacts import SourceText
 from experiments.post_training.task_curation.lexical_binding import LexicalMeasurementReceipt
 from experiments.post_training.task_curation.lexical_policy import LexicalInputUse
 from experiments.post_training.task_curation.receipt_shards import read_receipt_shards, write_receipt_shards
+from experiments.post_training.task_curation.registry import read_registry_json
 
 
 def measurement_receipts(
@@ -76,7 +77,7 @@ def main() -> None:
         {key: LexicalContaminationEvidence.model_validate(row) for key, row in outcomes["measurements"].items()},
         [SourceTextPopulation.model_validate(row) for row in json.loads(args.populations.read_text())],
         [LexicalInputUse.model_validate(row) for row in json.loads(args.source_uses.read_text())],
-        read_receipt_shards(args.actor_receipts_dir, ActorCensusReceipt, "census"),
+        read_receipt_shards(args.actor_receipts_dir, ActorCensusReceipt, "census", load_json=read_registry_json),
     )
     args.output_dir.mkdir(parents=True, exist_ok=False)
     write_receipt_shards(args.output_dir, {key: receipt.model_dump(mode="json") for key, receipt in receipts.items()})
