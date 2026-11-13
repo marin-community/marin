@@ -137,12 +137,12 @@ includes queueing, and stopping the coordinator stops its children.
 
 ### Sandbox prepared-image workdirs
 
-Kubernetes composition advertises `sandbox-image-workdir` as a task capability.
+The Kubernetes backend advertises `sandbox-image-workdir` as a task capability.
 SANDBOX pods without a bundle, inline workdir files, or workdir file references
 preserve the prepared image's `/app`; an empty workdir volume would hide those
-files. Explicitly staged inputs and ordinary jobs retain their workdir mounts.
+files. Explicitly staged inputs and non-sandbox jobs retain their workdir mounts.
 Harbor requires this capability before submitting prepared-image tasks. Older
-controllers need a separately authorized rollout before using that route.
+controllers need a separately authorized rollout before submitting prepared-image tasks.
 
 ### Sandbox disk limits
 
