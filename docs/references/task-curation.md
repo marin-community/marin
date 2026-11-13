@@ -1511,7 +1511,7 @@ versions, separate from the shared relay preset. Its v3 policy doubles v2's
 serving context from 262,144 to 524,288 tokens and generation limits from
 4,096/8,192 to 8,192/16,384 initial/retry tokens. Future source starts use v3;
 in-flight v2 work and its valid observations keep their original identities.
-The [FULL-QC reviewer changelog](../../experiments/post_training/task_curation/README.md#complete-retained-population-review)
+The [FULL-QC reviewer changelog](https://github.com/marin-community/marin/blob/atlas-env-audit/experiments/post_training/task_curation/README.md#complete-retained-population-review)
 records cache separation, resume commands and the preserved v2 repair policy.
 
 Quality manifests and assessment model metadata record the complete spec identity.
