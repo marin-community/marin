@@ -17,7 +17,6 @@ from finestore.rl.curation import (
     LexicalUse,
     SourceDeclaration,
 )
-from finestore.rl.source_identity import canonical_source_id
 from finestore.schema import arrow_schema
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt
@@ -31,6 +30,7 @@ from experiments.post_training.task_curation.lexical_registration import main as
 from experiments.post_training.task_curation.receipt_shards import read_receipt_shards
 from experiments.post_training.task_curation.source import RlDataSource, SourceOrigin
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 
 

@@ -116,6 +116,41 @@ def arguments(tmp_path) -> list[str]:
     return [item for pair in options.items() for item in pair]
 
 
+def test_historical_corpus_inventory_keeps_the_current_embedding_plan(tmp_path, monkeypatch):
+    source = number_source(tmp_path / "numbers")
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            id="HuggingFaceH4:math500",
+            origin=SourceOrigin.HUGGINGFACEH4,
+            upstream_dataset="math500",
+            upstream_name="math500",
+            title=None,
+        ),
+    )
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.all_sources", lambda: {source.info.id: source})
+    options = ["--embed", "coverage", "--cache-dir", str(tmp_path / "cache")]
+    plans = []
+    for identifier in (source.info.id, "MarinSkyRL:math500"):
+        corpus = tmp_path / (identifier.replace(":", "-") + ".json")
+        corpus.write_text(
+            json.dumps(
+                {
+                    "population": "converted",
+                    "sources": [],
+                    "inventory": [{**source.declaration.model_dump(mode="json"), "id": identifier}],
+                }
+            )
+        )
+        frozen = corpus.read_bytes()
+        result = CliRunner().invoke(main, [*options, "--corpus", str(corpus)])
+        assert result.exit_code == 0, result.output
+        plans.append(json.loads(result.output))
+        assert corpus.read_bytes() == frozen
+    assert plans[0] == plans[1]
+
+
 def test_source_option_selects_catalog_order_without_changing_identity(tmp_path, catalog):
     runner = CliRunner()
     full = runner.invoke(main, arguments(tmp_path))

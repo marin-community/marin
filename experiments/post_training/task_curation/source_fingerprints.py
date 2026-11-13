@@ -12,7 +12,6 @@ from heapq import nsmallest
 
 import dupekit
 import pyarrow as pa
-from finestore.rl.source_identity import canonical_source_id, canonical_source_map, original_source_id
 from taskcompendium.identity import canonical_sha256, task_identity
 from taskcompendium.models import TaskSpec, VerifyitGrader, format_conversation
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
@@ -25,6 +24,12 @@ from taskcompendium.source_fingerprints import (
     PairSimilarity,
     SourceFingerprint,
     SourceLineage,
+)
+
+from infra.marina.apps.rl_data_catalog.server.source_identity import (
+    canonical_source_id,
+    canonical_source_map,
+    original_source_id,
 )
 
 FINGERPRINT_SEED = 0

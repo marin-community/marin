@@ -460,15 +460,20 @@ unmeasured cohorts in the pending ingestion ledger. Publish a new metadata
 snapshot only after the producer's exact-pin census supplies these proofs;
 existing production SQL remains selected until that evidence-backed load is ready.
 
-The permanent `SOURCE_ID_ALIASES` table in `finestore.rl.source_identity`
-resolves the 232 approved historical IDs to generated identities. All readers
-resolve both spellings to the canonical ID, including retained assessments,
+The Atlas application owns the permanent `SOURCE_ID_ALIASES` table in
+`infra.marina.apps.rl_data_catalog.server.source_identity` resolves the 232 approved
+historical IDs to generated identities. Atlas and task-curation readers apply
+that policy at their boundaries; shared FineStore and TaskCompendium models keep
+source IDs opaque. Application packages carry the policy through relative imports.
+These readers resolve both spellings to the canonical ID, including retained assessments,
 actor receipts, duplicate surveys and Atlas URLs. Historical snapshots, packet
 URIs, pipeline keys and TaskSpec bytes remain unchanged. Artifact construction
 and deterministic selection use `original_source_id` for existing cache keys,
 source ordering and source-derived seeds. A naming migration therefore preserves
 conversion, assessment, census and decontamination artifacts and selected task
-bytes; it does not authorize a production publication or a new conversion.
+bytes. Curriculum coverage receives explicit stable sampling IDs from its caller,
+and Atlas projects survey IDs without changing their original hash payloads.
+The relocation does not authorize a production publication or a new conversion.
 New declarations must match their generated identities. Do not add aliases to
 bypass that contract without an explicitly approved identity migration.
 
