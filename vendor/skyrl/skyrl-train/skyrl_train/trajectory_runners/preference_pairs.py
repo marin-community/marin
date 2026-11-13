@@ -175,7 +175,6 @@ class PreferencePairTrajectoryRunner:
             "rollout_routed_experts": None,
             "teacher_evidence": None,
             "distillation": None,
-            "token_level_shaping": None,
             "response_span_tags": None,
             "teacher_route_keys": None,
             "is_last_step": None,
