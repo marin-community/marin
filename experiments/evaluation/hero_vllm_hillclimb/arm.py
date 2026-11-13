@@ -117,6 +117,9 @@ BASELINE_ARGS = (
     '{"distributed": true, "concurrency": 4, "memory_limit": 17179869184}',
     "--enable-per-request-metrics",
     "--trust-remote-code",
+    # Rafal's server runs a single API server process (its log shows one APIServer pid).
+    "--api-server-count",
+    "1",
 )
 
 
@@ -136,7 +139,7 @@ class ArmConfig:
 
 def _write_json(uri: str, payload: object) -> None:
     with open_url(uri, "w") as handle:
-        json.dump(payload, handle)
+        json.dump(payload, handle, default=lambda value: sorted(value) if isinstance(value, frozenset) else str(value))
 
 
 def _read_json(uri: str) -> dict:
