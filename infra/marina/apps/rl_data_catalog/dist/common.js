@@ -84,3 +84,16 @@ function boundProgress(source, measurement) {
       progress.retained_count !== source.within_source_dedup.unique_count) return null;
   return {...progress, as_of: measurement.as_of};
 }
+
+const contaminationClasses = {
+  'NO ISSUES': 'quality-good',
+  REMEDIATED: 'contamination-remediated',
+  'MEASURED, EVAL': 'quality-some_issues',
+  'REMEDIATION REQUIRED': 'quality-bad contamination-required',
+  'NOT MEASURED': 'quality-unassessed',
+};
+function contaminationChip(status) {
+  const chip = node('span', status, `chip contamination-chip ${contaminationClasses[status]}`);
+  chip.dataset.contamination = status;
+  return chip;
+}

@@ -55,7 +55,7 @@ def prepare_preview(checkout: Path, output: Path) -> None:
                 "transformation": "Package-relative imports only; definitions unchanged",
             }
         )
-    for relative in ("server/app.py", "server/curriculum.py", "server/quality.py"):
+    for relative in ("server/app.py", "server/curriculum.py", "server/quality.py", "server/contamination.py"):
         path = output / relative
         content = path.read_text()
         for before, after in IMPORT_RELOCATIONS.items():
