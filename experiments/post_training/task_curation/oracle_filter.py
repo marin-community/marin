@@ -119,13 +119,6 @@ def calibration_package_identity(path: Path, oracle_kind: str) -> str:
     return canonical_sha256({"task": document, "files": files})
 
 
-def trial_receipt(path: Path) -> OracleTrialReceipt:
-    document = decode_json_value(path.read_text())
-    native = Path(document["config"]["task"]["path"])
-    package = harbor_inspection("tasks", [str(native)])[str(native)]
-    return receipt_from_trial(path, document, package["task_checksum"])
-
-
 def receipt_from_trial(path: Path, document: dict, native_checksum: str) -> OracleTrialReceipt:
     """Read a trial's evidence against its measured native checksum."""
     native = Path(document["config"]["task"]["path"])
