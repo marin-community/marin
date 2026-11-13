@@ -3,7 +3,7 @@
 
 """Bind mandatory deduplication evidence to the configured source population."""
 
-import json
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -13,10 +13,10 @@ from finestore.rl.source_identity import canonical_source_id
 from experiments.post_training.task_curation.source import RlDataSource
 
 
-def read_dedup_receipts(path: Path) -> dict[str, WithinSourceDedupEvidence]:
+def read_dedup_receipts(path: Path, *, load_json: Callable[[Path], dict]) -> dict[str, WithinSourceDedupEvidence]:
     return {
         canonical_source_id(source_id): WithinSourceDedupEvidence.model_validate(record)
-        for source_id, record in json.loads(path.read_text()).items()
+        for source_id, record in load_json(path).items()
     }
 
 

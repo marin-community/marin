@@ -5,6 +5,35 @@ Data Atlas through [all_sources()](sources.py). See the
 [reference](../../../docs/references/task-curation.md) for source fields, grading,
 reviewed SAMPLE/FULL campaigns and artifact outputs.
 
+## Pinned registry receipts
+
+Generated census, lexical, retention, deduplication and fingerprint-index JSON is
+archived in the private `open-athena/marin-rl-data-atlas-registry` dataset. The
+repository keeps a reference at each original path with `repo`, exact commit
+`revision`, archive `path` and `sha256`. The archive preserves the original bytes
+and layout; it does not publish or modify a retained TaskCompendium release.
+Human-reviewed policy, including duplicate acknowledgements, stays in Git.
+
+`registry.read_registry_json()` uses the Hugging Face client's authenticated
+cache and verifies the downloaded bytes before decoding. Missing revisions,
+unavailable credentials and checksum mismatches fail the operation; there is no
+fallback to a different revision or inline data. Catalog construction, admission,
+selection and the source-overlap gate use this reader. Importing catalog modules
+does not download the registry; receipt accessors load it when called.
+
+When recording new measurements, write raw receipts into a fresh artifact
+directory, archive them in a new commit of the same private registry, and verify
+downloaded hashes before updating the small references. Preserve all earlier
+commits and artifacts. Do not write generated receipt bodies over pinned
+references. The overlap workflow uses the existing `HF_TOKEN` secret for read
+access; local operators use the Hugging Face client's normal credentials.
+
+Unit tests inject small documents at the download boundary and reject registry
+downloads. Tests that inspect the complete private registry use the
+`data_integration` marker and are excluded from the default safe suite. The
+source-overlap ranking fixture contains two small contracts rather than an
+archived production population.
+
 ## Final task selection
 
 Pass `--selection RECIPE.json` to a FULL campaign to append a

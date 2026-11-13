@@ -26,6 +26,7 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode, run_
 from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.datasets.native_harbor import VERSION, hub_rows, native_task, unpack_native
+from experiments.post_training.task_curation.registry import read_registry_json
 
 LOGGER = logging.getLogger(__name__)
 RETIRED = Path(__file__).with_name("retired-inventory-only.json")
@@ -192,7 +193,7 @@ def main() -> None:
     parser.add_argument("--hub-input")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    entries = {entry["id"]: entry for entry in json.loads(RETIRED.read_text())["entries"]}
+    entries = {entry["id"]: entry for entry in read_registry_json(RETIRED)["entries"]}
     args.root.mkdir(parents=True, exist_ok=True)
     for requested in args.source:
         source_id = canonical_source_id(requested)

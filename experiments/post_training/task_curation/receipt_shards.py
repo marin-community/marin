@@ -4,7 +4,7 @@
 """Read and write source receipt shards."""
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from finestore.rl.source_identity import canonical_source_id
@@ -13,10 +13,12 @@ from pydantic import BaseModel
 RECEIPTS_PER_SHARD = 64
 
 
-def read_receipt_shards[T: BaseModel](directory: Path, model: type[T], kind: str) -> dict[str, T]:
+def read_receipt_shards[T: BaseModel](
+    directory: Path, model: type[T], kind: str, *, load_json: Callable[[Path], dict]
+) -> dict[str, T]:
     receipts = {}
     for path in sorted(directory.glob("part-*.json")):
-        for source_id, record in json.loads(path.read_text()).items():
+        for source_id, record in load_json(path).items():
             source_id = canonical_source_id(source_id)
             receipt = model.model_validate(record)
             if source_id != receipt.model_dump()["source_id"] or source_id in receipts:
