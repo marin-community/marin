@@ -44,7 +44,7 @@ from rigging.secrets import COREWEAVE_SECRET_NAMES, SecretBehavior, get_secret
 from rigging.timing import Duration
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Command, ExitReason, MachineSpec, NetworkPolicy
+from shellbox.machine import Command, MachineSpec, NetworkPolicy
 from taskforge.sandbox.image_builder import (
     BUILD_IMAGE,
     BUILD_SCRIPT,
@@ -93,7 +93,8 @@ UNPACK = (
     "for wheel in sorted(pathlib.Path('/opt/probe-wheels').glob('*.whl')):\n"
     "    zipfile.ZipFile(wheel).extractall('/opt/pt')\n"
 )
-# One target per exec: urllib's timeout does not bound the DNS lookup, which can hang when egress drops packets.
+# One target per exec, bounded inside the guest: urllib's timeout does not bound the DNS lookup, which hangs
+# when egress drops packets, and an Iris command that reaches its host deadline closes the whole machine.
 EGRESS_URL = """\
 import sys, urllib.request
 try:
@@ -110,7 +111,9 @@ try:
 except OSError as error:
     print(type(error).__name__)
 """
-EGRESS_TIMEOUT = 30
+EGRESS_GUEST_TIMEOUT = 15
+EGRESS_TIMEOUT = 60
+GUEST_TIMEOUT_EXIT = 124
 # kaniko unpacks the base image over the root it runs in and keeps files already there. Taskforge runs it in
 # an Alpine bash image, so Alpine's /etc/protocols and /etc/ssl/openssl.cnf stay in the build root, and an
 # apt install of netbase or openssl stops at a dpkg conffile prompt. Like the official kaniko image, leave
@@ -147,9 +150,13 @@ def _text(result) -> str:
 
 
 async def _egress(machine, script: str, *args: str) -> str:
-    result = await machine.run(Command(("python3", "-c", script, *args), timeout=EGRESS_TIMEOUT))
-    # A target that never answers within the deadline was not reached.
-    return "timed_out" if result.reason == ExitReason.TIMED_OUT else _text(result) or f"exit {result.exit_code}"
+    result = await machine.run(
+        Command(("timeout", str(EGRESS_GUEST_TIMEOUT), "python3", "-c", script, *args), timeout=EGRESS_TIMEOUT)
+    )
+    # A target that never answers within the guest deadline was not reached.
+    if result.exit_code == GUEST_TIMEOUT_EXIT:
+        return "timed_out"
+    return _text(result) or f"exit {result.exit_code}"
 
 
 async def _checks(machine, scratch: Path, row: dict) -> None:
@@ -340,6 +347,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sandboxes", type=int, required=True, help="Concurrent sandboxes per round.")
     parser.add_argument("--rounds", type=int, required=True)
+    parser.add_argument(
+        "--build-count", type=int, choices=range(len(BUILD_TASKS) + 1), required=True, help="TMax kaniko builds to run."
+    )
     parser.add_argument("--max-p90-start", type=float, required=True, help="Pass rule for p90 start latency (s).")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--upload", required=True, help="Remote directory that receives a copy of --output.")
@@ -365,15 +375,16 @@ def main() -> None:
 
 def _probe(factory: IrisMachineFactory, controller_url: str, scratch: Path, args: argparse.Namespace) -> dict:
     rounds = []
-    with ThreadPoolExecutor(len(BUILD_TASKS)) as pool:
-        build_futures = [pool.submit(_build, controller_url, task) for task in BUILD_TASKS]
+    build_tasks = BUILD_TASKS[: args.build_count]
+    with ThreadPoolExecutor(max(1, len(build_tasks))) as pool:
+        build_futures = [pool.submit(_build, controller_url, task) for task in build_tasks]
         for number in range(args.rounds):
             logger.info("round %d: %d sandboxes", number, args.sandboxes)
             rows = asyncio.run(_round(factory, scratch, args.sandboxes))
             (args.output / f"round-{number}.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
             rounds.append(rows)
         builds = []
-        for task, future in zip(BUILD_TASKS, build_futures, strict=True):
+        for task, future in zip(build_tasks, build_futures, strict=True):
             try:
                 builds.append(future.result())
             except Exception as error:
