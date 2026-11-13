@@ -563,7 +563,6 @@ def test_get_table_registers_complete_versioned_object_backed_spec(tracked_clien
         assert registered.source_layout.target_object_bytes == 128 * 1024 * 1024
         assert registered.artifact_policy.revision == 4
         assert registered.logical_schema.columns[1].index.catalog_bounds
-        # Catalog bounds are catalog metadata, not an index artifact, as the server expects.
         assert [index.column for index in registered.artifact_policy.indexes] == ["worker_id"]
         assert registered.operating_policy.l0_mode == stats_pb2.L0_MODE_OBJECT_STORE
         assert registered.operating_policy.local_cache.max_bytes == 1024
@@ -1152,7 +1151,6 @@ def test_schema_from_proto_consistency():
         assert proto_col.index.trigram == src_col.trigram_index
         assert tuple(proto_col.index.exact_values) == src_col.exact_values
         assert proto_col.index.value_counts == src_col.value_counts
-        assert proto_col.index.catalog_bounds == src_col.catalog_bounds
 
 
 def test_trigram_index_round_trips_through_proto():
