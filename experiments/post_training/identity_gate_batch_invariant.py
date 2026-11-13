@@ -143,8 +143,17 @@ def submit_serve(model: str, serve_args: list[str], name: str, endpoint_name: st
 
 
 @contextlib.contextmanager
-def served_endpoint(shared: ModuleType, model: str, serve_args: list[str], tag: str) -> Iterator[tuple[object, dict]]:
-    """Serve ``model``, yield the gate's ``Endpoint`` and the serve record, and cancel the serve on exit."""
+def served_endpoint(
+    shared: ModuleType,
+    model: str,
+    serve_args: list[str],
+    tag: str,
+    wait_seconds: float = ENDPOINT_WAIT_SECONDS,
+) -> Iterator[tuple[object, dict]]:
+    """Serve ``model``, yield the gate's ``Endpoint`` and the serve record, and cancel the serve on exit.
+
+    ``wait_seconds`` covers queueing for capacity as well as model load.
+    """
     name = f"m16gate-bi-{tag}-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}"
     endpoint_name = f"/serve/{name}"
     job_id = submit_serve(model, serve_args, name, endpoint_name)
@@ -154,7 +163,7 @@ def served_endpoint(shared: ModuleType, model: str, serve_args: list[str], tag: 
         with connect_controller(cluster_name="marin") as info:
             with IrisClient.remote(info.url, workspace=Path.cwd(), credentials=info.credentials) as client:
                 job = client.job(JobName.from_wire(job_id))
-                _wait_for_endpoint(client, job, endpoint_name, ENDPOINT_WAIT_SECONDS)
+                _wait_for_endpoint(client, job, endpoint_name, wait_seconds)
                 token = client.mint_endpoint_token(endpoint_name, ttl=Duration.from_hours(1))
         record["ready_utc"] = time.time()
         logger.info("Endpoint ready; scoring")
@@ -258,6 +267,13 @@ def run(
 @common
 @click.option("--target-cluster", required=True, help="H100 peer to serve on; the original gate used cw-rno2a.")
 @click.option("--passes", type=click.IntRange(min=2), default=2, help="Passes over the 24 primary rows.")
+@click.option(
+    "--endpoint-wait-hours",
+    type=float,
+    default=ENDPOINT_WAIT_SECONDS / 3600,
+    show_default=True,
+    help="How long to wait for the serve, including time queued for capacity.",
+)
 @click.option("--out", required=True, type=click.Path(path_type=Path))
 def repeat(
     gate_path: Path,
@@ -266,6 +282,7 @@ def repeat(
     original: Path,
     target_cluster: str,
     passes: int,
+    endpoint_wait_hours: float,
     out: Path,
 ):
     """Smaller check: serve the baseline arm and score the 24 primary rows ``passes`` times.
@@ -300,7 +317,8 @@ def repeat(
             "original_family_mean_spread": original_receipt["primary_passes"]["family_mean_spread_NLL_per_token"],
             "passes": [],
         }
-        with served_endpoint(shared, model, serve_args, "repeat") as (endpoint, serve):
+        wait_seconds = endpoint_wait_hours * 3600
+        with served_endpoint(shared, model, serve_args, "repeat", wait_seconds) as (endpoint, serve):
             report["serve"] = serve
             for index in range(passes):
                 logprobs, records = {}, {}
