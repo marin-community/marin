@@ -21,10 +21,15 @@ Differences from the original run, all recorded in the receipt:
 Run from the repository root::
 
     uv run python experiments/post_training/identity_gate_batch_invariant.py check ...
+    uv run python experiments/post_training/identity_gate_batch_invariant.py repeat ...
     uv run python experiments/post_training/identity_gate_batch_invariant.py run --arm baseline ...
+
+``repeat`` is the smaller check: the baseline arm only, the 24 primary rows scored twice and
+compared exactly. ``run`` and ``decide`` are the full two-arm, five-pass gate.
     uv run python experiments/post_training/identity_gate_batch_invariant.py decide ...
 """
 
+import contextlib
 import hashlib
 import importlib
 import json
@@ -33,6 +38,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 
@@ -136,6 +142,30 @@ def submit_serve(model: str, serve_args: list[str], name: str, endpoint_name: st
     raise click.ClickException("The serve CLI did not report a job id")
 
 
+@contextlib.contextmanager
+def served_endpoint(shared: ModuleType, model: str, serve_args: list[str], tag: str) -> Iterator[tuple[object, dict]]:
+    """Serve ``model``, yield the gate's ``Endpoint`` and the serve record, and cancel the serve on exit."""
+    name = f"m16gate-bi-{tag}-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}"
+    endpoint_name = f"/serve/{name}"
+    job_id = submit_serve(model, serve_args, name, endpoint_name)
+    logger.info("Submitted %s", job_id)
+    record = {"job": job_id, "submitted_utc": time.time()}
+    try:
+        with connect_controller(cluster_name="marin") as info:
+            with IrisClient.remote(info.url, workspace=Path.cwd(), credentials=info.credentials) as client:
+                job = client.job(JobName.from_wire(job_id))
+                _wait_for_endpoint(client, job, endpoint_name, ENDPOINT_WAIT_SECONDS)
+                token = client.mint_endpoint_token(endpoint_name, ttl=Duration.from_hours(1))
+        record["ready_utc"] = time.time()
+        logger.info("Endpoint ready; scoring")
+        # The capability URL stays in memory and is never logged.
+        yield shared.Endpoint(token.capability_url.rstrip("/")), record
+    finally:
+        cancel_rc = subprocess.run([*IRIS, "job", "cancel", job_id], capture_output=True).returncode
+        logger.info("Serve cancel returned %d", cancel_rc)
+        record["cancelled_after_scoring"] = cancel_rc == 0
+
+
 @click.group()
 def cli():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -208,27 +238,10 @@ def run(
         if arm == "candidate":
             provenance["candidate_kind"] = "sft"
 
-        name = f"m16gate-bi-{arm}-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}"
-        endpoint_name = f"/serve/{name}"
-        job_id = submit_serve(provenance["model"], serve_args, name, endpoint_name)
-        logger.info("Submitted %s", job_id)
-        provenance["serve"] = {"job": job_id, "submitted_utc": time.time()}
-        try:
-            with connect_controller(cluster_name="marin") as info:
-                with IrisClient.remote(info.url, workspace=Path.cwd(), credentials=info.credentials) as client:
-                    job = client.job(JobName.from_wire(job_id))
-                    _wait_for_endpoint(client, job, endpoint_name, ENDPOINT_WAIT_SECONDS)
-                    token = client.mint_endpoint_token(endpoint_name, ttl=Duration.from_hours(1))
-            provenance["serve"]["ready_utc"] = time.time()
-            logger.info("Endpoint ready; scoring")
-            # The capability URL stays in memory and is never logged.
-            endpoint = shared.Endpoint(token.capability_url.rstrip("/"))
+        with served_endpoint(shared, provenance["model"], serve_args, arm) as (endpoint, serve):
+            provenance["serve"] = serve
             receipt = gate_module.score_arm(endpoint, tokenizer, prompt_dir, gate, arm, provenance)
-        finally:
-            cancel_rc = subprocess.run([*IRIS, "job", "cancel", job_id], capture_output=True).returncode
-            logger.info("Serve cancel returned %d", cancel_rc)
-    receipt["provenance"]["serve"]["cancelled_after_scoring"] = cancel_rc == 0
-    gate_module.write_json(out, receipt)
+        gate_module.write_json(out, receipt)
     print(
         json.dumps(
             {
@@ -239,6 +252,95 @@ def run(
             }
         )
     )
+
+
+@cli.command()
+@common
+@click.option("--target-cluster", required=True, help="H100 peer to serve on; the original gate used cw-rno2a.")
+@click.option("--passes", type=click.IntRange(min=2), default=2, help="Passes over the 24 primary rows.")
+@click.option("--out", required=True, type=click.Path(path_type=Path))
+def repeat(
+    gate_path: Path,
+    identity_path: Path,
+    tokenizer_path: Path,
+    original: Path,
+    target_cluster: str,
+    passes: int,
+    out: Path,
+):
+    """Smaller check: serve the baseline arm and score the 24 primary rows ``passes`` times.
+
+    Exactly equal passes mean the gate's five-pass spread is zero on this serve. Results are
+    written after every pass, so a preempted serve keeps what it finished.
+    """
+    serve_args = serve_args_for(target_cluster)
+    original_receipt = json.loads(original.read_text())
+    assert original_receipt["arm"] == "baseline", original_receipt["arm"]
+    model = original_receipt["provenance"]["model"]
+    with tempfile.TemporaryDirectory() as tmp:
+        workdir = Path(tmp)
+        shared, gate_module = load_gate_code(workdir)
+        gate = gate_module.load_gate(gate_path)
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+        prompt_dir = prepare_prompt_dir(workdir, identity_path)
+        check_inputs(shared, gate_module, prompt_dir, tokenizer)
+        check_grid_matches(gate_module, prompt_dir, gate, original_receipt, tokenizer)
+        rows = {row.id: row for row, _ in gate_module.grid_jobs(prompt_dir, gate)}
+        primary_rows = gate["primary_rows"]
+        report = {
+            "issue": "https://github.com/marin-community/marin/issues/10699",
+            "model": model,
+            "serve_args": serve_args,
+            "serve_environment": [BATCH_INVARIANT_ENV],
+            "scorer_revision": SCORER_REVISION,
+            "gate_module_revision": GATE_REVISION,
+            "sampling": gate_module.SAMPLING,
+            "request_order": "the 24 primary rows (gate order, no_system), one request per candidate, per pass",
+            "original_stability_max_abs_diff": original_receipt["logprob_stability_max_abs_diff"],
+            "original_family_mean_spread": original_receipt["primary_passes"]["family_mean_spread_NLL_per_token"],
+            "passes": [],
+        }
+        with served_endpoint(shared, model, serve_args, "repeat") as (endpoint, serve):
+            report["serve"] = serve
+            for index in range(passes):
+                logprobs, records = {}, {}
+                for row_id, spec in primary_rows.items():
+                    row = rows[row_id]
+                    result = shared.score_contrastive_row(endpoint, tokenizer, row, shared.Condition.NO_SYSTEM)
+                    spans = gate_module.span_lengths(tokenizer, result["prefix"], result["candidates"])
+                    case = gate_module.case_record(-1, result, spans, row.contrastive["correct_indices"])
+                    logprobs[row_id] = result["logprobs"]
+                    records[row_id] = gate_module.primary_record(case, spec)
+                report["passes"].append(
+                    {
+                        "pass": index,
+                        "candidate_summed_logprobs": logprobs,
+                        "family_mean_NLL_per_token": gate_module.family_means(records),
+                    }
+                )
+                gate_module.write_json(out, report)
+                logger.info("Finished pass %d", index)
+        first = report["passes"][0]["candidate_summed_logprobs"]
+        later = [p["candidate_summed_logprobs"] for p in report["passes"][1:]]
+        diffs = [
+            abs(a - b) for other in later for row_id in first for a, b in zip(first[row_id], other[row_id], strict=True)
+        ]
+        means = [p["family_mean_NLL_per_token"] for p in report["passes"]]
+        report["summary"] = {
+            "passes": passes,
+            "rows": len(first),
+            "rows_identical_in_every_pass": sum(
+                all(other[row_id] == first[row_id] for other in later) for row_id in first
+            ),
+            "candidate_scores_compared": len(diffs),
+            "candidate_scores_identical": sum(diff == 0.0 for diff in diffs),
+            "max_abs_diff_summed_logprob": max(diffs),
+            "family_mean_spread": {
+                family: max(m[family] for m in means) - min(m[family] for m in means) for family in means[0]
+            },
+        }
+        gate_module.write_json(out, report)
+    print(json.dumps(report["summary"]))
 
 
 @cli.command()
