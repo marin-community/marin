@@ -160,16 +160,15 @@ Disaggregated vLLM engines can span hosts when TP=PP=1 and EP=DP exceeds the GPU
 The runtime places each worker in a one-GPU Ray bundle and checks its host, GPU UUID and ranks.
 The rollout pool uses `ceil(engine count * DP / GPUs per host)` hosts. For example, 48 policy
 GPUs plus one DP=EP=12 rollout engine require 15 four-GPU hosts. The planner also accepts
-32/48/64 policy GPUs paired with 16/32/64 rollout GPUs, and a 72-GPU policy with valid
-Megatron geometry. These counts describe resource planning; larger layouts need separate
-runtime qualification.
+other configured counts with valid Megatron geometry, with no rack-size cap. Runtime evidence
+for this cross-host path covers the 48/12 layout. Other layouts, including engines that share
+or partly fill a host, need separate runtime qualification.
 
 Engines that fit on one host retain whole-engine packing: each host holds
 `floor(GPUs per host / engine ranks)` engines. Other disaggregated engines must still fit
 on one host. For colocated roles, each TP-by-PP slice must fit within and divide a policy node;
 DP replicas occupy separate slices. Expert parallel size must divide `tensor parallel * data parallel`;
-pipeline stages form separate expert
-groups. Total planned GPUs are:
+pipeline stages form separate expert groups. Total planned GPUs are:
 
 ```text
 policy GPUs = policy nodes * policy GPUs per node
@@ -179,9 +178,10 @@ separate roles: policy GPUs + rollout GPUs
 colocated roles: policy GPUs, which must equal rollout GPUs
 ```
 
-That total must equal `num_nodes * gpus_per_node`. For example, four 8-GPU policy nodes plus four
-node-sized rollout engines require 64 GPUs. Leaving rollout DP at one describes only 36 GPUs and is
-rejected during graph construction.
+The allocation must provide exactly the planned hosts, including whole-host rounding and
+host-local packing gaps. For example, four 8-GPU policy nodes plus four node-sized rollout
+engines require eight hosts. Leaving rollout DP at one needs only five hosts; an eight-host
+allocation then disagrees with the derived role plan and is rejected before submission.
 
 The preflight requires positive role dimensions, checks batch divisibility, and requires an explicit
 forward microbatch size to equal the training microbatch size. It checks local engine placement,
