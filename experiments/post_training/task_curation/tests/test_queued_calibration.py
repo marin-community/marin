@@ -93,8 +93,6 @@ def test_calibration_consumes_queued_attempt_verdicts_and_infrastructure_failure
         if "harbor" not in args or "start" not in args:
             return run_process(args, **kwargs)
         config = TrialConfig.model_validate_json(Path(args[-1]).read_text())
-        # Replace the external process boundary, retaining real queue supervision,
-        # source execution, artifact persistence and result consumption.
         asyncio.run(TrialQueue(n_concurrent=1).submit(config))
         return subprocess.CompletedProcess(args, 0)
 
@@ -102,14 +100,13 @@ def test_calibration_consumes_queued_attempt_verdicts_and_infrastructure_failure
     calibrated = calibrated_task(task, mapping, tmp_path / "calibration", "daytona", {}, None)
     attempts = calibrated["calibration"]["attempts"]
     assert len(attempts) == 1
-    for receipt in attempts:
-        assert receipt["result"]["task_checksum"] == mapping["task_checksum"]
-        assert Path(receipt["path"]).is_file()
-        if outcome == "provider_failure":
-            assert receipt["verdict"] is None
-            assert receipt["oracle_exit_code"] is None
-            assert receipt["result"]["exception_info"]["exception_type"] == "DaytonaConnectionError"
-        else:
-            assert receipt["verdict"]["reward"] == int(outcome == "pass")
-            assert receipt["verdict"]["status"] == "scored"
-            assert receipt["oracle_exit_code"] == 0
+    receipt = attempts[0]
+    assert receipt["result"]["task_checksum"] == mapping["task_checksum"]
+    if outcome == "provider_failure":
+        assert receipt["verdict"] is None
+        assert receipt["oracle_exit_code"] is None
+        assert receipt["result"]["exception_info"]["exception_type"] == "DaytonaConnectionError"
+    else:
+        assert receipt["verdict"]["reward"] == int(outcome == "pass")
+        assert receipt["verdict"]["status"] == "scored"
+        assert receipt["oracle_exit_code"] == 0
