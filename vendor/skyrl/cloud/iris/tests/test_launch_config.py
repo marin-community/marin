@@ -600,6 +600,9 @@ def test_source_launch_rejects_conflicting_author_values(tmp_path):
     raw.runtime.profile = "fsdp"
     cases.append((raw, "runtime.profile"))
     raw = OmegaConf.create(raw_launch_config())
+    raw.skyrl.trainer.callbacks = [{"type": "best_checkpoint"}]
+    cases.append((raw, "initial_model_uri"))
+    raw = OmegaConf.create(raw_launch_config())
     raw.skyrl.checkpoint_export = {"hf_hub_repo_id": "authored/model"}
     cases.append((raw, "checkpoint_export: the launch document owns export settings"))
     path = tmp_path / "invalid.yaml"
