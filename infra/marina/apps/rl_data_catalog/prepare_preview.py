@@ -41,14 +41,15 @@ def prepare_preview(checkout: Path, output: Path) -> None:
     modules = []
     for name, relative in MODEL_SOURCES.items():
         raw = (checkout / relative).read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
         (bundled / name).write_bytes(raw)
         modules.append(
             {
                 "source": relative,
-                "source_sha256": hashlib.sha256(raw).hexdigest(),
+                "source_sha256": digest,
                 "packaged": f"server/bundled/{name}",
-                "packaged_sha256": hashlib.sha256(raw).hexdigest(),
-                "transformation": "Byte-for-byte copy",
+                "packaged_sha256": digest,
+                "transformation": "Unchanged",
             }
         )
     for relative in ("server/app.py", "server/curriculum.py", "server/quality.py", "server/contamination.py"):
