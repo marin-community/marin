@@ -14,10 +14,8 @@ from iris.cluster.client.job_info import get_job_info
 from finestore.rl.run_records import (
     AttemptRecord,
     read_attempt,
-    run_records_root,
-    update_attempt,
+    write_attempt,
 )
-from finestore.store import DataStore
 
 from cloud.iris.launch_config import RunMode, load_launch_config
 from cloud.iris.rl_config_translation import registered_rl_entrypoint_module
@@ -34,16 +32,16 @@ def _start_attempt_record(config: DictConfig) -> None:
         vllm_version = None
     first_start = record is None or record.started_at is None
     facts = {"started_at": datetime.now(timezone.utc).isoformat(), "vllm_version": vllm_version} if first_start else {}
-    with DataStore.open(run_records_root(export_root)) as store:
-        update_attempt(
-            store,
-            AttemptRecord(
-                run_id=str(config.run.id),
-                attempt_id=attempt_id,
-                config=OmegaConf.to_container(config, resolve=True),
-                **facts,
-            ),
-        )
+    write_attempt(
+        export_root,
+        AttemptRecord(
+            run_id=str(config.run.id),
+            attempt_id=attempt_id,
+            iris_job_id=config.skyrl.runtime.iris_job_id,
+            config=OmegaConf.to_container(config, resolve=True),
+            **facts,
+        ),
+    )
 
 
 def run_config(config_path: Path) -> None:

@@ -18,9 +18,10 @@ Building the catalog performs no downloads, inference or job submission.
 [Evaluation tasks](evaluation-tasks.md) use population-preserving publication and
 carry execution protocols beside canonical tasks. Name them explicitly with
 `--source` and `--mode quick`; the default selection contains training sources.
-`experiments.post_training.task_curation.evaluation.EvalDataset` binds the recipe,
-protocol, and item builder. TaskCompendium owns the reusable source importers and
-corpus publisher; the experiment owns acquisition and artifact graphs.
+`experiments.evaluation.preparation.EvaluationCorpusRecipe` binds the recipe,
+protocol, and item builder. Evaluation owns shot selection and prompt preparation;
+shared curation code supplies acquisition and catalog publication. TaskCompendium
+owns reusable source importers and the corpus publisher.
 
 ## Pipeline overview
 

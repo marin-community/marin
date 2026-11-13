@@ -6,7 +6,7 @@ import pytest
 from marin.execution.lazy import StepContext
 
 from experiments.post_training.curriculum_rl import launch
-from experiments.post_training.snowball_tests.fixtures import native_json
+from experiments.post_training.skyrl_test_support import native_json
 
 COMPOSE_LAUNCHES = """
 import json

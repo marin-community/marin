@@ -5,11 +5,9 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from pydantic import NonNegativeInt
 
-from pydantic import Field, NonNegativeInt
-
-from .model import NumberMap, OpenMap, Section, field, unset_field
+from .model import Section, field, unset_field
 
 
 class EvalSamplingParams(Section):
@@ -20,43 +18,9 @@ class EvalSamplingParams(Section):
     top_p: int | float = field(1.0)
     min_p: int | float = field(0.0)
     top_k: int = field(-1)
-    logprobs: int | None = field(None)
-    stop: str | tuple[str, ...] | None = field(None)
+    logprobs: NonNegativeInt | None = field(None)
+    stop: tuple[str, ...] | None = field(None)
     stop_token_ids: tuple[int, ...] | None = field(None)
     skip_special_tokens: bool = field(True)
     min_tokens: NonNegativeInt = unset_field()
-    allowed_token_ids: tuple[int, ...] | None = unset_field()
-    bad_words: tuple[str, ...] | None = unset_field()
-    custom_params: OpenMap | None = unset_field()
-    detokenize: bool = unset_field()
-    ebnf: str | None = unset_field()
-    extra_args: OpenMap | None = unset_field()
-    flat_logprobs: bool = unset_field()
-    frequency_penalty: int | float = unset_field()
-    include_stop_str_in_output: bool = unset_field()
-    json_schema: str | None = unset_field()
-    logit_bias: NumberMap | None = unset_field()
-    logprob_token_ids: tuple[int, ...] | None = unset_field()
-    max_new_tokens: int | None = unset_field()
-    max_tokens: int | None = unset_field()
-    min_new_tokens: int = unset_field()
-    n: int = unset_field()
-    no_stop_trim: bool = unset_field()
-    output_kind: Annotated[int, Field(ge=0, le=2)] = unset_field()
-    output_text_buffer_length: int = unset_field()
-    presence_penalty: int | float = unset_field()
-    prompt_logprobs: int | None = unset_field()
-    regex: str | None = unset_field()
-    routed_experts_prompt_start: int = unset_field()
-    sampling_seed: int | None = unset_field()
     seed: int | None = unset_field()
-    skip_clone: bool = unset_field()
-    skip_reading_prefix_cache: bool | None = unset_field()
-    spaces_between_special_tokens: bool = unset_field()
-    stop_regex: str | tuple[str, ...] | None = unset_field()
-    stream_interval: int | None = unset_field()
-    thinking_token_budget: int | None = unset_field()
-    trace_decode_token_ids: tuple[int, ...] | None = unset_field()
-    watermarking: bool = unset_field()
-    structured_outputs: OpenMap | None = unset_field()
-    repetition_detection: OpenMap | None = unset_field()

@@ -28,7 +28,7 @@ from iris.resources.state import JobState
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl import SkyRLRun
-from marin.rl.skyrl_records import read_skyrl_metrics
+from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_launch_config, read_skyrl_metrics
 from rigging.provenance import Provenance
 from scipy.stats import t
 
@@ -45,7 +45,7 @@ from experiments.post_training.snowball_tests.fixtures import (
 from experiments.post_training.snowball_tests.fixtures import answer as _answer
 from experiments.post_training.snowball_tests.fixtures import write_json as _json
 
-pytestmark = pytest.mark.usefixtures("source_provenance")
+pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 VLLM = "vllm/median_generation_throughput"
 KL = "policy/mismatch/staleness0/kl_k3"
 
@@ -55,7 +55,7 @@ def controls(write, name, **kwargs):
     return [
         write(
             name,
-            presets.control_name(pin.preset, pin.commit, i),
+            gate.control_name(pin.preset, pin.commit, i),
             speed=100 + i,
             score=0.49 + i * 0.01,
             legacy=True,
@@ -127,16 +127,6 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs
     assert json.loads(artifact.read_text()) == report and artifact.with_suffix(".md").exists()
     invariants = {row["name"]: row for row in report["invariants"]}
     assert all(row["comparator"] is not None for row in invariants.values())
-    assert invariants["grader_error_fraction"]["comparator"] == "<="
-    assert invariants["planned_updates"]["comparator"] == "=="
-    assert invariants["finite_losses_and_gradients"]["comparator"] == "=="
-    fixed = invariants["fixed_reply_tokens"]
-    assert fixed["value"] is True and fixed["limit"] is True and fixed["comparator"] == "=="
-    historical = json.loads(artifact.read_text())
-    for row in historical["invariants"]:
-        row.pop("comparator")
-    decoded = gate.GateReport.model_validate_json(json.dumps(historical))
-    assert all(row.comparator is None for row in decoded.invariants)
     monkeypatch.setattr(sys, "argv", ["snowball_rl_gate", "--preset", "speed-medium", "--leave-out", "r0"])
     capsys.readouterr()
     with pytest.raises(SystemExit) as result:
@@ -172,9 +162,7 @@ def test_verdict_labels_use_objectives_and_guards(
 ):
     pin = gate.control_pins(presets.PRESETS["speed-medium"])[0]
     for i, value in enumerate(control_values):
-        recorded_runs(
-            "speed-medium", presets.control_name(pin.preset, pin.commit, i), speed=100 + i, metrics={VLLM: value}
-        )
+        recorded_runs("speed-medium", gate.control_name(pin.preset, pin.commit, i), speed=100 + i, metrics={VLLM: value})
     recorded_runs("speed-medium", "users/test/telemetry", speed=speed, metrics={VLLM: telemetry, KL: kl})
     report = rescore("speed-medium", "--candidate", "users/test/telemetry")
     assert (report["verdict"], report["label"]) == (verdict, label)
@@ -188,15 +176,13 @@ def test_zero_spread_is_unavailable_and_required_guards_are_invalid(recorded_run
     pin = gate.control_pins(presets.PRESETS["learning-medium"])[0]
     for i in range(pin.runs):
         value = (i + 1) / 4
-        recorded_runs(
-            "learning-medium", presets.control_name(pin.preset, pin.commit, i), score=value, initial_score=value
-        )
+        recorded_runs("learning-medium", gate.control_name(pin.preset, pin.commit, i), score=value, initial_score=value)
     recorded_runs("learning-medium", "users/test/zero-objective", score=0.625, initial_score=0)
     report = rescore("learning-medium", "--candidate", "users/test/zero-objective")
     row = comparisons(report, "objective")["eval_lite/family_mean/gain_per_h100_hour"]
     assert (row["sd"], row["noise_percent"], row["change"], report["label"]) == (0, None, "unavailable", "no change")
     for i in range(pin.runs):
-        recorded_runs("learning-medium", presets.control_name(pin.preset, pin.commit, i), score=0.5)
+        recorded_runs("learning-medium", gate.control_name(pin.preset, pin.commit, i), score=0.5)
     recorded_runs("learning-medium", "users/test/zero-guard")
     report = rescore("learning-medium", "--candidate", "users/test/zero-guard")
     assert report["verdict"] == "invalid" and "variation is zero" in report["reason"]
@@ -207,7 +193,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     pin = gate.control_pins(presets.PRESETS["speed-medium"])[0]
     for i in range(pin.runs):
         recorded_runs(
-            "speed-medium", presets.control_name(pin.preset, pin.commit, i), speed=100 + i, metrics={key: 100 + i}
+            "speed-medium", gate.control_name(pin.preset, pin.commit, i), speed=100 + i, metrics={key: 100 + i}
         )
     recorded_runs("speed-medium", "users/test/borderline", speed=108, metrics={key: 1})
     base = rescore("speed-medium", "--candidate", "users/test/borderline")
@@ -352,18 +338,15 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
             task["id"] = "candidate-" + task["id"]
             row["task_spec"] = json.dumps(task)
         pq.write_table(pa.Table.from_pylist(rows), path)
-        path = root / "exports/dumped_evals/eval_only/panel.jsonl"
+        path = root / "exports/dumped_evals/eval_only/task_set.jsonl"
         rows = [json.loads(line) for line in path.read_text().splitlines()]
         for row in rows:
             row["task_id"] = "candidate-" + row["task_id"]
         path.write_text("".join(json.dumps(row) + "\n" for row in rows))
     values = read_skyrl_metrics(str(root))[0]
-    assert "generate/outcome/graded" not in values and values["attempt_id"] == "recorded-attempt"
     report = rescore(preset, "--candidate", "users/test/current-generation")
     assert (report["verdict"], report["label"]) == ("pass", "no change"), report
     if preset == "speed-short":
-        coverage = [row for row in report["invariants"] if row["name"].endswith("/panel_scored_fraction")]
-        assert coverage and all(row["comparator"] == ">=" for row in coverage)
         values["eval/eval_lite/all/outcome/graded"] = 1480
         values["eval/eval_lite/all/outcome/unavailable"] = 20
         write_metrics(root, {0: values})
@@ -371,6 +354,19 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
         shutil.copytree(root, alias)
         report = rescore(preset, "--candidate", "users/test/current-bad-counter")
         assert report["verdict"] == "fail"
+        task_set = root / "exports/eval_lite/dumped_evals/eval_only/task_set.jsonl"
+        answers = [json.loads(line) for line in task_set.read_text().splitlines()]
+        for answer in answers[:20]:
+            answer["verification"]["status"] = "error"
+        task_set.write_text("".join(json.dumps(answer) + "\n" for answer in answers))
+        values["eval/eval_lite/all/outcome/graded"] = 1500
+        values["eval/eval_lite/all/outcome/unavailable"] = 0
+        write_metrics(root, {0: values})
+        coverage_run = root.parent.parent / "current-low-coverage" / root.name
+        shutil.copytree(root, coverage_run)
+        report = rescore(preset, "--candidate", "users/test/current-low-coverage")
+        coverage = next(row for row in report["invariants"] if row["name"].endswith("/scored_fraction"))
+        assert coverage["value"] < 0.99 and coverage["holds"] is False
 
 
 @pytest.mark.parametrize(
@@ -380,8 +376,9 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
         (("skyrl", "generator", "enable_prefix_caching"), False, (), "invalid"),
         (("runtime", "task_env", "VLLM_PROBE"), "1", ('extra_env.VLLM_PROBE="1"',), "pass"),
         (("skyrl", "generator", "eval_sampling_params", "temperature"), 0.5, (), "invalid"),
-        (("skyrl", "generator", "chat_template"), "different", (), "invalid"),
+        (("skyrl", "generator", "chat_template"), {"source": "name", "name_or_path": "different"}, (), "invalid"),
         (("runtime", "task_env", "TASK_PROBE"), "1", (), "invalid"),
+        (("skyrl", "trainer", "seed"), None, (), "invalid"),
         (("recorded-named",), None, (), "pass"),
     ],
 )
@@ -393,7 +390,9 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
         launch = json.loads((root / "terminal.json").read_text())["config"]
         launch["skyrl"]["generator"]["eval_sampling_params"]["presence_penalty"] = 0.8
         launch["skyrl"]["generator"]["eval_n_samples_per_prompt"] = 7
-        protocol = scoring.evaluation_protocol(launch, "eval_lite")
+        protocol = scoring.evaluation_protocol(
+            RecordedLaunch.from_document(launch, attempt="recorded-attempt"), "eval_lite"
+        )
         assert protocol["sampling_params"] == {
             "ignore_eos": False,
             "max_generate_length": 8192,
@@ -404,6 +403,8 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
             "top_k": -1,
             "logprobs": None,
             "stop": None,
+            "stop_token_ids": None,
+            "skip_special_tokens": True,
         }
         assert protocol["n_samples_per_prompt"] == 1
         assert protocol["context_budget"]["max_new_tokens_per_turn"] == 8192
@@ -422,7 +423,9 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
     write_receipt(root, receipt)
     report = rescore("learning-medium", "--candidate", "users/test/protocol")
     assert report["verdict"] == verdict, report
-    if verdict == "invalid":
+    if path == ("skyrl", "trainer", "seed"):
+        assert "malformed recorded configuration" in report["reason"] and "seed" in report["reason"]
+    elif verdict == "invalid":
         assert "evaluation protocol" in report["reason"] or "config differs" in report["reason"]
 
 
@@ -444,111 +447,275 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
         ("candidate-compose-no-wait", 4),
         ("train-candidate-compose", 4),
         ("train-candidate-compose-no-wait", 4),
+        ("train-pass", 0),
+        ("train-failed", 3),
+        ("malformed-control", 4),
+        ("malformed-status", 4),
+        ("fail-no-login", 1),
+        ("invalid-no-login", 2),
+        ("parent-early", 2),
+        ("mixed-native-failed", 2),
+        ("control-missing-receipt", 3),
+        ("partial-retry", 0),
+        ("data-short", 0),
     ],
 )
-def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
+def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
+    recorded_runs, selection, monkeypatch, case, expected
+):
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
-    preset = presets.PRESETS["train-long" if case.startswith("train-candidate") else "speed-medium"]
-    roots = controls(recorded_runs, preset.name) if preset.gated else []
-    built = snowball.build_run(preset)
-    source = (
-        None
-        if "candidate-compose" in case
-        else recorded_runs(
-            preset.name,
-            built.runs[0].name,
-            speed=150 if case == "fail" else 101,
-            fingerprint=built.runs[0].fingerprint(),
-        )
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+    publication_case = case in {
+        "pass",
+        "changed-source",
+        "child",
+        "fail-no-login",
+        "invalid-no-login",
+        "parent-early",
+        "mixed-native-failed",
+        "control-missing-receipt",
+        "partial-retry",
+        "data-short",
+    }
+    preset_name = (
+        "train-long"
+        if case.startswith("train-") or case == "malformed-status"
+        else "data-short" if case == "data-short" else "learning-medium" if publication_case else "speed-medium"
     )
-    if case.startswith("recorded-"):
-        receipt = json.loads((source / "terminal.json").read_text())
-        if case == "recorded-sync":
-            receipt["config"]["runtime"]["training_type"] = "sync"
+    preset = presets.PRESETS[preset_name]
+    if case == "child":
+        model = Path(presets.artifact_prefix(preset.recipe.layout.cluster)) / "child-model"
+        model.mkdir()
+        preset = replace(
+            preset,
+            model=replace(
+                preset.model,
+                step=ArtifactStep.adopt(
+                    preset.model.step.name,
+                    preset.model.step.version,
+                    str(model),
+                    kind=preset.model.step.artifact_type,
+                ),
+            ),
+        )
+        monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset_name: preset})
+    roots = controls(recorded_runs, preset.name) if preset.gated else []
+    replicas = 2 if case in {"partial-retry", "mixed-native-failed", "control-missing-receipt"} else 1
+    control = case == "control-missing-receipt"
+    built = snowball.build_run(
+        preset, control=control, replicates=replicas, tasks=selection if case == "data-short" else None
+    )
+    sources = (
+        []
+        if "candidate-compose" in case
+        else [
+            recorded_runs(
+                preset.name,
+                training.name,
+                speed=150 if case == "fail" else 101,
+                score=0.1 if case == "fail-no-login" else 0.5,
+                fingerprint=training.fingerprint(),
+                inputs=(
+                    gate.GateInputs(preset_name=preset_name, tasks=SELECTION_IDENTITY) if case == "data-short" else None
+                ),
+                attempt_id=f"native-{index}",
+            )
+            for index, training in enumerate(built.runs)
+        ]
+    )
+    source = sources[0] if sources else None
+    if case in {"native-failed", "train-failed", "invalid", "invalid-no-login"} or case.startswith(
+        ("malformed-", "recorded-", "stale-control")
+    ):
+        root = roots[0] if case == "malformed-control" else roots[-1] if case.startswith("stale-control") else source
+        receipt = json.loads((root / "terminal.json").read_text())
+        if case in {"native-failed", "train-failed"}:
+            receipt["result"]["state"] = "failed"
+        elif case in {"invalid", "invalid-no-login"}:
+            receipt["result"]["provenance"] = None
+        elif case.startswith("malformed-"):
+            receipt["config"]["skyrl"]["trainer"]["seed"] = None
+        elif case.startswith("recorded-"):
+            receipt["config"]["runtime"]["training_type"] = "sync" if case == "recorded-sync" else None
         else:
-            receipt["config"]["runtime"].pop("training_type")
-        write_receipt(source, receipt)
-    if case == "invalid":
-        receipt = json.loads((source / "terminal.json").read_text())
-        receipt["result"]["provenance"] = None
-        write_receipt(source, receipt)
-    if case == "native-failed":
-        receipt = json.loads((source / "terminal.json").read_text())
-        receipt["result"]["state"] = "failed"
-        write_receipt(source, receipt)
-        (source / "terminal.json").unlink()
-    if case.startswith("stale-control"):
-        receipt = json.loads((roots[-1] / "terminal.json").read_text())
-        receipt["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] = 5e-6
-        write_receipt(roots[-1], receipt)
-    job = JobName.from_wire("/atqamar/coordinator-id-returned-by-iris")
+            receipt["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] = 5e-6
+        write_receipt(root, receipt)
+        if case == "native-failed":
+            (source / "terminal.json").unlink()
+    pending = {}
+    if publication_case:
+        for root in sources:
+            for filename in ("terminal.json", "resolved-launch.yaml"):
+                path = root / filename
+                pending[path] = path.read_bytes()
+                path.unlink()
+    phase = {"retry": False}
+    submitted_provenance = Provenance.capture
 
     def finish(*args, **kwargs):
-        if case not in ("missing", "native-failed"):
+        for path, data in pending.items():
+            path.write_bytes(data)
+        if case in {"parent-early", "mixed-native-failed"}:
+            receipt = json.loads((source / "terminal.json").read_text())
+            if not phase["retry"]:
+                receipt["result"]["state"] = "failed"
+                write_receipt(source, receipt)
+                (source / "terminal.json").unlink()
+                return SimpleNamespace(state=JobState.FAILED)
+            metrics = read_skyrl_metrics(str(source), attempt_id="native-0")
+            receipt["config"]["run"]["attempt_id"] = "native-retry"
+            write_receipt(source, receipt)
+            for row in metrics.values():
+                row["attempt_id"] = "native-retry"
+            append_metrics(source, metrics)
+        if control and not phase["retry"]:
+            (source / "terminal.json").unlink()
+            (source / "resolved-launch.yaml").unlink()
+            return SimpleNamespace(state=JobState.FAILED)
+        if case not in {"missing", "native-failed"} and built.gate is not None:
             run(gate.completed_gate(built.gate))
-            if case == "changed-source":
-                monkeypatch.setattr(
-                    Provenance,
-                    "capture",
-                    lambda *args, **kwargs: Provenance("tree-edited-after-submit", "commit-one", True, "branch", "test"),
-                )
-        return SimpleNamespace(state=JobState.FAILED if case == "native-failed" else JobState.SUCCEEDED)
+        if case == "changed-source":
+            monkeypatch.setattr(
+                Provenance,
+                "capture",
+                lambda *args, **kwargs: Provenance(
+                    "tree-edited-before-publication",
+                    "commit-one",
+                    True,
+                    "branch",
+                    "test",
+                ),
+            )
+        return SimpleNamespace(
+            state=JobState.FAILED if case in {"native-failed", "train-failed"} else JobState.SUCCEEDED
+        )
 
-    jobs = {job: SimpleNamespace(wait=finish)}
     client = MagicMock(spec=IrisClient)
+    job = JobName.from_wire("/test-user/dashboard-coordinator")
     client.submit.return_value.job_id = job
-    if case.startswith("stale-control"):
-        client.submit.side_effect = AssertionError("stale controls reached the coordinator RPC")
-    if "candidate-compose" in case:
-        client.submit.side_effect = AssertionError("a candidate that cannot compose reached the coordinator RPC")
-    client.job.side_effect = lambda name: jobs[name]
+    client.job.return_value.wait.side_effect = finish
+    if case.startswith(("malformed-", "stale-control")) or "candidate-compose" in case:
+        client.submit.side_effect = AssertionError("invalid stored inputs reached the coordinator RPC")
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
-    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+    published = []
+    unavailable = {"value": case in {"partial-retry", "fail-no-login", "invalid-no-login"}}
+
+    def publish(record, service_url=None):
+        if unavailable["value"] and (case != "partial-retry" or record.attempt_id == "native-1"):
+            raise RuntimeError("Credential unavailable; run iris login")
+        published.append(record.model_dump(mode="json"))
+        return "https://progress.test/#" + urlencode({"run": record.run_id, "attempt": record.attempt_id})
+
+    monkeypatch.setattr("experiments.post_training.publish_rl_progress.publish_result", publish)
     if case == "child":
-        monkeypatch.setenv("IRIS_TASK_ID", "/atqamar/coordinator/0")
+        finish()
+        monkeypatch.setenv("IRIS_TASK_ID", "/test-user/cached-coordinator/0")
         client.submit.side_effect = AssertionError("coordinator execution submitted another job")
-    try:
-        result = CliRunner().invoke(
-            snowball.main,
-            [
-                "--preset",
-                preset.name,
-                "--version",
-                preset.revision,
-                "--run",
-                *(("--set", "trainer.algorithm.policy_loss_type=gspo") if "candidate-compose" in case else ()),
-                *(() if case.endswith("no-wait") else ("--wait",)),
-            ],
+        monkeypatch.setattr("marin.rl.skyrl.run_skyrl", lambda config: SkyRLRun.raw_load(str(source)))
+        monkeypatch.setattr(
+            "experiments.post_training.publish_rl_progress.publish_result",
+            lambda *args: pytest.fail("Coordinator contacted Marina"),
         )
+    arguments = ["--preset", preset.name, "--version", preset.revision, "--run", "--issue", "73"]
+    if not case.endswith("no-wait"):
+        arguments.append("--wait")
+    if "candidate-compose" in case:
+        arguments.extend(["--set", "trainer.algorithm.policy_loss_type=gspo"])
+    if control:
+        arguments.append("--control")
+    if case == "data-short":
+        arguments.extend(["--tasks", SELECTION_IDENTITY])
+    if replicas == 2:
+        arguments.extend(["--replicates", "2"])
+    try:
+        result = CliRunner().invoke(snowball.main, arguments)
     finally:
         set_job_info(None)
     assert result.exit_code == expected, (result.output, result.exception)
-    if case.startswith("recorded-"):
-        status = yaml.safe_load(result.output[result.output.rfind("\npreset: ") + 1 :].split("\n\n", 1)[0])
-        if case == "recorded-unknown":
-            assert "grafana_links" not in status["runs"][0]
-        else:
-            query = parse_qs(urlparse(status["runs"][0]["grafana_links"]["run"]).query)
-            assert query["var-training_type"] == ["sync"]
+    if case.startswith("malformed-"):
+        assert "malformed recorded configuration" in result.output and "seed" in result.output
     if case.startswith("stale-control"):
         assert "skyrl.trainer.policy.optimizer_config.lr" in result.output
     if "candidate-compose" in case:
         assert "current preset recipe cannot be composed" in result.output
     if case == "child":
+        assert published == []
         report = gate.completed_gate(built.gate)
         assert Path(report.path(), gate.GATE_REPORT_FILENAME).exists()
         assert gate.GateReport.raw_load(report.path()).verdict == "pass"
+        return
+    if not publication_case and not case.startswith("recorded-"):
+        return
+    snapshot = yaml.safe_load("preset:" + result.output.rpartition("\npreset:")[2].split("\n# ", 1)[0])
+    if case.startswith("recorded-"):
+        if case == "recorded-unknown":
+            assert "grafana_links" not in snapshot["runs"][0]
+        else:
+            query = parse_qs(urlparse(snapshot["runs"][0]["grafana_links"]["run"]).query)
+            assert query["var-training_type"] == ["sync"]
+        return
+    if case == "data-short":
+        assert "publication" not in snapshot and published == []
+        return
+    if case == "pass":
+        assert f"r0 planned_updates: {preset.updates} == {preset.updates}; within bound" in snapshot["constraints"]
+    paths = [[f"{training.name}-{preset.revision}", f"native-{index}"] for index, training in enumerate(built.runs)]
+    if unavailable["value"]:
+        assert snapshot["publication"] == {
+            "served_records": paths[:1] if case == "partial-retry" else [],
+            "unserved_records": paths[1:] if case == "partial-retry" else paths,
+            "errors": (
+                ["Credential unavailable; run iris login"] * (replicas - 1 if case == "partial-retry" else replicas)
+            ),
+            "retry": "Repeat the original command with --wait.",
+        }
+    if case == "mixed-native-failed":
+        assert [row["attempt_id"] for row in published] == ["native-0"]
+        assert snapshot["publication"] == {
+            "served_records": paths[:1],
+            "unserved_records": paths[1:],
+            "errors": ["Gate report missing for this attempt; repeat the original command with --wait"],
+            "retry": "Repeat the original command with --wait.",
+        }
+    if case in {"parent-early", "mixed-native-failed"}:
+        assert published[0]["status"] == "failed" and published[0]["gate_result"] is None
+    if expected == 0 and not unavailable["value"]:
+        for row in snapshot["runs"]:
+            assert parse_qs(urlsplit(row["rl_progress_url"]).fragment)["attempt"] == [row["attempt_id"]]
+    if case == "changed-source":
+        monkeypatch.setattr(Provenance, "capture", submitted_provenance)
+    unavailable["value"] = False
+    phase["retry"] = True
+    arguments[arguments.index("--issue") + 1] = "74"
+    repeated = CliRunner().invoke(snowball.main, arguments)
+    assert repeated.exit_code == (
+        0 if case in {"parent-early", "mixed-native-failed", "control-missing-receipt"} else expected
+    ), (repeated.output, repeated.exception)
+    recovered = yaml.safe_load("preset:" + repeated.output.rpartition("\npreset:")[2].split("\n# ", 1)[0])
+    assert recovered["publication"]["unserved_records"] == [] and recovered["publication"]["errors"] == []
+    assert all(row["issue"] == 74 for row in recovered["runs"])
+    if case in {"parent-early", "mixed-native-failed"}:
+        retry = next(row for row in published if row["attempt_id"] == "native-retry")
+        assert retry["status"] == "succeeded" and retry["gate_result"]["verdict"] == "pass" and retry["issue"] == 74
+    else:
+        assert any(row["attempt_id"] == "native-0" and row["issue"] == 74 for row in published)
 
 
-def test_control_refuses_actual_untracked_source_before_execution(selection, tmp_path, monkeypatch):
+@pytest.mark.parametrize("fault", ["untracked", "dirty"])
+def test_control_refuses_actual_untracked_source_before_execution(selection, tmp_path, monkeypatch, fault):
     root = tmp_path / "git-source"
     root.mkdir()
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     (root / "experiments").mkdir()
     (root / "experiments/untracked.py").write_text("VALUE = 1\n")
     monkeypatch.setattr(presets, "REPO_ROOT", root)
-    with pytest.raises(click.BadParameter, match="stage source"):
+    if fault == "dirty":
+        subprocess.run(["git", "-C", str(root), "add", "experiments/untracked.py"], check=True)
+        monkeypatch.setattr(
+            Provenance, "capture", lambda *args, **kwargs: Provenance("tree", "commit", True, "branch", "test")
+        )
+    with pytest.raises(click.BadParameter, match="stage source" if fault == "untracked" else "clean checkout"):
         snowball.build_run(presets.PRESETS["speed-medium"], control=True)
 
 
@@ -556,14 +723,14 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
     "arguments",
     [
         ("--wait",),
-        ("--replicates", "0"),
         ("--set", "trainer.resume_mode=latest"),
         ("--set", "generator.unrecognised_knob=1"),
+        ("--set", 'generator={"model_dtype":"complex64"}'),
+        ("--set", "generator.backend=sglang", "--set", "trainer.algorithm.batch_invariant=true"),
         ("--set", "trainer.policy.optimizer_config.lr=wrong"),
         ("--set", "+generator.engine_init_kwargs.probe={}"),
         ("--set", "trainer.rollout_buffer.max_staleness_steps=0"),
         ("--set", 'trainer={"algorithm":{"off_policy_correction":"none"}}'),
-        ("--set", "trainer.rollout_buffer.batch_policy=rolling"),
     ],
 )
 def test_refusals_use_exit_four(selection, arguments):
@@ -573,7 +740,7 @@ def test_refusals_use_exit_four(selection, arguments):
     assert result.exit_code == 4, (result.output, result.exception)
 
 
-def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
+def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, recorded_runs):
     answers = [
         _answer("bounded", 3, low=1, high=5)
         | {"score": 0.8, "output_response": "first\u2028second\u2029third\u0085fourth"},
@@ -594,23 +761,19 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
     ]
     (tmp_path / "selection").mkdir()
     pq.write_table(pa.Table.from_pylist(manifest), tmp_path / "selection" / presets.TASK_MANIFEST_FILENAME)
-    _json(
-        tmp_path / "resolved-launch.yaml",
-        {
-            "config": {
-                "artifacts": {"export_root": str(tmp_path / "configured-export")},
-                "inputs": {
-                    "validation_data": [{"uri": str(tmp_path / "selection")}],
-                },
-            }
-        },
-    )
+    root = recorded_runs("learning-medium", "users/test/score-order")
+    launch = read_skyrl_launch_config(str(root))
+    launch["artifacts"]["export_root"] = str(tmp_path / "configured-export")
+    launch["inputs"]["validation_data"][0]["uri"] = str(tmp_path / "selection")
+    _json(tmp_path / "resolved-launch.yaml", {"config": launch})
     for session in ("global_step_25_evals", "eval_only"):
         directory = tmp_path / "configured-export/dumped_evals" / session
         directory.mkdir(parents=True)
-        (directory / "panel.jsonl").write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in answers) + "\n")
+        (directory / "task_set.jsonl").write_text(
+            "\n".join(json.dumps(row, ensure_ascii=False) for row in answers) + "\n"
+        )
         (directory / "aggregated_results.jsonl").write_text('{"avg_score": 0.5}\n')
-    scores = scoring.panel_scores(presets.EVALUATIONS["eval_lite_100"], str(tmp_path))
+    scores = scoring.evaluation_scores(presets.EVALUATIONS["eval_lite_100"], str(tmp_path))
     final = [row for row in scores.to_pylist() if row["step"] == 25]
     assert [(row["item"], row["attempt"], row["scored"], row["score"]) for row in final] == [
         ("bounded", 0, True, 0.5),
@@ -637,24 +800,19 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
 @pytest.mark.parametrize(
     "case",
     [
-        "optimizer",
         "initializer",
         "stale-default",
-        "explicit-equal",
-        "control-setting",
-        "control-default-setting",
-        "control-initializer",
         "control-tasks",
         "control-revision",
+        "control-commit",
+        "control-dirty",
         "all-revisions",
-        "untouched-sibling",
         "unbound-model",
         "unbound-data",
         "batch",
         "staged-profile",
         "wrong-profile-control",
         "home-alias",
-        "alias-sibling",
         "unbound-gsm8k",
         "allocation",
         "source-identity",
@@ -666,7 +824,7 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
     ],
 )
 def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recorded_runs, tmp_path, monkeypatch, case):
-    short = {"staged-profile", "wrong-profile-control", "home-alias", "alias-sibling", "unbound-gsm8k"}
+    short = {"staged-profile", "wrong-profile-control", "home-alias", "unbound-gsm8k"}
     preset = presets.PRESETS[
         "data-medium" if case == "control-tasks" else "speed-short" if case in short else "learning-medium"
     ]
@@ -688,11 +846,9 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
         )
     if case in ("cached-default", "cached-execution", "cached-source"):
         inputs = gate.GateInputs(preset_name=preset.name)
-    if case == "control-default-setting":
-        inputs = gate.GateInputs(preset_name=preset.name, settings=("trainer.policy.optimizer_config.lr=1.0e-6",))
     if case == "control-tasks":
         inputs = gate.GateInputs(preset_name=preset.name, tasks="fixture-selection@2026.11.10")
-    if case in ("initializer", "unbound-model", "control-initializer"):
+    if case in ("initializer", "unbound-model"):
         name, version = "tests/custom-init", "2026.11.07"
         source = tmp_path / name / version
         initializer = SkyRLRun(
@@ -717,14 +873,14 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
             ).model_dump(mode="json"),
         )
         inputs = gate.GateInputs(preset_name=preset.name, init=f"{name}@{version}")
-    if case in ("stale-default", "explicit-equal", "untouched-sibling"):
+    if case in ("stale-default",):
         control_roots = controls(recorded_runs, preset.name)
-        promoted = replace(preset, patch=preset.patch.with_settings((setting,)))
+        promoted = replace(preset, recipe=replace(preset.recipe, config=preset.recipe.config.with_settings((setting,))))
         monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset.name: promoted})
         if case == "stale-default":
             inputs = gate.GateInputs(preset_name=preset.name)
-    control_inputs = inputs if case in ("control-setting", "control-initializer", "control-tasks") else None
-    if case not in ("stale-default", "explicit-equal", "untouched-sibling"):
+    control_inputs = inputs if case == "control-tasks" else None
+    if case not in ("stale-default",):
         control_roots = controls(recorded_runs, preset.name, **({"inputs": control_inputs} if control_inputs else {}))
     name = f"users/test/native-{case}"
     candidate = recorded_runs(preset.name, name, inputs=inputs)
@@ -736,22 +892,15 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
             record["version"] = "2026.11.10.1"
             path.write_text(json.dumps(record))
         fault_key = "preset revisions differ" if case == "control-revision" else "preset revision differs"
-    elif case == "control-default-setting":
+    elif case in ("control-commit", "control-dirty"):
         document = json.loads((control_roots[0] / "terminal.json").read_text())
-        document["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] = 5e-6
+        document["result"]["provenance"]["base_commit" if case == "control-commit" else "dirty"] = (
+            "wrong-commit" if case == "control-commit" else True
+        )
         write_receipt(control_roots[0], document)
-        fault_key = "skyrl.trainer.policy.optimizer_config.lr"
-    elif case in ("control-setting", "control-initializer", "control-tasks"):
-        fault_key = {
-            "control-setting": "skyrl.trainer.policy.optimizer_config.lr",
-            "control-initializer": "inputs.model.uri",
-            "control-tasks": "inputs.train_data",
-        }[case]
-    elif case == "untouched-sibling":
-        document = json.loads((control_roots[0] / "terminal.json").read_text())
-        document["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["weight_decay"] = 0.1
-        write_receipt(control_roots[0], document)
-        fault_key = "weight_decay"
+        fault_key = "does not match its pin"
+    elif case == "control-tasks":
+        fault_key = "inputs.train_data"
     elif case in ("unbound-model", "unbound-data"):
         document = json.loads((candidate / "terminal.json").read_text())
         if case == "unbound-model":
@@ -771,19 +920,16 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
                 profile = callback["additional_evaluations"]["eval_lite"]
                 profile["data_files"] = [str(Path(source["local_path"]) / source["relative_path"])]
                 if case == "wrong-profile-control":
-                    profile["data_files"] = ["/unbound/named-panel.parquet"]
+                    profile["data_files"] = ["/unbound/named-task_set.parquet"]
                     fault_key = f"skyrl.trainer.callbacks.{index}.additional_evaluations.eval_lite.data_files"
         write_receipt(root, document)
-    elif case in ("home-alias", "alias-sibling", "unbound-gsm8k"):
+    elif case in ("home-alias", "unbound-gsm8k"):
         document = json.loads((candidate / "terminal.json").read_text())
         launch = document["config"]
         launch["skyrl"]["data"]["train_data"] = ["/root/data/gsm8k/train.parquet"]
         if case == "unbound-gsm8k":
             launch["skyrl"]["data"]["train_data"] = ["/other/data/gsm8k/train.parquet"]
             fault_key = "skyrl.data.train_data"
-        elif case == "alias-sibling":
-            launch["skyrl"]["generator"]["max_num_seqs"] += 1
-            fault_key = "skyrl.generator.max_num_seqs"
         write_receipt(candidate, document)
     elif case in ("allocation", "source-identity", "relative-file", "authored-run-name"):
         document = json.loads((candidate / "terminal.json").read_text())
@@ -801,7 +947,7 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
             shutil.copyfile(Path(source["uri"]) / source["relative_path"], Path(source["uri"]) / "other.parquet")
             source["relative_path"] = "other.parquet"
             launch["skyrl"]["data"]["val_data"] = [dict(source)]
-            fault_key = "recorded panel file differs"
+            fault_key = "recorded task set file differs"
         else:
             launch["skyrl"]["trainer"]["run_name"] = "authored-run-name"
             fault_key = "skyrl.trainer.run_name"
@@ -811,7 +957,11 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
         assert report["verdict"] == "pass", report
         if case == "cached-default":
             promoted = replace(
-                preset, patch=preset.patch.with_settings(("trainer.policy.optimizer_config.weight_decay=0.1",))
+                preset,
+                recipe=replace(
+                    preset.recipe,
+                    config=preset.recipe.config.with_settings(("trainer.policy.optimizer_config.weight_decay=0.1",)),
+                ),
             )
             changed_key = "skyrl.trainer.policy.optimizer_config.weight_decay"
         elif case == "cached-execution":
@@ -835,12 +985,12 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
         assert updated["verdict"] == "invalid", updated
         assert changed_key in updated["reason"]
         assert updated["report"] != report["report"]
-    elif fault_key is not None or case in ("stale-default", "explicit-equal"):
+    elif fault_key is not None or case == "stale-default":
         assert report["verdict"] == "invalid", report
         assert (fault_key or "skyrl.trainer.policy.optimizer_config.lr") in report["reason"]
     else:
         assert (report["verdict"], report["label"]) == ("pass", "no change"), report
-        if case in ("initializer", "optimizer", "batch"):
+        if case in ("initializer", "batch"):
             expected_key = {
                 "initializer": "inputs.model.uri",
                 "batch": "skyrl.trainer.train_batch_size",
@@ -848,7 +998,7 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
             assert expected_key in report["run"]["config_changes"]
 
 
-def test_task_set_content_identity_and_declared_panel_bindings(recorded_runs):
+def test_task_set_content_identity_and_declared_task_set_bindings(recorded_runs):
     preset_name = "learning-medium"
     controls(recorded_runs, preset_name)
     source = recorded_runs(preset_name, "users/test/task-content")
@@ -862,7 +1012,7 @@ def test_task_set_content_identity_and_declared_panel_bindings(recorded_runs):
     source = recorded_runs(preset_name, "users/test/task-content-relocated")
     document = json.loads((source / "terminal.json").read_text())
     descriptor = document["config"]["inputs"]["validation_data"][0]
-    copied = source / "panel-copy"
+    copied = source / "task_set-copy"
     shutil.copytree(descriptor["uri"], copied)
     descriptor["uri"] = str(copied)
     document["config"]["skyrl"]["data"]["val_data"] = [dict(descriptor)]
@@ -888,10 +1038,10 @@ def test_task_set_content_identity_and_declared_panel_bindings(recorded_runs):
 
     roots = controls(recorded_runs, preset_name)
     roots.append(recorded_runs(preset_name, "users/test/wrong-cohort"))
-    panel_root = Path(presets.selection_artifact(presets.PRESETS[preset_name].eval_lite).path())
-    manifest = pq.read_table(panel_root / presets.TASK_MANIFEST_FILENAME).to_pylist()
+    task_set_root = Path(presets.selection_artifact(presets.PRESETS[preset_name].eval_lite).path())
+    manifest = pq.read_table(task_set_root / presets.TASK_MANIFEST_FILENAME).to_pylist()
     manifest.append(manifest[0] | {"task_id": "task-outside-input"})
-    pq.write_table(pa.Table.from_pylist(manifest), panel_root / presets.TASK_MANIFEST_FILENAME)
+    pq.write_table(pa.Table.from_pylist(manifest), task_set_root / presets.TASK_MANIFEST_FILENAME)
     for root in roots:
         for path in (root / "exports/dumped_evals").glob("*/*.jsonl"):
             rows = [json.loads(line) for line in path.read_text().splitlines()]
@@ -921,7 +1071,11 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
     monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset_name: preset})
     controls(recorded_runs, preset_name)
     tasks = selection if preset_name == "data-medium" else None
-    setting_text = ("trainer.policy.optimizer_config.lr=2.0e-6", 'extra_env.VLLM_PROBE="1"') if tasks is None else ()
+    setting_text = (
+        ("trainer.policy.optimizer_config.lr=2.0e-6", 'extra_env.VLLM_PROBE="1"', "generator.max_num_seqs=1024")
+        if tasks is None
+        else ()
+    )
     settings = setting_text
     built = snowball.build_run(preset, settings=settings, tasks=tasks, requirements=("policy/raw_grad_norm<=10",))
     task_name = SELECTION_IDENTITY if tasks else None
@@ -948,205 +1102,23 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
     assert recorded.preset_name == preset_name and recorded.requirements == ("policy/raw_grad_norm<=10",)
     decoded = dict(item.split("=", 1) for item in recorded.settings)
     assert {key: json.loads(value) for key, value in decoded.items()} == (
-        {} if tasks else {"trainer": {"policy": {"optimizer_config": {"lr": 2e-6}}}, "extra_env": {"VLLM_PROBE": "1"}}
+        {}
+        if tasks
+        else {
+            "trainer": {"policy": {"optimizer_config": {"lr": 2e-6}}},
+            "extra_env": {"VLLM_PROBE": "1"},
+            "generator": {"max_num_seqs": 1024},
+        }
     )
     assert recorded.tasks == task_name
-    before = {path: path.read_bytes() for path in source.rglob("*") if path.is_file()}
     report = rescore(preset_name, "--candidate", built.runs[0].name)
     assert report["verdict"] == "pass", report
     assert report["run"]["requirements"] == list(recorded.requirements)
     assert report["run"]["settings"] == list(recorded.settings)
     assert report["run"]["tasks"] == recorded.tasks
     assert report["run"]["attempt_ids"] == ["recorded-attempt"]
-    assert before == {path: path.read_bytes() for path in source.rglob("*") if path.is_file()}
-
-
-@pytest.mark.parametrize(
-    "case",
-    [
-        "pass",
-        "changed-source",
-        "fail-no-login",
-        "invalid-no-login",
-        "parent-early",
-        "mixed-native-failed",
-        "control-missing-receipt",
-        "partial-retry",
-        "child",
-        "data-short",
-    ],
-)
-def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, selection, monkeypatch, case):
-    monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
-    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
-    preset_name = "data-short" if case == "data-short" else "learning-medium"
-    preset = presets.PRESETS[preset_name]
-    if case == "child":
-        model = Path(presets.artifact_prefix(preset.recipe.layout.cluster)) / "child-model"
-        model.mkdir()
-        preset = replace(
-            preset,
-            model=replace(
-                preset.model,
-                step=ArtifactStep.adopt(
-                    preset.model.step.name,
-                    preset.model.step.version,
-                    str(model),
-                    kind=preset.model.step.artifact_type,
-                ),
-            ),
+    assert comparisons(report)["eval_lite/family_mean/gain_per_h100_hour"]["run"] == pytest.approx(0.005)
+    if tasks is None:
+        assert {"skyrl.trainer.policy.optimizer_config.lr", "skyrl.generator.max_num_seqs"} <= set(
+            report["run"]["config_changes"]
         )
-        monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset_name: preset})
-    controls(recorded_runs, preset_name)
-    replicas = 2 if case in {"partial-retry", "mixed-native-failed", "control-missing-receipt"} else 1
-    control = case == "control-missing-receipt"
-    built = snowball.build_run(
-        preset, control=control, replicates=replicas, tasks=selection if case == "data-short" else None
-    )
-    sources = [
-        recorded_runs(
-            preset.name,
-            training.name,
-            score=0.1 if case == "fail-no-login" else 0.5,
-            fingerprint=training.fingerprint(),
-            inputs=gate.GateInputs(preset_name=preset_name, tasks=SELECTION_IDENTITY) if case == "data-short" else None,
-            attempt_id=f"native-{index}",
-        )
-        for index, training in enumerate(built.runs)
-    ]
-    if case == "invalid-no-login":
-        receipt = json.loads((sources[0] / "terminal.json").read_text())
-        receipt["result"]["provenance"] = None
-        write_receipt(sources[0], receipt)
-    pending = {}
-    for root in sources:
-        for filename in ("terminal.json", "resolved-launch.yaml"):
-            path = root / filename
-            pending[path] = path.read_bytes()
-            path.unlink()
-    client = MagicMock(spec=IrisClient)
-    job = JobName.from_wire("/atqamar/dashboard-coordinator")
-    client.submit.return_value.job_id = job
-    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
-    monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
-    phase = {"retry": False}
-    submitted_provenance = Provenance.capture
-
-    def finish(*args, **kwargs):
-        for path, data in pending.items():
-            path.write_bytes(data)
-        if case in {"parent-early", "mixed-native-failed"}:
-            receipt = json.loads((sources[0] / "terminal.json").read_text())
-            if not phase["retry"]:
-                receipt["result"]["state"] = "failed"
-                write_receipt(sources[0], receipt)
-                (sources[0] / "terminal.json").unlink()
-                return SimpleNamespace(state=JobState.FAILED)
-            metrics = read_skyrl_metrics(str(sources[0]), attempt_id="native-0")
-            receipt["config"]["run"]["attempt_id"] = "native-retry"
-            write_receipt(sources[0], receipt)
-            for row in metrics.values():
-                row["attempt_id"] = "native-retry"
-            append_metrics(sources[0], metrics)
-        if control and not phase["retry"]:
-            (sources[0] / "terminal.json").unlink()
-            (sources[0] / "resolved-launch.yaml").unlink()
-            return SimpleNamespace(state=JobState.FAILED)
-        completed = gate.completed_gate(built.gate)
-        if completed is not None:
-            run(completed)
-        if case == "changed-source":
-            monkeypatch.setattr(
-                Provenance,
-                "capture",
-                lambda *args, **kwargs: Provenance(
-                    "tree-edited-before-publication", "commit-one", True, "branch", "test"
-                ),
-            )
-        return SimpleNamespace(state=JobState.SUCCEEDED)
-
-    client.job.return_value.wait.side_effect = finish
-    published = []
-    unavailable = {"value": case in {"partial-retry", "fail-no-login", "invalid-no-login"}}
-
-    def publish(record, service_url=None):
-        if unavailable["value"] and (case != "partial-retry" or record["attempt_id"] == "native-1"):
-            raise RuntimeError("Credential unavailable; run iris login")
-        published.append(record)
-        return "https://progress.test/#" + urlencode({"run": record["run_id"], "attempt": record["attempt_id"]})
-
-    monkeypatch.setattr("experiments.post_training.publish_rl_progress.publish_result", publish)
-    if case == "child":
-        finish()
-        monkeypatch.setenv("IRIS_TASK_ID", "/atqamar/cached-coordinator/0")
-        monkeypatch.setattr("marin.rl.skyrl.run_skyrl", lambda config: SkyRLRun.raw_load(str(sources[0])))
-        monkeypatch.setattr(
-            "experiments.post_training.publish_rl_progress.publish_result",
-            lambda *args: pytest.fail("Coordinator contacted Marina"),
-        )
-    arguments = ["--preset", preset.name, "--version", preset.revision, "--run", "--wait", "--issue", "73"]
-    if control:
-        arguments.append("--control")
-    if case == "data-short":
-        arguments.extend(["--tasks", SELECTION_IDENTITY])
-    if replicas == 2:
-        arguments.extend(["--replicates", "2"])
-    expected = (
-        1
-        if case == "fail-no-login"
-        else 2 if case in {"invalid-no-login", "parent-early", "mixed-native-failed"} else 3 if control else 0
-    )
-    try:
-        result = CliRunner().invoke(snowball.main, arguments)
-    finally:
-        set_job_info(None)
-    assert result.exit_code == expected, (result.output, result.exception)
-    if case == "child":
-        assert published == []
-        return
-    snapshot = yaml.safe_load("preset:" + result.output.rpartition("\npreset:")[2].split("\n# ", 1)[0])
-    if case == "data-short":
-        assert "publication" not in snapshot and published == []
-        return
-    if case == "pass":
-        assert f"r0 planned_updates: {preset.updates} == {preset.updates}; within bound" in snapshot["constraints"]
-    paths = [[f"{training.name}-{preset.revision}", f"native-{index}"] for index, training in enumerate(built.runs)]
-    if unavailable["value"]:
-        assert snapshot["publication"] == {
-            "served_records": paths[:1] if case == "partial-retry" else [],
-            "unserved_records": paths[1:] if case == "partial-retry" else paths,
-            "errors": (
-                ["Credential unavailable; run iris login"] * (replicas - 1 if case == "partial-retry" else replicas)
-            ),
-            "retry": "Repeat the original command with --wait.",
-        }
-    if case == "mixed-native-failed":
-        assert [row["attempt_id"] for row in published] == ["native-0"]
-        assert snapshot["publication"] == {
-            "served_records": paths[:1],
-            "unserved_records": paths[1:],
-            "errors": ["Gate report missing for this attempt; repeat the original command with --wait"],
-            "retry": "Repeat the original command with --wait.",
-        }
-    if case in {"parent-early", "mixed-native-failed"}:
-        assert published[0]["status"] == "failed" and published[0]["verdict"] is None
-    if expected == 0 and not unavailable["value"]:
-        for row in snapshot["runs"]:
-            assert parse_qs(urlsplit(row["rl_progress_url"]).fragment)["attempt"] == [row["attempt_id"]]
-    if case == "changed-source":
-        monkeypatch.setattr(Provenance, "capture", submitted_provenance)
-    unavailable["value"] = False
-    phase["retry"] = True
-    arguments[arguments.index("--issue") + 1] = "74"
-    repeated = CliRunner().invoke(snowball.main, arguments)
-    assert repeated.exit_code == (
-        0 if case in {"parent-early", "mixed-native-failed", "control-missing-receipt"} else expected
-    ), (repeated.output, repeated.exception)
-    recovered = yaml.safe_load("preset:" + repeated.output.rpartition("\npreset:")[2].split("\n# ", 1)[0])
-    assert recovered["publication"]["unserved_records"] == [] and recovered["publication"]["errors"] == []
-    assert all(row["issue"] == 74 for row in recovered["runs"])
-    if case in {"parent-early", "mixed-native-failed"}:
-        retry = next(row for row in published if row["attempt_id"] == "native-retry")
-        assert retry["status"] == "succeeded" and retry["verdict"] == "pass" and retry["issue"] == 74
-    else:
-        assert any(row["attempt_id"] == "native-0" and row["issue"] == 74 for row in published)

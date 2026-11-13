@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import json
-import random
+import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
@@ -19,10 +20,11 @@ import click
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
-from marin.execution.artifact import Artifact, is_mutable_version, read_record, result_type_name
+from marin.execution.artifact import is_mutable_version, read_record, result_type_name
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.experiment.namespacing import user_owned_name
+from marin.rl.rl_progress import Invariant
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
@@ -38,9 +40,19 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
 from skyrlrecipe import RecipePatch, sections
+from skyrlrecipe.declared import (
+    BestCheckpointCallback,
+    Callback,
+    CheckpointCallback,
+    EvaluationCallback,
+    EvaluationSampling,
+    HFModelSaveCallback,
+)
 from skyrlrecipe.documents import MISSING, get_path, merge_mappings, set_path
+from skyrlrecipe.model import Section
 from skyrlrecipe.sampling import EvalSamplingParams
 from skyrlrecipe.settings import parse_setting as typed_setting_value
+from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
 from experiments.post_training.task_curation.driver import CANONICAL_ARTIFACT_ROOT
 from experiments.post_training.task_curation.selection import (
@@ -48,6 +60,7 @@ from experiments.post_training.task_curation.selection import (
     SELECTION_PREFIX,
     SUMMARY_FILENAME,
     TASK_MANIFEST_FILENAME,
+    TASK_SPEC_COLUMN,
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
 )
@@ -56,8 +69,8 @@ REPO_ROOT = find_project_root(Path(__file__))
 RUN_PREFIX = "checkpoints/snowball-rl"
 UPDATE_SECONDS_METRIC = "speed/update_seconds"
 GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
-# Fraction of a native panel that must be scored before its scores count.
-MINIMUM_PANEL_COVERAGE = 0.99
+# Fraction of a native task set that must be scored before its scores count.
+MINIMUM_SCORED_FRACTION = 0.99
 SEED = 20261020
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
@@ -99,7 +112,6 @@ _DEFAULT_PATCH = RecipePatch(
         rollout_spans=True,
         policy_train_spans=True,
         algorithm=sections.Algorithm(
-            batch_invariant=False,
             advantage_estimator="rloo_n",
             policy_loss_type="regular",
             loss_reduction="token_mean",
@@ -129,7 +141,6 @@ _DEFAULT_PATCH = RecipePatch(
     ),
     generator=sections.Generator(
         backend="vllm",
-        model_dtype="bfloat16",
         vllm_attention_backend="FLASH_ATTN",
         run_engines_locally=True,
         weight_sync_backend="nccl",
@@ -179,6 +190,9 @@ class Duration(StrEnum):
 class WindowStatistic(StrEnum):
     MEAN = "mean"
     MEDIAN = "median"
+    PHASE_SUM_MEDIAN = "phase-sum-median"
+    GAIN_PER_H100_HOUR = "gain-per-h100-hour"
+    FIRST = "first"
     SELECTED_TOKEN_WEIGHTED_MEAN = "selected-token-weighted-mean"
 
 
@@ -190,37 +204,263 @@ class Gap(StrEnum):
     MISMATCH_IS_AGREEMENT = "mismatch-is-agreement"
 
 
+class EvaluationKind(StrEnum):
+    TRAINING_DATA = "training-data"
+    HELD_OUT = "held-out"
+
+
 @dataclass(frozen=True)
 class Evaluation:
     name: str
     file: str
+    kind: EvaluationKind
+    profile: EvaluationSampling
     source: Literal["default", "tasks", "eval_lite"] = "default"
     sample: int | None = None
-    answers: int = 1
     every: int | None = None
     at_start: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.isidentifier():
             raise ValueError(f"evaluation name must be an identifier: {self.name!r}")
+        if self.profile.n_samples_per_prompt is None or self.profile.sampling_params is None:
+            raise ValueError("evaluation profiles require explicit sampling and answer counts")
+
+    @property
+    def answers(self) -> int:
+        assert self.profile.n_samples_per_prompt is not None
+        return self.profile.n_samples_per_prompt
+
+    @property
+    def held_out(self) -> bool:
+        return self.kind is EvaluationKind.HELD_OUT
 
     def tasks(self, selection: ArtifactStep, default: ArtifactStep, eval_lite: str) -> ArtifactStep:
         if self.source == "default":
             return default
         if self.source == "tasks":
             return selection
-        if self.source == "eval_lite":
-            return selection_artifact(eval_lite)
-        raise ValueError(f"unknown evaluation source: {self.source}")
+        return selection_artifact(eval_lite)
+
+    def bound_tasks(self, tasks: ArtifactStep, seed: int, *, revision: str) -> ArtifactStep:
+        if self.sample is None:
+            return tasks
+        return sampled_tasks_step(tasks, self.file, self.sample, seed, revision=revision)
+
+
+@dataclass(frozen=True)
+class Training:
+    plan: SkyRLRolePlan
+    completion_metric: ClassVar[str] = "timing/step_wall/unaccounted"
+    outcome_prefix: ClassVar[str] = "generate/outcome/"
+    named_schedule: ClassVar[Literal["final"]] = "final"
+
+    def update_count(self, max_steps: int) -> int:
+        return max_steps
+
+    def planned_steps(self, updates: int) -> range:
+        return range(1, updates + 1)
+
+    def scored_step(self, updates: int) -> int:
+        return updates
+
+    def metric_step(self, updates: int) -> int:
+        return updates
+
+    def completed_row(self, row: Mapping) -> bool:
+        return row.get("trainer/global_step") == row["step"]
+
+    def training_data(self, selection: ArtifactStep) -> tuple[ArtifactDataSource, ...]:
+        return (ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),)
+
+    def batch_parameters(self, config: RecipePatch) -> tuple[int, int]:
+        return self.plan.micro_train_batch_size_per_gpu, self.plan.train_batch_size
+
+    def with_batches(self, changes: dict[str, int]) -> Training:
+        return replace(self, plan=replace(self.plan, **changes))
+
+    def validate_mode(self, mode: Sync | Async) -> None:
+        if isinstance(mode, Async) and self.plan.colocate_all:
+            raise ValueError("asynchronous training requires separate policy and rollout roles")
+
+    def invariants(self, updates: int, metrics: Mapping[int, Mapping[str, float]]) -> tuple[Invariant, ...]:
+        planned = set(self.planned_steps(updates))
+        completed = planned.intersection(metrics)
+        training = [metrics[step] for step in sorted(completed)]
+        finite = all(
+            all(
+                math.isfinite(row.get(key, math.nan))
+                for key in ("policy/raw_grad_norm", "policy/policy_loss", "policy/final_loss")
+            )
+            and any(key.startswith("loss/") for key in row)
+            and all(math.isfinite(row[key]) for key in row if key.startswith("loss/") or key == "policy/raw_grad_norm")
+            for row in training
+        )
+        return (
+            Invariant(
+                name="planned_updates",
+                value=len(completed),
+                limit=len(planned),
+                comparator="==",
+                holds=completed == planned,
+            ),
+            Invariant(name="finite_losses_and_gradients", value=finite, limit=True, comparator="==", holds=finite),
+        )
+
+    def fixed_reply_holds(self, fixed: int, training: list[dict], answers: list) -> bool:
+        return all(row.get("generate/min_num_tokens") == row.get("generate/max_num_tokens") == fixed for row in training)
+
+    def evaluation_patch(self, answer_count: int) -> RecipePatch:
+        return RecipePatch()
+
+    def callbacks(
+        self,
+        preset: Preset,
+        evaluation: Evaluation | None,
+        profiles: dict[str, EvaluationSampling],
+        expected_tasks: int,
+        initial_model_uri: str | None,
+    ) -> tuple[Callback, ...]:
+        callbacks: list[Callback] = []
+        if preset.checkpoint_every:
+            callbacks.append(CheckpointCallback(type="checkpoint", save_steps=preset.checkpoint_every))
+        if evaluation is not None:
+            callbacks.append(
+                EvaluationCallback(
+                    type="evaluation",
+                    eval_steps=evaluation.every or preset.updates + 1,
+                    eval_before_train=evaluation.at_start,
+                    eval_on_train_end=not evaluation.every or preset.updates % evaluation.every != 0,
+                    **({"additional_evaluations": profiles} if profiles else {}),
+                )
+            )
+        if preset.best_checkpoint_export:
+            assert initial_model_uri is not None
+            callbacks.extend(
+                (
+                    BestCheckpointCallback(
+                        type="best_checkpoint",
+                        initial_model_uri=initial_model_uri,
+                        expected_tasks=expected_tasks,
+                        minimum_scored_tasks=math.ceil(MINIMUM_SCORED_FRACTION * expected_tasks),
+                    ),
+                    HFModelSaveCallback(
+                        type="hf_model_save",
+                        save_steps=((preset.updates // preset.checkpoint_every) + 1) * preset.checkpoint_every,
+                        save_on_train_end=True,
+                    ),
+                )
+            )
+        if preset.publishes and not preset.best_checkpoint_export:
+            callbacks.extend(
+                (
+                    CheckpointCallback(type="checkpoint", save_steps=preset.updates + 1, save_on_train_end=True),
+                    HFModelSaveCallback(type="hf_model_save", save_steps=-1, save_on_train_end=True),
+                )
+            )
+        return tuple(callbacks)
+
+
+@dataclass(frozen=True)
+class Generation:
+    plan: SkyRLGenerationPlan
+    completion_metric: ClassVar[str] = GENERATE_WALL_SECONDS_METRIC
+    outcome_prefix: ClassVar[str] = "eval/all/outcome/"
+    named_schedule: ClassVar[Literal["every_evaluation"]] = "every_evaluation"
+
+    def update_count(self, max_steps: int) -> int:
+        return 0
+
+    def planned_steps(self, updates: int) -> range:
+        return range(1)
+
+    def scored_step(self, updates: int) -> int:
+        return -1
+
+    def metric_step(self, updates: int) -> int:
+        return 0
+
+    def completed_row(self, row: Mapping) -> bool:
+        return True
+
+    def training_data(self, selection: ArtifactStep) -> tuple[ArtifactDataSource, ...]:
+        return ()
+
+    def batch_parameters(self, config: RecipePatch) -> tuple[int, int]:
+        return config.trainer.micro_train_batch_size_per_gpu, config.trainer.train_batch_size
+
+    def with_batches(self, changes: dict[str, int]) -> Generation:
+        return replace(
+            self,
+            plan=replace(
+                self.plan, n_samples_per_prompt=changes.get("n_samples_per_prompt", self.plan.n_samples_per_prompt)
+            ),
+        )
+
+    def validate_mode(self, mode: Sync | Async) -> None:
+        if isinstance(mode, Async):
+            raise ValueError("asynchronous training requires separate policy and rollout roles")
+
+    def invariants(self, updates: int, metrics: Mapping[int, Mapping[str, float]]) -> tuple[Invariant, ...]:
+        return (
+            Invariant(name="planned_updates", value=int(0 in metrics), limit=1, comparator="==", holds=0 in metrics),
+        )
+
+    def fixed_reply_holds(self, fixed: int, training: list[dict], answers: list) -> bool:
+        return {len(row["response_token_ids"]) for _, _, row in answers} == {fixed}
+
+    def evaluation_patch(self, answer_count: int) -> RecipePatch:
+        return RecipePatch(trajectory_runner=sections.TrajectoryRunner(max_concurrent_tasks=answer_count))
+
+    def callbacks(
+        self,
+        preset: Preset,
+        evaluation: Evaluation | None,
+        profiles: dict[str, EvaluationSampling],
+        expected_tasks: int,
+        initial_model_uri: str | None,
+    ) -> tuple[Callback, ...]:
+        return (EvaluationCallback(type="evaluation", additional_evaluations=profiles),) if profiles else ()
 
 
 @dataclass(frozen=True)
 class Layout:
     name: str
-    role_plan: SkyRLRolePlan | SkyRLGenerationPlan
+    workload: Training | Generation
     megatron: MegatronGeometry
     cluster: str
     host_memory: str
+
+
+class Numerics(Section):
+    trainer_dtype: Literal["bfloat16", "float32"] = "bfloat16"
+    engine_dtype: Literal["bfloat16", "float16", "float32"] = "bfloat16"
+    batch_invariant: bool = False
+
+    def validate_recipe(self, config: RecipePatch) -> None:
+        if self.batch_invariant and (config.generator.backend != "vllm" or not config.generator.run_engines_locally):
+            raise ValueError("batch invariance requires local vLLM engines")
+
+    def patch(self) -> RecipePatch:
+        return RecipePatch(
+            trainer=sections.Trainer(
+                bf16=self.trainer_dtype == "bfloat16", algorithm=sections.Algorithm(batch_invariant=self.batch_invariant)
+            ),
+            generator=sections.Generator(model_dtype=self.engine_dtype),
+        )
+
+
+def numerics_patch(numerics: Numerics, *patches: RecipePatch) -> RecipePatch:
+    configured = numerics.patch()
+    expected = configured.to_skyrl()
+    for patch in patches:
+        numerics.validate_recipe(patch)
+        document = patch.to_skyrl()
+        for path in ("trainer.bf16", "generator.model_dtype", "trainer.algorithm.batch_invariant"):
+            value = get_path(document, path)
+            if value is not MISSING and value != get_path(expected, path):
+                raise ValueError(f"{path} is chosen by Recipe.numerics")
+    return configured
 
 
 @dataclass(frozen=True)
@@ -272,14 +512,13 @@ class Recipe:
     max_new_tokens: int
     fixed_reply_tokens: int | None
     mode: Sync | Async
+    numerics: Numerics = field(default_factory=Numerics)
     config: RecipePatch = _DEFAULT_PATCH
 
     def __post_init__(self) -> None:
         training_mode_patch(self.mode, self.config)
-        if isinstance(self.mode, Async) and (
-            isinstance(self.layout.role_plan, SkyRLGenerationPlan) or self.layout.role_plan.colocate_all
-        ):
-            raise ValueError("asynchronous training requires separate policy and rollout roles")
+        numerics_patch(self.numerics, self.config)
+        self.layout.workload.validate_mode(self.mode)
 
 
 @dataclass(frozen=True)
@@ -287,6 +526,193 @@ class Metric:
     key: str
     higher_is_better: bool
     window: WindowStatistic = WindowStatistic.MEAN
+
+
+def override_document(settings: tuple[str, ...]) -> dict:
+    """Canonical explicit user values for preset ownership and stored input identity."""
+    document = {}
+    for text in settings:
+        key, _, raw = text.partition("=")
+        patch = {}
+        set_path(patch, key, typed_setting_value(RecipePatch, key, raw))
+        document = merge_mappings(document, patch)
+    return document
+
+
+def configure_evaluation(
+    evaluation: Evaluation, config: RecipePatch, tasks: ArtifactStep, *, revision: str
+) -> tuple[RecipePatch, tuple[ArtifactDataSource, ...]]:
+    tasks = evaluation.bound_tasks(tasks, SEED, revision=revision)
+    sampling = evaluation.profile.sampling_params
+    configured = config.merge(
+        RecipePatch(
+            trainer=sections.Trainer(eval_num_prompts=None, dump_eval_results=True),
+            generator=sections.Generator(eval_n_samples_per_prompt=evaluation.answers, eval_sampling_params=sampling),
+        )
+    )
+    return configured, (ArtifactDataSource(tasks, relative_path=f"{evaluation.file}.parquet"),)
+
+
+_HELD_OUT_SAMPLING = EvaluationSampling(
+    n_samples_per_prompt=1,
+    sampling_params=EvalSamplingParams(
+        temperature=0.0, top_p=1.0, logprobs=None, ignore_eos=False, max_generate_length=EVAL_REPLY_TOKENS
+    ),
+)
+_THROUGHPUT_SAMPLING = EvaluationSampling(
+    n_samples_per_prompt=4,
+    sampling_params=EvalSamplingParams(temperature=1.0, top_p=1.0, logprobs=None, ignore_eos=True),
+)
+_SCREENING_SAMPLING = EvaluationSampling(
+    n_samples_per_prompt=4,
+    sampling_params=EvalSamplingParams(temperature=1.0, top_p=1.0, logprobs=None, ignore_eos=False),
+)
+EVALUATIONS = MappingProxyType(
+    {
+        evaluation.name: evaluation
+        for evaluation in (
+            Evaluation(
+                name="eval_lite",
+                file=Path(FULL_VALIDATION_FILENAME).stem,
+                source="eval_lite",
+                kind=EvaluationKind.HELD_OUT,
+                profile=_HELD_OUT_SAMPLING,
+            ),
+            Evaluation(
+                name="eval_lite_100",
+                file=Path(VALIDATION_FILENAME).stem,
+                source="eval_lite",
+                kind=EvaluationKind.HELD_OUT,
+                profile=_HELD_OUT_SAMPLING,
+            ),
+            Evaluation(
+                name="speed_512x4",
+                file=Path(TRAIN_FILENAME).stem,
+                sample=512,
+                kind=EvaluationKind.TRAINING_DATA,
+                profile=_THROUGHPUT_SAMPLING,
+            ),
+            Evaluation(
+                name="screen_256x4",
+                file=Path(TRAIN_FILENAME).stem,
+                source="tasks",
+                sample=256,
+                kind=EvaluationKind.TRAINING_DATA,
+                profile=_SCREENING_SAMPLING,
+            ),
+        )
+    }
+)
+_P40_PLAN = SkyRLRolePlan(
+    colocate_all=False,
+    policy_num_nodes=4,
+    policy_num_gpus_per_node=8,
+    num_inference_engines=1,
+    inference_engine_tensor_parallel_size=1,
+    inference_engine_pipeline_parallel_size=1,
+    inference_engine_data_parallel_size=8,
+    inference_engine_expert_parallel_size=8,
+    train_batch_size=128,
+    policy_mini_batch_size=128,
+    micro_train_batch_size_per_gpu=1,
+    n_samples_per_prompt=4,
+)
+P40 = Layout(
+    name="p40",
+    workload=Training(_P40_PLAN),
+    megatron=MegatronGeometry(
+        tensor_model_parallel_size=1,
+        pipeline_model_parallel_size=2,
+        context_parallel_size=1,
+        expert_model_parallel_size=8,
+        expert_tensor_parallel_size=1,
+    ),
+    cluster="cw-us-east-02a",
+    host_memory="1800GB",
+)
+E8 = replace(
+    P40,
+    name="e8",
+    workload=Generation(
+        SkyRLGenerationPlan(
+            gpus_per_node=8,
+            num_inference_engines=1,
+            inference_engine_tensor_parallel_size=1,
+            inference_engine_pipeline_parallel_size=1,
+            inference_engine_data_parallel_size=8,
+            inference_engine_expert_parallel_size=8,
+            n_samples_per_prompt=4,
+        )
+    ),
+)
+_GENERATION_NATIVE_DEFAULTS = RecipePatch(
+    trainer=sections.Trainer(
+        placement=sections.Placement(
+            colocate_all=False,
+            colocate_policy_ref=True,
+            policy_num_nodes=4,
+            policy_num_gpus_per_node=8,
+            ref_num_nodes=4,
+            ref_num_gpus_per_node=8,
+        ),
+        train_batch_size=128,
+        policy_mini_batch_size=128,
+        micro_train_batch_size_per_gpu=1,
+    )
+)
+_LEARNING = Recipe(
+    layout=P40,
+    request_window_tokens=24576,
+    max_new_tokens=8192,
+    fixed_reply_tokens=None,
+    mode=Sync(),
+)
+_GENERATING = replace(_LEARNING, layout=E8, config=_DEFAULT_PATCH.merge(_GENERATION_NATIVE_DEFAULTS))
+_ASYNC_P40 = replace(_LEARNING, mode=Async(2, "tis"))
+
+_GAPS = (
+    Gap.AAII_COVERAGE,
+    Gap.NO_AGENTIC_TASKS,
+    Gap.NO_IMAGE_SANDBOX,
+)
+_TASK_SET = EVALUATIONS["eval_lite_100"]
+BATCH_SETTINGS = {
+    "trainer.train_batch_size": "train_batch_size",
+    "trainer.policy_mini_batch_size": "policy_mini_batch_size",
+    "generator.n_samples_per_prompt": "n_samples_per_prompt",
+    "trainer.micro_train_batch_size_per_gpu": "micro_train_batch_size_per_gpu",
+}
+
+_BATCH_KEYS = frozenset(BATCH_SETTINGS)
+_OWNED_KEYS = (
+    frozenset(
+        {
+            "entrypoint",
+            "trainer.resume_mode",
+            "trainer.placement",
+            "generator.trajectory_retention",
+            "generator.run_engines_locally",
+            "trainer.callbacks",
+            "trainer.ckpt_interval",
+            "trainer.hf_save_interval",
+        }
+    )
+    | (frozenset(_P40_PLAN.config_values()) - _BATCH_KEYS)
+    | frozenset(_MODE_KEYS)
+)
+_GATED_KEYS = frozenset(
+    {
+        "trainer.max_steps",
+        "trainer.logger",
+        "trainer.project_name",
+        "context_budget",
+        "generator.sampling_params.ignore_eos",
+        "generator.sampling_params.min_tokens",
+    }
+)
+_SPEED_KEYS = frozenset(
+    {"generator.sampling_params.logprobs", "trainer.training_metrics", "generator.apply_overlong_filtering"}
+)
 
 
 @dataclass(frozen=True)
@@ -312,7 +738,6 @@ class Preset:
     data_settings: frozenset[str]
     tasks: str = _DEFAULT_TASKS
     model: ArtifactHfModel = _DEFAULT_MODEL
-    patch: RecipePatch = field(default_factory=RecipePatch)
     eval_lite: str = _DEFAULT_EVAL_LITE
     evaluations: tuple[Evaluation, ...] = ()
     checkpoint_every: int | None = None
@@ -322,7 +747,8 @@ class Preset:
     budget: str = "hours to days"
 
     def __post_init__(self) -> None:
-        training_mode_patch(self.recipe.mode, self.patch)
+        if not set(self.measured).issubset(self.recipe.layout.workload.planned_steps(self.updates)):
+            raise ValueError("measured window must lie within the planned steps")
         for evaluation in self.evaluations[1:]:
             if evaluation.every is not None or evaluation.at_start:
                 raise ValueError(f"non-primary evaluation {evaluation.name} accepts neither every nor at_start")
@@ -331,131 +757,13 @@ class Preset:
     def name(self) -> str:
         return f"{self.focus}-{self.duration}"
 
-
-def override_document(settings: tuple[str, ...]) -> dict:
-    """Canonical explicit user values for preset ownership and stored input identity."""
-    document = {}
-    for text in settings:
-        key, _, raw = text.partition("=")
-        patch = {}
-        set_path(patch, key, typed_setting_value(RecipePatch, key, raw))
-        document = merge_mappings(document, patch)
-    return document
+    @property
+    def guarded(self) -> Evaluation | None:
+        if not self.gated or not self.evaluations:
+            return None
+        return next((evaluation for evaluation in self.evaluations if evaluation.held_out), self.evaluations[0])
 
 
-def configure_evaluation(
-    evaluation: Evaluation, config: RecipePatch, tasks: ArtifactStep, *, revision: str
-) -> tuple[RecipePatch, tuple[ArtifactDataSource, ...]]:
-    if evaluation.sample is not None:
-        tasks = sampled_tasks_step(tasks, evaluation.file, evaluation.sample, SEED, revision=revision)
-    sampling = EvalSamplingParams(
-        temperature=0.0 if evaluation.answers == 1 else 1.0,
-        top_p=1.0,
-        logprobs=None,
-        ignore_eos=False if evaluation.answers == 1 else config.generator.sampling_params.ignore_eos,
-        **({"max_generate_length": EVAL_REPLY_TOKENS} if evaluation.answers == 1 else {}),
-    )
-    configured = config.merge(
-        RecipePatch(
-            trainer=sections.Trainer(eval_num_prompts=None, dump_eval_results=True),
-            generator=sections.Generator(eval_n_samples_per_prompt=evaluation.answers, eval_sampling_params=sampling),
-        )
-    )
-    return configured, (ArtifactDataSource(tasks, relative_path=f"{evaluation.file}.parquet"),)
-
-
-EVALUATIONS = MappingProxyType(
-    {
-        evaluation.name: evaluation
-        for evaluation in (
-            Evaluation(name="eval_lite", file=Path(FULL_VALIDATION_FILENAME).stem, source="eval_lite"),
-            Evaluation(name="eval_lite_100", file=Path(VALIDATION_FILENAME).stem, source="eval_lite"),
-            Evaluation(name="speed_512x4", file=Path(TRAIN_FILENAME).stem, sample=512, answers=4),
-            Evaluation(name="screen_256x4", file=Path(TRAIN_FILENAME).stem, source="tasks", sample=256, answers=4),
-        )
-    }
-)
-_P40_PLAN = SkyRLRolePlan(
-    colocate_all=False,
-    policy_num_nodes=4,
-    policy_num_gpus_per_node=8,
-    num_inference_engines=1,
-    inference_engine_tensor_parallel_size=1,
-    inference_engine_pipeline_parallel_size=1,
-    inference_engine_data_parallel_size=8,
-    inference_engine_expert_parallel_size=8,
-    train_batch_size=128,
-    policy_mini_batch_size=128,
-    micro_train_batch_size_per_gpu=1,
-    n_samples_per_prompt=4,
-)
-P40 = Layout(
-    name="p40",
-    role_plan=_P40_PLAN,
-    megatron=MegatronGeometry(
-        tensor_model_parallel_size=1,
-        pipeline_model_parallel_size=2,
-        context_parallel_size=1,
-        expert_model_parallel_size=8,
-        expert_tensor_parallel_size=1,
-    ),
-    cluster="cw-us-east-02a",
-    host_memory="1800GB",
-)
-E8 = replace(P40, name="e8", role_plan=SkyRLGenerationPlan(_P40_PLAN))
-_LEARNING = Recipe(
-    layout=P40,
-    request_window_tokens=24576,
-    max_new_tokens=8192,
-    fixed_reply_tokens=None,
-    mode=Sync(),
-)
-_ASYNC_P40 = replace(_LEARNING, mode=Async(2, "tis"))
-
-_GAPS = (
-    Gap.AAII_COVERAGE,
-    Gap.NO_AGENTIC_TASKS,
-    Gap.NO_IMAGE_SANDBOX,
-)
-_PANEL = EVALUATIONS["eval_lite_100"]
-_BATCH_KEYS = frozenset(
-    {
-        "trainer.train_batch_size",
-        "trainer.policy_mini_batch_size",
-        "generator.n_samples_per_prompt",
-        "trainer.micro_train_batch_size_per_gpu",
-    }
-)
-_OWNED_KEYS = (
-    frozenset(
-        {
-            "entrypoint",
-            "trainer.resume_mode",
-            "trainer.placement",
-            "generator.trajectory_retention",
-            "generator.run_engines_locally",
-            "trainer.callbacks",
-            "trainer.ckpt_interval",
-            "trainer.hf_save_interval",
-        }
-    )
-    | (frozenset(_P40_PLAN.config_values()) - _BATCH_KEYS)
-    | frozenset(_MODE_KEYS)
-)
-_GATED_KEYS = frozenset(
-    {
-        "trainer.max_steps",
-        "trainer.seed",
-        "trainer.logger",
-        "trainer.project_name",
-        "context_budget",
-        "generator.sampling_params.ignore_eos",
-        "generator.sampling_params.min_tokens",
-    }
-)
-_SPEED_KEYS = frozenset(
-    {"generator.sampling_params.logprobs", "trainer.training_metrics", "generator.apply_overlong_filtering"}
-)
 _LEARNING_MEDIUM = Preset(
     tasks_input="forbidden",
     accepts_settings=True,
@@ -478,7 +786,10 @@ _LEARNING_MEDIUM = Preset(
     measured=range(21, 26),
     evaluations=(replace(EVALUATIONS["eval_lite"], at_start=True),),
     guards=(Metric("eval_lite/family_mean", True),),
-    objectives=(Metric("eval_lite/family_mean", True), Metric("eval_lite/family_mean/gain_per_h100_hour", True)),
+    objectives=(
+        Metric("eval_lite/family_mean", True),
+        Metric("eval_lite/family_mean/gain_per_h100_hour", True, WindowStatistic.GAIN_PER_H100_HOUR),
+    ),
     gaps=_GAPS,
     budget="asynchronous runtime unmeasured",
 )
@@ -487,7 +798,7 @@ PRESETS = MappingProxyType(
         preset.name: preset
         for preset in (
             Preset(
-                revision="2026.11.11.1",
+                revision="2026.11.13.1",
                 tasks_input="forbidden",
                 accepts_settings=True,
                 accepts_init=False,
@@ -504,7 +815,7 @@ PRESETS = MappingProxyType(
                 focus=Focus.SPEED,
                 duration=Duration.SHORT,
                 objectives=(Metric("generate/tokens_per_second_per_gpu", True),),
-                recipe=replace(_LEARNING, layout=E8, fixed_reply_tokens=4096),
+                recipe=replace(_GENERATING, fixed_reply_tokens=4096),
                 updates=0,
                 measured=range(1),
                 evaluations=(EVALUATIONS["speed_512x4"], EVALUATIONS["eval_lite"]),
@@ -513,7 +824,7 @@ PRESETS = MappingProxyType(
                 budget="14-17 min; 2 H100-h",
             ),
             Preset(
-                revision="2026.11.11.1",
+                revision="2026.11.13.1",
                 tasks_input="required",
                 accepts_settings=False,
                 accepts_init=False,
@@ -530,7 +841,7 @@ PRESETS = MappingProxyType(
                 focus=Focus.DATA,
                 duration=Duration.SHORT,
                 objectives=(Metric("screen_256x4/mixed_fraction", True),),
-                recipe=replace(_LEARNING, layout=E8),
+                recipe=_GENERATING,
                 updates=0,
                 measured=range(1),
                 evaluations=(EVALUATIONS["screen_256x4"],),
@@ -555,7 +866,7 @@ PRESETS = MappingProxyType(
                 data_settings=frozenset(),
                 focus=Focus.SPEED,
                 duration=Duration.MEDIUM,
-                objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.MEDIAN),),
+                objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),),
                 recipe=replace(
                     _ASYNC_P40,
                     fixed_reply_tokens=4096,
@@ -570,7 +881,7 @@ PRESETS = MappingProxyType(
                 updates=10,
                 measured=range(2, 11),
                 guards=(
-                    Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.MEDIAN),
+                    Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),
                     Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
                 ),
                 gaps=(*_GAPS, Gap.MISMATCH_IS_AGREEMENT, Gap.LAYOUT_P40_ONLY),
@@ -593,12 +904,12 @@ PRESETS = MappingProxyType(
                 data_settings=frozenset(),
                 focus=Focus.SPEED,
                 duration=Duration.LONG,
-                objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.MEDIAN),),
+                objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),),
                 recipe=_ASYNC_P40,
                 updates=20,
                 measured=range(3, 21),
                 guards=(
-                    Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.MEDIAN),
+                    Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),
                     Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
                 ),
                 gaps=(*_GAPS, Gap.LAYOUT_P40_ONLY),
@@ -635,7 +946,7 @@ PRESETS = MappingProxyType(
                 recipe=_ASYNC_P40,
                 updates=100,
                 measured=range(1, 101),
-                evaluations=(replace(_PANEL, every=10, at_start=True),),
+                evaluations=(replace(_TASK_SET, every=10, at_start=True),),
                 checkpoint_every=10,
                 gaps=_GAPS,
             ),
@@ -646,6 +957,8 @@ PRESETS = MappingProxyType(
 
 def run_name(preset: Preset, provenance: Provenance, inputs_hash: str, replicate: int, *, control: bool) -> str:
     if control:
+        from experiments.post_training.snowball_rl_gate import control_name  # noqa: PLC0415
+
         return control_name(preset.name, provenance.base_commit, replicate)
     name = f"{RUN_PREFIX}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
     if preset.accepts_replicates:
@@ -658,34 +971,27 @@ def selection_summary(selection: ArtifactStep) -> dict:
 
 
 def evaluation_answer_count(evaluation: Evaluation, tasks: ArtifactStep) -> int:
-    key = "training_rows" if evaluation.file == Path(TRAIN_FILENAME).stem else f"{evaluation.file}_rows"
+    key = "training_rows" if not evaluation.held_out else f"{evaluation.file}_rows"
     return (evaluation.sample or selection_summary(tasks)[key]) * evaluation.answers
 
 
 def _write_sample(selection: str, filename: str, count: int, seed: int, output: str) -> None:
-    generator = random.Random(seed)
-    rows = []
-    seen = 0
     fs, key = filesystem_for(prefix_join(selection, f"{filename}.parquet"))
     with fs.open(key, "rb") as stream:
         source = pq.ParquetFile(stream)
         schema = source.schema_arrow
-        for batch in source.iter_batches(batch_size=256):
-            for row in batch.to_pylist():
-                seen += 1
-                if len(rows) < count:
-                    rows.append(row)
-                else:
-                    index = generator.randrange(seen)
-                    if index < count:
-                        rows[index] = row
+        _, rows = seeded_sample(
+            (row for batch in source.iter_batches(batch_size=256) for row in batch.to_pylist()),
+            size=count,
+            key=lambda row: seeded_order(json.loads(row[TASK_SPEC_COLUMN])["id"], seed),
+        )
     if len(rows) != count:
         raise ValueError(f"selection has only {len(rows)} eligible tasks; {count} are required")
     fs, key = filesystem_for(prefix_join(output, f"{filename}.parquet"))
     fs.makedirs(str(PurePosixPath(key).parent), exist_ok=True)
     with fs.open(key, "wb") as stream:
         pq.write_table(pa.Table.from_pylist(rows, schema=schema), stream)
-    for name in (TASK_MANIFEST_FILENAME, SUMMARY_FILENAME):
+    for name in (TASK_MANIFEST_FILENAME,):
         source_fs, source_key = filesystem_for(prefix_join(selection, name))
         if source_fs.exists(source_key):
             fs, key = filesystem_for(prefix_join(output, name))
@@ -707,14 +1013,6 @@ def sampled_tasks_step(selection: ArtifactStep, filename: str, count: int, seed:
     )
 
 
-BATCH_SETTINGS = {
-    "trainer.train_batch_size": "train_batch_size",
-    "trainer.policy_mini_batch_size": "policy_mini_batch_size",
-    "generator.n_samples_per_prompt": "n_samples_per_prompt",
-    "trainer.micro_train_batch_size_per_gpu": "micro_train_batch_size_per_gpu",
-}
-
-
 def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Preset) -> RecipePatch:
     """Validate typed settings, then enforce the preset's input and measurement ownership."""
     try:
@@ -731,9 +1029,7 @@ def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Prese
     owners = {
         "use the preset's declared owned keys": any(has(path) for path in preset.owned_keys),
         "choose network transport in Layout": any(key.startswith("NCCL_") for key in values.get("extra_env", {})),
-        "evaluation requests are fixed by the preset": (
-            has("trainer.callbacks") or any(key.startswith("eval_") for key in (*trainer, *generator))
-        ),
+        "evaluation requests are fixed by the preset": any(key.startswith("eval_") for key in (*trainer, *generator)),
         "select curated data with --tasks": has("data") and bool(values["data"].keys() - preset.data_settings),
         "use the preset's permitted setting sections": (
             preset.setting_sections is not None
@@ -746,8 +1042,9 @@ def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Prese
     return updated
 
 
-def default_selection(preset: Preset) -> ArtifactStep[Artifact]:
-    return selection_artifact(preset.tasks)
+def task_selections(preset: Preset, tasks: ArtifactStep | None = None) -> tuple[ArtifactStep, ArtifactStep]:
+    default = selection_artifact(preset.tasks)
+    return default, tasks or default
 
 
 def cluster_config_path(cluster: str) -> str:
@@ -792,10 +1089,10 @@ def selection_artifact(value: str) -> ArtifactStep:
     return ArtifactStep.adopt(f"{SELECTION_PREFIX}/{name}", version, str(StoragePath(SELECTION_ROOT) / name / version))
 
 
-def published_artifact(value: str, *, revision: str) -> ArtifactStep:
+def published_artifact(value: str) -> ArtifactStep:
     name, separator, version = value.rpartition("@")
     if not separator:
-        name, version = value, revision
+        raise click.BadParameter("use NAME@VERSION for published artifacts")
     if is_mutable_version(version):
         raise click.BadParameter("use an immutable artifact version instead of dev")
     root = str(StoragePath(artifact_prefix(P40.cluster)) / name / version)
@@ -808,23 +1105,12 @@ def published_artifact(value: str, *, revision: str) -> ArtifactStep:
     raise click.BadParameter(f"no published artifact record for {name}@{version}")
 
 
-def control_name(preset: str, commit: str, replicate: int) -> str:
-    return f"{RUN_PREFIX}/control/{preset}-{commit}-r{replicate}"
-
-
 def run_path(cluster: str, name: str, version: str) -> str:
     return str(StoragePath(artifact_prefix(cluster)) / name / version)
 
 
-def panel_evaluation(preset: Preset) -> Evaluation | None:
-    return next(
-        (
-            evaluation
-            for evaluation in preset.evaluations
-            if any(metric.key.startswith(evaluation.name + "/") for metric in preset.guards)
-        ),
-        None,
-    )
+def eval_lite_evaluation(preset: Preset) -> Evaluation | None:
+    return next((evaluation for evaluation in preset.evaluations if evaluation.held_out), None)
 
 
 def utc_millis(value: str) -> int:

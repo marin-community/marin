@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Select training tasks and evaluation panels from admitted curation artifacts."""
+"""Select training and evaluation task sets from admitted curation artifacts."""
 
 import hashlib
 import json

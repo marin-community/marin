@@ -31,14 +31,17 @@ def _curriculum_step(scale, policy, arm) -> ArtifactStep[SkyRLRun]:
 
 
 def _snowball_step(preset: snowball.Preset, settings: tuple[str, ...] = ()) -> ArtifactStep[SkyRLRun]:
-    panel = snowball.selection_artifact(preset.eval_lite)
-    selection = snowball.default_selection(preset)
-    for source, full_rows in ((selection, 910), (panel, 1500)):
+    eval_lite = snowball.selection_artifact(preset.eval_lite)
+    selection = snowball.selection_artifact(preset.tasks)
+    for source, full_rows in ((selection, 910), (eval_lite, 1500)):
         summary = {
             "recipe": {
                 "heldout": [],
                 "exclusions": [
-                    {"uri": str(StoragePath(panel.path()) / snowball.FULL_VALIDATION_FILENAME), "version": panel.version}
+                    {
+                        "uri": str(StoragePath(eval_lite.path()) / snowball.FULL_VALIDATION_FILENAME),
+                        "version": eval_lite.version,
+                    }
                 ],
             },
             "training_rows": 100000,

@@ -11,12 +11,11 @@ from dataclasses import dataclass, field, replace
 
 import click
 from finestore.rl.run_records import AttemptRecord, attempt_lineage
-from marin.execution.artifact import RECORD_FILENAME, read_record
+from marin.execution.artifact import read_record
 from marin.rl import skyrl_records
 from marin.rl.rl_progress import GateResult, RunSummary
-from marin.rl.skyrl_records import attempt_tracking, read_stored_skyrl_attempts
+from marin.rl.skyrl_records import attempt_tracking, read_stored_skyrl_attempts, recorded_launch
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import publish_rl_progress
 from experiments.post_training import snowball_rl_gate as gate
@@ -63,7 +62,7 @@ def build_record(
     receipt = receipts.get(attempt_id)
     if receipt is None:
         raise FileNotFoundError(f"No stored native receipt at {run_output} for {attempt_id}")
-    launch, result = receipt.native.config, receipt.native.result
+    launch, result = recorded_launch(receipt), receipt.native.result
     if result.state not in {"succeeded", "failed"}:
         raise ValueError("A progress record requires a terminal native attempt")
     evidence = []
@@ -72,13 +71,17 @@ def build_record(
     except FileNotFoundError:
         inputs = gate.GateInputs(preset_name=preset.name)
         evidence.append("Stored Snowball inputs are unavailable; using the supplied preset.")
-    preset = replace(presets.PRESETS[inputs.preset_name], updates=launch["skyrl"]["trainer"]["max_steps"])
-    native = launch["run"]
-    attempt_id = native["attempt_id"]
+    preset = presets.PRESETS[inputs.preset_name]
+    if launch.max_steps is None:
+        raise ValueError("Stored native max_steps is unavailable")
+    preset = replace(
+        preset, updates=launch.max_steps, measured=preset.recipe.layout.workload.planned_steps(launch.max_steps)
+    )
+    attempt_id = launch.attempt_id
     provenance = result.provenance or {}
-    tracking = attempt_tracking(receipt)
+    tracking = attempt_tracking(receipt, launch)
     started, finished = result.started_at, result.finished_at
-    history = attempt_lineage(launch["artifacts"]["export_root"], attempt_id)
+    history = attempt_lineage(launch.export_root, attempt_id)
     complete_history = (
         bool(history)
         and all(entry.record.metrics_started_at is not None for entry in history)
@@ -134,12 +137,11 @@ def build_record(
                 label=report.label,
                 reason=report.reason,
                 invariants=list(report.invariants),
-                comparisons=[
-                    row
-                    for row in report.comparisons
-                    if row.role
-                    in (gate.ComparisonRole.OBJECTIVE, gate.ComparisonRole.CONSTRAINT, gate.ComparisonRole.REQUIREMENT)
-                ],
+                comparisons=list(
+                    report.rows(
+                        gate.ComparisonRole.OBJECTIVE, gate.ComparisonRole.CONSTRAINT, gate.ComparisonRole.REQUIREMENT
+                    )
+                ),
                 attempt_ids=list(report.run.attempt_ids),
                 replicates=report.run.replicates,
             )
@@ -160,17 +162,10 @@ def build_record(
         source_revision=(
             f"base={provenance.get('base_commit')} tree={provenance.get('tree_hash')}" if provenance else "Unknown"
         ),
-        data_identity="; ".join(row["identity"] for row in launch["inputs"]["train_data"]),
-        initializer_identity=launch["inputs"]["model"]["identity"],
+        data_identity="; ".join(source.identity for source in launch.train_data),
+        initializer_identity=launch.model_identity,
         artifact_uri=run_output,
         evidence=evidence,
-    )
-
-
-def gate_complete(gate_path: str | None) -> bool:
-    """A completed gate has its report and the executor's artifact record."""
-    return gate_path is not None and all(
-        (StoragePath(gate_path) / filename).exists() for filename in (gate.GATE_REPORT_FILENAME, RECORD_FILENAME)
     )
 
 
@@ -179,7 +174,6 @@ def publish_runs(
     preset: presets.Preset,
     *,
     gate_path: str | None = None,
-    gate_required: bool = False,
     issue: int | None = None,
     service_url: str | None = None,
 ) -> PublicationOutcome:
@@ -195,10 +189,8 @@ def publish_runs(
     report = None
     report_error = None
     try:
-        if gate_complete(gate_path):
-            report = gate.GateReport.model_validate_json(
-                (StoragePath(gate_path) / gate.GATE_REPORT_FILENAME).read_text()
-            )
+        report = gate.read_gate_report(gate_path)
+        if report is not None:
             current_ids = tuple(
                 snapshots[path][0] for path in outputs if path in snapshots and snapshots[path][0] in snapshots[path][1]
             )
@@ -214,7 +206,7 @@ def publish_runs(
         for attempt_id, receipt in attempts.items():
             destination = (receipt.run_id, attempt_id)
             try:
-                if gate_required and attempt_id == current_id and receipt.native.result.state == "succeeded":
+                if gate_path is not None and attempt_id == current_id and receipt.native.result.state == "succeeded":
                     if report_error:
                         raise ValueError(report_error)
                     if report is None:

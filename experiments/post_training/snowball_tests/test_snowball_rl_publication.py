@@ -64,7 +64,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         pytest.fail("Host record builder requested live native execution/state")
 
     monkeypatch.setattr("marin.rl.skyrl.run_skyrl", forbid_live)
-    monkeypatch.setattr("marin.rl.skyrl.read_skyrl_launch_receipt", forbid_live)
+    monkeypatch.setattr("marin.rl.skyrl.read_skyrl_attempt", forbid_live)
     name = "train-long" if case == "train-long" else "learning-medium"
     preset = replace(presets.PRESETS[name], updates=2, measured=range(1, 3))
     monkeypatch.setattr(presets, "PRESETS", dict(presets.PRESETS) | {name: preset})
@@ -275,7 +275,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
             [str(root) for root in sources],
             preset,
             gate_path=gate_path,
-            gate_required=True,
             issue=issue,
             service_url="http://localhost",
         )

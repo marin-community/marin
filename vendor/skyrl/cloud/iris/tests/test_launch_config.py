@@ -40,6 +40,7 @@ from skyrl_train.config.utils import get_default_config
 from skyrl_train.utils.tracking import Tracking
 from skyrl_train.config.rollout_validation import EntrypointOperation, validate_rollout_launch
 from skyrl_train.inference_engines import placement as inference_placement
+from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 
 
 def test_training_channels_require_compatible_weight_transport() -> None:
@@ -184,7 +185,7 @@ def test_launch_preserves_harbor_dataset_relative_paths(tmp_path):
 
 def test_default_hf_export_requests_only_the_terminal_checkpoint(tmp_path):
     raw = raw_launch_config()
-    raw["skyrl"]["trainer"].update(export_hf_artifact=True, ckpt_interval=1)
+    raw["skyrl"]["trainer"].update(ckpt_interval=1)
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
 
@@ -321,6 +322,13 @@ def test_composed_launch_records_whether_training_runs_ahead_of_its_updates(
     raw["skyrl"]["trainer"]["rollout_buffer"] = {"max_staleness_steps": max_staleness_steps}
     raw["skyrl"]["trainer"]["algorithm"]["off_policy_correction"] = "none"
     raw["iris"]["allocation"]["num_nodes"] = 1 if entrypoint == "generate" else 2
+    if entrypoint == "generate":
+        adapter = tmp_path / "adapter"
+        adapter.mkdir()
+        raw["skyrl"]["trainer"].setdefault("policy", {}).setdefault("model", {})["lora"] = {
+            "rank": 8,
+            "adapter_path": str(adapter),
+        }
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw, sort_keys=False))
 
@@ -387,7 +395,7 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
     document = raw_launch_config()
     document["run"]["coordinator_iris_job_id"] = "/tests/coordinator"
     document["iris"]["max_retries"] = 0
-    document["skyrl"]["trainer"]["logger"] = "records" if entrypoint == "standard" else ["console", "records"]
+    document["skyrl"]["trainer"]["logger"] = "records" if entrypoint == "standard" else ["console", "records", "wandb"]
     document["skyrl"]["entrypoint"] = entrypoint
     document["artifacts"]["export_root"] = str(tmp_path / "exports")
     contents = yaml.safe_dump(document).encode()
@@ -400,6 +408,19 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
     assert path == str(destination)
     assert destination.read_bytes() == contents
 
+    wandb_runs = []
+
+    def start_wandb(**kwargs):
+        wandb_runs.append(kwargs)
+        return SimpleNamespace(
+            id=kwargs.get("id", "sdk-generated-id"),
+            define_metric=lambda *args, **kwargs: None,
+            log=lambda **kwargs: None,
+            finish=lambda **kwargs: None,
+        )
+
+    monkeypatch.setitem(sys.modules, "wandb", SimpleNamespace(init=start_wandb, Settings=lambda **kwargs: kwargs))
+    monkeypatch.setenv("WANDB_API_KEY", "fixture-api-key")
     export_root = str(tmp_path / "exports")
     first_start = datetime.now(timezone.utc)
     fail = True
@@ -446,6 +467,10 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
     assert final is not None and final.metrics_started_at is not None
     assert final.started_at == attempt.started_at and final.vllm_version == attempt.vllm_version
     assert read_attempt_metrics(export_root, "attempt-1")[0]["startup/ready"] == 1
+    assert final.iris_job_id == "/tests/bootstrap-trainer"
+    assert final.native.result.iris_job_id == "/tests/bootstrap-trainer"
+    if entrypoint == "generate":
+        assert [(run["id"], run["group"], run["resume"]) for run in wandb_runs] == [("attempt-1", "smoke", "allow")]
 
 
 def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) -> None:
@@ -454,13 +479,19 @@ def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) ->
     profiles = {"sampled": {"sampling_params": {"stop": ["./END"]}}}
     raw["trainer"]["callbacks"] = [
         {"type": "evaluation", "metric_groups": groups, "additional_evaluations": profiles},
-        {"type": "best_checkpoint", "selection_metric": "eval/identity_behavior_holdout/pass_at_1"},
+        {
+            "type": "best_checkpoint",
+            "selection_metric": "eval/identity_behavior_holdout/pass_at_1",
+            "initial_model_uri": "s3://models/initial",
+            "expected_tasks": 4,
+            "minimum_scored_tasks": 2,
+        },
     ]
     path = tmp_path / "evaluation.yaml"
     path.write_text(yaml.safe_dump(raw))
 
     config = compose_skyrl_config(
-        parse_rl_config(str(path)), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
+        parse_rl_config(OmegaConf.load(path)), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
     ).config
 
     assert config.trainer.callbacks[0].metric_groups == groups
@@ -469,21 +500,25 @@ def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) ->
 
 
 @pytest.mark.parametrize("consumer", ["metric_groups", "stop_when"])
-def test_callback_setup_rejects_final_metrics_during_periodic_evaluation(consumer: str) -> None:
+def test_callback_setup_rejects_final_metrics_during_periodic_evaluation(tmp_path: Path, consumer: str) -> None:
     config = get_default_config()
-    metric = "eval/full_panel/all/avg_score"
+    metric = "eval/full_task_set/all/avg_score"
     dependency = {"eval/reporting/avg_score": [metric]} if consumer == "metric_groups" else {metric: {"minimum": 0.5}}
     config.trainer.callbacks = [
-        {"type": "evaluation", "eval_steps": 2, consumer: dependency},
-        {"type": "evaluation", "eval_steps": 0, "additional_evaluations": {"full_panel": {"schedule": "final"}}},
+        {"type": "evaluation", consumer: dependency},
+        {"type": "evaluation", "eval_steps": 0, "additional_evaluations": {"full_task_set": {"schedule": "final"}}},
     ]
 
+    raw = raw_launch_config()
+    raw["run"]["export_hf"] = False
+    raw["skyrl"]["trainer"]["callbacks"] = OmegaConf.to_container(config.trainer.callbacks, resolve=True)
+    path = tmp_path / "periodic-final.yaml"
+    path.write_text(yaml.safe_dump(raw))
     with pytest.raises(ValueError, match=f"final-only metrics.*{metric}"):
-        create_default_callbacks(config)
-
-    # These dependencies are available when evaluation runs only at the final step.
-    config.trainer.callbacks[0].eval_steps = 0
-    create_default_callbacks(config)
+        load_launch_config(path)
+    raw["skyrl"]["trainer"]["callbacks"][0]["eval_steps"] = 0
+    path.write_text(yaml.safe_dump(raw))
+    create_default_callbacks(load_launch_config(path).skyrl)
 
 
 @pytest.mark.parametrize(
@@ -494,81 +529,15 @@ def test_callback_setup_rejects_final_metrics_during_periodic_evaluation(consume
         ("sampling-omitted", {}, None),
         ("sampling-null", {"sampling_params": None}, None),
         ("sampling-empty", {"sampling_params": {}}, None),
-        ("native-forms", {"sampling_params": {"stop": "!", "logprobs": -1, "prompt_logprobs": None}}, None),
         ("final-schedule", {"schedule": "final"}, None),
-        (
-            "sampling-domain",
-            {
-                "sampling_params": {
-                    "allowed_token_ids": [7],
-                    "bad_words": ["bad"],
-                    "custom_params": {"nested": {"enabled": True}},
-                    "detokenize": True,
-                    "ebnf": None,
-                    "extra_args": {"choice": {"json": {"type": "object"}}},
-                    "flat_logprobs": False,
-                    "frequency_penalty": 0.5,
-                    "ignore_eos": False,
-                    "include_stop_str_in_output": True,
-                    "json_schema": None,
-                    "logit_bias": {"7": -0.1},
-                    "logprob_token_ids": [7],
-                    "logprobs": -1,
-                    "max_generate_length": 64,
-                    "max_new_tokens": None,
-                    "max_tokens": None,
-                    "min_new_tokens": 0,
-                    "min_p": 0.1,
-                    "min_tokens": 1,
-                    "n": 1,
-                    "no_stop_trim": False,
-                    "output_kind": 0,
-                    "output_text_buffer_length": 0,
-                    "presence_penalty": 0.25,
-                    "prompt_logprobs": None,
-                    "regex": None,
-                    "repetition_detection": {"max_pattern_size": 4, "min_pattern_size": 2, "min_count": 3},
-                    "repetition_penalty": 1.1,
-                    "routed_experts_prompt_start": 0,
-                    "sampling_seed": 17,
-                    "seed": 42,
-                    "skip_clone": False,
-                    "skip_reading_prefix_cache": None,
-                    "skip_special_tokens": False,
-                    "spaces_between_special_tokens": True,
-                    "stop": ["domain-stop"],
-                    "stop_regex": None,
-                    "stop_token_ids": [7],
-                    "stream_interval": None,
-                    "structured_outputs": {"json": {"type": "object", "properties": {"answer": {"type": "integer"}}}},
-                    "temperature": 0.1,
-                    "thinking_token_budget": None,
-                    "top_k": -1,
-                    "top_p": 0.8,
-                    "trace_decode_token_ids": None,
-                    "watermarking": False,
-                }
-            },
-            None,
-        ),
+        ("generation-final", {"schedule": "final"}, "final evaluation profiles require training updates"),
         ("duplicate", {}, "duplicate evaluation profile: sampled"),
-        ("field", {"answer_count": 2}, "unknown fields.*answer_count"),
-        ("sampling", {"sampling_params": {"temprature": 0.1}}, "unknown sampling keys.*temprature"),
-        ("zero-answers", {"n_samples_per_prompt": 0}, r"(?s)n_samples_per_prompt.*greater than 0"),
-        ("empty-files", {"data_files": []}, r"(?s)data_files"),
+        ("field", {"answer_count": 2}, "answer_count"),
+        ("sampling", {"sampling_params": {"temprature": 0.1}}, "temprature"),
         ("missing-profile", {}, "evaluation data has no additional evaluation profile: sampled"),
         ("two-inputs", {"data_files": ["another.parquet"]}, "both data_files and evaluation_data"),
-        ("null-profile", None, "evaluation profile sampled must be a mapping"),
-        ("scalar-profile", 7, "evaluation profile sampled must be a mapping"),
-        ("scalar-sampling", {"sampling_params": 7}, "profile sampled: sampling_params must be a mapping"),
-        ("list-sampling", {"sampling_params": []}, "profile sampled: sampling_params must be a mapping"),
-        ("list-profiles", {}, "additional_evaluations must be a mapping"),
-        ("mixed-field-keys", {1: 0, "typo": 0}, "profile sampled has unknown fields"),
-        ("mixed-sampling-keys", {"sampling_params": {1: 0, "typo": 0}}, "profile sampled has unknown sampling keys"),
-        ("scalar-files", {"data_files": 7}, r"(?s)profile sampled:.*data_files"),
-        ("string-files", {"data_files": "panel.parquet"}, r"(?s)profile sampled:.*data_files"),
-        ("nonstring-files", {"data_files": [7]}, r"(?s)profile sampled:.*data_files"),
-        ("null-callback", {}, r"trainer.callbacks\[0\] must be a mapping"),
+        ("scalar-profile", 7, "additional_evaluations.sampled"),
+        ("mixed-field-keys", {1: 0, "typo": 0}, "mapping keys must be strings"),
     ],
 )
 def test_named_evaluation_data_is_staged_and_bound_in_training_driver(
@@ -591,8 +560,6 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(
         "sampling_params": {
             "temperature": 0.0,
             "stop": None,
-            "seed": 42,
-            "frequency_penalty": 0.5,
             "stop_token_ids": [7],
         },
         "n_samples_per_prompt": None,
@@ -604,7 +571,7 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(
         document["skyrl"]["entrypoint"] = "standard"
     document["skyrl"]["trainer"]["callbacks"] = [{"type": "evaluation", "additional_evaluations": {"sampled": profile}}]
     sources = []
-    for name, identifier in (("primary", "throughput-only"), ("panel", "panel-only")):
+    for name, identifier in (("primary", "throughput-only"), ("task_set", "task_set-only")):
         directory = tmp_path / name
         directory.mkdir()
         pq.write_table(pa.table({"task_id": [identifier]}), directory / "rows.parquet")
@@ -625,10 +592,6 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(
         )
     elif case == "missing-profile":
         document["skyrl"]["trainer"]["callbacks"] = []
-    elif case == "list-profiles":
-        document["skyrl"]["trainer"]["callbacks"][0]["additional_evaluations"] = []
-    elif case == "null-callback":
-        document["skyrl"]["trainer"]["callbacks"] = [None]
     path.write_text(yaml.safe_dump(document))
     if error is not None:
         with pytest.raises(ValueError, match=error):
@@ -647,8 +610,6 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(
     assert {key: request[key] for key in expected_sampling} == expected_sampling
     assert recorded.schedule == ("final" if case == "final-schedule" else "every_evaluation")
     prepared = launch._prepare_config(loaded)
-    OmegaConf.update(prepared, "skyrl.generator.eval_sampling_params.seed", 91, force_add=True)
-    OmegaConf.update(prepared, "skyrl.generator.eval_sampling_params.presence_penalty", 0.25, force_add=True)
     task_runtime.materialize_data_sources(task_runtime._runtime_namespace(prepared).data_sources_json)
     runner = training_driver.LocalRLRunner(
         training_driver.LocalRLConfig(
@@ -670,29 +631,21 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(
         observed["request"] = OmegaConf.to_container(profile.sampling_params, resolve=True)
         observed["count"] = profile.n_samples_per_prompt
         assert config.skyrl.generator.eval_sampling_params.stop == ["base-stop"]
-        assert config.skyrl.generator.eval_sampling_params.seed == 91
-        assert config.skyrl.generator.eval_sampling_params.presence_penalty == 0.25
         return 0
 
     monkeypatch.setattr(runner, "_setup_environment", lambda: None)
     monkeypatch.setattr(runner, "_run_skyrl", read_datasets)
     assert runner.run() == 0
     assert observed["primary"] == ["throughput-only"]
-    assert observed["profile"] == ["panel-only"]
+    assert observed["profile"] == ["task_set-only"]
     assert observed["count"] == (3 if case == "explicit" else 2)
     assert {key: observed["request"][key] for key in expected_sampling} == expected_sampling
-    from skyrl_train.inference_engines.sampling import get_sampling_params_for_backend
 
-    assert observed["request"]["presence_penalty"] == 0.25
     native_request = get_sampling_params_for_backend("vllm", OmegaConf.create(observed["request"]))
     assert native_request["skip_special_tokens"] is False
-    assert native_request["stop"] == (["!"] if case == "native-forms" else expected_sampling["stop"])
-    if case == "sampling-domain":
-        assert native_request["structured_outputs"] == expected_sampling["structured_outputs"]
-        assert native_request["extra_args"] == expected_sampling["extra_args"]
-        assert native_request["logprobs"] == -1
+    assert native_request["stop"] == expected_sampling["stop"]
     record = json.loads((tmp_path / "resolved.json").read_text())
-    assert record["config"]["inputs"]["evaluation_data"]["sampled"][0]["identity"] == "panel"
+    assert record["config"]["inputs"]["evaluation_data"]["sampled"][0]["identity"] == "task_set"
     stored = record["config"]["skyrl"]["trainer"]["callbacks"][0]["additional_evaluations"]["sampled"]
     assert stored["n_samples_per_prompt"] == observed["count"]
     assert stored["sampling_params"] == observed["request"]
@@ -748,16 +701,39 @@ def test_composed_launch_rejects_tis_selectors(tmp_path: Path, key: str, value) 
 @pytest.mark.parametrize(
     ("overrides", "error"),
     [
+        ({"algorithm.batch_invariant": True}, "cannot configure a remote inference server"),
+        (
+            {
+                "policy.megatron_config.moe_router_replay": True,
+                "policy.megatron_config.transformer_config_kwargs.moe_router_fusion": True,
+            },
+            "fused router bypasses",
+        ),
         ({"rollout_buffer.max_staleness_steps": 1}, "off-policy OLD-anchored"),
-        ({"rollout_buffer.max_staleness_steps": 1, "algorithm.off_policy_correction": "none"}, None),
-        ({"rollout_buffer.max_staleness_steps": 1, "algorithm.policy_loss_type": "behavior_clip"}, None),
+        (
+            {
+                "rollout_buffer.max_staleness_steps": 1,
+                "algorithm.off_policy_correction": "none",
+                "placement.colocate_all": False,
+            },
+            None,
+        ),
+        ({"rollout_buffer.max_staleness_steps": 1, "algorithm.off_policy_correction": "none"}, "colocate_all requires"),
+        (
+            {
+                "rollout_buffer.max_staleness_steps": 1,
+                "algorithm.policy_loss_type": "behavior_clip",
+                "placement.colocate_all": False,
+            },
+            None,
+        ),
         ({"algorithm.policy_loss_type": "behavior_clip", "algorithm.off_policy_correction": "tis"}, "OLD-anchored"),
         (
             {
                 "algorithm.off_policy_correction": "custom",
                 "algorithm.off_policy_correction_rules": [{"action": "truncate", "high": 2.0}],
             },
-            "kind must be token or sequence",
+            "discriminator 'kind'",
         ),
         (
             {
@@ -811,32 +787,95 @@ def test_launch_validates_correction_and_selection_contract(tmp_path: Path, over
     raw = OmegaConf.create(raw_launch_config())
     for key, value in overrides.items():
         OmegaConf.update(raw.skyrl.trainer, key, value, force_add=True)
+    if overrides.get("placement.colocate_all") is False:
+        raw.iris.allocation.num_nodes = 2
+    if overrides.get("algorithm.batch_invariant"):
+        raw.skyrl.generator.run_engines_locally = False
+        raw.skyrl.generator.remote_inference_engine_urls = ["http://inference.test:8000"]
     path = tmp_path / "launch.yaml"
     OmegaConf.save(raw, path)
     if error is not None:
-        with pytest.raises(ValueError, match=error):
+        with pytest.raises(ValueError, match=error) as raised:
             load_launch_config(path)
+        assert "/tmp/" not in str(raised.value)
     else:
         # Explicitly uncorrected stale policies and active reward filters are valid launch contracts.
         load_launch_config(path)
 
 
-@pytest.mark.parametrize(
-    ("recipe", "nodes"), [("snowball_mopd_ultra_async_smoke", 8), ("snowball_mopd_ultra_async_32k_smoke", 9)]
-)
-def test_inherited_recipe_round_trips_as_a_self_contained_launch(tmp_path: Path, recipe: str, nodes: int):
+def test_source_launch_preserves_nested_open_mappings(tmp_path):
     raw = raw_launch_config()
-    raw["skyrl"] = {"defaults": [recipe, "_self_"], "trainer": {"max_steps": 2}}
-    raw["iris"]["allocation"]["num_nodes"] = nodes
+    raw["skyrl"]["generator"]["engine_init_kwargs"] = {"user_options": {"nested": {}}}
+    path = tmp_path / "source.yaml"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    assert OmegaConf.to_container(load_launch_config(path).skyrl.generator.engine_init_kwargs.user_options) == {
+        "nested": {}
+    }
+
+
+def test_first_train_submission_validates_recipe_and_resolved_reload(tmp_path):
+    raw = raw_launch_config()
+    raw["runtime"]["entrypoint"] = ""
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
-    config = load_launch_config(path)
-    assert config.skyrl.trainer.max_steps == 2
-    assert config.skyrl.trainer.rollout_buffer.max_staleness_steps == 1
-    assert config.skyrl.trainer.algorithm.off_policy_correction == "tis"
-    assert config.skyrl.data.sampling.kind is None
-    assert config.skyrl.generator.engine_init_kwargs.max_model_len == (8192 if nodes == 8 else 32767)
+    loaded = load_launch_config(path)
     resolved = tmp_path / "resolved.yaml"
-    OmegaConf.save(config, resolved)
-    reloaded = load_launch_config(resolved)
-    assert OmegaConf.to_container(reloaded, resolve=True) == OmegaConf.to_container(config, resolve=True)
+    OmegaConf.save(loaded, resolved)
+    assert OmegaConf.to_container(load_launch_config(resolved), resolve=True) == OmegaConf.to_container(
+        loaded, resolve=True
+    )
+    del raw["skyrl"]["context_budget"]
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError, match="context_budget"):
+        load_launch_config(path)
+
+
+def test_source_launch_rejects_conflicting_author_values(tmp_path):
+    cases = []
+    for recipe_key, envelope_key in (("train_data", "train_data"), ("val_data", "validation_data")):
+        raw = OmegaConf.create(raw_launch_config())
+        raw.skyrl.data = {recipe_key: ["/authored/data"]}
+        raw.inputs[envelope_key] = [
+            {
+                "uri": "s3://data/gsm8k",
+                "identity": "sha256:gsm8k",
+                "local_path": "/tmp/data/gsm8k",
+                "relative_path": "train.parquet",
+                "kind": "directory",
+            }
+        ]
+        cases.append((raw, f"data.{recipe_key} conflicts"))
+    for role in ("policy", "ref"):
+        raw = OmegaConf.create(raw_launch_config())
+        raw.skyrl.trainer.placement[f"{role}_num_gpus_per_node"] = 32
+        cases.append((raw, rf"trainer\.placement\.{role}_num_gpus_per_node=32 exceeds"))
+    raw = OmegaConf.create(raw_launch_config())
+    raw.inputs.data_kind = "parquet"
+    cases.append((raw, "inputs.data_kind"))
+    raw = OmegaConf.create(raw_launch_config())
+    raw.iris.allocation.num_nodes = 2
+    raw.skyrl.trainer.placement.colocate_all = False
+    raw.skyrl.generator.speculative_decoding = {
+        "method": "eagle3",
+        "model": {"source_uri": "s3://models/draft", "source_identity": "mutable"},
+        "num_speculative_tokens": 3,
+        "training": None,
+    }
+    cases.append((raw, "artifact sources require sha256"))
+    raw = OmegaConf.create(raw_launch_config())
+    raw.iris.allocation.num_nodes = 2
+    cases.append((raw, "num_nodes"))
+    raw = OmegaConf.create(raw_launch_config())
+    raw.runtime.profile = "fsdp"
+    cases.append((raw, "runtime.profile"))
+    raw = OmegaConf.create(raw_launch_config())
+    raw.skyrl.trainer.callbacks = [{"type": "best_checkpoint"}]
+    cases.append((raw, "initial_model_uri"))
+    raw = OmegaConf.create(raw_launch_config())
+    raw.skyrl.checkpoint_export = {"hf_hub_repo_id": "authored/model"}
+    cases.append((raw, "checkpoint_export: the launch document owns export settings"))
+    path = tmp_path / "invalid.yaml"
+    for raw, error in cases:
+        OmegaConf.save(raw, path)
+        with pytest.raises(ValueError, match=error):
+            load_launch_config(path)

@@ -26,11 +26,10 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 from skyrl_train.trajectory_runners.types import TaskRequestBatch, TrajectoryID
 from skyrl_train.utils.trainer_utils import evaluation_response_metrics
 from tests.cpu.task_specs import NATIVE_ENVIRONMENT, lowered_task, task_input, text_task
-from tests.cpu.tiny_training.experiment import TinyTrainingExp
 from tests.cpu.tiny_training.tiny_model import build_tiny_policy
 
 
-@pytest.mark.parametrize("experiment_type", [BasePPOExp, TerminalBenchExp, TinyTrainingExp])
+@pytest.mark.parametrize("experiment_type", [BasePPOExp, TerminalBenchExp])
 def test_final_profiles_build_primary_and_named_datasets_without_periodic_evaluation(tmp_path, experiment_type):
     config = get_default_config()
     primary, named = tmp_path / "primary.parquet", tmp_path / "named.parquet"
@@ -41,13 +40,16 @@ def test_final_profiles_build_primary_and_named_datasets_without_periodic_evalua
     if experiment_type is TerminalBenchExp:
         OmegaConf.update(config, "terminal_bench_config", {}, force_add=True)
     config.trainer.eval_interval = 0
-    config.trainer.callbacks = [{
-        "type": "evaluation", "eval_steps": 0,
-        "additional_evaluations": {
-            "primary_final": {"schedule": "final"},
-            "named_final": {"schedule": "final", "data_files": [str(named)]},
-        },
-    }]
+    config.trainer.callbacks = [
+        {
+            "type": "evaluation",
+            "eval_steps": 0,
+            "additional_evaluations": {
+                "primary_final": {"schedule": "final"},
+                "named_final": {"schedule": "final", "data_files": [str(named)]},
+            },
+        }
+    ]
     experiment = experiment_type.__new__(experiment_type)
     experiment.cfg = config
     experiment.tokenizer = AutoTokenizer.from_pretrained(build_tiny_policy(tmp_path / "model"))

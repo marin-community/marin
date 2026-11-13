@@ -4,15 +4,11 @@ Main entrypoint for generating rollouts on terminal bench tasks.
 
 import ray
 import asyncio
-import hydra
 from omegaconf import DictConfig
 
-from skyrl_train.entrypoints.main_base import (
-    config_dir,
-    run_ray_driver,
-)
+from skyrl_train.entrypoints.main_base import run_ray_driver
 from skyrl_train.entrypoints.terminal_bench import TerminalBenchExp
-from skyrl_train.inference_engines.sampling import get_sampling_params_for_backend
+from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.config.rollout_validation import EntrypointOperation
 from skyrl_train.trajectory_runners.trajectory_processing import prepare_trajectory_request
 
@@ -59,12 +55,3 @@ def run(cfg: DictConfig) -> None:
         operation=EntrypointOperation.GENERATE,
         failure_message="Generation failed",
     )
-
-
-@hydra.main(config_path=config_dir, config_name="ppo_base_config", version_base=None)
-def main(cfg: DictConfig) -> None:
-    run(cfg)
-
-
-if __name__ == "__main__":
-    main()

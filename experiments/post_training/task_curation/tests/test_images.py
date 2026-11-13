@@ -18,7 +18,7 @@ from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.runtime.local import local_runtime
 
-from experiments.post_training.task_curation.datasets.evalchemy.environments import MATH_GRADER, PYTHON_GRADER
+from experiments.evaluation.benchmarks.environments import MATH_GRADER, PYTHON_GRADER
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images import __main__ as images
 from experiments.post_training.task_curation.images import build

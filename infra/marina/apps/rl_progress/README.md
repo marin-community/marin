@@ -21,6 +21,13 @@ Each native `(run_id, attempt_id)` identifies one updatable JSON record. Repeat
 publication refreshes that attempt's record; a missing issue preserves its stored
 issue link. Other attempts remain separate.
 
+Native failures and failed training invariants set `status: failed` and name `failed_facts`.
+Records carry native identity, source and engine facts, and the launcher's issue. The gate result
+contains the report's climbed metrics, constraints, invariants, verdict and label; controls and
+train-long have no gate verdict. Update counts use stored metrics and checkpoint parents.
+Lineage duration sums those native jobs' stored windows. Missing lineage records leave both
+measurements unknown; a missing window leaves elapsed time unknown with a timing note.
+
 `POST /api/runs` validates each submitted record with the shared
 `marin.rl.rl_progress.RunSummary`, upserts its native key and returns the stored
 record. `GET /api/runs` returns stored records and lists malformed historical rows

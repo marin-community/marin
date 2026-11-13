@@ -3,27 +3,21 @@
 Named results use eval/<name>/ metrics and <trainer.export_path>/<name>/ outputs.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 import json
 from typing import Any
 
 from marinskyrl.resource_locator import join_resource_path
 from omegaconf import DictConfig, OmegaConf
 from skyrlrecipe.declared import EvaluationSampling as EvaluationProfile
-from skyrlrecipe.sampling import EvalSamplingParams
 
 
-def _declared_profiles(config: Mapping[str, Any]) -> dict[str, EvaluationProfile]:
+DEFAULT_EVALUATION_STEPS = 5
+
+
+def _declared_profiles(config: Mapping[str, Any]) -> dict[str, Any]:
     profiles = {}
-    allowed = EvaluationProfile.model_fields.keys()
-    callbacks = config.get("trainer", {}).get("callbacks")
-    if callbacks is None:
-        callbacks = ()
-    if not isinstance(callbacks, Sequence) or isinstance(callbacks, str):
-        raise ValueError("trainer.callbacks must be a sequence")
-    for index, callback in enumerate(callbacks):
-        if not isinstance(callback, Mapping):
-            raise ValueError(f"trainer.callbacks[{index}] must be a mapping")
+    for callback in config.get("trainer", {}).get("callbacks") or ():
         if callback.get("type") != "evaluation":
             continue
         declarations = callback.get("additional_evaluations")
@@ -36,22 +30,9 @@ def _declared_profiles(config: Mapping[str, Any]) -> dict[str, EvaluationProfile
                 raise ValueError(f"evaluation name must be an identifier: {name!r}")
             if name in profiles:
                 raise ValueError(f"duplicate evaluation profile: {name}")
-            if not isinstance(parameters, Mapping):
-                raise ValueError(f"evaluation profile {name} must be a mapping")
-            if parameters.get("sampling_params") is not None and not isinstance(parameters["sampling_params"], Mapping):
-                raise ValueError(f"evaluation profile {name}: sampling_params must be a mapping")
-            unknown = set(parameters) - allowed
-            if unknown:
-                raise ValueError(f"evaluation profile {name} has unknown fields: {sorted(unknown, key=str)}")
-            unknown_sampling = set(parameters.get("sampling_params") or {}) - EvalSamplingParams.model_fields.keys()
-            if unknown_sampling:
-                raise ValueError(f"evaluation profile {name} has unknown sampling keys: {sorted(unknown_sampling, key=str)}")
-            try:
-                document = OmegaConf.to_container(parameters, resolve=True) if OmegaConf.is_config(parameters) else parameters
-                profile = EvaluationProfile.model_validate_json(json.dumps(document))
-            except (TypeError, ValueError) as error:
-                raise ValueError(f"evaluation profile {name}: {error}") from error
-            profiles[name] = profile
+            profiles[name] = (
+                OmegaConf.to_container(parameters, resolve=True) if OmegaConf.is_config(parameters) else parameters
+            )
     return profiles
 
 
@@ -61,32 +42,41 @@ def validate_evaluation_data(config: DictConfig, *, source_recipe: bool) -> None
     for name in config.inputs.get("evaluation_data", {}):
         if name not in profiles:
             raise ValueError(f"evaluation data has no additional evaluation profile: {name}")
-        if source_recipe and profiles[name].data_files is not None:
-            raise ValueError(f"evaluation profile {name} has both data_files and evaluation_data")
+        if source_recipe and isinstance(profiles[name], Mapping) and profiles[name].get("data_files") is not None:
+            raise ValueError(f"evaluation profile {name}: both data_files and evaluation_data")
 
 
-def evaluation_profiles(
+def resolve_evaluation_profiles(
     config: DictConfig, *, evaluation_data: tuple[tuple[str, tuple[str, ...]], ...] = ()
 ) -> dict[str, EvaluationProfile]:
     """Resolve and record named requests in one complete native SkyRL configuration."""
-    profiles = _declared_profiles(config)
-    for name, paths in evaluation_data:
-        profiles[name] = EvaluationProfile.model_validate_json(
-            json.dumps(profiles[name].to_skyrl() | {"data_files": paths})
-        )
+    staged = dict(evaluation_data)
     resolved = {}
-    for name, profile in profiles.items():
-        merged = evaluation_profile_config(config, profile, name)
-        resolved[name] = EvaluationProfile.model_validate_json(
-            json.dumps(
-                {
-                    "sampling_params": OmegaConf.to_container(merged.generator.eval_sampling_params, resolve=True),
-                    "n_samples_per_prompt": int(merged.generator.eval_n_samples_per_prompt),
-                    "data_files": profile.data_files,
-                    "schedule": profile.schedule,
-                }
-            )
-        )
+    for name, declaration in _declared_profiles(config).items():
+        document = declaration
+        if isinstance(declaration, Mapping):
+            sampling = declaration.get("sampling_params")
+            if sampling is None or isinstance(sampling, Mapping):
+                sampling = OmegaConf.to_container(config.generator.eval_sampling_params, resolve=True) | (
+                    sampling or {}
+                )
+            document = {
+                "schedule": "every_evaluation",
+                "data_files": None,
+                **declaration,
+                "sampling_params": sampling,
+                "n_samples_per_prompt": (
+                    int(config.generator.eval_n_samples_per_prompt)
+                    if declaration.get("n_samples_per_prompt") is None
+                    else declaration["n_samples_per_prompt"]
+                ),
+            }
+            if name in staged:
+                document["data_files"] = staged[name]
+        try:
+            resolved[name] = EvaluationProfile.model_validate_json(json.dumps(document))
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"evaluation profile {name}: {error}") from error
     for callback in config.get("trainer", {}).get("callbacks") or []:
         if callback.get("type") == "evaluation":
             for name in callback.get("additional_evaluations") or {}:
@@ -97,6 +87,32 @@ def evaluation_profiles(
 def evaluation_profile_due(profile: EvaluationProfile, *, step: int, last_step: bool) -> bool:
     """Whether a named request runs at this evaluation event."""
     return profile.schedule == "every_evaluation" or last_step and step > 0
+
+
+def validate_generation_profiles(profiles: Mapping[str, EvaluationProfile]) -> None:
+    if any(not evaluation_profile_due(profile, step=0, last_step=False) for profile in profiles.values()):
+        raise ValueError("final evaluation profiles require training updates")
+
+
+def validate_evaluation_schedule(
+    config: DictConfig, profiles: Mapping[str, EvaluationProfile], *, generation: bool = False
+) -> None:
+    if generation:
+        validate_generation_profiles(profiles)
+    evaluations = [
+        callback for callback in config.trainer.get("callbacks") or () if callback.get("type") == "evaluation"
+    ]
+    if any(callback.get("eval_steps", DEFAULT_EVALUATION_STEPS) > 0 for callback in evaluations):
+        final_prefixes = tuple(f"eval/{name}/" for name, profile in profiles.items() if profile.schedule == "final")
+        for callback in evaluations:
+            inputs = set(callback.get("stop_when") or {})
+            inputs.update(key for members in (callback.get("metric_groups") or {}).values() for key in members)
+            final_inputs = sorted(key for key in inputs if key.startswith(final_prefixes))
+            if final_inputs:
+                raise ValueError(
+                    "final-only metrics in metric_groups or stop_when require eval_steps=0 on all evaluation callbacks "
+                    f"({', '.join(final_inputs)})"
+                )
 
 
 def named_evaluation_metrics(metrics: Mapping[str, float], name: str) -> dict[str, float]:

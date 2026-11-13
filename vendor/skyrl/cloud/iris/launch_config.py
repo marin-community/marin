@@ -2,21 +2,26 @@
 
 from __future__ import annotations
 
+import posixpath
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-import posixpath
-import tempfile
 from typing import Any, Mapping
 
 from omegaconf import MISSING, DictConfig, OmegaConf, open_dict
 
-from skyrl_train.evaluation_profiles import evaluation_profiles, validate_evaluation_data
+from skyrl_train.evaluation_profiles import resolve_evaluation_profiles, validate_evaluation_data, validate_evaluation_schedule
 
+from skyrl_train.config.validation import (
+    validate_training_settings,
+    validate_megatron_config,
+    validate_batch_invariant_config,
+)
 from skyrl_train.config.utils import normalize_logging_backends
 from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.objective_spec import validate_objective
+from skyrlrecipe import RLEntrypoint
 
 from cloud.iris.ray_storage import RaySpillBackend, resolve_ray_spill_target
 from cloud.iris.role_plan import (
@@ -26,13 +31,10 @@ from cloud.iris.role_plan import (
     derive_role_plan,
 )
 from cloud.iris.rl_config_translation import (
-    RL_ENTRYPOINTS,
-    RLEntrypoint,
     compose_skyrl_config,
     parse_rl_config,
     registered_rl_entrypoint_module,
     training_type_for_entrypoint,
-    validate_tp_divides_heads,
 )
 from cloud.iris.runtime_environment import RuntimeMode, runtime_profile_for_strategy
 from marinskyrl.distillation import (
@@ -41,6 +43,7 @@ from marinskyrl.distillation import (
     compile_distillation_plan_from_config,
     validate_generation_logprobs,
 )
+from cloud.iris.rl_config_translation import RL_ENTRYPOINTS
 from marinskyrl.hf_model import HuggingFaceModelCache
 from marinskyrl.resource_locator import is_cloud_uri, is_hugging_face_repo_id, join_resource_path
 from marinskyrl.runtime_options import WeightSyncTransport
@@ -166,7 +169,7 @@ class InputsConfig:
 
     model: LaunchModelLocator = field(default_factory=LaunchModelLocator)
     hugging_face_models: list[HuggingFaceModelCache] = field(default_factory=list)
-    data_kind: str = "tasks"
+    data_kind: str = MISSING
     train_data: list[dict[str, Any]] = field(default_factory=list)
     validation_data: list[dict[str, Any]] = field(default_factory=list)
     evaluation_data: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
@@ -187,9 +190,8 @@ class SkyRLLaunchConfig:
 
 
 def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
-    """Compose the structured launch schema, omitting empty named evaluation data."""
-    schema = OmegaConf.structured(SkyRLLaunchConfig)
-    composed = OmegaConf.merge(schema, raw)
+    """Compose a raw mapping into the strict structured launch schema."""
+    composed = OmegaConf.merge(OmegaConf.structured(SkyRLLaunchConfig), raw)
     OmegaConf.to_container(composed, resolve=True, throw_on_missing=True)
     if not composed.inputs.evaluation_data:
         with open_dict(composed.inputs):
@@ -197,8 +199,13 @@ def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
     return composed
 
 
-def _is_source_recipe(skyrl: DictConfig) -> bool:
-    return "context_budget" in skyrl or "config_groups" in skyrl or "defaults" in skyrl
+def _is_source_recipe(config: DictConfig) -> bool:
+    return (
+        config.run.mode == RunMode.TRAIN
+        and not config.runtime.entrypoint
+        or "context_budget" in config.skyrl
+        or "config_groups" in config.skyrl
+    )
 
 
 def _compose_source_recipe(config: DictConfig) -> DictConfig:
@@ -208,32 +215,30 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
     model_uri = str(config.inputs.model.uri)
     model_identity = str(config.inputs.model.identity)
     model_is_cloud = is_cloud_uri(model_uri)
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as source_file:
-        OmegaConf.save(OmegaConf.create(raw_skyrl), source_file.name, resolve=False)
-        parsed = parse_rl_config(source_file.name)
-        compiled = compose_skyrl_config(
-            parsed,
-            {
-                "job_name": str(config.iris.job_name),
-                "experiments_dir": str(config.runtime.experiments_dir),
-                "num_nodes": int(config.iris.allocation.num_nodes),
-                "gpus_per_node": int(config.iris.allocation.gpus_per_node),
-                "model_path": str(config.inputs.model.local_path),
-                "model_source_uri": model_uri if model_is_cloud else None,
-                "model_source_identity": model_identity if model_is_cloud else None,
-                "model_revision": model_identity,
-                "train_data": list(config.inputs.train_data),
-                "val_data": list(config.inputs.validation_data),
-                "checkpoint_root": str(config.artifacts.checkpoint_root),
-                "export_root": str(config.artifacts.export_root),
-                "resume_checkpoint_count": int(config.artifacts.resume_checkpoint_count),
-                "trajectory_root": join_resource_path(str(config.artifacts.attempts_root), "trajectories"),
-                "export_hf_artifact": bool(config.run.export_hf),
-                "seed": int(config.run.seed),
-            },
-            config.iris.allocation,
-        )
-        OmegaConf.resolve(compiled.config)
+    parsed = parse_rl_config(raw_skyrl)
+    compiled = compose_skyrl_config(
+        parsed,
+        {
+            "job_name": str(config.iris.job_name),
+            "experiments_dir": str(config.runtime.experiments_dir),
+            "num_nodes": int(config.iris.allocation.num_nodes),
+            "gpus_per_node": int(config.iris.allocation.gpus_per_node),
+            "model_path": str(config.inputs.model.local_path),
+            "model_source_uri": model_uri if model_is_cloud else None,
+            "model_source_identity": model_identity if model_is_cloud else None,
+            "model_revision": model_identity,
+            "train_data": list(config.inputs.train_data),
+            "val_data": list(config.inputs.validation_data),
+            "checkpoint_root": str(config.artifacts.checkpoint_root),
+            "export_root": str(config.artifacts.export_root),
+            "resume_checkpoint_count": int(config.artifacts.resume_checkpoint_count),
+            "trajectory_root": join_resource_path(str(config.artifacts.attempts_root), "trajectories"),
+            "export_hf_artifact": bool(config.run.export_hf),
+            "seed": int(config.run.seed),
+        },
+        config.iris.allocation,
+    )
+    OmegaConf.resolve(compiled.config)
     resolved = OmegaConf.create(OmegaConf.to_container(config, resolve=False))
     OmegaConf.set_struct(resolved, False)
     resolved.runtime.entrypoint = compiled.entrypoint
@@ -241,15 +246,19 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
         compiled.entrypoint, max_staleness_steps=compiled.config.trainer.rollout_buffer.max_staleness_steps
     )
     resolved.runtime.training_type = None if training_type is None else training_type.value
-    resolved.inputs.data_kind = parsed.data_kind
     resolved.skyrl = compiled.config
+    data_kind = parsed.recipe.data.kind
+    if resolved.inputs.data_kind != data_kind:
+        raise ValueError(
+            f"inputs.data_kind={resolved.inputs.data_kind!r} does not match the composed SkyRL value {data_kind!r}"
+        )
     return compose_launch_config(resolved)
 
 
 def load_launch_config(path: Path) -> DictConfig:
     """Load and validate one complete SkyRL launch document."""
     config = compose_launch_config(OmegaConf.load(path))
-    if _is_source_recipe(config.skyrl):
+    if _is_source_recipe(config):
         validate_evaluation_data(config, source_recipe=True)
         if config.run.mode != RunMode.TRAIN:
             raise ValueError("checkpoint_export launch configs must already contain a composed SkyRL subtree")
@@ -260,7 +269,15 @@ def load_launch_config(path: Path) -> DictConfig:
         probe.archive_uri = join_resource_path(artifact_root, "mismatch_probe")
     normalize_logging_backends(config.skyrl)
     validate_launch_config(config)
-    evaluation_profiles(config.skyrl)
+    profiles = resolve_evaluation_profiles(config.skyrl)
+    if config.run.mode == RunMode.TRAIN:
+        if config.runtime.entrypoint != RL_ENTRYPOINTS[RLEntrypoint.GENERATE]:
+            validate_training_settings(config.skyrl)
+            validate_batch_invariant_config(config.skyrl)
+        validate_megatron_config(config.skyrl)
+        validate_evaluation_schedule(
+            config.skyrl, profiles, generation=config.runtime.entrypoint == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]
+        )
     return config
 
 
@@ -355,7 +372,7 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     backends = raw["skyrl"].get("trainer", {}).get("logger", ())
     if "records" in backends and raw["iris"]["max_retries"] != 0:
         raise ValueError("The records backend requires iris.max_retries=0 and a fresh attempt_id per execution")
-    validate_evaluation_data(config, source_recipe=_is_source_recipe(config.skyrl))
+    validate_evaluation_data(config, source_recipe=_is_source_recipe(config))
     ray = raw["ray"]
     if ray["rendezvous_timeout"] <= 0 or ray["cluster_join_timeout"] <= 0 or ray["driver_liveness_timeout"] < 0:
         raise ValueError(
@@ -395,11 +412,6 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
         raise ValueError(
             f"runtime.profile={runtime['profile']!r} does not match SkyRL trainer strategy ({expected_profile.value!r})"
         )
-    generator = skyrl.get("generator", {})
-    validate_tp_divides_heads(
-        int(generator["inference_engine_tensor_parallel_size"]),
-        skyrl.get("model_num_attention_heads"),
-    )
     trainer_seed = skyrl.get("trainer", {}).get("seed")
     if trainer_seed != run["seed"]:
         raise ValueError(f"run.seed={run['seed']} does not match skyrl.trainer.seed={trainer_seed!r}")

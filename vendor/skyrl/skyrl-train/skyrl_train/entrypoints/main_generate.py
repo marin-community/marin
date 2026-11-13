@@ -7,7 +7,6 @@ import time
 from pathlib import Path
 from typing import Any, Protocol
 
-import hydra
 import ray
 from loguru import logger
 from omegaconf import DictConfig
@@ -16,21 +15,20 @@ from marinskyrl.runtime_options import EvaluationRunner
 from skyrl_train.evaluation_profiles import (
     named_evaluation_metrics,
     evaluation_profile_config,
-    evaluation_profiles,
-    evaluation_profile_due,
+    resolve_evaluation_profiles,
+    validate_generation_profiles,
 )
 from skyrl_train.config.rollout_validation import EntrypointOperation
-from skyrl_train.entrypoints.main_base import (
-    BasePPOExp,
-    config_dir,
-)
+from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.inference_engines.base import NamedWeightsUpdateRequest, lora_disk_load_request
 from skyrl_train.inference_engines.vllm.stats import IntervalReadMode
 from skyrl_train.inference_observability import trainer_metrics
 from skyrl_train.metric_names import (
     PROMPTS_DROPPED_TOO_LONG_METRIC,
 )
-from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray, num_rollout_gpus
+from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray
+from skyrl_train.config.placement_geometry import num_rollout_gpus
+from skyrl_train.config.utils import normalize_logging_backends
 from skyrl_train.evaluate import evaluate
 from skyrl_train.trajectory_runners.trajectory_retention import make_trajectory_sink
 from skyrl_train.utils.trainer_utils import build_eval_dataloader
@@ -74,9 +72,8 @@ class EvalOnlyEntrypoint(BasePPOExp):
         return results
 
     async def _evaluate(self) -> dict[str, Any]:
-        profiles = evaluation_profiles(self.cfg)
-        if any(not evaluation_profile_due(profile, step=0, last_step=False) for profile in profiles.values()):
-            raise ValueError("final evaluation profiles require training updates")
+        profiles = resolve_evaluation_profiles(self.cfg)
+        validate_generation_profiles(profiles)
         datasets = self.get_named_eval_datasets()
         assert self.eval_dataset is not None, "The evaluation only entrypoint requires an eval dataset is provided"
 
@@ -95,7 +92,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
 
         trajectory_sink = make_trajectory_sink(self.cfg.generator, self.tokenizer)
         trajectory_runner.set_trajectory_sink(trajectory_sink)
-        local_vllm = self.cfg.generator.run_engines_locally and self.cfg.generator.backend == "vllm"
+        local_engines = self.cfg.generator.run_engines_locally
         try:
             await trajectory_runner.startup()
             started = time.perf_counter()
@@ -116,7 +113,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
                     PROMPTS_DROPPED_TOO_LONG_METRIC: self.eval_dataset.prompts_dropped_too_long,
                 }
             )
-            if local_vllm:
+            if local_engines:
                 snapshot = await inference_engine_client.get_stats(read_mode=IntervalReadMode.RESET)
                 generated_tokens = sum(engine.cumulative.generation_tokens for engine in snapshot.engines)
                 results.update(
@@ -157,16 +154,8 @@ def eval_entrypoint(cfg: DictConfig) -> dict:
 
 
 def run(cfg: DictConfig) -> None:
+    normalize_logging_backends(cfg)
     validate_generator_cfg(cfg)
     initialize_ray(cfg)
     metrics = ray.get(eval_entrypoint.remote(cfg))
     logger.info(f"Metrics from eval only run: {metrics}")
-
-
-@hydra.main(config_path=config_dir, config_name="ppo_base_config", version_base=None)
-def main(cfg: DictConfig) -> None:
-    run(cfg)
-
-
-if __name__ == "__main__":
-    main()

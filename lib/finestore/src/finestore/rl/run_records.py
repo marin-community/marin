@@ -26,7 +26,8 @@ from finestore.store import DataStore, DataTable
 RUN_RECORDS_SUBDIRECTORY = "run-records"
 METRICS_TABLE = "metrics"
 ATTEMPTS_TABLE = "attempts"
-METRIC_METADATA_KEYS = frozenset(("step", "attempt_id", "metric_attempt_ids"))
+METRIC_ATTEMPT_IDS = "metric_attempt_ids"
+METRIC_METADATA_KEYS = frozenset(("step", "attempt_id", METRIC_ATTEMPT_IDS))
 
 
 class LaunchState(StrEnum):
@@ -78,6 +79,7 @@ class AttemptRecord(BaseModel):
     run_id: str
     attempt_id: str
     started_at: str | None = None
+    iris_job_id: str | None = None
     vllm_version: str | None = None
     metrics_started_at: str | None = None
     resumed_step: int | None = None
@@ -94,7 +96,7 @@ class AttemptRecord(BaseModel):
             state=LaunchState.SUBMITTED if self.started_at is not None else LaunchState.PREPARED,
             run_id=self.run_id,
             attempt_id=self.attempt_id,
-            iris_job_id=self.config.get("skyrl", {}).get("runtime", {}).get("iris_job_id"),
+            iris_job_id=self.iris_job_id,
             started_at=self.started_at,
         )
         return LaunchReceipt(config=self.config, result=result)
@@ -160,6 +162,12 @@ def update_attempt(store: DataStore, record: AttemptRecord) -> None:
     store.flush()
 
 
+def write_attempt(export_root: str, record: AttemptRecord) -> None:
+    """Commit one attempt update to its export root."""
+    with DataStore.open(run_records_root(export_root)) as store:
+        update_attempt(store, record)
+
+
 def _records(rows: Iterable[dict[str, Any]]) -> dict[str, AttemptRecord]:
     records: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -168,8 +176,6 @@ def _records(rows: Iterable[dict[str, Any]]) -> dict[str, AttemptRecord]:
 
 
 def _attempt(view: ReadView, attempt_id: str) -> AttemptRecord | None:
-    if ATTEMPTS_TABLE not in view.table_names():
-        return None
     return _records(view.iter_rows(ATTEMPTS_TABLE, where=[("attempt_id", "==", attempt_id)])).get(attempt_id)
 
 
@@ -181,7 +187,7 @@ def read_attempt(export_root: str, attempt_id: str) -> AttemptRecord | None:
 def read_attempts(export_root: str) -> dict[str, AttemptRecord]:
     """Read the stored attempts from one export root's committed snapshot."""
     view = ReadView(run_records_root(export_root))
-    return _records(view.iter_rows(ATTEMPTS_TABLE)) if ATTEMPTS_TABLE in view.table_names() else {}
+    return _records(view.iter_rows(ATTEMPTS_TABLE))
 
 
 def _lineage(export_root: str, attempt_id: str, views: dict[str, ReadView]) -> tuple[AttemptHistory, ...]:
@@ -210,7 +216,7 @@ def _lineage(export_root: str, attempt_id: str, views: dict[str, ReadView]) -> t
 
 
 def attempt_lineage(export_root: str, attempt_id: str) -> tuple[AttemptHistory, ...]:
-    """Read bounded checkpoint receipts for native history and timing consumers."""
+    """Return newest-first checkpoint ancestry with inclusive through_step bounds."""
     return _lineage(export_root, attempt_id, {})
 
 
@@ -224,16 +230,14 @@ def read_attempt_metrics(export_root: str, attempt_id: str) -> dict[int, dict[st
     history = _lineage(export_root, attempt_id, views)
     metrics: dict[int, dict[str, Any]] = {}
     for entry in reversed(history):
-        if METRICS_TABLE not in views[entry.records_root].table_names():
-            continue
         for row in views[entry.records_root].iter_rows(
             METRICS_TABLE, where=[("attempt_id", "==", entry.record.attempt_id)]
         ):
             step = row["step"]
             if entry.through_step is not None and step > entry.through_step:
                 continue
-            values = metrics.setdefault(step, {"step": step, "metric_attempt_ids": {}})
+            values = metrics.setdefault(step, {"step": step, METRIC_ATTEMPT_IDS: {}})
             values["attempt_id"] = entry.record.attempt_id
-            values["metric_attempt_ids"][row["name"]] = entry.record.attempt_id
+            values[METRIC_ATTEMPT_IDS][row["name"]] = entry.record.attempt_id
             values[row["name"]] = row["value"]
     return dict(sorted(metrics.items()))

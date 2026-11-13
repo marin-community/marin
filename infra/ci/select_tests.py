@@ -90,6 +90,7 @@ CI_BROAD_TRIGGERS: frozenset[str] = frozenset({"infra/ci/select_tests.py", ".git
 BROAD_TRIGGERS = LOCAL_BROAD_TRIGGERS | CI_BROAD_TRIGGERS
 
 MARIN_NATIVE_CONFIG_TESTS = {
+    "tests/rl/test_rl_launch_documents.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
     "experiments/post_training/curriculum_rl/test_launch.py": (
         "vendor/skyrl/cloud/iris/",
         "vendor/skyrl/skyrl-train/skyrl_train/config/",
@@ -105,6 +106,10 @@ MARIN_NATIVE_CONFIG_TESTS = {
         "vendor/skyrl/skyrl-train/skyrl_train/config/",
     ),
     "experiments/post_training/snowball_tests/test_snowball_rl_gate.py": (
+        "vendor/skyrl/cloud/iris/",
+        "vendor/skyrl/skyrl-train/skyrl_train/config/",
+    ),
+    "experiments/post_training/snowball_tests/test_snowball_rl_publication.py": (
         "vendor/skyrl/cloud/iris/",
         "vendor/skyrl/skyrl-train/skyrl_train/config/",
     ),
@@ -209,7 +214,9 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "infra/marina/",
         "lib/marin/src/marin/rl/",
         "lib/marin/src/marin/execution/",
-        "experiments/post_training/",
+        "experiments/post_training/snowball_",
+        "experiments/post_training/publish_rl_progress.py",
+        "experiments/post_training/skyrl_test_support.py",
         "infra/ci/",
         ".github/workflows/unified-unit.yaml",
         *DEPENDENCY_MANIFESTS,
@@ -228,16 +235,6 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "lib/verifyit/",
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
-    ),
-    "evalchemy-unit": (
-        "vendor/evalchemy/",
-        "lib/finestore/",
-        "lib/rigging/",
-        "lib/marin/src/marin/evaluation/evalchemy/",
-        "experiments/evaluation/",
-        "infra/ci/select_tests.py",
-        ".github/workflows/unified-unit.yaml",
-        *DEPENDENCY_MANIFESTS,
     ),
     "harbor-unit": (
         "vendor/harbor/",
@@ -795,12 +792,6 @@ def classify(
     forced: set[str] = set()
     native_changed: set[str] = set()
     experiment_asset_areas: set[str] = set()
-
-    launch_census = "tests/rl/test_rl_launch_documents.py"
-    if (repo_root / launch_census).is_file() and any(
-        path.startswith(("vendor/skyrl/", "lib/skyrlrecipe/")) for path in changed_files
-    ):
-        direct_tests["marin"].append(launch_census)
 
     for filepath in changed_files:
         if filepath in broad_triggers:

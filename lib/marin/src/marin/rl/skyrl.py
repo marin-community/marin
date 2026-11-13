@@ -23,7 +23,6 @@ import fsspec
 import yaml
 from finestore.rl.run_records import (
     AttemptRecord,
-    LaunchReceipt,
     LaunchResult,
     LaunchState,
 )
@@ -43,13 +42,11 @@ from marin.rl.skyrl_records import (
     EXPORTS_SUBDIRECTORY,
     RESOLVED_LAUNCH_FILENAME,
     TERMINAL_RECEIPT_FILENAME,
-    read_skyrl_launch_config,
-    read_stored_skyrl_receipt,
+    read_skyrl_attempt_config,
+    read_stored_skyrl_attempt,
 )
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 from marin.training.training import LevanterCheckpoint
-
-IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
 
 _EXECUTION = "skyrl_execution"
 _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
@@ -58,7 +55,7 @@ _TRACE_JOBS_SUBDIR = "trace_jobs"
 _TRAJECTORIES_SUBDIR = "trajectories"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
-BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
+_BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
 SKYRL_PROJECT = Path("vendor/skyrl")
 # The SkyRL runtime is packaged separately, so its matching limit is checked there too.
 _COLOCATED_EXPERT_BLOCK_GPU_COUNT = 4
@@ -107,7 +104,28 @@ def _training_entrypoint() -> str:
 
 
 @dataclass(frozen=True)
-class SkyRLRolePlan:
+class _InferenceGeometry:
+    num_inference_engines: int
+    inference_engine_tensor_parallel_size: int
+    inference_engine_pipeline_parallel_size: int
+    inference_engine_data_parallel_size: int
+    inference_engine_expert_parallel_size: int
+    n_samples_per_prompt: int
+
+    @property
+    def engine_gpus(self) -> int:
+        return (
+            self.inference_engine_tensor_parallel_size
+            * self.inference_engine_pipeline_parallel_size
+            * self.inference_engine_data_parallel_size
+        )
+
+    def inference_config(self) -> dict[str, object]:
+        return {f"generator.{item.name}": getattr(self, item.name) for item in fields(_InferenceGeometry)}
+
+
+@dataclass(frozen=True)
+class SkyRLRolePlan(_InferenceGeometry):
     """Training role geometry and registered training entrypoint.
 
     The reference role reuses the policy's GPUs-per-node width: the vendored
@@ -118,15 +136,9 @@ class SkyRLRolePlan:
     colocate_all: bool
     policy_num_nodes: int
     policy_num_gpus_per_node: int
-    num_inference_engines: int
-    inference_engine_tensor_parallel_size: int
-    inference_engine_pipeline_parallel_size: int
-    inference_engine_data_parallel_size: int
-    inference_engine_expert_parallel_size: int
     train_batch_size: int
     policy_mini_batch_size: int
     micro_train_batch_size_per_gpu: int
-    n_samples_per_prompt: int
     reference_num_nodes: int | None = None
     entrypoint: str = field(default_factory=_training_entrypoint)
 
@@ -134,9 +146,13 @@ class SkyRLRolePlan:
         from skyrlrecipe import RLEntrypoint  # noqa: PLC0415 - optional authoring dependency
 
         selected = RLEntrypoint(self.entrypoint)
-        if selected not in (RLEntrypoint.STANDARD, RLEntrypoint.TASKCOMPENDIUM):
-            raise ValueError("SkyRL training plans support standard or taskcompendium entrypoints")
+        if selected is RLEntrypoint.GENERATE:
+            raise ValueError("entrypoint=generate requires SkyRLGenerationPlan")
         object.__setattr__(self, "entrypoint", selected.value)
+
+    @property
+    def gpus_per_node(self) -> int:
+        return self.policy_num_gpus_per_node
 
     @property
     def colocate_policy_ref(self) -> bool:
@@ -161,20 +177,16 @@ class SkyRLRolePlan:
             "trainer.train_batch_size": self.train_batch_size,
             "trainer.policy_mini_batch_size": self.policy_mini_batch_size,
             "trainer.micro_train_batch_size_per_gpu": self.micro_train_batch_size_per_gpu,
-            "generator.num_inference_engines": self.num_inference_engines,
-            "generator.inference_engine_tensor_parallel_size": self.inference_engine_tensor_parallel_size,
-            "generator.inference_engine_pipeline_parallel_size": self.inference_engine_pipeline_parallel_size,
-            "generator.inference_engine_data_parallel_size": self.inference_engine_data_parallel_size,
-            "generator.inference_engine_expert_parallel_size": self.inference_engine_expert_parallel_size,
-            "generator.n_samples_per_prompt": self.n_samples_per_prompt,
+            **self.inference_config(),
         }
 
     def validate(self, topology: SkyRLTopology) -> None:
         """Validate training geometry against the allocated topology."""
-        plan = self
-        _validate_inference_geometry(plan, topology)
+        _validate_inference_geometry(self)
+        if not self.colocate_all:
+            _validate_engine_fits_node(self, topology)
         tensor_pipeline_gpus = self.inference_engine_tensor_parallel_size * self.inference_engine_pipeline_parallel_size
-        rollout_gpus = self.num_inference_engines * tensor_pipeline_gpus * self.inference_engine_data_parallel_size
+        rollout_gpus = self.num_inference_engines * self.engine_gpus
         for field_name in (
             "policy_num_nodes",
             "policy_num_gpus_per_node",
@@ -183,57 +195,121 @@ class SkyRLRolePlan:
             "micro_train_batch_size_per_gpu",
             "n_samples_per_prompt",
         ):
-            if getattr(plan, field_name) <= 0:
+            if getattr(self, field_name) <= 0:
                 raise ValueError(f"SkyRL role plan {field_name} must be positive")
-        if plan.num_inference_engines == 0 and plan.colocate_all:
+        if self.num_inference_engines == 0 and self.colocate_all:
             raise ValueError("a SkyRL role plan without inference engines cannot colocate policy and rollout roles")
-        if plan.policy_num_nodes > topology.num_nodes:
+        if self.policy_num_nodes > topology.num_nodes:
             raise ValueError("SkyRL policy_num_nodes exceeds the allocated topology")
-        if plan.policy_num_gpus_per_node > topology.gpus_per_node:
+        if self.policy_num_gpus_per_node > topology.gpus_per_node:
             raise ValueError("SkyRL policy_num_gpus_per_node exceeds the GPUs on one allocated node")
-        if plan.colocate_all and not plan.colocate_policy_ref:
+        if self.colocate_all and not self.colocate_policy_ref:
             raise ValueError("colocate_all requires a shared policy/reference footprint")
-        if plan.reference_num_nodes is not None and plan.reference_num_nodes <= 0:
+        if self.reference_num_nodes is not None and self.reference_num_nodes <= 0:
             raise ValueError("SkyRL reference_num_nodes must be positive")
 
-        if plan.colocate_all and topology.gpus_per_node % tensor_pipeline_gpus:
+        if self.colocate_all and topology.gpus_per_node % tensor_pipeline_gpus:
             raise ValueError(
                 "each colocated SkyRL inference engine TP*PP slice must divide gpus_per_node; "
                 f"got TP*PP={tensor_pipeline_gpus} and gpus_per_node={topology.gpus_per_node}"
             )
-        policy_gpus = plan.policy_num_nodes * plan.policy_num_gpus_per_node
-        if plan.colocate_all and policy_gpus != rollout_gpus:
+        policy_gpus = self.policy_num_nodes * self.policy_num_gpus_per_node
+        if self.colocate_all and policy_gpus != rollout_gpus:
             raise ValueError(
                 "colocated SkyRL roles must use the same GPUs: "
                 f"policy={policy_gpus}, rollout={rollout_gpus} "
-                f"({plan.num_inference_engines} engines x TP{plan.inference_engine_tensor_parallel_size} "
-                f"x PP{plan.inference_engine_pipeline_parallel_size} x DP{plan.inference_engine_data_parallel_size})"
+                f"({self.num_inference_engines} engines x TP{self.inference_engine_tensor_parallel_size} "
+                f"x PP{self.inference_engine_pipeline_parallel_size} x DP{self.inference_engine_data_parallel_size})"
             )
-        planned_gpus = policy_gpus if plan.colocate_all else policy_gpus + rollout_gpus
-        if plan.reference_num_nodes is not None:
-            planned_gpus += plan.reference_num_nodes * plan.policy_num_gpus_per_node
+        planned_gpus = policy_gpus if self.colocate_all else policy_gpus + rollout_gpus
+        if self.reference_num_nodes is not None:
+            planned_gpus += self.reference_num_nodes * self.policy_num_gpus_per_node
         allocated_gpus = topology.num_nodes * topology.gpus_per_node
         # SkyRL derives optional critic, teacher, and draft-trainer claims from the recipe
         # and validates that the complete role plan exactly consumes this allocation.
         if planned_gpus > allocated_gpus:
-            placement = "colocated policy/rollout" if plan.colocate_all else "policy + rollout"
+            placement = "colocated policy/rollout" if self.colocate_all else "policy + rollout"
             raise ValueError(
                 "SkyRL core role plan exceeds the allocated topology: "
                 f"{placement}={planned_gpus} GPUs, topology={allocated_gpus} GPUs "
                 f"({topology.num_nodes} nodes x {topology.gpus_per_node})"
             )
 
-        if plan.train_batch_size % plan.policy_mini_batch_size:
+        if self.train_batch_size % self.policy_mini_batch_size:
             raise ValueError("SkyRL train_batch_size must be divisible by policy_mini_batch_size")
-        if plan.policy_mini_batch_size % plan.micro_train_batch_size_per_gpu:
+        if self.policy_mini_batch_size % self.micro_train_batch_size_per_gpu:
             raise ValueError("SkyRL policy_mini_batch_size must be divisible by micro_train_batch_size_per_gpu")
+
+    def validate_recipe(self, config: dict[str, object], topology: SkyRLTopology) -> None:
+        if _declared_config_value(config, "generator.weight_sync_transport") == "expert_block" and self.colocate_all:
+            supported = (
+                self.entrypoint == "standard"
+                and self.policy_num_nodes == 1
+                and self.policy_num_gpus_per_node == _COLOCATED_EXPERT_BLOCK_GPU_COUNT
+                and self.num_inference_engines == 1
+                and self.inference_engine_tensor_parallel_size == 1
+                and self.inference_engine_pipeline_parallel_size == 1
+                and self.inference_engine_data_parallel_size == self.policy_num_gpus_per_node
+                and self.inference_engine_expert_parallel_size == self.policy_num_gpus_per_node
+                and _declared_config_value(config, "trainer.policy.megatron_config.tensor_model_parallel_size") == 1
+                and _declared_config_value(config, "trainer.policy.megatron_config.pipeline_model_parallel_size") == 1
+                and _declared_config_value(config, "trainer.policy.megatron_config.expert_tensor_parallel_size")
+                in (1, None)
+                and _declared_config_value(config, "trainer.policy.megatron_config.expert_model_parallel_size")
+                == self.policy_num_gpus_per_node
+                and _declared_config_value(config, "trainer.policy.megatron_config.nccl_max_channels")
+                in (None, 1, _MISSING_CONFIG_VALUE)
+                and _declared_config_value(config, "generator.backend") == "vllm"
+                and _declared_config_value(config, "generator.run_engines_locally") is True
+                and _declared_config_value(config, "generator.weight_sync_backend") == "nccl"
+                and _declared_config_value(config, "generator.expert_block_sync.verify") is True
+                and _declared_config_value(config, "generator.engine_init_kwargs.kernel_config.moe_backend") == "triton"
+                and _declared_config_value(config, "trainer.policy.model.lora.rank") in (0, _MISSING_CONFIG_VALUE)
+                and _declared_config_value(config, "generator.enforce_eager") in (False, _MISSING_CONFIG_VALUE)
+            )
+            if not supported:
+                raise ValueError(
+                    "SkyRL colocated expert_block requires entrypoint=standard, one four-GPU node, "
+                    "policy TP=PP=ETP=1 EP=4, "
+                    "one local vLLM TP=PP=1 DP=EP=4 TRITON engine, NCCL, verification, and no LoRA or eager mode"
+                )
+        # The reference role inherits the policy width, so this one check covers both:
+        # the launcher requires a single GPUs-per-node value across all bundles.
+        if self.policy_num_gpus_per_node != topology.gpus_per_node:
+            raise ValueError(
+                "SkyRL policy_num_gpus_per_node must match the whole-node topology width; "
+                f"got {self.policy_num_gpus_per_node} and {topology.gpus_per_node}"
+            )
+
+        critic_path = _declared_config_value(config, "trainer.critic.model.path")
+        if critic_path is not _MISSING_CONFIG_VALUE and critic_path:
+            raise ValueError("Marin SkyRL artifact topology does not yet describe a separate critic role")
+        forward_batch = _declared_config_value(config, "trainer.micro_forward_batch_size_per_gpu")
+        if forward_batch is not _MISSING_CONFIG_VALUE and forward_batch != self.micro_train_batch_size_per_gpu:
+            raise ValueError(
+                "Megatron requires equal micro_forward_batch_size_per_gpu and micro_train_batch_size_per_gpu"
+            )
+        for role, nodes in (
+            ("policy", self.policy_num_nodes),
+            ("ref", self.reference_num_nodes or self.policy_num_nodes),
+        ):
+            dimensions: dict[str, int] = {}
+            for dimension in fields(MegatronGeometry):
+                value = _declared_config_value(config, f"trainer.{role}.megatron_config.{dimension.name}")
+                dimensions[dimension.name] = 1 if value is _MISSING_CONFIG_VALUE else cast(int, value)
+            etp = _declared_config_value(config, f"trainer.{role}.megatron_config.expert_tensor_parallel_size")
+            if etp is _MISSING_CONFIG_VALUE or etp is None:
+                dimensions["expert_tensor_parallel_size"] = dimensions["tensor_model_parallel_size"]
+            validate_megatron_geometry(
+                MegatronGeometry(**dimensions), role=role, num_gpus=nodes * self.policy_num_gpus_per_node
+            )
 
 
 @dataclass(frozen=True)
-class SkyRLGenerationPlan:
-    """Inference allocation with the canonical native role geometry."""
+class SkyRLGenerationPlan(_InferenceGeometry):
+    """Whole-node inference geometry for evaluation-only jobs."""
 
-    geometry: SkyRLRolePlan
+    gpus_per_node: int
 
     @property
     def entrypoint(self) -> str:
@@ -243,35 +319,47 @@ class SkyRLGenerationPlan:
 
     @property
     def num_nodes(self) -> int:
-        return _inference_nodes(self.geometry)
+        return _inference_nodes(self)
 
     def config_values(self) -> dict[str, object]:
-        return self.geometry.config_values()
+        return {
+            "trainer.placement.colocate_all": False,
+            "trainer.placement.policy_num_gpus_per_node": self.gpus_per_node,
+            **self.inference_config(),
+        }
 
     def validate(self, topology: SkyRLTopology) -> None:
-        plan = self.geometry
-        _validate_inference_geometry(plan, topology)
-        if plan.num_inference_engines <= 0:
-            raise ValueError("SkyRL role plan num_inference_engines must be positive")
+        _validate_inference_geometry(self)
+        if self.num_inference_engines <= 0 or self.n_samples_per_prompt <= 0:
+            raise ValueError("SkyRL generation engines and samples per prompt must be positive")
+        _validate_engine_fits_node(self, topology)
         if topology.num_nodes != self.num_nodes:
             raise ValueError("SkyRL generation topology must allocate exactly the inference engine nodes")
-        if plan.policy_num_gpus_per_node != topology.gpus_per_node:
+        if self.gpus_per_node != topology.gpus_per_node:
             raise ValueError("SkyRL inference node width must match the whole-node topology width")
 
+    def validate_recipe(self, config: dict[str, object], topology: SkyRLTopology) -> None:
+        return None
 
-def _inference_nodes(plan: SkyRLRolePlan) -> int:
-    engine_gpus = (
-        plan.inference_engine_tensor_parallel_size
-        * plan.inference_engine_pipeline_parallel_size
-        * plan.inference_engine_data_parallel_size
-    )
-    engines_per_node = plan.policy_num_gpus_per_node // engine_gpus
+
+def _validate_engine_fits_node(plan: SkyRLRolePlan | SkyRLGenerationPlan, topology: SkyRLTopology) -> None:
+    engine_gpus = plan.engine_gpus
+    if engine_gpus > topology.gpus_per_node:
+        raise ValueError(
+            "each SkyRL inference engine must fit on one node, but "
+            f"TP*PP*DP={engine_gpus} exceeds gpus_per_node={topology.gpus_per_node}"
+        )
+
+
+def _inference_nodes(plan: SkyRLRolePlan | SkyRLGenerationPlan) -> int:
+    engine_gpus = plan.engine_gpus
+    engines_per_node = plan.gpus_per_node // engine_gpus
     if not engines_per_node:
         raise ValueError("each SkyRL inference engine must fit on one node")
     return (plan.num_inference_engines + engines_per_node - 1) // engines_per_node
 
 
-def _validate_inference_geometry(plan: SkyRLRolePlan, topology: SkyRLTopology) -> None:
+def _validate_inference_geometry(plan: SkyRLRolePlan | SkyRLGenerationPlan) -> None:
     for name in (
         "inference_engine_tensor_parallel_size",
         "inference_engine_pipeline_parallel_size",
@@ -282,18 +370,6 @@ def _validate_inference_geometry(plan: SkyRLRolePlan, topology: SkyRLTopology) -
             raise ValueError(f"SkyRL role plan {name} must be positive")
     if plan.num_inference_engines < 0:
         raise ValueError("SkyRL role plan num_inference_engines cannot be negative")
-    engine_gpus = (
-        plan.inference_engine_tensor_parallel_size
-        * plan.inference_engine_pipeline_parallel_size
-        * plan.inference_engine_data_parallel_size
-    )
-    if (
-        isinstance(topology.role_plan, SkyRLGenerationPlan) or not plan.colocate_all
-    ) and engine_gpus > topology.gpus_per_node:
-        raise ValueError(
-            "each SkyRL inference engine must fit on one node, but "
-            f"TP*PP*DP={engine_gpus} exceeds gpus_per_node={topology.gpus_per_node}"
-        )
     expert_group_gpus = plan.inference_engine_tensor_parallel_size * plan.inference_engine_data_parallel_size
     if expert_group_gpus % plan.inference_engine_expert_parallel_size:
         raise ValueError(
@@ -564,6 +640,9 @@ class SkyRLSpec:
             raise ValueError("duplicate evaluation data names")
 
 
+IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
+
+
 @dataclass(frozen=True)
 class IrisSkyRLExecution:
     """Runtime-only Iris placement and retry policy."""
@@ -617,7 +696,7 @@ class SkyRLOutputPaths:
     terminal_manifest_uri: str
 
 
-MISSING_CONFIG_VALUE = object()
+_MISSING_CONFIG_VALUE = object()
 
 
 def _parsed_config(config_yaml: str) -> dict[str, object]:
@@ -630,11 +709,11 @@ def _parsed_config(config_yaml: str) -> dict[str, object]:
     return config
 
 
-def declared_config_value(config: dict[str, object], dotted_key: str) -> object:
+def _declared_config_value(config: dict[str, object], dotted_key: str) -> object:
     value: object = config
     for part in dotted_key.split("."):
         if not isinstance(value, dict) or part not in value:
-            return MISSING_CONFIG_VALUE
+            return _MISSING_CONFIG_VALUE
         value = value[part]
     return value
 
@@ -642,14 +721,14 @@ def declared_config_value(config: dict[str, object], dotted_key: str) -> object:
 def _validate_role_plan_config(config: dict[str, object], role_plan: SkyRLRolePlan | SkyRLGenerationPlan) -> None:
     """Reject recipe values that disagree with Marin's canonical role plan."""
     for dotted_key, expected in role_plan.config_values().items():
-        actual = declared_config_value(config, dotted_key)
-        if actual is MISSING_CONFIG_VALUE:
+        actual = _declared_config_value(config, dotted_key)
+        if actual is _MISSING_CONFIG_VALUE:
             continue
         if type(actual) is not type(expected) or actual != expected:
             raise ValueError(f"SkyRL config {dotted_key}={actual!r} disagrees with the role plan value {expected!r}")
 
 
-def set_config_value(config: dict[str, object], dotted_key: str, value: object) -> None:
+def _set_config_value(config: dict[str, object], dotted_key: str, value: object) -> None:
     node = config
     parts = dotted_key.split(".")
     for part in parts[:-1]:
@@ -666,28 +745,27 @@ def set_config_value(config: dict[str, object], dotted_key: str, value: object) 
 def _materialize_role_plan_config(config: dict[str, object], role_plan: SkyRLRolePlan | SkyRLGenerationPlan) -> None:
     """Render the typed Marin role plan into the SkyRL Hydra document."""
     for dotted_key, value in role_plan.config_values().items():
-        set_config_value(config, dotted_key, value)
+        _set_config_value(config, dotted_key, value)
 
 
 def _validate_skyrl_backend_constraints(
     config: dict[str, object],
-    topology: SkyRLTopology,
 ) -> None:
     """Validate assumptions imposed by Marin's scalar role-plan interface."""
-    run_engines_locally = declared_config_value(config, "generator.run_engines_locally")
-    if run_engines_locally is MISSING_CONFIG_VALUE:
+    run_engines_locally = _declared_config_value(config, "generator.run_engines_locally")
+    if run_engines_locally is _MISSING_CONFIG_VALUE:
         raise ValueError("SkyRL config must explicitly set generator.run_engines_locally")
     if run_engines_locally is not True:
         raise ValueError("Marin SkyRL artifact topology requires generator.run_engines_locally=true")
-    if not isinstance(declared_config_value(config, "generator.backend"), str):
+    if not isinstance(_declared_config_value(config, "generator.backend"), str):
         raise ValueError("SkyRL config must explicitly set a non-empty generator.backend")
 
     for key in ("use_conversation_multi_turn", "require_exact_chat_transport"):
-        if declared_config_value(config, f"generator.{key}") is not MISSING_CONFIG_VALUE:
+        if _declared_config_value(config, f"generator.{key}") is not _MISSING_CONFIG_VALUE:
             raise ValueError(f"SkyRL task sessions do not support generator.{key}. Remove this setting.")
 
-    use_kl_loss = declared_config_value(config, "trainer.algorithm.use_kl_loss")
-    if use_kl_loss is MISSING_CONFIG_VALUE:
+    use_kl_loss = _declared_config_value(config, "trainer.algorithm.use_kl_loss")
+    if use_kl_loss is _MISSING_CONFIG_VALUE:
         raise ValueError("SkyRL config must explicitly set trainer.algorithm.use_kl_loss")
 
 
@@ -697,80 +775,13 @@ def _validate_skyrl_recipe(
 ) -> None:
     """Validate one effective recipe before building an artifact."""
     config = _parsed_config(config_yaml)
-    if declared_config_value(config, "trainer.strategy") != "megatron":
+    if _declared_config_value(config, "trainer.strategy") != "megatron":
         raise ValueError("SkyRL requires trainer.strategy=megatron")
     _validate_role_plan_config(config, topology.role_plan)
-    entrypoint = declared_config_value(config, "entrypoint")
-    plan = topology.role_plan
-    if isinstance(plan, SkyRLRolePlan):
-        training_plan: SkyRLRolePlan | None = plan
-        geometry = plan
-    else:
-        training_plan = None
-        geometry = plan.geometry
-    if declared_config_value(config, "generator.weight_sync_transport") == "expert_block" and geometry.colocate_all:
-        plan = geometry
-        supported = (
-            training_plan is not None
-            and training_plan.entrypoint == "standard"
-            and plan.policy_num_nodes == 1
-            and plan.policy_num_gpus_per_node == _COLOCATED_EXPERT_BLOCK_GPU_COUNT
-            and plan.num_inference_engines == 1
-            and plan.inference_engine_tensor_parallel_size == 1
-            and plan.inference_engine_pipeline_parallel_size == 1
-            and plan.inference_engine_data_parallel_size == plan.policy_num_gpus_per_node
-            and plan.inference_engine_expert_parallel_size == plan.policy_num_gpus_per_node
-            and declared_config_value(config, "trainer.policy.megatron_config.tensor_model_parallel_size") == 1
-            and declared_config_value(config, "trainer.policy.megatron_config.pipeline_model_parallel_size") == 1
-            and declared_config_value(config, "trainer.policy.megatron_config.expert_tensor_parallel_size") in (1, None)
-            and declared_config_value(config, "trainer.policy.megatron_config.expert_model_parallel_size")
-            == plan.policy_num_gpus_per_node
-            and declared_config_value(config, "trainer.policy.megatron_config.nccl_max_channels")
-            in (None, 1, MISSING_CONFIG_VALUE)
-            and declared_config_value(config, "generator.backend") == "vllm"
-            and declared_config_value(config, "generator.run_engines_locally") is True
-            and declared_config_value(config, "generator.weight_sync_backend") == "nccl"
-            and declared_config_value(config, "generator.expert_block_sync.verify") is True
-            and declared_config_value(config, "generator.engine_init_kwargs.kernel_config.moe_backend") == "triton"
-            and declared_config_value(config, "trainer.policy.model.lora.rank") in (0, MISSING_CONFIG_VALUE)
-            and declared_config_value(config, "generator.enforce_eager") in (False, MISSING_CONFIG_VALUE)
-        )
-        if not supported:
-            raise ValueError(
-                "SkyRL colocated expert_block requires entrypoint=standard, one four-GPU node, policy TP=PP=ETP=1 EP=4, "
-                "one local vLLM TP=PP=1 DP=EP=4 TRITON engine, NCCL, verification, and no LoRA or eager mode"
-            )
-    if entrypoint is not MISSING_CONFIG_VALUE:
+    if _declared_config_value(config, "entrypoint") is not _MISSING_CONFIG_VALUE:
         raise ValueError("SkyRL entrypoint is derived from the selected plan")
-    _validate_skyrl_backend_constraints(config, topology)
-    if training_plan is None:
-        return
-    plan = training_plan
-    # The reference role inherits the policy width, so this one check covers both:
-    # the launcher requires a single GPUs-per-node value across all bundles.
-    if plan.policy_num_gpus_per_node != topology.gpus_per_node:
-        raise ValueError(
-            "SkyRL policy_num_gpus_per_node must match the whole-node topology width; "
-            f"got {plan.policy_num_gpus_per_node} and {topology.gpus_per_node}"
-        )
-
-    critic_path = declared_config_value(config, "trainer.critic.model.path")
-    if critic_path is not MISSING_CONFIG_VALUE and critic_path:
-        raise ValueError("Marin SkyRL artifact topology does not yet describe a separate critic role")
-    forward_batch = declared_config_value(config, "trainer.micro_forward_batch_size_per_gpu")
-    if forward_batch is not MISSING_CONFIG_VALUE and forward_batch != plan.micro_train_batch_size_per_gpu:
-        raise ValueError("Megatron requires equal micro_forward_batch_size_per_gpu and micro_train_batch_size_per_gpu")
-    for role, nodes in (("policy", plan.policy_num_nodes), ("ref", plan.reference_num_nodes or plan.policy_num_nodes)):
-        dimensions: dict[str, int] = {}
-        for dimension in fields(MegatronGeometry):
-            value = declared_config_value(config, f"trainer.{role}.megatron_config.{dimension.name}")
-            dimensions[dimension.name] = 1 if value is MISSING_CONFIG_VALUE else cast(int, value)
-        etp = declared_config_value(config, f"trainer.{role}.megatron_config.expert_tensor_parallel_size")
-        if etp is MISSING_CONFIG_VALUE or etp is None:
-            dimensions["expert_tensor_parallel_size"] = dimensions["tensor_model_parallel_size"]
-        validate_megatron_geometry(
-            MegatronGeometry(**dimensions), role=role, num_gpus=nodes * plan.policy_num_gpus_per_node
-        )
+    _validate_skyrl_backend_constraints(config)
+    topology.role_plan.validate_recipe(config, topology)
 
 
 @dataclass(frozen=True)
@@ -947,7 +958,7 @@ def _launch_config_yaml(
     recipe["entrypoint"] = spec.topology.role_plan.entrypoint
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
     for callback in recipe.get("trainer", {}).get("callbacks") or []:
-        if callback["type"] == BEST_CHECKPOINT_CALLBACK:
+        if callback["type"] == _BEST_CHECKPOINT_CALLBACK:
             callback["initial_model_uri"] = model.uri
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
@@ -964,7 +975,7 @@ def _launch_config_yaml(
             **({"coordinator_iris_job_id": coordinator_iris_job_id} if coordinator_iris_job_id is not None else {}),
         },
         "runtime": {
-            "profile": declared_config_value(recipe, "trainer.strategy"),
+            "profile": _declared_config_value(recipe, "trainer.strategy"),
             "entrypoint": "",
             "experiments_dir": "/app/experiments",
             "task_env": task_env,
@@ -1004,8 +1015,8 @@ def _launch_config_yaml(
         "inputs": {
             "model": {**asdict(model), "chat_template": None},
             "data_kind": (
-                declared_config_value(recipe, "data.kind")
-                if declared_config_value(recipe, "data.kind") is not MISSING_CONFIG_VALUE
+                _declared_config_value(recipe, "data.kind")
+                if _declared_config_value(recipe, "data.kind") is not _MISSING_CONFIG_VALUE
                 else "tasks"
             ),
             "train_data": [_launch_data_source(source) for source in train_data],
@@ -1058,12 +1069,12 @@ def skyrl_step(
             resolved_config_uri=prefix_join(ctx.output_path, RESOLVED_LAUNCH_FILENAME),
             terminal_manifest_uri=prefix_join(ctx.output_path, TERMINAL_RECEIPT_FILENAME),
         )
-        draft_training = declared_config_value(
+        draft_training = _declared_config_value(
             _parsed_config(spec.config_yaml), "generator.speculative_decoding.training"
         )
         draft_checkpoint_root = (
             prefix_join(output.checkpoint_root, "drafts")
-            if draft_training is not MISSING_CONFIG_VALUE and draft_training is not None
+            if draft_training is not _MISSING_CONFIG_VALUE and draft_training is not None
             else None
         )
         run_id = f"{step_name}-{spec.version}"
@@ -1114,22 +1125,18 @@ class SkyRLReceiptLookupError(ValueError):
     """The recorded Iris job cannot be identified uniquely."""
 
 
-def read_skyrl_launch_receipt(run_output: str) -> AttemptRecord | None:
-    """Read a launch's terminal or attempt receipt, or build one from its Iris job's state.
+def read_skyrl_attempt(run_output: str) -> AttemptRecord | None:
+    """Read a stored attempt or its current Iris job state.
 
     Returns None when the output has no resolved launch. Without a receipt file, the job state comes from the Iris
     controller and may be running. Raises SkyRLReceiptLookupError when the job name matches no job or several.
     """
-    record = read_stored_skyrl_receipt(run_output)
+    record = read_stored_skyrl_attempt(run_output)
     if record is not None and record.native.result.state in {LaunchState.SUCCEEDED, LaunchState.FAILED}:
         return record
-    if record is not None:
-        config = record.native.config
-    else:
-        try:
-            config = read_skyrl_launch_config(run_output)
-        except FileNotFoundError:
-            return None
+    config = read_skyrl_attempt_config(run_output, record)
+    if config is None:
+        return None
     name = config["iris"]["job_name"]
     info = get_job_info()
     with ExitStack() as stack:
@@ -1156,18 +1163,9 @@ def read_skyrl_launch_receipt(run_output: str) -> AttemptRecord | None:
     state = LaunchState.SUBMITTED
     if is_job_finished(job.state):
         state = LaunchState.SUCCEEDED if job.state == job_pb2.JOB_STATE_SUCCEEDED else LaunchState.FAILED
-    receipt = LaunchReceipt.model_validate(
-        {
-            "config": config,
-            "result": {
-                "state": state,
-                "iris_job_id": str(JobName.from_wire(job.job_id)),
-                "model": None,
-            },
-        }
-    )
+    result = LaunchResult(state=state, iris_job_id=str(JobName.from_wire(job.job_id)))
     if record is not None:
-        return record.model_copy(update={"config": config, "result": receipt.result})
+        return record.model_copy(update={"config": config, "result": result})
     return AttemptRecord(
-        run_id=config["run"]["id"], attempt_id=config["run"]["attempt_id"], config=config, result=receipt.result
+        run_id=config["run"]["id"], attempt_id=config["run"]["attempt_id"], config=config, result=result
     )

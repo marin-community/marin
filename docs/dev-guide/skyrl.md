@@ -51,17 +51,8 @@ The pinned Ray release has no Intel macOS wheel.
 
 ## Run records
 
-Native launches write their receipt and startup facts to FineStore's `attempts`
-table under `<export_root>/run-records`. The `records` tracker adds numeric rows
-keyed by attempt, step and metric name. It requires `iris.max_retries=0` and a
-fresh attempt ID for each execution. `terminal.json` and `resolved-launch.yaml`
-retain their launch-result and configuration roles.
-
-Use `finestore.rl.run_records.read_attempt` for one receipt and
-`read_attempt_metrics` for its metric history. Resumes include checkpoint ancestors
-only through their recorded boundaries. Joined steps identify each metric's writer;
-a trainer step reset starts a fresh history. Metrics remain readable after a workload
-failure, and each log call commits its new values.
+Native receipts and numeric metrics use the [FineStore run-record contract](https://github.com/marin-community/marin/blob/main/lib/finestore/README.md#package-boundary).
+See [RL launching](../references/rl-launching.md) for checkpoint continuation and retry procedures.
 
 Generate-only launches through Marin allocate the inference engines' nodes and
 reserve no trainer or reference nodes.

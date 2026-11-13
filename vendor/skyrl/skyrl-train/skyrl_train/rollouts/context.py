@@ -28,7 +28,7 @@ from skyrl_train.dynamic_sampling import (
     resolve_dynamic_sampling_criteria,
 )
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdmissionStalledError, GroupAdvantageInvariant
-from skyrl_train.inference_engines.sampling import get_sampling_params_for_backend
+from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.rollouts.buffer import (
     BatchPolicy,
     Admission,
