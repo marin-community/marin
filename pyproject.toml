@@ -353,7 +353,13 @@ url = "https://stable.repo.amd.com/rocm/core/whl-next/"
 explicit = true
 
 [tool.iris.bundle]
-include = ["vendor/harbor/src/**/*", "lib/rigging/src/**/*", "lib/finestore/src/**/*"]
+# Packaged Harbor task folders keep their tests/ (the default bundle drops every tests/ directory).
+include = [
+    "vendor/harbor/src/**/*",
+    "lib/rigging/src/**/*",
+    "lib/finestore/src/**/*",
+    "experiments/post_training/tmax_reserve/tasks/**/*",
+]
 exclude = ["^vendor/harbor/tests(/|$)"]
 
 [tool.black]
