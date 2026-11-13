@@ -9,6 +9,9 @@ import io
 import tarfile
 
 import pytest
+
+pytest.importorskip("harbor", reason="Requires the isolated vendor/harbor runtime")
+
 from harbor.environments.daytona import machine_spec
 from shellbox.backends.daytona.snapshot import snapshot_request_for_spec
 from shellbox.image import DockerfileSource, RegistryImage
@@ -21,8 +24,6 @@ from experiments.post_training.task_curation.daytona_identity import (
 )
 from experiments.post_training.task_curation.lowered_envelope import LoweredSpec
 from experiments.post_training.task_curation.tests.task_tar_fixtures import pack_tar
-
-pytest.importorskip("harbor")  # the counter runs the production Harbor spec mapping
 
 
 def lowered(document: dict) -> LoweredSpec:
