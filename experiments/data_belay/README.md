@@ -107,6 +107,13 @@ what a candidate costs beyond that. The reference arm holds one value per refere
 the references differ from each other by more than their seeds do. At a share without references, the harm is
 against the control.
 
+Use `--against` when the question is A instead of B at one share: a filtered dataset against its source, or two
+candidates for one place in the mix. Both the gain and the harm are then against B's runs, since both arms give up
+the same share: `better` means A beats B, and `worse` means A costs more than B past the harm limit. Use the
+default, against the control, for a dataset that has no B: the gain is what it adds over the base mix despite giving
+up the share, and the harm is what it costs beyond the dilution references. At a share without references, that harm
+includes the cost of giving up the share, so a `worse` group there may be dilution alone.
+
 A group is `better` (gain interval below 0, and a gain of at least 1%), `worse` (harm interval above its harm limit),
 `neutral` (harm interval below the limit) or `unresolved`. The harm limit is 1%, or 2.5 seed SDs of the d512 control
 where the seeds vary more; the SDs are the vanilla Track's (see Model). The 1% floor holds for gains too. With the
