@@ -15,6 +15,7 @@ import pyarrow.parquet as pq
 import pytest
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
+from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.pipeline.oracle_filter import NoOracleLivenessReceipt, OracleExclusionReason, require_oracle_filter
 from taskcompendium.runtime.resources import inline_resource
 
@@ -332,7 +333,12 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
             )
             assert import_taskcompendium_cohort(
                 PrebuiltCohort(
-                    name="calibrated", version="1", repo="open-athena/calibrated", revision="a" * 40, expected_rows=1
+                    intended_use=IntendedUse.TRAIN,
+                    name="calibrated",
+                    version="1",
+                    repo="open-athena/calibrated",
+                    revision="a" * 40,
+                    expected_rows=1,
                 )
             ) == str(output)
         else:
