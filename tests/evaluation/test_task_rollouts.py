@@ -12,6 +12,7 @@ import openai
 import pytest
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
+from finestore.testing.simulated_s3 import simulated_s3
 from fray.local_backend import LocalClient
 from marin.evaluation.records import JudgeIdentity
 from marin.rollouts.evaluation import (
@@ -22,6 +23,7 @@ from marin.rollouts.evaluation import (
     ModelIdentity,
     run_evaluation,
 )
+from rigging.filesystem import factory
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
 from rolloutengine.likelihood import VllmLikelihood
@@ -208,6 +210,84 @@ async def test_driver_resumes_partial_archive_after_request_concurrency_changes(
     assert sum(row["grading"]["score"] == 1 for row in samples) == 8
     assert sum((row["doc_id"], row["trial_id"]) == (completed["doc_id"], completed["trial_id"]) for row in samples) == 1
     assert calls == 9
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_table", [SELECTIONS_TABLE, ATTEMPTS_TABLE, ARCHIVE_SAMPLES_TABLE])
+async def test_driver_keeps_event_loop_running_during_result_commits(
+    published_corpora, run_config, monkeypatch, blocked_table
+):
+    entered = threading.Event()
+    release = threading.Event()
+    timed_out = threading.Event()
+    blocked_write_seen = False
+    output = "s3://evaluation-test/result-commits"
+
+    async def model(_request):
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+    async def release_from_event_loop():
+        await asyncio.to_thread(entered.wait)
+        release.set()
+
+    def release_on_timeout():
+        timed_out.set()
+        release.set()
+
+    local_open_url = factory.open_url
+    local_url_to_fs = factory.url_to_fs
+    with simulated_s3(latency=0.0) as fs, monkeypatch.context() as patcher:
+        simulated_open_url = factory.open_url
+        simulated_url_to_fs = factory.url_to_fs
+        patcher.setattr(
+            factory,
+            "open_url",
+            lambda url, mode="rb", **kwargs: (
+                simulated_open_url(url, mode, **kwargs)
+                if url.startswith("s3://")
+                else local_open_url(url, mode, **kwargs)
+            ),
+        )
+        patcher.setattr(
+            factory,
+            "url_to_fs",
+            lambda url, **kwargs: (
+                simulated_url_to_fs(url, **kwargs) if url.startswith("s3://") else local_url_to_fs(url, **kwargs)
+            ),
+        )
+        put_object = fs.put_object
+        fallback = threading.Timer(2, release_on_timeout)
+        fallback.daemon = True
+
+        def wait_on_result_write(path, data):
+            nonlocal blocked_write_seen
+            if blocked_table in path and not blocked_write_seen:
+                blocked_write_seen = True
+                entered.set()
+                fallback.start()
+                assert release.wait(timeout=5)
+            put_object(path, data)
+
+        patcher.setattr(fs, "put_object", wait_on_result_write)
+        monitor = asyncio.create_task(release_from_event_loop())
+        try:
+            await run_evaluation(
+                published_corpora[:1],
+                output,
+                run_config.model_copy(update={"source_limit": 1}),
+                model,
+                machine_factories={},
+            )
+        finally:
+            release.set()
+            entered.set()
+            await monitor
+            fallback.cancel()
+
+        assert blocked_write_seen
+        assert not timed_out.is_set()
+        assert sum(row["status"] == "selected" for row in ReadView(output).iter_rows(SELECTIONS_TABLE)) == 1
+        assert len([row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]) == 2
 
 
 def convert_mixed_row(row: RawRow, _context: ConversionContext):

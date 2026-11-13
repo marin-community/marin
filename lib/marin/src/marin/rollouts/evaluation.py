@@ -6,7 +6,7 @@
 import asyncio
 import dataclasses
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from enum import StrEnum
 from functools import partial
 from typing import Any
@@ -314,6 +314,26 @@ def _save_attempt(
         transaction.write_object(blob, json.dumps(raw, allow_nan=False).encode())
 
 
+def _save_selection_records(store: DataStore, records: list[dict]) -> None:
+    with store.transaction() as transaction:
+        transaction.table(SELECTIONS_TABLE).extend(records)
+
+
+def _save_started_attempt(store: DataStore, attempt: Attempt) -> None:
+    with store.transaction() as transaction:
+        transaction.table(ATTEMPTS_TABLE).add(attempt.model_dump(mode="json"))
+
+
+async def _await_store_write(write: Callable[..., None], *args: Any) -> None:
+    # A canceled consumer must finish its in-flight commit before DataStore closes.
+    task = asyncio.create_task(asyncio.to_thread(write, *args))
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await task
+        raise
+
+
 async def _score_likelihood(
     case: EvaluationCase,
     protocol: EvaluationProtocol,
@@ -402,7 +422,8 @@ async def _score_likelihood(
     )
     usage = [result.usage for result in results]
     known_usage = outcome is Outcome.GRADED and all(value is not None for value in usage)
-    _save_attempt(
+    await _await_store_write(
+        _save_attempt,
         store,
         attempt,
         sample,
@@ -510,7 +531,8 @@ async def _score_generation(
     )
     if retry_turn is not None:
         prompt_tokens = completion_tokens = 0
-    _save_attempt(
+    await _await_store_write(
+        _save_attempt,
         store,
         attempt,
         sample,
@@ -653,8 +675,7 @@ async def run_evaluation(
                 ):
                     records.append(decision.record.model_dump(mode="json"))
                     if len(records) >= 500 or decision.case is not None:
-                        with store.transaction() as transaction:
-                            transaction.table(SELECTIONS_TABLE).extend(records)
+                        await _await_store_write(_save_selection_records, store, records)
                         records = []
                     case = decision.case
                     if case is None:
@@ -685,8 +706,7 @@ async def run_evaluation(
                             )
                         )
                 if records:
-                    with store.transaction() as transaction:
-                        transaction.table(SELECTIONS_TABLE).extend(records)
+                    await _await_store_write(_save_selection_records, store, records)
                 if not selected:
                     raise ValueError(f"No evaluation rows are eligible under this run: {protocol.benchmark}")
             for _ in range(config.concurrency):
@@ -712,8 +732,7 @@ async def run_evaluation(
                     prompt_tokens=None,
                     completion_tokens=None,
                 )
-                with store.transaction() as transaction:
-                    transaction.table(ATTEMPTS_TABLE).add(attempt.model_dump(mode="json"))
+                await _await_store_write(_save_started_attempt, store, attempt)
                 if isinstance(case.item.operation, ChoiceLikelihood | ContinuationLikelihood):
                     assert likelihood is not None
                     outcome = await _score_likelihood(
