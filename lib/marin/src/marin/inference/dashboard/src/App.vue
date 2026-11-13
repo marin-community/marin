@@ -8,7 +8,7 @@ import HistoryPanel from './components/HistoryPanel.vue'
 import ReportIssueDialog from './components/ReportIssueDialog.vue'
 import SamplingControls from './components/SamplingControls.vue'
 import { useServing } from './composables/useServing'
-import { createChatShare, fetchChatShare, submitFeedback } from './lib/api'
+import { createChatShare, fetchChatShare, type ReportInput, submitFeedback } from './lib/api'
 import { ThinkingMode } from './lib/chat_template'
 import { loadComparison } from './lib/comparison_storage'
 import {
@@ -104,10 +104,11 @@ async function shareConversation() {
   }
 }
 
-function saveFeedback(description: string, includeConversation: boolean): Promise<string> {
+function saveFeedback({ description, reporter, includeConversation }: ReportInput): Promise<string> {
   const conversation = active.value
   return submitFeedback({
     description,
+    reporter,
     model: conversation.model || info.value?.model || '',
     conversation: includeConversation ? conversation : null,
   })

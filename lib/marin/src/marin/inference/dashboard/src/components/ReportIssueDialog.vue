@@ -1,21 +1,26 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 
+import type { ReportInput } from '../lib/api'
+
 const props = defineProps<{
   /** Save the report and return its storage URL. */
-  save: (description: string, includeConversation: boolean) => Promise<string>
+  save: (input: ReportInput) => Promise<string>
 }>()
 
 const FILER_URL = 'https://filer.marina.oa.dev/#'
+const REPORTER_KEY = 'marin-serve-reporter'
 
 const dialog = ref<HTMLDialogElement | null>(null)
 const description = ref('')
+const reporter = ref('')
 const includeConversation = ref(true)
 const status = ref<'editing' | 'saving' | 'saved' | 'failed'>('editing')
 const location = ref('')
 
 function open() {
   description.value = ''
+  reporter.value = localStorage.getItem(REPORTER_KEY) ?? ''
   includeConversation.value = true
   status.value = 'editing'
   dialog.value?.showModal()
@@ -23,8 +28,14 @@ function open() {
 
 async function submit() {
   status.value = 'saving'
+  const name = reporter.value.trim()
+  localStorage.setItem(REPORTER_KEY, name)
   try {
-    location.value = await props.save(description.value.trim(), includeConversation.value)
+    location.value = await props.save({
+      description: description.value.trim(),
+      reporter: name,
+      includeConversation: includeConversation.value,
+    })
     status.value = 'saved'
   } catch (error) {
     console.error('Could not save the feedback report', error)
@@ -80,12 +91,21 @@ defineExpose({ open })
           class="w-full rounded-lg border border-surface-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
         />
       </label>
+      <label class="block space-y-1.5 text-sm text-text-secondary">
+        <span>Your name <span class="text-xs text-text-muted">(optional, remembered in this browser)</span></span>
+        <input
+          v-model="reporter"
+          type="text"
+          autocomplete="name"
+          class="w-full rounded-lg border border-surface-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+        />
+      </label>
       <label class="flex cursor-pointer items-start gap-2 text-sm text-text-secondary">
         <input v-model="includeConversation" type="checkbox" class="mt-0.5 accent-accent" />
         <span>
           Include the conversation
           <span class="block text-xs text-text-muted">
-            Uncheck to send only your description and the model and serving settings.
+            Uncheck to send only your description, name, and the model and serving settings.
           </span>
         </span>
       </label>

@@ -108,8 +108,10 @@ current dashboard URL; it does not narrow or revoke that access.
 ## Report a poor response
 
 **Report issue** in Chat saves a private report about the active conversation
-to Marin storage. Describe what went wrong and choose **Save report**. The
-report contains the description, the model and serving settings, and the saved
+to Marin storage. Describe what went wrong, optionally enter your name, and
+choose **Save report**. The browser remembers the name for later reports; the
+server does not verify it. The report contains the description, the name, the
+model and serving settings, and the saved
 conversation, including the system prompt, reasoning, tool calls, and tool
 configuration. Uncheck **Include the conversation** to leave the conversation
 out. The dialog then links to the stored JSON in Filer. Reports from CoreWeave

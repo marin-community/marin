@@ -314,6 +314,7 @@ def test_dashboard_feedback_saves_report_with_serving_metadata(tmp_path):
     )
     report = {
         "description": "Ignored the system prompt.",
+        "reporter": "Ada",
         "model": "fake-model",
         "conversation": {"title": "Be terse", "messages": [{"role": "user", "content": "Hi"}]},
     }

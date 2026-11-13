@@ -89,9 +89,18 @@ export async function createChatShare(snapshot: SharedChatSnapshot): Promise<str
 
 export interface FeedbackReport {
   description: string
+  /** Self-reported and unverified; empty when the reporter left it blank. */
+  reporter: string
   model: string
   /** The saved conversation, or null when the reporter left it out. */
   conversation: Conversation | null
+}
+
+/** What the reporter enters in the Report issue dialog. */
+export interface ReportInput {
+  description: string
+  reporter: string
+  includeConversation: boolean
 }
 
 /** Save a model-feedback report and return its storage URL. */
