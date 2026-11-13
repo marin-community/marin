@@ -387,7 +387,11 @@ It records seed-0 samples of at most
 20 normalized tasks, instruction MinHash sketches, reference/test hashes,
 upstream dataset revisions, identifier/URL hashes and within-source duplicate
 counts. Pin each source's fingerprint artifact URI, its SHA-256 and task-input digest
-in `experiments/post_training/task_curation/source_fingerprint_index.json`.
+in a staged raw copy of `experiments/post_training/task_curation/source_fingerprint_index.json`.
+That Git path holds a registry reference. Use the
+[registry update command](../../experiments/post_training/task_curation/README.md#pinned-registry-receipts)
+to archive the complete updated index, verify readback and replace its reference;
+do not insert fingerprint entries into the reference object.
 The task-input digest binds the consumed dataset revision, pipeline, converter
 revision and the actor census's `task_specs_sha256` for that population.
 Catalog titles, counts and assessment

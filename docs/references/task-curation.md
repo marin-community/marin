@@ -1757,15 +1757,19 @@ registry remain staged; they do not register a new source. The declaration
 persists the input binding in `actor_census_input` and rejects a later input or
 converter change that carries the old census.
 
-Freeze a complete set of measured actor artifacts into the checked-in receipt
-shards with:
+Stage a complete set of measured actor artifacts in a fresh registry tree:
 
 ```bash
 uv run python -m experiments.post_training.task_curation.census_binding \
   --censuses actor-censuses.json \
   --integrity-censuses integrity-censuses.json \
-  --output-dir experiments/post_training/task_curation/datasets/daytona_census_receipts
+  --output-dir /tmp/atlas-registry-YYYYMMDD-v1/experiments/post_training/task_curation/datasets/daytona_census_receipts
 ```
+
+Archive the staged tree with the
+[registry update command](../../experiments/post_training/task_curation/README.md#pinned-registry-receipts).
+It appends an immutable private revision, verifies readback, then updates the Git
+references. Never use the checked-in reference directory as producer output.
 
 Integrity-contract summaries are optional and independent of actor safety.
 The optional `--integrity-censuses` input requires the same source, normalized
@@ -1808,7 +1812,7 @@ uv run python -m experiments.post_training.task_curation.lexical_registration \
   --outcomes lexical-outcomes.json --populations normalized-populations.json \
   --source-uses measured-source-uses.json \
   --actor-receipts-dir experiments/post_training/task_curation/datasets/daytona_census_receipts \
-  --output-dir /tmp/atlas-lexical-measurements-YYYYMMDD
+  --output-dir /tmp/atlas-registry-YYYYMMDD-v2/experiments/post_training/task_curation/datasets/lexical_measurement_receipts
 ```
 
 This command updates metadata only. It does not publish dataset versions or
@@ -1816,8 +1820,10 @@ change admitted selection. Training release publication combines within-source
 exact deduplication and lexical decontamination after approval of the retained
 population.
 The output directory must be new; an existing directory is never replaced.
-Review the staged shards before updating the checked-in
-`datasets/lexical_measurement_receipts` registry.
+Review the staged shards, then use the
+[registry update command](../../experiments/post_training/task_curation/README.md#pinned-registry-receipts)
+with that fresh staging root. The checked-in `datasets/lexical_measurement_receipts`
+directory contains references, not writable receipt bodies.
 
 Approved frozen combined plans are published with `remediation_publish`. Run
 publication on CPU Iris workers in the artifacts' region, at production priority
@@ -1842,8 +1848,11 @@ uv run iris --config lib/iris/config/marin.yaml job run \
 After readback, `retained_census` measures the retained actor and integrity
 population using the existing complete census. It also writes a normalized
 `task_json` view with the original serialized bytes. `remediation_binding` joins
-these measurements to the publication receipts and stages
-`datasets/retained_release_receipts`. Registry loading validates the original
+these measurements to the publication receipts. Set its `--output-dir` to a fresh
+`STAGED_ROOT/experiments/post_training/task_curation/datasets/retained_release_receipts`
+directory, then use the
+[registry update command](../../experiments/post_training/task_curation/README.md#pinned-registry-receipts)
+to archive/read back the shards and update their references. Registry loading validates the original
 conversion binding before selecting the retained importer and pin. Original
 pipeline, conversion, deduplication and qualification records stay in lineage.
 Active deduplication counts describe the retained pin: raw and unique both equal

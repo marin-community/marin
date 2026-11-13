@@ -3,10 +3,12 @@
 
 import hashlib
 import json
+import sys
+from types import SimpleNamespace
 
 import pytest
 
-from experiments.post_training.task_curation import registry
+from experiments.post_training.task_curation import census_binding, registry
 
 
 def test_registry_loads_the_pinned_file_and_rejects_corrupted_cache_bytes(tmp_path, monkeypatch):
@@ -38,27 +40,65 @@ def test_registry_loads_the_pinned_file_and_rejects_corrupted_cache_bytes(tmp_pa
         registry.read_registry_json(path)
 
 
-def test_registry_does_not_replace_an_unavailable_pin_with_another_revision(tmp_path, monkeypatch):
-    payload = b'{"source": {"count": 3}}\n'
-    latest = tmp_path / "latest.json"
-    latest.write_bytes(payload)
-    path = tmp_path / "reference.json"
-    path.write_text(
-        json.dumps(
-            {
-                "repo": "open-athena/registry-fixture",
-                "revision": "a" * 40,
-                "path": "data.json",
-                "sha256": hashlib.sha256(payload).hexdigest(),
-            }
+@pytest.mark.parametrize("corrupt_readback", [False, True])
+def test_archive_updates_references_only_after_every_document_verifies(tmp_path, monkeypatch, corrupt_readback):
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    cached = tmp_path / "cache"
+    cached.mkdir()
+    originals = {"census.json": b'{"count": 3}\n', "lexical.json": b'{"matched": 1}\n'}
+    for name, data in originals.items():
+        (staged / name).write_bytes(data)
+        (checkout / name).write_text("existing reference")
+    remote = {"older.json": b'{"preserved": true}'}
+
+    class Archive:
+        def repo_info(self, **kwargs):
+            return SimpleNamespace(private=True)
+
+        def create_commit(self, *, operations, **kwargs):
+            assert kwargs["parent_commit"] == "a" * 40
+            for operation in operations:
+                assert isinstance(operation, registry.CommitOperationAdd)
+                remote[operation.path_in_repo] = operation.path_or_fileobj
+            return SimpleNamespace(oid="b" * 40)
+
+    def download(*, repo_id, repo_type, revision, filename):
+        assert (repo_id, repo_type, revision) == ("fixture/registry", "dataset", "b" * 40)
+        path = cached / filename
+        data = remote[filename]
+        path.write_bytes(b"corrupt" if corrupt_readback and filename == "lexical.json" else data)
+        return str(path)
+
+    monkeypatch.setattr(registry, "HfApi", Archive)
+    monkeypatch.setattr(registry, "hf_hub_download", download)
+    arguments = dict(repo="fixture/registry", parent_revision="a" * 40, commit_message="Record measurements")
+    if corrupt_readback:
+        with pytest.raises(ValueError, match="Registry bytes changed"):
+            registry.archive_registry_documents(staged, checkout, **arguments)
+        assert {name: (checkout / name).read_text() for name in originals} == dict.fromkeys(
+            originals, "existing reference"
         )
-    )
+    else:
+        registry.archive_registry_documents(staged, checkout, **arguments)
+        assert {name: registry.read_registry_json(checkout / name) for name in originals} == {
+            "census.json": {"count": 3},
+            "lexical.json": {"matched": 1},
+        }
+    assert remote == {"older.json": b'{"preserved": true}', **originals}
+    assert {name: (staged / name).read_bytes() for name in originals} == originals
 
-    def unavailable(**kwargs):
-        if kwargs["revision"] == "a" * 40:
-            raise FileNotFoundError("Pinned fixture revision is unavailable")
-        return str(latest)
 
-    monkeypatch.setattr(registry, "hf_hub_download", unavailable)
-    with pytest.raises(FileNotFoundError, match="Pinned fixture revision"):
-        registry.read_registry_json(path)
+def test_census_staging_preserves_an_existing_reference_directory(tmp_path, monkeypatch):
+    censuses = tmp_path / "censuses.json"
+    censuses.write_text("[]")
+    output = tmp_path / "receipts"
+    output.mkdir()
+    reference = output / "part-000.json"
+    reference.write_text('{"revision": "existing"}')
+    monkeypatch.setattr(sys, "argv", ["census_binding", "--censuses", str(censuses), "--output-dir", str(output)])
+    with pytest.raises(FileExistsError):
+        census_binding.main()
+    assert reference.read_text() == '{"revision": "existing"}'

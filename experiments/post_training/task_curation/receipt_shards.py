@@ -31,9 +31,6 @@ def write_receipt_shards(
     directory: Path, receipts: Mapping[str, Mapping[str, object]], *, records_per_shard: int = RECEIPTS_PER_SHARD
 ) -> None:
     entries = sorted(receipts.items())
-    for old in directory.glob("part-*.json"):
-        old.unlink()
     for part, offset in enumerate(range(0, len(entries), records_per_shard)):
-        (directory / f"part-{part:03d}.json").write_text(
-            json.dumps(dict(entries[offset : offset + records_per_shard]), indent=2, sort_keys=True) + "\n"
-        )
+        with (directory / f"part-{part:03d}.json").open("x") as output:
+            output.write(json.dumps(dict(entries[offset : offset + records_per_shard]), indent=2, sort_keys=True) + "\n")
