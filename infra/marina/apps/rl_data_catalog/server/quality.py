@@ -34,6 +34,9 @@ def quality_display(
     declaration: dict[str, Any], curation: dict[str, Any] | None, assessment_key: str | None
 ) -> QualityDisplay:
     """Keep unfinished reviews pending without changing declared oversight or evidence."""
+    aggregate = declaration.get("quality_result")
+    if aggregate is not None and aggregate["reviewed"] == 0:
+        return QualityDisplay(Quality.QUICK, "SAMPLE review in progress")
     level = quality(declaration, curation)
     if level != Quality.QUICK and declaration.get("quality_result") is None and assessment_key is None:
         return QualityDisplay(Quality.QUICK, "SAMPLE review in progress")

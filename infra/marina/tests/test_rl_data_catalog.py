@@ -988,6 +988,13 @@ def test_loaded_assemblies_keep_inflight_and_uncertain_results_provisional(catal
             assert source["review_completeness"] == detail["review_completeness"]
             assert declaration.quality_result is not None
             assert source["review_completeness"]["reviewed"] == declaration.quality_result.reviewed
+            if declaration.quality_result.reviewed == 0:
+                assert source["quality"] == detail["quality"] == "QUICK"
+                assert source["result"] is detail["result"] is None
+                assert source["issue_rate"] is detail["issue_rate"] is None
+                assert source["quality_review_status"] == detail["quality_review_status"]
+                assert source["quality_review_status"]
+                assert detail["declaration"] == declaration.model_dump(mode="json")
         assert sources["Marin:sample-complete"]["quality"] == sources["Marin:sample-uncertain"]["quality"] == "SAMPLE"
         content_only = sources["Marin:sample-content"]
         assert content_only["quality"] == "SAMPLE" and content_only["oversight"] == "none"

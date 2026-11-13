@@ -14,7 +14,7 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
     page.emulate_media(color_scheme=theme)
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-all").check()
-    expect(page.locator("#rows tr")).to_have_count(21)
+    expect(page.locator("#rows tr")).to_have_count(23)
     expected = {
         "clean": "NO ISSUES",
         "stale-clean": "NOT MEASURED",
