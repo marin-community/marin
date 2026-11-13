@@ -44,9 +44,14 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource
 from tomlkit.items import Table
 
-from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT, SETUP_SCRIPT
+from experiments.post_training.task_curation.calibforge_fixtures import (
+    FIXTURE_ARCHIVE,
+    SETUP_ROOT,
+    SETUP_SCRIPT,
+    fixture_generator,
+)
 from experiments.post_training.task_curation.environment import dockerfile_lines
-from experiments.post_training.task_curation.environment_fidelity import PINNED_BASES
+from experiments.post_training.task_curation.environment_fidelity import PINNED_BASES, dynamic_copy_error
 from experiments.post_training.task_curation.tasktrove.harbor_export import archive_bytes
 
 ENVIRONMENT_PREFIX = "environment/"
@@ -243,14 +248,11 @@ def compile_recipe(instructions: list[Instruction], files: dict[str, bytes], mod
                     inline_env += raw_segment[0] + " "
                     raw_segment = raw_segment[1:]
                 arguments = raw_segment
-                fixture_generator = (
-                    len(arguments) == 2
-                    and arguments[0] == "python3"
-                    and arguments[1].startswith("/app/")
-                    and arguments[1].endswith(".py")
-                    and arguments[1] in copied_files
-                )
-                if _dependency_run(arguments) or arguments[0] in _INNOCUOUS_RUN or fixture_generator:
+                if (
+                    _dependency_run(arguments)
+                    or arguments[0] in _INNOCUOUS_RUN
+                    or fixture_generator(arguments, copied_files)
+                ):
                     if "`" in " ".join(raw_segment):
                         raise DeferredRebuild("requires_command_substitution_support")
                     prefix = inline_env
@@ -267,17 +269,13 @@ def compile_recipe(instructions: list[Instruction], files: dict[str, bytes], mod
         if item.flags:
             raise DeferredRebuild("requires_copy_flags_support")
         *sources, destination = item.args
-        if any(character in destination for character in "$*?[") or ".." in PurePosixPath(destination).parts:
-            raise DeferredRebuild("requires_dynamic_destination_support")
+        if reason := dynamic_copy_error(destination, ""):
+            raise DeferredRebuild(reason)
         target = str(PurePosixPath(workdir) / destination)
         directory_target = destination.endswith("/") or len(sources) > 1
         for source_name in sources:
-            if (
-                any(character in source_name for character in "$*?[")
-                or PurePosixPath(source_name).is_absolute()
-                or ".." in PurePosixPath(source_name).parts
-            ):
-                raise DeferredRebuild("requires_dynamic_source_support")
+            if reason := dynamic_copy_error(destination, source_name):
+                raise DeferredRebuild(reason)
             prefix = source_name.rstrip("/") + "/"
             matches = [name for name in files if name == source_name or name.startswith(prefix)]
             if not matches:
