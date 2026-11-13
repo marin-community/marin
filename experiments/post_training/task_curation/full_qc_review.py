@@ -233,9 +233,25 @@ def write_review_result(
     batches: Iterable[tuple[ContractBatch, list[ReviewRecord], str]],
 ) -> FullQCReview:
     """Persist complete retained observations and compute the informational source Result."""
+
+    def logged_batches():
+        reviewed = 0
+        for batch, records, receipt in batches:
+            yield batch, records, receipt
+            reviewed += len(records)
+            logger.info("%s: %d / %d retained contracts reviewed", inputs.source_id, reviewed, inputs.retained_count)
+
+    records_path, reviews, receipts = write_observations(output_path, logged_batches())
+    return write_source_result(inputs, reviewer, rubric, records_path, reviews, receipts)
+
+
+def write_observations(
+    output_path: str, batches: Iterable[tuple[ContractBatch, list[ReviewRecord], str]]
+) -> tuple[StoragePath, list[ReviewRecord], list[str]]:
+    """Persist task contracts with their reviews and batch receipts."""
     records_path = StoragePath(output_path) / "attempts" / uuid4().hex / "reviews.parquet"
     reviews: list[ReviewRecord] = []
-    receipts = []
+    receipts: list[str] = []
 
     with records_path.open("wb", auto_mkdir=True) as stream:
         with pq.ParquetWriter(stream, RECORD_SCHEMA, compression="zstd") as writer:
@@ -257,10 +273,7 @@ def write_review_result(
                 )
                 reviews.extend(records)
                 receipts.append(receipt)
-                logger.info(
-                    "%s: %d / %d retained contracts reviewed", inputs.source_id, len(reviews), inputs.retained_count
-                )
-    return write_source_result(inputs, reviewer, rubric, records_path, reviews, receipts)
+    return records_path, reviews, receipts
 
 
 def write_source_result(
