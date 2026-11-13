@@ -1,0 +1,84 @@
+{
+  "TaskTrove:tasktrove-math_prism-qa": {
+    "source_id": "TaskTrove:tasktrove-math_prism-qa",
+    "input": {
+      "dataset_id": "open-athena/tasktrove-math_prism-taskcompendium-20261112",
+      "dataset_revision": "ddb6f6cc8dbb09638d496739ab204b3ba5c6c37e",
+      "converter_version": "2026.11.12.1",
+      "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+      "measured_tasks": 2221,
+      "task_specs_sha256": "6f0564cf3a0dbafdf2151c472e8bca59c9eeb459a46fba9757e7f5e97fde2ef4",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/2552b39df05e85f232a0/2026.11.12.4/.artifact.json"
+    },
+    "contract_index": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/contracts/2552b39df05e85f232a0/2026.11.12.2/attempts/cf28b1eedbf44292b8e85d1a6c961048/contracts.parquet",
+      "sha256": "599b39400f3338b13d4800aecd06f0f92766beea623dac0bb68e7f351e78bf16"
+    },
+    "review_receipt": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/repair-overlay/2026.11.13.1/2552b39df05e85f232a0/attempts/dbb3a1fcfa734297ba1a3c4923a38792/.artifact.json",
+      "sha256": "becb908634234d82291c2bd899d7ef098b1ac179217339f2939f4a95fb969841"
+    },
+    "records": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/repair-overlay/2026.11.13.1/2552b39df05e85f232a0/attempts/dbb3a1fcfa734297ba1a3c4923a38792/reviews.parquet",
+      "sha256": "a6c60bd7c94137248796627a4cf0869f989ce25806c034ecf3a8eab99679cc2f"
+    },
+    "result": {
+      "reviewed": 2213,
+      "issue_count": 286,
+      "issues": [],
+      "repair_recommendation": "Inspect all task-level issue evidence and qualify repairs with renewed QA. Resolve unavailable and uncertain observations before source-wide conclusions.",
+      "unavailable_count": 1,
+      "uncertain_count": 7,
+      "sample_count": 2221,
+      "issue_rate": 0.12923633077270674,
+      "verdict": "some_issues"
+    },
+    "coverage_complete": false,
+    "finalization": "accepted_incomplete",
+    "waiver": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/final-content/2026.11.13.1/prism.json",
+      "sha256": "2804606c86edae07c0a2474053efd1650f9e996cbadf62bbf825e758a3368f07"
+    }
+  },
+  "TaskTrove:tasktrove-math_gym-qa": {
+    "source_id": "TaskTrove:tasktrove-math_gym-qa",
+    "input": {
+      "dataset_id": "open-athena/campaign-release-tasktrove-math-gym-qa-03ef831a-retained-20261113-v1",
+      "dataset_revision": "c29e8dd9069d778c94c2834ba6f3742e36b0494a",
+      "converter_version": "2026.11.13.1",
+      "converter_revision": "2f4b27ba2e",
+      "measured_tasks": 3939,
+      "task_specs_sha256": "9cb9a7ec6621e793eb20ee4f8afaad4f1927a2224d48ab6a24c80c79ade3c15c",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/03ef831ab6bc99825711/actor/.artifact.json"
+    },
+    "contract_index": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/contracts/71e174a5aa3e399d6509/2026.11.12.2/attempts/647f21d22df941c5bdb645aa373b0990/contracts.parquet",
+      "sha256": "0d921f3fbcb5ffcbbb71e4b077aabe84c76a912c9add63680c16e321b470bb64"
+    },
+    "review_receipt": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/repair-overlay/2026.11.13.1/71e174a5aa3e399d6509/attempts/86260c0b22e64c0cbb81f8d0fe803c10/.artifact.json",
+      "sha256": "05389bcc243860af2d3fcc24dca79cbef94d77cbe2c378b95521dbac28e52dae"
+    },
+    "records": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/repair-overlay/2026.11.13.1/71e174a5aa3e399d6509/attempts/86260c0b22e64c0cbb81f8d0fe803c10/reviews.parquet",
+      "sha256": "4b36f17b2aad284690818850cc15d3785f42717ebd3b466154cc19277de6d008"
+    },
+    "result": {
+      "reviewed": 3884,
+      "issue_count": 372,
+      "issues": [],
+      "repair_recommendation": "Inspect all task-level issue evidence and qualify repairs with renewed QA. Resolve unavailable and uncertain observations before source-wide conclusions.",
+      "unavailable_count": 20,
+      "uncertain_count": 35,
+      "sample_count": 3939,
+      "issue_rate": 0.09577754891864057,
+      "verdict": "good"
+    },
+    "coverage_complete": false,
+    "finalization": "accepted_incomplete",
+    "waiver": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/final-content/2026.11.13.1/gym.json",
+      "sha256": "6554fe2ba3d723d0e7f3ae89baed1b5a4f81e082e1a540b0990f471e7f9be0d8"
+    }
+  }
+}
