@@ -55,13 +55,18 @@ def _sensitive_flag_name(token: str) -> str | None:
 def strip_url_userinfo(url: str) -> str:
     """*url* without its ``user:password@`` part, which can hold a credential.
 
-    Only the text up to the last ``@`` of the authority is removed. Nothing else
-    is parsed, so a malformed port or host is kept as is and this never raises.
+    The authority ends at the first ``/`` only, since a pasted password can
+    hold a raw ``?`` or ``#``; everything up to its last ``@`` is removed.
+    Nothing else is parsed, so a malformed port or host is kept as is and this
+    never raises. A pathless URL with an ``@`` in its query loses part of the
+    query, which errs toward stripping.
     """
     scheme, separator, rest = url.partition("://")
     if not separator:
         return url
-    authority_end = min((index for index in map(rest.find, "/?#") if index >= 0), default=len(rest))
+    authority_end = rest.find("/")
+    if authority_end < 0:
+        authority_end = len(rest)
     authority = rest[:authority_end]
     if "@" not in authority:
         return url

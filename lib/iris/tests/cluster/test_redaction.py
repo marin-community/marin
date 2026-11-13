@@ -172,6 +172,8 @@ def test_redact_submit_argv_keeps_flags_not_named_like_a_secret():
         ("https://made-up-user:made-up-pw@[::1]:8080/repo", "https://[::1]:8080/repo"),
         ("https://made-up-user:made-up-pw@[::1/repo", "https://[::1/repo"),
         ("https://made-up-host/repo?ref=made-up@tag", "https://made-up-host/repo?ref=made-up@tag"),
+        ("https://made-up-user:made-up#pw@example.com/repo", "https://example.com/repo"),
+        ("https://made-up-user:made-up?pw@example.com/repo", "https://example.com/repo"),
     ],
     ids=[
         "user-and-password",
@@ -181,7 +183,9 @@ def test_redact_submit_argv_keeps_flags_not_named_like_a_secret():
         "bad-port",
         "ipv6",
         "unclosed-ipv6",
-        "at-sign-after-host",
+        "at-sign-in-query-after-path",
+        "hash-in-password",
+        "question-mark-in-password",
     ],
 )
 def test_strip_url_userinfo(url, expected):
