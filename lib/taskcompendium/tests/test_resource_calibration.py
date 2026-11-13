@@ -22,6 +22,7 @@ from taskcompendium.pipeline.resource_calibration import (
         ({"exception_type": "AgentTimeoutError"}, "", ResourceUsage(), FailureSignal.AGENT_TIMEOUT),
         ({"exception_type": "VerifierTimeoutError"}, "", ResourceUsage(), FailureSignal.VERIFIER_TIMEOUT),
         ({"exception_type": "AgentDiskFullError"}, "", ResourceUsage(), FailureSignal.DISK_FULL),
+        ({"exception_type": "DiskLimitExceeded"}, "", ResourceUsage(), FailureSignal.DISK_FULL),
         (None, "write failed: No space left on device", ResourceUsage(), FailureSignal.DISK_FULL),
         (None, "ENOSPC", ResourceUsage(), FailureSignal.DISK_FULL),
         (None, "container state: OOMKilled", ResourceUsage(), FailureSignal.OOM),

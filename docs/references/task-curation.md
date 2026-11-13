@@ -1407,11 +1407,11 @@ uv run python -m experiments.post_training.task_curation.oracle_filter calibrate
   --output-dir /path/to/oracle-run-v2 --environment daytona --concurrency 128
 
 # LOCAL: prepared digest-pinned images via umoci and shellbox-images.json,
-# on Iris CPU workers. This route supports only root commands.
+# in PRIVILEGED Iris CPU workers with loop devices. This route supports only root commands.
 uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
   --output-dir /path/to/oracle-local-v2 --environment local --concurrency 4 \
-  --environment-kwargs '{"image_cache":"/cache/shellbox-images","cgroup_parent":"/sys/fs/cgroup/marin-liveness"}'
+  --environment-kwargs '{"image_cache":"/cache/shellbox-images","cgroup_parent":"/sys/fs/cgroup/marin-liveness","disk_root":"/cache/shellbox-disks"}'
 
 uv run python -m experiments.post_training.task_curation.oracle_filter collect \
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/oracle-run-v2/task-map.json \
@@ -1424,6 +1424,49 @@ when the cohort's snapshot identities fit the cap. Otherwise use LOCAL on Iris
 CPU workers, with the task's own prepared images. Concurrency does not waive
 snapshot or CPU capacity limits. LOCAL honors allow_internet and cannot run
 nonroot task commands; choose a supporting route when the task requires them.
+
+LOCAL accepts declared `storage_mb` only with an explicit `disk_root` whose
+`LocalDiskPool` host probe passes. The worker needs Linux root in the existing
+PRIVILEGED pod, `/dev/loop-control`, available loop devices, ext4 and OverlayFS,
+and `mkfs.ext4`, `mount`, `umount`, `losetup`, `findmnt` and `umoci`. The disk root
+must be root-owned mode 0700 in a private or slave mount namespace. Missing
+capabilities fail before task acquisition; an unconfigured LOCAL worker continues
+to reject storage declarations. This route requires no controller change or gVisor.
+
+Each container gets a sparse image of exactly `storage_mb * 1024 * 1024` bytes,
+formatted as ext4 with no reserved root blocks. Filesystem metadata and journal
+consume part of that capacity. Prepared image contents are shared read-only
+OverlayFS lower layers outside the budget. Copy-up, whiteouts, new root files,
+`/tmp`, workdirs, `/dev/shm`, uploads and command stdout/stderr/input spool files
+consume the container's ext4 budget. `/dev` permits device I/O but disallows
+creating regular files; `/dev/shm` binds back to ext4. Read-only package/program
+mounts remain outside the budget. Provision the worker disk for the sum of active
+limits plus image caches and host artifacts; sparse images do not reserve that
+physical capacity.
+
+This accounting differs by backend: Daytona requests whole GiB rounded up through
+its service API, whose image/filesystem accounting is provider-controlled. Docker
+passes `--storage-opt size` to a supporting storage driver for the writable layer;
+its separate tmpfs and bind/volume mounts are outside that layer. LOCAL's ext4
+filesystem includes its scratch and shared-memory directories. ENOSPC or exhausted
+blocks/inodes produces Shellbox `DiskLimitExceeded` with `ResourceLimit.DISK`,
+translated by Harbor to `SandboxDiskFullError` (or `AgentDiskFullError` during
+the agent phase). Calibration classifies the explicit disk signal before
+infrastructure verdicts and doubles only missing disk limits. A declared fixed
+disk limit remains fixed and records a resource exclusion when exceeded.
+
+A guardian owns each filesystem until task teardown unmounts OverlayFS and ext4
+and releases the autoclear loop device. Closing the owner pipe on driver death
+also invokes cleanup. Startup reclaims allocations with released leases and
+leaves live neighbours intact. Cleanup errors retain the allocation for recovery
+and fail visibly; cleanup never lazily unmounts or detaches unrelated loop devices.
+Run the bounded disk correctness tests explicitly in an authorized privileged
+CPU worker:
+
+```bash
+uv run --package marin-shellbox --group test pytest \
+  lib/shellbox/tests/test_local_disk.py -o addopts='' -m manual -q -s
+```
 
 Use CPU Iris workers at production priority with a three-day job timeout.
 Run `collect` against the same calibrated run; there is no second oracle pass.

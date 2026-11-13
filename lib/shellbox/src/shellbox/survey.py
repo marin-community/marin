@@ -6,10 +6,12 @@
 import importlib
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
+from shellbox.backends.local.disk import LocalDiskPool
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage
 from shellbox.machine import (
     CommandSemantics,
@@ -44,7 +46,7 @@ class ProbeRequirements:
     docker_image: str | None = None
 
 
-def production_checkers() -> dict[str, Checker]:
+def production_checkers(*, local_disk_pool: LocalDiskPool | None = None) -> dict[str, Checker]:
     """Return all production validators without acquiring machines or provider clients."""
     checkers = {}
     for backend, class_name in (
@@ -60,7 +62,7 @@ def production_checkers() -> dict[str, Checker]:
         factory = factory_type(controller_url="http://survey.invalid") if backend == "iris" else factory_type()
         checkers[backend] = factory.check_environment
     module = importlib.import_module("shellbox.backends.local.machine")
-    checkers["local"] = module.check_local_environment
+    checkers["local"] = partial(module.check_local_environment, disk_pool=local_disk_pool)
     return checkers
 
 
@@ -245,6 +247,8 @@ def survey_backend(backend: str, check: Checker) -> list[CapabilityCell]:
                     note += " Disk quotas require a compatible Docker storage driver; GPUs require host/runtime support."
                 if backend == "local":
                     note += " CPU/memory enforcement depends on delegated cgroups; rolloutengine omits local memory."
+                    if requirement == Requirement.STORAGE:
+                        note += " Storage requires an active LocalDiskPool verified on this worker host."
                 if backend == "iris" and requirement == Requirement.STORAGE:
                     note += " Iris disk is a scheduling request, not a filesystem quota."
             if requirement == Requirement.STARTUP_TIMEOUT and backend != "daytona":
