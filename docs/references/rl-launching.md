@@ -156,9 +156,19 @@ engine slice = tensor parallel * pipeline parallel
 engine ranks = engine slice * data parallel
 ```
 
-For disaggregated roles, one engine's ranks must fit within one node. For colocated roles, each
-TP-by-PP slice must fit within and divide a policy node; DP replicas occupy separate slices. Expert
-parallel size must divide `tensor parallel * data parallel`; pipeline stages form separate expert
+Disaggregated vLLM engines can span hosts when TP=PP=1 and EP=DP exceeds the GPUs per host.
+The runtime places each worker in a one-GPU Ray bundle and checks its host, GPU UUID and ranks.
+The rollout pool uses `ceil(engine count * DP / GPUs per host)` hosts. For example, 48 policy
+GPUs plus one DP=EP=12 rollout engine require 15 four-GPU hosts. The planner also accepts
+32/48/64 policy GPUs paired with 16/32/64 rollout GPUs, and a 72-GPU policy with valid
+Megatron geometry. These counts describe resource planning; larger layouts need separate
+runtime qualification.
+
+Engines that fit on one host retain whole-engine packing: each host holds
+`floor(GPUs per host / engine ranks)` engines. Other disaggregated engines must still fit
+on one host. For colocated roles, each TP-by-PP slice must fit within and divide a policy node;
+DP replicas occupy separate slices. Expert parallel size must divide `tensor parallel * data parallel`;
+pipeline stages form separate expert
 groups. Total planned GPUs are:
 
 ```text
