@@ -262,6 +262,10 @@ trainer:
   # Rollout workers generate prompt groups under leases from the rollout buffer; each step trains on
   # train_batch_size groups. At 0 staleness every group comes from the current policy (synchronous training).
   rollout_buffer:
+    # Optional full_batch generation boundary, equal to trainer.max_steps. Rejected groups fail the run
+    # instead of drawing replacements, so prefetch cannot exceed this many complete training batches.
+    # Requires a fresh run, no dynamic sampling, and no resume.
+    generation_batch_limit: null
     # Exact consumed-group quotas, enforced at lease admission; full_batch only.
     consumed_route_quotas: {}
     source_routes: {}

@@ -384,6 +384,14 @@ expert geometry, tokenizer and EOS settings. The RL graph consumes that verified
 URI directly, without native checkpoint restoration, SFT or another export.
 HF-only adoption stops at `--through rl`; the archive requires native SFT evidence.
 
+For fixed-rollout comparisons, set `trainer.rollout_buffer.generation_batch_limit`
+equal to `trainer.max_steps` with `full_batch`, no dynamic sampling and
+`resume_mode: none`. The buffer cannot prefetch beyond the last training batch.
+Any discarded group fails the run instead of generating a replacement. Thus a
+successful run generates exactly `max_steps * train_batch_size *
+n_samples_per_prompt` trajectories; failed runs do not satisfy that budget.
+Match route quotas in trajectory units and disable trial retries in both arms.
+
 Output and temporary buckets must match the physical execution cluster's region,
 using the bucket registry in `config/coreweave.yaml`. RNO2A outputs must stay
 under supported `tmp/ttl=Nd` paths. The earlier recipe targeted RNO2A compute but

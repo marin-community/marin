@@ -55,8 +55,14 @@ class RolloutBufferConfig:
     dynamic_sampling: DynamicSamplingType | None
     max_candidate_groups: int | None
     consumed_route_quotas: dict[str, int] = field(default_factory=dict)
+    generation_batch_limit: int | None = None
 
     def __post_init__(self) -> None:
+        if self.generation_batch_limit is not None:
+            if self.generation_batch_limit < 1 or self.batch_policy is not BatchPolicy.FULL_BATCH:
+                raise ValueError("A generation batch limit requires positive full_batch training")
+            if self.dynamic_sampling is not None:
+                raise ValueError("A fixed generation budget cannot use dynamic sampling")
         if self.consumed_route_quotas:
             if self.batch_policy is not BatchPolicy.FULL_BATCH:
                 raise ValueError("Consumed route quotas require full_batch admission")
@@ -370,7 +376,10 @@ class FullBatchRolloutPolicy:
     config: RolloutBufferConfig
 
     def lease_batch(self, step: int, occupancy: collections.Counter[int]) -> int | None:
-        for batch_id in range(step, step + self.config.max_staleness_steps + 1):
+        stop = step + self.config.max_staleness_steps + 1
+        if self.config.generation_batch_limit is not None:
+            stop = min(stop, self.config.generation_batch_limit + 1)
+        for batch_id in range(step, stop):
             if occupancy[batch_id] < self.config.batch_size:
                 return batch_id
         return None
@@ -621,6 +630,8 @@ class RolloutBuffer:
 
     async def restore(self, snapshot: BufferSnapshot) -> None:
         """Load a checkpoint's groups into an unpublished, empty buffer."""
+        if self.config.generation_batch_limit is not None:
+            raise ValueError("A fixed generation budget requires a fresh run without restored rollouts")
         async with self._changed:
             if self._policy_step or self._leases or self._ready or self._retries or any(self._admitted.values()):
                 raise RuntimeError("a rollout buffer can only be restored before training starts")
@@ -632,6 +643,11 @@ class RolloutBuffer:
         self._dispose(rollout, rejection.value)
 
     def _dispose(self, rollout: ReadyRollout, disposition: str) -> None:
+        if self.config.generation_batch_limit is not None and disposition != "consumed":
+            raise RuntimeError(
+                f"Fixed generation budget cannot replace group {rollout.verdict.uid}: {disposition} "
+                f"in batch {rollout.batch_id}"
+            )
         dwell = None if rollout.committed_at is None else time.monotonic() - rollout.committed_at
         self._dispositions.append(
             GroupDisposition(rollout.verdict.uid, disposition, rollout.verdict.work.generated_token_count, dwell,

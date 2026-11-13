@@ -484,6 +484,10 @@ class Algorithm(Section):
 
 
 class RolloutBuffer(Section):
+    generation_batch_limit: PositiveInt | None = field(None)
+    """Optional full_batch generation boundary, equal to trainer.max_steps. Rejected groups fail the run instead of
+    drawing replacements, so prefetch cannot exceed this many complete training batches. Requires a fresh run, no
+    dynamic sampling, and no resume."""
     consumed_route_quotas: OpenMap = field({})
     "Exact consumed-group quotas, enforced at lease admission; full_batch only."
     source_routes: OpenMap = field({})

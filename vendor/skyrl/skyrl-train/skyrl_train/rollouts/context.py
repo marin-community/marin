@@ -197,6 +197,7 @@ class TrainingContext:
             dynamic_sampling=selection.sampling_type,
             max_candidate_groups=max_sample_batches * batch_size if max_sample_batches > 0 else None,
             consumed_route_quotas=dict(config.trainer.rollout_buffer.consumed_route_quotas),
+            generation_batch_limit=config.trainer.rollout_buffer.generation_batch_limit,
         )
         routes = {}
         if buffer_config.consumed_route_quotas:
