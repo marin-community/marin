@@ -694,6 +694,13 @@ setup and uses common actor images. Publish the resulting native package, copy
 its metadata integrity contract into the TaskSpec, then run full-population
 Harbor ORACLE filtering and SAMPLE/FULL QA.
 
+Protected bootstrap metadata travels as a compressed native `setup_files` resource.
+Harbor uploads it before initialization; the root bootstrap reads it from a file
+and removes both compressed and unpacked inputs before agent access. Keeping this
+payload out of command arguments avoids Linux's per-argument size limit without
+adding per-task data to the common image. Changing this resource or setup command
+requires new native hashes and dataset qualification.
+
 Non-Python SWE-rebench packages use `harbor_payload` or `harbor_record` with a `shared-native` contract
 and an explicit `native.family`: Go, Rust, JVM (Gradle/Maven), Julia, Swift,
 C/C++, Dart, PHP, Elixir, .NET, Lua or OCaml. The declaration preserves the exact

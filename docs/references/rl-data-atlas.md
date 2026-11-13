@@ -349,6 +349,8 @@ the top three per changed source. The runtime-selected `JudgeEndpoint` uses
 route owns one H100 through `remote_inference`, with compilation and CUDA graphs
 enabled, and releases it when the bounded batch exits. The local judge uses
 batch priority and a 65,536-token context, including up to 2,048 output tokens.
+The 4,200-second client read deadline covers worker readiness and one request,
+allowing managed batch-preemption recovery to finish before the caller times out.
 Identical complete
 requests reuse cached reviews. Use a labelled duplicate/distinct fixture before
 accepting a new model or prompt.

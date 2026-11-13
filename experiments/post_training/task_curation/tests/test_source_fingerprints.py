@@ -8,9 +8,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from finestore.rl.source_identity import canonical_source_id
 from iris.rpc import job_pb2
+from marin.evaluation.evalchemy.client import EVALCHEMY_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.model_config import load_model_config
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from taskcompendium.identity import canonical_sha256
@@ -141,11 +143,20 @@ def test_source_change_detection_includes_added_and_modified_declarations():
     assert changed_source_declarations(before, after) == {"changed", "added"}
 
 
-def test_uncached_local_review_requests_batch_gpu_capacity(review_server, monkeypatch, tmp_path):
+def test_uncached_local_review_covers_batch_gpu_recovery(review_server, monkeypatch, tmp_path):
     model_config = tmp_path / "config.json"
     model_config.write_text(json.dumps({"max_position_embeddings": 262144}))
     monkeypatch.setattr("marin.evaluation.serving_config.hf_hub_download", lambda *args, **kwargs: str(model_config))
     leases = []
+    request_timeouts = []
+    send = httpx.Client.send
+
+    def record_request(client, request, *args, **kwargs):
+        if request.method == "POST":
+            request_timeouts.append(request.extensions["timeout"])
+        return send(client, request, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.Client, "send", record_request)
 
     @contextmanager
     def serving_lease(config):
@@ -172,6 +183,9 @@ def test_uncached_local_review_requests_batch_gpu_capacity(review_server, monkey
 
     assert reviews[0].verdict.label is DuplicateLabel.DUPLICATE
     assert leases[0].iris.priority == job_pb2.PRIORITY_BAND_BATCH
+    assert request_timeouts[0]["read"] >= (
+        leases[0].iris.endpoint_ready_timeout_seconds + EVALCHEMY_REQUEST_TIMEOUT_SECONDS
+    )
     assert review_server.requests[0]["temperature"] == 0.7
 
 

@@ -22,8 +22,13 @@ def main() -> None:
     verifyit = shutil.which("verifyit")
     assert verifyit is not None
     (bootstrap / "verifyit").symlink_to(verifyit)
+    setup_files = package / "setup_files"
+    if setup_files.is_dir():
+        shutil.copytree(setup_files, Path("/setup_files"))
     config = tomllib.loads((package / "task.toml").read_text())
     subprocess.run(["bash", "-c", config["environment"]["setup"]["command"]], check=True)
+    assert not Path("/setup_files/taskcompendium-shared-input.zlib").exists()
+    assert not Path("/tmp/taskcompendium-shared-input.json").exists()
     target = workspace / "tests/test_calc.py"
     assert "test_hidden" not in target.read_text()
     repair = int(sys.argv[1])
