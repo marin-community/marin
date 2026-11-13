@@ -17,7 +17,7 @@ import os
 import sys
 from pathlib import Path
 
-from daytona import AsyncDaytona, Daytona, DaytonaConfig, DaytonaNotFoundError
+from daytona import AsyncDaytona, Daytona, DaytonaConfig, DaytonaError, DaytonaNotFoundError
 from harbor.environments.daytona import machine_spec
 from harbor_config.models.task.config import TaskConfig
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
@@ -60,6 +60,20 @@ def usage() -> dict:
     }
 
 
+async def prepare_once_more_on_error(factory: DaytonaMachineFactory, spec: MachineSpec) -> str:
+    """Prepare one snapshot, calling ``prepare`` a second time if the first raises a provider error.
+
+    The SDK's ``snapshot.create`` waits for the build itself and polls without retries, so one transient API error
+    raises while the snapshot is still building. The second call finds that snapshot and waits through Shellbox's
+    retried metadata reads. A failed build fails both calls. The first error goes to stderr.
+    """
+    try:
+        return await factory.prepare(spec)
+    except DaytonaError as error:
+        print(f"prepare raised {type(error).__name__}: {error}; preparing once more", file=sys.stderr)
+        return await factory.prepare(spec)
+
+
 def prepare(task_dirs: list[Path]) -> dict[str, str]:
     """Build each distinct snapshot before any trial starts.
 
@@ -73,7 +87,7 @@ def prepare(task_dirs: list[Path]) -> dict[str, str]:
     for task_dir in sorted(task_dirs):
         spec = task_spec(task_dir)
         specs.setdefault(snapshot_request_for_spec(spec).name, spec)
-    built = {name: asyncio.run(factory.prepare(spec)) for name, spec in sorted(specs.items())}
+    built = {name: asyncio.run(prepare_once_more_on_error(factory, spec)) for name, spec in sorted(specs.items())}
     if any(name != result for name, result in built.items()):
         raise RuntimeError(f"prepare built other names than the naming path gives: {built}")
     return built
