@@ -8,15 +8,12 @@ import hashlib
 import json
 import logging
 from collections.abc import Iterable
-from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 
 import pyarrow.parquet as pq
 from finestore.rl.source_identity import canonical_source_id, original_source_id
-from fray.current_client import set_current_client
-from fray.local_backend import LocalClient
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -24,7 +21,7 @@ from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import RENDERER_VERSION, write_text_population
-from experiments.post_training.task_curation.local import artifact_prefix
+from experiments.post_training.task_curation.local import artifact_prefix, local_client
 
 
 @dataclass(frozen=True)
@@ -147,10 +144,7 @@ def main() -> None:
                 + "\n"
             )
             return
-        with ExitStack() as cleanup:
-            client = LocalClient()
-            cleanup.callback(client.shutdown)
-            cleanup.enter_context(set_current_client(client))
+        with local_client():
             results = run(*steps, max_concurrent=2)
         args.output.write_text(json.dumps([r.model_dump(mode="json") for r in results], indent=2) + "\n")
 
