@@ -38,6 +38,12 @@ def reverse_cumsum_bwd(dgc, chunk_size: int):
 
 
 # ---------- B1 ----------
+class InterChunkGradients(NamedTuple):
+    state_history: jax.Array
+    initial_state: jax.Array
+    values: jax.Array
+
+
 def gdn2_dhu_backward(do, dv_partial, w_pseudo, qg, kg, gc_last, scale, dht=None):
     bsz, H, n_chunks, BT, D = qg.shape
     if dht is None:
@@ -64,7 +70,7 @@ def gdn2_dhu_backward(do, dv_partial, w_pseudo, qg, kg, gc_last, scale, dht=None
     dh0, (dh_all_rev, dv_all_rev) = jax.lax.scan(step, dht, to_scan, reverse=True)
     dh_all = jnp.moveaxis(dh_all_rev, 0, 2)
     dv_all = jnp.moveaxis(dv_all_rev, 0, 2)
-    return dh_all, dh0, dv_all
+    return InterChunkGradients(dh_all, dh0, dv_all)
 
 
 # ---------- B2 ----------

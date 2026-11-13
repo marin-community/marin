@@ -423,6 +423,12 @@ def gdn2_pallas_forward(q, k, v, w, b, g, scale, h0, config):
     return _scan_output(o_scanned, q.shape, config), h_final
 
 
+class ForwardResult(NamedTuple):
+    output: jax.Array
+    final_state: jax.Array
+    residuals: ForwardResiduals
+
+
 def gdn2_pallas_forward_with_residuals(q, k, v, w, b, g, scale, h0, config):
     chunks, A = _prepare_chunks(q, k, v, w, b, g, scale, config)
     h_final, (o_scanned, h_pre_all, v_new_all) = _inter_chunk_scan(chunks, scale, h0, retain_state=True)
@@ -437,4 +443,4 @@ def gdn2_pallas_forward_with_residuals(q, k, v, w, b, g, scale, h0, config):
         qg=chunks.qg,
         gc_last=chunks.gc_last,
     )
-    return out, h_final, residuals
+    return ForwardResult(out, h_final, residuals)

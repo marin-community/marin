@@ -42,8 +42,8 @@ def _gdn2_core(q, k, v, w, b, g, scale, config, h0):
 
 
 def _gdn2_core_fwd(q, k, v, w, b, g, scale, config, h0):
-    out, h_final, forward = gdn2_pallas_forward_with_residuals(q, k, v, w, b, g, scale, h0=h0, config=config)
-    return (out, h_final), ((q, k, v, w, b, g, h0), forward)
+    forward = gdn2_pallas_forward_with_residuals(q, k, v, w, b, g, scale, h0=h0, config=config)
+    return (forward.output, forward.final_state), ((q, k, v, w, b, g, h0), forward.residuals)
 
 
 def _gdn2_core_bwd(scale, config, residuals: tuple[tuple[jax.Array, ...], ForwardResiduals], cotangents):
@@ -64,10 +64,10 @@ def _gdn2_core_bwd(scale, config, residuals: tuple[tuple[jax.Array, ...], Forwar
     dAqk, dv_partial = dav_backward_pallas(forward.Aqk, forward.v_new_all, do_r, config)
 
     # B1
-    dh_all, dh0, dv_all = gdn2_dhu_backward(
+    chunk_grads = gdn2_dhu_backward(
         do_r, dv_partial, forward.w_pseudo, forward.qg, forward.kg, forward.gc_last, scale, dht=dh_final
     )
-    dh_next_all = _build_dh_next_all(dh_all, dh_final)
+    dh_next_all = _build_dh_next_all(chunk_grads.state_history, dh_final)
 
     # B3
     q_r = _reshape_to_chunks(q, bsz, n_chunks, H, D, config.bt)
@@ -87,7 +87,7 @@ def _gdn2_core_bwd(scale, config, residuals: tuple[tuple[jax.Array, ...], Forwar
         forward.h_pre_all,
         forward.v_new_all,
         do_r,
-        dv_all,
+        chunk_grads.values,
         dh_next_all,
         scale,
         config,
@@ -112,7 +112,7 @@ def _gdn2_core_bwd(scale, config, residuals: tuple[tuple[jax.Array, ...], Forwar
     dw = dw.astype(w.dtype)
     dv = dv.astype(v.dtype)
     dg = dg.astype(g.dtype)
-    dh0 = dh0.astype(h0.dtype)
+    dh0 = chunk_grads.initial_state.astype(h0.dtype)
 
     return dq, dk, dv, dw, db, dg, dh0
 
