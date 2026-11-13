@@ -1706,7 +1706,7 @@ def test_daytona_job_wait_recovers_controls_without_replaying_source(tmp_path, m
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux process and setsid contract")
-@pytest.mark.parametrize("failure", ["transient", "stalled_delete"])
+@pytest.mark.parametrize("failure", ["transient", "stalled_delete", "concurrent_close"])
 def test_daytona_job_wait_close_cancellation_has_wall_clock_cleanup_bound(monkeypatch, failure):
     async def scenario():
         loop = asyncio.get_running_loop()
@@ -1717,11 +1717,12 @@ def test_daytona_job_wait_close_cancellation_has_wall_clock_cleanup_bound(monkey
         retrying = asyncio.Event()
         interrupted = asyncio.Event()
         release = asyncio.Event()
+        finish = asyncio.Event()
         closed = asyncio.Event()
 
         async def backoff(delay):
             retrying.set()
-            await release.wait()
+            await (finish.wait() if failure == "concurrent_close" else release.wait())
 
         monkeypatch.setattr("shellbox.backends.daytona.provider.sleep", backoff)
 
@@ -1736,6 +1737,8 @@ def test_daytona_job_wait_close_cancellation_has_wall_clock_cleanup_bound(monkey
                     except asyncio.CancelledError:
                         # Model an SDK request that does not finish when cancelled.
                         interrupted.set()
+                if failure == "concurrent_close" and not finish.is_set():
+                    raise DaytonaError("Provider deletion unavailable", status_code=503)
                 await super().delete(sandbox)
 
             async def __aexit__(self, *args):
@@ -1746,11 +1749,16 @@ def test_daytona_job_wait_close_cancellation_has_wall_clock_cleanup_bound(monkey
         machine = await DaytonaMachineFactory(lambda: client, provider_wait_policy=ProviderWaitPolicy.JOB).create(
             MachineSpec(RegistryImage("ubuntu:24.04"))
         )
-        pending = asyncio.create_task(machine.close())
+        owner = asyncio.create_task(machine.close())
         await (retrying.wait() if failure == "transient" else entered.wait())
+        pending = asyncio.create_task(machine.close()) if failure == "concurrent_close" else owner
+        if failure == "concurrent_close":
+            await asyncio.sleep(0)  # Let the second caller join the already-running close.
         pending.cancel("shutdown requested")
+        owner_error = None
+        owner_finished_before_recovery = True
         try:
-            if failure == "stalled_delete":
+            if failure in {"stalled_delete", "concurrent_close"}:
                 # A plain asyncio.wait is the watchdog; active phase clocks cannot pause it.
                 interruption = asyncio.create_task(interrupted.wait())
                 done, _ = await asyncio.wait({interruption}, timeout=1)
@@ -1765,10 +1773,21 @@ def test_daytona_job_wait_close_cancellation_has_wall_clock_cleanup_bound(monkey
         finally:
             # Release the fake service even on the old backend, so a failed regression cannot hang pytest.
             release.set()
+            if failure == "concurrent_close":
+                done, _ = await asyncio.wait({owner}, timeout=1)
+                owner_finished_before_recovery = bool(done)
+                finish.set()
+                try:
+                    await owner
+                except BaseException as error:
+                    owner_error = error
             with pytest.raises(asyncio.CancelledError, match="shutdown requested"):
                 await pending
             await asyncio.wait_for(closed.wait(), timeout=1)
         assert completed_before_release
+        assert owner_finished_before_recovery
+        if failure == "concurrent_close":
+            assert isinstance(owner_error, DaytonaError)
         assert client.closed
 
     asyncio.run(scenario())

@@ -26,6 +26,9 @@ PENDING_SANDBOX_IP_MESSAGE = "failed to resolve container ip after 3 attempts"
 class _RetryScope:
     cancelled: bool = False
 
+    def cancel(self) -> None:
+        self.cancelled = True
+
 
 _RETRY_SCOPE: ContextVar[_RetryScope | None] = ContextVar("provider_retry_scope", default=None)
 
@@ -34,18 +37,20 @@ def cancel_provider_waits() -> None:
     """Keep cancellation cleanup bounded by its existing deadline."""
     scope = _RETRY_SCOPE.get()
     if scope is not None:
-        scope.cancelled = True
+        scope.cancel()
 
 
 @asynccontextmanager
-async def provider_wait_scope() -> AsyncIterator[None]:
-    """Bound cancellation cleanup without retrying after its caller has stopped."""
-    if _RETRY_SCOPE.get() is not None:
-        yield
+async def provider_wait_scope() -> AsyncIterator[Callable[[], None]]:
+    """Bind provider recovery and expose cancellation for an owned child operation."""
+    scope = _RETRY_SCOPE.get()
+    if scope is not None:
+        yield scope.cancel
         return
-    token = _RETRY_SCOPE.set(_RetryScope())
+    scope = _RetryScope()
+    token = _RETRY_SCOPE.set(scope)
     try:
-        yield
+        yield scope.cancel
     finally:
         _RETRY_SCOPE.reset(token)
 

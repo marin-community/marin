@@ -159,6 +159,12 @@ class DaytonaNetworkPolicy:
         return {"network_block_all": mode == DaytonaNetworkMode.BLOCK_ALL}
 
 
+@dataclass(frozen=True)
+class _Closing:
+    task: asyncio.Task[None]
+    cancel_provider_waits: Callable[[], None]
+
+
 class DaytonaMachine:
     """One Daytona sandbox. Each command gets a fresh process and shared files."""
 
@@ -176,7 +182,7 @@ class DaytonaMachine:
         self._closed = False
         self._sessions: set[DaytonaProcessSession] = set()
         self._acquisitions: set[asyncio.Task[None]] = set()
-        self._closing: asyncio.Task[None] | None = None
+        self._closing: _Closing | None = None
 
     async def _provider_request[T](self, operation: str, request: Callable[[], Awaitable[T]]) -> T:
         if self.provider_wait_policy is ProviderWaitPolicy.PHASE:
@@ -527,18 +533,19 @@ class DaytonaMachine:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
 
-    @provider_wait_scope()
     async def close(self) -> None:
         if self._closing is None:
             self._closed = True
-            self._closing = own_cleanup(self._close())
+            async with provider_wait_scope() as cancel_waits:
+                self._closing = _Closing(own_cleanup(self._close()), cancel_waits)
+        closing = self._closing
         try:
-            await asyncio.shield(self._closing)
+            await asyncio.shield(closing.task)
         except asyncio.CancelledError as error:
-            cancel_provider_waits()
-            self._closing.cancel()
+            closing.cancel_provider_waits()
+            closing.task.cancel()
             try:
-                await finish_owned(self._closing, timeout=INTERRUPT_TIMEOUT)
+                await finish_owned(closing.task, timeout=INTERRUPT_TIMEOUT)
             except BaseException as cleanup_error:
                 error.add_note(f"Daytona cleanup failed ({type(cleanup_error).__name__})")
             raise
