@@ -124,15 +124,16 @@ def test_relay_endpoint_uses_registered_job_url_and_checks_model(review_server, 
 
 
 @pytest.mark.parametrize("advertised_model", ["MiniMaxAI/MiniMax-M3-MXFP8", "wrong-checkpoint"])
+@pytest.mark.parametrize("context_window", [262144, 524288])
 def test_local_endpoint_releases_inference_after_identity_or_grading_failure(
-    review_server, monkeypatch, tmp_path, advertised_model
+    review_server, monkeypatch, tmp_path, advertised_model, context_window
 ):
     definition = JUDGE_TIERS[JudgeTier.MEDIUM]
     model_yaml = tmp_path / "model.yaml"
     model_yaml.write_text(
         f"name: fixture\nlocation: {definition.model_identity}\nrevision: {definition.model_revision}\n"
         "resource_hint:\n  gpu: {H100: 8}\n  cpu: 64\n  memory: 512g\n  disk: 600g\n"
-        "serve:\n  auto_overrides: false\n  tensor_parallel_size: 8\n  max_model_len: 262144\n"
+        f"serve:\n  auto_overrides: false\n  tensor_parallel_size: 8\n  max_model_len: {context_window}\n"
     )
     review_server.model_ids = [advertised_model]
     released = []
@@ -156,7 +157,7 @@ def test_local_endpoint_releases_inference_after_identity_or_grading_failure(
                     data_parallel_size=1,
                     pipeline_parallel_size=1,
                     task_count=1,
-                    max_model_len=262144,
+                    max_model_len=context_window,
                 ),
             )
         finally:
@@ -164,7 +165,11 @@ def test_local_endpoint_releases_inference_after_identity_or_grading_failure(
 
     monkeypatch.setattr(judges, "remote_inference", inference)
     endpoint: JudgeEndpoint = LocalJudgeEndpoint(
-        JudgeTier.MEDIUM, Path(model_yaml), AcceleratorChoice(Platform.GPU, gpu_type="H100", gpu_count=8), priority=0
+        tier=JudgeTier.MEDIUM,
+        model_config=Path(model_yaml),
+        context_window_tokens=context_window,
+        accelerator=AcceleratorChoice(Platform.GPU, gpu_type="H100", gpu_count=8),
+        priority=0,
     )
     error = ValueError if advertised_model == "wrong-checkpoint" else RuntimeError
     with pytest.raises(error):

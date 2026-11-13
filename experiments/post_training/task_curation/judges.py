@@ -147,6 +147,7 @@ class LocalJudgeEndpoint:
 
     tier: JudgeTier
     model_config: Path
+    context_window_tokens: int
     accelerator: AcceleratorChoice
     priority: int
     env_vars: Mapping[str, str] = field(default_factory=dict)
@@ -175,7 +176,7 @@ class LocalJudgeEndpoint:
         if (model.location, model.revision, model.serve.max_model_len) != (
             definition.model_identity,
             definition.model_revision,
-            definition.context_window_tokens,
+            self.context_window_tokens,
         ):
             raise ValueError(f"Model YAML must match the {self.tier} model, revision and context window")
         config = inference_config_for_model(
@@ -215,17 +216,17 @@ class LocalJudgeEndpoint:
                 ),
             ),
         )
-        if config.model.max_model_len != definition.context_window_tokens:
-            raise ValueError("Resolved serving configuration changed the tier's context window")
+        if config.model.max_model_len != self.context_window_tokens:
+            raise ValueError("Resolved serving configuration changed the declared context window")
         with remote_inference(config) as session:
             self.job_ids.extend(str(job.job_id) for job in session.jobs)
             logger.info("Judge serving jobs: %s", self.job_ids)
             session = session.ready_direct_session()
             if (
                 session.effective_serving is None
-                or session.effective_serving.max_model_len != definition.context_window_tokens
+                or session.effective_serving.max_model_len != self.context_window_tokens
             ):
-                raise ValueError("Running inference does not confirm the tier's context window")
+                raise ValueError("Running inference does not confirm the declared context window")
             endpoint = session.model.endpoint
             if endpoint.model != definition.spec.model:
                 raise ValueError(f"Serving endpoint returned an unexpected model {endpoint.model!r}")
