@@ -148,29 +148,28 @@ def test_marin_temp_bucket_uses_source_prefix_region_from_local_launcher():
         ) == ("gs://marin-us-east5/tmp/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/run/checkpoints")
 
 
-def test_marin_temp_bucket_r2_uses_bucket_root_ttl_path():
-    """An R2 marin prefix resolves temp to the bucket root, dropping the marin/ subdir."""
+def test_marin_temp_bucket_coreweave_uses_shared_scratch():
     with (
         patch("rigging.filesystem.cluster_config.urllib.request.urlopen", side_effect=OSError("not on GCP")),
-        patch.dict(os.environ, {"MARIN_PREFIX": "s3://marin-na/marin"}),
+        patch.dict(os.environ, {"MARIN_PREFIX": "s3://marin-us-east-02a/marin"}),
     ):
-        assert marin_temp_bucket(ttl_days=1, prefix="zephyr") == "s3://marin-na/tmp/ttl=1d/zephyr"
-        assert marin_temp_bucket(ttl_days=14) == "s3://marin-na/tmp/ttl=14d"
+        assert marin_temp_bucket(ttl_days=1, prefix="zephyr") == "s3://marin-us-east-08a/tmp/ttl=1d/zephyr"
+        assert marin_temp_bucket(ttl_days=14) == "s3://marin-us-east-08a/tmp/ttl=14d"
 
 
-def test_marin_temp_bucket_r2_uses_source_prefix_bucket():
+def test_marin_temp_bucket_coreweave_source_uses_shared_scratch():
     with (
         patch("rigging.filesystem.cluster_config.urllib.request.urlopen", side_effect=OSError("not on GCP")),
         patch.dict(os.environ, {}, clear=True),
     ):
         assert (
-            marin_temp_bucket(ttl_days=3, prefix="ferry", source_prefix="s3://marin-na/experiments/grug")
-            == "s3://marin-na/tmp/ttl=3d/ferry"
+            marin_temp_bucket(ttl_days=3, prefix="ferry", source_prefix="s3://marin-us-east-02a/experiments/grug")
+            == "s3://marin-us-east-08a/tmp/ttl=3d/ferry"
         )
 
 
-def test_marin_temp_bucket_r2_source_prefix_overrides_gcs_launcher():
-    """An explicit R2 source_prefix wins over a gs:// MARIN_PREFIX and GCP metadata."""
+def test_marin_temp_bucket_coreweave_source_prefix_overrides_gcs_launcher():
+    """An explicit CoreWeave source wins over a GCS launcher and its metadata."""
     with (
         patch(
             "rigging.filesystem.cluster_config.urllib.request.urlopen",
@@ -179,8 +178,8 @@ def test_marin_temp_bucket_r2_source_prefix_overrides_gcs_launcher():
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
     ):
         assert (
-            marin_temp_bucket(ttl_days=7, prefix="out", source_prefix="s3://marin-na/experiments/grug")
-            == "s3://marin-na/tmp/ttl=7d/out"
+            marin_temp_bucket(ttl_days=7, prefix="out", source_prefix="s3://marin-us-east-02a/experiments/grug")
+            == "s3://marin-us-east-08a/tmp/ttl=7d/out"
         )
 
 

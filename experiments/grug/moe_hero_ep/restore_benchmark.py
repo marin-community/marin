@@ -49,8 +49,6 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.hero_recipe import (
-    HERO_EP_BATCH_SIZE,
-    HERO_EP_EXPERT_AXIS_SIZE,
     HERO_GPUS_PER_NODE,
     HERO_MASTER_PARAM_MODE,
     HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE,
@@ -59,6 +57,9 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_NODE_DISK,
     HERO_NODE_RAM,
     HERO_QB_HIST_BINS,
+    HERO_RACK_GPUS,
+    HERO_SCHEDULE_STEPS,
+    hero_rack_batch_size,
     with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic, build_hero_configs
@@ -73,7 +74,6 @@ from experiments.grug.moe_hero_ep.train import (
 logger = logging.getLogger(__name__)
 
 # The hero's own schedule length, so this pytree matches the one a hero resume restores into.
-HERO_SCHEDULE_STEPS = 390_251
 CHECKPOINT_TTL_DAYS = 1
 GIB = 1024**3
 HERO_MODEL_SIZE = "hero"
@@ -90,8 +90,11 @@ class RestoreBenchmarkConfig:
     read: TensorStoreReadConfig = field(default_factory=TensorStoreReadConfig)
     write: TensorStoreWriteConfig = field(default_factory=TensorStoreWriteConfig)
     repeats: int = 2
-    expert_axis_size: int = HERO_EP_EXPERT_AXIS_SIZE
+    expert_axis_size: int = HERO_RACK_GPUS
     replica_axis_size: int = 1
+    # Restores read no activations, so a context-parallel run's width is safe to set here: it
+    # only places the restored parameters the way that run's mesh would.
+    context_axis_size: int = 1
 
 
 def _benchmark_state(config: RestoreBenchmarkConfig, mesh):
@@ -145,6 +148,7 @@ def _run_restore_benchmark_local(config: RestoreBenchmarkConfig) -> None:
     mesh = compact_grug_mesh(
         expert_axis_size=config.expert_axis_size,
         replica_axis_size=config.replica_axis_size,
+        context_axis_size=config.context_axis_size,
     )
     state = _benchmark_state(config, mesh)
     with set_mesh(mesh):
@@ -197,7 +201,7 @@ def _run_restore_benchmark_local(config: RestoreBenchmarkConfig) -> None:
 @click.option(
     "--expert-axis-size",
     type=click.IntRange(min=1),
-    default=HERO_EP_EXPERT_AXIS_SIZE,
+    default=HERO_RACK_GPUS,
     show_default=True,
     help="Devices in each expert-parallel replica group.",
 )
@@ -242,7 +246,7 @@ def main(
     requests: int,
     replica_mode: str,
 ) -> None:
-    batch_size = HERO_EP_BATCH_SIZE * replica_groups
+    batch_size = hero_rack_batch_size(HERO_MODEL_CONFIG.max_seq_len) * replica_groups
     if model_size == HERO_MODEL_SIZE:
         model = with_transport_remat_mode(HERO_MODEL_CONFIG)
         _, optimizer = build_hero_configs(num_train_steps=HERO_SCHEDULE_STEPS, batch_size=batch_size)

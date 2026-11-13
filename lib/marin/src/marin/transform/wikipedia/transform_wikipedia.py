@@ -163,7 +163,7 @@ def unwrap_eqn(soup: BeautifulSoup) -> None:
 
 
 def postprocess_content(
-    content: str, digit_threshold: int, word_threshold: int, special_char_threshold: float
+    content: str, digit_threshold: int, word_threshold: int, special_char_threshold: int
 ) -> str | None:
     """
     Postprocesses the content by deleting it if its is mainly digits, words, and special characters.
@@ -207,7 +207,7 @@ def process_record(
     remove_reference_section: bool = True,
     digit_threshold: int = 50,
     word_threshold: int = 70,
-    special_char_threshold: float = 0.2,
+    special_char_threshold: int = 50,
 ):
     """Process a single Wikipedia record and return transformed record.
 

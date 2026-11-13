@@ -113,9 +113,9 @@ def create_api(services: Services) -> RegisteredApi:
     return registered_api(api)
 
 
-def migrate(engine: sqlalchemy.Engine) -> None:
-    """Bring Echo's schema up to date; ``marina migrate`` runs this before a deploy serves."""
-    apply_migrations(engine)
+def migrate(connection: sqlalchemy.Connection) -> None:
+    """Apply Echo's schema changes within the package release transaction."""
+    apply_migrations(connection)
 
 
 def caller() -> str:
@@ -349,10 +349,29 @@ class LogEntry(LogSummary):
     body: str | None = None
 
 
+class LogProject(BaseModel):
+    project: str
+    entries: int
+    last_at: datetime
+
+
 class LogCreate(BaseModel):
-    project: str = Field(description="Stable slug for the thread of work.")
+    project: str = Field(
+        description=(
+            "Stable slug for the thread of work, such as 'harbor:issue-161'. Stored in lowercase. "
+            "Reuse a slug from list_work_log_projects before you make a new one."
+        )
+    )
     title: str = Field(description="One-line summary.")
     body: str | None = Field(None, description="Short markdown; link evidence inline.")
+
+    @field_validator("project")
+    @classmethod
+    def validate_project(cls, project: str) -> str:
+        slug = work_log_project_slug(project)
+        if not slug:
+            raise ValueError("work-log project must not be blank")
+        return slug
 
 
 class WikiSummary(BaseModel):
@@ -461,6 +480,11 @@ def normalize_wiki_tags(tags: Iterable[str]) -> list[str]:
                 f"invalid wiki tag {tag!r}; use lowercase kebab-case up to {MAX_WIKI_TAG_LENGTH} characters"
             )
     return normalized
+
+
+def work_log_project_slug(project: str) -> str:
+    """The stored form of a work-log project slug, so writes and filters agree on case."""
+    return project.strip().lower()
 
 
 def snippet(row: sqlalchemy.Row) -> str:
@@ -1453,22 +1477,49 @@ def repository_file(reference_value: str, engine: Engine) -> RepositoryFileDetai
 def work_log(
     engine: Engine,
     days: int = Query(7, ge=1, description="Look back this many days."),
-    project: str | None = Query(None, description="Filter to one project slug."),
+    project: str | None = Query(None, description="Filter to one project slug, in any case."),
     limit: int = Query(30, ge=1, le=200),
 ) -> list[LogSummary]:
     """Recent work-log entries, newest first — summaries; use the id endpoint for bodies."""
     columns = [getattr(schema.work_log.c, c) for c in LogSummary.model_fields]
-    # make_interval takes positional (years, months, weeks, days, ...).
-    cutoff = sqlalchemy.func.now() - sqlalchemy.func.make_interval(0, 0, 0, days)
-    query = sqlalchemy.select(*columns).where(schema.work_log.c.at > cutoff)
+    query = sqlalchemy.select(*columns).where(schema.work_log.c.at > work_log_cutoff(days))
     if project:
-        query = query.where(schema.work_log.c.project == project)
+        query = query.where(schema.work_log.c.project == work_log_project_slug(project))
     query = query.order_by(schema.work_log.c.at.desc()).limit(limit)
     with engine.connect() as conn:
         return [
             LogSummary(**{field: getattr(row, field) for field in LogSummary.model_fields})
             for row in conn.execute(query)
         ]
+
+
+def work_log_cutoff(days: int) -> sqlalchemy.ColumnElement[datetime]:
+    # make_interval takes positional (years, months, weeks, days, ...).
+    return sqlalchemy.func.now() - sqlalchemy.func.make_interval(0, 0, 0, days)
+
+
+# Declared before /work_log/{entry_id}, which would otherwise match "projects" and reject it as an id.
+@router.get(
+    "/work_log/projects",
+    operation_id="list_work_log_projects",
+    response_model=list[LogProject],
+    openapi_extra=operation_extension(OperationRisk.READ),
+)
+def work_log_projects(
+    engine: Engine,
+    days: int = Query(30, ge=1, description="Count entries from this many days back."),
+) -> list[LogProject]:
+    """Project slugs with entries in the window and their entry counts, most recently active first."""
+    entries = sqlalchemy.func.count().label("entries")
+    last_at = sqlalchemy.func.max(schema.work_log.c.at).label("last_at")
+    query = (
+        sqlalchemy.select(schema.work_log.c.project, entries, last_at)
+        .where(schema.work_log.c.at > work_log_cutoff(days))
+        .group_by(schema.work_log.c.project)
+        .order_by(last_at.desc())
+    )
+    with engine.connect() as conn:
+        return [LogProject(project=row.project, entries=row.entries, last_at=row.last_at) for row in conn.execute(query)]
 
 
 @router.get(

@@ -22,13 +22,12 @@ from levanter.store.cache import TreeCache
 from marin.datakit.decon import DeconAttributes
 from marin.datakit.source_key import datakit_source_key
 from marin.execution.artifact import read_artifact
-from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
-from marin.processing.classification.deduplication.verify_fuzzy_dups import (
-    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-    VerifiedFuzzyDupsAttrData,
+from marin.processing.classification.deduplication.cluster_dedup import ClusterDedupParams
+from marin.processing.classification.deduplication.cluster_verify import (
+    ClusterVerifiedFuzzyDupsAttrData,
     VerifiedFuzzyDupsPerSource,
 )
-from marin.processing.tokenize.attributes import TokenizedAttrData
+from marin.processing.tokenize.attributes import TokenizedAttrData, iter_tokenized_documents
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
 from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
@@ -36,7 +35,6 @@ from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExa
 from experiments.datakit.store.bucket_writer import BucketSpillRun, write_bucket_cache, write_bucket_cache_from_spills
 from experiments.datakit.store.datakit_store import (
     ClusteredStoreData,
-    _iter_tokenized_documents,
     build_clustered_store,
 )
 
@@ -211,16 +209,14 @@ def _build_inputs(tmp_path):
     quality = {
         "src": QualityScores(
             main_output_dir=dirs["quality"],
-            samples_output_dir="",
             model_dir="model",
             calib_file="calib.json",
             bucket_edges=[0.2, 0.4, 0.6, 0.8],
             counters={},
         )
     }
-    dedup = VerifiedFuzzyDupsAttrData(
-        verification=FuzzyVerificationParams(),
-        local_representatives=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+    dedup = ClusterVerifiedFuzzyDupsAttrData(
+        rule=ClusterDedupParams(),
         sources={source_key: VerifiedFuzzyDupsPerSource(attr_dir=dirs["dedup"], source_tag="source_000")},
         counters={},
     )
@@ -240,7 +236,8 @@ def _read_bucket_tokens(bucket_root: str) -> list[np.ndarray]:
     return [np.asarray(doc["input_ids"]) for doc in cache]
 
 
-def test_store_filters_routes_and_roundtrips(tmp_path, monkeypatch):
+@pytest.mark.parametrize("fuzzy_exempt", [False, True])
+def test_store_filters_routes_and_roundtrips(tmp_path, monkeypatch, fuzzy_exempt):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
     output_path = str(tmp_path / "store")
@@ -255,13 +252,17 @@ def test_store_filters_routes_and_roundtrips(tmp_path, monkeypatch):
         output_path=output_path,
         cluster_view=CLUSTER_VIEW,
         split=SPLIT,
+        fuzzy_exempt_sources=frozenset(tokenize) if fuzzy_exempt else frozenset(),
     )
 
+    expected = {key: dict(docs) for key, docs in EXPECTED.items()}
+    if fuzzy_exempt:
+        expected[(1, 2)][905] = 8
     by_key = {(b.cluster_id, b.quality_bucket): b for b in artifact.buckets}
-    assert set(by_key) == set(EXPECTED), "exactly the surviving buckets, nothing for the dropped docs"
+    assert set(by_key) == set(expected), "exactly the surviving buckets, nothing for the dropped docs"
 
     all_tokens: list[int] = []
-    for key, expected_docs in EXPECTED.items():
+    for key, expected_docs in expected.items():
         bucket = by_key[key]
         assert bucket.total_elements == len(expected_docs)
         assert bucket.total_tokens == sum(expected_docs.values())
@@ -275,19 +276,21 @@ def test_store_filters_routes_and_roundtrips(tmp_path, monkeypatch):
             assert len(set(arr.tolist())) == 1  # each doc is a run of its unique token value
             all_tokens.extend(arr.tolist())
 
-    assert DROPPED_TOKEN_VALUES.isdisjoint(all_tokens), "filtered docs must be absent"
+    dropped = DROPPED_TOKEN_VALUES - ({905} if fuzzy_exempt else set())
+    assert dropped.isdisjoint(all_tokens), "filtered docs must be absent"
     assert artifact.counters["datakit_store/records_in"] == len(SHARD0) + len(SHARD1)
     assert artifact.counters["datakit_store/contaminated_dropped"] == 1
     assert artifact.counters["datakit_store/exact_duplicate_dropped"] == 2
-    assert artifact.counters["datakit_store/fuzzy_duplicate_dropped"] == 1
-    assert artifact.counters["datakit_store/records_out"] == sum(len(docs) for docs in EXPECTED.values())
+    assert artifact.counters["datakit_store/fuzzy_duplicate_dropped"] == (0 if fuzzy_exempt else 1)
+    assert artifact.counters["datakit_store/records_out"] == sum(len(docs) for docs in expected.values())
     assert artifact.counters["datakit_store/tokens_out"] == sum(
-        length for docs in EXPECTED.values() for length in docs.values()
+        length for docs in expected.values() for length in docs.values()
     )
     record = json.loads((tmp_path / "store" / ".artifact.json").read_text())
     assert record["result"]["cache_path"] == "store"
     assert all(bucket["path"].startswith("store/") for bucket in record["result"]["buckets"])
     loaded = read_artifact(output_path, ClusteredStoreData)
+    assert loaded.fuzzy_exempt_sources == (sorted(tokenize) if fuzzy_exempt else [])
     assert loaded.cache_path == output_path
     assert [bucket.path for bucket in loaded.buckets] == [bucket.path for bucket in artifact.buckets]
 
@@ -458,7 +461,7 @@ def test_tokenized_documents_regroup_chunks_and_reject_an_orphan(tmp_path):
         ),
     )
 
-    documents = [(doc_id, list(tokens)) for doc_id, tokens in _iter_tokenized_documents(path)]
+    documents = [(doc_id, list(tokens)) for doc_id, tokens in iter_tokenized_documents(path)]
     assert documents == [("a", [1, 2, 3]), ("b", [4]), ("b", [5, 6])]
 
     orphan_path = str(tmp_path / "orphan.parquet")
@@ -474,7 +477,7 @@ def test_tokenized_documents_regroup_chunks_and_reject_an_orphan(tmp_path):
     )
 
     with pytest.raises(RuntimeError, match="chunk 1 of b, but chunk 1 of a must come next"):
-        list(_iter_tokenized_documents(orphan_path))
+        list(iter_tokenized_documents(orphan_path))
 
     # Out of order within one id: concatenating in file order would silently
     # reverse a document's tokens.
@@ -491,7 +494,7 @@ def test_tokenized_documents_regroup_chunks_and_reject_an_orphan(tmp_path):
     )
 
     with pytest.raises(RuntimeError, match="chunk 2 of a, but chunk 1 of a must come next"):
-        list(_iter_tokenized_documents(shuffled_path))
+        list(iter_tokenized_documents(shuffled_path))
 
 
 def test_tokenized_shard_without_chunk_index_is_rejected(tmp_path):
@@ -500,4 +503,4 @@ def test_tokenized_shard_without_chunk_index_is_rejected(tmp_path):
     _write_parquet(path, pa.table({"id": ["a"], "input_ids": pa.array([[1, 2]])}))
 
     with pytest.raises(RuntimeError, match="no chunk_index column"):
-        list(_iter_tokenized_documents(path))
+        list(iter_tokenized_documents(path))

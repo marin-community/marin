@@ -18,13 +18,50 @@ import dataclasses
 import importlib
 import importlib.metadata
 import json
+import os
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 _SELECTED_SENTINEL = "MARIN_VLLM_WHEEL_SELECTED="
 _VERIFIED_SENTINEL = "MARIN_VLLM_WHEEL_VERIFIED="
+
+
+def configure_nvrtc_linker_path(distribution: importlib.metadata.Distribution) -> Path | None:
+    """Expose the versioned CUDA NVRTC runtime under the linker name used by JIT extensions.
+
+    NVIDIA's CUDA 13 NVRTC wheel ships ``libnvrtc.so.13`` but no unversioned ``libnvrtc.so``.
+    FlashInfer invokes the system linker while vLLM starts FP8 models, and ``-lnvrtc`` therefore
+    fails even though the runtime library is installed. Keep the installed wheel immutable: create
+    the linker name in a process-private temporary directory and prepend that directory to the
+    compile-time and runtime library search paths.
+
+    Returns the temporary shim directory, or ``None`` when the distribution has no versioned NVRTC
+    runtime.
+    """
+    candidates = sorted(
+        Path(distribution.locate_file(file)).resolve()
+        for file in distribution.files or ()
+        if file.name.startswith("libnvrtc.so.") and "builtins" not in file.name
+    )
+    if not candidates:
+        return None
+    if len(candidates) != 1:
+        raise RuntimeError(f"Expected exactly one versioned NVRTC runtime, found {candidates}")
+
+    library = candidates[0]
+    shim_directory = Path(tempfile.mkdtemp(prefix="marin-vllm-nvrtc-"))
+    (shim_directory / "libnvrtc.so").symlink_to(library)
+    for variable, directories in (
+        ("LIBRARY_PATH", (shim_directory,)),
+        ("LD_LIBRARY_PATH", (shim_directory, library.parent)),
+    ):
+        existing = os.environ.get(variable)
+        prefix = os.pathsep.join(str(directory) for directory in directories)
+        os.environ[variable] = f"{prefix}{os.pathsep}{existing}" if existing else prefix
+    return shim_directory
 
 
 @dataclass(frozen=True)
@@ -113,6 +150,13 @@ def main() -> None:
     resolved_extension_path = Path(extension_path).resolve()
     if not resolved_extension_path.is_relative_to(distribution_root):
         raise RuntimeError(f"{extension_module} loaded outside the verified distribution: {resolved_extension_path}")
+
+    try:
+        nvrtc_distribution = importlib.metadata.distribution("nvidia-cuda-nvrtc")
+    except importlib.metadata.PackageNotFoundError:
+        pass
+    else:
+        configure_nvrtc_linker_path(nvrtc_distribution)
 
     provenance = {
         **expected.record(),

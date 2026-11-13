@@ -3,6 +3,8 @@
 
 """Authenticated HTTP client helpers for Marina's command line."""
 
+from collections.abc import Callable
+from typing import Any
 from urllib.parse import urlparse
 
 import requests
@@ -18,6 +20,14 @@ from rigging.credentials import iap_edge_provider
 
 DEFAULT_MARINA_URL = "https://marina.oa.dev"
 DEFAULT_TIMEOUT = 60
+LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost"})
+AppletQuery = Callable[[str, dict[str, Any]], dict[str, Any]]
+
+
+class MarinaRequestError(RuntimeError):
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(f"Marina request failed ({status_code}): {detail}")
+        self.status_code = status_code
 
 
 def _cached_login_provider() -> TokenProvider | None:
@@ -31,9 +41,14 @@ def _cached_login_provider() -> TokenProvider | None:
     return None
 
 
-def bearer_token() -> str:
+def marina_token_provider() -> TokenProvider:
+    """Resolve an expiring-token provider for reuse across a sequence of requests."""
+    return _cached_login_provider() or IapServiceAccountTokenProvider(MARIN_DESKTOP_OAUTH_CLIENT.client_id)
+
+
+def bearer_token(provider: TokenProvider | None = None) -> str:
     """Return an IAP token from a cached Marin login or ambient service account."""
-    provider = _cached_login_provider() or IapServiceAccountTokenProvider(MARIN_DESKTOP_OAUTH_CLIENT.client_id)
+    provider = provider if provider is not None else marina_token_provider()
     try:
         token = provider.get_token()
     except (IapCredentialsUnavailable, IapLoginRequired) as error:
@@ -51,16 +66,19 @@ def marina_request(
     json_body: object | None = None,
     payload: bytes | None = None,
     params: dict[str, object] | None = None,
+    session: requests.Session | None = None,
+    token_provider: TokenProvider | None = None,
 ) -> object | None:
-    """Call one Marina endpoint with the shared CLI authentication behavior."""
+    """Call Marina, optionally reusing a caller-owned transport and token provider."""
     service_url = service_url.rstrip("/")
     headers: dict[str, str] = {}
     if payload is not None:
         headers["Content-Type"] = "application/gzip"
     host = urlparse(service_url).hostname
-    if host not in {"127.0.0.1", "localhost"}:
-        headers["Authorization"] = f"Bearer {bearer_token()}"
-    response = requests.request(
+    if host not in LOCAL_HOSTS:
+        headers["Authorization"] = f"Bearer {bearer_token(token_provider)}"
+    request = session.request if session is not None else requests.request
+    response = request(
         method,
         service_url + path,
         params=params,
@@ -75,10 +93,44 @@ def marina_request(
             if "json" in response.headers.get("content-type", "")
             else response.text
         )
-        raise RuntimeError(f"Marina request failed ({response.status_code}): {detail}")
+        raise MarinaRequestError(response.status_code, str(detail))
     if response.status_code == 204:
         return None
     return response.json()
+
+
+def applet_query(
+    service_url: str,
+    applet_id: str,
+    *,
+    session: requests.Session | None = None,
+    token_provider: TokenProvider | None = None,
+) -> AppletQuery:
+    """Return a SQL client for an applet, sharing caller-owned transport and refreshing tokens."""
+    details = marina_request(
+        service_url,
+        "GET",
+        f"/api/marina/applets/{applet_id}",
+        session=session,
+        token_provider=token_provider,
+    )
+    assert isinstance(details, dict)
+    parsed = urlparse(details["authenticated_url"])
+    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
+
+    def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
+        result = marina_request(
+            origin,
+            "POST",
+            f"/a/{applet_id}/query",
+            json_body={"sql": sql, "parameters": parameters},
+            session=session,
+            token_provider=token_provider,
+        )
+        assert isinstance(result, dict)
+        return result
+
+    return query
 
 
 def publish_applet(

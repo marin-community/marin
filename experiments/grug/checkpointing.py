@@ -13,6 +13,7 @@ import fsspec
 import jax
 from fsspec import AbstractFileSystem
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
+from levanter.checkpoint_manifest import read_manifest
 from levanter.utils.jax_utils import barrier_sync_named
 
 logger = logging.getLogger(__name__)
@@ -118,6 +119,34 @@ def restore_grug_state_from_checkpoint(
 ) -> StateT:
     """Restore the newest loadable checkpoint under the search paths, else return ``state``.
 
+    See `restore_grug_state_and_source`, which also returns the checkpoint it loaded.
+    """
+    restored, _ = restore_grug_state_and_source(
+        state,
+        checkpoint_search_paths=checkpoint_search_paths,
+        load_checkpoint_setting=load_checkpoint_setting,
+        mesh=mesh,
+        allow_partial=allow_partial,
+        template_for_candidate=template_for_candidate,
+        _load_fn=_load_fn,
+    )
+    return restored
+
+
+def restore_grug_state_and_source(
+    state: StateT,
+    *,
+    checkpoint_search_paths: Sequence[str],
+    load_checkpoint_setting: bool | None,
+    mesh: jax.sharding.Mesh | None,
+    allow_partial: bool,
+    template_for_candidate: Callable[[str], StateT] | None = None,
+    _load_fn: Callable[..., StateT] = load_checkpoint,
+) -> tuple[StateT, str | None]:
+    """Restore the newest loadable checkpoint under the search paths, and name the checkpoint it loaded.
+
+    Returns ``(state, None)`` when no checkpoint loads and the setting allows starting fresh.
+
     ``template_for_candidate`` maps a candidate path to the exemplar it is read with. An exemplar
     is the pytree whose leaves name what restore loads. Pass the hook when the state layout
     differs between checkpoint generations, so each candidate is read with an exemplar matching
@@ -128,10 +157,10 @@ def restore_grug_state_from_checkpoint(
     if not checkpoint_search_paths:
         if load_checkpoint_setting:
             raise FileNotFoundError("load_checkpoint=True but no checkpoint search paths are configured.")
-        return state
+        return state, None
 
     if load_checkpoint_setting is False:
-        return state
+        return state, None
 
     candidates = _checkpoint_candidates(checkpoint_search_paths)
     # A bare search root is always a candidate, so this is what separates "nothing has been
@@ -141,17 +170,17 @@ def restore_grug_state_from_checkpoint(
 
     for candidate in candidates:
         try:
-            loaded = _load_candidate_state(
+            loaded = load_grug_checkpoint(
                 state=state if template_for_candidate is None else template_for_candidate(candidate),
                 candidate=candidate,
                 mesh=mesh,
                 allow_partial=allow_partial,
-                load_fn=_load_fn,
+                _load_fn=_load_fn,
             )
             barrier_sync_named(RESTORE_COMPLETE_BARRIER, timeout=RESTORE_BARRIER_TIMEOUT)
             if candidate not in checkpoint_search_paths:
                 logger.info("Loaded checkpoint from %s while searching %s", candidate, checkpoint_search_paths)
-            return loaded
+            return loaded, candidate
         except FileNotFoundError as exc:
             last_error = exc
             logger.warning(
@@ -176,7 +205,7 @@ def restore_grug_state_from_checkpoint(
         ) from last_error
 
     logger.info("No checkpoint under %s. Starting from scratch.", checkpoint_search_paths)
-    return state
+    return state, None
 
 
 def init_weights_only_from_checkpoint(
@@ -211,16 +240,26 @@ def init_weights_only_from_checkpoint(
     return cast(GrugStateT, dataclasses.replace(state, **updates))
 
 
-def _load_candidate_state(
+def checkpoint_stores_master(candidate: str) -> bool:
+    """Read master-parameter presence from a manifest; refuse manifest-less checkpoints."""
+    manifest = read_manifest(candidate)
+    if manifest is None:
+        raise FileNotFoundError(f"{candidate} has no manifest.json, so its layout cannot be read")
+    markers = (MASTER_PARAMS_KEY, f"{LEGACY_STATE_KEY}/{MASTER_PARAMS_KEY}")
+    return any(path == marker or path.startswith(marker + "/") for path in manifest.array_paths for marker in markers)
+
+
+def load_grug_checkpoint(
     *,
     state: StateT,
     candidate: str,
     mesh: jax.sharding.Mesh | None,
     allow_partial: bool,
-    load_fn: Callable[..., StateT],
+    _load_fn: Callable[..., StateT] = load_checkpoint,
 ) -> StateT:
+    """Load only the exemplar's leaves from one concrete Grug checkpoint, including legacy wrapping."""
     try:
-        return load_fn(
+        return _load_fn(
             state,
             candidate,
             axis_mapping=None,
@@ -228,7 +267,7 @@ def _load_candidate_state(
             allow_partial=allow_partial,
         )
     except FileNotFoundError:
-        wrapped = load_fn(
+        wrapped = _load_fn(
             {LEGACY_STATE_KEY: state},
             candidate,
             axis_mapping=None,

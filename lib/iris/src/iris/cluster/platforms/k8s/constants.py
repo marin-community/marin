@@ -3,6 +3,8 @@
 
 """Shared Kubernetes constants for Iris cluster components."""
 
+from rigging.secrets import AWS_CREDENTIALS_FILENAME
+
 # CoreWeave's Helm repository. ``install_kueue.py`` and ``install_cw_network.py``
 # both ``helm repo add`` this alias on the operator's machine, so the two must
 # name the same URL or whichever ran last repoints the alias for the other.
@@ -31,3 +33,18 @@ COREWEAVE_INTERRUPTABLE_TOLERATION: dict = {
     "operator": "Exists",
     "effect": "NoExecute",
 }
+
+# A pod off the cluster network carries this label with its TaskNetwork value
+# ("none" or "internet"). Controller start creates one NetworkPolicy per value,
+# named EGRESS_NETWORK_POLICY_PREFIX + value, that selects those pods.
+EGRESS_LABEL = "iris.egress"
+EGRESS_NETWORK_POLICY_PREFIX = "iris-egress-"
+
+# Secret volumes are readable by the pod's supplemental group.
+SECRET_GROUP = 2000
+SECRET_FILE_MODE = 0o440
+CONTROLLER_SECRET_NAME = "iris-controller-secrets"
+CONTROLLER_SECRETS_DIR = "/run/rigging/controller-secrets"
+STORAGE_SECRET_NAME = "iris-storage-secrets"
+STORAGE_SECRETS_DIR = "/run/rigging/storage-secrets"
+STORAGE_CREDENTIALS_FILE = f"{STORAGE_SECRETS_DIR}/{AWS_CREDENTIALS_FILENAME}"

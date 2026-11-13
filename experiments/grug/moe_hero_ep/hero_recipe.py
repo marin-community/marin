@@ -10,8 +10,10 @@ from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.grug.sharding import compact_grug_mesh_shape
 from levanter.tracker import TrackerConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
 from marin.processing.tokenize.tokenize import TokenizedCache
@@ -19,20 +21,38 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from experiments.datasets.paloma import paloma_datasets
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL
 from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, QbEstimator
+from experiments.grug.moe_hero_ep.optimizer import ScheduleExtension
 from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
     GrugTrainerConfig,
     MasterParamMode,
     TrainingDataMode,
     WatchMode,
+    grug_trainer_mesh_config,
 )
 from experiments.marin_tokenizer import marin_tokenizer
 
 DEFAULT_WANDB_PROJECT = "marin_moe"
-HERO_EP_BATCH_SIZE = 1024
+# The hero started at 4K context with 1024 sequences per rack. Every later context keeps those tokens
+# per rack per update.
+HERO_INITIAL_SEQ_LEN = 4096
+HERO_TOKENS_PER_RACK = 1024 * HERO_INITIAL_SEQ_LEN
 HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
-HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
+# One rack's GPUs. Without context parallelism they all form the expert axis.
+HERO_RACK_GPUS = HERO_EP_NODES * HERO_GPUS_PER_NODE
+# The hero's context-parallel degree. Each rack splits into HERO_RACK_GPUS // HERO_CONTEXT_AXIS_SIZE expert
+# shards of HERO_CONTEXT_AXIS_SIZE sequence shards each (see `hero_expert_axis_size`).
+HERO_CONTEXT_AXIS_SIZE = 4
+# The hero's pretraining schedule length; its optimizer hyperparameters are scaled from it.
+HERO_SCHEDULE_STEPS = 390_251
+# Steps the hero trains past the end of its schedule, and the learning rate over them. None stops at the
+# schedule's end. A deploy PR sets this; the schedule length, and everything it sizes, stays as it is.
+HERO_SCHEDULE_EXTENSION: ScheduleExtension | None = ScheduleExtension(steps=3240, final_lr_ratio=0.01)
+# Deal rows to batch shards by attention cost (`GrugTrainerConfig.balance_attention_rows`).
+HERO_BALANCE_ATTENTION_ROWS = False
+# The hero has no tensor parallelism.
+HERO_MODEL_AXIS_SIZE = 1
 HERO_PROCESSES_PER_TASK = HERO_GPUS_PER_NODE
 HERO_NODE_CPU = 120
 HERO_NODE_RAM = "890g"
@@ -50,11 +70,67 @@ HERO_QB_HIST_BINS = 10_000
 # stayed near 0.923 GiB, while a 125 GB limit let native RSS increase until the cache was full.
 HERO_TENSORSTORE_CACHE_BYTES = 1_000_000_000
 HERO_WATCH_INTERVAL = 10
+HERO_MAX_GRAD_NORM = 1.0
 HERO_MODEL_CONFIG = dataclasses.replace(
     HERO_MODEL,
     qb_estimator=QbEstimator.HIST,
     qb_hist_bins=HERO_QB_HIST_BINS,
 )
+
+
+def hero_rack_batch_size(seq_len: int) -> int:
+    """Sequences per rack that hold the hero's tokens per rack at ``seq_len``."""
+    if HERO_TOKENS_PER_RACK % seq_len:
+        raise ValueError(f"seq_len={seq_len} must divide the hero's {HERO_TOKENS_PER_RACK} tokens per rack")
+    return HERO_TOKENS_PER_RACK // seq_len
+
+
+def hero_expert_axis_size(context_axis_size: int) -> int:
+    """The expert axis that fills one rack beside ``context_axis_size`` sequence shards."""
+    if context_axis_size <= 0 or HERO_RACK_GPUS % context_axis_size:
+        raise ValueError(f"context_axis_size={context_axis_size} must divide the {HERO_RACK_GPUS} devices of a rack")
+    return HERO_RACK_GPUS // context_axis_size
+
+
+def validated_batch_axis_size(
+    *, device_count: int, dp_racks: int, batch_size: int, context_axis_size: int, expert_axis_size: int
+) -> int:
+    """Validate mesh and batch divisibility; return the replica * data * expert product.
+
+    Context and model axes do not partition the batch.
+    """
+    replica, data, expert, _context, _model = compact_grug_mesh_shape(
+        process_count=device_count,
+        local_device_count=1,
+        expert_axis_size=expert_axis_size,
+        replica_axis_size=dp_racks,
+        model_axis_size=HERO_MODEL_AXIS_SIZE,
+        context_axis_size=context_axis_size,
+    )
+    batch_axes = replica * data * expert
+    if batch_size % batch_axes != 0:
+        raise ValueError(
+            f"batch_size={batch_size} must be divisible by the batch axes replica ({replica}) * "
+            f"data ({data}) * expert ({expert}) = {batch_axes}"
+        )
+    return batch_axes
+
+
+def validate_model_split(model: GrugModelConfig, *, context_axis_size: int, expert_axis_size: int) -> None:
+    """Validate sequence and expert-bank divisibility for the mesh."""
+    if model.max_seq_len % context_axis_size:
+        raise ValueError(f"context_axis_size={context_axis_size} must divide max_seq_len={model.max_seq_len}")
+    bank_shards = expert_axis_size * context_axis_size
+    if model.num_experts % bank_shards != 0:
+        raise ValueError(
+            f"num_experts={model.num_experts} must be divisible by expert ({expert_axis_size}) * "
+            f"context ({context_axis_size}) = {bank_shards}, the expert bank's storage split"
+        )
+    local_experts = model.num_experts // expert_axis_size
+    if model.moe_implementation == "fixed_pooled_wave_all_to_all" and local_experts % model.num_expert_waves != 0:
+        raise ValueError(
+            f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
+        )
 
 
 def with_transport_remat_mode(model: GrugModelConfig) -> GrugModelConfig:
@@ -73,6 +149,10 @@ def hero_grug_trainer_config(
     training_data_mode: TrainingDataMode,
     watch_mode: WatchMode,
     save_checkpoints: bool,
+    context_axis_size: int,
+    expert_axis_size: int,
+    balance_attention_rows: bool,
+    max_grad_norm: float | None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     gc_interval: int | None = None,
 ) -> GrugTrainerConfig:
@@ -83,14 +163,17 @@ def hero_grug_trainer_config(
         gc_interval=gc_interval,
         ema_beta=None,
         z_loss_weight=1e-4,
+        max_grad_norm=max_grad_norm,
         # Keep the MuonH state on pinned host memory so the transport buffers have sufficient HBM.
         offload_opt_state=True,
         master_param_mode=master_param_mode,
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
-        expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
+        expert_axis_size=expert_axis_size,
         replica_axis_size=replica_axis_size,
+        context_axis_size=context_axis_size,
+        balance_attention_rows=balance_attention_rows,
         sharding_dump_path=None,
     )
 
@@ -105,6 +188,7 @@ def hero_trainer_config(
     tracker: TrackerConfig,
     watch: WatchConfig,
     checkpointer: CheckpointerConfig,
+    context_axis_size: int,
     progress_watchdog: ProgressWatchdogConfig = ProgressWatchdogConfig(),
     load_checkpoint_path: str | list[str] | None = None,
     load_checkpoint: bool | None = None,
@@ -121,6 +205,9 @@ def hero_trainer_config(
         tracker=tracker,
         watch=watch,
         progress_watchdog=progress_watchdog,
+        # Context shards do not hold separate batch rows, so the batch count excludes them. Without context
+        # parallelism every device is a batch shard, which the default mesh already counts.
+        mesh=grug_trainer_mesh_config(context_axis_size) if context_axis_size > 1 else MeshConfig(),
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,

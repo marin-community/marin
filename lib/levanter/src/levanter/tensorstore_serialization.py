@@ -42,6 +42,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from levanter._debug_logging import flush_debug_output
 from levanter.checkpoint_manifest import CheckpointArray, build_manifest, read_manifest, write_manifest
 from levanter.utils import jax_utils
+from levanter.utils.byte_budget import HostByteBudget
 
 logger = logging.getLogger(__name__)
 
@@ -136,9 +137,18 @@ def build_kvstore_spec(path: str) -> dict:
             # tensorstore from trying (and failing) to discover the region via HEAD bucket.
             spec["aws_region"] = "us-east-1"
 
-        # Supplying credentials explicitly reduces noisy AWS CRT logs in containers.
+        # TensorStore's default chain does not reliably load a mounted shared
+        # credentials file in a task pod. Its profile provider also requires
+        # a readable config path, even if that config is empty.
         if os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
             spec["aws_credentials"] = {"type": "environment"}
+        elif credentials_file := os.environ.get("AWS_SHARED_CREDENTIALS_FILE"):
+            spec["aws_credentials"] = {
+                "type": "profile",
+                "profile": os.environ.get("AWS_PROFILE") or "default",
+                "credentials_file": credentials_file,
+                "config_file": os.environ.get("AWS_CONFIG_FILE") or os.devnull,
+            }
 
         return spec
     elif parsed.scheme == "gs":
@@ -320,43 +330,6 @@ class _ShardWrite:
         if self.slice_axis is None:
             return None
         return self.slice_axis, self.slice_start, self.slice_limit
-
-
-class _HostByteBudget:
-    """Bound one process's staged save bytes while writes remain in flight."""
-
-    def __init__(self, limit_bytes: int):
-        self._limit = limit_bytes
-        self._in_flight = 0
-        self._peak = 0
-        self._released = asyncio.Event()
-        self._loop: asyncio.AbstractEventLoop | None = None
-
-    @property
-    def peak_bytes(self) -> int:
-        return self._peak
-
-    async def acquire(self, num_bytes: int) -> None:
-        # Built before the save's loop exists, so bind on first use.
-        self._loop = asyncio.get_running_loop()
-        # A snapshot larger than the whole budget proceeds alone; it can never be admitted.
-        while self._in_flight and self._in_flight + num_bytes > self._limit:
-            self._released.clear()
-            await self._released.wait()
-        self._in_flight += num_bytes
-        self._peak = max(self._peak, self._in_flight)
-
-    def release(self, num_bytes: int) -> None:
-        """Callable from any thread; TensorStore resolves commits off the loop."""
-        loop = self._loop
-        if loop is None or loop.is_closed():
-            return
-        loop.call_soon_threadsafe(self._release_on_loop, num_bytes)
-
-    def _release_on_loop(self, num_bytes: int) -> None:
-        # Every mutation lands on the loop thread, so acquire never observes a partial update.
-        self._in_flight -= num_bytes
-        self._released.set()
 
 
 def _hashable_index(index) -> tuple:
@@ -734,7 +707,7 @@ def _serialize_arrays(
     # JAX's process-lifetime context accumulates caches across saves, since each save writes a
     # new OCDBT database (#6785). Give each save bounded caches and copy concurrency of its own.
     context = _tensorstore_write_context(config)
-    gate = _HostByteBudget(config.max_staged_host_bytes)
+    gate = HostByteBudget(config.max_staged_host_bytes)
     commit_futures: list[ts.Future] = []
 
     async def issue_write(num_bytes: int, stage, store_future, region: _ShardWrite | None):
@@ -754,7 +727,9 @@ def _serialize_arrays(
             try:
                 store = future.result()
                 target = store if region is None else store[region.index]
-                write = target.write(data, can_reference_source_data_indefinitely=True)
+                # TensorStore's referenced-source fast path can commit only fill values
+                # for large bfloat16 chunks. Let it copy the staged snapshot instead.
+                write = target.write(data)
                 write.commit.add_done_callback(write_finished)
                 write.commit.force()
             except BaseException as error:

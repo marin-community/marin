@@ -12,16 +12,33 @@ import os
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 
 import sqlalchemy
 
+from marina.db import DatabaseSpec, engine_for
 from marina.local_postgres import docker_database
 
 TEST_DATABASE_URL_ENV = "MARINA_TEST_DATABASE_URL"
 
 
+@dataclass(frozen=True)
+class SourceServices:
+    """Backend services for unit tests that manage their own schema."""
+
+    name: str
+    data_url: str
+    database: DatabaseSpec | None
+
+    def engine(self) -> sqlalchemy.Engine:
+        if self.database is None:
+            raise RuntimeError(f"app {self.name} needs a database")
+        return engine_for(self.database, self.name)
+
+
 @contextmanager
-def _fresh_database(server_url: str) -> Iterator[str]:
+def isolated_database(server_url: str) -> Iterator[str]:
+    """Create and remove one database on an existing local test server."""
     name = f"marina_test_{uuid.uuid4().hex[:8]}"
     admin = sqlalchemy.create_engine(server_url, isolation_level="AUTOCOMMIT")
     try:
@@ -45,7 +62,7 @@ def test_database() -> Iterator[str]:
     """
     given = os.environ.get(TEST_DATABASE_URL_ENV)
     if given:
-        with _fresh_database(given) as url:
+        with isolated_database(given) as url:
             yield url
         return
     with docker_database() as url:

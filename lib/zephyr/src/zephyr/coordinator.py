@@ -4,6 +4,7 @@
 """Coordinator actor and pull protocol for Zephyr pipelines."""
 
 import enum
+import json
 import logging
 import re
 import sys
@@ -13,15 +14,18 @@ from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 import cloudpickle
+from connectrpc.errors import ConnectError
 from fray.actor import ActorGroup, ActorHandle, current_actor
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import ActorConfig, ResourceConfig
+from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
@@ -29,16 +33,27 @@ from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp,
 from starlette.types import ASGIApp
 
 from zephyr.dashboard.app import (
-    ROOT_PLAN_PREFIX,
     PipelinePlan,
     PlanNodeState,
     create_dashboard_application,
-    join_right_prefix,
-    stage_node_id,
 )
 from zephyr.dashboard.coordinator import CoordinatorDashboard
-from zephyr.memory_store import MemoryTableRegistration
-from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Reduce, Scatter, SourceItem, StageType
+from zephyr.plan import (
+    ROOT_PLAN_PREFIX,
+    Join,
+    PhysicalOp,
+    PhysicalPlan,
+    PhysicalStage,
+    Reduce,
+    Scatter,
+    SourceItem,
+    StageType,
+    execution_stage_name,
+    execution_stages,
+    join_right_prefix,
+    join_stage_name,
+    stage_node_id,
+)
 from zephyr.shuffle import ListShard, MemChunk
 from zephyr.stage_io import (
     ShardTask,
@@ -49,8 +64,23 @@ from zephyr.stage_io import (
     _ensure_picklable_exception,
     _stage_throughput,
 )
-from zephyr.stats import StatsConfig, StatsWriter, ZephyrShuffleStat, ZephyrWorkerStatStatus, _push_iris_task_status
-from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, merge_counter_entries
+from zephyr.stats import (
+    StatsConfig,
+    StatsWriter,
+    ZephyrExecutionStat,
+    ZephyrShuffleStat,
+    ZephyrWorkerStatStatus,
+    _push_iris_task_status,
+    configure_coordinator_telemetry,
+)
+from zephyr.worker_context import (
+    Aggregation,
+    CounterEntry,
+    CounterKey,
+    CounterSnapshot,
+    counters_by_name,
+    merge_counter_entries,
+)
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -61,6 +91,7 @@ MAX_STATUS_TEXT_LENGTH = 1000
 MAX_CONCURRENT_PIPELINES = 16
 MAX_CONCURRENT_RESULT_READS = 16
 ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
+ZEPHYR_HISTORY_ENDPOINT_NAME = "/system/zephyr-history"
 
 # Seconds between worker-job liveness probes. Each probe is a GetJobState RPC to
 # the Iris controller, and the coordinator loop ticks every 0.5s, so probing once
@@ -70,6 +101,14 @@ ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
 WORKER_GROUP_CHECK_INTERVAL = 5.0
 
 _SNAPSHOT_ATTRIBUTES = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
+
+
+def _publish_counter_snapshot(execution_id: str, progress_time: float, values: dict[str, int | float]) -> None:
+    attributes = {**_SNAPSHOT_ATTRIBUTES, "run": execution_id}
+    for name, value in values.items():
+        metric_name = re.sub(r"[^a-zA-Z0-9_]", "_", name.removeprefix("zephyr/"))
+        telemetry.gauge(metric_name).set(value, attributes=attributes)
+    telemetry.gauge(ZEPHYR_PROGRESS_TIME_METRIC, unit="s").set(progress_time, attributes=attributes)
 
 
 class ShardFailureKind(enum.StrEnum):
@@ -93,6 +132,17 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
                 exec_dir.rmtree()
             except Exception as e:
                 logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
+
+
+def _resolve_execution_history_url() -> str | None:
+    """Resolve the optional execution-history app for the current Iris cluster."""
+    context = get_iris_ctx()
+    if context is None or context.client is None:
+        return None
+    try:
+        return context.client.resolve_endpoint(ZEPHYR_HISTORY_ENDPOINT_NAME).rstrip("/")
+    except (ConnectionError, ConnectError):
+        return None
 
 
 class WorkerState(enum.StrEnum):
@@ -201,8 +251,8 @@ class _PipelineExecution:
     # True once the final task-producing stage has been loaded, so a drained
     # queue means no further task can be dispatched for this pipeline.
     is_last_stage: bool = False
-    # Folded completed-task counters, keyed by stage, name, and aggregation.
-    completed_totals: dict[tuple[str | None, str, Aggregation], CounterEntry] = field(default_factory=dict)
+    # Folded completed-task counters, keyed by counter (scope and name) and aggregation.
+    completed_totals: dict[tuple[CounterKey, Aggregation], CounterEntry] = field(default_factory=dict)
     # Set at each _start_stage so status logs show throughput since stage start.
     stage_monotonic_start: float | None = None
     progress_time_seconds: float = 0.0
@@ -261,34 +311,28 @@ class _PipelineExecution:
 
     def fold_counters(self, snapshot: CounterSnapshot) -> None:
         """Fold one completed task snapshot into bounded execution state."""
-        for name, entry in snapshot.counters.items():
-            key = (entry.stage, name, entry.aggregation)
+        for counter_key, entry in snapshot.counters.items():
+            key = (counter_key, entry.aggregation)
             accumulated = self.completed_totals.get(key)
             if accumulated is None:
-                self.completed_totals[key] = CounterEntry(
-                    entry.value,
-                    entry.aggregation,
-                    entry.stage,
-                    entry.count,
-                )
+                self.completed_totals[key] = CounterEntry(entry.value, entry.aggregation, entry.count)
             else:
                 accumulated.merge(entry)
 
-    def merged_counters(self, stage: str | None = None) -> dict[str, CounterEntry]:
-        """Return merged completed counters for this execution.
-
-        Callers wanting one stage's totals must pass ``stage`` here rather than
-        filter the result: a name recorded under several stages folds into a
-        single entry that keeps whichever stage was folded first, so a later
-        ``entry.stage`` filter would attribute every stage's total to that one
-        stage and drop the rest.
-        """
+    def completed_snapshot(self) -> CounterSnapshot:
+        """Return completed counters for this execution, still keyed by scope."""
         merged, conflicted = merge_counter_entries(
-            (name, entry)
-            for (entry_stage, name, _), entry in self.completed_totals.items()
-            if stage is None or entry_stage == stage
+            (counter_key, entry) for (counter_key, _), entry in self.completed_totals.items()
         )
-        return {k: e for k, e in merged.items() if k not in conflicted}
+        return CounterSnapshot(counters={k: e for k, e in merged.items() if k not in conflicted}, generation=0)
+
+    def merged_counters(self, stage: str | None = None) -> dict[str, CounterEntry]:
+        """Return completed counters for this execution by name.
+
+        With ``stage`` set, only that stage's counters are included. With
+        ``stage=None``, a name recorded under several scopes folds into one entry.
+        """
+        return counters_by_name(self.completed_snapshot().counters.items(), stage)
 
 
 def _aggregate_counter_snapshots(
@@ -304,10 +348,8 @@ def _aggregate_counter_snapshots(
     interrupts execution. When ``stage`` is given, only entries recorded under
     that stage label are included.
     """
-    merged, conflicted = merge_counter_entries(
-        (k, entry) for snap in snapshots for k, entry in snap.counters.items() if stage is None or entry.stage == stage
-    )
-    return {k: e.value for k, e in merged.items() if k not in conflicted}
+    entries = (item for snap in snapshots for item in snap.counters.items())
+    return {name: entry.value for name, entry in counters_by_name(entries, stage).items()}
 
 
 class ZephyrCoordinator:
@@ -364,13 +406,13 @@ class ZephyrCoordinator:
         self._max_shard_infra_failures = max_shard_infra_failures
         self._max_concurrent_pipelines = max_concurrent_pipelines
         self._stats_config = stats_config
+        self._execution_history_url = _resolve_execution_history_url()
         # Per-worker in-flight counter snapshots. Each snapshot carries a
         # monotonic generation so the coordinator can discard stale or
         # out-of-order heartbeats.
         self._worker_counters: dict[tuple[str, str], CounterSnapshot] = {}
         self._worker_handles: dict[str, ActorHandle] = {}
         self._worker_group: ActorGroup | None = None  # owned, created by start_workers()
-        self._memory_tables: dict[str, MemoryTableRegistration] = {}
         self._worker_task_ids: dict[str, str] = {}
         self._coordinator_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
@@ -389,14 +431,17 @@ class ZephyrCoordinator:
         self._self_handle = actor_ctx.handle
 
         self._stats_writer = StatsWriter.connect(stats_config)
+        configure_coordinator_telemetry(stats_config)
         job_info = get_job_info()
         self._job_id = str(job_info.job_id) if job_info is not None else ""
+        self._root_job_id = str(job_info.job_id.root_job) if job_info is not None else ""
         self._result_executor = ThreadPoolExecutor(
             max_workers=MAX_CONCURRENT_RESULT_READS, thread_name_prefix="zephyr-result"
         )
         self._coordinator_task_id = job_info.task_id.to_wire() if (job_info := get_job_info()) is not None else ""
 
-        self._web_application = create_dashboard_application(CoordinatorDashboard(self, WorkerState.ACTIVE))
+        self._dashboard = CoordinatorDashboard(self, WorkerState.ACTIVE)
+        self._web_application = create_dashboard_application(self._dashboard)
 
         logger.info("Coordinator initialized")
 
@@ -453,15 +498,12 @@ class ZephyrCoordinator:
         """Return the dashboard app that shares the actor endpoint."""
         return self._web_application
 
-    def register_worker(
-        self, worker_id: str, worker_handle: ActorHandle, task_id: str = ""
-    ) -> tuple[MemoryTableRegistration, ...]:
+    def register_worker(self, worker_id: str, worker_handle: ActorHandle, task_id: str = "") -> None:
         """Called by workers when they come online to register with coordinator.
 
-        Handles re-registration from reconstructed workers (e.g. after node
-        preemption) by updating the stale handle and resetting worker state. The
-        returned table registrations let the worker restore table metadata
-        before it polls for tasks. Table data is reloaded lazily on first use.
+        Handles a worker that registers again under the same ID by updating the
+        stale handle and resetting worker state. A new Iris attempt of a worker
+        task registers under a new ID (see ``attempt_worker_id``).
         """
         with self._lock:
             if worker_id in self._worker_handles:
@@ -480,24 +522,6 @@ class ZephyrCoordinator:
                 self._worker_states[worker_id] = WorkerState.ACTIVE
                 self._last_seen[worker_id] = time.monotonic()
                 logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
-            return tuple(self._memory_tables.values())
-
-    def register_memory_table(self, registration: MemoryTableRegistration) -> None:
-        """Publish a table after every worker validates its source shards."""
-        with self._lock:
-            if registration.table_id in self._memory_tables:
-                raise ValueError(f"memory table {registration.table_id!r} is already registered")
-            self._memory_tables[registration.table_id] = registration
-
-    def memory_table_registration(self, table_id: str) -> MemoryTableRegistration | None:
-        """Return metadata needed to reload a table on a replacement worker."""
-        with self._lock:
-            return self._memory_tables.get(table_id)
-
-    def unregister_memory_table(self, table_id: str) -> None:
-        """Remove a table from future worker recovery."""
-        with self._lock:
-            self._memory_tables.pop(table_id, None)
 
     def deregister_worker(self, worker_id: str) -> None:
         """Remove a sub-worker that has finished its stage pool."""
@@ -566,26 +590,28 @@ class ZephyrCoordinator:
             )
 
     def _publish_telemetry(self) -> None:
-        """Publish coordinator-owned counter snapshots."""
+        """Publish completed and live counters from one consistent snapshot."""
         with self._lock:
-            snapshots = [
-                (
-                    run.execution_id,
-                    run.progress_time_seconds,
-                    {name: entry.value for name, entry in run.merged_counters().items()},
-                )
-                for run in self._executions.values()
-                if not run.done
-            ]
+            snapshots = []
+            for run in self._executions.values():
+                if run.done:
+                    continue
+                live = [
+                    snapshot
+                    for (_, execution_id), snapshot in self._worker_counters.items()
+                    if execution_id == run.execution_id
+                ]
+                completed = run.completed_snapshot()
+                values = _aggregate_counter_snapshots([completed, *live], stage=None)
+                snapshots.append((run.execution_id, run.progress_time_seconds, values))
         for execution_id, progress_time_seconds, counters in snapshots:
-            attributes = {**_SNAPSHOT_ATTRIBUTES, "run": execution_id}
-            for name, value in counters.items():
-                metric_name = re.sub(r"[^a-zA-Z0-9_]", "_", name.removeprefix("zephyr/"))
-                telemetry.gauge(metric_name).set(value, attributes=attributes)
-            telemetry.gauge(ZEPHYR_PROGRESS_TIME_METRIC, unit="s").set(
-                progress_time_seconds,
-                attributes=attributes,
-            )
+            with self._lock:
+                run = self._executions.get(execution_id)
+                if run is None or run.done:
+                    continue
+                # Do not let an older periodic snapshot follow the release's
+                # final snapshot. Gauge writes enqueue locally, without RPCs.
+                _publish_counter_snapshot(execution_id, progress_time_seconds, counters)
 
     def _build_status_md(self) -> tuple[str, str]:
         """Render pipeline progress as ``(detail, summary)`` markdown."""
@@ -604,10 +630,21 @@ class ZephyrCoordinator:
                 if not run.done
             ]
 
-        detail_lines: list[str] = []
-        summary_lines: list[str] = []
+        detail_lines = []
+        summary_lines = []
+        if self._execution_history_url is not None:
+            applet_link = f"[Zephyr]({self._execution_history_url})"
+            detail_lines.append(applet_link)
+            summary_lines.append(applet_link)
+        if not snapshot:
+            detail_lines.append("idle")
+            summary_lines.append("idle")
         for execution_id, plan_stages, stage_index, completed, total, in_flight, queued in snapshot:
-            detail_lines.append(f"**{execution_id}**")
+            if self._execution_history_url is not None:
+                execution_url = f"{self._execution_history_url}/#/execution/{quote(execution_id, safe='')}"
+                detail_lines.append(f"**[{execution_id}]({execution_url})**")
+            else:
+                detail_lines.append(f"**{execution_id}**")
             for idx, stage in enumerate(plan_stages):
                 stage_desc = _get_stage_description(stage)
                 detail_lines.append(f"- **{stage_desc}**" if idx == stage_index else f"- {stage_desc}")
@@ -620,8 +657,8 @@ class ZephyrCoordinator:
                 f"**{current_desc}** ({stage_index + 1}/{len(plan_stages)}) - {completed}/{total} shards ({pct}%)"
             )
 
-        detail_md = "\n".join(detail_lines)[:MAX_STATUS_TEXT_LENGTH] or "idle"
-        summary_md = "  \n".join(summary_lines)[:MAX_STATUS_TEXT_LENGTH] or "idle"
+        detail_md = "\n".join(detail_lines)[:MAX_STATUS_TEXT_LENGTH]
+        summary_md = "  \n".join(summary_lines)[:MAX_STATUS_TEXT_LENGTH]
         return detail_md, summary_md
 
     def _report_task_stats(self) -> None:
@@ -649,7 +686,7 @@ class ZephyrCoordinator:
                     {idx: att for idx, att in run.task_attempts.items() if att > 0},
                     run.stage_monotonic_start,
                     [
-                        CounterSnapshot(counters=run.merged_counters(run.stage_name), generation=0),
+                        run.completed_snapshot(),
                         *(
                             snapshot
                             for (_, execution_id), snapshot in self._worker_counters.items()
@@ -872,10 +909,9 @@ class ZephyrCoordinator:
         """True when no further task can be dispatched to this worker. Lock held.
 
         Every active execution must have loaded its last task-producing stage
-        and drained its queue, and this worker must hold nothing in flight that
-        could fail and be requeued onto it. A peer's requeued shard is picked up
-        by a restarted worker, and ``_check_worker_group`` is the failsafe
-        against the pool dying out entirely.
+        and drained its queue. Keep one idle worker while shards are in flight:
+        a replacement attempt can poll before the old attempt's heartbeat
+        expires and would otherwise exit before its shard is requeued.
         """
         active = [r for r in self._executions.values() if not r.done]
         if not active:
@@ -887,7 +923,17 @@ class ZephyrCoordinator:
             return False
         if not all(r.is_last_stage and not r.task_queue for r in active):
             return False
-        return not any(e.worker_id == worker_id for r in active for e in r.in_flight.values())
+        in_flight_workers = {e.worker_id for r in active for e in r.in_flight.values()}
+        if worker_id in in_flight_workers:
+            return False
+        if any(r.completed_shards < r.total_shards for r in active):
+            idle_workers = sum(
+                state is WorkerState.ACTIVE and worker not in in_flight_workers
+                for worker, state in self._worker_states.items()
+            )
+            if idle_workers <= 1:
+                return False
+        return True
 
     def _assert_in_flight_consistent(self, run: _PipelineExecution, worker_id: str, shard_idx: int) -> None:
         """Assert in_flight[shard_idx], if present, is owned by the reporting worker.
@@ -986,7 +1032,7 @@ class ZephyrCoordinator:
             run.stage_done.set()
 
     def _clear_worker_inflight_counters(self, worker_id: str, execution_id: str, generation: int = 0) -> None:
-        """Zero a worker's in-flight snapshot, keeping the generation watermark.
+        """Clear live counters while retaining sibling progress and the generation watermark.
 
         Called when a task's runner is done, so late heartbeats from that task
         (strictly-lower generation) are rejected and the finished task's live
@@ -1000,7 +1046,14 @@ class ZephyrCoordinator:
         counter_key = (worker_id, execution_id)
         existing = self._worker_counters.get(counter_key)
         watermark = max(generation, existing.generation) if existing is not None else generation
-        self._worker_counters[counter_key] = CounterSnapshot.empty(watermark)
+        # Finishing one concurrent runner must not blank its siblings' progress.
+        run = self._executions[execution_id]
+        remaining_shards = {
+            index: progress
+            for index, progress in (existing.shards.items() if existing is not None else ())
+            if index in run.in_flight and run.in_flight[index].worker_id == worker_id
+        }
+        self._worker_counters[counter_key] = CounterSnapshot(counters={}, generation=watermark, shards=remaining_shards)
 
     def report_error(
         self,
@@ -1083,7 +1136,7 @@ class ZephyrCoordinator:
                 only. If None, return totals derived from all registered
                 executions' completed snapshots plus in-flight snapshots,
                 applying per-key aggregation hints.
-            stage: If provided, only include entries with ``entry.stage == stage``.
+            stage: If provided, only include counters recorded under that stage.
                 If None (default), include all entries regardless of stage.
 
         Snapshots are folded with :func:`merge_counter_entries`, the same
@@ -1107,9 +1160,7 @@ class ZephyrCoordinator:
                 ]
                 return _aggregate_counter_snapshots(worker_snapshots, stage)
 
-            all_snaps = [
-                CounterSnapshot(counters=run.merged_counters(stage), generation=0) for run in self._executions.values()
-            ]
+            all_snaps = [run.completed_snapshot() for run in self._executions.values()]
             all_snaps.extend(self._worker_counters.values())
 
         return _aggregate_counter_snapshots(all_snaps, stage)
@@ -1268,6 +1319,16 @@ class ZephyrCoordinator:
         result_path = _execution_result_path(self._chunk_prefix, execution_id)
         try:
             shards = _build_source_shards(plan.source_items)
+            self._stats_writer.emit_execution_stat(
+                ZephyrExecutionStat(
+                    execution_id=execution_id,
+                    root_job_id=self._root_job_id,
+                    coordinator_job_id=self._job_id,
+                    ts=datetime.now(UTC).replace(tzinfo=None),
+                    input_shards=len(shards),
+                    stages_json=json.dumps([asdict(stage) for stage in execution_stages(plan)]),
+                )
+            )
             if not shards:
                 self._persist_result(
                     result_path, ZephyrExecutionResult(results=[], counters={}, execution_id=execution_id)
@@ -1275,18 +1336,19 @@ class ZephyrCoordinator:
                 return None
 
             last_worker_stage_idx = max(
-                (i for i, st in enumerate(plan.stages) if st.stage_type != StageType.RESHARD),
+                (i for i, st in enumerate(plan.stages) if st.stage_type.runs_on_worker),
                 default=-1,
             )
 
             with self._lock:
                 run.plan_stages = list(plan.stages)
 
+            fragment_layout = _FragmentLayout()
             for stage_idx, stage in enumerate(plan.stages):
                 node_id = stage_node_id(ROOT_PLAN_PREFIX, stage_idx)
-                if stage.stage_type == StageType.RESHARD:
+                if not stage.stage_type.runs_on_worker:
                     with self._track_plan_node(run, node_id):
-                        shards = _reshard_refs(shards, stage.output_shards or len(shards))
+                        shards = fragment_layout.apply(stage, shards)
                     continue
 
                 aux_per_shard = self._compute_join_aux(run, stage.operations, shards, stage_idx)
@@ -1295,7 +1357,7 @@ class ZephyrCoordinator:
                         run,
                         stage,
                         shards,
-                        stage_label=f"stage{stage_idx}-{stage.stage_name(max_length=40)}",
+                        stage_label=execution_stage_name(stage, stage_idx),
                         stage_index_for_state=stage_idx,
                         aux_per_shard=aux_per_shard,
                         is_last_stage=(stage_idx == last_worker_stage_idx),
@@ -1329,6 +1391,12 @@ class ZephyrCoordinator:
             storage_cleanup_safe = self._drain_execution(run)
             with self._lock:
                 run.finish(storage_cleanup_safe=storage_cleanup_safe)
+                final_counters = _aggregate_counter_snapshots([run.completed_snapshot()], stage=None)
+                # Keep the final sample ordered after any periodic sample.
+                try:
+                    _publish_counter_snapshot(execution_id, run.progress_time_seconds, final_counters)
+                except Exception:
+                    logger.warning("Failed to publish final coordinator telemetry", exc_info=True)
                 run.finished.set()
 
     def release_execution(self, execution_id: str) -> None:
@@ -1339,6 +1407,7 @@ class ZephyrCoordinator:
                 return
             if not run.done:
                 raise RuntimeError(f"Execution {execution_id} is still active")
+            self._dashboard.archive_locked(execution_id)
             self._executions.pop(execution_id, None)
             for key in [key for key in self._worker_counters if key[1] == execution_id]:
                 self._worker_counters.pop(key)
@@ -1395,7 +1464,8 @@ class ZephyrCoordinator:
         whole pipeline's results for the driver to discard.
         """
         ensure_parent_dir(result_path)
-        StoragePath(result_path).write_bytes(cloudpickle.dumps(payload))
+        with StoragePath(result_path).open("wb") as stream:
+            cloudpickle.dump(payload, stream)
 
     @contextmanager
     def _track_plan_node(self, run: _PipelineExecution, node_id: str) -> Iterator[None]:
@@ -1487,19 +1557,20 @@ class ZephyrCoordinator:
                 continue
 
             right_refs = _build_source_shards(op.right_plan.source_items)
+            fragment_layout = _FragmentLayout()
             prefix = join_right_prefix(stage_node_id(ROOT_PLAN_PREFIX, parent_stage_idx), i)
 
             for stage_idx, right_stage in enumerate(op.right_plan.stages):
                 with self._track_plan_node(run, stage_node_id(prefix, stage_idx)):
-                    if right_stage.stage_type == StageType.RESHARD:
-                        right_refs = _reshard_refs(right_refs, right_stage.output_shards or len(right_refs))
+                    if not right_stage.stage_type.runs_on_worker:
+                        right_refs = fragment_layout.apply(right_stage, right_refs)
                         continue
 
                     right_refs = self._run_worker_stage(
                         run,
                         right_stage,
                         right_refs,
-                        stage_label=f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}",
+                        stage_label=join_stage_name(parent_stage_idx, i, stage_idx),
                         stage_index_for_state=parent_stage_idx,
                     )
 
@@ -1549,6 +1620,8 @@ class ZephyrCoordinator:
 
         self._result_executor.shutdown(wait=True, cancel_futures=True)
         self._stats_writer.close()
+        # The exporter belongs to the process; another local actor may share it.
+        telemetry.flush()
 
         logger.info("Coordinator shutdown complete")
 
@@ -1649,6 +1722,8 @@ class ZephyrExecutionResult:
         counters: Aggregated counter values from the run, including built-in
             zephyr counters (e.g. ``zephyr/records_in``) and any user counters
             recorded via ``zephyr.counters.pipeline``.
+        execution_id: Identifier for the coordinator run, or empty when no
+            coordinator execution was needed.
     """
 
     results: list
@@ -1681,6 +1756,34 @@ def _try_read_coordinator_result(result_path: str) -> Any:
         return None
 
 
+@dataclass
+class _FragmentLayout:
+    """Remember the parent layout while independent map tasks process its chunks."""
+
+    counts: list[int] | None = None
+
+    def apply(self, stage: PhysicalStage, shards: list[ListShard]) -> list[ListShard]:
+        if stage.stage_type == StageType.RESHARD:
+            assert self.counts is None, "Reshard requires concatenated input"
+            return _reshard_refs(shards, stage.output_shards or len(shards))
+        if stage.stage_type == StageType.SPLIT:
+            assert self.counts is None, "Nested Split is not supported"
+            self.counts = [max(1, len(shard.refs)) for shard in shards]
+            # Empty parents retain a task and therefore their original output slot.
+            return [ListShard(refs=[ref]) for shard in shards for ref in shard.refs or [MemChunk(items=[])]]
+        if stage.stage_type == StageType.CONCAT:
+            assert self.counts is not None, "Concat requires a preceding Split"
+            assert sum(self.counts) == len(shards), "Fragment count changed during map"
+            output = []
+            start = 0
+            for count in self.counts:
+                output.append(ListShard(refs=[ref for shard in shards[start : start + count] for ref in shard.refs]))
+                start += count
+            self.counts = None
+            return output
+        raise ValueError(f"Not a reference stage: {stage.stage_type}")
+
+
 def _reshard_refs(shards: list[ListShard], num_shards: int) -> list[ListShard]:
     """Reshard ListShard refs by output shard index without loading data."""
     output_by_shard: dict[int, list[Iterable]] = defaultdict(list)
@@ -1704,7 +1807,7 @@ def _build_source_shards(source_items: list[SourceItem]) -> list[ListShard]:
     num_shards = max(items_by_shard.keys()) + 1 if items_by_shard else 0
     shards: list[ListShard] = []
     for i in range(num_shards):
-        shards.append(ListShard(refs=[MemChunk(items=items_by_shard.get(i, []))]))
+        shards.append(ListShard(refs=[MemChunk(items=[item]) for item in items_by_shard.get(i, [])]))
 
     return shards
 

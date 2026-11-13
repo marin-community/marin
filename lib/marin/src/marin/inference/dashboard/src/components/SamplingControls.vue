@@ -36,6 +36,17 @@ const customInstructions = defineModel<string>('customInstructions', { default: 
         class="w-24 rounded-lg border border-surface-border bg-surface px-2 py-1.5 text-sm text-text"
       />
     </label>
+    <label v-if="showChatControls" class="flex flex-col gap-1 text-xs text-text-muted">
+      Max tool rounds
+      <input
+        v-model.number="params.maxToolRounds"
+        type="number"
+        step="1"
+        min="0"
+        class="w-24 rounded-lg border border-surface-border bg-surface px-2 py-1.5 text-sm text-text"
+      />
+      <span>Set to 0 for unlimited.</span>
+    </label>
     <label v-if="showChatControls" class="flex min-w-60 flex-1 flex-col gap-1 text-xs text-text-muted">
       System prompt
       <textarea

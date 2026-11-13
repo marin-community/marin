@@ -152,8 +152,8 @@ class ProfileCache:
             try:
                 StoragePath(source_uri).download_to(str(downloaded), recursive=True, callback=progress)
                 run_path = self._xprof_run_path(downloaded)
-                if not any(run_path.glob("*/*.xplane.pb")) and not any(run_path.glob("*/*.xplane.riegeli")):
-                    raise FileNotFoundError(f"no XPlane files found under {source_uri}")
+                if not any(run_path.glob("*/*.xplane.pb")):
+                    raise FileNotFoundError(f"no XPlane protobuf files found under {source_uri}")
                 (downloaded / _SOURCE_MARKER).write_text(source_uri)
                 downloaded.rename(target)
             finally:
@@ -277,6 +277,8 @@ class XprofGateway:
             return self._open(environ, start_response)
         if path == "/progress":
             return self._progress(environ, start_response)
+        if path.rstrip("/") in ("/capture_profile", "/data/plugin/profile/capture_profile"):
+            return _response(start_response, "404 Not Found", b"Not Found\n", "text/plain")
         return self._serve_xprof(path, environ, start_response)
 
     def shutdown(self) -> None:

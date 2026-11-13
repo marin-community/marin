@@ -74,8 +74,10 @@ class StatusFile:
         if not self.fs.exists(self.path):
             return None
 
-        with self.fs.open(self.path, "r") as f:
-            lines = [line.strip() for line in f.readlines() if line.strip()]
+        # Status changes while peers wait; a ranged S3 read pins the ETag from
+        # its metadata lookup and fails if another worker updates the object.
+        content = self.fs.cat_file(self.path).decode("utf-8")
+        lines = [line.strip() for line in content.splitlines() if line.strip()]
 
         if not lines:
             return None

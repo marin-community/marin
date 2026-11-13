@@ -56,7 +56,7 @@ class CCNode(TypedDict):
 
 
 class CCInput(TypedDict):
-    bucket: str
+    bucket: int
     id: Any
     file_idx: int
 
@@ -102,7 +102,7 @@ def connected_components(
         num_reduce_shards: Shuffle shard count. Defaults to the context worker cap.
     """
 
-    def _reduce_bucket_to_links(bucket: str, items: Iterator[CCInput]) -> Iterator[dict]:
+    def _reduce_bucket_to_links(bucket: int, items: Iterator[CCInput]) -> Iterator[dict]:
         """Generator reducer: dedup items by id_norm, yield star-topology links.
 
         Streams through items tracking only the current minimum hub RecordId (O(1))
@@ -145,7 +145,7 @@ def connected_components(
         if preserve_singletons and num_unique == 1:
             yield _make_link(hub, hub)
 
-    def _dedup_combiner(bucket: str, items: Iterator[CCInput]) -> Iterator[CCInput]:
+    def _dedup_combiner(bucket: int, items: Iterator[CCInput]) -> Iterator[CCInput]:
         """Local pre-aggregation: deduplicate items by record_id within each scatter buffer."""
         # TODO (rav): replace this with bloom filter? Reduce mem overhead.
         seen: set[str] = set()
@@ -286,7 +286,7 @@ def _build_adjacency(node_id: str, links: Iterator[dict]) -> CCNode:
 def _emit_messages(node: CCNode) -> Iterator[dict]:
     """
     1. Emit the node structure to itself (to preserve graph topology).
-    2. Emit the current component ID to all neighbors.
+    2. Emit the current component ID to all neighbors when it changed last iteration.
     """
     # 1. Preserve structure (self-message carries all node fields)
     yield {
@@ -300,20 +300,13 @@ def _emit_messages(node: CCNode) -> Iterator[dict]:
         "file_idx": node["file_idx"],
     }
 
-    # 2. Propagate component ID to neighbors
-    # Use [""] instead of [] so Arrow infers list<string> consistently
-    # with the self-message's adjacency_list, avoiding schema evolution.
+    # 2. Propagate component ID to neighbors. Labels only decrease, and a node
+    # re-sends whenever its label drops, so an unchanged node's neighbors
+    # already hold a label <= the one it would re-send.
+    if not node["changed"]:
+        return
     for neighbor_id in node["adjacency_list"]:
-        yield {
-            "key": neighbor_id,
-            "is_self": False,
-            "record_id": node["record_id"],
-            "id_norm": "",
-            "adjacency_list": [""],
-            "component_id": node["component_id"],
-            "changed": False,
-            "file_idx": 0,
-        }
+        yield {"key": neighbor_id, "is_self": False, "component_id": node["component_id"]}
 
 
 def _reduce_node_step(key: str, incoming: Iterator[dict]) -> CCNode:

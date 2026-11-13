@@ -55,6 +55,13 @@ all. A peer that reports no band split
 (a worker-daemon backend, or one predating the field) reclaims nothing and is gated on its free
 amount alone.
 
+A `--reserve H100` marker on a CPU job requires an H100 peer but carries no numeric capacity
+gate. When other placement scores tie, the job prefers the peer with the most effective `h100`
+capacity. The CPU job does not reserve that capacity and can still be placed when every eligible
+peer reports zero; later GPU child jobs have no capacity guarantee. A peer without a readable
+capacity metric ranks after measured peers, and a peer reporting no `h100` capacity scores zero.
+A hash of the job id and peer id breaks ties, so different jobs need not choose the same peer.
+
 Three properties keep placement honest without pretending to be exact:
 
 - **Never summed across backends.** A job pins to one backend, so 6 free on one backend plus 4
@@ -79,17 +86,27 @@ bound on a burst against stale metrics.
 
 Routing constraints are the subset of constraints marked `routing=True` in
 `CONSTRAINT_REGISTRY` (`cluster/constraints.py`): `device-type`, `device-variant`,
-`preemptible`, `region`, `zone`.
+`preemptible`, `region`, `zone`. The router also matches `availability:<variant>`
+constraints from `--reserve`.
+
+Peers advertise configured accelerator variants, availability markers,
+preemptibility, and regions. A CPU job with `--reserve H100` can use an H100 peer
+without a cluster pin or free GPUs. A `preemptible=false` constraint requires
+on-demand or reserved capacity. CPU jobs with one task, at most one core, and at
+most 4 GiB default to `preemptible=false`.
+
+Peer attributes combine all scaling groups, so a match does not guarantee that
+one group can satisfy every constraint. Preferred routing constraints also act
+as filters.
 
 Two consequences catch people out:
 
 - **`gpu-count` is not a routing constraint.** It is a consumable, checked against a worker's
   free GPUs when the peer schedules the job. `H100x1` and `H100x8` route identically. GPUs
   pack: several tasks share one 8-GPU node, unlike a TPU VM, which is atomic.
-- **A peer that advertises no `region` satisfies no `region` constraint.** An advertised
-  attribute the peer omits makes every constraint on that key fail. The CoreWeave backends
-  advertise only `device-type` and `device-variant`, so any job carrying a region or zone
-  constraint stays local.
+- **Region constraints require a matching advertised region.** CoreWeave backends
+  advertise their configured region. Backends do not advertise zones, so a zone
+  constraint prevents automatic federation.
 
 That second point bites sub-jobs specifically. `IrisClient.submit` (`iris/client/client.py`)
 gives a child job its parent worker's region unless the child names a region itself, which
@@ -137,18 +154,21 @@ parent's `env`, and a job's explicit env overrides a cluster's `defaults.task_en
 `-e MARIN_PREFIX gs://…` to a job bound for CoreWeave therefore delivers a `gs://` path to a
 pod holding only S3 credentials.
 
-## Credentials do not travel
+## Storage credentials
 
-Each cluster's task pods carry that cluster's credentials, and only those:
+GCP task Pods use a platform service account. CoreWeave task Pods use the
+submitter's object-storage keys from the job's secret bundle:
 
 | Cluster | Task pods can read |
 | --- | --- |
 | `marin` (GCP) | `gs://` via the `iris-worker` service account |
-| `cw-*` (CoreWeave) | `s3://` via the `iris-task-env` secret (CoreWeave AI Object Storage) |
+| `cw-*` (CoreWeave) | `s3://` via submitted personal CoreWeave credentials, delivered as files |
 
-There is no cross-cloud identity. A job on CoreWeave cannot read `gs://`, and a job on
-`marin` cannot read `s3://marin-us-east-02a` unless it is handed AWS credentials explicitly.
-Every artifact a federated job touches must live in the peer's object store.
+Federation forwards the job environment and secrets, including CoreWeave keys. It does not
+translate service-account identity or storage URLs. A CoreWeave job cannot use
+the GCP worker service account to read `gs://`; a GCP job accessing CoreWeave
+storage needs the object-storage keys and endpoint configuration. Keep artifacts
+in the execution cluster's regional object store to avoid cross-region transfers.
 
 ## Reaching a child's serving endpoint through the parent
 
@@ -174,7 +194,35 @@ will not round-trip today, because the child rewrites `Location` against its own
 `/proxy/t/<token>/<name>` prefix without the cluster tag; direct-API endpoints (an
 OpenAI-style `/v1/*` server) are unaffected.
 
+For relay 502s, use the JSON error body to identify the failing path.
+`upstream transport error: client error (Connect)` is emitted by the native proxy
+when it cannot connect to its upstream. Compare `proxy_responses_total` with `scope=total` in Finelog's
+`telemetry_v1.iris.rpc` for the hub (`cluster` is empty) and the peer. A peer 502
+increase shows that requests reached the peer proxy, where its upstream is the
+registered endpoint. The `scope=total` counter is exact; per-endpoint series are capped.
+
+## Shared budgets
+
+Set `budget_parent` on each child and list those children in the parent's
+`budget_peers`, a subset of its routing peers. Edit limits on the parent;
+child-local budget edits are rejected.
+
+`FederationSync` distributes parent limits and usage from other clusters. Its
+response reports the child's local usage, including direct submissions and child
+jobs. Scheduling adds current local usage to the received totals. `GetUserBudget`
+returns that combined view; `ListUserBudgets` reports local usage.
+
+Children use configured defaults until their first policy arrives. During sync
+outages, clusters keep their last received policy and usage; submissions remain
+available.
+Budgets are soft priority limits, so disconnected clusters can exceed the shared
+limit. Deploy both sides to exchange budget data.
+
 ## Observing federation
+
+Peer calls default to a 60-second deadline unless the operation sets its own.
+A status-sync RPC that times out retries from the same cursor on the next peer cycle.
+Heartbeat runs separately and can remain healthy while sync stalls.
 
 There is no `iris peers` command. Reachability, advertised shapes, and free capacity come
 from the `ListPeers` RPC; handoff state lives in the parent's `federated_jobs` table.

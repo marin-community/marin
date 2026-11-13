@@ -43,7 +43,8 @@ use crate::server::interceptors::{
 use crate::server::{debug, forwarded_prefix, introspection, legacy_path, spa, telemetry};
 use crate::store::Store;
 
-use super::log_service::LogServiceImpl;
+use super::compression::compression_registry;
+use super::log_service::{LogServiceImpl, LogTailCache};
 use super::stats_service::StatsServiceImpl;
 use super::MAX_MESSAGE_BYTES;
 
@@ -118,14 +119,16 @@ impl ServerConfig {
 fn build_connect_service(
     store: Arc<Store>,
     config: &ServerConfig,
+    tail_cache: Arc<LogTailCache>,
 ) -> ConnectRpcService<ConnectRouter> {
     let connect_router = {
         let r = ConnectRouter::new();
         let r = Arc::new(StatsServiceImpl::new(Arc::clone(&store))).register(r);
-        Arc::new(LogServiceImpl::new(Arc::clone(&store))).register(r)
+        Arc::new(LogServiceImpl::new(Arc::clone(&store), tail_cache)).register(r)
     };
 
     ConnectRpcService::new(connect_router)
+        .with_compression(compression_registry())
         .with_limits(
             Limits::default()
                 .max_message_size(MAX_MESSAGE_BYTES)
@@ -142,14 +145,14 @@ fn build_connect_service(
             config.max_concurrent_fetch_logs,
             config.max_concurrent_query,
         ))
-    // gzip + zstd are already active via the default CompressionRegistry the
-    // crate's `gzip`/`zstd` features install in ConnectRpcService::new.
 }
 
 /// Build the full axum app for `store` with `config`. See the module doc for
 /// the route precedence. Re-exported as `server::build_app_with_config`.
 pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
-    let connect_service = build_connect_service(Arc::clone(&store), &config);
+    let tail_cache = Arc::new(LogTailCache::new());
+    let connect_service =
+        build_connect_service(Arc::clone(&store), &config, Arc::clone(&tail_cache));
     let health = Arc::new(IngestHealth::new());
 
     let telemetry = telemetry::router(
@@ -165,6 +168,7 @@ pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
         Arc::clone(&store),
         Arc::clone(&health),
         config.forwarding.clone(),
+        tail_cache,
     )
     .layer(axum::middleware::from_fn_with_state(
         Arc::clone(&config.auth),

@@ -7,31 +7,26 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import MappingProxyType
 
-from marin.evaluation.evalchemy.config import EvalchemyConfig
-from marin.evaluation.evalchemy.runner import (
-    DEFAULT_NUM_CONCURRENT,
-    EvalchemyRunConfig,
-    EvalchemyRuntimeConfig,
-)
-from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
-from marin.evaluation.evaluation_config import EvalTaskConfig
+import yaml
+from marin.evaluation.eval_policy import source_config_digest
 from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_info
-from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, ValidatedHarborConfig
+from marin.evaluation.harbor.driver_config import HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvalchemyRef, EvalRef, EvalTaskRef, HarborRef
+from marin.evaluation.records import EvalRef, EvalTaskRef, EvaluationSelection, HarborRef, ModelConfigRef
 from marin.evaluation.runner import EvalExecutor
-from marin.external_dependencies import EVALCHEMY
 from rigging.secrets import SecretSpec
+
+from experiments.evaluation.catalog import evaluation_benchmarks
+from experiments.evaluation.curated import requires_judge
 
 logger = logging.getLogger(__name__)
 
 _DAYTONA_ENVIRONMENT_TYPE = "daytona"
-_EVALCHEMY_CONFIG_DIR = Path(__file__).with_name("configs") / "evalchemy"
 _HARBOR_CONFIG_DIR = Path(__file__).with_name("configs") / "harbor"
 _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
     {
@@ -41,75 +36,17 @@ _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
         )
     }
 )
-
-# Capped ``-smoke`` variants remain unfamilied because scoring surfaces exclude them.
-_EVAL_FAMILIES: Mapping[str, str] = MappingProxyType({"gsm8k": "gsm8k", "gsm8k-0shot": "gsm8k"})
-
-
-@dataclass(frozen=True)
-class EvalchemyDefinition:
-    name: str
-    config_path: Path
-    secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
-    family: str | None = None
-
-    def record_ref_for(self, config: EvalchemyRunConfig) -> EvalRef:
-        return EvalRef(
-            name=config.name,
-            mechanism="evalchemy",
-            family=self.family,
-            tasks=tuple(
-                EvalTaskRef(
-                    name=task.name,
-                    num_fewshot=task.num_fewshot,
-                    task_alias=task.task_alias,
-                    generation=task.generation,
-                    unsafe_code=task.unsafe_code,
-                    completion_only=task.completion_only,
-                )
-                for task in config.tasks
-            ),
-            evalchemy=EvalchemyRef(
-                apply_chat_template=config.apply_chat_template,
-                max_gen_toks=config.max_gen_toks,
-                max_eval_instances=config.max_eval_instances,
-                num_concurrent=config.num_concurrent,
-                batch_size=config.batch_size,
-                seed=config.seed,
-                extra_gen_kwargs=dict(config.extra_gen_kwargs),
-                extra_model_args=dict(config.extra_model_args),
-                max_length=config.max_length,
-            ),
-        )
-
-    def config_for(self, source: EvalchemyConfig, model: ModelConfig, limit: int | None) -> EvalchemyRunConfig:
-        config = evalchemy_run_config(self.name, source)
-        effective_limit = config.max_eval_instances if limit is None else limit
-        model_max_gen_toks = model.generation.max_gen_toks
-        max_gen_toks = config.max_gen_toks
-        if model_max_gen_toks is not None:
-            if max_gen_toks is None or model_max_gen_toks < max_gen_toks:
-                max_gen_toks = model_max_gen_toks
-            elif model_max_gen_toks > max_gen_toks:
-                logger.warning(
-                    "Model generation limit %d exceeds the %s benchmark limit %d; using the benchmark limit. "
-                    "Pass an Evalchemy config with a larger max_tokens value to evaluate longer generations.",
-                    model_max_gen_toks,
-                    self.name,
-                    max_gen_toks,
-                )
-        return replace(
-            config,
-            apply_chat_template=(
-                model.apply_chat_template if source.apply_chat_template is None else source.apply_chat_template
-            ),
-            max_gen_toks=max_gen_toks,
-            max_eval_instances=effective_limit,
-            extra_gen_kwargs={
-                **config.extra_gen_kwargs,
-                **model.generation.extra_gen_kwargs,
-            },
-        )
+_TOGETHER_API_KEY_SECRET: SecretSpec = (
+    "env:TOGETHER_API_KEY",
+    "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest",
+)
+_VERIFIER_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType({"TOGETHER_API_KEY": _TOGETHER_API_KEY_SECRET})
+# Destinations beyond Iris's base egress allowlist (iris.cluster.egress). The
+# orchestrator job declares them; they take effect on clusters that enforce the
+# allowlist.
+_DAYTONA_EGRESS: tuple[str, ...] = ("app.daytona.io", "*.app.daytona.io")
+# Harbor's dataset registry, a Supabase project (Harbor's HARBOR_SUPABASE_URL).
+_HARBOR_REGISTRY_EGRESS: tuple[str, ...] = ("hlqxxzsirfrgeqasvaps.supabase.co",)
 
 
 @dataclass(frozen=True)
@@ -121,10 +58,17 @@ class HarborDefinition:
     max_eval_instances: int | None = None
     family: str | None = None
 
+    def egress_allow_for(self, config: ValidatedHarborConfig) -> tuple[str, ...]:
+        """Egress rules for the Harbor driver's sandbox service and dataset registry."""
+        rules = _DAYTONA_EGRESS if config.environment == _DAYTONA_ENVIRONMENT_TYPE else ()
+        if config.dataset_kind == HarborDatasetKind.HARBOR_REGISTRY:
+            rules = (*rules, *_HARBOR_REGISTRY_EGRESS)
+        return rules
+
     def secret_env_for(self, config: ValidatedHarborConfig) -> Mapping[str, SecretSpec]:
         secret_env = dict(_DAYTONA_SECRET_ENV) if config.environment == _DAYTONA_ENVIRONMENT_TYPE else {}
         for key in config.verifier_env_keys:
-            secret_env.setdefault(key, (f"env:{key}",))
+            secret_env.setdefault(key, _VERIFIER_SECRET_ENV.get(key, (f"env:{key}",)))
         return MappingProxyType(secret_env)
 
     def record_ref_for(self, config: ValidatedHarborConfig, runtime_task_limit: int | None) -> EvalRef:
@@ -132,6 +76,7 @@ class HarborDefinition:
         return EvalRef(
             name=self.name,
             mechanism="harbor",
+            source_digest=source_config_digest(self.config_path),
             family=self.family,
             tasks=(
                 EvalTaskRef(
@@ -147,28 +92,28 @@ class HarborDefinition:
                 env=config.environment,
                 task_limit=runtime_task_limit,
                 config_digest=config.digest,
-                harbor_config_commit=config.error_taxonomy.commit,
                 max_input_tokens=config.max_input_tokens,
                 max_output_tokens=config.max_output_tokens,
             ),
         )
-
-    @property
-    def runtime_descriptor(self) -> str:
-        return HARBOR_RUNTIME
 
     def executor_for(
         self,
         config: ValidatedHarborConfig,
         model: ModelConfig,
         runtime_task_limit: int | None,
+        retry_unscored_trials: bool,
+        judge_model: ModelConfig | None,
     ) -> EvalExecutor:
         secret_env = self.secret_env_for(config)
         return HarborExecutor(
             config=config,
             task_limit=runtime_task_limit,
             model_agent_kwargs=harbor_model_agent_kwargs(model),
+            model_config=ModelConfigRef.model_validate(asdict(model)),
+            judge_config=ModelConfigRef.model_validate(asdict(judge_model)) if judge_model is not None else None,
             secret_env_keys=tuple(secret_env),
+            retry_unscored_trials=retry_unscored_trials,
         )
 
 
@@ -189,105 +134,22 @@ def harbor_definition(
         name=name,
         config_path=_HARBOR_CONFIG_DIR / f"{name}.yaml",
         max_eval_instances=max_eval_instances,
-        family=_EVAL_FAMILIES.get(name),
     )
 
 
-def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConfig:
-    """Lower one launch file into Marin's served Evalchemy runner."""
-    tasks: list[EvalTaskConfig] = []
-    for task_name in config.tasks:
-        options = config.task_options.get(task_name)
-        num_fewshot = config.num_fewshot
-        if options is not None and options.num_fewshot is not None:
-            num_fewshot = options.num_fewshot
-        tasks.append(
-            EvalTaskConfig(
-                name=task_name,
-                num_fewshot=num_fewshot,
-                task_alias=options.task_alias if options is not None else None,
-                generation=options.generation if options is not None else False,
-                unsafe_code=options.unsafe_code if options is not None else False,
-                completion_only=options.completion_only if options is not None else False,
-            )
-        )
-
-    extra_model_args = dict(config.extra_model_args)
-    configured_concurrency = extra_model_args.pop("num_concurrent", DEFAULT_NUM_CONCURRENT)
-    try:
-        num_concurrent = int(configured_concurrency)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"extra_model_args.num_concurrent must be an integer, got {configured_concurrency!r}") from exc
-    if num_concurrent <= 0:
-        raise ValueError(f"extra_model_args.num_concurrent must be positive, got {num_concurrent}")
-    for key in ("max_length", "max_model_len"):
-        extra_model_args.pop(key, None)
-
-    extra_gen_kwargs = dict(config.gen_kwargs)
-    for key in ("max_tokens", "max_new_tokens", "max_gen_toks"):
-        extra_gen_kwargs.pop(key, None)
-    return EvalchemyRunConfig(
-        name=name,
-        tasks=tuple(tasks),
-        apply_chat_template=config.apply_chat_template or False,
-        max_gen_toks=config.max_tokens,
-        max_eval_instances=config.limit,
-        num_concurrent=num_concurrent,
-        batch_size=config.batch_size,
-        seed=config.seed,
-        extra_gen_kwargs=extra_gen_kwargs,
-        extra_model_args=extra_model_args,
-        max_length=config.max_length,
-        runtime=EvalchemyRuntimeConfig(
-            requirement=EVALCHEMY.requirement((*EVALCHEMY_REQUIRED_EXTRAS, *config.runtime_extras))
-        ),
-    )
+EvaluationDefinition = EvaluationSelection | HarborDefinition
 
 
-EvaluationDefinition = EvalchemyDefinition | HarborDefinition
-
-
-_STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
-    "mmlu",
-    "arc-challenge",
-    "hellaswag",
-    "winogrande",
-    "truthfulqa",
-    "boolq",
-    "piqa",
-    "openbookqa",
-    "gsm8k",
-    "math500",
-    "humaneval",
-    "arc-easy",
-    "lambada",
-    "triviaqa",
-    "nq-open",
-    "drop",
-    "gsm8k-0shot",
-    "aime24",
-    "olympiadbench",
-    "humanevalplus",
-    "mbppplus",
-    "mmlu-smoke",
-    "gsm8k-smoke",
-)
-
+_CONFIG = yaml.safe_load((Path(__file__).with_name("configs") / "evalchemy.yaml").read_text())
 EVALS: dict[str, EvaluationDefinition] = {
-    name: EvalchemyDefinition(
-        name=name,
-        config_path=_EVALCHEMY_CONFIG_DIR / f"{name}.yaml",
-        family=_EVAL_FAMILIES.get(name),
-    )
-    for name in _STANDARD_EVALCHEMY_EVALS
+    name: EvaluationSelection.model_validate({"label": name, **entry}) for name, entry in _CONFIG["evaluations"].items()
 }
 EVALS.update(
     {
         # --- Harbor (agentic registry benchmarks) ---
         # aime@1.0 is 60 AIME math problems; the served model solves each in a Daytona sandbox and
-        # Harbor's verifier scores the boxed answer. aime-smoke caps the task count for a fast check.
+        # Harbor's verifier scores the boxed answer.
         "aime-harbor": harbor_definition("aime-harbor"),
-        "aime-smoke": harbor_definition("aime-smoke", 2),
         # Agentic datasets contain Harbor task directories and run with Daytona.
         "tb2": harbor_definition("tb2"),
         "tb2-lite": harbor_definition("tb2-lite", 2),
@@ -303,81 +165,26 @@ EVALS.update(
     }
 )
 
-# A fast cluster smoke: one small MCQ cut plus a capped gsm8k generation task.
-SMOKE_EVALS: tuple[str, ...] = ("mmlu-smoke", "gsm8k-smoke")
 
-# The comprehensive per-model benchmark set: every model x task pair runs (and is recorded) as its
-# own run, so the dashboard shows the full N-models x M-tasks grid of runs.
-CORE_EVALS: tuple[str, ...] = (
-    "mmlu",
-    "gsm8k",
-    "arc-challenge",
-    "hellaswag",
-    "winogrande",
-    "truthfulqa",
-    "boolq",
-    "piqa",
-    "openbookqa",
-    "humaneval",
-    "math500",
+def evaluation_for(name: str) -> EvaluationDefinition:
+    if name in EVALS:
+        return EVALS[name]
+    if name in evaluation_benchmarks():
+        return EvaluationSelection(benchmark=name)
+    raise ValueError(f"unknown evaluation: {name}")
+
+
+SUITES: dict[str, tuple[str, ...]] = {name: tuple(entries) for name, entries in _CONFIG["suites"].items()}
+SUITES["standard-local"] = tuple(
+    name
+    for name in SUITES["standard"]
+    if isinstance(definition := evaluation_for(name), EvaluationSelection) and not requires_judge(definition)
 )
 
-# The baseline lm-eval-harness NLP suite: 14 deterministic loglikelihood/greedy tasks, runnable on
-# every served model (base or instruct).
-NLP_EVALS: tuple[str, ...] = (
-    "mmlu",
-    "arc-challenge",
-    "arc-easy",
-    "hellaswag",
-    "winogrande",
-    "truthfulqa",
-    "boolq",
-    "piqa",
-    "openbookqa",
-    "lambada",
-    "triviaqa",
-    "nq-open",
-    "drop",
-    "gsm8k-0shot",
-)
 
-# The short general-purpose chat suite. Longer publication-policy benchmarks are file-backed under
-# configs/evalchemy and validated on H100; GPQADiamond's seeded requests remain incompatible with TPU vLLM.
-CHAT_EVALS: tuple[str, ...] = ("math500", "aime24", "olympiadbench")
-
-MATH_EVALS: tuple[str, ...] = ("math500", "aime24", "gsm8k-0shot")
-CODE_EVALS: tuple[str, ...] = ("humanevalplus", "mbppplus")
-
-AGENTIC_EVALS: tuple[str, ...] = (
-    "tb2",
-    "swebench",
-    "gaia",
-    "bfcl",
-    "aider",
-    "medagentbench",
-    "financeagent",
-)
-
-# Named suite groups selectable by name on the CLI (``--evals smoke``). Launch NLP and CHAT as
-# separate groups (two serves) rather than one ~19-eval serial serve: the serve backstop grows
-# 2h + 2h x n_evals, and a single long serve is more exposed to preemption.
-SUITES: dict[str, tuple[str, ...]] = {
-    "smoke": SMOKE_EVALS,
-    "core": CORE_EVALS,
-    "nlp": NLP_EVALS,
-    "chat": CHAT_EVALS,
-    "math": MATH_EVALS,
-    "code": CODE_EVALS,
-    "agentic": AGENTIC_EVALS,
-}
-
-
-def resolve_eval_keys(selection: str) -> tuple[str, ...]:
-    """Resolve a named suite or comma-separated evaluation keys."""
+def resolve_evaluations(selection: str) -> tuple[EvaluationDefinition, ...]:
+    """Resolve suite and CLI labels once, at the textual input boundary."""
     keys = SUITES.get(selection) or tuple(part.strip() for part in selection.split(",") if part.strip())
     if not keys:
         raise ValueError("no evals selected")
-    unknown = [key for key in keys if key not in EVALS]
-    if unknown:
-        raise ValueError(f"unknown eval(s) {unknown}; known: {sorted(EVALS)} or suites {sorted(SUITES)}")
-    return keys
+    return tuple(evaluation_for(key) for key in keys)

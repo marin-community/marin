@@ -1,46 +1,61 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { formatCoverage, formatInterval, formatScore, formatTimestamp, objectStoreUrl } from '@/utils/formatting'
-import { fleetBest, isPartialCoverage } from '@/utils/panel'
+import { formatInterval, formatScore, formatTimestamp, objectStoreUrl } from '@/utils/formatting'
+import { ALL_COHORTS, UNVERSIONED_COHORT, cellCoverageLabel, fleetBest, isPartialCoverage } from '@/utils/panel'
 import { isSmokeEval } from '@/constants'
-import { INTERVAL_KIND, type MissingCell, type ModelDetail, type ModelRun, type Panel, type PanelCell } from '@/types/api'
+import { INTERVAL_KIND, type Meta, type MissingCell, type ModelDetail, type ModelRun, type Panel, type PanelCell } from '@/types/api'
 import EvalRail from '@/components/charts/EvalRail.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import StatusChip from '@/components/shared/StatusChip.vue'
 
 const props = defineProps<{ model: string }>()
 const router = useRouter()
+const route = useRoute()
 
 const { data, loading, error, refresh } = useApi<ModelDetail>(() => `api/models/${encodeURIComponent(props.model)}`)
 const { data: panel, refresh: refreshPanel } = useApi<Panel>(() => 'api/panel?include_archived=1')
+const { data: meta, refresh: refreshMeta } = useApi<Meta>(() => 'api/meta')
 
 onMounted(() => {
   refresh()
   refreshPanel()
+  refreshMeta()
 })
 watch(
   () => props.model,
-  () => {
-    selectedVersion.value = undefined
-    refresh()
-  },
+  refresh,
 )
 onViewRefresh(() => {
   refresh()
   refreshPanel()
+  refreshMeta()
 })
 
 
-// Cohort scope: a specific version (null = the unversioned cohort, distinct from ALL), or ALL for the
-// union across every run. Defaults to the current (newest) version once the record loads.
+// Cohort scope lives in the URL, including the unversioned and all-runs views.
 const ALL = '__all__'
-const selectedVersion = ref<string | null | undefined>(undefined)
-const scope = computed<string | null>(() =>
-  selectedVersion.value === undefined ? (data.value?.current_version ?? null) : selectedVersion.value,
+const scope = computed<string | null>(() => {
+  const selected = route.query.cohort
+  const cohort = typeof selected === 'string' && selected ? selected : meta.value?.default_cohort
+  if (cohort === ALL_COHORTS) return ALL
+  if (cohort === UNVERSIONED_COHORT) return null
+  return cohort ?? data.value?.current_version ?? null
+})
+watch(
+  [() => data.value?.model, () => meta.value?.default_cohort, () => route.query.cohort, () => props.model],
+  () => {
+    if (data.value?.model !== props.model || !meta.value) return
+    if (typeof route.query.cohort === 'string' && route.query.cohort) return
+    router.replace({ query: { ...route.query, cohort: meta.value.default_cohort } })
+  },
 )
+
+function selectCohort(version: string | null) {
+  router.push({ query: { ...route.query, cohort: version === ALL ? ALL_COHORTS : (version ?? UNVERSIONED_COHORT) } })
+}
 
 // Benchmarks this model has runs for, in the panel's column order where known (no smoke).
 const tasks = computed<string[]>(() => {
@@ -99,11 +114,11 @@ function onPick(task: string) {
   if (runId) router.push(`/runs/${runId}/samples`)
 }
 
-const cohortLabel = computed(() => (scope.value === ALL ? 'all runs' : (scope.value ?? 'unversioned')))
+const cohortLabel = computed(() => (scope.value === ALL ? 'all runs' : (scope.value ?? UNVERSIONED_COHORT)))
 const location = computed(() => data.value?.location ?? null)
 
 function coverageNote(cell: PanelCell): string {
-  return isPartialCoverage(cell) ? formatCoverage(cell.coverage) : ''
+  return isPartialCoverage(cell) ? cellCoverageLabel(cell) : ''
 }
 </script>
 
@@ -148,9 +163,9 @@ function coverageNote(cell: PanelCell): string {
                 ? 'border-accent text-text bg-accent-subtle'
                 : 'border-surface-border text-text-secondary hover:bg-surface-raised'
             "
-            @click="selectedVersion = c.version"
+            @click="selectCohort(c.version)"
           >
-            {{ c.version ?? 'unversioned' }}
+            {{ c.version ?? UNVERSIONED_COHORT }}
           </button>
           <button
             class="font-mono text-xs px-2.5 py-1 rounded border"
@@ -159,7 +174,7 @@ function coverageNote(cell: PanelCell): string {
                 ? 'border-accent text-text bg-accent-subtle'
                 : 'border-surface-border text-text-secondary hover:bg-surface-raised'
             "
-            @click="selectedVersion = ALL"
+            @click="selectCohort(ALL)"
           >
             all runs
           </button>

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compute-scaling LR heuristic and the EP64 hero config builder.
+"""Compute-scaling LR heuristic and the hero config builder.
 
 ``MoeHeuristic`` is the Aug hero LR-sweep refit (issues #7856 / #8003, R^2=0.978): it sets compute-optimal MuonH /
 Adam learning rates, epsilon, and beta2 from the token budget and batch size. ``build_hero_configs``
@@ -10,7 +10,7 @@ pairs it with the fixed hero model spec so a launcher gets both configs back fro
 
 The hero model is d6144 with 48 layers and 384 routed experts. Each expert has width 3,072, and
 the router selects eight experts per token. Expert parallelism moves tokens with the ragged
-all-to-all transport at a 1.15 receiver capacity factor.
+all-to-all transport at a 1.5 receiver capacity factor (1.15 before the 65K switch).
 """
 
 import math
@@ -97,14 +97,17 @@ HERO_MODEL = GrugModelConfig(
     local_kv_heads=12,
     global_kv_heads=6,
     head_dim=128,
-    max_seq_len=4096,
+    max_seq_len=262144,
     sliding_window=2048,
     global_every=4,
-    capacity_factor=1.15,
+    capacity_factor=1.5,
     initializer_std=0.5 / math.sqrt(_HERO_HIDDEN),
-    qk_mult=1.3,
+    qk_mult=1.66,
+    log_scaling_n_floor=65536,
+    log_scaling_alpha=0.1,
+    log_scaling_power=2.0,
     sconv=True,
-    attention_implementation="gpu_fa4_cute_wide",
+    attention_implementation="gpu_fa4_cute_sm100",
     moe_implementation="ragged_all_to_all",
     pooled_transport_capacity_factor=1.15,  # pooled-wave only
     num_expert_waves=3,  # pooled-wave only
@@ -116,7 +119,7 @@ HERO_MODEL = GrugModelConfig(
 
 
 def build_hero_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
-    """The fixed EP64 hero model plus its compute-scaled MuonH optimizer."""
+    """The fixed hero model plus its compute-scaled MuonH optimizer."""
     model = HERO_MODEL
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=num_train_steps,

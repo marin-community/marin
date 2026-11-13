@@ -14,10 +14,13 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from google.protobuf import json_format
+from rigging.timing import Duration
 
 from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
 from iris.cluster.runtime.types import MountKind, MountSpec
+from iris.cluster.setup_scripts import DEFAULT_UV_LINK_MODE, UV_LINK_MODE_ENV
 from iris.cluster.tpu_topology import get_tpu_topology
+from iris.preemption import TERMINATION_GRACE_ENV
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -25,6 +28,8 @@ logger = logging.getLogger(__name__)
 IRIS_SLICE_COUNT = "IRIS_SLICE_COUNT"
 IRIS_TASKS_PER_SLICE = "IRIS_TASKS_PER_SLICE"
 IRIS_ATTEMPT_UID_ENV = "IRIS_ATTEMPT_UID"
+# Bearer token the task's Iris client presents to the controller as the job's owner.
+IRIS_TASK_TOKEN_ENV = "IRIS_TASK_TOKEN"
 IRIS_NODE_NAME_ENV = "IRIS_NODE_NAME"
 IRIS_NAMESPACE_ENV = "IRIS_NAMESPACE"
 IRIS_WORKER_REGION_ENV = "IRIS_WORKER_REGION"
@@ -43,12 +48,12 @@ VENV_PATH = f"{WORKDIR_PATH}/.venv"
 # bring its own image: build_common_iris_env points each tool here explicitly, so
 # nothing depends on that image's HOME.
 UV_CACHE_PATH = "/uv/cache"
-UV_RETRY_CACHE_PATH = f"{WORKDIR_PATH}/.uv-cache"
+UV_CACHE_RECOVERY_SIGNAL_PREFIX = ".iris-recovery-"
 HF_HUB_CACHE_PATH = "/hf/cache"
 CARGO_HOME_PATH = "/cargo"
 # Unclaimed node-local scratch, for anything that needs a real directory on the
 # node rather than a bucket. Tasks pick their own subdirectory; nothing prunes
-# it. `iris.runtime.jax_init` puts XLA's per-fusion autotune cache under
+# it. `iris.jax.init` puts XLA's per-fusion autotune cache under
 # `/cache/xla` because XLA opens that directory from C++ through `tsl::Env`,
 # which has no object-store filesystem.
 SCRATCH_CACHE_PATH = "/cache"
@@ -83,6 +88,49 @@ def cache_host_dirname(container_path: str) -> str:
 # Heredoc delimiter for materializing a setup script to disk. Distinctive enough
 # that a real setup script will not contain it as a standalone line.
 _SETUP_STEP_DELIMITER = "__IRIS_SETUP_STEP__"
+_UV_WRAPPER_DELIMITER = "__IRIS_UV_WRAPPER__"
+_UV_WRAPPER_DIR = "/tmp/iris-uv-wrapper"
+_UV_WRAPPER_PATH = f"{_UV_WRAPPER_DIR}/uv"
+
+_UV_WRAPPER_SCRIPT = r"""#!/bin/bash
+set -u
+recovery_cache="$IRIS_WORKDIR/.uv-recovery-cache"
+recovery_marker="$IRIS_WORKDIR/.iris-uv-cache-recovery"
+shared_cache="${UV_CACHE_DIR:-}"
+
+case "${1:-} ${2:-}" in
+  "sync "*|"pip install") ;;
+  *) exec "$IRIS_UV_EXECUTABLE" "$@" ;;
+esac
+
+if [ -f "$recovery_marker" ]; then
+  exec env UV_CACHE_DIR="$recovery_cache" "$IRIS_UV_EXECUTABLE" "$@"
+fi
+
+if "$IRIS_UV_EXECUTABLE" "$@"; then
+  exit 0
+fi
+
+printf '%s\n' "${UV_CACHE_DIR:-}" > "$recovery_marker"
+echo 'uv install failed; retrying with task-local cache' >&2
+retry_args=("$@")
+reinstall=false
+for arg in "$@"; do
+  case "$arg" in
+    --reinstall|--force-reinstall) reinstall=true; break ;;
+  esac
+done
+if [ "$reinstall" = false ]; then
+  retry_args+=(--reinstall)
+fi
+env UV_CACHE_DIR="$recovery_cache" "$IRIS_UV_EXECUTABLE" "${retry_args[@]}"
+retry_status=$?
+if [ "$retry_status" -eq 0 ] && [ -n "${IRIS_ATTEMPT_UID:-}" ]; then
+  touch "$shared_cache/__UV_CACHE_RECOVERY_SIGNAL_PREFIX__${IRIS_ATTEMPT_UID}" || \
+    echo 'uv cache recovery succeeded, but Iris could not record it' >&2
+fi
+exit "$retry_status"
+"""
 
 
 def render_setup_steps(scripts: Sequence[str]) -> list[str]:
@@ -92,7 +140,18 @@ def render_setup_steps(scripts: Sequence[str]) -> list[str]:
     banner, rather than concatenated, so a failure points at the exact step. The
     caller's ``set -e`` stops the sequence on the first non-zero step.
     """
-    lines: list[str] = []
+    if not scripts:
+        return []
+
+    lines = [
+        'export IRIS_UV_EXECUTABLE="$(command -v uv)"',
+        f'mkdir -p "{_UV_WRAPPER_DIR}"',
+        f"cat > {_UV_WRAPPER_PATH} <<'{_UV_WRAPPER_DELIMITER}'",
+        _UV_WRAPPER_SCRIPT.replace("__UV_CACHE_RECOVERY_SIGNAL_PREFIX__", UV_CACHE_RECOVERY_SIGNAL_PREFIX).rstrip("\n"),
+        _UV_WRAPPER_DELIMITER,
+        f'chmod +x "{_UV_WRAPPER_PATH}"',
+        f'export PATH="{_UV_WRAPPER_DIR}:$PATH"',
+    ]
     total = len(scripts)
     for index, script in enumerate(scripts, start=1):
         step_file = f"/tmp/iris-setup-step-{index}.sh"
@@ -176,10 +235,12 @@ def build_common_iris_env(
     num_tasks: int,
     bundle_id: str,
     controller_address: str | None,
+    task_token: str | None,
     environment: job_pb2.EnvironmentConfig,
     constraints: Sequence[job_pb2.Constraint],
     ports: Sequence[str],
     resources: job_pb2.ResourceSpecProto | None,
+    termination_grace: Duration,
 ) -> dict[str, str]:
     """Build the Iris system env vars shared by both worker and k8s paths.
 
@@ -202,11 +263,14 @@ def build_common_iris_env(
         env[IRIS_ATTEMPT_UID_ENV] = attempt_uid
     env["IRIS_NUM_TASKS"] = str(num_tasks)
     env["IRIS_BUNDLE_ID"] = bundle_id
+    env[TERMINATION_GRACE_ENV] = str(termination_grace.to_ms())
 
     # Controller connectivity
     if controller_address:
         env["IRIS_CONTROLLER_ADDRESS"] = controller_address
         env["IRIS_CONTROLLER_URL"] = controller_address
+    if task_token:
+        env[IRIS_TASK_TOKEN_ENV] = task_token
 
     # Standard paths and binaries
     env["IRIS_BIND_HOST"] = "0.0.0.0"
@@ -223,10 +287,9 @@ def build_common_iris_env(
     # HF_HOME is left alone on purpose: it holds the submitter's HF_TOKEN, which
     # must not land on a node directory every other task can read. HF_HUB_CACHE
     # covers the part worth sharing -- the content-addressed model/dataset blobs.
-    # A failed attempt may have read a malformed entry from the persistent
-    # node cache. Retrying from the attempt-local workdir avoids repeating that
-    # failure while keeping uv's symlink targets alive for the run phase.
-    env["UV_CACHE_DIR"] = UV_CACHE_PATH if attempt_id == 0 else UV_RETRY_CACHE_PATH
+    env["UV_CACHE_DIR"] = UV_CACHE_PATH
+    # Kubernetes may clean the shared cache while tasks run, so its venvs own copies.
+    env[UV_LINK_MODE_ENV] = DEFAULT_UV_LINK_MODE
     env["UV_PYTHON_INSTALL_DIR"] = f"{UV_CACHE_PATH}/python"
     env["HF_HUB_CACHE"] = HF_HUB_CACHE_PATH
     # CARGO_HOME moves the crate registry onto the mount; a rustup toolchain
@@ -239,10 +302,10 @@ def build_common_iris_env(
     # parent (bring-your-own image) from a top-level submission with no parent.
     env["IRIS_JOB_SETUP_SCRIPTS"] = json.dumps(list(environment.setup_scripts))
 
-    # Serialize user env vars for child job inheritance via IRIS_JOB_ENV
-    user_env_vars = dict(environment.env_vars)
-    if user_env_vars:
-        env["IRIS_JOB_ENV"] = json.dumps(user_env_vars)
+    if environment.env_vars:
+        env["IRIS_JOB_ENV"] = json.dumps(
+            {key: value for key, value in environment.env_vars.items() if key != TERMINATION_GRACE_ENV}
+        )
 
     # Only propagate region/zone constraints to children; device constraints
     # are re-derived from each child's own resource spec.

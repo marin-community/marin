@@ -17,7 +17,9 @@ run browses correctly whether or not it has been migrated.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import threading
 import time
 from typing import Generic, TypeVar
@@ -30,14 +32,19 @@ from finestore.eval import (
     SAMPLES_PREFIX,
     SAMPLES_SUFFIX,
     EvalSample,
+    Grading,
+    SampleKind,
     sample_from_archive_row,
+    samples_schema,
 )
 from finestore.layout import FormatVersionError
 from finestore.migrations import LEGACY_READ_FORMAT_VERSION, LegacyReadView
 from finestore.reader import ReadView
 from fsspec.core import url_to_fs
-from marin.evaluation.metric_selection import declared_metric, primary_filter
-from marin.evaluation.records import EvalRunRecord
+from marin.evaluation.metric_selection import PUBLICATION_METRICS, base_metric, declared_sample_metric, primary_filter
+from marin.evaluation.records import BenchmarkMetricRef, EvalRunRecord, MetricKind
+from marin.rollouts.evaluation import RUN_OBJECT
+from marin.rollouts.evaluation_results import logical_samples
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 
@@ -51,6 +58,9 @@ MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 
 # The finestore reference scheme a migrated sample uses for its trajectory.
 _ARCHIVE_URI_PREFIX = "finestore://"
+_SOTOPIA_SUMMARY_URI_PREFIX = "sotopia-summary://"
+_SOTOPIA_TASK = "sotopia-hard-harbor"
+_SOTOPIA_TRIAL_ID = re.compile(r"(?!\.\.?$)[A-Za-z0-9._-]+")
 
 
 class SampleTask(BaseModel):
@@ -75,15 +85,20 @@ class SampleTasksResponse(BaseModel):
 
 
 class SampleCounts(BaseModel):
-    """Unpaginated per-task outcome counts. ``ungraded`` (no primary metric, ``correct is None``) is
-    tracked apart from ``incorrect`` so a sample that was never scored is not reported as a wrong answer."""
+    """Unpaginated outcomes; continuous scores have no correct/incorrect counts."""
 
     model_config = ConfigDict(frozen=True)
 
     all: int
-    correct: int
-    incorrect: int
+    correct: int | None
+    incorrect: int | None
     ungraded: int
+
+
+class SampleRow(EvalSample):
+    """A sample page row with an optional reference to a retained SOTOPIA episode."""
+
+    summary_uri: str | None = None
 
 
 class SamplesResponse(BaseModel):
@@ -105,17 +120,16 @@ class SamplesResponse(BaseModel):
     offset: int
     limit: int
     counts: SampleCounts
-    rows: tuple[EvalSample, ...]
+    rows: tuple[SampleRow, ...]
 
 
 class ArtifactResponse(BaseModel):
-    """One sample-referenced artifact (the trajectory) resolved to text for the browser.
+    """One sample-referenced artifact resolved to text for the browser.
 
     ``available`` is False -- with a human-readable ``reason`` -- for every non-happy path (the run
     has no results directory, the reference is missing/unreadable, or it exceeds the size cap),
-    mirroring the logs endpoint's reachability degradation rather than raising. ``text`` is the decoded
-    object body when available, and ``media_type`` reflects the URI extension so the client knows
-    whether to parse JSON.
+    mirroring the logs endpoint's reachability degradation rather than raising. ``text`` is the
+    decoded object body when available, and ``media_type`` describes the resolved object.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -201,7 +215,11 @@ def _archive_task_table(results_path: str, task: str) -> pa.Table:
     cached = _table_cache.get(key)
     if cached is not None:
         return cached
-    table = _archive_view(results_path).scan(ARCHIVE_SAMPLES_TABLE, where=[("task", "==", task)])
+    reader = _archive_view(results_path)
+    if reader.read_blob(RUN_OBJECT) is not None:
+        table = pa.Table.from_pylist(list(logical_samples(reader, task=task)), schema=samples_schema())
+    else:
+        table = reader.scan(ARCHIVE_SAMPLES_TABLE, where=[("task", "==", task)])
     if table is None:
         table = pa.table({})
     _table_cache.put(key, table)
@@ -325,24 +343,24 @@ def _task_table(results_path: str, task: str) -> pa.Table | None:
     return _legacy_load_table(_fs, paths) if paths else None
 
 
-def declared_primary_metric(record: EvalRunRecord, sample_task: str) -> str | None:
-    """Return the metric declaration that applies to a sample task."""
+def sample_metric(record: EvalRunRecord, sample_task: str) -> BenchmarkMetricRef | None:
+    """Resolve the publication metric or the evaluator's recorded default."""
+    selected = PUBLICATION_METRICS.get(record.evaluation.name) if record.evaluation.curated is None else None
+    if selected is not None:
+        return selected
     tasks = record.evaluation.tasks
-    if len(tasks) == 1:
-        benchmark = tasks[0].benchmark
-        if benchmark is None:
-            return None
-        return next(metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric)
     for task in tasks:
         benchmark = task.benchmark
-        if benchmark is not None and (sample_task == benchmark.task or sample_task.startswith(f"{benchmark.task}_")):
-            return next(metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric)
+        if benchmark is not None and (
+            len(tasks) == 1 or sample_task == benchmark.task or sample_task.startswith(f"{benchmark.task}_")
+        ):
+            return next(metric for metric in benchmark.metrics if metric.name == benchmark.primary_metric)
     return None
 
 
 def _sample_primary_metric(metric_columns: tuple[str, ...], declared: str | None) -> str | None:
     metrics = dict.fromkeys(metric_columns, 0.0)
-    picked = declared_metric(metrics, declared)
+    picked = declared_sample_metric(metrics, declared)
     return picked[0] if picked is not None else None
 
 
@@ -355,6 +373,7 @@ def fetch_samples(
     correct: str,
     extraction_filter: str | None = None,
     primary_metric_name: str | None = None,
+    primary_metric_kind: MetricKind | None = None,
 ) -> SamplesResponse:
     """Return one typed, correctness-filtered page of samples for a task under one extraction filter."""
     if not results_path:
@@ -381,31 +400,80 @@ def fetch_samples(
     filtered = _select_extraction_filter(table, extraction_filter)
     table = filtered.rows
     columns = set(table.column_names)
-    correct_values = table.column("correct").to_pylist() if "correct" in columns else [None] * table.num_rows
+    stored_correct = table.column("correct").to_pylist() if "correct" in columns else [None] * table.num_rows
     metric_maps = (
         table.column("metrics").to_pylist(maps_as_pydicts="strict") if "metrics" in columns else [None] * table.num_rows
     )
     metric_columns = tuple(sorted({name for row in metric_maps if row for name in row}))
     primary = _sample_primary_metric(metric_columns, primary_metric_name)
-    n_correct = sum(1 for value in correct_values if value is True)
-    n_ungraded = sum(1 for value in correct_values if value is None)
+    selected_scores = [row.get(primary) if row and primary is not None else None for row in metric_maps]
+    if primary_metric_name is not None:
+        if primary is None:
+            return _empty_samples(
+                available=False,
+                error=f"selected metric {primary_metric_name!r} is missing",
+                task=task,
+                offset=offset,
+                limit=limit,
+            )
+        correct_values = [
+            score >= 1.0 if score is not None and primary_metric_kind is not MetricKind.CONTINUOUS else None
+            for score in selected_scores
+        ]
+        ungraded = [score is None for score in selected_scores]
+    else:
+        correct_values = [
+            value if value is not None or score is None else score >= 1.0
+            for value, score in zip(stored_correct, selected_scores, strict=True)
+        ]
+        ungraded = [value is None for value in correct_values]
+    continuous = primary_metric_kind is MetricKind.CONTINUOUS
     counts = SampleCounts(
         all=table.num_rows,
-        correct=n_correct,
-        incorrect=table.num_rows - n_correct - n_ungraded,
-        ungraded=n_ungraded,
+        correct=None if continuous else sum(value is True for value in correct_values),
+        incorrect=None if continuous else sum(value is False for value in correct_values),
+        ungraded=sum(ungraded),
     )
     if correct == "correct":
         indices = [i for i, value in enumerate(correct_values) if value is True]
     elif correct == "incorrect":
         indices = [i for i, value in enumerate(correct_values) if value is False]
     elif correct == "ungraded":
-        indices = [i for i, value in enumerate(correct_values) if value is None]
+        indices = [i for i, value in enumerate(ungraded) if value]
     else:
         indices = list(range(table.num_rows))
     page_indices = indices[offset : offset + limit]
     page_rows = table.take(pa.array(page_indices, type=pa.int64())).to_pylist(maps_as_pydicts="strict")
-    page = tuple(sample_from_archive_row(row) for row in page_rows)
+    page = []
+    for row, index in zip(page_rows, page_indices, strict=True):
+        sample = SampleRow.model_validate(sample_from_archive_row(row).model_dump())
+        trial_id = row.get("trial_id") or ""
+        if (
+            task.rsplit("/", 1)[-1] == _SOTOPIA_TASK
+            and sample.kind is SampleKind.AGENTIC
+            and sample.trajectory_uri is None
+            and _SOTOPIA_TRIAL_ID.fullmatch(trial_id)
+        ):
+            sample = sample.model_copy(update={"summary_uri": f"{_SOTOPIA_SUMMARY_URI_PREFIX}{trial_id}"})
+        if primary is not None and (primary_metric_name is not None or sample.correct is None):
+            score = sample.metrics.get(primary)
+            passed = correct_values[index]
+            grading = sample.grading
+            if score is not None or grading is None or grading.score is not None:
+                grading = Grading(
+                    method=(
+                        sample.grading.method
+                        if sample.grading is not None and not sample.grading.method.startswith("lm-eval:")
+                        else f"lm-eval:{base_metric(primary)}"
+                    ),
+                    metric=primary,
+                    filter=filtered.selected,
+                    score=score,
+                    passed=passed,
+                    detail=sample.grading.detail if sample.grading is not None else "{}",
+                )
+            sample = sample.model_copy(update={"correct": passed, "grading": grading})
+        page.append(sample)
     return SamplesResponse(
         available=True,
         error=None,
@@ -418,7 +486,7 @@ def fetch_samples(
         offset=offset,
         limit=limit,
         counts=counts,
-        rows=page,
+        rows=tuple(page),
     )
 
 
@@ -474,18 +542,32 @@ def _resolve_archive_artifact(results_path: str, uri: str, max_bytes: int) -> Ar
     )
 
 
+def _sotopia_summary_path(results_path: str, trial_id: str) -> StoragePath | None:
+    """Find Harbor's selected summary, or None without one unambiguous trial result."""
+    results = (StoragePath(results_path) / "harbor_jobs" / "harbor_*" / trial_id / "result.json").glob()
+    if len(results) != 1:
+        return None
+    selected = json.loads(results[0].read_text()).get("trial_relpath")
+    if not isinstance(selected, str):
+        return None
+    parts = selected.split("/")
+    if len(parts) != 3 or parts[:2] != [trial_id, "attempts"] or not re.fullmatch(r"[0-9]{3,}", parts[2]):
+        return None
+    return results[0].parent.parent / selected / "agent/sotopia-summary.json"
+
+
 def fetch_artifact(results_path: str | None, uri: str, *, max_bytes: int = MAX_ARTIFACT_BYTES) -> ArtifactResponse:
     """Resolve one sample-referenced artifact URI to decoded text, size-capped.
 
-    A ``finestore://`` reference resolves from the run's archive; a legacy ``gs://``/``s3://`` URI is
-    resolved in place, path-restricted to under ``results_path``. Anything missing, out of tree, or
-    oversized returns ``available=False`` with a reason instead of raising.
+    A ``finestore://`` reference resolves from the run's archive. A ``sotopia-summary://`` reference
+    resolves by trial ID under the run's Harbor job tree. Legacy ``gs://``/``s3://`` URIs are resolved
+    in place, path-restricted to under ``results_path``. Anything missing, out of tree, or oversized
+    returns ``available=False`` with a reason instead of raising.
     """
     if not results_path:
         return _unavailable_artifact(uri, "run has no results_path")
 
-    # A finestore:// URI is archive-relative, so two runs can share one (e.g. blobs/trial-1/...);
-    # key the cache by the run as well so one run's artifact never answers for another's.
+    # Relative references can repeat across runs; key the cache by the run as well.
     cache_key = f"{results_path}|{uri}"
     cached = _artifact_cache.get(cache_key)
     if cached is not None:
@@ -493,6 +575,22 @@ def fetch_artifact(results_path: str | None, uri: str, *, max_bytes: int = MAX_A
 
     if uri.startswith(_ARCHIVE_URI_PREFIX):
         response = _resolve_archive_artifact(results_path, uri, max_bytes)
+        if response.available:
+            _artifact_cache.put(cache_key, response)
+        return response
+
+    if uri.startswith(_SOTOPIA_SUMMARY_URI_PREFIX):
+        trial_id = uri.removeprefix(_SOTOPIA_SUMMARY_URI_PREFIX)
+        if not _SOTOPIA_TRIAL_ID.fullmatch(trial_id):
+            return _unavailable_artifact(uri, "invalid SOTOPIA trial ID")
+        try:
+            path = _sotopia_summary_path(results_path, trial_id)
+        except Exception as exc:
+            logger.info("SOTOPIA summary lookup failed for %s: %s", uri, exc)
+            return _unavailable_artifact(uri, f"{type(exc).__name__}: {exc}"[:400])
+        if path is None:
+            return _unavailable_artifact(uri, "SOTOPIA trial has no selected summary path")
+        response = fetch_artifact(results_path, str(path), max_bytes=max_bytes).model_copy(update={"uri": uri})
         if response.available:
             _artifact_cache.put(cache_key, response)
         return response

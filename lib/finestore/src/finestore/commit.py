@@ -10,11 +10,13 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 
+from rigging import telemetry
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from finestore.layout import (
+    CACHE_HISTORY_FLOOR_FEATURE,
     FORMAT_VERSION,
     SUPPORTED_MANIFEST_FEATURES,
     ArchiveMetadata,
@@ -29,10 +31,22 @@ from finestore.layout import (
     TableMetadata,
 )
 
-_MAX_COMMIT_ATTEMPTS = 32
-_COMMIT_BACKOFF_INITIAL = 1.0
-_COMMIT_BACKOFF_MAXIMUM = 10 * 60.0
+# A lost compare-and-swap means another writer published, so the retry delay only needs to
+# spread concurrent writers apart, not wait out an outage. Shorter delays raise the request
+# count faster than they lower latency: in the simulator, 50 ms tripled requests at 64 writers.
+# The retry budget is wall time, so many writers can share one HEAD without a flush failing.
+_COMMIT_BACKOFF_INITIAL = 0.5
+_COMMIT_BACKOFF_MAXIMUM = 5.0
+_RETRY_BACKOFF_FACTOR = 2.0
+_RETRY_BACKOFF_JITTER = 0.25
+_COMMIT_RETRY_BUDGET = 60 * 60.0
+_MAX_COMMIT_ATTEMPTS = 100_000
+_CREATE_RETRY_BUDGET = 60.0
+_MAX_CREATE_ATTEMPTS = 1000
 _ROOT_COMMIT_ID = "root"
+
+_COMMITS = telemetry.counter("finestore_commits", unit="{commit}")
+_COMMIT_CONFLICTS = telemetry.counter("finestore_commit_conflicts", unit="{conflict}")
 
 
 class CommitConflict(RuntimeError):
@@ -78,25 +92,53 @@ class CommitDelta:
     removals: frozenset[str] = frozenset()
     required_features: frozenset[str] = frozenset()
     seal_update: SealMarker | ClearSeal | None = None
+    # ``expected_epoch`` rejects the commit, without rebasing, once another maintainer has
+    # taken over; ``epoch_update`` is how a new maintainer announces itself.
+    expected_epoch: int | None = None
+    epoch_update: int | None = None
+    cache_history_floor: int = 0
 
 
 def _empty_manifest() -> Manifest:
     return Manifest(commit_id=_ROOT_COMMIT_ID, sequence=0)
 
 
+def _create_or_read(path: str, data: bytes, *, operation: str) -> bytes:
+    """Create the object at ``path`` with ``data`` unless it exists, and return the stored bytes."""
+    obj = conditional_object(path)
+
+    def attempt() -> bytes:
+        existing = obj.read()
+        if existing is not None:
+            return existing.data
+        try:
+            obj.write(data, expected_version=None)
+            return data
+        except ConditionalWriteError:
+            existing = obj.read()
+            if existing is None:
+                # The competing create is still in flight; retry until its object is visible.
+                raise
+            return existing.data
+
+    return retry_with_backoff(
+        attempt,
+        retryable=lambda exc: isinstance(exc, ConditionalWriteError),
+        max_attempts=_MAX_CREATE_ATTEMPTS,
+        max_elapsed=_CREATE_RETRY_BUDGET,
+        backoff=ExponentialBackoff(initial=0.1, maximum=1.0, factor=_RETRY_BACKOFF_FACTOR, jitter=_RETRY_BACKOFF_JITTER),
+        operation=operation,
+    )
+
+
 def initialize_archive(layout: FineStoreLayout) -> ArchiveMetadata:
     """Create the archive marker, or validate the marker already present."""
-    marker = conditional_object(layout.archive_path)
-    existing = marker.read()
-    expected = ArchiveMetadata()
-    if existing is None:
-        try:
-            marker.write(expected.model_dump_json(indent=2).encode(), expected_version=None)
-            return expected
-        except ConditionalWriteError:
-            existing = marker.read()
-            assert existing is not None
-    found = ArchiveMetadata.model_validate_json(existing.data)
+    data = _create_or_read(
+        layout.archive_path,
+        ArchiveMetadata().model_dump_json(indent=2).encode(),
+        operation=f"FineStore archive initialization at {layout.root}",
+    )
+    found = ArchiveMetadata.model_validate_json(data)
     if found.format_version != FORMAT_VERSION:
         raise FormatVersionError(layout.root, found=found.format_version)
     return found
@@ -119,29 +161,25 @@ def write_schema(layout: FineStoreLayout, metadata: TableMetadata) -> str:
     data = metadata.model_dump_json(indent=2).encode()
     schema_id = hashlib.blake2b(data, digest_size=16).hexdigest()
     path = layout.schema_path(schema_id)
-    obj = conditional_object(path)
-    existing = obj.read()
-    if existing is None:
-        try:
-            obj.write(data, expected_version=None)
-            return path
-        except ConditionalWriteError:
-            existing = obj.read()
-            assert existing is not None
-    if existing.data != data:
+    if _create_or_read(path, data, operation=f"FineStore schema publication at {path}") != data:
         raise ValueError(f"schema digest collision at {path}")
     return path
 
 
 def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:
-    """Pin and return the manifest selected by one HEAD read."""
+    """Pin and return the manifest selected by one HEAD read.
+
+    A populated archive is validated from HEAD alone. Only an absent HEAD reads the format
+    marker, which distinguishes an empty root from a format-v1 archive that has no HEAD.
+    """
     head_object = conditional_object(layout.head_path)
     versioned = head_object.read()
     if versioned is None:
+        validate_archive(layout)
         return ArchiveSnapshot(manifest=_empty_manifest(), token=None)
     head = HeadMetadata.model_validate_json(versioned.data)
     if head.format_version != FORMAT_VERSION:
-        raise ValueError(f"HEAD at {layout.root} is FineStore format v{head.format_version}; expected v{FORMAT_VERSION}")
+        raise FormatVersionError(layout.root, found=head.format_version)
     manifest = Manifest.model_validate_json(StoragePath(head.manifest_path).read_bytes())
     if manifest.format_version != FORMAT_VERSION:
         raise ValueError(
@@ -163,6 +201,12 @@ def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:
 
 
 def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
+    if delta.expected_epoch is not None and base.maintainer_epoch != delta.expected_epoch:
+        raise CommitConflict(
+            f"maintenance epoch is {base.maintainer_epoch}, commit was prepared under {delta.expected_epoch}"
+        )
+    if delta.epoch_update is not None and delta.epoch_update <= base.maintainer_epoch:
+        raise CommitConflict(f"maintenance epoch {base.maintainer_epoch} already passed {delta.epoch_update}")
     sequence = base.sequence + 1
     tables = dict(base.tables)
     for name, addition in delta.additions.items():
@@ -172,7 +216,9 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
         prior = current.shards if current is not None else ()
         paths = {shard.path for shard in prior}
         added = tuple(
-            shard.model_copy(update={"commit_sequence": sequence})
+            shard.model_copy(
+                update={"commit_sequence": sequence, "min_row_commit": sequence, "max_row_commit": sequence}
+            )
             for shard in addition.shards
             if shard.path not in paths
         )
@@ -206,14 +252,20 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
         sealed = None
     elif delta.seal_update is not None:
         sealed = delta.seal_update
+    history_floor = max(base.cache_history_floor, delta.cache_history_floor)
+    required_features = set(base.required_features) | delta.required_features
+    if history_floor:
+        required_features.add(CACHE_HISTORY_FLOOR_FEATURE)
     return base.model_copy(
         update={
             "commit_id": uuid.uuid4().hex,
             "parent_commit_id": None if base.commit_id == _ROOT_COMMIT_ID else base.commit_id,
             "sequence": sequence,
-            "required_features": tuple(sorted(set(base.required_features) | delta.required_features)),
+            "required_features": tuple(sorted(required_features)),
+            "cache_history_floor": history_floor,
             "tables": tables,
             "sealed": sealed,
+            "maintainer_epoch": base.maintainer_epoch if delta.epoch_update is None else delta.epoch_update,
         }
     )
 
@@ -225,14 +277,34 @@ class CommitCoordinator:
         self._layout = layout
         self._head = conditional_object(layout.head_path)
         self._lock = threading.Lock()
+        self._published: ArchiveSnapshot | None = None
 
     def snapshot(self) -> ArchiveSnapshot:
+        """Read the current HEAD and manifest."""
         return read_snapshot(self._layout)
 
-    def commit(self, delta: CommitDelta, *, base: ArchiveSnapshot | None = None) -> CommitToken:
-        """Publish ``delta`` and return the new durable commit token."""
+    def last_snapshot(self) -> ArchiveSnapshot:
+        """Return the snapshot this coordinator last published, reading HEAD only when it has none.
+
+        The result is current for this writer's own commits and may lag other writers; a commit
+        based on it rebases after a lost compare-and-swap exactly as a fresh read would.
+        """
         with self._lock:
-            current = base or read_snapshot(self._layout)
+            if self._published is None:
+                self._published = read_snapshot(self._layout)
+            return self._published
+
+    def commit(self, delta: CommitDelta, *, base: ArchiveSnapshot | None = None) -> CommitToken:
+        """Publish ``delta`` and return the new durable commit token.
+
+        Without ``base`` the commit starts from the last snapshot this coordinator published,
+        so an uncontended commit reads nothing before its compare-and-swap.
+        """
+        with self._lock:
+            if base is None and self._published is None:
+                self._published = read_snapshot(self._layout)
+            current = base or self._published
+            assert current is not None
             refresh = False
 
             def publish() -> CommitToken:
@@ -252,29 +324,34 @@ class CommitCoordinator:
                 try:
                     version = self._head.write(head.model_dump_json().encode(), expected_version=expected_version)
                 except ConditionalWriteError:
+                    _COMMIT_CONFLICTS.add()
                     refresh = True
                     raise
-                return CommitToken(
+                _COMMITS.add()
+                token = CommitToken(
                     commit_id=manifest.commit_id,
                     sequence=manifest.sequence,
                     version=version,
                     manifest_path=manifest_path,
                 )
+                self._published = ArchiveSnapshot(manifest=manifest, token=token)
+                return token
 
             try:
                 return retry_with_backoff(
                     publish,
                     retryable=lambda exc: isinstance(exc, ConditionalWriteError),
                     max_attempts=_MAX_COMMIT_ATTEMPTS,
+                    max_elapsed=_COMMIT_RETRY_BUDGET,
                     backoff=ExponentialBackoff(
                         initial=_COMMIT_BACKOFF_INITIAL,
                         maximum=_COMMIT_BACKOFF_MAXIMUM,
-                        factor=2.0,
-                        jitter=0.25,
+                        factor=_RETRY_BACKOFF_FACTOR,
+                        jitter=_RETRY_BACKOFF_JITTER,
                     ),
                     operation=f"FineStore commit at {self._layout.root}",
                 )
             except ConditionalWriteError as exc:
                 raise CommitConflict(
-                    f"HEAD at {self._layout.root} changed {_MAX_COMMIT_ATTEMPTS} consecutive times"
+                    f"HEAD at {self._layout.root} kept changing for {_COMMIT_RETRY_BUDGET:.0f} s"
                 ) from exc

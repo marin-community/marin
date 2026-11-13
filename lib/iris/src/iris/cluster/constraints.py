@@ -40,7 +40,14 @@ from typing import Any, ClassVar
 
 from iris.cluster.config import ScaleGroupResources
 from iris.cluster.tpu_topology import TpuTopologyInfo, get_tpu_topology
-from iris.cluster.types import AUTO_DEVICE_VARIANT, AcceleratorType, CapacityType, WellKnownAttribute
+from iris.cluster.types import (
+    AUTO_DEVICE_VARIANT,
+    AVAILABILITY_PREFIX,
+    AcceleratorType,
+    CapacityType,
+    WellKnownAttribute,
+    availability_key,
+)
 from iris.rpc import job_pb2
 
 # ---------------------------------------------------------------------------
@@ -325,19 +332,6 @@ def zone_constraint(zone: str) -> Constraint:
     return Constraint.create(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value=zone)
 
 
-AVAILABILITY_PREFIX = "availability:"
-
-
-def availability_key(variant: str) -> str:
-    """Composite attribute key marking that a zone can provision ``variant``.
-
-    The variant is lowercased to match the canonical ``device-variant`` string
-    that scaling groups and workers already carry (e.g. ``availability:v5p-8``,
-    ``availability:h100``).
-    """
-    return f"{AVAILABILITY_PREFIX}{variant.strip().lower()}"
-
-
 def is_availability_key(key: str) -> bool:
     """Whether ``key`` is an ``availability:<variant>`` zone-capability marker."""
     return key.startswith(AVAILABILITY_PREFIX)
@@ -355,26 +349,15 @@ def availability_constraint(variant: str) -> Constraint:
 
 
 # ---------------------------------------------------------------------------
-# Federated availability: numeric "how much of a resource is free right now".
-#
-# Distinct from ``availability:<variant>`` above. That marker is BOOLEAN and
-# means "this accelerator has been empirically obtained in this zone" — a
-# feasibility signal. The ``available:<token>`` gate here is NUMERIC and means
-# "a federation peer has >= N of this resource free right now". The parent gates
-# a queued federated job on it (see federation.availability) so jobs wait for and
-# spread across peers with real idle capacity instead of piling onto the first.
+# availability:<variant> marks configured capability for peer routing and
+# observed zone capability for local scheduling. available:<token> counts free
+# resources and gates peer placement (see federation.availability).
 # ---------------------------------------------------------------------------
 
 AVAILABLE_PREFIX = "available:"
 
 
 def available_key(token: str) -> str:
-    """Composite attribute key naming a free-capacity resource token.
-
-    The numeric parallel of :func:`availability_key`: ``available:h100`` names the
-    count of free H100 chips a peer advertises. The token is lowercased to match the
-    canonical ``device-variant`` string (``available:v5p-8``, ``available:h100``).
-    """
     return f"{AVAILABLE_PREFIX}{token.strip().lower()}"
 
 

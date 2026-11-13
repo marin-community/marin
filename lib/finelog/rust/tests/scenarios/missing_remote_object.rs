@@ -54,6 +54,12 @@ async fn a_missing_remote_object_fails_reads_cleanly_without_wedging_recovery() 
         "the error must name the missing object; got: {error}"
     );
 
+    // A remote read error must not enter the legacy compactor's recovery path,
+    // which can drop a missing local run head or promote an unreadable input.
+    cold.maintain_namespace(TABLE, true).await.unwrap_err();
+    let after = cluster.states().load(TABLE).await.unwrap().unwrap();
+    assert_eq!(live_objects(&after.catalog), live_objects(&state.catalog));
+
     // Maintenance keeps returning — the table degrades, the process does not.
     for _ in 0..3 {
         let _ = cold.maintain_namespace(TABLE, false).await;

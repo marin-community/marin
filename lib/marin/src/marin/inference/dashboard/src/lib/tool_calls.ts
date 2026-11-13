@@ -1,6 +1,7 @@
 import type { ChatTemplateProtocol, ToolCall } from './types'
 
 const TOOL_CALL_ID_PREFIX = 'call_'
+const REPEATED_TOOL_CALL_LIMIT = 3
 
 interface PendingToolCall {
   id: string | null
@@ -11,6 +12,58 @@ interface PendingToolCall {
 
 export interface ToolCallAccumulator {
   calls: Map<number, PendingToolCall>
+}
+
+interface ToolCallRun {
+  signature: string
+  length: number
+}
+
+function canonicalJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJsonValue)
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, canonicalJsonValue(child)]),
+    )
+  }
+  return value
+}
+
+function nextToolCallRun(previous: ToolCallRun | null, call: ToolCall): ToolCallRun {
+  const signature = JSON.stringify([call.name, canonicalJsonValue(call.arguments)])
+  const next = {
+    signature,
+    length: previous?.signature === signature ? previous.length + 1 : 1,
+  }
+  if (next.length >= REPEATED_TOOL_CALL_LIMIT) {
+    throw new Error(`Model made the same tool call ${REPEATED_TOOL_CALL_LIMIT} times in a row`)
+  }
+  return next
+}
+
+/** Run model/tool rounds until the model answers or a configured guard stops the exchange. */
+export async function runToolRounds(
+  maxToolRounds: number,
+  nextCalls: () => Promise<ToolCall[]>,
+  executeCall: (call: ToolCall) => Promise<void>,
+): Promise<void> {
+  let completedRounds = 0
+  let toolCallRun: ToolCallRun | null = null
+  while (true) {
+    const calls = await nextCalls()
+    if (!calls.length) return
+
+    for (const call of calls) {
+      toolCallRun = nextToolCallRun(toolCallRun, call)
+      await executeCall(call)
+    }
+    completedRounds += 1
+    if (maxToolRounds > 0 && completedRounds >= maxToolRounds) {
+      throw new Error(`Stopped after ${maxToolRounds} consecutive tool rounds.`)
+    }
+  }
 }
 
 function objectValue(value: unknown, message: string): Record<string, unknown> {

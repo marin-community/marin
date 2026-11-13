@@ -9,19 +9,37 @@ live backends, the ListPeers view, and the submit router's decision matrix
 """
 
 import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pydantic
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.backends.rpc.backend import EXEC_IN_CONTAINER_MAX_TIMEOUT
-from iris.cluster.config import PeerConfig, config_to_dict, parse_config, user_admitted
-from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
+from iris.cluster.config import (
+    IrisClusterConfig,
+    PeerConfig,
+    ScaleGroupConfig,
+    ScaleGroupResources,
+    backend_attribute_sets,
+    config_to_dict,
+    parse_config,
+    user_admitted,
+)
+from iris.cluster.constraints import (
+    Constraint,
+    ConstraintOp,
+    WellKnownAttribute,
+    availability_constraint,
+    peer_availability_gate,
+    preemptible_constraint,
+)
 from iris.cluster.federation import peer as peer_module
-from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
+from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION, QueuedCandidate
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitDisposition
+from iris.cluster.types import AcceleratorType, CapacityType, JobName
 from iris.managed_thread import get_thread_container, thread_container_scope
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, ExponentialBackoff
@@ -177,6 +195,26 @@ def _availability_backend(backend_id: str, version: int) -> controller_pb2.Contr
     return backend
 
 
+def test_list_peers_hides_stale_capacity_when_peer_is_unreachable():
+    connection = _StubConnection((_availability_backend("gpu", AVAILABILITY_METRIC_VERSION),))
+    peer = _peer("cw", connection)
+    manager = FederationManager([peer], threads=get_thread_container())
+    peer.probe()
+    assert manager.peer_summaries()[0].backends[0].availability.amounts["h100"] == 8
+
+    connection.fail = True
+    peer.probe()
+    (summary,) = manager.peer_summaries()
+    assert not summary.reachable
+    assert not summary.backends[0].HasField("availability")
+    assert summary.backends[0].advertised_attributes[WellKnownAttribute.DEVICE_VARIANT].values == ["h100"]
+    assert peer.heartbeat().backends[0].availability.amounts["h100"] == 8
+
+    connection.fail = False
+    peer.probe()
+    assert manager.peer_summaries()[0].backends[0].availability.amounts["h100"] == 8
+
+
 def test_availability_at_a_known_version_is_read_in_full():
     peer = _peer("cw", _StubConnection((_availability_backend("gpu", AVAILABILITY_METRIC_VERSION),)))
     manager = FederationManager([peer], threads=get_thread_container())
@@ -257,6 +295,53 @@ def test_heartbeat_rpc_has_a_finite_deadline(monkeypatch):
     connection.list_backends()
 
     assert stub.list_backends_timeout_ms is not None
+
+
+@pytest.mark.parametrize("method, stall", [("sync", "body"), ("cancel", "headers")])
+def test_peer_rpc_stall_times_out_and_next_sync_succeeds(monkeypatch, method, stall):
+    monkeypatch.setattr(peer_module, "_PEER_RPC_TIMEOUT_MS", 200)
+    release = threading.Event()
+    response = controller_pb2.Controller.FederationSyncResponse(next_cursor="recovered").SerializeToString()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, _format, *args):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            if stall == "headers" and not release.is_set():
+                release.wait(timeout=3)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/proto")
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            if not release.is_set():
+                release.wait(timeout=3)
+                return
+            self.wfile.write(response)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = peer_module._PeerRpcConnection(f"http://127.0.0.1:{server.server_port}", [])
+    request = controller_pb2.Controller.FederationSyncRequest(requester_id="parent")
+    try:
+        with pytest.raises(ConnectError) as exc_info:
+            if method == "sync":
+                connection.federation_sync(request)
+            else:
+                connection.terminate_job(JobName.from_string("/u/job"))
+        assert exc_info.value.code == Code.DEADLINE_EXCEEDED
+
+        release.set()
+        assert connection.federation_sync(request).next_cursor == "recovered"
+    finally:
+        release.set()
+        connection.shutdown()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 class _BlockingStub(_StubConnection):
@@ -437,6 +522,64 @@ def test_router_queues_a_gpu_job_to_a_peer_advertising_the_matching_variant():
     plan = PeerRouter([peer]).classify(request)
     assert plan.disposition == SubmitDisposition.QUEUE
     assert plan.pinned_peer_id == ""
+
+
+@pytest.mark.parametrize(
+    "variant, capacity_type, disposition",
+    [
+        (" H100 ", CapacityType.ON_DEMAND, SubmitDisposition.QUEUE),
+        ("A100", CapacityType.ON_DEMAND, SubmitDisposition.REJECT),
+        ("H100", CapacityType.PREEMPTIBLE, SubmitDisposition.REJECT),
+    ],
+)
+def test_cpu_reserve_routes_only_to_a_compatible_peer(variant, capacity_type, disposition):
+    config = IrisClusterConfig(
+        scale_groups={
+            "workers": ScaleGroupConfig(
+                name="workers",
+                num_vms=1,
+                resources=ScaleGroupResources(
+                    device_type=AcceleratorType.GPU, device_variant=variant, capacity_type=capacity_type
+                ),
+            )
+        }
+    )
+    backend = _backend(
+        "fleet",
+        advertised_attributes={
+            key: controller_pb2.StringList(values=sorted(values))
+            for key, values in backend_attribute_sets(config).items()
+        },
+        # A CPU reservation can use a peer with no free GPUs.
+        availability=controller_pb2.Controller.ResourceAvailability(
+            version=AVAILABILITY_METRIC_VERSION, observation_epoch_ms=1000, amounts={"h100": 0}
+        ),
+    )
+    peer = _peer("cw", _StubConnection((backend,)))
+    peer.probe()
+    constraints = [availability_constraint("H100"), preemptible_constraint(False)]
+    candidate = QueuedCandidate(
+        job_id=JobName.from_string("/u/cpu-reserve"),
+        pinned_peer_id="",
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
+        submitted_at_ms=0,
+        shape_constraints=constraints,
+        availability_gate=peer_availability_gate(job_pb2.DeviceConfig(cpu=job_pb2.CpuDevice()), replicas=1),
+    )
+
+    with thread_container_scope() as threads:
+        manager = FederationManager([peer], threads=threads)
+        plan = manager.classify_submit(RoutingRequest(constraints=constraints, local_feasible=False))
+        assert plan.disposition == disposition
+        promotions = manager.plan_federation([candidate])
+
+    if disposition == SubmitDisposition.QUEUE:
+        assert plan.pinned_peer_id == ""
+        assert [(p.job_id, p.peer_id, p.backend_id, p.reserved) for p in promotions] == [
+            (candidate.job_id, "cw", "fleet", {})
+        ]
+    else:
+        assert promotions == []
 
 
 def test_router_rejects_a_gpu_job_when_a_peer_advertises_no_device_attributes():

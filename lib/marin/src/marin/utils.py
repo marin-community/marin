@@ -6,6 +6,7 @@ from typing import Any
 
 import datasets
 import fsspec
+import httpx
 import requests
 from huggingface_hub.utils import HfHubHTTPError
 from rigging.timing import ExponentialBackoff, retry_with_backoff
@@ -20,15 +21,20 @@ _HF_RETRY_KEYWORDS = (
 )
 
 
+def _is_retryable_status(status: int) -> bool:
+    return status == 429 or status >= 500
+
+
 def _hf_should_retry(exc: Exception) -> bool:
+    # huggingface_hub >= 1.0 raises httpx-based errors; datasets still uses requests for some URLs.
+    if isinstance(exc, HfHubHTTPError | httpx.HTTPStatusError):
+        return _is_retryable_status(exc.response.status_code)
     if isinstance(exc, requests.exceptions.HTTPError):
-        # HfHubHTTPError subclasses HTTPError; retry it on unknown status because the
-        # hub SDK can raise without an attached response on transient failures.
-        status = getattr(getattr(exc, "response", None), "status_code", None)
-        if status is None:
-            return isinstance(exc, HfHubHTTPError)
-        return status == 429 or status >= 500
-    if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return exc.response is not None and _is_retryable_status(exc.response.status_code)
+    if isinstance(
+        exc,
+        httpx.NetworkError | httpx.TimeoutException | requests.exceptions.ConnectionError | requests.exceptions.Timeout,
+    ):
         return True
     message = str(exc).lower()
     return any(keyword in message for keyword in _HF_RETRY_KEYWORDS)

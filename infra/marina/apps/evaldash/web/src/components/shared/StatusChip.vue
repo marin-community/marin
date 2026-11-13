@@ -12,6 +12,8 @@ const STYLES: Record<string, string> = {
   [RUN_STATUS.FAILED]: 'bg-status-danger-bg text-status-danger border-status-danger-border',
   [RUN_STATUS.ARTIFACT_FAILED]: 'bg-status-warning-bg text-status-warning border-status-warning-border',
   [RUN_STATUS.INFRA_FAILED]: 'bg-status-warning-bg text-status-warning border-status-warning-border',
+  running: 'bg-status-warning-bg text-status-warning border-status-warning-border',
+  step_failed: 'bg-status-danger-bg text-status-danger border-status-danger-border',
 }
 
 const chipClass = computed(

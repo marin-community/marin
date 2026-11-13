@@ -77,6 +77,14 @@ class BackendKind(StrEnum):
     KUBERNETES = "kubernetes"
 
 
+class EgressAllowlistMode(StrEnum):
+    """How a backend handles ``EGRESS_POLICY_ALLOWLIST`` jobs."""
+
+    UNAVAILABLE = "unavailable"  # cannot enforce it; the job runs on the cluster network
+    OPT_IN = "opt-in"  # enforces it for jobs that request it
+    DEFAULT = "default"  # enforces it, and root jobs get it unless they choose otherwise
+
+
 class BackendCapability(StrEnum):
     """Mechanisms a backend asks the controller to feed during each phase."""
 
@@ -95,11 +103,14 @@ class BackendDescriptor:
     scale_groups: frozenset[str] = field(default_factory=frozenset)
     capabilities: frozenset[BackendCapability] = field(default_factory=frozenset)
     display_name: str | None = None
+    # Task execution contracts, independent of reconciliation mechanisms above.
+    task_capabilities: frozenset[str] = field(default_factory=frozenset)
 
     def __post_init__(self) -> None:
         normalized = {key: frozenset(values) for key, values in self.advertised_attributes.items()}
         object.__setattr__(self, "advertised_attributes", MappingProxyType(normalized))
         object.__setattr__(self, "scale_groups", frozenset(self.scale_groups))
+        object.__setattr__(self, "task_capabilities", frozenset(self.task_capabilities))
         capabilities = self.capabilities
         if not capabilities:
             capabilities = frozenset(
@@ -120,7 +131,7 @@ class DashboardBackendDescriptor:
 
 def dashboard_backend_descriptor(backend: "TaskBackend") -> DashboardBackendDescriptor:
     descriptor = backend.descriptor
-    capabilities = []
+    capabilities = sorted(descriptor.task_capabilities)
     if BackendCapability.DIRECT_DISPATCH in descriptor.capabilities:
         capabilities.append("cluster")
     if BackendCapability.WORKER_FLEET in descriptor.capabilities:
@@ -521,6 +532,14 @@ class TaskBackend(Protocol):
 
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         """Return why a submitted shape can never run, or None if feasible."""
+        ...
+
+    def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        """Validate backend requirements; return an error for an invalid job, or None."""
+        ...
+
+    def egress_allowlist_mode(self, request: controller_pb2.Controller.LaunchJobRequest) -> EgressAllowlistMode:
+        """How this backend handles ``EGRESS_POLICY_ALLOWLIST`` for ``request``."""
         ...
 
     def get_process_status(

@@ -7,7 +7,8 @@ changes from the branch point with main. Selected paths share one synced
 workspace environment. When Haliax and other packages are selected together,
 the runner gives Haliax one eight-device worker and runs the remaining workers
 concurrently with the normal one-device topology. Dedicated accelerator and
-browser suites remain delegated to CI.
+browser suites remain delegated to CI. Harbor's offline runtime runs separately
+in its own frozen environment.
 
 Usage:
     uv run --no-project infra/ci/run_tests.py
@@ -27,6 +28,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from infra.ci.run_harbor_tests import run_harbor_tests
 from infra.ci.select_tests import BROAD_TRIGGER_REASON, RUST_SETUP_TAG, SelectionResult, select_local_tests
 
 DEFAULT_BASE_REFS: tuple[str, ...] = ("origin/HEAD", "origin/main", "main")
@@ -346,6 +348,11 @@ def _print_plan(
     show_commands: bool,
 ) -> None:
     packages = invocation.packages if invocation is not None else ()
+    if "harbor-unit" in selection.suites:
+        print("Selected Harbor's isolated offline runtime suite.")
+        if show_commands:
+            print(f"  {shlex.join(('uv', 'run', '--no-project', 'infra/ci/run_harbor_tests.py', *extra_args))}")
+    ci_suites = [suite for suite in selection.suites if suite != "harbor-unit"]
     if selection.reason == BROAD_TRIGGER_REASON:
         print(
             f"The {len(diff.changed_files)} changed files include shared test-environment configuration "
@@ -353,8 +360,8 @@ def _print_plan(
         )
         if show_commands:
             print(f"  {shlex.join(top_level_pytest_command(extra_args))}")
-        if selection.suites:
-            print(f"Dedicated CI suites not run locally: {', '.join(selection.suites)}")
+        if ci_suites:
+            print(f"Dedicated CI suites not run locally: {', '.join(ci_suites)}")
         return
 
     print(
@@ -377,8 +384,8 @@ def _print_plan(
         for lane in lanes:
             label = f"{lane.label}: " if len(lanes) > 1 else ""
             print(f"  {label}{pytest_command_preview(lane, extra_args, no_sync=len(lanes) > 1)}")
-    if selection.suites:
-        print(f"Dedicated CI suites not run locally: {', '.join(selection.suites)}")
+    if ci_suites:
+        print(f"Dedicated CI suites not run locally: {', '.join(ci_suites)}")
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -409,7 +416,16 @@ def run(argv: list[str] | None = None) -> int:
 
     extra_args = tuple(args.pytest_args[1:] if args.pytest_args[:1] == ["--"] else args.pytest_args)
     _print_plan(diff, selection, invocation, extra_args, repo_root, args.workers, show_commands=True)
-    if invocation is None or args.dry_run:
+    if args.dry_run:
+        return 0
+
+    if "harbor-unit" in selection.suites:
+        print("\n==> Harbor (isolated offline runtime)", flush=True)
+        status = run_harbor_tests(repo_root, extra_args)
+        if status:
+            return status
+
+    if invocation is None:
         return 0
 
     if selection.reason == BROAD_TRIGGER_REASON:

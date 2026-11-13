@@ -7,7 +7,9 @@ Trains a regression head (MSE on the continuous normalized quality score) with
 an internal train/val split for early model selection, then reports the held-out
 oracle metrics (:mod:`experiments.datakit.cluster.quality.fast_transformer.metrics`):
 AUC and Spearman of predicted quality vs the Claude oracle, plus accuracy /
-precision / recall / F1 at threshold 0.5.
+precision / recall / F1 at threshold 0.5. ``main`` then fits the bme calibration
+(:mod:`experiments.datakit.cluster.quality.fast_transformer.calibrate`) into the
+same model dir, so one command yields every file the scoring stage loads.
 """
 
 import argparse
@@ -24,9 +26,11 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import pyarrow.parquet as pq
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
+from experiments.datakit.cluster.quality.fast_transformer.artifact import MODEL_CALIB
+from experiments.datakit.cluster.quality.fast_transformer.calibrate import calibrate_model
 from experiments.datakit.cluster.quality.fast_transformer.data import PackedData, build_remap, encode_texts, pack
 from experiments.datakit.cluster.quality.fast_transformer.inference import data_parallel_shardings, predict
 from experiments.datakit.cluster.quality.fast_transformer.metrics import auc, spearman_rho
@@ -35,14 +39,17 @@ from experiments.datakit.cluster.quality.fast_transformer.model import (
     FastTransformerConfig,
     count_params,
 )
-from experiments.datakit.cluster.quality.fast_transformer.scorer import MODEL_STEM, artifact_names
+from experiments.datakit.cluster.quality.fast_transformer.scorer import MODEL_EQX, MODEL_META, MODEL_REMAP
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_THRESHOLD = 0.5
 
-# The deployed scorer's config + tokenizer (selected by the earlier architecture sweep).
-TOKENIZER = "intfloat/multilingual-e5-small"
+# The deployed scorer's config (selected by the earlier architecture sweep) and
+# tokenizer. TOKENIZER must equal ``reference_pipeline.TOKENIZER``: the stage scores
+# the tokenize step's stored ids and refuses a model whose meta tokenizer differs
+# from the tokenize artifact's.
+TOKENIZER = "marin-community/marin-tokenizer"
 MAX_TOKENS = 512
 DEPLOY_CONFIG = {
     "embed_dim": 256,
@@ -266,31 +273,29 @@ def fit(
     )
 
 
-def _save_scorer(model, remap: dict, tokenizer: str, config: FastTransformerConfig, out_dir: str, name: str) -> None:
-    """Serialise the model + vocab remap + meta in the format `scorer.py` loads."""
+def _save_scorer(model, remap: dict, tokenizer: str, config: FastTransformerConfig, out_dir: str) -> None:
+    """Serialise the model + vocab remap + meta under the names `scorer.py` loads."""
     out_dir = out_dir.rstrip("/")
-    eqx_name, remap_name, meta_name = artifact_names(name)
     fd, local = tempfile.mkstemp(suffix=".eqx")
     os.close(fd)
     eqx.tree_serialise_leaves(local, model)  # eqx serialise needs a local path
-    with open(local, "rb") as src, StoragePath(f"{out_dir}/{eqx_name}").open("wb") as dst:
+    with open(local, "rb") as src, StoragePath(f"{out_dir}/{MODEL_EQX}").open("wb") as dst:
         dst.write(src.read())
-    with StoragePath(f"{out_dir}/{remap_name}").open("w") as fh:
+    with StoragePath(f"{out_dir}/{MODEL_REMAP}").open("w") as fh:
         json.dump(remap, fh)
     # Serialise the FULL config (not a hand-picked subset) so the loader rebuilds the exact
     # architecture -- otherwise a non-default final_pool / mlp_ratio silently falls back to
     # the dataclass default and scores with the wrong (or shape-mismatched) model.
     meta = {"tokenizer": tokenizer, "max_tokens": config.max_tokens, "config": asdict(config)}
-    with StoragePath(f"{out_dir}/{meta_name}").open("w") as fh:
+    with StoragePath(f"{out_dir}/{MODEL_META}").open("w") as fh:
         json.dump(meta, fh)
-    logger.info("saved scorer -> %s/%s (+ %s, %s)", out_dir, eqx_name, remap_name, meta_name)
+    logger.info("saved scorer -> %s/%s (+ %s, %s)", out_dir, MODEL_EQX, MODEL_REMAP, MODEL_META)
 
 
 def train_from_labels(
     *,
     labels_path: str,
     out_dir: str,
-    name: str = MODEL_STEM,
     tokenizer: str = TOKENIZER,
     max_tokens: int = MAX_TOKENS,
     eval_frac: float = 1 / 7,
@@ -313,9 +318,9 @@ def train_from_labels(
 
     tr_texts, tr_scores = _split(train_idx)
     ev_texts, ev_scores = _split(eval_idx)
-    tr_raw = encode_texts(tokenizer, tr_texts, max_tokens)
-    ev_raw = encode_texts(tokenizer, ev_texts, max_tokens)
-    remap = build_remap(tr_raw, min_count=2)
+    tr_raw = encode_texts(tokenizer, tr_texts)
+    ev_raw = encode_texts(tokenizer, ev_texts)
+    remap = build_remap([r[:max_tokens] for r in tr_raw], min_count=2)
     vocab = len(remap) + 2
     data = PackedData(
         train=pack(tr_raw, remap, tr_scores, max_tokens),
@@ -331,18 +336,22 @@ def train_from_labels(
     fitted = fit(config, data, hp)
     holdout = _metrics(predict(fitted.model, data.eval.ids), data.eval.scores)
     logger.info("HOLDOUT AUC=%.4f spearman=%.4f (best_epoch=%d)", holdout.auc, holdout.spearman_rho, fitted.best_epoch)
-    _save_scorer(fitted.model, remap, tokenizer, config, out_dir, name)
+    _save_scorer(fitted.model, remap, tokenizer, config, out_dir)
     return fitted
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Train the pooled fast-transformer quality scorer on the oracle labels.")
     p.add_argument("--labels", default=DEFAULT_LABELS, help="merged oracle-label parquet")
-    p.add_argument("--out-dir", required=True, help="dir to write <name>.eqx + _remap.json + _meta.json")
-    p.add_argument("--name", default=MODEL_STEM)
+    p.add_argument(
+        "--out-dir",
+        required=True,
+        help=f"dir to write {MODEL_EQX} + {MODEL_REMAP} + {MODEL_META} + {MODEL_CALIB}",
+    )
     args = p.parse_args()
     configure_logging(logging.INFO)
-    train_from_labels(labels_path=args.labels, out_dir=args.out_dir, name=args.name)
+    train_from_labels(labels_path=args.labels, out_dir=args.out_dir)
+    calibrate_model(args.labels, args.out_dir, prefix_join(args.out_dir, MODEL_CALIB))
 
 
 if __name__ == "__main__":

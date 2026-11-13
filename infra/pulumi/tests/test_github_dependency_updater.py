@@ -28,10 +28,10 @@ def _config(**overrides) -> DependencyUpdaterConfig:
     return DependencyUpdaterConfig(**values)
 
 
-def test_plan_preserves_admin_override_and_limits_the_updater_to_review_bypass() -> None:
+def test_plan_limits_admin_and_updater_bypass_to_pull_requests() -> None:
     plan = dependency_updater_plan(_config())
 
-    admin = RulesetBypassActorPlan(actor_type="OrganizationAdmin", bypass_mode="always")
+    admin = RulesetBypassActorPlan(actor_type="OrganizationAdmin", bypass_mode="pull_request")
     updater = RulesetBypassActorPlan(actor_type="Integration", bypass_mode="pull_request", actor_id=1234)
     assert plan.review_bypass_actors == (admin, updater)
     assert plan.required_ci_bypass_actors == (admin,)

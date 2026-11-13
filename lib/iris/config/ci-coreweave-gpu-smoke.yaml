@@ -19,15 +19,12 @@ platform:
     region: US-WEST-04A
     namespace: iris-gang-smoke
     kubeconfig_path: ~/.kube/coreweave-iris
-    object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+    object_storage_endpoint: http://cwlota.com
+    external_object_storage_endpoint: https://cwobject.com
 
 storage:
   # Throwaway controller state in the pod's local-state volume — the smoke tears
-  # down on exit, so durable S3 state is pointless. An S3 backend also needs an R2
-  # token with ListBucket on the (initially empty) state prefix, or the controller's
-  # checkpoint-restore fs.exists() gets a 403 on the missing key and crash-loops.
-  # file:// sidesteps that; gang admission (what's under test) is unaffected by the
-  # state backend. (coreweave-ci uses S3 only because its prefix is already populated.)
+  # down on exit, so durable S3 state is unnecessary.
   remote_state_dir: file:///var/cache/iris/controller/state
 
 kubernetes_provider:

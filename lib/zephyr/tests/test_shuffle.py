@@ -40,14 +40,7 @@ from zephyr.shuffle import (
 )
 from zephyr.worker_context import _worker_ctx_var
 
-
-@pytest.fixture(autouse=True)
-def mock_worker_ctx():
-    """Provide a dummy worker context for ScatterWriter."""
-    ctx = _InProcessWorkerContext(chunk_prefix="test", execution_id="test", stage_name="test")
-    token = _worker_ctx_var.set(ctx)
-    yield
-    _worker_ctx_var.reset(token)
+pytestmark = pytest.mark.usefixtures("worker_context")
 
 
 def _read_shard(shard: ScatterReader) -> list:
@@ -99,6 +92,42 @@ def test_scatter_roundtrip(tmp_path):
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
 
 
+def test_shuffle_reader_reports_target_row_total(tmp_path):
+    items = [{"k": i % 4, "v": i} for i in range(40)]
+    paths = _build_shard(tmp_path, items, num_output_shards=4)
+    target = deterministic_hash(0) % 4
+    reader = ScatterReader.from_sidecars(paths, target)
+    merged = reader.merge_sorted_chunks(str(tmp_path / "sort"))
+    first = next(merged)
+    expected = [row for row in items if deterministic_hash(row["k"]) % 4 == target]
+    assert merged.total_rows == len(expected)
+    recovered = [first, *merged]
+    assert sorted(recovered, key=lambda row: row["v"]) == expected
+
+
+def test_scatter_streams_wide_items_before_consuming_input(tmp_path):
+    """Batched records must reach the memory-aware writer before 1,000 accumulate."""
+    data_path = tmp_path / "wide-scatter"
+
+    def rows():
+        for index in range(64):
+            if index == 32:
+                assert list(data_path.glob("*.parquet")), "Wide records accumulated without flushing"
+            yield {"k": index % 4, "v": index, "payload": b"x" * 1024**2}
+
+    ctx = _InProcessWorkerContext(
+        chunk_prefix="test", execution_id="test", stage_name="test", task_memory_bytes=64 * 1024**2
+    )
+    token = _worker_ctx_var.set(ctx)
+    try:
+        paths = list(_write_scatter(rows(), 0, str(data_path), _key, 4))
+    finally:
+        _worker_ctx_var.reset(token)
+    recovered = [row for shard in range(4) for row in _read_shard(ScatterReader.from_sidecars(paths, shard))]
+    assert sorted(row["v"] for row in recovered) == list(range(64))
+    assert all(row["payload"] == b"x" * 1024**2 for row in recovered)
+
+
 def test_scatter_each_shard_gets_correct_items(tmp_path):
     """Items are routed to shards by deterministic_hash(key) % num_shards."""
     num_shards = 4
@@ -112,7 +141,7 @@ def test_scatter_each_shard_gets_correct_items(tmp_path):
         assert recovered == expected, f"shard {shard_idx} mismatch"
 
 
-def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
+def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch, tmp_path):
     path = "s3://marin-us-east-02a/execution/stage0/shard-0000/scatter/c0000.parquet"
     calls = []
     frame = pl.DataFrame(
@@ -129,6 +158,15 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
 
     monkeypatch.setenv("AWS_ENDPOINT_URL", "http://cwlota.com")
     monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path / "no-mounted-secrets"))
+    for name in (
+        "CW_KEY_ID",
+        "CW_KEY_SECRET",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SHARED_CREDENTIALS_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(pl, "scan_parquet", scan_parquet)
 
     schema = frame.collect_schema()
@@ -410,6 +448,24 @@ def test_scatter_empty_input(tmp_path):
     assert list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path))) == []
 
 
+def test_scatter_items_the_stdlib_pickler_cannot_reference_round_trip():
+    """Items holding a lambda or a class defined inside a function fall back to cloudpickle."""
+
+    class _Local:
+        def __init__(self, value):
+            self.value = value
+
+        def __eq__(self, other):
+            return type(other) is _Local and other.value == self.value
+
+    items = [{"v": 1, "fn": lambda x: x + 1}, _Local(7), {"v": 2}]
+    frame = _items_to_dataframe(items, key_fn=lambda _: 0, sort_fn=None, num_output_shards=1)
+    restored = list(_dataframe_to_items(frame))
+    assert restored[0]["fn"](41) == 42
+    assert restored[1] == _Local(7)
+    assert restored[2] == {"v": 2}
+
+
 def test_scatter_key_fn_must_be_serializable(tmp_path):
     """key_fn must return a msgpack-serializable value."""
 
@@ -449,24 +505,6 @@ def test_scatter_handles_arbitrary_python_objects(tmp_path):
         return (x["k"], repr(x["v"]))
 
     assert sorted(recovered, key=_ord) == sorted(items, key=_ord)
-
-
-def test_scatter_byte_budget_preserves_all_items(tmp_path):
-    """Items are not lost or duplicated when byte-budget flushes fire mid-write."""
-    num_shards = 3
-    items = [{"k": i % num_shards, "v": i} for i in range(300)]
-    scatter_paths = _build_shard(
-        tmp_path,
-        items,
-        num_output_shards=num_shards,
-    )
-
-    recovered = []
-    for shard_idx in range(num_shards):
-        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
-        recovered.extend(_read_shard(shard))
-
-    assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
 
 
 def test_scatter_bounds_parquet_row_groups(tmp_path):
@@ -747,7 +785,7 @@ def test_merge_sorted_frames_multi_pass_preserves_order(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
-def test_merge_sorted_frames_reads_coreweave_spills_with_virtual_host_addressing(monkeypatch):
+def test_merge_sorted_frames_reads_coreweave_spills_with_virtual_host_addressing(monkeypatch, tmp_path):
     frames = [_make_sorted_frame([value]) for value in range(5)]
     spill_bytes: dict[str, bytes] = {}
     scan_calls: list[tuple[str, dict[str, str]]] = []
@@ -775,6 +813,15 @@ def test_merge_sorted_frames_reads_coreweave_spills_with_virtual_host_addressing
 
     monkeypatch.setenv("AWS_ENDPOINT_URL", "http://cwlota.com")
     monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path / "no-mounted-secrets"))
+    for name in (
+        "CW_KEY_ID",
+        "CW_KEY_SECRET",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SHARED_CREDENTIALS_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(StoragePath, "mkdirs", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(StoragePath, "open", open_spill)
     monkeypatch.setattr(StoragePath, "rm", remove_spill)

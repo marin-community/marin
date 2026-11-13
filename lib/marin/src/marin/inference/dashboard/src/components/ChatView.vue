@@ -4,6 +4,7 @@ import {
   fetchToolDefinitions,
   invokeShell,
   invokeTool,
+  invokeWebSearch,
   isAbortError,
   requestCompletion,
 } from '../lib/api'
@@ -20,11 +21,15 @@ import {
   parseWorkspaceFiles,
 } from '../lib/shell_workspace'
 import { splitThinking } from '../lib/thinking'
+import { WEB_SEARCH_TOOL_DEFINITION, WEB_SEARCH_TOOL_NAME } from '../lib/web_search'
+import { requestDebugData, vllmDebugStreamOptions } from '../lib/vllm_debug'
+import type { VllmRequestDebug } from '../lib/vllm_debug'
 import {
   appendToolCallDelta,
   createToolCallAccumulator,
   finalizeToolCalls,
   inlineToolCalls,
+  runToolRounds,
 } from '../lib/tool_calls'
 import { newId } from '../lib/storage'
 import type {
@@ -38,8 +43,6 @@ import type {
 import MessageBubble from './MessageBubble.vue'
 import ShellWorkspacePanel from './ShellWorkspacePanel.vue'
 
-const MAX_TOOL_ROUNDS = 8
-
 const props = defineProps<{
   conversation: Conversation
   params: SamplingParams
@@ -47,6 +50,9 @@ const props = defineProps<{
   hasChatTemplate: boolean
   chatTemplateProtocol: ChatTemplateProtocol | null
   streaming: boolean
+  baseUrl?: string
+  composerMode?: 'embedded' | 'external'
+  webSearchAvailable?: boolean
 }>()
 
 const emit = defineEmits<{ persist: [] }>()
@@ -56,6 +62,7 @@ const busy = ref(false)
 const showTools = ref(false)
 const showWorkspace = ref(false)
 const showRawChat = ref(false)
+const showVllmDebug = ref(false)
 const rawChat = computed(() => plainTextChat(props.conversation))
 const scroller = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
@@ -71,6 +78,7 @@ watch(
   },
 )
 onUnmounted(stopStreaming)
+defineExpose({ send, stopStreaming })
 
 function stopStreaming() {
   abort?.abort()
@@ -98,7 +106,10 @@ watch(
     props.conversation.messages
       .map((message) => {
         if (message.role === 'tool') return JSON.stringify(message.result).length
-        return message.content.length + (message.role === 'assistant' ? message.thinking.length : 0)
+        if (message.role === 'assistant') {
+          return `${message.content.length + message.thinking.length}:${message.finishReason ?? ''}`
+        }
+        return message.content.length
       })
       .join(','),
   async () => {
@@ -156,7 +167,7 @@ async function send(text?: string) {
 async function runToolExchange(conversation: Conversation, pythonTools: string, signal: AbortSignal) {
   let reply: AssistantMessage | null = null
   try {
-    const tools = pythonTools ? await fetchToolDefinitions(pythonTools, signal) : []
+    const tools = pythonTools ? await fetchToolDefinitions(pythonTools, signal, props.baseUrl) : []
     let workspaceFiles: Record<string, string> | null = null
     if (conversation.shellWorkspace) {
       workspaceFiles = parseWorkspaceFiles(conversation.shellWorkspace.filesJson)
@@ -165,34 +176,42 @@ async function runToolExchange(conversation: Conversation, pythonTools: string, 
       }
       tools.push(BASH_TOOL_DEFINITION)
     }
+    if (conversation.webSearch && props.webSearchAvailable) {
+      if (tools.some((tool) => tool.function.name === WEB_SEARCH_TOOL_NAME)) {
+        throw new Error(`Python tool name ${JSON.stringify(WEB_SEARCH_TOOL_NAME)} is reserved for web search`)
+      }
+      tools.push(WEB_SEARCH_TOOL_DEFINITION)
+    }
     const templateFields = chatTemplateRequestFields(
       conversation.thinkingMode,
       conversation.customInstructions,
       tools,
     )
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
-      const request = modelMessages(conversation)
-      reply = appendAssistantReply(conversation)
-
-      await complete(reply, request, tools, templateFields, signal)
-      const calls = reply.toolCalls ?? []
-      persistConversation(conversation)
-      if (!calls.length) break
-
-      await executeToolCalls(conversation, calls, pythonTools, workspaceFiles, signal)
-
-      if (round === MAX_TOOL_ROUNDS - 1) {
-        reply.error = `Stopped after ${MAX_TOOL_ROUNDS} consecutive tool rounds.`
-      }
-    }
+    await runToolRounds(
+      props.params.maxToolRounds,
+      async () => {
+        const request = modelMessages(conversation)
+        reply = appendAssistantReply(conversation)
+        await complete(reply, request, tools, templateFields, signal)
+        persistConversation(conversation)
+        return reply.toolCalls ?? []
+      },
+      (call) => executeToolCall(conversation, call, pythonTools, workspaceFiles, signal),
+    )
   } catch (error) {
     if (isAbortError(error)) {
-      appendCancelledToolResults(conversation, reply)
+      markReplyIncomplete(reply)
+      appendMissingToolResults(conversation, reply, 'tool call cancelled')
     } else {
       reply ??= appendAssistantReply(conversation)
-      reply.error = String(error)
+      appendMissingToolResults(conversation, reply, 'tool call not executed')
+      reply.error = error instanceof Error ? error.message : String(error)
     }
   }
+}
+
+function markReplyIncomplete(reply: AssistantMessage | null) {
+  if (reply) reply.completed = false
 }
 
 function appendAssistantReply(conversation: Conversation): AssistantMessage {
@@ -204,6 +223,7 @@ function appendAssistantReply(conversation: Conversation): AssistantMessage {
     rawReasoning: '',
     thinkingSeconds: null,
     error: null,
+    completed: false,
     toolCalls: [],
   })
   // Return the reactive proxy so streaming deltas re-render.
@@ -213,33 +233,34 @@ function appendAssistantReply(conversation: Conversation): AssistantMessage {
   return reply
 }
 
-async function executeToolCalls(
+async function executeToolCall(
   conversation: Conversation,
-  calls: ToolCall[],
+  call: ToolCall,
   pythonTools: string,
   workspaceFiles: Record<string, string> | null,
   signal: AbortSignal,
-) {
-  for (const call of calls) {
-    let result: unknown
-    try {
-      if (call.name === BASH_TOOL_NAME) {
-        const workspace = conversation.shellWorkspace
-        if (!workspace || !workspaceFiles) throw new Error('Shell workspace is not enabled')
-        const command = bashCommand(call.arguments)
-        const shellResult = await invokeShell(workspaceFiles, workspace.commits, workspace.history, command, signal)
-        result = shellResult
-        if (shellResult.stop_reason === null) workspace.history.push(command)
-      } else {
-        result = await invokeTool(call.name, pythonTools, call.arguments, signal)
-      }
-    } catch (error) {
-      if (isAbortError(error)) throw error
-      result = { error: String(error) }
+): Promise<void> {
+  let result: unknown
+  try {
+    if (call.name === BASH_TOOL_NAME) {
+      const workspace = conversation.shellWorkspace
+      if (!workspace || !workspaceFiles) throw new Error('Shell workspace is not enabled')
+      const command = bashCommand(call.arguments)
+      const shellResult = await invokeShell(workspaceFiles, workspace.commits, workspace.history, command, signal, props.baseUrl)
+      result = shellResult
+      if (shellResult.stop_reason === null) workspace.history.push(command)
+    } else if (call.name === WEB_SEARCH_TOOL_NAME) {
+      if (!conversation.webSearch || !props.webSearchAvailable) throw new Error('Web search is not enabled')
+      result = await invokeWebSearch(call.arguments, signal, props.baseUrl)
+    } else {
+      result = await invokeTool(call.name, pythonTools, call.arguments, signal, props.baseUrl)
     }
-    conversation.messages.push(toolResultMessage(call, result))
-    persistConversation(conversation)
+  } catch (error) {
+    if (isAbortError(error)) throw error
+    result = { error: String(error) }
   }
+  conversation.messages.push(toolResultMessage(call, result))
+  persistConversation(conversation)
 }
 
 function persistConversation(conversation: Conversation) {
@@ -247,13 +268,13 @@ function persistConversation(conversation: Conversation) {
   emit('persist')
 }
 
-function appendCancelledToolResults(conversation: Conversation, reply: AssistantMessage | null) {
+function appendMissingToolResults(conversation: Conversation, reply: AssistantMessage | null, error: string) {
   const completed = new Set(
     conversation.messages.filter((message) => message.role === 'tool').map((message) => message.toolCallId),
   )
   for (const call of reply?.toolCalls ?? []) {
     if (completed.has(call.id)) continue
-    conversation.messages.push(toolResultMessage(call, { error: 'tool call cancelled' }))
+    conversation.messages.push(toolResultMessage(call, { error }))
   }
 }
 
@@ -278,6 +299,7 @@ async function complete(
   let thinkingStartedAt: number | null = null
   const structuredCalls = createToolCallAccumulator()
 
+  const debugEnabled = showVllmDebug.value
   const body: Record<string, unknown> = {
     model: props.model,
     messages,
@@ -286,14 +308,19 @@ async function complete(
     max_tokens: props.params.maxTokens,
     top_p: props.params.topP,
     ...templateFields,
+    ...vllmDebugStreamOptions(debugEnabled, props.streaming),
   }
+  let requestDebug: VllmRequestDebug | null = null
   if (tools.length) {
     // Permit model-native call generation without requiring vLLM auto-tool parsing.
     // The response handling below also accepts structured calls when a server emits them.
     body.tool_choice = null
   }
   await requestCompletion('v1/chat/completions', body, props.streaming, signal, (data) => {
-    const delta = data.choices?.[0]?.delta ?? data.choices?.[0]?.message
+    if (debugEnabled) requestDebug = requestDebugData(data) ?? requestDebug
+    const choice = data.choices?.[0]
+    if (choice?.finish_reason) reply.finishReason = choice.finish_reason
+    const delta = choice?.delta ?? choice?.message
     if (!delta) return
     const reasoning = delta.reasoning_content ?? delta.reasoning
     if (reasoning) reasoningStream += reasoning
@@ -318,7 +345,8 @@ async function complete(
     if (thinkingStartedAt !== null && reply.thinkingSeconds === null && (reply.content || reply.toolCalls.length)) {
       reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
     }
-  })
+  }, props.baseUrl)
+  if (debugEnabled && !signal.aborted) reply.requestDebug = requestDebug ?? { metrics: null, usage: null }
 
   if (thinkingStartedAt !== null && reply.thinkingSeconds === null) {
     reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
@@ -329,6 +357,7 @@ async function complete(
     reply.content = inline.visible
     reply.toolCalls = structuredCalls.calls.size ? finalizeToolCalls(structuredCalls, newId) : inline.calls
   }
+  reply.completed = !signal.aborted && reply.finishReason !== 'length'
 }
 
 </script>
@@ -342,7 +371,7 @@ async function complete(
           <div class="mb-5 text-center text-sm text-text-muted">
             Send a message to start. Conversations stay in this browser.
           </div>
-          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div v-if="composerMode !== 'external'" class="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <button
               v-for="example in CHAT_EXAMPLES"
               :key="example.label"
@@ -373,14 +402,15 @@ async function complete(
           :key="index"
           :message="message"
           :streaming="busy && index === conversation.messages.length - 1"
+          :show-vllm-debug="showVllmDebug"
         />
       </div>
     </div>
 
-    <div class="border-t border-surface-border px-4 py-3">
+    <div v-if="composerMode !== 'external'" class="border-t border-surface-border px-4 py-3">
       <div class="mx-auto max-w-3xl">
-        <div class="mb-2 flex items-center justify-between gap-4">
-          <div class="flex items-center gap-4">
+        <div class="mb-2 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
             <button
               class="flex items-center gap-2 text-xs font-medium text-text-muted transition-colors hover:text-text-secondary"
               :class="{ 'text-accent': conversation.pythonTools.trim() }"
@@ -403,14 +433,35 @@ async function complete(
                 enabled
               </span>
             </button>
+            <label
+              v-if="webSearchAvailable"
+              class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted"
+              :class="{ 'text-accent': conversation.webSearch }"
+              title="Give the model a web_search tool backed by Parallel search"
+            >
+              <input
+                v-model="conversation.webSearch"
+                type="checkbox"
+                class="accent-accent"
+                :disabled="busy"
+                @change="persistConversation(conversation)"
+              />
+              Web search
+            </label>
           </div>
-          <label
-            class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted"
-            title="Show the whole chat as a plain-text transcript"
-          >
-            <input v-model="showRawChat" type="checkbox" class="accent-accent" />
-            Raw chat
-          </label>
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <label class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted" title="Record and show vLLM timings on each reply">
+              <input v-model="showVllmDebug" type="checkbox" class="accent-accent" />
+              vLLM debug
+            </label>
+            <label
+              class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted"
+              title="Show the whole chat as a plain-text transcript"
+            >
+              <input v-model="showRawChat" type="checkbox" class="accent-accent" />
+              Raw chat
+            </label>
+          </div>
         </div>
         <div v-if="showTools" class="mb-3">
           <textarea

@@ -111,9 +111,10 @@ def _moe_mlp_ep_deepep_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    token_sharding_axes: tuple[str, ...],
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """DeepEP dispatch/combine path for an intranode expert mesh."""
-    del capacity_factor
+    del capacity_factor, token_sharding_axes  # DeepEP is dropless, so it reduces nothing over tokens
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(

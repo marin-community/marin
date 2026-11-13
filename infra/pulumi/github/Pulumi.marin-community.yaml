@@ -52,13 +52,14 @@ config:
         - marin-community/MarinSkyRL
         - marin-community/evalchemy
         - marin-community/harbor
+        - marin-community/marin
         - marin-community/marin-style
         - marin-community/tpu-inference
         - marin-community/vllm
       source_kind: manual
       source_ref: owner-recovery:loom-trigger-token
       disposition: keep
-      note: Consumed outside marin; MarinSkyRL has a default-branch workflow reference.
+      note: Consumed by fork failure reporters and the SkyRL nightly.
     - name: SLACK_WEBHOOK_URL
       scope: organization
       presence: present
@@ -70,6 +71,14 @@ config:
       source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-github-alerts-slack-webhook/versions/1
       disposition: keep
       note: Routes GitHub Actions alerts to #marin-alerts.
+    - name: BELAY_INTAKE_TOKEN
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:belay-intake-token
+      disposition: keep
+      note: marin-belay-bot token used by the Belay intake workflow to comment on the locked issue.
     - name: CW_KUBECONFIG
       scope: repository
       repository: marin-community/marin
@@ -85,6 +94,14 @@ config:
       source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-discord-webhook-code-review/versions/1
       disposition: remove-candidate
       note: No current workflow reference; the current shell value matches the GCP version.
+    - name: DISCORD_WEBHOOK_GCS_EGRESS
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: gcp-secret
+      source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-discord-webhook-gcs-egress/versions/1
+      disposition: keep
+      note: Consumed by .github/workflows/ops-egress-report.yaml.
     - name: DISCORD_WEBHOOK_INTERNAL_DISCUSS
       scope: repository
       repository: marin-community/marin
@@ -218,20 +235,6 @@ config:
       source_kind: manual
       source_ref: owner-recovery:new-gcp-json
       disposition: remove-candidate
-    - name: NIGHTSHIFT_APP_ID
-      scope: repository
-      repository: marin-community/marin
-      presence: present
-      source_kind: github-metadata
-      source_ref: github-app://marin-community/claude-nightshift#app-id
-      disposition: move-to-variable
-    - name: NIGHTSHIFT_APP_PRIVATE_KEY
-      scope: repository
-      repository: marin-community/marin
-      presence: present
-      source_kind: manual
-      source_ref: owner-recovery:claude-nightshift-private-key
-      disposition: keep
     - name: OPENAI_API_KEY
       scope: repository
       repository: marin-community/marin
@@ -293,14 +296,6 @@ config:
       source_ref: env:ANTHROPIC_ADMIN_KEY
       disposition: review
       note: Optional cost-report provider credential.
-    - name: CLAUDE_MAX_OAUTH_TOKEN
-      scope: repository
-      repository: marin-community/marin
-      presence: referenced-missing
-      source_kind: manual
-      source_ref: owner-recovery:claude-max-oauth-token
-      disposition: review
-      note: Fallback reference; CLAUDE_CODE_OAUTH_TOKEN is present at organization scope.
     - name: COREWEAVE_API_TOKEN
       scope: repository
       repository: marin-community/marin

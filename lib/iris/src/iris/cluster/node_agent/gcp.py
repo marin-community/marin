@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from rigging import telemetry
-from rigging.auth import BearerTokenInjector, StaticTokenProvider
+from rigging.auth import BearerTokenInjector
 from rigging.telemetry.probes import nvidia
 
 from iris.cluster.config import WorkerConfig
@@ -16,6 +16,7 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_
 from iris.cluster.node_agent import SERVICE_NAME
 from iris.cluster.node_agent.metrics import NodeMetrics, NodeTarget, publish_node_telemetry
 from iris.cluster.types import AcceleratorType
+from iris.cluster.worker.auth import worker_token_provider
 from iris.cluster.worker.env_probe import (
     HardwareProbe,
     HostMetricsCollector,
@@ -39,7 +40,12 @@ def _worker_telemetry_endpoint(config: WorkerConfig) -> str:
         address = f"http://{address}"
     interceptors: tuple[BearerTokenInjector, ...] = ()
     if config.auth_token:
-        interceptors = (BearerTokenInjector(StaticTokenProvider(config.auth_token), "authorization"),)
+        interceptors = (
+            BearerTokenInjector(
+                worker_token_provider(address, config.auth_token, Path(config.cache_dir)),
+                "authorization",
+            ),
+        )
     client = EndpointServiceClientSync(
         address=address,
         timeout_ms=10_000,

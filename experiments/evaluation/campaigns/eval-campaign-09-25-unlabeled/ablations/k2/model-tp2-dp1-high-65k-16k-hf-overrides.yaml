@@ -1,0 +1,32 @@
+# Diagnostic HF-override arm; differs from high-65k-16k only in hf_overrides.
+name: K2-Horizon-screen-tp2-dp1-high-65k-16k-hf-overrides
+location: IFM/K2-Horizon-MoVA-36B-A4B
+revision: 7730b92d1b574e04663b04023d5d6fa83475432f
+tokenizer: IFM/K2-Horizon-MoVA-36B-A4B
+apply_chat_template: true
+generation:
+  max_gen_toks: 16384
+  thinking_off_template_kwargs:
+    reasoning_effort: high
+resource_hint:
+  gpu:
+    H100: 2
+serve:
+  tensor_parallel_size: 2
+  data_parallel_size: 1
+  max_model_len: 65536
+  hf_overrides: '{"max_position_embeddings":65536,"max_seq_len":65536}'
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --enable-prefix-caching
+  - --chat-template-content-format
+  - string
+  - --default-chat-template-kwargs
+  - '{"reasoning_effort":"high"}'
+  reasoning_parser: k2_horizon
+  tool_call_parser: k2_horizon
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+    extra_body: '{"chat_template_kwargs":{"reasoning_effort":"high"}}'
+    interleaved_thinking: true

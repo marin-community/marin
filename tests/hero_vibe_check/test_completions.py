@@ -47,16 +47,15 @@ def sample_request():
         ),
         spec=SamplingSpec(
             release="test-v1",
-            batch_size=1,
             completions_per_prompt=3,
             prompts=(Prompt(id="add", text="def add(a, b):", seed=0, source_url="https://example.org"),),
             tokenizer="test",
             tokenizer_revision="a" * 40,
-            model={},
             temperature=0,
             max_new_tokens=2,
             context_length=4,
         ),
+        model={"attention_implementation": "reference"},
         source_revision="b" * 40,
         target_cluster="test",
     )
@@ -121,27 +120,30 @@ def test_retries_recover_service_errors_without_overlapping_jobs(tmp_path, sampl
     older = request.model_copy(
         update={"checkpoint": request.checkpoint.model_copy(update={"step": 3000, "uri": "s3://checkpoints/step-3000"})}
     )
+    newest = request.model_copy(
+        update={"checkpoint": request.checkpoint.model_copy(update={"step": 9000, "uri": "s3://checkpoints/step-9000"})}
+    )
     jobs.lose_submit_response = False
     submit_pending(store, jobs, [changed_main, older], spec=sample_request.spec)
-    assert len(jobs.jobs) == 1
-    name = next(iter(jobs.jobs))
+    assert sorted(row.checkpoint.step for row in jobs.requests.values()) == [3000, 6000]
+    name = next(name for name, row in jobs.requests.items() if row.sample_id == request.sample_id)
     assert jobs.requests[name].source_revision == request.source_revision
     jobs.unavailable = True
     with pytest.raises(ConnectionError):
         submit_pending(store, jobs, [changed_main, older], spec=sample_request.spec)
-    assert len(jobs.jobs) == 1
+    assert len(jobs.jobs) == 2
     jobs.unavailable = False
     jobs.jobs[name] = JobState.FAILED
     submit_pending(store, jobs, [changed_main, older], spec=sample_request.spec)
-    assert len(jobs.jobs) == 2
+    assert len(jobs.jobs) == 3
     retry = list(jobs.jobs)[-1]
     assert jobs.requests[retry] == request
     store.save_result(completed(request))
-    submit_pending(store, jobs, [], spec=sample_request.spec)
-    assert len(jobs.jobs) == 2  # A saved result does not mean GPU teardown finished.
+    submit_pending(store, jobs, [newest], spec=sample_request.spec)
+    assert len(jobs.jobs) == 3  # A saved result does not mean GPU teardown finished.
     jobs.jobs[retry] = JobState.SUCCEEDED
     submit_pending(store, jobs, [], spec=sample_request.spec)
-    assert list(jobs.requests.values())[-1] == older
+    assert list(jobs.requests.values())[-1] == newest
 
 
 def test_all_permanent_requests_survive_missed_ticks_and_retry_budget(tmp_path, sample_request):
@@ -158,9 +160,13 @@ def test_all_permanent_requests_survive_missed_ticks_and_retry_budget(tmp_path, 
     newest = request.model_copy(update={"checkpoint": request.checkpoint.model_copy(update={"step": 24000})})
     submit_pending(store, jobs, requests, spec=sample_request.spec)
     assert {row.sample_id for row in store.requests(sample_request.spec)} == {row.sample_id for row in requests}
+    assert [row.checkpoint.step for row in jobs.requests.values()] == [18000, 12000]  # Two active jobs at most.
     for state in [JobState.FAILED, JobState.UNSCHEDULABLE, JobState.SUCCEEDED]:
-        active = next(name for name, job_state in jobs.jobs.items() if job_state == JobState.RUNNING)
-        assert jobs.requests[active] == requests[-1]
+        active = next(
+            name
+            for name, job_state in jobs.jobs.items()
+            if job_state == JobState.RUNNING and jobs.requests[name] == requests[-1]
+        )
         jobs.jobs[active] = state
         if state == JobState.UNSCHEDULABLE:
             jobs.jobs.clear()  # History deletion between attempts must not reset the budget.
@@ -211,6 +217,18 @@ def test_prompt_changes_add_samples_and_source_changes_reuse_results(tmp_path, s
     assert len(jobs.jobs) == 1
     assert store.result(request.sample_id) == completed(request)
     assert changed.sample_id not in store.completed_ids()
+
+
+def test_training_side_model_changes_keep_completed_results_addressable(tmp_path, sample_request):
+    store, jobs = SampleStore(str(tmp_path)), JobService()
+    store.save_result(completed(sample_request))
+    # A renamed attention kernel reaches the request through the hero training configuration.
+    retuned = sample_request.model_copy(update={"model": {"attention_implementation": "gpu_fa4_cute_sm100"}})
+    assert retuned.sample_id == sample_request.sample_id
+    submit_pending(store, jobs, [retuned], spec=sample_request.spec)
+    assert jobs.jobs == {}
+    assert store.requests(sample_request.spec) == [retuned]
+    assert store.result(sample_request.sample_id) == completed(sample_request)
 
 
 def test_results_require_the_full_bank_and_keep_the_first_success(tmp_path, sample_request):
@@ -283,7 +301,12 @@ def test_generation_stops_at_the_correct_boundary(sample_request, prompt_ids, pr
         return np.eye(5)[[predicted]]
 
     result = generate(
-        request.spec, [prompt_ids], eos_token_id=0, logits=logits, decode=lambda ids: "".join(map(str, ids))
+        request.spec,
+        [prompt_ids],
+        batch_size=1,
+        eos_token_id=0,
+        logits=logits,
+        decode=lambda ids: "".join(map(str, ids)),
     )[0]
     assert len(result.samples) == 3
     assert all(sample.token_ids == expected_ids and sample.stop_reason == reason for sample in result.samples)
@@ -295,7 +318,6 @@ def test_sampling_streams_do_not_depend_on_prompt_order_or_early_eos(sample_requ
     spec = request.spec.model_copy(
         update={
             "prompts": (request.spec.prompts[0], other),
-            "batch_size": 2,
             "temperature": 1.0,
             "context_length": 20,
             "max_new_tokens": 12,
@@ -305,26 +327,39 @@ def test_sampling_streams_do_not_depend_on_prompt_order_or_early_eos(sample_requ
     def logits(tokens, positions):
         return np.tile(np.array([-1000, 1, 1, 1, 1]), (tokens.shape[0], 1))
 
-    pair = generate(spec, [[1], [2]], eos_token_id=0, logits=logits, decode=lambda ids: "".join(map(str, ids)))
+    pair = generate(
+        spec, [[1], [2]], batch_size=2, eos_token_id=0, logits=logits, decode=lambda ids: "".join(map(str, ids))
+    )
     reversed_spec = spec.model_copy(update={"prompts": tuple(reversed(spec.prompts))})
     reverse = generate(
-        reversed_spec, [[2], [1]], eos_token_id=0, logits=logits, decode=lambda ids: "".join(map(str, ids))
+        reversed_spec,
+        [[2], [1]],
+        batch_size=2,
+        eos_token_id=0,
+        logits=logits,
+        decode=lambda ids: "".join(map(str, ids)),
     )
     alone = generate(
-        spec.model_copy(update={"prompts": (other,), "batch_size": 1}),
+        spec.model_copy(update={"prompts": (other,)}),
         [[2]],
+        batch_size=1,
         eos_token_id=0,
         logits=logits,
         decode=lambda ids: "".join(map(str, ids)),
     )
     batches = generate(
-        spec.model_copy(update={"batch_size": 1}),
+        spec,
         [[1], [2]],
+        batch_size=1,
         eos_token_id=0,
         logits=logits,
         decode=lambda ids: "".join(map(str, ids)),
     )
-    assert batches == pair
+    # A rack wider than the prompt bank repeats prompts into the filler rows.
+    padded = generate(
+        spec, [[1], [2]], batch_size=5, eos_token_id=0, logits=logits, decode=lambda ids: "".join(map(str, ids))
+    )
+    assert batches == pair == padded
     assert pair[0] == reverse[1]
     assert pair[1] == reverse[0] == alone[0]
     assert len({sample.token_ids for sample in pair[1].samples}) == 3
@@ -335,7 +370,9 @@ def test_sampling_streams_do_not_depend_on_prompt_order_or_early_eos(sample_requ
         scores[tokens[:, 0] == 1] = [1000, -1000, -1000, -1000, -1000]
         return scores
 
-    early = generate(spec, [[1], [2]], eos_token_id=0, logits=early_eos, decode=lambda ids: "".join(map(str, ids)))
+    early = generate(
+        spec, [[1], [2]], batch_size=2, eos_token_id=0, logits=early_eos, decode=lambda ids: "".join(map(str, ids))
+    )
     assert all(sample.stop_reason == StopReason.EOS for sample in early[0].samples)
     assert early[1] == alone[0]
 

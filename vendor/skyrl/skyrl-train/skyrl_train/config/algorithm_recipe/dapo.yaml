@@ -1,0 +1,14 @@
+# @package trainer.algorithm
+# DAPO equation (8) and section 4.1: https://arxiv.org/abs/2503.14476
+advantage_estimator: grpo
+policy_loss_type: regular
+loss_reduction: token_mean
+grpo_norm_by_std: true
+advantage_batch_normalize: false
+eps_clip_low: 0.2
+eps_clip_high: 0.28
+use_kl_in_reward: false
+use_kl_loss: false
+dynamic_sampling:
+  type: filter
+  min_reward_std: 0.0

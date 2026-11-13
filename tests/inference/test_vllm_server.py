@@ -8,6 +8,8 @@ routing by severity and flushing/draining on teardown. A second group covers sta
 process without HTTP readiness and waiting once for an ordinary server.
 """
 
+import json
+import logging
 import os
 import socket
 import subprocess
@@ -28,12 +30,14 @@ from marin.inference.vllm_server import (
     _engine_kwargs_to_cli_args,
     _linux_process_group_status,
     _LogPump,
+    _native_error_summary,
     _native_logs,
     _native_logs_tail,
     _prepare_vllm_compilation_cache,
     _ProcessGroupStatus,
     _starts_nccl_ras_probe,
 )
+from marin.testing.inference.fake_vllm_server import FakeVllmLauncher
 from prometheus_client.parser import text_string_to_metric_families
 from rigging import telemetry
 from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper
@@ -42,6 +46,14 @@ from rigging.testing import RecordingTelemetryTransport
 
 def test_engine_kwargs_forward_dtype_to_vllm_command() -> None:
     assert _engine_kwargs_to_cli_args({"dtype": "float16"}) == ["--dtype", "float16"]
+
+
+def test_vllm_env_allows_large_streamed_checkpoints_to_finish_loading(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VLLM_ENGINE_READY_TIMEOUT_S", raising=False)
+    assert vllm_server._vllm_env()["VLLM_ENGINE_READY_TIMEOUT_S"] == "1500"
+
+    monkeypatch.setenv("VLLM_ENGINE_READY_TIMEOUT_S", "2400")
+    assert vllm_server._vllm_env()["VLLM_ENGINE_READY_TIMEOUT_S"] == "2400"
 
 
 def test_nccl_ras_probe_supports_direct_and_wrapped_cuda_launchers() -> None:
@@ -215,6 +227,17 @@ def test_native_logs_tail_includes_unterminated_final_fragment(tmp_path):
     pump.close()
 
 
+def test_native_error_summary_preserves_originating_exception(tmp_path):
+    (tmp_path / "stdout.log").write_text("ordinary output\nRuntimeError: engine initialization failed\n")
+    (tmp_path / "stderr.log").write_text("Ninja build stopped\nCalledProcessError: nvcc exited 1\n")
+
+    summary = _native_error_summary(str(tmp_path))
+
+    assert "RuntimeError: engine initialization failed" in summary
+    assert "CalledProcessError: nvcc exited 1" in summary
+    assert "ordinary output" not in summary
+
+
 def test_native_logs_keeps_placement_older_than_diagnostic_tail(tmp_path):
     placement = "Worker placement: process_rank=0"
     (tmp_path / "stdout.log").write_text("\n".join([placement, *(f"later line {index}" for index in range(250))]))
@@ -354,24 +377,6 @@ def test_linux_process_group_status_inspects_threads_of_dead_leader(tmp_path, mo
 
 # --- explicit start and readiness lifecycle ---
 
-_FAKE_VLLM_SERVER = str(Path(__file__).parent / "fake_vllm_server.py")
-
-
-class _FakeLauncher:
-    """Runs fake_vllm_server.py (see its modes) in place of the real ``vllm serve`` child."""
-
-    def __init__(self, *mode_args: str) -> None:
-        self._mode_args = mode_args
-
-    def command(self) -> list[str]:
-        return [sys.executable, _FAKE_VLLM_SERVER, *self._mode_args]
-
-    def env(self) -> dict[str, str]:
-        return {}
-
-    def cache_identity(self) -> str:
-        return "fake"
-
 
 def _free_port() -> int:
     with socket.socket() as sock:
@@ -384,7 +389,7 @@ def test_subprocess_environment_overrides_reach_vllm():
         model_name_or_path="fake-model",
         extra_cli_args=None,
         launcher=VllmLauncherWithEnvironment(
-            _FakeLauncher("serve"),
+            FakeVllmLauncher("serve"),
             {
                 "VLLM_HOST_IP": "10.0.0.2",
                 "GLOO_SOCKET_IFNAME": "eth0",
@@ -399,11 +404,14 @@ def test_subprocess_environment_overrides_reach_vllm():
         cache.close()
 
 
-def _environment(launcher: _FakeLauncher, *, timeout_seconds: float = 30) -> VllmEnvironment:
+def _environment(
+    launcher: FakeVllmLauncher, *, timeout_seconds: float = 30, extra_args: list[str] | None = None
+) -> VllmEnvironment:
     return VllmEnvironment(
         vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
         port=_free_port(),
         timeout_seconds=timeout_seconds,
+        extra_args=extra_args,
         launcher=launcher,
         compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
         wait_for_ready=False,
@@ -414,13 +422,69 @@ def _wait_until_ready(environment: VllmEnvironment) -> None:
     environment.wait_until_ready(poll_interval_seconds=0.05)
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--enforce-eager"],
+        ["--no-enforce-eager", "--enforce-eager"],
+    ],
+)
+def test_eager_without_acknowledgement_fails_before_spawn(monkeypatch, args):
+    monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
+
+    with pytest.raises(ValueError, match="--i-know-i-am-making-vllm-slow"):
+        with _environment(FakeVllmLauncher("exit"), extra_args=args):
+            pass
+
+
+@pytest.mark.parametrize(
+    ("args", "expected_eager"),
+    [
+        ([], False),
+        (["--no-enforce-eager"], False),
+        (["--enforce-eager", "--no-enforce-eager"], False),
+        (["--enforce-eager", "--i-know-i-am-making-vllm-slow"], True),
+        (["--no-enforce-eager", "--enforce-eager", "--i-know-i-am-making-vllm-slow"], True),
+    ],
+)
+def test_eager_guard_preserves_vllm_args_and_warns_on_acknowledged_eager(tmp_path, caplog, args, expected_eager):
+    argv_path = tmp_path / "argv.json"
+    with _environment(FakeVllmLauncher("record-args", str(argv_path)), extra_args=args) as environment:
+        _wait_until_ready(environment)
+        argv = json.loads(argv_path.read_text())
+
+    assert argv[argv.index("--port") + 2 :] == [arg for arg in args if arg != "--i-know-i-am-making-vllm-slow"]
+    assert "--i-know-i-am-making-vllm-slow" not in argv
+    assert (
+        any(record.name == vllm_server.__name__ and record.levelno == logging.WARNING for record in caplog.records)
+        is expected_eager
+    )
+
+
+@pytest.mark.parametrize("arg", ["--enforce_eager", "--enf", "--no-enf", "--enforce-eager=true"])
+def test_eager_aliases_rejected_before_spawn(monkeypatch, arg):
+    monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
+
+    with pytest.raises(ValueError, match="Use the exact"):
+        with _environment(FakeVllmLauncher("exit"), extra_args=[arg]):
+            pass
+
+
+@pytest.mark.parametrize("args", [["--config", "vllm.yaml"], ["--config=vllm.yaml"]])
+def test_vllm_config_file_rejected_before_spawn(monkeypatch, args):
+    monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
+    with pytest.raises(ValueError, match="does not support --config"):
+        with _environment(FakeVllmLauncher("exit"), extra_args=args):
+            pass
+
+
 def test_environment_starts_without_waiting_for_http_readiness(tmp_path):
     counter = tmp_path / "starts"
     environment = VllmEnvironment(
         vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
         port=_free_port(),
         extra_args=["--headless"],
-        launcher=_FakeLauncher("hang", str(counter)),
+        launcher=FakeVllmLauncher("hang", str(counter)),
         compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
         wait_for_ready=False,
     )
@@ -440,7 +504,7 @@ def test_environment_rejects_a_clean_early_exit():
         vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
         port=_free_port(),
         extra_args=["--headless"],
-        launcher=_FakeLauncher("exit"),
+        launcher=FakeVllmLauncher("exit"),
         compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
         wait_for_ready=False,
     )
@@ -453,15 +517,22 @@ def test_environment_rejects_a_clean_early_exit():
 
 
 def test_serves_when_startup_succeeds():
-    with _environment(_FakeLauncher("serve")) as environment:
+    with _environment(FakeVllmLauncher("serve")) as environment:
         _wait_until_ready(environment)
         assert environment.model_id == "fake-model"
 
 
-def test_streamer_fault_fails_while_parent_is_still_running(tmp_path):
+@pytest.mark.parametrize(
+    "error",
+    [
+        "Could not receive runai_response from libstreamer due to: File access error",
+        "AWS_ERROR_HTTP_CHANNEL_THROUGHPUT_FAILURE",
+    ],
+)
+def test_streamer_fault_fails_while_parent_is_still_running(tmp_path, error):
     counter = tmp_path / "starts"
     with pytest.raises(RuntimeError, match="Run:ai streamer read fault"):
-        with _environment(_FakeLauncher("stuck-fault", str(counter))) as environment:
+        with _environment(FakeVllmLauncher("stuck-fault", str(counter), error)) as environment:
             _wait_until_ready(environment)
     assert counter.read_text() == "1"
 
@@ -469,6 +540,6 @@ def test_streamer_fault_fails_while_parent_is_still_running(tmp_path):
 def test_hang_times_out_after_one_start(tmp_path):
     counter = tmp_path / "starts"
     with pytest.raises(TimeoutError):
-        with _environment(_FakeLauncher("hang", str(counter)), timeout_seconds=0.5) as environment:
+        with _environment(FakeVllmLauncher("hang", str(counter)), timeout_seconds=0.5) as environment:
             _wait_until_ready(environment)
     assert counter.read_text() == "1"

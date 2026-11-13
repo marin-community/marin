@@ -16,26 +16,76 @@ uv run pytest <test path>
 uv run --no-project infra/ci/run_tests.py
 ```
 
+The affected-test runner checks Harbor's standalone lock and runs its offline
+runtime suite when vendored Harbor or its local Rigging or FineStore dependencies
+change. Run those checks directly with `uv run --no-project infra/ci/run_harbor_tests.py`.
+
 The repository defaults exclude `slow`, `integration`, `data_integration`,
 `cluster`, `requires_cluster`, `docker`, and `manual` tests. Do not pass a
 partial marker expression such as `-m "not slow"`; pytest replaces the default
 expression and may select live-cluster tests. Run excluded markers only when
 requested or directed by the relevant module guide.
 
-Tests run from the repository root have a 60-second per-test timeout, including
-fixture setup and teardown. On POSIX, pytest-timeout first interrupts the test
-with `SIGALRM`; if the test suppresses that failure, the test process exits five
+The root and standalone Levanter pytest configurations use a 60-second per-test
+timeout, including fixture setup and teardown. On POSIX, pytest-timeout first
+interrupts the test with `SIGALRM`; if the test suppresses that failure, the test process exits five
 seconds later. Give a legitimately longer test an explicit
 `@pytest.mark.timeout(...)` value instead of increasing the repository default.
+Both configurations also stop the session between tests once its 600-second
+budget has elapsed. Levanter retains its `src` and `tests` Python paths and adds
+the repository root to load the shared guard without a Marin package dependency.
 
 A formatter-only mechanical edit does not require another test run. Rerun the
 repository formatting and lint checks after the edit; rerun tests only when the
 follow-up changes executable behavior or test expectations.
 
+## Adding a New Library
+
+When adding a new `lib/<name>/` package, run its unit tests through
+[unified-unit.yaml](.github/workflows/unified-unit.yaml). Add its short name to
+`SCOPES` and its uv package name to `UV_PACKAGE` in
+[select_tests.py](infra/ci/select_tests.py). The selector uses
+`lib/<name>/tests` by default; update `TEST_DIRS` if its tests live elsewhere.
+These registrations include the library in pull request, push, and full-suite
+runs.
+
+Harbor's isolated test environment includes TaskCompendium for task-curation
+rebuild and snapshot-identity checks; rebuild tests skip in environments without
+Harbor.
+
+Root `pyproject.toml` and `uv.lock` changes run the broad CPU matrix. The
+Levanter TPU lane runs for those changes when the resolved dependencies of
+`marin-levanter` with its `tpu` extra and `test` group change, including
+transitive dependencies. If the selector cannot compare the base and head
+lockfiles, it runs the TPU lane. Levanter or Haliax source changes also select
+the lane. The Levanter Torch lane retains its root manifest trigger. Scheduled
+or manual runs without a base ref run every suite.
+
+The Levanter TPU lane selects affected Levanter test files containing
+`pytest.mark.tpu` or `pytest.mark.multidevice`, then runs matching marked cases,
+including scheduled and full-suite runs. Tests outside Levanter stay in their
+existing CI scopes. Mark tests `tpu` when they exercise accelerator-specific
+kernels or TPU numerical behavior. Mark topology tests `multidevice` when they
+need several devices and also run on CPU. Use literal `@pytest.mark` decorators,
+`pytest.param(..., marks=...)` for selected parameters, or a module-level marker.
+Keep markers literal so [select_tests.py](infra/ci/select_tests.py) can find them
+without importing test dependencies. Both markers also work on test classes.
+CPU CI runs marked tests too; these markers select additional TPU coverage and
+do not imply a CPU skip. On the current four-device TPU runner, tests whose
+topology specifically requires eight devices run only in CPU CI. The TPU lane
+retains its safety exclusions and excludes Torch tests.
+
 ## Core Rule
 
 A test must fail when behavior is wrong. It should not fail only because an
 implementation detail, wording choice, helper call, or command assembly changed.
+
+Do not add a test for every validation branch. A scalar or configuration guard
+such as `count > 0`, enum membership, a required field, or a simple range check
+does not justify a checked-in test by itself. Test such a guard only when it
+reproduces a reported regression or protects a compatibility-critical public
+contract. Otherwise, test the consequential behavior on the valid path or omit
+the test.
 
 Prefer integration-style tests that validate externally observable behavior:
 
@@ -77,7 +127,13 @@ Delete or rewrite tests with negative value:
 - Obvious error-condition behavior: Obvious error-condition tests that only prove a type checker, dataclass
   constructor, or standard library function works. Infrastructure failure modes
   are valid when the failure is externally observable.
+- Scalar and configuration guards: standalone tests that only set a count,
+  timeout, enum, boolean, or other config value outside an obvious allowed range
+  and assert that construction raises. Keep one only for a reported regression
+  or a compatibility-critical public contract.
 - Tests for Python language semantics.
+- Shellsim guest interpreter or ports acceptance tests. Keep that coverage in Shellsim;
+  Marin CI should exercise caller contracts with shell-only fixtures or existing machine fakes.
 - Registration tests: Tests that check that specific items are registered in global registries.
 - Configuration projections: assertions that a lowered or constructed field equals the same value
   supplied by the test or checked-in config. Test validation, merge conflicts, observable behavior,
@@ -100,6 +156,11 @@ error promised by the API. Assert on structured fields when possible.
 Command construction is rarely the contract. Prefer to run through the boundary
 and assert the effect. If the command line is the contract, assert the parsed
 argv or structured command object, not a substring in rendered shell text.
+
+Exact dependency versions, default scalar values, and serialized configuration
+text are not contracts by default. Test the compatibility behavior they enable.
+Assert an exact value or representation only when external consumers depend on
+it.
 
 ## Mocks And Fakes
 
@@ -152,6 +213,10 @@ the implementation is not useful.
 ## Pytest Style
 
 - Prefer top-level `def test_*` functions with fixtures over test classes.
+- Do not import helpers or constants from another `test_*.py` module. Put shared
+  pytest fixtures in the nearest `conftest.py`, and shared importable helpers in
+  a named support module. Its import must work in package-only and repository-wide
+  runs without adding test directories to the root pytest configuration.
 - Name tests as `test_<subject>_<scenario>_<expected_outcome>`.
 - Use parameterization for meaningful behavior variation.
 - Extend existing test files before creating new ones.
@@ -171,6 +236,10 @@ When reviewing tests, flag the test if the answer to any question is "yes":
 - Is it asserting on private state, call counts, or internal dispatch?
 - Does it duplicate the implementation instead of checking an independent
   oracle or observable behavior?
+- Does it only mirror a scalar or config guard without a reported regression or
+  compatibility-critical public contract?
+- Does it pin an exact dependency version, default, or serialized config detail
+  instead of the compatibility behavior that matters?
 - Is the mock inside the system under test rather than at an external boundary?
 - Does it sleep, skip permanently, or lack a real assertion?
 - Did the change weaken a numerical tolerance or test expectation without justification?

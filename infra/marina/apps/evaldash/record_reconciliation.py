@@ -6,17 +6,21 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from marin.evaluation.records import RECORD_FILE, EvalRunRecord
+from marin.execution.step_status import STATUS_FAILED, STATUS_RUNNING, StatusFile
 from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.storage_path import StoragePath
 
+from .curated import SUMMARY_REVISION, import_curated_record
 from .results_db import ObservationKind, RecordObservation, SourceState
 
 _MAX_RECORD_READERS = 16
+_RECENT_RUN_WINDOW = timedelta(days=1)
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,41 @@ def _record_run_id(path: str) -> str:
     if record_path.name != RECORD_FILE or not record_path.parent.name:
         raise ValueError(f"record path must end with a run directory and {RECORD_FILE!r}: {path!r}")
     return record_path.parent.name
+
+
+def step_status_for_record(path: str) -> str | None:
+    """Read the StepSpec state adjacent to a run record, when one exists."""
+    return StatusFile(str(StoragePath(path).parent), worker_id="evaldash").status
+
+
+def _source_version(record_version: str, step_status: str | None, raw: dict | None = None) -> str:
+    parts = [record_version, step_status]
+    if raw is not None:
+        parts.append(raw)
+    return json.dumps(parts, separators=(",", ":"))
+
+
+def _raw_version(root: str) -> dict:
+    return {
+        "root": root,
+        "version": conditional_object(str(StoragePath(root) / "HEAD")).version(),
+        "summary": SUMMARY_REVISION,
+    }
+
+
+def _next_verification(path: str, step_status: str | None, schedule: VerificationSchedule, initial: bool) -> datetime:
+    if step_status in (STATUS_RUNNING, STATUS_FAILED):
+        return schedule.checked_at + timedelta(seconds=schedule.retry_after)
+    if step_status is None:
+        try:
+            launched_at = datetime.strptime(_record_run_id(path)[:15], "%Y%m%d-%H%M%S").replace(tzinfo=UTC)
+        except ValueError:
+            launched_at = None
+        if launched_at is not None and schedule.checked_at - launched_at < _RECENT_RUN_WINDOW:
+            return schedule.checked_at + timedelta(seconds=schedule.retry_after)
+    if initial:
+        return _initial_next_verification(path, schedule)
+    return schedule.checked_at + timedelta(seconds=schedule.revalidate_after)
 
 
 def _invalid_observation(
@@ -96,19 +135,21 @@ def _read_changed_record(
             raise ValueError(f"path run ID {expected_run_id!r} does not match record run ID {record.run_id!r}")
     except Exception as exc:
         return _invalid_observation(path, found.version, schedule, f"{type(exc).__name__}: {exc}")
-    next_verify_at = (
-        _initial_next_verification(path, schedule)
-        if initial
-        else schedule.checked_at + timedelta(seconds=schedule.revalidate_after)
-    )
+    try:
+        step_status = step_status_for_record(path)
+        raw_version = _raw_version(record.results_path) if record.evaluation.curated is not None else None
+        record = import_curated_record(record)
+    except Exception as exc:
+        return _invalid_observation(path, found.version, schedule, f"{type(exc).__name__}: {exc}")
+    next_verify_at = _next_verification(path, step_status, schedule, initial)
     return RecordObservation(
         path=path,
-        object_version=found.version,
+        object_version=_source_version(found.version, step_status, raw_version),
         verified_at=schedule.checked_at,
         next_verify_at=next_verify_at,
         kind=ObservationKind.CHANGED,
         run_id=record.run_id,
-        record=record,
+        record=record.model_copy(update={"step_status": step_status}),
     )
 
 
@@ -117,10 +158,13 @@ def _inspect_record(
     state: SourceState | None,
     schedule: VerificationSchedule,
 ) -> RecordObservation:
-    if state is None:
-        return _read_changed_record(path, schedule, initial=True)
+    if state is None or state.error is not None:
+        return _read_changed_record(path, schedule, initial=state is None)
     try:
         version = conditional_object(path).version()
+        step_status = step_status_for_record(path) if version is not None else None
+        old_version = json.loads(state.object_version) if state.object_version is not None else []
+        raw = _raw_version(old_version[2]["root"]) if len(old_version) == 3 else None
     except Exception as exc:
         return RecordObservation(
             path=path,
@@ -132,12 +176,13 @@ def _inspect_record(
         )
     if version is None:
         return _missing_observation(path, schedule)
-    if version == state.object_version and state.error is None:
+    source_version = _source_version(version, step_status, raw)
+    if source_version == state.object_version and state.error is None:
         return RecordObservation(
             path=path,
-            object_version=version,
+            object_version=source_version,
             verified_at=schedule.checked_at,
-            next_verify_at=schedule.checked_at + timedelta(seconds=schedule.revalidate_after),
+            next_verify_at=_next_verification(path, step_status, schedule, initial=False),
             kind=ObservationKind.UNCHANGED,
         )
     return _read_changed_record(path, schedule, initial=False)

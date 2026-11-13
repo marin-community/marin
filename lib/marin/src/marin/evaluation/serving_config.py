@@ -10,17 +10,22 @@ from collections.abc import Mapping
 from dataclasses import replace
 from functools import cache
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 
 from fray.types import ResourceConfig, create_environment
 from huggingface_hub import HfApi, hf_hub_download
 from iris.cluster.setup_scripts import default_setup_script
+from iris.cluster.tpu_topology import get_tpu_topology
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
+from marin.evaluation.eval_env import EVALUATION_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
 from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args
 from marin.inference.config import (
     BrokerConfig,
+    InferenceProxyConfig,
+    InferenceWorkerConfig,
     IrisConfig,
     LevanterEngineConfig,
     RemoteInferenceConfig,
@@ -33,7 +38,10 @@ from marin.inference.config import (
 logger = logging.getLogger(__name__)
 
 ENDPOINT_READY_TIMEOUT_SECONDS = 2400
-EVAL_SERVE_MAX_NUM_BATCHED_TOKENS = 512
+_BROKER_DEADLINE_MARGIN_SECONDS = 60
+EVAL_SERVE_MAX_NUM_BATCHED_TOKENS = MappingProxyType({Platform.GPU: 4096, Platform.TPU: 512})
+_EVAL_WORKER_MAX_IN_FLIGHT = 64
+_EVAL_PROXY_MIN_PENDING_REQUESTS = 256
 DEFAULT_SERVE_CPU = 8.0
 _HF_CONFIG_FILENAME = "config.json"
 _MAX_POSITION_EMBEDDINGS_KEY = "max_position_embeddings"
@@ -42,6 +50,15 @@ DEFAULT_SERVE_DISK = "100g"
 _QUIET_VLLM_ARGS = ("--uvicorn-log-level", "warning")
 _VLLM_BATCH_INVARIANT_ENV = "VLLM_BATCH_INVARIANT"
 _VLLM_FLASHINFER_SAMPLER_ENV = "VLLM_USE_FLASHINFER_SAMPLER"
+_RUNAI_STREAMER_CONCURRENCY_ENV = "RUNAI_STREAMER_CONCURRENCY"
+_RUNAI_STREAMER_S3_REQUEST_TIMEOUT_ENV = "RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"
+_SPECULATIVE_METRIC_FAMILIES = frozenset(
+    {
+        "vllm:spec_decode_num_accepted_tokens",
+        "vllm:spec_decode_num_draft_tokens",
+        "vllm:spec_decode_num_drafts",
+    }
+)
 
 # vLLM loads a checkpoint through host memory: the weight files land in the page cache and the
 # loader stages shard buffers on the way to device memory. Both are charged to the serve child's
@@ -91,7 +108,7 @@ def _auto_serve_overrides_from_config(
             merged.extend((option, value))
 
     native_max_model_len = text_config.get(_MAX_POSITION_EMBEDDINGS_KEY) or config.get(_MAX_POSITION_EMBEDDINGS_KEY)
-    if isinstance(native_max_model_len, int | float) and max_model_len is not None:
+    if max_model_len is not None and isinstance(native_max_model_len, int | float):
         max_model_len = min(max_model_len, int(native_max_model_len))
     return tuple(merged), max_model_len
 
@@ -191,24 +208,38 @@ def _vllm_engine_config(
 ) -> VllmEngineConfig:
     """Build the evaluation engine settings shared by GPU and TPU workers."""
     launcher = VllmLauncherType.CUDA if platform is Platform.GPU else VllmLauncherType.TPU
-    source = VllmSource.MARIN_FORK if platform is Platform.GPU else VllmSource.UPSTREAM
+    if platform is Platform.TPU and (serve.vllm_source is not None or serve.vllm_plugin_requirements):
+        raise ValueError("model-specific vLLM source and plugins require GPU serving")
+    source = serve.vllm_source or (VllmSource.MARIN_FORK if platform is Platform.GPU else VllmSource.UPSTREAM)
     return VllmEngineConfig(
         launcher=launcher,
         source=source,
+        version=serve.vllm_version,
+        extra_requirements=serve.vllm_plugin_requirements,
         startup_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
         max_num_batched_tokens=(
             serve.max_num_batched_tokens
             if serve.max_num_batched_tokens is not None
-            else EVAL_SERVE_MAX_NUM_BATCHED_TOKENS
+            else EVAL_SERVE_MAX_NUM_BATCHED_TOKENS[platform]
         ),
         max_num_seqs=serve.max_num_seqs,
         extra_args=(*extra_args, *_QUIET_VLLM_ARGS),
+        extra_metric_families=_SPECULATIVE_METRIC_FAMILIES if serve.speculative is not None else frozenset(),
+        speculative=serve.speculative,
     )
 
 
 def _vllm_environment_variables(serve: ServeConfig, platform: Platform) -> dict[str, str]:
     """Validate and render catalog-owned vLLM process settings."""
-    has_process_setting = serve.vllm_batch_invariant is not None or serve.vllm_use_flashinfer_sampler is not None
+    has_process_setting = any(
+        setting is not None
+        for setting in (
+            serve.vllm_batch_invariant,
+            serve.vllm_use_flashinfer_sampler,
+            serve.runai_streamer_concurrency,
+            serve.runai_streamer_s3_request_timeout_ms,
+        )
+    )
     if has_process_setting and (serve.backend is not ServeBackend.VLLM or platform is not Platform.GPU):
         raise ValueError("vLLM process settings require the vLLM backend on GPU")
 
@@ -217,6 +248,10 @@ def _vllm_environment_variables(serve: ServeConfig, platform: Platform) -> dict[
         environment[_VLLM_BATCH_INVARIANT_ENV] = str(int(serve.vllm_batch_invariant))
     if serve.vllm_use_flashinfer_sampler is not None:
         environment[_VLLM_FLASHINFER_SAMPLER_ENV] = str(int(serve.vllm_use_flashinfer_sampler))
+    if serve.runai_streamer_concurrency is not None:
+        environment[_RUNAI_STREAMER_CONCURRENCY_ENV] = str(serve.runai_streamer_concurrency)
+    if serve.runai_streamer_s3_request_timeout_ms is not None:
+        environment[_RUNAI_STREAMER_S3_REQUEST_TIMEOUT_ENV] = str(serve.runai_streamer_s3_request_timeout_ms)
     return environment
 
 
@@ -228,13 +263,40 @@ def inference_config_for_model(
     priority: int,
     capability_origin: str | None = None,
     api_model: str | None = None,
-    instances: int = 1,
+    instances: int | None = None,
     broker: BrokerConfig | None = None,
+    request_timeout_seconds: float = EVALUATION_REQUEST_TIMEOUT_SECONDS,
 ) -> RemoteInferenceConfig:
     """Lower one model and selected accelerator into remote inference configuration."""
     serve = resolved_serve_config(model)
+    resolved_instances = serve.instances if instances is None else instances
     geometry = serving_geometry(serve, accelerator)
+    # Multi-host TPU and multi-node GPU servers are one Iris job with one task per host,
+    # while a broker worker runs one single-task server. Serve those directly; a failed
+    # host stops the whole server, and the evaluator's retries are the recovery.
+    multihost_tpu = accelerator.tpu_type is not None and get_tpu_topology(accelerator.tpu_type).vm_count > 1
+    if broker is None and not multihost_tpu and (geometry is None or geometry.task_count == 1):
+        # Keep downstream deadlines beyond the evaluator budget, with time to relay the response.
+        broker = BrokerConfig(
+            worker=InferenceWorkerConfig(
+                max_in_flight=_EVAL_WORKER_MAX_IN_FLIGHT,
+                request_timeout_seconds=request_timeout_seconds + _BROKER_DEADLINE_MARGIN_SECONDS,
+            ),
+            proxy=InferenceProxyConfig(
+                max_pending_requests=max(
+                    _EVAL_PROXY_MIN_PENDING_REQUESTS, resolved_instances * _EVAL_WORKER_MAX_IN_FLIGHT
+                ),
+                request_timeout_seconds=request_timeout_seconds + 3 * _BROKER_DEADLINE_MARGIN_SECONDS,
+                readiness_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
+            ),
+            request_lease_timeout_seconds=request_timeout_seconds + 2 * _BROKER_DEADLINE_MARGIN_SECONDS,
+        )
+    if serve.speculative is not None and accelerator.platform is not Platform.GPU:
+        raise ValueError("speculative serving requires the GPU vLLM backend")
     vllm_environment_variables = _vllm_environment_variables(serve, accelerator.platform)
+    worker_env = dict(env_vars)
+    if serve.hf_hub_disable_xet:
+        worker_env["HF_HUB_DISABLE_XET"] = "1"
     extra_args = serve_config_vllm_args(serve)
     max_model_len = serve.max_model_len
 
@@ -260,11 +322,11 @@ def inference_config_for_model(
             )
             environment = create_environment(
                 setup_scripts=[default_setup_script(packages=["marin-core"])],
-                env_vars={**env_vars, **vllm_environment_variables},
+                env_vars={**worker_env, **vllm_environment_variables},
             )
         else:
             engine = LevanterEngineConfig()
-            environment = create_environment(extras=["gpu"], env_vars=dict(env_vars))
+            environment = create_environment(extras=["gpu"], env_vars=worker_env)
     else:
         if accelerator.tpu_type is None:
             raise ValueError("TPU accelerator choice requires tpu_type")
@@ -277,10 +339,10 @@ def inference_config_for_model(
         )
         if serve.backend is ServeBackend.VLLM:
             engine = _vllm_engine_config(serve, accelerator.platform, extra_args)
-            environment = create_environment(extras=["tpu"], env_vars=dict(env_vars))
+            environment = create_environment(extras=["tpu"], env_vars=worker_env)
         else:
             engine = LevanterEngineConfig()
-            environment = create_environment(extras=["tpu"], env_vars=dict(env_vars))
+            environment = create_environment(extras=["tpu"], env_vars=worker_env)
 
     return RemoteInferenceConfig(
         model=ServedModelConfig(
@@ -288,9 +350,11 @@ def inference_config_for_model(
             revision=model.revision,
             api_model=api_model,
             tokenizer=model.tokenizer or model.location,
+            tokenizer_revision=model.effective_tokenizer_revision,
             max_model_len=max_model_len,
             tensor_parallel_size=serve.tensor_parallel_size,
             chat_template_content=serve.chat_template,
+            object_store_load_mode=serve.object_store_load_mode,
         ),
         engine=engine,
         iris=IrisConfig(
@@ -300,7 +364,7 @@ def inference_config_for_model(
             endpoint_ready_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
             priority=priority,
         ),
-        instances=instances,
+        instances=resolved_instances,
         broker=broker,
         capability_origin=capability_origin,
     )

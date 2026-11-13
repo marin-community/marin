@@ -38,11 +38,12 @@ from levanter.callbacks import StepInfo
 from levanter.checkpoint import (
     CheckpointCandidate,
     CheckpointDebugConfig,
+    CheckpointRetention,
     Checkpointer,
     CheckpointerConfig,
     CheckpointInterval,
     _collect_debug_checkpointer_state,
-    _load_metadata,
+    load_checkpoint_metadata,
     discover_checkpoint_candidates,
     discover_latest_checkpoint,
     is_checkpoint_path,
@@ -83,7 +84,7 @@ def _on_step(checkpointer: Checkpointer, step: int, *, force: bool = False):
 
 def _get_checkpoint_steps(checkpoint_dir):
     paths = list(pathlib.Path(checkpoint_dir).iterdir())
-    return sorted([_load_metadata(f)["step"] for f in paths])
+    return sorted([load_checkpoint_metadata(f)["step"] for f in paths])
 
 
 def _write_checkpoint_metadata(path: pathlib.Path, *, step: int, timestamp: str, is_temporary: bool = False) -> None:
@@ -914,6 +915,50 @@ def test_checkpointer_force_save_uses_permanent_path_even_when_time_policy_elaps
         assert list(pathlib.Path(temporary_dir).iterdir()) == []
 
 
+def test_checkpointer_commits_application_metadata_with_every_save(tmp_path):
+    config = CheckpointerConfig(
+        base_path=str(tmp_path / "checkpoints"),
+        temporary_base_path=str(tmp_path / "temporary"),
+        save_interval=None,
+        keep=None,
+        keep_last_temporary_checkpoints=1,
+    )
+    checkpointer = config.create("run1", metadata={"placement": {"fingerprint": "abc"}})
+    state = {"model": jnp.asarray([1.0, 2.0])}
+
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    checkpointer.on_step(tree=state, step=1)
+    checkpointer.wait_until_finished()
+    temporary = load_checkpoint_metadata(str(tmp_path / "temporary" / "run1" / "step-1"))
+    assert (temporary["placement"], temporary["is_temporary"]) == ({"fingerprint": "abc"}, True)
+
+    checkpointer.save_final_checkpoint(tree=state, step=2)
+    permanent = load_checkpoint_metadata(str(tmp_path / "checkpoints" / "run1" / "step-2"))
+    assert (permanent["placement"], permanent["step"]) == ({"fingerprint": "abc"}, 2)
+
+
+def test_final_checkpoint_waits_for_pending_temporary_save_and_restores_completed_state(tmp_path):
+    permanent_path = tmp_path / "checkpoints"
+    temporary_path = tmp_path / "temporary"
+    checkpointer = Checkpointer(permanent_path, None, [], temporary_base_path=temporary_path)
+    state = {
+        "step": jnp.asarray(3),
+        "data_position": jnp.asarray(48),
+        "model": jnp.asarray([1.0, 2.0]),
+        "optimizer": jnp.asarray([0.1, 0.2]),
+    }
+
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    checkpointer.on_step(tree=state, step=3)
+    checkpointer.save_final_checkpoint(tree=state, step=3)
+
+    path = latest_checkpoint_path(permanent_path)
+    assert path == str(permanent_path / "step-3")
+    restored = load_checkpoint(jax.tree.map(jnp.zeros_like, state), path)
+    assert_trees_all_equal(restored, state)
+    assert load_checkpoint_metadata(path)["is_temporary"] is False
+
+
 def test_checkpointer_coalesces_requests_into_one_temporary_checkpoint(tmp_path):
     permanent_path = tmp_path / "checkpoints"
     temporary_path = tmp_path / "temporary"
@@ -924,8 +969,8 @@ def test_checkpointer_coalesces_requests_into_one_temporary_checkpoint(tmp_path)
         temporary_base_path=temporary_path,
     )
 
-    checkpointer.request_checkpoint()
-    checkpointer.request_checkpoint()
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
     _on_step(checkpointer, 1)
     _on_step(checkpointer, 2)
     checkpointer.wait_until_finished()
@@ -944,12 +989,39 @@ def test_requested_checkpoint_does_not_downgrade_scheduled_permanent_checkpoint(
         temporary_base_path=temporary_path,
     )
 
-    checkpointer.request_checkpoint()
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
     _on_step(checkpointer, 1)
     checkpointer.wait_until_finished()
 
     assert _get_checkpoint_steps(permanent_path) == [1]
     assert not temporary_path.exists()
+
+
+def test_permanent_request_saves_permanent_checkpoint_and_prunes_temporaries(tmp_path):
+    permanent_path = tmp_path / "checkpoints"
+    temporary_path = tmp_path / "temporary"
+    checkpointer = Checkpointer(
+        permanent_path,
+        None,
+        [],
+        temporary_base_path=temporary_path,
+    )
+
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    _on_step(checkpointer, 1)
+    checkpointer.wait_until_finished()
+    assert _get_checkpoint_steps(temporary_path) == [1]
+
+    # A temporary request made in the same step does not downgrade the permanent one.
+    checkpointer.request_checkpoint(CheckpointRetention.PERMANENT)
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    _on_step(checkpointer, 2)
+    checkpointer.wait_until_finished()
+
+    assert _get_checkpoint_steps(permanent_path) == [2]
+    metadata = json.loads((permanent_path / "step-2" / "metadata.json").read_text())
+    assert metadata["is_temporary"] is False
+    assert _get_checkpoint_steps(temporary_path) == []
 
 
 def test_load_from_checkpoint_or_initialize():
@@ -1164,6 +1236,7 @@ def test_backward_compatibility_with_ocdbt():
         assert restored_state.step == initial_state.step
 
 
+@pytest.mark.tpu
 def test_mpmd_checkpoint_uses_standard_format_across_destination_shardings(tmp_path):
     devices = np.array(jax.devices())
     mesh = jax.sharding.Mesh(devices, ("data",))

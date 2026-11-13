@@ -1,6 +1,10 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+
 import equinox as eqx
 import haliax as hax
 import jax
@@ -8,8 +12,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from haliax.partitioning import ResourceAxis
+from jax.sharding import AxisType
 
 import levanter.utils.jax_utils as jax_utils
+from levanter.testing.devices import use_test_devices
 from levanter.utils.jax_utils import (
     axis_resource_is_explicit,
     barrier_sync,
@@ -111,6 +117,7 @@ def test_sharded_tree_size_tuple_axis_partition_spec():
     assert per_device_bytes == (8 * 4 * jnp.dtype(jnp.float32).itemsize) // 4
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize("fsdp_size", [1, 2, 4, 8])
 def test_best_effort_sharding_with_mesh(fsdp_size):
     if fsdp_size > len(jax.devices()):
@@ -146,6 +153,25 @@ def test_best_effort_sharding_with_mesh(fsdp_size):
     array = array.reshape(2, 2, 2)
     sharding = best_effort_sharding(array.shape, mesh=mesh)
     _assert_can_put_with_sharding(array, sharding)
+
+
+@pytest.mark.multidevice
+def test_best_effort_sharding_uses_context_and_expert_for_checkpoint_staging():
+    with use_test_devices(4) as devices:
+        mesh = create_mesh_from_axis_specs(
+            ici_axes={"data": 1, "context": 2, "expert": 2, "model": 1},
+            dcn_axes={},
+            devices=devices,
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        shape = (8, 16, 32)
+        sharding = best_effort_sharding(shape, mesh=mesh)
+        staged = jax.device_put(np.arange(np.prod(shape)).reshape(shape), sharding)
+        assert len(staged.addressable_shards) == 4
+        assert all(shard.data.size == np.prod(shape) // 4 for shard in staged.addressable_shards)
+        assert {"context", "expert"} == set().union(
+            *(entry if isinstance(entry, tuple) else (entry,) for entry in sharding.spec if entry is not None)
+        )
 
 
 def test_tree_broadcast_to_simple():
@@ -253,6 +279,7 @@ def test_axis_resource_is_explicit():
     assert not axis_resource_is_explicit(mesh, "unknown")
 
 
+@pytest.mark.tpu
 def test_move_tree_to_memory_kind():
     x = jnp.arange(4)
     tree = {"a": x, "b": 3}
@@ -265,6 +292,7 @@ def test_move_tree_to_memory_kind():
     assert moved_again["a"] is moved["a"]
 
 
+@pytest.mark.tpu
 def test_move_tree_to_memory_kind_is_noop_inside_jit():
     @jax.jit
     def move_inside_jit(x):
@@ -299,3 +327,42 @@ def test_barrier_sync_does_not_reuse_a_barrier_id(multiprocess_client):
 
     first, second = (barrier_id for barrier_id, _ in multiprocess_client.calls)
     assert first != second
+
+
+def test_multihost_allgather_can_use_a_pipeline_stage_without_world_rank_zero(monkeypatch):
+    context = threading.local()
+    condition = threading.Condition()
+    values = {}
+    arrived = {}
+
+    class Coordinator:
+        def key_value_set(self, key, value):
+            with condition:
+                values[key] = value
+                condition.notify_all()
+
+        def wait_at_barrier(self, barrier_id, timeout_in_ms, process_ids):
+            assert process_ids == (1, 2)
+            with condition:
+                arrived.setdefault(barrier_id, set()).add(context.rank)
+                condition.notify_all()
+                assert condition.wait_for(lambda: arrived[barrier_id] == {1, 2}, timeout=timeout_in_ms / 1000)
+
+        def blocking_key_value_get(self, key, timeout_in_ms):
+            with condition:
+                assert condition.wait_for(lambda: key in values, timeout=timeout_in_ms / 1000)
+                return values[key]
+
+    monkeypatch.setattr(jax, "process_count", lambda: 3)
+    monkeypatch.setattr(jax, "process_index", lambda: context.rank)
+    monkeypatch.setattr(jax_utils.jax_distributed.global_state, "client", Coordinator(), raising=False)
+    monkeypatch.setattr(jax_utils, "_group_sync_counters", defaultdict(int))
+
+    def gather(rank):
+        context.rank = rank
+        return jax_utils.multihost_allgather_sync({"rank": rank}, process_ids=(1, 2))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(gather, (1, 2)))
+
+    assert results == [[{"rank": 1}, {"rank": 2}]] * 2

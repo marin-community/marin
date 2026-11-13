@@ -1210,3 +1210,45 @@ def test_alerts_crashloops_scope_param_filters_rows():
     client = _client(_fleet(("cw-a", k8s_api(healthy_k8s_routes()))))
     rows = client.get("/k8s/alerts/crashloops", params={"scope": "control-plane"}).json()
     assert rows == [{"cluster": "cw-a", "scope": "control-plane", "value": 0}]
+
+
+def test_control_plane_crashloop_alert_uses_deployment_selectors():
+    routes = healthy_k8s_routes()
+    # Namespace enumeration is deliberately unavailable: the paging alert must
+    # not scan the workload fleet to inspect a handful of deployments.
+    routes.pop("/api/v1/namespaces", None)
+
+    def iris_pods(request):
+        assert request.url.params["labelSelector"] == "app=iris-controller"
+        return httpx.Response(200, json={"items": [pod("iris", "iris-controller-a", waiting="CrashLoopBackOff")]})
+
+    routes["/api/v1/namespaces/iris/pods"] = iris_pods
+    client = _client(_fleet(("cw-a", k8s_api(routes))))
+    response = client.get("/k8s/alerts/crashloops", params={"scope": "control-plane"})
+    assert response.status_code == 200
+    assert response.json() == [{"cluster": "cw-a", "scope": "control-plane", "value": 1}]
+
+
+def test_malformed_pod_page_reports_query_failure_without_partial_counts():
+    routes = healthy_k8s_routes()
+    routes["/api/v1/namespaces"] = [_namespace("iris")]
+
+    def pods(request):
+        if request.url.params.get("continue"):
+            return httpx.Response(200, content=b'{"items": [{"secret": "truncated')
+        return httpx.Response(
+            200,
+            json={
+                "items": [pod("iris", "task-1", waiting="CrashLoopBackOff")],
+                "metadata": {"continue": "next"},
+            },
+        )
+
+    routes["/api/v1/namespaces/iris/pods"] = pods
+    client = _client(_fleet(("cw-a", k8s_api(routes))))
+    response = client.get("/k8s/crashloops")
+    assert response.status_code == 200
+    (row,) = response.json()
+    assert row["error_class"] == "http"
+    assert "invalid JSON" in row["error"]
+    assert "secret" not in row["error"]

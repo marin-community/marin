@@ -9,6 +9,8 @@ per-cpu/per-mode CPU counters, ``/mnt/local`` NVMe filesystem, multi-interface
 network, and DCGM's ``hostname``/``gpu``/``modelName`` labels).
 """
 
+import os
+
 import pytest
 from iris.cluster.node_agent.kubernetes import (
     KubeletScrapeError,
@@ -21,9 +23,17 @@ from iris.cluster.node_agent.kubernetes import (
     parse_prometheus,
 )
 from iris.cluster.node_agent.metrics import NodeMetrics, NodeTarget
+from iris.cluster.node_agent.uv_cache_recovery import (
+    UV_CACHE_CLEARED_EVENT,
+    UV_CACHE_RECOVERY_OBSERVED_EVENT,
+    UV_CACHE_RECOVERY_THRESHOLD,
+    reconcile_uv_cache_recovery,
+)
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
+from iris.cluster.runtime.env import UV_CACHE_RECOVERY_SIGNAL_PREFIX
 from iris.test_util import FakeStatsTable
+from rigging.timing import Timestamp
 
 NODE_EXPORTER_TEXT = """
 # HELP node_memory_MemTotal_bytes Memory information field MemTotal_bytes.
@@ -75,6 +85,62 @@ DCGM_FI_DEV_POWER_MGMT_LIMIT{{{_DCGM_GPU1}}} 700
 """
 
 _MIB = 1024 * 1024
+
+
+def test_uv_cache_recovery_clears_cache_after_threshold(tmp_path, monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        "iris.cluster.node_agent.uv_cache_recovery.telemetry.event",
+        lambda name, body: events.append((name, dict(body.fields))),
+    )
+    now = Timestamp.from_seconds(1_795_910_400)
+    uv_cache = tmp_path / "uv-cache"
+    uv_cache.mkdir()
+    cached_file = uv_cache / "archive.whl"
+    cached_file.write_text("suspect")
+    for index in range(UV_CACHE_RECOVERY_THRESHOLD):
+        signal = uv_cache / f"{UV_CACHE_RECOVERY_SIGNAL_PREFIX}{index}"
+        signal.touch()
+        os.utime(signal, (now.epoch_seconds(), now.epoch_seconds()))
+
+    uv = tmp_path / "uv"
+    uv.write_text(
+        """\
+#!/bin/sh
+set -eu
+[ "$1 $2 $3" = "cache clean --cache-dir" ]
+find "$4" -mindepth 1 -delete
+"""
+    )
+    uv.chmod(0o755)
+
+    reconcile_uv_cache_recovery(tmp_path, now=now, uv_executable=str(uv))
+    assert uv_cache.is_dir()
+    assert list(uv_cache.iterdir()) == []
+    assert not cached_file.exists()
+
+    observed_events = [body for name, body in events if name == UV_CACHE_RECOVERY_OBSERVED_EVENT]
+    assert {body["attempt_uid"] for body in observed_events} == {"0", "1", "2"}
+    assert [body for name, body in events if name == UV_CACHE_CLEARED_EVENT] == [
+        {
+            "cache_path": str(uv_cache),
+            "recovery_count": UV_CACHE_RECOVERY_THRESHOLD,
+            "recovery_window_seconds": 1800.0,
+        }
+    ]
+
+
+def test_uv_cache_recovery_ignores_stale_and_subthreshold_signals(tmp_path):
+    now = Timestamp.from_seconds(1_795_910_400)
+    uv_cache = tmp_path / "uv-cache"
+    uv_cache.mkdir()
+    for index, modified_at in enumerate((now.epoch_seconds(), now.epoch_seconds(), 0.0)):
+        signal = uv_cache / f"{UV_CACHE_RECOVERY_SIGNAL_PREFIX}{index}"
+        signal.touch()
+        os.utime(signal, (modified_at, modified_at))
+
+    reconcile_uv_cache_recovery(tmp_path, now=now, uv_executable="must-not-run")
+    assert not (uv_cache / f"{UV_CACHE_RECOVERY_SIGNAL_PREFIX}2").exists()
 
 
 def test_parse_prometheus_handles_labels_values_and_comments():

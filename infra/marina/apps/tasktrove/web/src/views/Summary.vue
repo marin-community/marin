@@ -272,7 +272,7 @@ function statusSummary(statuses: [string, number][]): string {
           <h3>How to read a task archive</h3>
           <p>
             <code>tests/test.sh</code> is deliberately a common entrypoint. The converter writes the task-specific
-            contract to <code>tests/verifier.toml</code>; <code>tasktrove-verify</code> executes that contract against
+            contract to <code>tests/verifier.toml</code>; <code>verifyit</code> executes that contract against
             the agent workspace. A missing <code>solution.py</code> is expected when the source supplies no golden—the
             agent is responsible for creating it.
           </p>

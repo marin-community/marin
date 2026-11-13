@@ -1,4 +1,5 @@
 import type { ThinkingMode } from './chat_template'
+import type { VllmRequestDebug } from './vllm_debug'
 
 /** Output conventions discovered from the served model's active chat template. */
 export interface ChatTemplateProtocol {
@@ -20,6 +21,8 @@ export interface ServingInfo {
   endpoint: string
   streaming: boolean
   chat_template_protocol: ChatTemplateProtocol
+  /** The server holds a Parallel API key and serves the web_search tool. */
+  web_search: boolean
 }
 
 export type ServerStatus = 'connecting' | 'ok' | 'loading' | 'bad'
@@ -46,7 +49,11 @@ export interface AssistantMessage {
   rawReasoning?: string
   thinkingSeconds: number | null
   error: string | null
+  /** The model request finished; partial or failed responses stay unrated. */
+  completed?: boolean
+  finishReason?: string
   toolCalls?: ToolCall[]
+  requestDebug?: VllmRequestDebug
 }
 
 export interface ToolMessage {
@@ -79,6 +86,7 @@ export interface Conversation {
   system: string
   pythonTools: string
   shellWorkspace: ShellWorkspace | null
+  webSearch: boolean
   thinkingMode: ThinkingMode
   customInstructions: string
   createdAt: number
@@ -90,4 +98,5 @@ export interface SamplingParams {
   temperature: number
   maxTokens: number
   topP: number
+  maxToolRounds: number
 }

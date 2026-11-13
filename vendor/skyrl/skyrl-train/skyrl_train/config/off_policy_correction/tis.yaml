@@ -1,0 +1,4 @@
+rules:
+  - kind: token
+    action: truncate
+    high: 2.0

@@ -21,7 +21,14 @@ from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
-from marin.evaluation.eval_measurements import declared_metric_gap, measurement_from_record, measurements_from_records
+from marin.evaluation.eval_measurements import (
+    MetricRow,
+    declared_metric_gap,
+    declared_metric_rows,
+    measurement_from_record,
+    undeclared_metric_rows,
+)
+from marin.evaluation.eval_policy import POLICIES, record_policy_violations
 from marin.evaluation.eval_stats import (
     DEFAULT_EXCLUDE_FLAGS,
     DEFAULT_MIN_COVERAGE,
@@ -44,16 +51,18 @@ from marin.evaluation.eval_stats import (
     panel_aggregate,
     select,
 )
+from marin.evaluation.historical_protocols import comparison_column, compatible_selection, historical_selection
+from marin.evaluation.metric_selection import PUBLICATION_METRIC_POLICY
 from marin.evaluation.records import EvalRunRecord, RunStatus
+from marin.execution.step_status import STATUS_SUCCESS
 
 # Capped-instance launcher validation runs; kept out of the headline panel (they stay visible in the
 # runs list and history).
 SMOKE_SUFFIX = "-smoke"
 
 # Presentation grouping of eval columns into suites for the dashboard's column tree. This mirrors the
-# launcher's suite membership (experiments/evaluation/evals.py), which evaldash cannot import: it ships
-# as a standalone image vendoring only the marin record contracts, and experiments depends on marin,
-# not the reverse. Membership drift is graceful -- an eval not listed here just falls into "Other".
+# launcher's suite membership (experiments/evaluation/evals.py). Experiment catalogs are not part of
+# applet releases. An eval not listed here falls into "Other".
 EVAL_SUITES: dict[str, tuple[str, ...]] = {
     "NLP": (
         "mmlu",
@@ -70,8 +79,10 @@ EVAL_SUITES: dict[str, tuple[str, ...]] = {
         "nq-open",
         "drop",
         "gsm8k-0shot",
+        "gsm8k",
     ),
     "Chat / Math": ("math500", "aime24", "olympiadbench"),
+    "Long context": ("mrcr", "graphwalks"),
     "Code": ("humaneval", "humanevalplus", "mbppplus"),
 }
 
@@ -86,17 +97,19 @@ RUN_FACETS: dict[str, str] = {
 }
 
 
-def eval_suites(evals: set[str]) -> list[dict]:
+def eval_suites(evals: set[str], families: Mapping[str, str]) -> list[dict]:
     """Group the eval names present into ordered presentation suites for the column tree.
 
     Each suite lists only the evals actually seen; any eval outside :data:`EVAL_SUITES` lands in a
     trailing ``Other`` bucket so an unmapped column is still selectable.
     """
-    assigned = {name for names in EVAL_SUITES.values() for name in names}
+    assigned = set()
+    for names in EVAL_SUITES.values():
+        assigned.update(name for name in evals if name in names or families.get(name) in names)
     result = [
         {"suite": suite, "evals": present}
         for suite, names in EVAL_SUITES.items()
-        if (present := sorted(name for name in names if name in evals))
+        if (present := sorted(name for name in evals if name in names or families.get(name) in names))
     ]
     other = sorted(name for name in evals if name not in assigned)
     if other:
@@ -109,6 +122,9 @@ def declared_families(records: Iterable[EvalRunRecord]) -> dict[str, str]:
     explicit: dict[str, tuple[str, str]] = {}
     inferred: dict[str, tuple[str, str]] = {}
     for record in records:
+        curated = record.evaluation.curated
+        if curated is not None and curated.selection is not None:
+            explicit[comparison_column(curated.selection)] = (curated.selection.benchmark, record.created_at or "")
         family = record.evaluation.family
         if family is not None:
             current = explicit.get(record.evaluation.name)
@@ -172,16 +188,112 @@ def run_metadata(records: list[EvalRunRecord]) -> dict[str, dict[str, str]]:
     return {record.run_id: {facet: _attribute(record, path) for facet, path in RUN_FACETS.items()} for record in records}
 
 
-def _panel_records(records: list[EvalRunRecord]) -> list[EvalRunRecord]:
-    """Records eligible for the headline panel: everything but the capped smoke suites."""
-    return [record for record in records if not record.evaluation.name.endswith(SMOKE_SUFFIX)]
+ALL_COHORTS = "all"
+"""Cohort selection for the newest admissible result per benchmark across every cohort."""
+
+UNVERSIONED_COHORT = "unversioned"
+"""Cohort selection for records launched without a version label (``version: null``)."""
+
+
+def cohort_selection(cohort: str) -> tuple[CohortMode, str | None]:
+    """Return the cohort mode and version a ``cohort`` query value names."""
+    if cohort == ALL_COHORTS:
+        return CohortMode.LATEST_VALID, None
+    if cohort == UNVERSIONED_COHORT:
+        return CohortMode.SINGLE_COHORT, None
+    return CohortMode.SINGLE_COHORT, cohort
+
+
+def in_cohort(record: EvalRunRecord, request: SelectionRequest | None) -> bool:
+    """Whether ``record`` belongs to the request's cohort; no request or all cohorts admits every record."""
+    return request is None or request.cohort is CohortMode.LATEST_VALID or record.version == request.cohort_version
+
+
+def _panel_records(records: list[EvalRunRecord], request: SelectionRequest | None = None) -> list[EvalRunRecord]:
+    """Return policy-compliant, non-smoke records for the selected cohort."""
+    return [
+        record
+        for record in records
+        if not record.evaluation.name.endswith(SMOKE_SUFFIX)
+        if in_cohort(record, request)
+        if not record_policy_violations(record)
+    ]
+
+
+def _policy_rejections(
+    records: list[EvalRunRecord], request: SelectionRequest, models: tuple[str, ...] | None = None
+) -> list[dict[str, object]]:
+    metadata = run_metadata(records)
+    return [
+        {
+            "run_id": record.run_id,
+            "model": record.model.name,
+            "benchmark": record.evaluation.name,
+            "reasons": list(violations),
+        }
+        for record in records
+        if not record.evaluation.name.endswith(SMOKE_SUFFIX)
+        if in_cohort(record, request)
+        if request.panel is None or record.evaluation.name in request.panel
+        if models is None or record.model.name in models
+        if matches_filters(record.model.name, metadata[record.run_id], request)
+        if (violations := record_policy_violations(record))
+    ]
 
 
 def _gap_reason(record: EvalRunRecord) -> str:
     """Why a record contributes no cell, when the request did not reject it outright."""
+    if record.step_status not in (None, STATUS_SUCCESS):
+        return f"step {record.step_status.lower()}"
     if record.status == RunStatus.SUCCEEDED:
         return declared_metric_gap(record) or "no metrics recorded"
     return f"status {record.status.value}"
+
+
+def display_status(record: EvalRunRecord) -> str:
+    """Use the StepSpec state when its run has not completed successfully."""
+    if record.step_status is None or record.step_status == STATUS_SUCCESS:
+        return record.status.value
+    if record.step_status == "RUNNING":
+        return "running"
+    return "step_failed"
+
+
+def score_eligible(record: EvalRunRecord) -> bool:
+    """Whether EvalDash can publish scores from this observed record."""
+    return record.step_status in (None, STATUS_SUCCESS)
+
+
+def dashboard_measurements(records: Iterable[EvalRunRecord]) -> list[Measurement]:
+    """Extract scores from records whose observed steps are complete."""
+    records = [record for record in records if score_eligible(record)]
+    selections = {
+        comparison_column(record.evaluation.curated.selection): record.evaluation.curated.selection
+        for record in records
+        if record.evaluation.curated is not None and record.evaluation.curated.selection is not None
+    }
+    result = []
+    for record in records:
+        measurement = measurement_from_record(record)
+        if measurement is None:
+            continue
+        curated = record.evaluation.curated
+        if curated is not None and curated.selection is not None:
+            result.append(replace(measurement, benchmark=comparison_column(curated.selection)))
+            continue
+        historical = historical_selection(record)
+        columns = [
+            column
+            for column, selection in selections.items()
+            if historical is not None and compatible_selection(historical, selection)
+        ]
+        if columns:
+            result.extend(
+                replace(measurement, benchmark=column, num_fewshot=historical.num_fewshot) for column in columns
+            )
+        else:
+            result.append(measurement)
+    return result
 
 
 def cell_payload(measurement: Measurement) -> dict:
@@ -189,12 +301,18 @@ def cell_payload(measurement: Measurement) -> dict:
     interval = measurement_interval(measurement)
     coverage = measurement.coverage
     return {
+        "metric_policy": PUBLICATION_METRIC_POLICY,
         "value": measurement.value,
         "low": interval.low,
         "high": interval.high,
         "interval_kind": interval.kind.value,
         "metric": measurement.metric,
         "metric_kind": measurement.kind.value,
+        "repeat_aggregation": (
+            measurement.repeat_aggregation.model_dump(mode="json")
+            if measurement.repeat_aggregation is not None
+            else None
+        ),
         "declared": measurement.declared,
         "n_scored": coverage.n_scored,
         "n_benchmark": coverage.n_benchmark,
@@ -235,28 +353,43 @@ def _missing_cells(
     records: list[EvalRunRecord],
     chosen: Mapping[str, Mapping[str, Measurement]],
     rejections: tuple[Rejection, ...],
+    measurements: Sequence[Measurement],
+    requested: tuple[str, ...] | None,
+    hidden: set[str],
 ) -> dict[str, dict[str, dict]]:
     """Why each ``(model, benchmark)`` without an admitted cell has none, keyed model then benchmark.
 
-    A gap is either a run the request rejected (a failed status, coverage below the gate, the wrong
-    cohort) or a run that reached no metric at all, which never becomes a measurement. Both keep the
+    A gap is either a run the request rejected (a failed status or coverage below the gate) or a run
+    that reached no metric at all, which never becomes a measurement. Both keep the
     newest offending run, so an empty cell links the run behind it instead of rendering blank.
     """
     reasons = {rejection.run_id: rejection.reason for rejection in rejections}
+    columns: dict[str, list[str]] = {}
+    for measurement in measurements:
+        columns.setdefault(measurement.run_id, []).append(measurement.benchmark)
     missing: dict[str, dict[str, dict]] = {}
     for record in records:
-        model, benchmark = record.model.name, record.evaluation.name
-        if benchmark in chosen.get(model, {}):
-            continue
-        reason = reasons.get(record.run_id) or _gap_reason(record)
-        current = missing.setdefault(model, {}).get(benchmark)
-        if current is None or (record.created_at or "") > current["created_at"]:
-            missing[model][benchmark] = {
-                "reason": reason,
-                "run_id": record.run_id,
-                "status": record.status.value,
-                "created_at": record.created_at,
-            }
+        curated = record.evaluation.curated
+        name = (
+            comparison_column(curated.selection)
+            if curated is not None and curated.selection is not None
+            else record.evaluation.name
+        )
+        for benchmark in columns.get(record.run_id, [name]):
+            if benchmark in hidden or (requested is not None and benchmark not in requested):
+                continue
+            model = record.model.name
+            if benchmark in chosen.get(model, {}):
+                continue
+            reason = reasons.get(record.run_id) or _gap_reason(record)
+            current = missing.setdefault(model, {}).get(benchmark)
+            if current is None or (record.created_at or "") > current["created_at"]:
+                missing[model][benchmark] = {
+                    "reason": reason,
+                    "run_id": record.run_id,
+                    "status": display_status(record),
+                    "created_at": record.created_at,
+                }
     return missing
 
 
@@ -277,9 +410,13 @@ def build_panel(
     variants and controls coverage, completeness, and aggregation. ``benchmarks`` and ``cells`` retain
     every admitted variant under its exact eval name.
     """
-    eligible = _panel_records(records)
+    eligible = _panel_records(records, request)
     metadata = run_metadata(eligible)
-    measurements = measurements_from_records(eligible)
+    measurements = [
+        measurement
+        for measurement in dashboard_measurements(_panel_records(records))
+        if request.cohort_version is None or measurement.version == request.cohort_version
+    ]
     protocols = declared_protocols(measurements)
     # Family columns are resolved after selection, so apply completeness to the effective panel below.
     selection = select(
@@ -289,19 +426,13 @@ def build_panel(
         protocols,
     )
     requested = list(request.panel) if request.panel is not None else list(selection.benchmarks)
-    families = _family_columns(requested, declared_families(eligible), selection.cells)
+    families = _family_columns(requested, declared_families(_panel_records(records)), selection.cells)
     panel = [column.default for column in families]
     # Omit gap entries for sibling variants without a visible column; admitted cells remain in the payload.
     hidden = {name for column in families for name in column.variants if name != column.default}
 
-    on_panel = [
-        record
-        for record in eligible
-        if record.evaluation.name not in hidden
-        if request.panel is None or record.evaluation.name in request.panel
-        if matches_filters(record.model.name, metadata[record.run_id], request)
-    ]
-    missing = _missing_cells(on_panel, selection.cells, selection.rejections)
+    on_panel = [record for record in eligible if matches_filters(record.model.name, metadata[record.run_id], request)]
+    missing = _missing_cells(on_panel, selection.cells, selection.rejections, measurements, request.panel, hidden)
 
     protocol = AggregationProtocol(panel=tuple(panel), missing=aggregate_policy) if aggregate_policy else None
 
@@ -313,7 +444,7 @@ def build_panel(
         rows.append(
             {
                 "model": model,
-                "archived": model in archived_models,
+                "archived": model in archived_models or model.split("@", 1)[0] in archived_models,
                 "cells": {name: cell_payload(measurement) for name, measurement in cells.items()},
                 "missing": missing.get(model, {}),
                 "last_updated": max((measurement.created_at for measurement in cells.values()), default=None),
@@ -333,6 +464,7 @@ def build_panel(
             for column in families
         ],
         "rows": rows,
+        "policy_rejections": _policy_rejections(records, request),
         "request": {
             "min_coverage": request.min_coverage,
             "min_benchmark_coverage": request.min_benchmark_coverage,
@@ -365,11 +497,23 @@ def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, mo
     ``require_complete``: a model missing one of them is not scored rather than scored on a smaller
     panel that would not be the same quantity.
     """
-    eligible = _panel_records(records)
+    eligible = _panel_records(records, request)
     metadata = run_metadata(eligible)
-    measurements = measurements_from_records(eligible)
-    selection = select(measurements, request, metadata, declared_protocols(measurements))
+    measurements = [
+        measurement
+        for measurement in dashboard_measurements(_panel_records(records))
+        if request.cohort_version is None or measurement.version == request.cohort_version
+    ]
+    selection = select(
+        measurements,
+        replace(request, completeness=Completeness.ANY),
+        metadata,
+        declared_protocols(measurements),
+    )
     chosen = {model: dict(selection.cells.get(model, {})) for model in models}
+    if request.completeness is Completeness.COMPLETE_PANEL:
+        selected_panel = request.panel or tuple(sorted({name for cells in chosen.values() for name in cells}))
+        chosen = {model: cells if covers_panel(cells, selected_panel) else {} for model, cells in chosen.items()}
 
     union = [name for name in selection.benchmarks if any(name in cells for cells in chosen.values())]
     shared = [name for name in union if all(name in cells for cells in chosen.values())]
@@ -397,26 +541,53 @@ def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, mo
         "benchmarks": union,
         "shared": shared,
         "rows": rows,
+        "policy_rejections": _policy_rejections(records, request, models),
         "aggregates": {model: _aggregate_payload(panel_aggregate(cells, protocol)) for model, cells in chosen.items()},
     }
 
 
 def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = frozenset()) -> dict:
     """Return panel filter metadata and all known variants for each family."""
-    eval_names = {r.evaluation.name for r in records}
+    all_models = sorted({record.model.name for record in records})
+    run_facets = {
+        "model": all_models,
+        "eval": sorted({r.evaluation.name for r in records}),
+        "version": sorted({r.version for r in records if r.version}),
+        "status": sorted({r.status.value for r in records}),
+        "user": sorted({r.user for r in records if r.user}),
+        "accelerator": sorted({r.hardware.accelerator for r in records if r.hardware.accelerator}),
+    }
+    records = _panel_records(records)
+    eval_names = {measurement.benchmark for measurement in dashboard_measurements(records)}
+    eval_names.update(
+        (
+            comparison_column(r.evaluation.curated.selection)
+            if r.evaluation.curated is not None and r.evaluation.curated.selection is not None
+            else r.evaluation.name
+        )
+        for r in records
+        if measurement_from_record(r) is None
+    )
     by_family = group_by_family(sorted(eval_names), declared_families(records))
     metadata = run_metadata(records)
     facets = {
         facet: sorted({values[facet] for values in metadata.values() if values.get(facet)}) for facet in RUN_FACETS
     }
     return {
-        "models": sorted({r.model.name for r in records}),
+        "models": all_models,
+        "run_facets": run_facets,
+        "metric_policy": PUBLICATION_METRIC_POLICY,
+        "default_cohort": ALL_COHORTS,
+        "verified_cohorts": list(POLICIES),
         "evals": sorted(eval_names),
-        "suites": eval_suites(eval_names),
+        "suites": eval_suites(eval_names, declared_families(records)),
         "families": [{"family": family, "variants": variants} for family, variants in sorted(by_family.items())],
         "users": sorted({r.user for r in records if r.user}),
-        "statuses": sorted({r.status.value for r in records}),
-        "versions": sorted({r.version for r in records if r.version}),
+        "statuses": sorted({display_status(r) for r in records}),
+        "versions": (
+            sorted(set(POLICIES) | {r.version for r in records if r.version})
+            + ([UNVERSIONED_COHORT] if any(r.version is None for r in records) else [])
+        ),
         "facets": facets,
         "archived_models": sorted(archived_models),
     }
@@ -424,10 +595,22 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
 
 def record_headline(record: EvalRunRecord, protocol: MetricProtocol | None = None) -> dict | None:
     """One run's headline score with its interval, or None when the run produced no primary metric."""
+    if not score_eligible(record):
+        return None
     measurement = measurement_from_record(record)
     if measurement is None or (protocol is not None and not matches_protocol(measurement, protocol)):
         return None
     return cell_payload(measurement)
+
+
+def run_metric_rows(record: EvalRunRecord) -> list[MetricRow]:
+    """The run page's top metric rows: declared protocol metrics first, then undeclared raw rows.
+
+    A declared benchmark metric keeps its protocol name and the value the statistics engine would
+    select; tasks without a declaration keep their raw rows, so a record that mixes both still shows
+    every task. When nothing is declared, the whole raw map is returned.
+    """
+    return [*declared_metric_rows(record), *undeclared_metric_rows(record)]
 
 
 def _model_cohorts(records: list[EvalRunRecord]) -> list[dict]:
@@ -443,7 +626,7 @@ def _model_cohorts(records: list[EvalRunRecord]) -> list[dict]:
                 "version": version,
                 "created_at": newest.created_at,
                 "n_evals": len(members),
-                "n_succeeded": sum(1 for record in members if record.status == RunStatus.SUCCEEDED),
+                "n_succeeded": sum(1 for record in members if display_status(record) == RunStatus.SUCCEEDED),
                 "group_id": newest.group_id,
             }
         )
@@ -451,26 +634,29 @@ def _model_cohorts(records: list[EvalRunRecord]) -> list[dict]:
     return cohorts
 
 
-def _model_history(records: list[EvalRunRecord], protocols: Mapping[str, MetricProtocol]) -> dict[str, list[dict]]:
+def _model_history(measurements: list[Measurement], protocols: Mapping[str, MetricProtocol]) -> dict[str, list[dict]]:
     """Per-eval score-over-time: every scored run for the model on each eval, oldest first."""
     history: dict[str, list[dict]] = {}
-    for record in records:
-        headline = record_headline(record, protocols.get(record.evaluation.name))
-        if headline is None:
+    for measurement in measurements:
+        protocol = protocols.get(measurement.benchmark)
+        if protocol is not None and not matches_protocol(measurement, protocol):
             continue
-        history.setdefault(record.evaluation.name, []).append({**headline, "status": record.status.value})
+        history.setdefault(measurement.benchmark, []).append(
+            {**cell_payload(measurement), "status": measurement.status.value}
+        )
     for points in history.values():
         points.sort(key=lambda point: point["created_at"] or "")
     return history
 
 
 def _model_runs(records: list[EvalRunRecord], protocols: Mapping[str, MetricProtocol]) -> list[dict]:
-    """Every run for the model, newest first, each with its headline score when it scored."""
+    """Every run for the model, newest first, with grades only for admitted runs."""
     runs = []
     for record in records:
+        violations = record_policy_violations(record)
         protocol = protocols.get(record.evaluation.name)
-        measurement = measurement_from_record(record)
-        headline = record_headline(record, protocol)
+        measurement = measurement_from_record(record) if score_eligible(record) else None
+        headline = None if violations else record_headline(record, protocol)
         protocol_mismatch = (
             measurement is not None and protocol is not None and not matches_protocol(measurement, protocol)
         )
@@ -478,14 +664,20 @@ def _model_runs(records: list[EvalRunRecord], protocols: Mapping[str, MetricProt
             {
                 "run_id": record.run_id,
                 "eval_name": record.evaluation.name,
-                "status": record.status.value,
+                "status": display_status(record),
+                "step_status": record.step_status,
                 "created_at": record.created_at,
                 "version": record.version,
                 "headline": headline,
+                "policy_violations": list(violations),
                 "gap_reason": (
                     None
                     if headline
-                    else "metric differs from current protocol" if protocol_mismatch else _gap_reason(record)
+                    else (
+                        "; ".join(violations)
+                        if violations
+                        else "metric differs from current protocol" if protocol_mismatch else _gap_reason(record)
+                    )
                 ),
             }
         )
@@ -496,12 +688,13 @@ def _model_runs(records: list[EvalRunRecord], protocols: Mapping[str, MetricProt
 def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
     """Everything the frontend Model view needs for one model, in one payload, or None when unknown.
 
-    ``current_version`` is the version of the model's most recent non-smoke run -- the cohort the view
-    opens on -- and ``cohorts`` lists one entry per distinct version, both excluding ``-smoke`` suites
-    as the headline panel does. ``history`` is the per-eval score-over-time across every scored run,
-    and ``runs`` spans every run for the model (smoke included), newest first.
+    ``current_version`` is the version of the model's most recent non-smoke run, and ``cohorts``
+    lists one entry per distinct version, both excluding ``-smoke`` suites as the headline panel
+    does. ``history`` is the per-eval score-over-time across every scored run, and ``runs`` spans
+    every run for the model (smoke included), newest first.
     """
-    protocols = declared_protocols(measurements_from_records(_panel_records(records)))
+    measurements = dashboard_measurements(_panel_records(records))
+    protocols = declared_protocols(measurements)
     model_records = [record for record in records if record.model.name == model]
     if not model_records:
         return None
@@ -514,7 +707,7 @@ def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
         "user": newest.user,
         "current_version": max(eligible, key=lambda r: r.created_at or "").version if eligible else None,
         "cohorts": _model_cohorts(eligible),
-        "history": _model_history(eligible, protocols),
+        "history": _model_history([item for item in measurements if item.model == model], protocols),
         "runs": _model_runs(model_records, protocols),
     }
 
@@ -522,7 +715,7 @@ def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
 def panel_request(
     *,
     benchmarks: tuple[str, ...] | None = None,
-    cohort_version: str | None = None,
+    cohort: str = ALL_COHORTS,
     completeness: Completeness = Completeness.ANY,
     min_coverage: float = DEFAULT_MIN_COVERAGE,
     min_benchmark_coverage: float = DEFAULT_MIN_COVERAGE,
@@ -535,12 +728,14 @@ def panel_request(
     ``include_flagged`` readmits results the engine flags as suspect, which are excluded by default
     so one cannot stand as a model's newest result. They are always reported as the reason for the
     empty cell, so this widens what is shown rather than revealing something that was hidden.
+    ``cohort`` is a version label, ``"unversioned"`` for records without one, or ``"all"``.
     """
+    cohort_mode, cohort_version = cohort_selection(cohort)
     return SelectionRequest(
         min_coverage=min_coverage,
         min_benchmark_coverage=min_benchmark_coverage,
         exclude_flags=frozenset() if include_flagged else DEFAULT_EXCLUDE_FLAGS,
-        cohort=CohortMode.SINGLE_COHORT if cohort_version else CohortMode.LATEST_VALID,
+        cohort=cohort_mode,
         cohort_version=cohort_version,
         panel=benchmarks,
         completeness=completeness,

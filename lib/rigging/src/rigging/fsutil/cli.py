@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The ``fsutil`` command line: list, read, size, copy, and remove across Marin's buckets.
+"""The ``fsutil`` command line: list, read, size, copy, and remove across Marin's buckets and HF.
 
-Every path is a full URL (``gs://``, ``s3://``, or a local path). There is no implicit
+Every path is a full URL (``gs://``, ``s3://``, ``hf://``, or a local path). There is no implicit
 current bucket, so the same command means the same thing from any shell, and a copy can
 name two different backends. Bare ``fsutil`` opens the interactive browser, and
 ``fsutil URL`` opens the browser on a directory or the file viewer on anything else.
@@ -19,15 +19,26 @@ import click
 
 from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
+from rigging.filesystem.hashing import file_md5
 from rigging.filesystem.s3_compat import s3_credentials, s3_endpoint
 from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.transfer import (
+    CopyAction,
+    CopyPlan,
+    TransferError,
+    copy_plan,
+    execute_copy_plan,
+    execute_sync,
+    remove_sources,
+    sync_plan,
+)
 from rigging.fsutil.deletion import (
     DEFAULT_DELETE_WORKERS,
     MAX_DELETE_WORKERS,
     DeleteProgress,
     delete_prefix,
 )
-from rigging.fsutil.hashing import file_md5, format_digest
+from rigging.fsutil.huggingface import prepare_hf_destination
 from rigging.fsutil.listing import (
     ROOT,
     Entry,
@@ -38,15 +49,8 @@ from rigging.fsutil.listing import (
     total_size,
 )
 from rigging.fsutil.parquet import PREVIEW_ROWS, MissingParquetReader, is_parquet, parquet_lines
-from rigging.fsutil.render import aligned_lines, file_lines, format_size, format_time, table_lines
-from rigging.fsutil.transfer import (
-    TransferError,
-    copy_plan,
-    execute_copy_plan,
-    execute_sync,
-    remove_sources,
-    sync_plan,
-)
+from rigging.fsutil.remote import REMOTE_CLUSTER, run_remote_transfer
+from rigging.fsutil.render import aligned_lines, file_lines, format_digest, format_size, format_time, table_lines
 from rigging.fsutil.tui import run as run_browser
 from rigging.fsutil.tui import show as show_viewer
 from rigging.fsutil.usage import (
@@ -58,6 +62,7 @@ from rigging.fsutil.usage import (
     render_usage_report,
     scan_usage,
 )
+from rigging.fsutil.verified_copy import DEFAULT_VERIFIED_COPY_WORKERS, VerifiedCopyError, verified_copy_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -115,9 +120,10 @@ class _AutoOpenGroup(click.Group):
 @click.option("-v", "--verbose", is_flag=True, help="Log fsspec/botocore activity.")
 @click.pass_context
 def cli(ctx: click.Context, verbose: bool) -> None:
-    """Browse and manipulate Marin's object storage (GCS, CoreWeave, R2).
+    """Browse and manipulate Marin's object storage (GCS, CoreWeave, R2, HF).
 
-    Paths are full URLs: gs://bucket/key, s3://bucket/key, or a local path.
+    Paths are full URLs: gs://bucket/key, s3://bucket/key, hf://buckets/owner/bucket/key,
+    hf://owner/model/key, hf://datasets/owner/dataset/key, or a local path.
     A bare URL opens the browser on a directory or the viewer on a file.
     """
     logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING)
@@ -317,12 +323,17 @@ def find(pattern: str) -> None:
 @click.argument("urls", nargs=-1, required=True)
 @click.option("-r", "-R", "--recursive", is_flag=True, help="Copy a prefix and everything under it.")
 @click.option("-n", "--no-clobber", is_flag=True, help="Skip files that already exist at the destination.")
-def cp(urls: tuple[str, ...], recursive: bool, no_clobber: bool) -> None:
+@click.option("--remote", is_flag=True, help=f"Run on the {REMOTE_CLUSTER} Iris cluster.")
+def cp(urls: tuple[str, ...], recursive: bool, no_clobber: bool, remote: bool) -> None:
     """Copy one or more sources to a file, directory, or object prefix."""
     source_urls, destination_url = _transfer_arguments(urls)
+    if remote:
+        run_remote_transfer("cp", urls, recursive=recursive, no_clobber=no_clobber)
+        return
     try:
+        prepare_hf_destination(destination_url)
         plan = copy_plan(source_urls, destination_url, recursive=recursive, no_clobber=no_clobber)
-        execute_copy_plan(plan)
+        _execute_transfer(plan)
     except TransferError as error:
         raise click.ClickException(str(error)) from error
     for action in plan.copies:
@@ -334,17 +345,33 @@ def cp(urls: tuple[str, ...], recursive: bool, no_clobber: bool) -> None:
 @click.command()
 @click.argument("urls", nargs=-1, required=True)
 @click.option("-r", "-R", "--recursive", is_flag=True, help="Move a prefix and everything under it.")
-def mv(urls: tuple[str, ...], recursive: bool) -> None:
+@click.option("--remote", is_flag=True, help=f"Run on the {REMOTE_CLUSTER} Iris cluster.")
+def mv(urls: tuple[str, ...], recursive: bool, remote: bool) -> None:
     """Move or rename one or more sources, including across backends."""
     source_urls, destination_url = _transfer_arguments(urls)
+    if remote:
+        run_remote_transfer("mv", urls, recursive=recursive)
+        return
     try:
+        prepare_hf_destination(destination_url)
         plan = copy_plan(source_urls, destination_url, recursive=recursive, no_clobber=False)
-        execute_copy_plan(plan)
+        _execute_transfer(plan)
         remove_sources(plan.sources)
     except TransferError as error:
         raise click.ClickException(str(error)) from error
     for action in plan.copies:
         click.echo(f"{action.source.url} -> {action.destination.url}")
+
+
+def _execute_transfer(plan: CopyPlan) -> None:
+    display = _ProgressDisplay()
+
+    def progress(action: CopyAction, copied_bytes: int) -> None:
+        display.update(f"Copying {action.source.url} -> {action.destination.url}: {format_size(copied_bytes)}")
+
+    execute_copy_plan(plan, progress=progress)
+    if plan.copies:
+        display.finish(f"Copied {len(plan.copies)} file(s)")
 
 
 @click.command()
@@ -369,6 +396,29 @@ def rsync(source: str, destination: str, delete: bool, dry_run: bool, checksum: 
         click.echo(f"copy {action.source.url} -> {action.destination.url}")
     for action in plan.deletes:
         click.echo(f"delete {action.location.url}")
+
+
+@click.command("verified-copy")
+@click.argument("source")
+@click.argument("destination")
+@click.option("--status-prefix", default=None, help="Sibling prefix for verified per-object resume records.")
+@click.option(
+    "--workers",
+    default=DEFAULT_VERIFIED_COPY_WORKERS,
+    show_default=True,
+    type=click.IntRange(min=1, max=64),
+)
+def verified_copy(source: str, destination: str, status_prefix: str | None, workers: int) -> None:
+    """Stage and verify a prefix, then publish its completion manifest last."""
+    try:
+        result = verified_copy_prefix(source, destination, status_url=status_prefix, workers=workers)
+    except VerifiedCopyError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(
+        f"verified {result.total_files} files ({result.total_bytes} bytes): "
+        f"{result.copied_files} copied, {result.resumed_files} resumed"
+    )
+    click.echo(result.manifest_url)
 
 
 @click.command("hash")
@@ -548,6 +598,7 @@ _COMMANDS = (
     cp,
     mv,
     rsync,
+    verified_copy,
     hash_command,
     rm,
     browse,

@@ -1,0 +1,22 @@
+--- a/apps_testing_util.py
++++ b/apps_testing_util.py
+@@ -20,7 +20,18 @@
+ # used for testing the code that reads from input
+ from unittest.mock import patch, mock_open
+ 
+-from pyext import RuntimeModule
++import types
++
++
++class RuntimeModule:
++    """Stand-in for pyext 0.7's RuntimeModule, which does not import on Python 3.11+."""
++
++    @staticmethod
++    def from_string(name, docstring, source):
++        module = types.ModuleType(name, docstring)
++        sys.modules[name] = module
++        exec(source, module.__dict__)
++        return module
+ 
+ from enum import Enum
+ class CODE_TYPE(Enum):

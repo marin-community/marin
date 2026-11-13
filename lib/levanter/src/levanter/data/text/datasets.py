@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Literal, NotRequired, TypeAlias, TypeVar, TypedDict
+from typing import Literal, TypeAlias, TypeVar
 
 import equinox as eqx
 import jax
@@ -53,12 +53,20 @@ from levanter.data.text.formats import (
     PrebuiltLmDatasetFormat,
     ProcessedChatDict,
     TextLmDatasetFormat,
+    TokenSeqDict,
+)
+from levanter.data.text.length_bucket import (
+    LengthBucket,
+    LengthBucketIndex,
+    LengthBucketTokenSeqDataset,
+    load_bucket_length_stats,
 )
 from levanter.models.lm_model import LmExample
-from levanter.schedule import BatchSchedule
+from levanter.schedule import BatchSchedule, IntSchedule
 from levanter.store.cache import CacheCatalog, CacheCatalogEntry, CacheLedger, CacheOptions, TreeCache
 from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 from levanter.utils.jax_utils import key_iterator
+from levanter.utils.thread_utils import blocking_wait
 from levanter.utils.logging import silence_transformer_nag
 
 silence_transformer_nag()  # noqa
@@ -68,11 +76,6 @@ T = TypeVar("T")
 
 logger = logging.getLogger("levanter.data.text")
 CACHE_METADATA_WORKERS = 32
-
-
-class TokenSeqDict(TypedDict):
-    input_ids: np.ndarray
-    loss_weights: NotRequired[np.ndarray]
 
 
 class TokenSeqDataset(AsyncDataset[TokenSeqDict]):
@@ -359,6 +362,37 @@ class ConcatDatasetComponent(DatasetComponentBase):
     tags: list[str] | None = None
 
 
+@DatasetComponentBase.register_subclass("length_skew")
+@dataclass(frozen=True)
+class LengthSkewDatasetComponent(DatasetComponentBase):
+    """Split a training cache into virtual buckets with a relative long-token sampling weight."""
+
+    child: DatasetComponent
+    threshold: int
+    long_weight: float
+    stats_path: str
+    stats_key: str
+
+
+def _length_bucket_weights(component: LengthSkewDatasetComponent, seq_len: int) -> dict[LengthBucket, float]:
+    stats = load_bucket_length_stats(component.stats_path).buckets[component.stats_key]
+    long_tokens = stats.tokens_above[component.threshold]
+    if component.long_weight <= 0:
+        raise ValueError("The long-token sampling weight must be positive")
+    weights = {
+        bucket: tokens * multiplier
+        for bucket, tokens, multiplier in (
+            (LengthBucket.SHORT, stats.total_tokens - long_tokens, 1.0),
+            (LengthBucket.LONG, long_tokens, component.long_weight),
+        )
+        if tokens >= seq_len
+    }
+    total = sum(weights.values())
+    if not total:
+        raise ValueError(f"Length-skew component {component.stats_key} has no {seq_len}-token sequences")
+    return {bucket: weight / total for bucket, weight in weights.items()}
+
+
 def _effective_pack(component: DatasetComponent) -> bool | int:
     if component.pack is not None:
         return component.pack
@@ -373,8 +407,8 @@ def _effective_pack(component: DatasetComponent) -> bool | int:
 def _resolve_pack_config(
     pack: bool | int,
     *,
-    packed_slice_strategy: Literal["left", "right", "raise"] = "left",
-) -> tuple[int, Literal["left", "right", "raise"]]:
+    packed_slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
+) -> tuple[int, Literal["left", "right", "raise", "drop"]]:
     """Resolve a ``pack`` value to ``(max_segments_per_example, slice_strategy)``.
 
     A falsy value (``False``/``0``) selects one document per example, padded to
@@ -398,7 +432,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         cache: TreeCache[dict],
         Pos: Axis,
         max_segments_per_example: int = 64,
-        slice_strategy: Literal["left", "right", "raise"] = "left",
+        slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
         loss_weights_key: str | None = None,
         block_cross_document_attention: bool = True,
     ):
@@ -461,7 +495,7 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
         cache: TreeCache[ProcessedChatDict],
         Pos: Axis,
         max_segments_per_example: int = 64,
-        slice_strategy: Literal["left", "right", "raise"] = "left",
+        slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
         mask_user_turns: bool = True,
         block_cross_document_attention: bool = True,
     ):
@@ -531,7 +565,7 @@ def dataset_for_component(
         )
     elif isinstance(fmt, ChatLmDatasetFormat):
         # Chat has no continuous-stream mode: a falsy pack means one conversation per example.
-        max_segments, slice_strategy = _resolve_pack_config(pack)
+        max_segments, slice_strategy = _resolve_pack_config(pack, packed_slice_strategy=fmt.slice_strategy)
         return ChatDataset(
             cache,
             Pos,
@@ -611,6 +645,115 @@ DEFAULT_LM_DATA_SHUFFLE = BlockShuffleConfig(
 """Default hierarchical block-shuffle policy for LM training data."""
 
 
+@dataclass(frozen=True)
+class ContextPhaseConfig:
+    """An earlier stretch of a run, trained at another sequence length, that the current config continues.
+
+    The run trained with these settings until ``end_step``. When training resumes at a new sequence length,
+    each source skips the unread rest of its current shuffle window and starts the next window, so it repeats
+    nothing it already served. This requires the same components, shuffle seed, and token-sized shuffle
+    blocks in every phase.
+    """
+
+    end_step: int
+    seq_len: int
+    batch_size: int | IntSchedule
+    """Batch size, or a schedule of batch sizes from step 0, as in ``TrainerConfig.train_batch_size``."""
+    train_weights: list[tuple[int, dict[str, float]]]
+    """Mixture stages in training steps at this phase's batch size."""
+    shuffle: BlockShuffleConfig
+
+
+@dataclass(frozen=True)
+class ContextPhase:
+    """One context phase of the run, with its batch schedule and stages in sequence indices."""
+
+    start_step: int
+    seq_len: int
+    batch_schedule: BatchSchedule
+    weights: list[tuple[int, dict[str, float]]]
+
+
+def skip_to_window_offsets(
+    *,
+    datasets: Mapping[str, AsyncDataset],
+    token_counts: Mapping[str, int],
+    phases: Sequence[ContextPhase],
+    block_size: int,
+    window_tokens: int,
+    key: PRNGKeyArray,
+) -> dict[str, int]:
+    """Return per-source start offsets for the last phase in ``phases``.
+
+    At each phase change, every source moves from its true read position (in the previous phase's
+    sequences, including that phase's own offsets, rounded up to the end of the partly consumed mixture
+    block) to the start of its next shuffle window, or of its next epoch if it was in the last window.
+    The offset is that target minus the new phase's own count at the start of its current mixture block,
+    which also absorbs differences in stage boundaries.
+
+    ``datasets`` fixes the source order and the set of sources; only the names are used. Every phase must
+    give positive weight, in some stage, to exactly these sources.
+    ``window_tokens`` is the shuffle window size in tokens, the same in every phase.
+    """
+    if len(phases) < 2:
+        raise ValueError("skip_to_window_offsets needs a prior phase and the current phase")
+    # A training config drops sources whose weight is zero in every stage, which changes the shuffle keys of
+    # the rest, so ``datasets`` cannot reconstruct a phase that drew from a different set of sources.
+    for phase in phases:
+        active = {name for _, weights in phase.weights for name, weight in weights.items() if weight > 0}
+        if active != set(datasets):
+            raise ValueError(
+                f"Every context phase must draw from the same sources; {sorted(active)} != {sorted(datasets)}"
+            )
+    offsets = {name: 0 for name in datasets}
+    previous = phases[0]
+    for phase in phases[1:]:
+        if phase.start_step <= previous.start_step:
+            raise ValueError("Context phases must start at increasing steps")
+        # The within-window order changes only with the sequence length; at the same length a source could continue
+        # in place, and skipping to the next window would discard up to a window per source.
+        if phase.seq_len == previous.seq_len:
+            raise ValueError(f"Adjacent context phases must differ in sequence length; both use {phase.seq_len}")
+        for seq_len in (previous.seq_len, phase.seq_len):
+            if window_tokens % seq_len:
+                raise ValueError(f"Sequence length {seq_len} must divide the {window_tokens}-token shuffle window")
+        previous_mixture = MixtureDataset(datasets=datasets, weights=previous.weights, block_size=block_size, key=key)
+        mixture = MixtureDataset(datasets=datasets, weights=phase.weights, block_size=block_size, key=key)
+        # A mixture block serves each source's sequences in shuffled order, so a partly consumed block may
+        # already have served any of its sequences. Count the old block as fully served and measure the new
+        # phase from the start of its current block; every post-switch index is then past the old reads.
+        previous_index = previous.batch_schedule.global_data_offset_by_step(phase.start_step)
+        served = previous_mixture.sequence_counts_before_block(-(-previous_index // block_size))
+        index = phase.batch_schedule.global_data_offset_by_step(phase.start_step)
+        replayed = mixture.sequence_counts_before_block(index // block_size)
+        offsets = {
+            name: _next_window_start(
+                position=count + offsets[name],
+                tokens=token_counts[name],
+                old_seq_len=previous.seq_len,
+                new_seq_len=phase.seq_len,
+                window_tokens=window_tokens,
+            )
+            - replayed[name]
+            for name, count in served.items()
+        }
+        previous = phase
+    return offsets
+
+
+def _next_window_start(*, position: int, tokens: int, old_seq_len: int, new_seq_len: int, window_tokens: int) -> int:
+    """Map an old-length read position to the next shuffle-window start, in new-length sequences."""
+    old_length, new_length = tokens // old_seq_len, tokens // new_seq_len
+    if old_length == 0 or new_length == 0:
+        raise ValueError(f"A source with {tokens} tokens has no full sequence")
+    epoch, position_in_epoch = divmod(position, old_length)
+    window_sequences = window_tokens // old_seq_len
+    window_start = -(-position_in_epoch // window_sequences) * window_sequences
+    if window_start >= old_length:
+        epoch, window_start = epoch + 1, 0
+    return epoch * new_length + window_start * old_seq_len // new_seq_len
+
+
 # A classified dataset component from `build_caches`: (name, loaded cache, deferred
 # build args). Exactly one of the two trailing fields is non-None.
 _ClassifiedComponent: TypeAlias = tuple[
@@ -677,6 +820,20 @@ class LmDataConfig:
     dataset ordering for the split. Only relevant when num_validation_sequences
     is set.
     """
+    prior_context_phases: list[ContextPhaseConfig] = field(default_factory=list)
+    """Earlier context phases of the run, oldest first, each at a different sequence length than the next. When
+    set, each source resumes at the start of its next shuffle window after its true position at the last phase's
+    ``end_step``. Batch-size changes within one context length belong in the trainer's ``BatchSchedule``, not here.
+
+    The offsets assume what this config cannot check: every phase used the same trainer seed (which keys the shuffle
+    and the mixture) and listed its sources in the same order (which assigns each source's shuffle key and mixture
+    slots), and the current launch restores the checkpoint at the last ``end_step``. Restoring an earlier step
+    re-reads data."""
+    mixture_start_step: int | None = None
+    """The training step that reads the mixture's first sequence, for a run that continues on a new data store.
+    Each source then starts at the beginning of its shuffled order at this step, whatever the batch size, and a
+    restore at a later step continues in place. A restore before this step raises. The steps of ``train_weights``
+    stages count from this step. Requires the restart stop strategy, and excludes ``prior_context_phases``."""
 
     def __post_init__(self):
         if self.components and self.train_weights is None:
@@ -694,10 +851,44 @@ class LmDataConfig:
             else:
                 raise ValueError(f"Invalid train_weights type: {type(weights)}")
 
+        for name, component in self.components.items():
+            if not isinstance(component, LengthSkewDatasetComponent):
+                continue
+            if (
+                self.prior_context_phases
+                or name in (self.max_train_batches or {})
+                or name in (self.num_validation_sequences or {})
+            ):
+                raise ValueError("Length skew excludes context history and per-component sequence limits")
+            for bucket in LengthBucket:
+                if f"{name}/{bucket}" in self.components:
+                    raise ValueError(f"Component {name}/{bucket} collides with a virtual length bucket")
+
         if self.max_train_batches is not None or self.num_validation_sequences is not None:
             assert (
                 self.experiment_budget is None and self.target_budget is None
             ), "max_train_batches/num_validation_sequences and simulated data budget cannot all be set"
+
+        if self.prior_context_phases:
+            if not isinstance(self.shuffle, BlockShuffleConfig):
+                raise ValueError("prior_context_phases require a block shuffle")
+            if self.stop_strategy != StopStrategy.RESTART_STRATEGY:
+                raise ValueError("prior_context_phases require the restart stop strategy")
+            if self.max_train_batches is not None or self.num_validation_sequences is not None:
+                raise ValueError(
+                    "prior_context_phases cannot be combined with max_train_batches or num_validation_sequences"
+                )
+            if self.experiment_budget != self.target_budget:
+                raise ValueError("prior_context_phases cannot be combined with simulated epoching")
+            end_steps = [phase.end_step for phase in self.prior_context_phases]
+            if end_steps != sorted(set(end_steps)) or end_steps[0] <= 0:
+                raise ValueError(f"prior_context_phases must end at increasing positive steps, got {end_steps}")
+
+        if self.mixture_start_step is not None:
+            if self.prior_context_phases:
+                raise ValueError(
+                    "mixture_start_step excludes prior_context_phases, which replay this config's sources"
+                )
 
     @cached_property
     def the_tokenizer(self) -> MarinTokenizer:
@@ -756,6 +947,32 @@ class LmDataConfig:
                     datasets[name] = ConcatDataset(child_datasets)
                 continue
 
+            if isinstance(component, LengthSkewDatasetComponent):
+                if split != "train":
+                    continue
+                cache = caches.get(name)
+                if cache is None:
+                    raise ValueError(f"No cache available for length-skew component {name}")
+                if not isinstance(component.child.format, TextLmDatasetFormat) or _effective_pack(component.child):
+                    raise ValueError("Length skew requires an unpacked text cache")
+                stats = load_bucket_length_stats(component.stats_path)
+                cell_stats = stats.buckets[component.stats_key]
+                index = LengthBucketIndex(
+                    cache,
+                    component.threshold,
+                    statistics=cell_stats,
+                    chunk_rows=stats.chunk_rows,
+                )
+                for bucket in _length_bucket_weights(component, Pos.size):
+                    token_dataset = LengthBucketTokenSeqDataset(index, Pos.size, bucket=bucket)
+                    datasets[f"{name}/{bucket}"] = CausalLmDataset(
+                        token_dataset,
+                        Pos,
+                        eos_id=self.the_tokenizer.eos_token_id,
+                        block_cross_document_attention=self.block_cross_document_attention,
+                    )
+                continue
+
             if not isinstance(component, DatasetComponent):
                 raise ValueError(f"Unsupported component type for {name}: {type(component)}")
 
@@ -782,20 +999,136 @@ class LmDataConfig:
         *,
         key: PRNGKeyArray,
     ) -> AsyncDataset[LmExample]:
+        return NamedLmDataset(self.train_mixture(Pos, batch_schedule, key=key), Pos)
+
+    def train_mixture(
+        self,
+        Pos: Axis,
+        batch_schedule: BatchSchedule,
+        *,
+        key: PRNGKeyArray,
+    ) -> MixtureDataset[GrugLmExample]:
+        """Return the training mixture, with each source's start offset when ``prior_context_phases`` is set."""
         mix_key, shuffle_key = jax.random.split(key)
-        weights = self.train_weights
+        weights = self._training_weights(Pos.size)
         if isinstance(weights, list):
-            weights = rescale_mixture_schedule_for_batch_schedule(weights, batch_schedule)
+            weights = rescale_mixture_schedule_for_batch_schedule(
+                weights, batch_schedule, start_step=self.mixture_start_step or 0
+            )
         initial_batch_size = batch_schedule.batch_size_at_step(0)
-        datasets = self.train_sets(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
-        mixture = MixtureDataset(
+        datasets, doc_caches = self._train_sets_and_caches(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
+        start_offsets = (
+            self._prior_context_phase_offsets(datasets, doc_caches, Pos.size, batch_schedule, weights, mix_key)
+            if self.prior_context_phases
+            else None
+        )
+        if start_offsets is not None:
+            logger.info("Context-switch start offsets, in %d-token sequences per source: %s", Pos.size, start_offsets)
+        return MixtureDataset(
             datasets=datasets,
             weights=weights,
             stop_strategy=self.stop_strategy,
             key=mix_key,
             block_size=self.mixture_block_size,
+            start_offsets=start_offsets,
+            first_index=(
+                0
+                if self.mixture_start_step is None
+                else batch_schedule.global_data_offset_by_step(self.mixture_start_step)
+            ),
         )
-        return NamedLmDataset(mixture, Pos)
+
+    def _training_weights(self, seq_len: int) -> dict[str, float] | list[tuple[int, dict[str, float]]] | None:
+        bucket_weights = {
+            name: _length_bucket_weights(component, seq_len)
+            for name, component in self.components.items()
+            if isinstance(component, LengthSkewDatasetComponent) and self._has_nonzero_weight(name)
+        }
+        if not bucket_weights:
+            return self.train_weights
+
+        def expand(weights: dict[str, float]) -> dict[str, float]:
+            expanded: dict[str, float] = {}
+            for name, weight in weights.items():
+                if name in bucket_weights:
+                    expanded.update(
+                        {f"{name}/{bucket}": weight * share for bucket, share in bucket_weights[name].items()}
+                    )
+                else:
+                    expanded[name] = weight
+            return expanded
+
+        weights = self.train_weights
+        if isinstance(weights, list):
+            return [(step, expand(stage)) for step, stage in weights]
+        assert weights is not None
+        return expand(weights)
+
+    def _prior_context_phase_offsets(
+        self,
+        datasets: Mapping[str, AsyncDataset[GrugLmExample]],
+        doc_caches: Mapping[str, TreeCache[dict]],
+        seq_len: int,
+        batch_schedule: BatchSchedule,
+        weights: dict[str, float] | list[tuple[int, dict[str, float]]] | None,
+        mix_key: PRNGKeyArray,
+    ) -> dict[str, int]:
+        window_tokens = self._context_phase_window_tokens(datasets, seq_len)
+        token_counts = {
+            name: blocking_wait(doc_caches[name].async_flat_field_length("input_ids")) for name in datasets
+        }
+        if weights is None:
+            raise ValueError("prior_context_phases require train_weights")
+        current_weights = [(0, weights)] if isinstance(weights, dict) else weights
+        phases = [
+            ContextPhase(
+                start_step=0 if i == 0 else self.prior_context_phases[i - 1].end_step,
+                seq_len=phase.seq_len,
+                batch_schedule=BatchSchedule(phase.batch_size),
+                weights=rescale_mixture_schedule_for_batch_schedule(
+                    phase.train_weights, BatchSchedule(phase.batch_size)
+                ),
+            )
+            for i, phase in enumerate(self.prior_context_phases)
+        ]
+        phases.append(
+            ContextPhase(
+                start_step=self.prior_context_phases[-1].end_step,
+                seq_len=seq_len,
+                batch_schedule=batch_schedule,
+                weights=current_weights,
+            )
+        )
+        return skip_to_window_offsets(
+            datasets=datasets,
+            token_counts=token_counts,
+            phases=phases,
+            block_size=self.mixture_block_size,
+            window_tokens=window_tokens,
+            key=mix_key,
+        )
+
+    def _context_phase_window_tokens(self, datasets: Mapping[str, AsyncDataset[GrugLmExample]], seq_len: int) -> int:
+        """Return the shuffle window size in tokens after checking that every phase can continue the reads."""
+        shuffle = self.shuffle
+        assert isinstance(shuffle, BlockShuffleConfig)
+        block_tokens = shuffle.io_block_size * seq_len
+        for phase in self.prior_context_phases:
+            same_blocks = phase.shuffle.io_block_size * phase.seq_len == block_tokens
+            if not same_blocks or (phase.shuffle.window_blocks, phase.shuffle.perm_type) != (
+                shuffle.window_blocks,
+                shuffle.perm_type,
+            ):
+                raise ValueError(f"Context phase {phase} must shuffle the same token-sized blocks and windows")
+        for name in datasets:
+            component = self.components[name]
+            if (
+                not isinstance(component, DatasetComponent)
+                or not isinstance(component.format, TextLmDatasetFormat)
+                or _effective_pack(component)
+            ):
+                raise ValueError(f"prior_context_phases need unpacked text-stream components; {name} is not one")
+        return block_tokens * shuffle.window_blocks
 
     def train_sets(
         self,
@@ -804,6 +1137,24 @@ class LmDataConfig:
         initial_batch_size: int | None = None,
         key: PRNGKeyArray,
     ) -> Mapping[str, AsyncDataset[GrugLmExample]]:
+        """Return shuffled sources, which can include multiple buckets per component.
+
+        Use ``train_mixture`` to combine these sources with their resolved sampling weights.
+        """
+        if self.prior_context_phases:
+            raise ValueError(
+                "prior_context_phases need per-source start offsets; build training data with train_mixture"
+            )
+        datasets, _ = self._train_sets_and_caches(Pos, initial_batch_size=initial_batch_size, key=key)
+        return datasets
+
+    def _train_sets_and_caches(
+        self,
+        Pos: Axis,
+        *,
+        initial_batch_size: int | None = None,
+        key: PRNGKeyArray,
+    ) -> tuple[dict[str, AsyncDataset[GrugLmExample]], dict[str, TreeCache[dict]]]:
         doc_caches = self.build_caches("train")
         datasets = self.build_token_datasets(doc_caches, Pos, split="train")
 
@@ -865,7 +1216,7 @@ class LmDataConfig:
                     ), f"Max sequences for {name} ({num_sequences}) is greater than the dataset size ({len_dataset})"
                     datasets[name] = ds.slice_dataset(end_index=num_sequences)
 
-        return datasets
+        return datasets, doc_caches
 
     def _validation_datasets_unwrapped(self, Pos: Axis) -> dict[str, AsyncDataset[GrugLmExample]]:
         doc_caches = self.build_caches("validation")
@@ -897,6 +1248,10 @@ class LmDataConfig:
             if isinstance(component, ConcatDatasetComponent):
                 for child_name, child in component.children.items():
                     items.append((f"{name}/{child_name}", child))
+                continue
+            if isinstance(component, LengthSkewDatasetComponent):
+                if split == "train":
+                    items.append((name, component.child))
                 continue
             if not isinstance(component, DatasetComponent):
                 raise ValueError(f"Unsupported component type for {name}: {type(component)}")

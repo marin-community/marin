@@ -5,6 +5,8 @@ from typing import Literal, Optional, cast, overload
 
 import jax
 import jax.numpy as jnp
+from jax.sharding import PartitionSpec as P
+from jax.sharding import reshard
 
 import haliax as hax
 from haliax import NamedArray
@@ -15,8 +17,27 @@ from levanter.kernels.pallas.fused_cross_entropy_loss import (
     Implementation,
     fused_cross_entropy_loss_and_logsumexp_penalty as fused_cross_entropy_loss_and_logsumexp_penalty_kernel,
 )
+from levanter.sharding import partition_spec_of
 
 DEFAULT_REDUCTION = cast(hax.ReductionFunction, hax.mean)
+
+
+def next_token_ids(Pos: hax.AxisSelector, true_ids: NamedArray) -> NamedArray:
+    """Shift next-token targets while preserving sequence sharding."""
+    Pos = cast(hax.Axis, true_ids.resolve_axis(Pos))
+    token_spec = partition_spec_of(true_ids.array)
+    position_index = true_ids.axes.index(Pos)
+    if token_spec is not None:
+        # JAX cannot roll across a sharded sequence axis. Gather only the token IDs,
+        # shift them, then restore their layout for the sharded loss kernel.
+        # Slice operations can drop explicit sharding on singleton dimensions. Normalize
+        # those dimensions too so the two slices in roll have identical layouts.
+        unsharded_position = P(
+            *(None if i == position_index or true_ids.axes[i].size == 1 else axis for i, axis in enumerate(token_spec))
+        )
+        ids = reshard(true_ids.array, unsharded_position)
+        return hax.named(reshard(jnp.roll(ids, -1, axis=position_index), token_spec), true_ids.axes)
+    return hax.roll(true_ids, -1, Pos)
 
 
 def next_token_loss_weight(Pos: hax.Axis, loss_weight: Optional[NamedArray]) -> NamedArray:
@@ -73,7 +94,7 @@ def maybe_fused_next_token_loss(
     Vocab = pred_lm_head.resolve_axis(Vocab)
 
     # Shift target tokens to predict the next token
-    target_y = hax.roll(true_ids, -1, Pos)
+    target_y = next_token_ids(Pos, true_ids)
 
     # When a loss_weight is supplied, the fused kernel runs the loss in its dtype.
     if loss_weight is not None:
@@ -126,7 +147,7 @@ def next_token_loss(
     """
     Pos = logits.resolve_axis(hax.axis_name(Pos))
 
-    target_y = hax.roll(true_ids, -1, Pos)
+    target_y = next_token_ids(Pos, true_ids)
     target_y_full = hax.nn.one_hot(target_y, Vocab, dtype=logits.dtype)
 
     loss_weight = next_token_loss_weight(Pos, loss_weight)
@@ -288,7 +309,16 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         output = fused_impl(pred_embeddings, target_y, lm_head)
     else:
         axis_mapping = current_thread_local_mapping() or {}
-        output = shard_map(fused_impl, axis_mapping=axis_mapping, check_rep=False)(pred_embeddings, target_y, lm_head)
+        # The local kernel requires the complete contraction and vocabulary dimensions.
+        batch_axes = hax.axis.without_axes(pred_embeddings.axes, Contract)
+        loss_axis_mapping = {axis.name: axis_mapping[axis.name] for axis in batch_axes if axis.name in axis_mapping}
+        with hax.axis_mapping(loss_axis_mapping):
+            pred_embeddings = hax.shard(pred_embeddings, loss_axis_mapping)
+            target_y = hax.shard(target_y, loss_axis_mapping)
+            lm_head = hax.shard(lm_head, loss_axis_mapping)
+            output = shard_map(fused_impl, axis_mapping=loss_axis_mapping, check_rep=False)(
+                pred_embeddings, target_y, lm_head
+            )
 
     if return_argmax:
         loss, argmax = cast(tuple[NamedArray, NamedArray], output)

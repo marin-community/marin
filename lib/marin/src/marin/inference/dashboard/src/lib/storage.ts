@@ -5,10 +5,33 @@ const CONVERSATIONS_KEY = 'marin-serve:conversations:v1'
 const PARAMS_KEY = 'marin-serve:params:v1'
 const MAX_CONVERSATIONS = 100
 
-export const DEFAULT_PARAMS: SamplingParams = { temperature: 0.7, maxTokens: 1024, topP: 1.0 }
+export const DEFAULT_PARAMS: SamplingParams = {
+  temperature: 0.7,
+  maxTokens: 1024,
+  topP: 1.0,
+  maxToolRounds: 0,
+}
 
 export function newId(): string {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+export function newConversation(model: string): Conversation {
+  const now = Date.now()
+  return {
+    id: newId(),
+    title: '',
+    model,
+    system: '',
+    pythonTools: '',
+    shellWorkspace: null,
+    webSearch: false,
+    thinkingMode: ThinkingMode.TemplateDefault,
+    customInstructions: '',
+    createdAt: now,
+    updatedAt: now,
+    messages: [],
+  }
 }
 
 export function loadConversations(): Conversation[] {
@@ -23,6 +46,7 @@ export function loadConversations(): Conversation[] {
       shellWorkspace: conversation.shellWorkspace
         ? { repositoryUrl: '', commits: [], ...conversation.shellWorkspace }
         : null,
+      webSearch: conversation.webSearch ?? false,
       thinkingMode: conversation.thinkingMode ?? ThinkingMode.TemplateDefault,
       customInstructions: conversation.customInstructions ?? '',
     }))

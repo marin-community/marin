@@ -19,7 +19,9 @@ from fray.types import ResourceConfig
 from rigging.timing import ExponentialBackoff
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_file
+from zephyr.runners import _InProcessWorkerContext
 from zephyr.testing.coordinator import make_test_coordinator
+from zephyr.worker_context import _worker_ctx_var
 
 
 @pytest.fixture(scope="session")
@@ -58,6 +60,14 @@ def actor_context():
     token = _set_current_actor(ActorContext(handle=MagicMock(), index=0, group_name="test-coord"))
     yield
     _reset_current_actor(token)
+
+
+@pytest.fixture
+def worker_context():
+    ctx = _InProcessWorkerContext(chunk_prefix="", execution_id="", stage_name="test")
+    token = _worker_ctx_var.set(ctx)
+    yield ctx
+    _worker_ctx_var.reset(token)
 
 
 @pytest.fixture

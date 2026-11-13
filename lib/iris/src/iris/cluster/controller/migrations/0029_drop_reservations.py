@@ -46,8 +46,9 @@ steps guard on column/table presence. A crash mid-migration is safe to retry.
 import json
 import logging
 
-from iris.cluster.constraints import availability_constraint, availability_key
+from iris.cluster.constraints import availability_constraint
 from iris.cluster.controller.codec import constraints_from_json, constraints_to_json
+from iris.cluster.types import availability_key
 
 logger = logging.getLogger(__name__)
 

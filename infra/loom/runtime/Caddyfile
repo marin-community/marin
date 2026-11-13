@@ -1,5 +1,7 @@
 {$LOOM_DOMAIN} {
 	@metrics path /metrics
 	respond @metrics 404
-	reverse_proxy loom:{$LOOM_PORT}
+	reverse_proxy loom:{$LOOM_PORT} {
+		header_up X-Loom-Forwarded 1
+	}
 }

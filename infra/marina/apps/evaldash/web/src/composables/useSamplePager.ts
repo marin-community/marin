@@ -12,12 +12,11 @@
  */
 import { ref, watch, type Ref } from 'vue'
 import { apiGet } from '@/composables/useApi'
-import type { SampleRow, SamplesResponse } from '@/types/api'
+import type { SampleCounts, SampleRow, SamplesResponse } from '@/types/api'
 import type { SampleFilter } from '@/utils/samples'
 
 export type { SampleFilter }
 
-type SampleCounts = { all: number; correct: number; incorrect: number; ungraded: number }
 
 const PAGE_SIZE = 25
 const PREFETCH_MARGIN = 5
@@ -96,7 +95,7 @@ export function useSamplePager(
       extractionFilters.value = resp.extraction_filters ?? []
       resolvedExtractionFilter.value = resp.extraction_filter
       if (resp.counts) counts.value = resp.counts
-      error.value = null
+      error.value = resp.error ?? null
     } catch (e) {
       if (gen !== generation) return
       error.value = e instanceof Error ? e.message : String(e)

@@ -7,6 +7,7 @@ These dataclasses are safe to construct in CPU coordinators and CLI processes.
 Accelerator-heavy serving implementations translate them inside worker jobs.
 """
 
+import json
 import tomllib
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -38,6 +39,19 @@ VLLM_TOPOLOGY_OPTIONS = frozenset(
         "--headless",
     }
 )
+
+
+def resolve_tokenizer_revision(
+    revision: str | None,
+    tokenizer: str | None,
+    tokenizer_revision: str | None,
+) -> str | None:
+    """Resolve the revision owned by an explicit or model-default tokenizer."""
+    if tokenizer_revision is not None:
+        return tokenizer_revision
+    if tokenizer is None:
+        return revision
+    return None
 
 
 def validate_pipeline_args(args: tuple[str, ...]) -> None:
@@ -153,15 +167,75 @@ class VllmCompilationCacheMode(StrEnum):
 
 
 @dataclass(frozen=True)
+class ResolvedModelLocator:
+    """An immutable model source resolved before inference is launched."""
+
+    uri: str
+    identity: str
+
+    def __post_init__(self) -> None:
+        if not self.uri:
+            raise ValueError("resolved model URI must not be empty")
+        if not self.identity:
+            raise ValueError("resolved model identity must not be empty")
+
+
+class SpeculativeMethod(StrEnum):
+    """Speculative decoding methods supported by Marin's vLLM launcher."""
+
+    EAGLE3 = "eagle3"
+
+
+class ObjectStoreLoadMode(StrEnum):
+    """How an inference worker makes object-store weights available to its engine."""
+
+    STREAM = "stream"
+    STAGE_LOCAL = "stage_local"
+
+
+@dataclass(frozen=True)
+class SpeculativeServingConfig:
+    """A resolved draft model and its vLLM speculative-decoding policy."""
+
+    method: SpeculativeMethod
+    model: ResolvedModelLocator
+    num_speculative_tokens: int
+
+    def __post_init__(self) -> None:
+        if self.num_speculative_tokens <= 0:
+            raise ValueError("num_speculative_tokens must be positive")
+
+    def vllm_argument(self) -> str:
+        """Return the JSON value accepted by vLLM's ``--speculative-config``."""
+        return json.dumps(
+            {
+                "method": self.method.value,
+                "model": self.model.uri,
+                "num_speculative_tokens": self.num_speculative_tokens,
+            },
+            separators=(",", ":"),
+        )
+
+
+@dataclass(frozen=True)
 class ServedModelConfig:
+    """Model and tokenizer inputs for local or Iris-backed serving.
+
+    ``revision`` pins ``weights``. ``tokenizer_revision`` pins an explicitly
+    configured ``tokenizer``. When ``tokenizer`` is omitted, it defaults to the
+    original weights repository and may inherit its revision.
+    """
+
     weights: str
     revision: str | None = None
     api_model: str | None = None
     tokenizer: str | None = None
+    tokenizer_revision: str | None = None
     dtype: str = "bfloat16"
     max_model_len: int | None = None
     tensor_parallel_size: int | None = None
     chat_template_content: str | None = None
+    object_store_load_mode: ObjectStoreLoadMode = ObjectStoreLoadMode.STREAM
 
     def __post_init__(self) -> None:
         if not self.weights:
@@ -178,6 +252,11 @@ class ServedModelConfig:
         """Model identifier accepted by the served OpenAI endpoint."""
         return self.api_model or self.weights
 
+    @property
+    def effective_tokenizer_revision(self) -> str | None:
+        """Revision owned by the configured or default tokenizer repository."""
+        return resolve_tokenizer_revision(self.revision, self.tokenizer, self.tokenizer_revision)
+
 
 @dataclass
 class InferenceModelConfig:
@@ -193,12 +272,14 @@ class VllmEngineConfig:
     launcher: VllmLauncherType = VllmLauncherType.PREINSTALLED
     source: VllmSource = VllmSource.UPSTREAM
     version: str | None = None
+    extra_requirements: tuple[str, ...] = ()
     compilation_cache: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED
     startup_timeout_seconds: int = 1800
     max_num_batched_tokens: int | None = None
     max_num_seqs: int | None = None
     extra_args: tuple[str, ...] = ()
     extra_metric_families: frozenset[str] = frozenset()
+    speculative: SpeculativeServingConfig | None = None
 
     def __post_init__(self) -> None:
         if self.startup_timeout_seconds <= 0:
@@ -337,7 +418,9 @@ class IrisConfig:
         if not isinstance(self.worker_resources, ResourceConfig):
             return
         geometry = self.serving_geometry
-        if geometry is None and self.worker_resources.replicas != 1:
+        if geometry is None and self.worker_resources.replicas != (
+            self.worker_resources.device.vm_count() if isinstance(self.worker_resources.device, TpuConfig) else 1
+        ):
             raise ValueError("Each inference instance must use exactly one Iris task")
         device = self.worker_resources.device
         if geometry is not None:
@@ -347,8 +430,6 @@ class IrisConfig:
                 raise ValueError("serving geometry requires matching GPU resources per task")
         if isinstance(device, CpuConfig):
             raise ValueError("Inference workers require an accelerator")
-        if isinstance(device, TpuConfig) and device.vm_count() != 1:
-            raise ValueError(f"Inference instances require a single-host TPU; got {device.variant}")
 
 
 @dataclass(frozen=True)
@@ -365,6 +446,15 @@ class RemoteInferenceConfig:
     def __post_init__(self) -> None:
         if self.instances <= 0:
             raise ValueError("instances must be positive")
+        resources = self.iris.worker_resources
+        device = resources.device if isinstance(resources, ResourceConfig) else None
+        if isinstance(device, TpuConfig) and device.vm_count() > 1:
+            if not isinstance(self.engine, VllmEngineConfig) or self.engine.launcher is not VllmLauncherType.TPU:
+                raise ValueError("multi-host TPU serving requires the isolated TPU vLLM backend")
+            if self.instances != 1 or self.broker is not None:
+                raise ValueError("multi-host TPU serving requires one instance and no broker")
+            if self.model.object_store_load_mode is not ObjectStoreLoadMode.STREAM:
+                raise ValueError("multi-host TPU serving requires shared weights with stream loading")
         geometry = self.iris.serving_geometry
         if geometry is not None and geometry.task_count > 1:
             if not isinstance(self.engine, VllmEngineConfig):

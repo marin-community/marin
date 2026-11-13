@@ -31,6 +31,7 @@ from jaxtyping import Array, Bool, Float, Int
 from levanter.grug._moe.common import (
     _DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
+    _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS,
     _init_weight,
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
     CapacityDrops,
@@ -42,6 +43,7 @@ from levanter.grug._moe.common import (
     PspecAxis,
     resolve_moe_implementation,
     split_moe_w13_output,
+    validate_moe_implementation,
 )
 from levanter.grug._moe.ep_common import (
     _clip_receiver_group_sizes as _clip_receiver_group_sizes,
@@ -51,10 +53,16 @@ from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import _moe_mlp_ep_fixed_pooled_wave_a2a_local
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
-from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
+from levanter.grug._moe.ep_ring import (
+    _gather_dispatch_combine,
+    _moe_mlp_ep_ring_local,
+    _scatter_add_dispatch_combine,
+)
+from levanter.grug._moe.ep_ring_filtered import _moe_mlp_ep_ring_filtered_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
-    _batch_spec_from_x,
+    _axis_names,
+    _token_spec_from_x,
     _current_mesh,
     _drop_absent_mesh_axes,
     _mesh_axis_size,
@@ -72,6 +80,15 @@ MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC = "moe/skipped_padding_assignments"
 MOE_VALID_ASSIGNMENTS_METRIC = "moe/valid_assignments"
 
 
+def _expert_assignment_counts(
+    selected_experts: Int[Array, "T K"], token_valid: Bool[Array, "T"], num_experts: int
+) -> Int[Array, "E"]:
+    # float32 holds integers exactly only up to 2**24. With unbalanced routing at large batch, one expert's
+    # global count passes that, and rounded counts break the valid-plus-skipped accounting of drop metrics.
+    one_hot = jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.int32)
+    return jnp.sum(one_hot * token_valid.astype(jnp.int32)[:, None, None], axis=(0, 1))
+
+
 def moe_routing_stats(
     selected_experts: Int[Array, "T K"],
     router_probs: Float[Array, "T E"],
@@ -85,10 +102,7 @@ def moe_routing_stats(
     router_probs_f = router_probs.astype(jnp.float32)
     router_logits_f = router_logits.astype(jnp.float32)
     valid_f = token_valid.astype(jnp.float32)
-    expert_counts = jnp.sum(
-        jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.float32) * valid_f[:, None, None],
-        axis=(0, 1),
-    )
+    expert_counts = _expert_assignment_counts(selected_experts, token_valid, num_experts)
     total_assignments = jnp.maximum(jnp.sum(expert_counts), 1.0)
     assignment_fraction = expert_counts / total_assignments
     routing_entropy = -jnp.sum(assignment_fraction * jnp.log(assignment_fraction + 1e-6))
@@ -124,7 +138,7 @@ def moe_routing_stats_local(
 
     def _local(sel: jax.Array, probs: jax.Array, logits: jax.Array, valid: jax.Array) -> dict[str, jax.Array]:
         valid_f = valid.astype(jnp.float32)
-        counts = jnp.sum(jax.nn.one_hot(sel, num_experts, dtype=jnp.float32) * valid_f[:, None, None], axis=(0, 1))
+        counts = _expert_assignment_counts(sel, valid, num_experts)
         log_partition = jsp.special.logsumexp(logits.astype(jnp.float32), axis=-1)
         return {
             "routing_counts_local": counts[None, :],
@@ -292,6 +306,8 @@ class QBRoutedMoE(eqx.Module):
             selected_experts = selected_experts[:, :-1]
             selected_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
             combine_weights = jax.nn.sigmoid(selected_logits)
+            # Keep sigmoid rounding consistent when AD fuses expert-weight renormalization.
+            combine_weights = jax.lax.optimization_barrier(combine_weights)
             combine_weights *= self.routing_renorm_sum / (jnp.sum(combine_weights, axis=-1, keepdims=True) + 1e-9)
             combine_weights = combine_weights.astype(x.dtype)
 
@@ -329,6 +345,9 @@ class QBRoutedMoE(eqx.Module):
             routed, dispatch_counts = cast(tuple[Float[Array, "T D"], MoeDispatchCounts], moe_out)
             router_stats["capacity_overflow"] = dispatch_counts.dropped.astype(jnp.float32)
             router_stats["skipped_assignments"] = dispatch_counts.padding_skipped.astype(jnp.float32)
+            router_stats["routing_assignments"] = jnp.asarray(x.shape[0] * self.num_experts_per_token, dtype=jnp.int32)
+            router_stats["routing_sender_drops"] = dispatch_counts.sender_dropped
+            router_stats["routing_receiver_drops"] = dispatch_counts.receiver_dropped
         else:
             routed = cast(Float[Array, "T D"], moe_out)
             router_stats["capacity_overflow"] = jnp.zeros((), dtype=jnp.float32)
@@ -448,6 +467,22 @@ def moe_mlp(
     `token_valid` excludes invalid positions from dispatch, capacity accounting,
     and expert gradients. Omitted validity treats every token as valid.
 
+    `implementation=None` picks `ring_gather_combine` on GPUs and `ring` on other backends. Expert-parallel
+    implementations such as these run only on an expert axis of size two or more. Without one they fall back to the
+    local `scatter` path, so a single-device call never reaches them.
+
+    With `implementation="ragged_all_to_all"` on an expert axis of size two or
+    more, SiLU experts with bfloat16 or float32 tokens on an SM100 GPU with
+    QuACK installed take the combine-weight gradient on the expert side, from
+    the expert MLP's own backward, so the backward keeps neither the expert
+    outputs nor their return transport. That gradient is zero at a zero weight,
+    and zero or inexact wherever `|w * dout|` falls below the cotangent dtype's
+    smallest normal number, 2^-126, which only output cotangents near underflow
+    reach. `ring_filtered` takes the combine-weight gradient from the down
+    projection's backward as `<hidden, dhidden> / w`: zero at a zero weight and
+    rounded like the bfloat16 hidden activations. Every other path, float16
+    included, differentiates the combine weights exactly.
+
     Set `report_capacity_overflow=True` to also return sender and receiver
     capacity drops plus padding-skipped assignment counts.
 
@@ -455,7 +490,8 @@ def moe_mlp(
     greater than one split the expert bank into equal, statically sized chunks.
 
     `pooled_transport_capacity_factor` sets the sender capacity for each
-    destination pool. `num_expert_waves` sets the static wave count for the
+    destination pool (`fixed_pooled_wave_all_to_all`) or destination shard
+    (`ring_filtered`). `num_expert_waves` sets the static wave count for the
     fixed pooled-wave implementation.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
@@ -526,9 +562,17 @@ def moe_mlp(
             )
         return out
 
-    batch_spec = _batch_spec_from_x(x, mesh)
+    token_spec = _token_spec_from_x(x, mesh)
+    # Mesh axes partitioning batch or sequence positions. Reduce token counts over these
+    # axes only; other mesh axes carry replicas.
+    token_sharding_axes = _axis_names(token_spec[0])
 
     if has_expert_axis and expert_axis_size > 1:
+        if "expert" not in token_sharding_axes:
+            # EP dispatch requires disjoint token shards across expert ranks to avoid duplicate dispatch.
+            raise ValueError(
+                f"expert-parallel moe_mlp needs the token dim sharded over 'expert'; got token spec {token_spec}"
+            )
         if expert_chunks != 1:
             raise ValueError("expert_chunks must be 1 when expert parallelism is active")
         if resolved_implementation not in _EP_MOE_IMPLEMENTATIONS:
@@ -539,16 +583,26 @@ def moe_mlp(
             )
         if num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
+        if (
+            resolved_implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
+            and pooled_transport_capacity_factor is None
+        ):
+            raise ValueError(f"{resolved_implementation} requires pooled_transport_capacity_factor")
 
         if resolved_implementation == "ring":
-            shard_local_fn = _moe_mlp_ep_ring_local
+            shard_local_fn = partial(_moe_mlp_ep_ring_local, make_dispatch_combine=_scatter_add_dispatch_combine)
+        elif resolved_implementation == "ring_gather_combine":
+            shard_local_fn = partial(_moe_mlp_ep_ring_local, make_dispatch_combine=_gather_dispatch_combine)
+        elif resolved_implementation == "ring_filtered":
+            shard_local_fn = partial(
+                _moe_mlp_ep_ring_filtered_local,
+                transport_capacity_factor=pooled_transport_capacity_factor,
+            )
         elif resolved_implementation == "ragged_all_to_all":
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local
         elif resolved_implementation == "fixed_pooled_wave_all_to_all":
-            if pooled_transport_capacity_factor is None:
-                raise ValueError("fixed_pooled_wave_all_to_all requires pooled_transport_capacity_factor")
             shard_local_fn = partial(
                 _moe_mlp_ep_fixed_pooled_wave_a2a_local,
                 transport_capacity_factor=pooled_transport_capacity_factor,
@@ -562,10 +616,10 @@ def moe_mlp(
         w_up_gate_spec = P("expert", None, None)
         w_down_spec = P("expert", None, None)
 
-        x = _reshard_for_shard_map(x, mesh, batch_spec)
-        selected_experts = _reshard_for_shard_map(selected_experts, mesh, batch_spec)
-        combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
-        token_valid = _reshard_for_shard_map(token_valid, mesh, batch_spec)
+        x = _reshard_for_shard_map(x, mesh, token_spec)
+        selected_experts = _reshard_for_shard_map(selected_experts, mesh, token_spec)
+        combine_weights = _reshard_for_shard_map(combine_weights, mesh, token_spec)
+        token_valid = _reshard_for_shard_map(token_valid, mesh, token_spec)
         w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
         w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
@@ -575,17 +629,18 @@ def moe_mlp(
                 activation_fn=activation_fn,
                 num_experts=num_experts,
                 capacity_factor=capacity_factor,
+                token_sharding_axes=token_sharding_axes,
             ),
             mesh=mesh,
             in_specs=(
-                batch_spec,
-                batch_spec,
-                batch_spec,
-                batch_spec,
+                token_spec,
+                token_spec,
+                token_spec,
+                token_spec,
                 w_up_gate_spec,
                 w_down_spec,
             ),
-            out_specs=(batch_spec, CapacityDrops(sender_dropped=P(), receiver_dropped=P())),
+            out_specs=(token_spec, CapacityDrops(sender_dropped=P(), receiver_dropped=P())),
             check_vma=False,
         )
         out, drops = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
@@ -597,10 +652,10 @@ def moe_mlp(
     # semantics without EP collectives. JAX 0.9 requires shard_map in_specs to
     # match the actual input sharding, so reshard ordinary inputs to the mesh
     # specs that preserve data-axis parallelism.
-    x_spec = _value_spec_or_default(x, batch_spec, replace_replicated=True)
-    selected_experts_spec = _value_spec_or_default(selected_experts, batch_spec, replace_replicated=True)
-    combine_weights_spec = _value_spec_or_default(combine_weights, batch_spec, replace_replicated=True)
-    token_valid_spec = _value_spec_or_default(token_valid, batch_spec, replace_replicated=True)
+    x_spec = _value_spec_or_default(x, token_spec, replace_replicated=True)
+    selected_experts_spec = _value_spec_or_default(selected_experts, token_spec, replace_replicated=True)
+    combine_weights_spec = _value_spec_or_default(combine_weights, token_spec, replace_replicated=True)
+    token_valid_spec = _value_spec_or_default(token_valid, token_spec, replace_replicated=True)
     if expert_chunks > 1 and resolved_implementation == "sonic_cute":
         # The chunked sonic_cute path all-gathers the hidden dim per expert-chunk over ``data``, so it
         # needs a real data axis; without one the local kernel hits an unbound-axis error.
@@ -615,8 +670,9 @@ def moe_mlp(
         w_up_gate_spec = _drop_absent_mesh_axes(mesh, P("expert", "data", "model"))
         w_down_spec = _drop_absent_mesh_axes(mesh, P("expert", "model", "data"))
     else:
-        w_up_gate_spec = _value_spec_or_default(w_up_gate, P(*(None for _ in range(w_up_gate.ndim))))
-        w_down_spec = _value_spec_or_default(w_down, P(*(None for _ in range(w_down.ndim))))
+        # The local kernel contracts full hidden dimensions against the complete expert bank.
+        w_up_gate_spec = P(*(None for _ in range(w_up_gate.ndim)))
+        w_down_spec = P(*(None for _ in range(w_down.ndim)))
 
     x = _reshard_for_shard_map(x, mesh, x_spec)
     selected_experts = _reshard_for_shard_map(selected_experts, mesh, selected_experts_spec)
@@ -638,9 +694,9 @@ def moe_mlp(
             implementation=resolved_implementation,
             expert_chunks=expert_chunks,
         )
-        batch_axis_names = x_spec[0]
-        if report_capacity_overflow and batch_axis_names is not None:
-            dropped = jax.lax.psum(dropped, axis_name=batch_axis_names)
+        local_token_sharding_axes = _axis_names(x_spec[0])
+        if report_capacity_overflow and local_token_sharding_axes:
+            dropped = jax.lax.psum(dropped, axis_name=local_token_sharding_axes)
         return out, dropped
 
     shard_fn = shard_map(
@@ -685,4 +741,5 @@ __all__ = [
     "qb_topk_physical_count",
     "resolve_moe_implementation",
     "split_moe_w13_output",
+    "validate_moe_implementation",
 ]

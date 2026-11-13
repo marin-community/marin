@@ -131,12 +131,14 @@ _sync_count = 0
 
 
 @contextlib.contextmanager
-def temp_dir_before_upload(path, process_should_upload: Optional[bool] = None):
+def temp_dir_before_upload(path, process_should_upload: Optional[bool] = None, sync_on_exit: bool = True):
     """
     Creates a temp_dir, yields it, then uploads it to the given path or url on exit using fsspec.
     If it's a local path instead of a url, it just yields the path.
 
     :param process_should_upload: If None, only upload if jax.process_index() == 0. Otherwise, upload if this is True.
+    :param sync_on_exit: Synchronize processes after uploading. Disable only when the caller synchronizes after
+        all uploads; worker threads cannot enter a multi-host collective.
     """
 
     if process_should_upload is None:
@@ -161,12 +163,13 @@ def temp_dir_before_upload(path, process_should_upload: Optional[bool] = None):
                 fs: AbstractFileSystem = fsspec.core.get_fs_token_paths(path, mode="wb")[0]
                 fs.put(os.path.join(local_path, "*"), path, recursive=True)
                 logger.info(f"Finished copying to {path}")
-            else:
+            elif sync_on_exit:
                 logger.info(f"Waiting for process 0 to finish saving checkpoint to {path}")
 
-            global _sync_count
-            sync_global_devices(f"upload? {path}{_sync_count}")
-            _sync_count += 1
+            if sync_on_exit:
+                global _sync_count
+                sync_global_devices(f"upload? {path}{_sync_count}")
+                _sync_count += 1
     finally:
         if tmpdir is not None:
             shutil.rmtree(tmpdir, ignore_errors=True)

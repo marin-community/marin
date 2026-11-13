@@ -1,5 +1,5 @@
 <!--
-See .agents/skills/writing-style/pull-requests.md for the prose rules.
+See docs/dev-guide/writing-style/pull-requests.md for the prose rules.
 
 Lead with what changes, then why. Keep the measured results, constraints, and
 caveats a future reader needs; length follows useful content rather than a fixed

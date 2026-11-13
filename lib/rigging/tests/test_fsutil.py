@@ -12,16 +12,20 @@ import lzma
 import os
 import threading
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 import rigging.filesystem.bulk_deletion as bulk_deletion
+import rigging.filesystem.transfer as transfer_module
 import rigging.fsutil.cli as cli_module
-import rigging.fsutil.transfer as transfer_module
+import rigging.fsutil.verified_copy as verified_copy_module
 import rigging.timing as timing
 from botocore.exceptions import EndpointConnectionError
 from click.testing import CliRunner
+from rigging.filesystem.buckets import S3UploadPolicy
 from rigging.filesystem.cross_region import CrossRegionGuardedFS
 from rigging.filesystem.paged_listing import with_listing
+from rigging.filesystem.transfer import copy
 from rigging.fsutil import deletion, listing
 from rigging.fsutil.cli import cli
 from rigging.fsutil.listing import MAX_PREVIEW_BYTES, read_decompressed_preview
@@ -34,6 +38,7 @@ from rigging.fsutil.usage import (
     scan_usage,
     threshold_prefix_groups,
 )
+from rigging.fsutil.verified_copy import COMPLETION_MANIFEST, STAGING_SUFFIX, VerifiedCopyError, verified_copy_prefix
 
 
 @pytest.fixture
@@ -42,6 +47,31 @@ def tree(tmp_path):
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "c.txt").write_text("nested")
     return tmp_path
+
+
+@pytest.mark.parametrize("no_clobber", [False, True])
+def test_copy_directory_preserves_tree_and_handles_existing_files(tree, tmp_path, no_clobber):
+    source = tree / "source"
+    source.mkdir()
+    (source / "nested").mkdir()
+    (source / "nested" / "file.txt").write_text("new")
+    (source / "other.txt").write_text("other")
+    destination = tmp_path / "output"
+    (destination / "source" / "nested").mkdir(parents=True)
+    (destination / "source" / "nested" / "file.txt").write_text("old")
+
+    copy(str(source), f"{destination}/", recursive=True, no_clobber=no_clobber)
+
+    assert (destination / "source" / "nested" / "file.txt").read_text() == ("old" if no_clobber else "new")
+    assert (destination / "source" / "other.txt").read_text() == "other"
+
+
+def test_copy_file_uses_exact_destination(tree, tmp_path):
+    destination = tmp_path / "renamed.txt"
+
+    copy(str(tree / "b.txt"), str(destination))
+
+    assert destination.read_text() == "hello"
 
 
 def test_cp_handles_the_awkward_destination_shapes(tree, tmp_path, monkeypatch):
@@ -114,6 +144,667 @@ def test_cp_no_clobber_preserves_existing_destination(tree, tmp_path):
 
     assert result.exit_code == 0, result.output
     assert (destination / "b.txt").read_text() == "keep"
+
+
+def test_verified_copy_publishes_content_manifest_after_verification(tmp_path):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    (source / "nested").mkdir(parents=True)
+    (source / "config.json").write_bytes(b"config")
+    (source / "nested" / "weights.bin").write_bytes(b"weights")
+
+    result = verified_copy_prefix(str(source), str(destination), workers=2)
+
+    manifest = json.loads((destination / COMPLETION_MANIFEST).read_text())
+    assert result.total_files == 2
+    assert result.copied_files == 2
+    assert result.resumed_files == 0
+    assert {entry["path"]: entry["size"] for entry in manifest["files"]} == {
+        "config.json": 6,
+        "nested/weights.bin": 7,
+    }
+    assert (destination / "config.json").read_bytes() == b"config"
+    assert (destination / "nested" / "weights.bin").read_bytes() == b"weights"
+
+
+def test_verified_copy_retry_uses_verified_objects_without_source_reads(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"weights")
+    verified_copy_prefix(str(source), str(destination), workers=1)
+    (destination / COMPLETION_MANIFEST).unlink()
+
+    source_filesystem, source_path = verified_copy_module.filesystem_for(str(source))
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    status_filesystem, status_path = verified_copy_module.filesystem_for(f"{destination}.verified-copy-status")
+
+    class UnreadableSource:
+        def __getattr__(self, name):
+            return getattr(source_filesystem, name)
+
+        def open(self, _path, _mode):
+            raise AssertionError("a verified resumed object must not reread its source")
+
+    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        del s3_upload_policy
+        if url == str(source):
+            return UnreadableSource(), source_path
+        if url == str(destination):
+            return destination_filesystem, destination_path
+        return status_filesystem, status_path
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 0
+    assert result.resumed_files == 1
+    assert (destination / "weights.bin").read_bytes() == b"weights"
+    assert (destination / COMPLETION_MANIFEST).exists()
+
+
+def test_verified_copy_rejects_alias_for_source_as_destination(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    source_file = source / "weights.bin"
+    source_file.write_bytes(b"weights")
+
+    with pytest.raises(VerifiedCopyError, match="source and destination prefixes overlap"):
+        verified_copy_prefix(f"file://{source}", str(source), workers=1)
+
+    assert source_file.read_bytes() == b"weights"
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_verified_copy_rejects_contained_prefixes(tmp_path, reverse):
+    parent = tmp_path / "parent"
+    child = parent / "child"
+    child.mkdir(parents=True)
+    (child / "weights.bin").write_bytes(b"weights")
+    source, destination = (child, parent) if reverse else (parent, child)
+
+    with pytest.raises(VerifiedCopyError, match="source and destination prefixes overlap"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+
+@pytest.mark.parametrize("marker_payload", ["{", "[]"])
+def test_verified_copy_ignores_malformed_resume_marker(tmp_path, marker_payload, caplog):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"weights")
+    verified_copy_prefix(str(source), str(destination), workers=1)
+    (destination / COMPLETION_MANIFEST).unlink()
+    marker = next(tmp_path.glob("destination.verified-copy-status/*.json"))
+    marker.write_text(marker_payload)
+
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 1
+    assert result.resumed_files == 0
+    assert (destination / "weights.bin").read_bytes() == b"weights"
+    assert "Ignoring invalid verified-copy resume marker" in caplog.text
+
+
+def test_verified_copy_interruption_leaves_no_completion_and_retry_resumes(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "a.bin").write_bytes(b"first")
+    (source / "b.bin").write_bytes(b"second")
+
+    source_filesystem, source_path = verified_copy_module.filesystem_for(str(source))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    class FailingSource:
+        def __getattr__(self, name):
+            return getattr(source_filesystem, name)
+
+        def open(self, path, mode):
+            if path.endswith("b.bin") and mode == "rb":
+                raise OSError("injected source failure")
+            return source_filesystem.open(path, mode)
+
+    def failing_route(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(source):
+            return FailingSource(), source_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", failing_route)
+    with pytest.raises(OSError, match="injected source failure"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+    assert not (destination / COMPLETION_MANIFEST).exists()
+    assert not destination.exists()
+    assert Path(f"{destination}{STAGING_SUFFIX}").joinpath("a.bin").read_bytes() == b"first"
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", original_filesystem_for)
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 1
+    assert result.resumed_files == 1
+    assert (destination / "b.bin").read_bytes() == b"second"
+    assert (destination / COMPLETION_MANIFEST).exists()
+    assert not Path(f"{destination}{STAGING_SUFFIX}").exists()
+
+
+def test_verified_copy_interrupted_promotion_resumes_from_staging(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "a.bin").write_bytes(b"first")
+    (source / "b.bin").write_bytes(b"second")
+
+    source_filesystem, source_path = verified_copy_module.filesystem_for(str(source))
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    class FailingPromotion:
+        def __getattr__(self, name):
+            return getattr(destination_filesystem, name)
+
+        def cp_file(self, source_path, destination_path, **kwargs):
+            if destination_path.endswith("b.bin"):
+                raise OSError("injected promotion failure")
+            return destination_filesystem.cp_file(source_path, destination_path, **kwargs)
+
+    def failing_route(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(destination):
+            return FailingPromotion(), destination_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", failing_route)
+    with pytest.raises(OSError, match="injected promotion failure"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+    staging = Path(f"{destination}{STAGING_SUFFIX}")
+    assert (destination / "a.bin").read_bytes() == b"first"
+    assert not (destination / "b.bin").exists()
+    assert not (staging / "a.bin").exists()
+    assert (staging / "b.bin").read_bytes() == b"second"
+    assert not (destination / COMPLETION_MANIFEST).exists()
+
+    class UnreadableSource:
+        def __getattr__(self, name):
+            return getattr(source_filesystem, name)
+
+        def open(self, _path, _mode):
+            raise AssertionError("promotion retry must reuse verified staged or published objects")
+
+    def retry_route(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(source):
+            return UnreadableSource(), source_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", retry_route)
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 0
+    assert result.resumed_files == 2
+    assert (destination / "b.bin").read_bytes() == b"second"
+    assert (destination / COMPLETION_MANIFEST).exists()
+    assert not staging.exists()
+
+
+def test_verified_copy_does_not_reuse_status_from_another_source(tmp_path):
+    first_source = tmp_path / "first-source"
+    second_source = tmp_path / "second-source"
+    destination = tmp_path / "destination"
+    first_source.mkdir()
+    second_source.mkdir()
+    (first_source / "weights.bin").write_bytes(b"first!!")
+    (second_source / "weights.bin").write_bytes(b"second!")
+    verified_copy_prefix(str(first_source), str(destination), workers=1)
+    (destination / COMPLETION_MANIFEST).unlink()
+
+    result = verified_copy_prefix(str(second_source), str(destination), workers=1)
+
+    assert result.copied_files == 1
+    assert result.resumed_files == 0
+    assert (destination / "weights.bin").read_bytes() == b"second!"
+
+
+def test_verified_copy_same_size_source_overwrite_invalidates_resume_marker(tmp_path):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    source_file = source / "weights.bin"
+    source_file.write_bytes(b"first!!")
+    verified_copy_prefix(str(source), str(destination), workers=1)
+    (destination / COMPLETION_MANIFEST).unlink()
+    original_mtime = source_file.stat().st_mtime_ns
+    source_file.write_bytes(b"second!")
+    os.utime(source_file, ns=(original_mtime + 1_000_000_000, original_mtime + 1_000_000_000))
+
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 1
+    assert result.resumed_files == 0
+    assert (destination / "weights.bin").read_bytes() == b"second!"
+
+
+def test_verified_copy_same_size_source_overwrite_invalidates_completion(tmp_path):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    source_file = source / "weights.bin"
+    source_file.write_bytes(b"first!!")
+    verified_copy_prefix(str(source), str(destination), workers=1)
+    original_mtime = source_file.stat().st_mtime_ns
+    source_file.write_bytes(b"second!")
+    os.utime(source_file, ns=(original_mtime + 1_000_000_000, original_mtime + 1_000_000_000))
+
+    with pytest.raises(VerifiedCopyError, match="source identity changed"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert (destination / "weights.bin").read_bytes() == b"first!!"
+
+
+def test_verified_copy_identityless_source_rereads_content_on_completion(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    source_file = source / "weights.bin"
+    source_file.write_bytes(b"first!!")
+
+    source_filesystem, source_path = verified_copy_module.filesystem_for(str(source))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    class IdentitylessSource:
+        def __getattr__(self, name):
+            return getattr(source_filesystem, name)
+
+        def find(self, path, *, detail):
+            found = source_filesystem.find(path, detail=detail)
+            return {
+                name: {"name": name, "size": info["size"], "type": info.get("type", "file")}
+                for name, info in found.items()
+            }
+
+        def info(self, path):
+            info = source_filesystem.info(path)
+            return {"name": path, "size": info["size"], "type": info.get("type", "file")}
+
+    def identityless_route(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(source):
+            return IdentitylessSource(), source_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", identityless_route)
+    verified_copy_prefix(str(source), str(destination), workers=1)
+    source_file.write_bytes(b"second!")
+
+    with pytest.raises(VerifiedCopyError, match="source content changed"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+
+def test_verified_copy_hash_mismatch_removes_object_and_withholds_completion(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"weights")
+
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    class CorruptingWriter:
+        def __init__(self, file, path):
+            self.file = file
+            self.path = path
+
+        def write(self, data):
+            return self.file.write(data)
+
+        def close(self):
+            self.file.close()
+            path = Path(self.path)
+            path.write_bytes(b"x" * path.stat().st_size)
+
+    class CorruptingDestination:
+        def __getattr__(self, name):
+            return getattr(destination_filesystem, name)
+
+        def open(self, path, mode):
+            file = destination_filesystem.open(path, mode)
+            if mode == "wb" and path.endswith("weights.bin"):
+                return CorruptingWriter(file, path)
+            return file
+
+    def corrupting_route(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(destination):
+            return CorruptingDestination(), destination_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", corrupting_route)
+
+    with pytest.raises(VerifiedCopyError, match="destination hash mismatch"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert not (destination / "weights.bin").exists()
+    assert not (destination / COMPLETION_MANIFEST).exists()
+
+
+class _EtagDestination:
+    protocol = "s3"
+
+    def __init__(self, filesystem, etag, *, fixed_upload_size, allow_reads):
+        self.filesystem = filesystem
+        self.etag = etag
+        self.fixed_upload_size = fixed_upload_size
+        self.allow_reads = allow_reads
+        self.reads = 0
+
+    def __getattr__(self, name):
+        return getattr(self.filesystem, name)
+
+    def open(self, path, mode, **kwargs):
+        if mode == "rb" and path.endswith("weights.bin"):
+            self.reads += 1
+            if not self.allow_reads:
+                raise AssertionError("S3 verification must not download the destination object")
+        kwargs.pop("block_size", None)
+        return self.filesystem.open(path, mode, **kwargs)
+
+    def info(self, path):
+        info = self.filesystem.info(path)
+        if path.endswith("weights.bin"):
+            info["ETag"] = f'"{self.etag}"'
+        return info
+
+    def find(self, path, *, detail):
+        found = self.filesystem.find(path, detail=detail)
+        if detail:
+            for name, info in found.items():
+                if name.endswith("weights.bin"):
+                    info["ETag"] = f'"{self.etag}"'
+        return found
+
+
+@pytest.mark.parametrize(
+    ("contents", "etag", "allow_reads"),
+    [
+        (b"abc", "af5da9f45af7a300e3aded972f8ff687-1", True),
+        (b"abcdefghij", "446feba4c1b5cc7ad93bf4d44a0e36ac-3", False),
+    ],
+)
+def test_verified_copy_verifies_s3_staging_objects(tmp_path, monkeypatch, contents, etag, allow_reads):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(contents)
+
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+    etag_destination = _EtagDestination(
+        destination_filesystem,
+        etag,
+        fixed_upload_size=True,
+        allow_reads=allow_reads,
+    )
+
+    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(destination):
+            return etag_destination, destination_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "S3_UPLOAD_PART_BYTES", 4)
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+
+    first = verified_copy_prefix(str(source), str(destination), workers=1)
+    (destination / COMPLETION_MANIFEST).unlink()
+    second = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert first.copied_files == 1
+    assert second.resumed_files == 1
+    if allow_reads:
+        assert etag_destination.reads > 0
+    else:
+        assert etag_destination.reads == 0
+
+
+def test_verified_copy_promotes_small_s3_multipart_object_without_etag_preservation(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"abc")
+
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    class SmallMultipartDestination:
+        protocol = "s3"
+        fixed_upload_size = False
+
+        def __getattr__(self, name):
+            return getattr(destination_filesystem, name)
+
+        def info(self, path):
+            info = destination_filesystem.info(path)
+            if path.endswith("weights.bin"):
+                info["ETag"] = (
+                    '"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1"'
+                    if STAGING_SUFFIX in path
+                    else '"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"'
+                )
+            return info
+
+        def find(self, path, *, detail):
+            found = destination_filesystem.find(path, detail=detail)
+            if detail:
+                for name in found:
+                    found[name] = self.info(name)
+            return found
+
+        def cp_file(self, source_path, destination_path, **kwargs):
+            if kwargs.get("preserve_etag"):
+                raise OSError("CoreWeave rejects small multipart UploadPartCopy")
+            destination_filesystem.cp_file(source_path, destination_path)
+
+    routed_destination = SmallMultipartDestination()
+
+    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(destination):
+            return routed_destination, destination_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 1
+    assert (destination / "weights.bin").read_bytes() == b"abc"
+    assert (destination / COMPLETION_MANIFEST).exists()
+
+
+def test_verified_copy_rejects_s3_etag_mismatch(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"abcdefghij")
+
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    etag_destination = _EtagDestination(
+        destination_filesystem,
+        "00000000000000000000000000000000-3",
+        fixed_upload_size=True,
+        allow_reads=True,
+    )
+
+    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(destination):
+            return etag_destination, destination_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "S3_UPLOAD_PART_BYTES", 4)
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+
+    with pytest.raises(VerifiedCopyError, match="destination ETag mismatch"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert not (destination / "weights.bin").exists()
+    assert not (destination / COMPLETION_MANIFEST).exists()
+
+
+@pytest.mark.parametrize("corrupt_promotion", [False, True])
+def test_verified_copy_checks_content_when_multipart_etag_changes(tmp_path, monkeypatch, corrupt_promotion):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"abcdefghij")
+
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    class ChangingEtagDestination(_EtagDestination):
+        def cp_file(self, source_path, destination_path, **kwargs):
+            self.filesystem.cp_file(source_path, destination_path, **kwargs)
+            if corrupt_promotion:
+                Path(destination_path).write_bytes(b"x" * 10)
+
+        def info(self, path):
+            info = super().info(path)
+            if path == str(destination / "weights.bin"):
+                info["ETag"] = '"00000000000000000000000000000000-3"'
+            return info
+
+        def find(self, path, *, detail):
+            found = super().find(path, detail=detail)
+            if detail:
+                for name, info in found.items():
+                    if name == str(destination / "weights.bin"):
+                        info["ETag"] = '"00000000000000000000000000000000-3"'
+            return found
+
+    etag_destination = ChangingEtagDestination(
+        destination_filesystem,
+        "446feba4c1b5cc7ad93bf4d44a0e36ac-3",
+        fixed_upload_size=True,
+        allow_reads=True,
+    )
+
+    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(destination):
+            return etag_destination, destination_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "S3_UPLOAD_PART_BYTES", 4)
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+
+    if corrupt_promotion:
+        with pytest.raises(VerifiedCopyError, match="promoted object does not match"):
+            verified_copy_prefix(str(source), str(destination), workers=1)
+        assert not (destination / "weights.bin").exists()
+        assert not (destination / COMPLETION_MANIFEST).exists()
+        return
+
+    first = verified_copy_prefix(str(source), str(destination), workers=1)
+    (destination / COMPLETION_MANIFEST).unlink()
+    second = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert first.copied_files == 1
+    assert second.resumed_files == 1
+    assert (destination / "weights.bin").read_bytes() == b"abcdefghij"
+
+
+def test_verified_copy_failed_s3_upload_does_not_publish_partial_staging(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"abcdefghij")
+
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    class FailingUpload:
+        def __init__(self, path, *, autocommit):
+            self.path = Path(path)
+            self.parts = bytearray()
+            self.autocommit = autocommit
+            self.closed = False
+
+        def __del__(self):
+            if not self.closed:
+                self.close()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            self.close()
+
+        def write(self, data):
+            if self.parts:
+                raise OSError("UploadPart request timeout")
+            self.parts.extend(data)
+
+        def close(self):
+            if self.autocommit:
+                self.commit()
+            self.closed = True
+
+        def commit(self):
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_bytes(self.parts)
+
+        def discard(self):
+            self.parts.clear()
+
+    class FailingDestination:
+        protocol = "s3"
+        fixed_upload_size = True
+
+        def __getattr__(self, name):
+            return getattr(destination_filesystem, name)
+
+        def open(self, path, mode, **kwargs):
+            if mode == "wb" and path.endswith("weights.bin"):
+                return FailingUpload(path, autocommit=kwargs.get("autocommit", True))
+            return destination_filesystem.open(path, mode, **kwargs)
+
+    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(destination):
+            return FailingDestination(), destination_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "COPY_CHUNK_BYTES", 4)
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+
+    with pytest.raises(OSError, match="UploadPart request timeout"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert not (Path(f"{destination}{STAGING_SUFFIX}") / "weights.bin").exists()
+    assert not (destination / COMPLETION_MANIFEST).exists()
+
+
+def test_verified_copy_reads_destination_when_s3_part_sizes_are_not_fixed(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"abcdefghij")
+
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+    etag_destination = _EtagDestination(
+        destination_filesystem,
+        "00000000000000000000000000000000-3",
+        fixed_upload_size=False,
+        allow_reads=True,
+    )
+
+    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(destination):
+            return etag_destination, destination_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "S3_UPLOAD_PART_BYTES", 4)
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 1
+    assert etag_destination.reads == 1
+    assert (destination / COMPLETION_MANIFEST).exists()
 
 
 @pytest.mark.parametrize(("command", "destination"), [(["cp", "-r"], "copy"), (["rsync"], "sync")])

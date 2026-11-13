@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-from dataclasses import replace
 from functools import lru_cache
 
 from levanter.data.text.datasets import (
@@ -44,21 +43,6 @@ def dataset_component(source: LmDatasetSourceConfigBase) -> DatasetComponent:
     """Wrap a resolved dataset source as a Levanter mixture component, carrying its
     cache dir, format, and tags."""
     return DatasetComponent(source=source, cache_dir=source.cache_dir, format=source.format, tags=source.tags)
-
-
-def with_pack(data: LmDataConfig, pack: bool | int) -> LmDataConfig:
-    """Override the packing strategy on every cache-backed component of a mixture.
-
-    Packing is a load-time view over the tokenized cache, so this re-tokenizes nothing.
-    Components without a ``pack`` field (concat/direct) are returned unchanged.
-    """
-    return replace(
-        data,
-        components={
-            name: replace(component, pack=pack) if isinstance(component, DatasetComponent) else component
-            for name, component in data.components.items()
-        },
-    )
 
 
 def step_to_lm_mixture_component(step: TokenizeConfig) -> DatasetComponent:

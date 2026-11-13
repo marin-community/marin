@@ -13,4 +13,5 @@ serve:
   - --enable-prefix-caching
 agent:
   agent_kwargs:
+    thinking_format: qwen-chat-template
     extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

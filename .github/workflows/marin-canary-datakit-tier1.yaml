@@ -7,15 +7,17 @@ on:
 
 permissions:
   contents: read
-  issues: write    # claude triage files issues
-  id-token: write  # claude-code-action OIDC
+  id-token: write  # Loom federation OIDC
 
 jobs:
   datakit-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    outputs:
+      resource_exhausted: ${{ steps.wait.outputs.resource_exhausted }}
     concurrency:
-      group: datakit-smoke
+      # A run on a branch must not cancel the scheduled run on main.
+      group: datakit-smoke-${{ github.ref }}
       cancel-in-progress: true
     env:
       SMOKE_RUN_ID: datakit-smoke-${{ github.run_id }}-${{ github.run_attempt }}
@@ -71,6 +73,7 @@ jobs:
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
             --timeout 21600 \
+            --region=us-west4 \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
             --priority production \
             -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \
@@ -94,11 +97,13 @@ jobs:
         id: wait
         shell: bash -l {0}
         run: |
+          # Oct 28 completed in 4h44m after store workers waited for capacity.
+          # Leave 14m under the 350m job limit for failure diagnostics.
           uv run python scripts/ci/iris_monitor.py wait \
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --poll-interval 30 \
-            --timeout 7100 \
+            --timeout 20200 \
             --resource-exhaustion-policy shutdown \
             --github-output
 
@@ -137,6 +142,12 @@ jobs:
           path: perf-report.json
           retention-days: 90
 
+      - name: Note a skipped day
+        if: steps.wait.outputs.resource_exhausted == 'true'
+        run: |
+          echo "::notice title=Datakit Smoke skipped::Iris cancelled the ferry because it could not get capacity."
+          echo "Skipped: Iris cancelled the ferry because it could not get capacity." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Capture failure diagnostics
         if: failure() || cancelled()
         continue-on-error: true
@@ -166,35 +177,20 @@ jobs:
 
       # lane id must be unique per canary: it flows into the [canary-{lane}] issue
       # title, so a shared id would collide with another tier's triage dedup.
-      - name: Claude triage
-        id: claude_triage
+      - name: Launch Loom triage
+        id: loom_triage
         if: (failure() || cancelled()) && github.event_name == 'schedule'
-        uses: ./.github/actions/claude-triage
-        timeout-minutes: 30
+        uses: ./.github/actions/loom-canary-triage
+        timeout-minutes: 5
         with:
-          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          profile: ${{ vars.LOOM_GITHUB_AUTOMATION_PROFILE }}
           lane: datakit-smoke
           job-id: ${{ steps.submit.outputs.job_id }}
           run-id: ${{ env.SMOKE_RUN_ID }}
           iris-config: ${{ env.IRIS_CONFIG }}
           wandb-entity: ${{ env.WANDB_ENTITY }}
           wandb-project: ${{ env.WANDB_PROJECT }}
-          wandb-api-key: ${{ secrets.WANDB_API_KEY }}
           gha-run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-      # Upload Claude's Slack message (if it was written) so the separate
-      # notify-slack job can pick it up. We run Slack notify in a separate
-      # job because a job-level timeout can force-kill this runner before
-      # in-job steps after Claude triage ever execute — see
-      # https://github.com/marin-community/marin/actions/runs/24498461666.
-      - name: Upload Slack message
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
-        with:
-          name: slack-message
-          path: slack_message.md
-          retention-days: 1
-          if-no-files-found: ignore
 
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. `needs.*.result` reflects the upstream job
@@ -215,3 +211,17 @@ jobs:
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *Datakit Smoke failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  # A day skipped for lack of capacity finishes green, so it gets its own, non-failure message.
+  notify-skipped:
+    needs: datakit-smoke
+    if: always() && needs.datakit-smoke.outputs.resource_exhausted == 'true' && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Notify Slack
+        uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb  # main 2026-08-24
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          fallback-text: ":white_circle: *Datakit Smoke skipped*: no capacity, so it did not run. This is not a failure.\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

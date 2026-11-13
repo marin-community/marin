@@ -98,7 +98,7 @@ src_paths = ["src", "tests"]
 # apply repo-wide: PLC0415 (no function-local imports), and the issue #6219
 # local-import hygiene pair TID252 (absolute over parent-relative imports) and
 # ICN001 (conventional import aliases, e.g. `import numpy as np`).
-extend-select = ["PLC0415", "TID252", "ICN001"]
+extend-select = ["PLC0415", "TID251", "TID252", "ICN001"]
 ignore = [ "E203", "E501", "W605", "F821", "E266", "F722", "E731", "E741" ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -123,3 +123,6 @@ exclude_also = [
     "@(abc\\.)?abstractmethod",
     "[.][.][.]"
     ]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"litellm" = { msg = "LiteLLM is blocked; use a provider SDK or an OpenAI-compatible endpoint." }

@@ -16,7 +16,8 @@ class InputFileSpec:
     """Describe a file or row range for a Zephyr reader.
 
     ``format`` selects which reader handles the file; ``auto`` infers it from the
-    path extension.
+    path extension. Parquet and Vortex readers accept either row bound on its
+    own for an open-ended range.
     """
 
     path: str

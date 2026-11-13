@@ -11,8 +11,9 @@ and optional condition on its target resource.
 """
 
 import base64
+import json
 from collections.abc import Hashable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Protocol, TypeVar
 
 import pulumi
@@ -24,6 +25,7 @@ from iac.imports import NO_IMPORTS, ImportRegistrar
 
 _ConditionArgsT = TypeVar("_ConditionArgsT")
 _TargetT = TypeVar("_TargetT", bound=Hashable)
+_PRINCIPAL_DIRECTORY_SECRET_ID = "iris-principal-directory"
 
 
 class _ConditionArgsFactory(Protocol[_ConditionArgsT]):
@@ -163,6 +165,7 @@ class GcpIamArgs:
     service_accounts: tuple[GcpServiceAccountIam, ...]
     backend_service_iap: tuple[GcpBackendServiceIapIam, ...]
     cloud_run_iap: tuple[GcpCloudRunIapIam, ...]
+    principal_directory: dict[str, GcpEncryptedMember] = field(default_factory=dict)
 
 
 def merge_iam_grant_sets(args: GcpIamArgs, grant_sets: tuple[GcpIamGrantSet, ...]) -> GcpIamArgs:
@@ -572,9 +575,10 @@ class GcpIam(pulumi.ComponentResource):
     ) -> None:
         super().__init__("marin:gcp:GcpIam", name, None, opts)
 
-        # Decrypt every GcpEncryptedMember before declaring any resource, so everything below
-        # only ever handles plain strings.
-        args = _resolve_encrypted_members(args, _KmsMemberDecryptor(_crypto_key_id(args)))
+        # Resolve grant members before declaring IAM resources; reuse the decryptor
+        # when publishing the principal directory.
+        decrypt = _KmsMemberDecryptor(_crypto_key_id(args))
+        args = _resolve_encrypted_members(args, decrypt)
         context = _GcpIamContext(args=args, imports=imports, provider=gcp_provider, parent=self)
 
         # Owned service accounts and custom role definitions first: a grant referencing either
@@ -583,7 +587,32 @@ class GcpIam(pulumi.ComponentResource):
         # waits on both, mirroring GcpDeployPermissions's created_accounts -> grant_opts pattern.
         created_accounts = _create_service_accounts(context)
         created_roles = _create_custom_roles(context)
-        grant_context = replace(context, dependencies=tuple(created_accounts + created_roles))
+        dependencies: list[pulumi.Resource] = [*created_accounts, *created_roles]
+        if args.principal_directory:
+            directory = gcp.secretmanager.Secret(
+                _PRINCIPAL_DIRECTORY_SECRET_ID,
+                project=args.project,
+                secret_id=_PRINCIPAL_DIRECTORY_SECRET_ID,
+                replication=gcp.secretmanager.SecretReplicationArgs(auto={}),
+                opts=context.options(),
+            )
+            context.register(directory, f"projects/{args.project}/secrets/{_PRINCIPAL_DIRECTORY_SECRET_ID}")
+            gcp.secretmanager.SecretVersion(
+                f"{_PRINCIPAL_DIRECTORY_SECRET_ID}-version",
+                secret=directory.id,
+                secret_data=pulumi.Output.secret(
+                    json.dumps(
+                        {
+                            principal_id: decrypt(member).removeprefix("user:")
+                            for principal_id, member in args.principal_directory.items()
+                        },
+                        sort_keys=True,
+                    )
+                ),
+                opts=context.options(),
+            )
+            dependencies.append(directory)
+        grant_context = replace(context, dependencies=tuple(dependencies))
 
         _grant_project_iam(grant_context)
         _grant_kms_iam(grant_context)

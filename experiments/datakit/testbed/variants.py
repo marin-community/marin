@@ -32,21 +32,17 @@ from marin.execution.lazy import ArtifactStep
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
+from marin.processing.classification.deduplication.cluster_verify import (
+    ClusterVerifiedFuzzyDupsAttrData,
+    cluster_verify_step,
+)
 from marin.processing.classification.deduplication.fuzzy_dups import (
     FUZZY_DUPS_ATTR_DATA_VERSION,
-    FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
 )
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs
-from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
-from marin.processing.classification.deduplication.verify_fuzzy_dups import (
-    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-    VERIFICATION_WORKER_SCRATCH,
-    VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
-    FuzzyVerificationStoreConfig,
-    VerifiedFuzzyDupsAttrData,
-    verify_fuzzy_dups,
-)
+from marin.processing.classification.deduplication.large_clusters import large_clusters_step
+from marin.processing.classification.deduplication.materialize_cluster_text import cluster_text_step
 from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem.cluster_config import check_path_in_region, marin_prefix
 from rigging.filesystem.storage_path import prefix_join
@@ -76,12 +72,6 @@ _FUZZY_DUPS_MAX_PARALLELISM = 128
 _EXACT_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _MINHASH_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _FUZZY_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
-_FUZZY_VERIFICATION_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk=VERIFICATION_WORKER_SCRATCH)
-_FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
-    recovery_timeout=1_800,
-    ready_timeout=1_800,
-    lookup_batch_size=128,
-)
 _CONSOLIDATE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 
 
@@ -140,36 +130,11 @@ def _fuzzy_dups_step(minhash_steps: list[StepSpec], cc_max_iterations: int) -> S
     )
 
 
-def _fuzzy_verification_step(
-    sampled_by_source: dict[str, StepSpec],
-    minhash_by_source: dict[str, StepSpec],
-    fuzzy_dups: StepSpec,
-) -> StepSpec:
-    """Verify candidate members against retained local representatives."""
-    params = FuzzyVerificationParams()
-    return StepSpec(
-        name="data/datakit/verify_fuzzy_dups",
-        deps=[*sampled_by_source.values(), *minhash_by_source.values(), fuzzy_dups],
-        hash_attrs={
-            "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
-            "verification": params.model_dump(mode="json"),
-            "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
-        },
-        fn=lambda output_path: verify_fuzzy_dups(
-            normalized_sources={
-                name: read_artifact(step.output_path, NormalizedData) for name, step in sampled_by_source.items()
-            },
-            minhash_sources={
-                name: read_artifact(step.output_path, MinHashAttrData) for name, step in minhash_by_source.items()
-            },
-            candidates=read_artifact(fuzzy_dups.output_path, FuzzyDupsAttrData),
-            output_path=output_path,
-            verification_params=params,
-            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-            store_config=_FUZZY_VERIFICATION_STORE_CONFIG,
-            worker_resources=_FUZZY_VERIFICATION_WORKER_RESOURCES,
-        ),
-    )
+def _fuzzy_verification_step(fuzzy_dups: StepSpec) -> StepSpec:
+    """Verify candidate clusters on their full text, as the reference pipeline does."""
+    cluster_plan = large_clusters_step(name="data/datakit/large_fuzzy_clusters", candidates=fuzzy_dups)
+    cluster_text = cluster_text_step(name="data/datakit/fuzzy_cluster_text", plan=cluster_plan)
+    return cluster_verify_step(name="data/datakit/verify_fuzzy_clusters", cluster_text=cluster_text)
 
 
 def _consolidate_deduped(
@@ -182,7 +147,7 @@ def _consolidate_deduped(
     normalized = read_artifact(sampled.output_path, NormalizedData)
     source_key = datakit_source_key(normalized.main_output_dir)
     exact = read_artifact(exact_dups.output_path, GlobalExactDedupData)
-    verified = read_artifact(verified_dups.output_path, VerifiedFuzzyDupsAttrData)
+    verified = read_artifact(verified_dups.output_path, ClusterVerifiedFuzzyDupsAttrData)
     return consolidate(
         input_path=normalized.main_output_dir,
         output_path=prefix_join(output_path, "outputs/main"),
@@ -260,7 +225,7 @@ def dedup(
     }
     exact_dups = _exact_dups_step(sampled_by_source)
     fuzzy_dups = _fuzzy_dups_step(list(minhash_by_source.values()), fuzzy_dedup_cc_max_iterations)
-    verified_dups = _fuzzy_verification_step(sampled_by_source, minhash_by_source, fuzzy_dups)
+    verified_dups = _fuzzy_verification_step(fuzzy_dups)
     deduped_by_source = {
         src_name: _deduped_step(src_name, sampled, exact_dups, verified_dups)
         for src_name, sampled in sampled_by_source.items()

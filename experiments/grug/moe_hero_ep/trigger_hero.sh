@@ -11,11 +11,12 @@ fi
 mode=$1
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 
-# Checkpoint 121638 resumes at global_step 121638; parent W&B _step 121637
-# was verified to record global_step 121637 before the replayed window.
+# The handoff averages hero-ctx65k-step372k's last 11 permanent checkpoints, 385500 through 390251, in hyperball space
+# with equal weights. Its optimizer state comes from step-390251, so it resumes at global_step 390251.
+# Parent W&B _step 390250 records global_step 390250.
 RUN_ID=$(uv run python -m experiments.grug.moe_hero_ep.current_run)
-HANDOFF_CHECKPOINT=s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/hero-nopdl-step108k/2026.08.19.2/checkpoints/step-121638
-WANDB_FORK_FROM='hero-nopdl-step108k?_step=121637'
+HANDOFF_CHECKPOINT=s3://marin-us-east-02a/marin/grug/hero-ctx65k-merge-hb-avg11/checkpoints/step-390251
+WANDB_FORK_FROM='hero-ctx65k-step372k?_step=390250'
 WANDB_PROJECT=marin_moe
 IRIS_CONFIG=lib/iris/config/marin.yaml
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506
@@ -150,8 +151,6 @@ IRIS_USER=marin uv run iris --config "$IRIS_CONFIG" job run --no-wait --enable-e
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32614 \
-  -e XLA_PYTHON_CLIENT_MEM_FRACTION 0.75 \
-  -e XLA_FLAGS "--xla_gpu_memory_limit_slop_factor=85" \
   -- python -m experiments.grug.moe_hero_ep.launch_scaling_ladder \
     --run-id "$RUN_ID" \
     --initialize-from-checkpoint "$HANDOFF_CHECKPOINT" \

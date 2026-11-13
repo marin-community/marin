@@ -1,0 +1,8 @@
+rules:
+  - kind: token
+    action: mask
+    low: 0.5
+    high: 5.0
+  - kind: token
+    action: truncate
+    high: 5.0

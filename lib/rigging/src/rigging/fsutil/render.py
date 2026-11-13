@@ -9,6 +9,7 @@ JSON as a table and falls back to text, then to a byte count for binary data. Th
 plain-line renderers are shared by the curses TUI and the command-line tables.
 """
 
+import base64
 import json
 from datetime import datetime
 
@@ -18,6 +19,13 @@ _SIZE_UNITS = ("B", "KB", "MB", "GB", "TB", "PB")
 
 # Longest single-cell value rendered from a JSON object before truncation.
 _MAX_CELL = 120
+
+
+def format_digest(digest: bytes, *, hexadecimal: bool) -> str:
+    """Format a digest as lowercase hexadecimal or RFC 4648 base64."""
+    if hexadecimal:
+        return digest.hex()
+    return base64.b64encode(digest).decode()
 
 
 def format_size(size: int | None) -> str:

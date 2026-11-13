@@ -16,9 +16,11 @@ SCHEMA_TABLES = sqlalchemy.text("SELECT table_name FROM information_schema.table
 def test_migrate_creates_the_schema_once_and_records_what_it_applied(database_url: str) -> None:
     engine = engine_for(UrlDatabase(url=database_url), APP)
     try:
-        echo_app.migrate(engine)
+        with engine.begin() as migration_connection:
+            echo_app.migrate(migration_connection)
         # A second run must be a no-op: the deploy job runs it on every image change.
-        echo_app.migrate(engine)
+        with engine.begin() as migration_connection:
+            echo_app.migrate(migration_connection)
         with engine.connect() as conn:
             tables = {row[0] for row in conn.execute(SCHEMA_TABLES, {"schema": APP})}
             applied = [

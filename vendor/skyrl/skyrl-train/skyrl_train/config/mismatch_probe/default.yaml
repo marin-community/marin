@@ -1,0 +1,9 @@
+enabled: false
+prompts: {count: 128, samples_per_prompt: 4}
+seed: null
+archive_uri: null
+reuse_probe: null
+updates: 2
+extra_trainer_modes: []
+filtered_replay: {keep_fraction: null}
+rescore_prefix_cache: "off"

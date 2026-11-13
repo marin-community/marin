@@ -41,20 +41,26 @@ def telemetry_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
     progress_since = sql_epoch_ms(now - _PROGRESS_LOOKBACK)
     enrolled_since = sql_timestamp(now - _PHASE_LOOKBACK)
     end = sql_epoch_ms(now)
-    metric_names = f"'{PHASE_METRIC}', '{_PROGRESS_TIME_METRIC}'"
-    return (
-        f"WITH telemetry AS (SELECT * FROM {LEVANTER_METRICS_TABLE}), raw AS ("
+    projection = (
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
         "run_id, job_id AS telemetry_job, execution_uid, name, value, step, "
         "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS ts "
-        "FROM telemetry "
-        f"WHERE name IN ({metric_names}) "
+        f"FROM {LEVANTER_METRICS_TABLE} "
+    )
+    common_predicate = f"{run_predicate} AND process_index = 0 " "AND job_id IS NOT NULL AND execution_uid IS NOT NULL "
+    return (
+        "WITH raw AS ("
+        f"{projection}"
         # Typed training metrics publish from process zero. Keep that constraint in the
         # query so migrated legacy rows and direct typed rows select the same replica.
-        f"AND {run_predicate} AND process_index = 0 "
-        "AND job_id IS NOT NULL AND execution_uid IS NOT NULL "
+        f"WHERE {common_predicate}"
+        f"AND name = '{PHASE_METRIC}' "
         f"AND timestamp_ms >= {phase_since} AND timestamp_ms < {end} "
-        f"AND (name = '{PHASE_METRIC}' OR timestamp_ms >= {progress_since})"
+        "UNION ALL "
+        f"{projection}"
+        f"WHERE {common_predicate}"
+        f"AND name = '{_PROGRESS_TIME_METRIC}' "
+        f"AND timestamp_ms >= {progress_since} AND timestamp_ms < {end}"
         "), filtered AS ("
         "SELECT origin_cluster, run_id, telemetry_job, execution_uid, name, value, "
         "timestamp_ms, seq, ts FROM raw UNION ALL "

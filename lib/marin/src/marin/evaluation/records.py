@@ -12,18 +12,17 @@ This module is import-light on purpose -- the filesystem layer plus Pydantic, wi
 marin/levanter/iris imports -- so it can be vendored into the dashboard image that reads records back.
 """
 
+import json
 import logging
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal, TypedDict
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import prefix_join
-
-from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_PATTERN
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +41,7 @@ DEFAULT_SCAN_PREFIXES = (
 )
 RECORD_FILE = "record.json"
 _MAX_RECORD_READERS = 16
+DEFAULT_EVALUATION_CONCURRENCY = 64
 EVALCHEMY_INFRASTRUCTURE_ERROR = "EVALCHEMY_INFRASTRUCTURE_ERROR"
 
 
@@ -68,7 +68,7 @@ class MetricKind(StrEnum):
 class BenchmarkMetricRef(BaseModel):
     """One evaluator metric in its canonical and source vocabularies."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     name: str
     source_name: str
@@ -76,8 +76,39 @@ class BenchmarkMetricRef(BaseModel):
     higher_is_better: bool
 
 
+class BenchmarkSourceRef(TypedDict):
+    """The dataset, split, and revision used by a benchmark."""
+
+    dataset: str
+    split: str
+    revision: str | None
+
+
+class BenchmarkReducerRef(TypedDict):
+    """The reduction and metric names used to aggregate benchmark grades."""
+
+    name: str
+    accuracy: str
+    stderr: str
+    repeat_ddof: int
+    groups: dict[str, str]
+    group_suffix: str
+    group_weights: dict[str, float]
+    trial_metric: str | None
+    selected_trial: int | None
+
+
+class BenchmarkPromptLengthRef(TypedDict):
+    """The size and digest of a benchmark's measured prompt corpus."""
+
+    distinct_prompt_count: int
+    longest_prompt_chars: int
+    longest_prompt_tokens: int
+    sha256: str
+
+
 class BenchmarkMetadataRef(BaseModel):
-    """The benchmark protocol emitted by an evaluation harness."""
+    """The benchmark protocol and evaluator provenance."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -88,6 +119,11 @@ class BenchmarkMetadataRef(BaseModel):
     metrics: tuple[BenchmarkMetricRef, ...]
     n_benchmark: int | None = Field(ge=0)
     n_attempted: int | None = Field(ge=0)
+    source: BenchmarkSourceRef | None = None
+    reducers: tuple[BenchmarkReducerRef, ...] = ()
+    prompt_length: BenchmarkPromptLengthRef | None = None
+    requires_judge: bool = False
+    identity: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def validate_protocol(self) -> "BenchmarkMetadataRef":
@@ -107,7 +143,7 @@ class BenchmarkMetadataRef(BaseModel):
 class ModelResourceConfig(BaseModel):
     """Normalized placement and inference-worker resources for an evaluated model."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     hbm_gb: int | None
     gpu: dict[str, int]
@@ -116,15 +152,35 @@ class ModelResourceConfig(BaseModel):
     disk: str | None
 
 
+class ModelLocatorRef(BaseModel):
+    """The immutable URI and producer identity of a resolved model artifact."""
+
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    uri: str
+    identity: str
+
+
+class SpeculativeServingRef(BaseModel):
+    """The draft model and speculative-decoding policy used by vLLM."""
+
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    method: str
+    model: ModelLocatorRef
+    num_speculative_tokens: int
+
+
 class ModelServeConfig(BaseModel):
     """Normalized model-server configuration preserved in an evaluation record."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     backend: str
     tensor_parallel_size: int | None
     data_parallel_size: int | None
     pipeline_parallel_size: int = 1
+    instances: int = 1
     gpu_memory_utilization: float | None = None
     max_model_len: int | None
     max_num_batched_tokens: int | None
@@ -135,7 +191,15 @@ class ModelServeConfig(BaseModel):
     reasoning_parser: str | None
     vllm_batch_invariant: bool | None = None
     vllm_use_flashinfer_sampler: bool | None = None
+    runai_streamer_concurrency: int | None = None
+    runai_streamer_s3_request_timeout_ms: int | None = None
+    hf_hub_disable_xet: bool = False
+    vllm_source: str | None = None
+    vllm_version: str | None = None
+    vllm_plugin_requirements: tuple[str, ...] = ()
+    object_store_load_mode: str = "stream"
     vllm_extra_args: tuple[str, ...]
+    speculative: SpeculativeServingRef | None = None
     chat_template: str | None
     auto_overrides: bool
 
@@ -143,16 +207,18 @@ class ModelServeConfig(BaseModel):
 class ModelGenerationConfig(BaseModel):
     """Normalized generation overrides preserved in an evaluation record."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     max_gen_toks: int | None
     extra_gen_kwargs: dict[str, str]
+    chat_template_kwargs: dict[str, bool | str] = Field(default_factory=dict)
+    thinking_off_template_kwargs: dict[str, bool | str] = Field(default_factory=dict)
 
 
 class ModelAgentConfig(BaseModel):
     """Normalized agent request arguments preserved in an evaluation record."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     agent_kwargs: dict[str, str]
 
@@ -160,21 +226,24 @@ class ModelAgentConfig(BaseModel):
 class ModelConfigRef(BaseModel):
     """The complete normalized model catalog schema used by one launch.
 
-    These blocks mirror the launcher's ``ModelConfig`` dataclasses. A key none of them names is
-    dropped, so a record a newer launcher wrote still reads.
+    These blocks mirror the launcher's ``ModelConfig`` dataclasses. Most blocks retain unknown
+    keys, while resource hints use the launcher's strict schema.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     name: str
     location: str
+    identity: str | None = None
     revision: str | None
     tokenizer: str | None
+    tokenizer_revision: str | None = None
     apply_chat_template: bool
     resource_hint: ModelResourceConfig
     serve: ModelServeConfig
     generation: ModelGenerationConfig
     agent: ModelAgentConfig
+    evaluation_num_concurrent: int | None = None
 
 
 class ModelRef(BaseModel):
@@ -190,6 +259,8 @@ class ModelRef(BaseModel):
     location: str
     backend: str
     config: ModelConfigRef | None = None
+    source_config: ModelConfigRef | None = Field(default=None, exclude_if=lambda value: value is None)
+    config_digest: str | None = None
 
 
 class EvalTaskRef(BaseModel):
@@ -207,6 +278,15 @@ class EvalTaskRef(BaseModel):
     """The evaluator-owned benchmark protocol, when the harness emitted one."""
 
 
+class EvalchemyJudgeRef(BaseModel):
+    """Non-secret identity of the external judge used by Evalchemy."""
+
+    model_config = ConfigDict(frozen=True)
+
+    base_url: str
+    model: str
+
+
 class EvalchemyRef(BaseModel):
     """The normalized Evalchemy launch configuration recorded for a run.
 
@@ -217,6 +297,9 @@ class EvalchemyRef(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     apply_chat_template: bool
+    chat_tokenizer_backend: str = "none"
+    debug: bool = False
+    prompt_budget_preflight: bool = Field(default=False, exclude_if=lambda value: not value)
     max_gen_toks: int | None
     max_eval_instances: int | None
     num_concurrent: int
@@ -224,7 +307,9 @@ class EvalchemyRef(BaseModel):
     seed: int | None
     extra_gen_kwargs: dict[str, str] = Field(default_factory=dict)
     extra_model_args: dict[str, str | int | float | bool] = Field(default_factory=dict)
+    chat_template_kwargs: dict[str, bool | str] = Field(default_factory=dict)
     max_length: int | None = None
+    judge: EvalchemyJudgeRef | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class HarborRef(BaseModel):
@@ -246,11 +331,6 @@ class HarborRef(BaseModel):
         pattern=r"^sha256:[0-9a-f]{64}$",
         exclude_if=lambda value: value is None,
     )
-    harbor_config_commit: str | None = Field(
-        default=None,
-        pattern=FULL_GIT_COMMIT_PATTERN,
-        exclude_if=lambda value: value is None,
-    )
     max_input_tokens: int | None = Field(
         default=None,
         description="Agent context budget resolved from the served model, the policy, and Harbor's defaults",
@@ -261,6 +341,107 @@ class HarborRef(BaseModel):
         description="Agent generation budget resolved from the served model, the policy, and Harbor's defaults",
         exclude_if=lambda value: value is None,
     )
+
+
+class JudgeIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    deployment: str = Field(min_length=1)
+    models: dict[str, str]
+    default_model: str | None = None
+
+
+class EvaluationOverrides(BaseModel):
+    """Run policy supplied by a suite or campaign."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    limit: int | None = Field(default=None, gt=0)
+    max_tokens: int | None = Field(default=None, gt=0)
+    seed: int | None = None
+    judge: JudgeIdentity | None = None
+    judge_endpoint: str | None = None
+    judge_api_key: tuple[str, ...] = ()
+
+
+class PromptFormat(StrEnum):
+    COMPLETION = "completion"
+    CHAT = "chat"
+
+
+class ResolvedEvaluationSelection(BaseModel):
+    """The explicit protocol choice bound to published corpora."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    benchmark: str
+    protocol: str
+    num_fewshot: int | None = Field(default=None, ge=0)
+    prompt_format: PromptFormat | None = None
+    partitions: tuple[str, ...] = ()
+
+
+class EvaluationSelection(BaseModel):
+    """Select a benchmark protocol without exposing its compiled artifact names."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    benchmark: str
+    label: str | None = None
+    protocol: str | None = None
+    num_fewshot: int | None = Field(default=None, ge=0)
+    prompt_format: PromptFormat | None = None
+    partitions: tuple[str, ...] = ()
+    run: EvaluationOverrides = Field(default_factory=EvaluationOverrides)
+
+    @property
+    def name(self) -> str:
+        if self.label is not None:
+            return self.label
+        parts = [self.benchmark]
+        if self.protocol is not None:
+            parts.append(self.protocol)
+        if self.num_fewshot is not None:
+            parts.append(f"{self.num_fewshot}shot")
+        if self.prompt_format is not None:
+            parts.append(self.prompt_format)
+        return "-".join(parts)
+
+
+class CuratedSettings(BaseModel):
+    """Recorded selection and execution settings shared by launch and dashboard readers."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    max_tokens: int | None = Field(default=None, gt=0)
+    source_limit: int | None = Field(default=None, gt=0)
+    seed: int | None = None
+    judge: JudgeIdentity | None = None
+    concurrency: int = Field(default=DEFAULT_EVALUATION_CONCURRENCY, gt=0)
+
+
+def scoring_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
+    """Separate request scheduling from settings that govern saved observations."""
+    return {key: value for key, value in settings.items() if key != "concurrency"}
+
+
+class CuratedRef(BaseModel):
+    """Pinned corpus selection and typed TaskSpec driver settings."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    datasets: tuple[str, ...]
+    settings: CuratedSettings
+    selection: ResolvedEvaluationSelection | None = Field(default=None, exclude_if=lambda value: value is None)
+
+    @model_validator(mode="before")
+    @classmethod
+    def read_initial_native_records(cls, value: Any) -> Any:
+        # Initial native smoke records encoded the settings as JSON inside record.json.
+        if isinstance(value, dict) and "settings_json" in value:
+            value = dict(value)
+            value["settings"] = json.loads(value.pop("settings_json"))
+        return value
 
 
 class EvalRef(BaseModel):
@@ -274,6 +455,9 @@ class EvalRef(BaseModel):
 
     name: str
     mechanism: str
+    source_digest: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$", exclude_if=lambda value: value is None
+    )
     family: str | None = Field(
         default=None,
         description="Benchmark this eval is a setting of, for the leaderboard column it shares",
@@ -281,11 +465,14 @@ class EvalRef(BaseModel):
     )
     tasks: tuple[EvalTaskRef, ...] = ()
     evalchemy: EvalchemyRef | None = None
+    curated: CuratedRef | None = Field(default=None, exclude_if=lambda value: value is None)
     harbor: HarborRef | None = None
+    postprocessing: dict[str, str] = Field(default_factory=dict, exclude_if=lambda value: not value)
+    """Named final-score protocols and their frozen JSON configurations."""
 
 
 class HardwareRef(BaseModel):
-    """The slice the model was served on. ``region_or_cluster`` is the GCP region or CW cluster name."""
+    """Serving allocation: ``task_count`` slices per instance, placed in a GCP region or CW cluster."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -293,20 +480,29 @@ class HardwareRef(BaseModel):
     accelerator: str
     region_or_cluster: str | None
     task_count: int = 1
+    instances: int = 1
+
+
+class HostedJudgeRef(BaseModel):
+    """The model and hardware used for verifier-only hosted inference."""
+
+    model_config = ConfigDict(frozen=True)
+
+    model: ModelRef
+    hardware: HardwareRef
 
 
 class Provenance(BaseModel):
-    """Where the run came from: launch-time git SHA, eval runtime, and launch host.
-
-    ``eval_runtime`` is Evalchemy's commit-pinned package requirement or Harbor's pinned package
-    requirements. Records written before external evaluators used ``eval_image`` or
-    ``evalchemy_image`` for the same value.
-    """
+    """Launch-time Marin revision, host, and an optional external evaluator runtime."""
 
     model_config = ConfigDict(frozen=True)
 
     git_sha: str
-    eval_runtime: str = Field(validation_alias=AliasChoices("eval_runtime", "eval_image", "evalchemy_image"))
+    eval_runtime: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("eval_runtime", "eval_image", "evalchemy_image"),
+        exclude_if=lambda value: value is None,
+    )
     launch_host: str
 
 
@@ -332,6 +528,30 @@ class ServingParams(BaseModel):
     extra: dict[str, str] = Field(default_factory=dict)
 
 
+class SpeculativeDecodingMetrics(BaseModel):
+    """Per-evaluation deltas of vLLM speculative counters and their ratios."""
+
+    model_config = ConfigDict(frozen=True)
+
+    drafts: int
+    draft_tokens: int
+    accepted_tokens: int
+    mean_acceptance_length: float | None
+    draft_acceptance_rate: float | None
+
+
+class InferenceMetrics(BaseModel):
+    """Inference work observed during one evaluation from counter deltas."""
+
+    model_config = ConfigDict(frozen=True)
+
+    prompt_tokens: int
+    generation_tokens: int
+    wall_time_seconds: float
+    generation_tokens_per_second: float
+    speculative_decoding: SpeculativeDecodingMetrics | None = None
+
+
 class RunTiming(BaseModel):
     """The eval's wall-clock window, when the orchestrator captured it.
 
@@ -353,6 +573,8 @@ class TaskCoverage(BaseModel):
     ``n_attempted`` is the number of items the run set out to grade after any declared cap, and
     ``n_scored`` how many have a usable score. ``errors`` counts errors by type, including errors
     on scored outcomes when the harness permits them. Completion uses the item counts.
+    A repeated aggregate counts distinct benchmark problems as items and records scored trials
+    separately in ``repeat_aggregates``. Extraction filters for one trial are not new items.
 
     ``n_attempted`` is ``None`` when the run graded items but could not establish how many it set out
     to grade. That is unknown coverage, and readers widen for it; it is never read as complete. A
@@ -379,6 +601,29 @@ class TaskCoverage(BaseModel):
     errors: dict[str, int] = Field(default_factory=dict)
 
 
+class RepeatCoverageBasis(StrEnum):
+    """Whether projected coverage counts items, bounds them, or retains source units."""
+
+    ITEMS = "items"
+    ITEM_LOWER_BOUND = "item_lower_bound"
+    SOURCE = "source"
+
+
+class RepeatAggregate(BaseModel):
+    """A repeated score's item and trial counts, publication uncertainty, and source coverage."""
+
+    model_config = ConfigDict(frozen=True)
+
+    n_items: int
+    n_repeats: int
+    n_trials: int
+    n_scored_trials: int | None = None
+    coverage_basis: RepeatCoverageBasis
+    stderr: float
+    stderr_basis: str
+    source_coverage: TaskCoverage | None = None
+
+
 class EvalRunRecord(BaseModel):
     """The full account of one eval run, serialized to ``record.json``.
 
@@ -398,17 +643,22 @@ class EvalRunRecord(BaseModel):
     created_at: str
     user: str
     version: str | None = None
-    """A human version label for the launch (``--version``), e.g. ``2026.07.20`` or ``rl-fix-sweep``.
-    Every record in a group shares it. The dashboard groups a model's runs by version so the headline
-    matrix shows the latest labelled cohort rather than mixing evals across model states; ``None`` for
-    an unlabelled launch."""
+    """A submitter-controlled cohort label for the launch (``--version``).
+
+    Every record in a group shares it. The dashboard may use the label to group runs, but it is
+    provenance metadata rather than evidence of evaluation-policy conformance. A trusted verifier
+    must assign conformance independently. ``None`` denotes an unlabelled launch.
+    """
     description: str | None = None
     """A free-text note on why the launch was run (``--description``), e.g. ``Trying out a new sweep
     after fixing RL``. Shared by every record in a group and surfaced on the launch in the dashboard."""
     model: ModelRef
+    judge: HostedJudgeRef | None = None
     evaluation: EvalRef = Field(alias="eval")
     hardware: HardwareRef
     status: RunStatus
+    step_status: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    """StepSpec state observed by a dashboard reader. Absent on records from older launchers."""
     error: str | None
     results_path: str
     metrics: dict[str, dict[str, float]]
@@ -418,6 +668,8 @@ class EvalRunRecord(BaseModel):
     """Per-task item coverage, keyed like ``metrics``, for mechanisms that report an attempted-item
     count. Empty when the mechanism reports none and on every record written before coverage existed;
     a reader treats an empty entry as unknown coverage, never as complete coverage."""
+    repeat_aggregates: dict[str, RepeatAggregate] = Field(default_factory=dict)
+    """Serving projections for repeated scores. Raw evaluator metrics and coverage remain available."""
     jobs: dict[str, str]
     """Pipeline role (``orchestrator``/``inference``/``eval``) to Iris job path, for every job the run
     submitted before finishing; a failure before a role's submission simply omits that role."""
@@ -429,6 +681,8 @@ class EvalRunRecord(BaseModel):
     """The eval's wall-clock window when captured; ``None`` on records without recorded timing."""
     serving: ServingParams | None = None
     """The model-serving and generation settings the run evaluated under; ``None`` when not captured."""
+    inference_metrics: InferenceMetrics | None = None
+    """Inference work and rates from vLLM counter deltas over this evaluation's window."""
 
 
 def record_path(prefix: str, run_id: str) -> str:

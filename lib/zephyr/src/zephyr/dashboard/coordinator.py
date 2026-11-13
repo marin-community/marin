@@ -5,24 +5,28 @@
 
 import time
 from _thread import LockType
-from collections import Counter, defaultdict
-from collections.abc import Callable, Mapping, Sized
+from collections import Counter, defaultdict, deque
+from collections.abc import Callable, Iterable, Mapping, Sized
 from dataclasses import dataclass
+from itertools import islice
 from typing import Protocol
 
 from zephyr.dashboard.app import (
-    SOURCE_STAGE_TYPE,
     CounterPage,
     CounterQuery,
-    PipelineList,
+    DashboardOverview,
     PipelineMetrics,
+    PipelineOverview,
     PipelinePhase,
     PipelinePlan,
     PipelineStatus,
-    PipelineSummary,
     PlanNodeState,
     PlanNodeStatus,
     ResourceUsage,
+    ShardBucket,
+    ShardPage,
+    ShardState,
+    ShardStatus,
     WorkerAssignment,
     WorkerPage,
     WorkerQuery,
@@ -31,10 +35,19 @@ from zephyr.dashboard.app import (
     counter_value,
     pipeline_plan,
 )
-from zephyr.plan import PhysicalPlan
+from zephyr.plan import SOURCE_STAGE_TYPE, PhysicalPlan
 from zephyr.stage_io import ZephyrTaskResources
 from zephyr.stats import ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, ZEPHYR_WORKER_MEM_CURRENT_KEY, StatsWriter
-from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, merge_counter_entries
+from zephyr.worker_context import (
+    CounterEntry,
+    CounterKey,
+    CounterSnapshot,
+    counters_by_name,
+    merge_counter_entries,
+)
+
+MAX_SHARD_BUCKETS = 32
+MAX_FINISHED_PIPELINES = 100
 
 
 class InFlightTask(Protocol):
@@ -57,6 +70,10 @@ class DashboardExecution(Protocol):
     fatal_error: str | None
     terminal_error: Exception | None
     done: bool
+    stage_generation: int
+
+    @property
+    def task_attempts(self) -> Mapping[int, int]: ...
 
     @property
     def node_states(self) -> Mapping[str, PlanNodeState]: ...
@@ -68,7 +85,9 @@ class DashboardExecution(Protocol):
     def task_queue(self) -> Sized: ...
 
     @property
-    def completed_totals(self) -> Mapping[tuple[str | None, str, Aggregation], CounterEntry]: ...
+    def results(self) -> Mapping[int, object]: ...
+
+    def completed_snapshot(self) -> CounterSnapshot: ...
 
 
 class DashboardCoordinator(Protocol):
@@ -106,12 +125,35 @@ class _DashboardWorkerSnapshot:
     counters: dict[str, CounterEntry]
 
 
+def _shard_indices(run: DashboardExecution, state: ShardState | None, stopped: bool) -> tuple[Iterable[int], int]:
+    """Return matching shard IDs and their count before pagination."""
+    if state == ShardState.RUNNING:
+        return sorted(run.in_flight), len(run.in_flight)
+    if state == ShardState.SUCCEEDED:
+        return sorted(run.results), len(run.results)
+    if state is None:
+        return range(run.total_shards), run.total_shards
+    if (state == ShardState.STOPPED) != stopped:
+        return (), 0
+    return (
+        (index for index in range(run.total_shards) if index not in run.results and index not in run.in_flight),
+        run.total_shards - len(run.results) - len(run.in_flight),
+    )
+
+
 class CoordinatorDashboard:
     """Read coordinator state and build dashboard responses."""
 
     def __init__(self, coordinator: DashboardCoordinator, active_worker_state: str) -> None:
         self._coordinator = coordinator
         self._active_worker_state = active_worker_state
+        self._finished: deque[PipelineOverview] = deque(maxlen=MAX_FINISHED_PIPELINES)
+
+    def archive_locked(self, execution_id: str) -> None:
+        """Keep a payload-free summary before release; the caller holds the coordinator lock."""
+        run = self._coordinator._executions[execution_id]
+        plan = self._plan_locked(run)
+        self._finished.append(PipelineOverview(plan, self._status_locked(run, plan), archived=True))
 
     def _run_locked(self, execution_id: str) -> DashboardExecution | None:
         if execution_id:
@@ -128,20 +170,6 @@ class CoordinatorDashboard:
             return PipelinePhase.WAITING_FOR_WORKERS
         return PipelinePhase.RUNNING
 
-    def pipelines(self) -> PipelineList:
-        with self._coordinator._lock:
-            runs = list(self._coordinator._executions.values())
-            return PipelineList(
-                pipelines=tuple(
-                    PipelineSummary(
-                        execution_id=run.execution_id,
-                        pipeline_name=run.pipeline_name or run.execution_id,
-                        current_stage=run.stage_name,
-                    )
-                    for run in reversed(runs)
-                )
-            )
-
     def _plan_locked(self, run: DashboardExecution) -> PipelinePlan:
         if run.dashboard_plan is None and run.plan is not None:
             run.dashboard_plan = pipeline_plan(
@@ -151,132 +179,192 @@ class CoordinatorDashboard:
             )
         return run.dashboard_plan or PipelinePlan(pipeline_name="", execution_id=run.execution_id)
 
-    def plan(self, execution_id: str) -> PipelinePlan:
-        with self._coordinator._lock:
-            run = self._run_locked(execution_id)
-            if run is None:
-                return PipelinePlan(pipeline_name="", execution_id=execution_id)
-            return self._plan_locked(run)
-
     def _worker_counter_entries_locked(self) -> dict[str, dict[str, CounterEntry]]:
         """Merge live counter entries for every worker, keyed by worker id.
 
         ``_worker_counters`` is keyed by ``(worker_id, execution_id)``, so merging one worker at a
         time rescans the whole map per worker. Group in a single pass instead.
         """
-        entries_by_worker: dict[str, list[tuple[str, CounterEntry]]] = defaultdict(list)
+        entries_by_worker: dict[str, list[tuple[CounterKey, CounterEntry]]] = defaultdict(list)
         for (worker_id, _), snapshot in self._coordinator._worker_counters.items():
             entries_by_worker[worker_id].extend(snapshot.counters.items())
 
-        merged_by_worker: dict[str, dict[str, CounterEntry]] = {}
-        for worker_id, entries in entries_by_worker.items():
-            merged, conflicted = merge_counter_entries(entries)
-            merged_by_worker[worker_id] = {name: entry for name, entry in merged.items() if name not in conflicted}
-        return merged_by_worker
+        return {worker_id: counters_by_name(entries) for worker_id, entries in entries_by_worker.items()}
 
-    def status(self, execution_id: str) -> PipelineStatus:
+    def _shard_buckets_locked(self, run: DashboardExecution) -> tuple[ShardBucket, ...]:
+        total = run.total_shards
+        if total <= 0:
+            return ()
+        count = min(MAX_SHARD_BUCKETS, total)
+        completed = [0] * count
+        running = [0] * count
+        for shard in run.results:
+            completed[shard * count // total] += 1
+        for shard in run.in_flight:
+            running[shard * count // total] += 1
+        return tuple(
+            ShardBucket(
+                completed=completed[index],
+                running=running[index],
+                pending=(
+                    ((index + 1) * total + count - 1) // count
+                    - (index * total + count - 1) // count
+                    - completed[index]
+                    - running[index]
+                ),
+            )
+            for index in range(count)
+        )
+
+    def _status_locked(self, run: DashboardExecution, safe_plan: PipelinePlan) -> PipelineStatus:
+        worker_states = Counter(state for state in self._coordinator._worker_states.values())
+        worker_snapshots = [
+            snapshot
+            for (worker_id, snapshot_execution_id), snapshot in self._coordinator._worker_counters.items()
+            if worker_id in self._coordinator._worker_states and snapshot_execution_id == run.execution_id
+        ]
+        worker_counters = [counters_by_name(snapshot.counters.items()) for snapshot in worker_snapshots]
+        cpu_percent = sum(
+            float(counters.get(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, CounterEntry(0)).value) for counters in worker_counters
+        )
+        memory_bytes = sum(
+            int(counters.get(ZEPHYR_WORKER_MEM_CURRENT_KEY, CounterEntry(0)).value) for counters in worker_counters
+        )
+        active_workers = worker_states.get(self._active_worker_state, 0)
+        cpu_capacity = active_workers * self._coordinator._worker_resources.cpu
+        memory_capacity = active_workers * self._coordinator._worker_resources.memory
+        node_statuses: list[PlanNodeStatus] = []
+        phase = self._phase_locked(run)
+        buckets = self._shard_buckets_locked(run)
+        for node in safe_plan.nodes:
+            if node.stage_type == SOURCE_STAGE_TYPE:
+                state = PlanNodeState.SUCCEEDED
+            else:
+                state = run.node_states.get(node.node_id, PlanNodeState.PENDING)
+            active = state == PlanNodeState.RUNNING and node.stage_name == run.stage_name
+            node_statuses.append(
+                PlanNodeStatus(
+                    node_id=node.node_id,
+                    state=state,
+                    completed_shards=run.completed_shards if active else 0,
+                    total_shards=run.total_shards if active else 0,
+                    shard_buckets=buckets if active else (),
+                )
+            )
+
+        return PipelineStatus(
+            execution_id=run.execution_id,
+            phase=phase,
+            current_stage=run.stage_name,
+            completed_shards=run.completed_shards,
+            total_shards=run.total_shards,
+            in_flight_shards=len(run.in_flight),
+            queued_shards=len(run.task_queue),
+            retries=run.retries,
+            started_at_ms=run.started_at_ms,
+            finished_at_ms=run.finished_at_ms,
+            fatal_error=run.fatal_error or (str(run.terminal_error) if run.terminal_error is not None else ""),
+            coordinator_task_id=self._coordinator._coordinator_task_id,
+            expected_workers=self._coordinator._expected_workers,
+            worker_states=tuple(
+                WorkerStateCount(state=state, count=count) for state, count in sorted(worker_states.items())
+            ),
+            resources=ResourceUsage(
+                cpu_cores=cpu_percent / 100,
+                cpu_utilization=(cpu_percent / 100 / cpu_capacity) if cpu_capacity else 0,
+                memory_bytes=memory_bytes,
+                memory_utilization=(memory_bytes / memory_capacity) if memory_capacity else 0,
+            ),
+            node_statuses=tuple(node_statuses),
+        )
+
+    def overview(self) -> DashboardOverview:
+        with self._coordinator._lock:
+            pipelines = list(self._finished)
+            for run in self._coordinator._executions.values():
+                plan = self._plan_locked(run)
+                pipelines.append(PipelineOverview(plan=plan, status=self._status_locked(run, plan)))
+            pipelines.sort(key=lambda item: (item.status.started_at_ms, item.status.execution_id))
+            return DashboardOverview(pipelines=tuple(pipelines))
+
+    def shards(self, execution_id: str, offset: int, limit: int, state: ShardState | None = None) -> ShardPage:
+        now = time.monotonic()
         with self._coordinator._lock:
             run = self._run_locked(execution_id)
             if run is None:
-                return PipelineStatus(execution_id=execution_id)
-
-            worker_states = Counter(state for state in self._coordinator._worker_states.values())
-            worker_snapshots = [
-                snapshot
-                for (worker_id, snapshot_execution_id), snapshot in self._coordinator._worker_counters.items()
-                if worker_id in self._coordinator._worker_states and snapshot_execution_id == run.execution_id
-            ]
-            cpu_percent = sum(
-                float(snapshot.counters.get(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, CounterEntry(0)).value)
-                for snapshot in worker_snapshots
-            )
-            memory_bytes = sum(
-                int(snapshot.counters.get(ZEPHYR_WORKER_MEM_CURRENT_KEY, CounterEntry(0)).value)
-                for snapshot in worker_snapshots
-            )
-            active_workers = worker_states.get(self._active_worker_state, 0)
-            cpu_capacity = active_workers * self._coordinator._worker_resources.cpu
-            memory_capacity = active_workers * self._coordinator._worker_resources.memory
-            safe_plan = self._plan_locked(run)
-            node_statuses: list[PlanNodeStatus] = []
-            phase = self._phase_locked(run)
-            for node in safe_plan.nodes:
-                if node.stage_type == SOURCE_STAGE_TYPE:
-                    state = PlanNodeState.SUCCEEDED
+                return ShardPage(shards=(), total=0, stage_name="")
+            stopped = self._phase_locked(run) == PipelinePhase.FAILED
+            indices, matching = _shard_indices(run, state, stopped)
+            shards = []
+            for index in islice(indices, offset, offset + limit):
+                if index in run.results:
+                    state = ShardState.SUCCEEDED
+                elif index in run.in_flight:
+                    state = ShardState.RUNNING
                 else:
-                    state = run.node_states.get(node.node_id, PlanNodeState.PENDING)
-                node_statuses.append(PlanNodeStatus(node_id=node.node_id, state=state))
-
-            return PipelineStatus(
-                execution_id=run.execution_id,
-                phase=phase,
-                current_stage=run.stage_name,
-                completed_shards=run.completed_shards,
-                total_shards=run.total_shards,
-                in_flight_shards=len(run.in_flight),
-                queued_shards=len(run.task_queue),
-                retries=run.retries,
-                started_at_ms=run.started_at_ms,
-                finished_at_ms=run.finished_at_ms,
-                fatal_error=run.fatal_error or (str(run.terminal_error) if run.terminal_error is not None else ""),
-                coordinator_task_id=self._coordinator._coordinator_task_id,
-                expected_workers=self._coordinator._expected_workers,
-                worker_states=tuple(
-                    WorkerStateCount(state=state, count=count) for state, count in sorted(worker_states.items())
-                ),
-                resources=ResourceUsage(
-                    cpu_cores=cpu_percent / 100,
-                    cpu_utilization=(cpu_percent / 100 / cpu_capacity) if cpu_capacity else 0,
-                    memory_bytes=memory_bytes,
-                    memory_utilization=(memory_bytes / memory_capacity) if memory_capacity else 0,
-                ),
-                node_statuses=tuple(node_statuses),
-            )
+                    state = ShardState.STOPPED if stopped else ShardState.PENDING
+                entry = run.in_flight.get(index)
+                worker_id = entry.worker_id if entry is not None else ""
+                snapshot = self._coordinator._worker_counters.get((worker_id, run.execution_id))
+                progress = snapshot.shards.get(index) if snapshot is not None and entry is not None else None
+                if progress is not None and (
+                    progress.stage_generation != run.stage_generation or progress.attempt != run.task_attempts[index]
+                ):
+                    progress = None
+                last_seen = self._coordinator._last_seen.get(worker_id)
+                shards.append(
+                    ShardStatus(
+                        index=index,
+                        state=state,
+                        worker_id=worker_id,
+                        task_id=self._coordinator._worker_task_ids.get(worker_id, ""),
+                        last_seen_age_seconds=max(0, now - last_seen) if last_seen is not None else None,
+                        progress=progress,
+                    )
+                )
+            return ShardPage(shards=tuple(shards), total=run.total_shards, stage_name=run.stage_name, matching=matching)
 
     def metrics(self, execution_id: str, max_points: int) -> PipelineMetrics:
         with self._coordinator._lock:
             run = self._run_locked(execution_id)
-            if run is None:
-                return PipelineMetrics(warning="The selected pipeline is not active.")
-            selected_execution_id = run.execution_id
+            if run is not None:
+                selected_execution_id = run.execution_id
+            elif any(item.status.execution_id == execution_id for item in self._finished):
+                selected_execution_id = execution_id
+            else:
+                return PipelineMetrics(warning="The selected pipeline is no longer retained.")
         result = self._coordinator._stats_writer.query_pipeline_metrics(selected_execution_id, max_points)
         return PipelineMetrics(points=result.points, warning=result.warning)
 
-    def _counter_entries(self, execution_id: str) -> list[tuple[str, CounterEntry]]:
+    def _counter_entries(self, execution_id: str) -> list[tuple[CounterKey, CounterEntry]]:
         with self._coordinator._lock:
             run = self._run_locked(execution_id)
             if run is None:
                 return []
-            entries = [(name, entry) for (_, name, _), entry in run.completed_totals.items()]
+            entries = list(run.completed_snapshot().counters.items())
             entries.extend(
-                (name, entry)
+                (key, entry)
                 for (worker_id, snapshot_execution_id), snapshot in self._coordinator._worker_counters.items()
                 if worker_id in self._coordinator._worker_states and snapshot_execution_id == run.execution_id
-                for name, entry in snapshot.counters.items()
+                for key, entry in snapshot.counters.items()
             )
 
-        by_stage: dict[str | None, list[tuple[str, CounterEntry]]] = defaultdict(list)
-        for name, entry in entries:
-            by_stage[entry.stage].append((name, entry))
-        result: list[tuple[str, CounterEntry]] = []
-        for stage_entries in by_stage.values():
-            merged, conflicted = merge_counter_entries(stage_entries)
-            result.extend((name, entry) for name, entry in merged.items() if name not in conflicted)
-        return result
+        merged, conflicted = merge_counter_entries(entries)
+        return [(key, entry) for key, entry in merged.items() if key not in conflicted]
 
     def counters(self, query: CounterQuery) -> CounterPage:
         search = query.search.casefold()
         available_entries = self._counter_entries(query.execution_id)
-        stages = tuple(sorted({entry.stage for _, entry in available_entries if entry.stage}))
+        stages = tuple(sorted({key.stage for key, _ in available_entries if key.stage}))
         entries = [
-            (name, entry)
-            for name, entry in available_entries
-            if (not query.stage or entry.stage == query.stage)
-            and (not search or search in name.casefold() or search in (entry.stage or "").casefold())
+            (key, entry)
+            for key, entry in available_entries
+            if (not query.stage or key.stage == query.stage)
+            and (not search or search in key.name.casefold() or search in (key.stage or "").casefold())
         ]
-        sort_keys: dict[str, Callable[[tuple[str, CounterEntry]], object]] = {
-            "name": lambda item: item[0].casefold(),
-            "stage": lambda item: (item[1].stage or "").casefold(),
+        sort_keys: dict[str, Callable[[tuple[CounterKey, CounterEntry]], object]] = {
+            "name": lambda item: item[0].name.casefold(),
+            "stage": lambda item: (item[0].stage or "").casefold(),
             "value": lambda item: item[1].value,
             "aggregation": lambda item: item[1].aggregation.value,
             "observations": lambda item: item[1].count,
@@ -284,7 +372,7 @@ class CoordinatorDashboard:
         entries.sort(key=sort_keys.get(query.sort_field, sort_keys["name"]), reverse=query.sort_descending)
         page = entries[query.offset : query.offset + query.limit]
         return CounterPage(
-            counters=tuple(counter_value(name, entry) for name, entry in page),
+            counters=tuple(counter_value(key, entry) for key, entry in page),
             total=len(entries),
             stages=stages,
         )

@@ -10,6 +10,9 @@ They include a final end-of-sequence (EOS) token, which measures the probability
 of stopping after the reference. The report shows EOS and includes it in the totals.
 Token colors show model probabilities. Hover, focus, or tap a token for its
 probability and the five most likely alternatives.
+Completions containing valid SVG have an image preview, including when prose
+follows the image markup. Expand **Full generated text** to inspect the SVG
+source and any continuation. Incomplete or malformed SVG remains visible as text.
 Each prompt in [prompts.json](prompts.json) includes an expected answer, which
 is scored separately. Open-ended expected answers are examples, and probability
 does not measure answer correctness. Probabilities use the model distribution
@@ -27,24 +30,36 @@ gh workflow run marin-hero-completions.yaml --ref main -f submission=all -f prio
 ```
 
 Use the Actions summary for Iris job links, status, and errors.
-Each checkpoint job requests **32 GB200 GPUs** across eight nodes and uses a batch
-size of 32 across the job. With `submission=all`, two checkpoint jobs can run concurrently when
-64 GPUs and the corresponding node resources are available. The backfill skips
+Each checkpoint job requests **64 GB200 GPUs** across 16 nodes, one NVL72 rack
+block. The sampler puts one prompt row on each GPU, so the batch equals the GPU
+count and the prompt bank fits in a single pass per sample. Three samples take
+approximately two hours, against a six-hour job timeout. Two checkpoint jobs run
+concurrently when 128 GPUs and the corresponding node resources are available.
+With `submission=all`, the backfill submits every unfinished request. It skips
 completed results, active jobs, and requests that exhausted their retries. The
 checkpoint selection comes from [`hero_checkpoint_paths()`](../../checkpoints.py),
-which reads the current hero run and its ancestors.
+which reads the current hero run and its ancestors. Discovery skips checkpoints
+before `FIRST_SAMPLED_STEP` in [config.py](config.py).
+The drawing prompt expansion starts at step 386,001, after the retained
+checkpoints through step 386,000, so it does not backfill those checkpoints.
 
-The workflow runs hourly. With its default, `submission=next`, it submits no new
-request while jobs for the current sampling specification are active. Otherwise,
-it submits at most one unfinished request. Priorities are `batch`, `interactive`,
-or `production`. A manual invocation saves its selected priority for subsequent
+The workflow runs hourly. With its default, `submission=next`, it keeps at most two
+jobs for the current sampling specification active. It submits unfinished requests
+only into free slots. One sample set takes about 40 hours with the queue wait, and
+the hero writes a permanent checkpoint about every 28 hours. One active job falls
+behind, and the newest-first order then never samples the older checkpoints.
+Priorities are `batch`, `interactive`, or `production`. A manual invocation saves its selected priority for subsequent
 attempts of all discovered requests. Active jobs retain their assigned priority.
 Future checkpoints use batch priority unless a manual invocation sets a different
 priority.
 
 Each request identifies a checkpoint and a sampling specification: the prompt bank,
 sampler release, completion count, and other generation settings in
-[config.py](config.py). The report retains completed results across sampling
+[config.py](config.py). The specification holds no execution detail. The hero
+model architecture and the batch shape stay outside it, so a training-side
+change, such as a renamed attention kernel or a wider rack, does not re-identify
+completed results. `release` remains the only deliberate backfill knob.
+The report retains completed results across sampling
 versions. It updates only when new usable results arrive. Missing historical
 scores appear as unavailable. Unusable files produce a warning and do not block
 other results. The report labels each sampling version in the checkpoint selector.
@@ -59,4 +74,6 @@ All attempts use that commit for the sampler code, so
 merging a fix does not change existing requests.
 To rerun checkpoints with corrected sampler code, change `release` in
 [config.py](config.py) through a PR, then invoke the workflow. A new release
-creates new requests for all retained checkpoints, including prior successes.
+creates new requests for all retained checkpoints from `FIRST_SAMPLED_STEP` on,
+including prior successes. Lower `FIRST_SAMPLED_STEP` in the same PR to backfill
+older checkpoints.

@@ -1616,7 +1616,11 @@ def unflatten_axis(array: NamedArray, axis: AxisSelector, new_axes: AxisSpec) ->
         )
 
     resolved_new_axes = array.axes[:old_index] + tuple(new_axes) + array.axes[old_index + 1 :]
-    new_array = jnp.reshape(array.array, [ax.size for ax in resolved_new_axes])
+    new_array = jnp.reshape(
+        array.array,
+        [ax.size for ax in resolved_new_axes],
+        out_sharding=haliax.partitioning.get_pspec_for_manual_mesh(resolved_new_axes),
+    )
     return NamedArray(new_array, resolved_new_axes)
 
 

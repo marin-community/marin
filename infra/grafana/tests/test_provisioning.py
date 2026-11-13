@@ -139,7 +139,8 @@ def test_alert_rules_define_nodata_and_error_behavior():
     # Most alert endpoints return explicit zeros when healthy. The storage rules
     # stay normal until the optional CoreWeave collector writes its first rows.
     for rule in _rules():
-        expected_no_data = "OK" if rule["uid"].startswith("coreweave-storage-") else "Alerting"
+        optional_metrics = rule["uid"].startswith("coreweave-storage-") or rule["uid"] == "node-runtime-filesystem-full"
+        expected_no_data = "OK" if optional_metrics else "Alerting"
         assert rule["noDataState"] == expected_no_data, rule["uid"]
         assert rule["execErrState"] == "Alerting", rule["uid"]
         assert rule["labels"]["severity"] in VALID_SEVERITIES, rule["uid"]
@@ -182,6 +183,10 @@ class _FakeFinelog:
         )
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        if "node_filesystem_available_bytes" in sql:
+            return pa.table(
+                {"cluster": ["cw-a"], "node": ["n1"], "node_uid": ["uid1"], "mountpoint": ["/"], "value": [0.5]}
+            )
         if '"storage.usage"' in sql:
             return pa.table(
                 {
@@ -400,11 +405,8 @@ def test_coreweave_storage_alert_notifies_slack_when_collection_is_missing_for_2
         assert database.execute(sql).fetchall() == expected
 
 
-def test_every_slack_alert_goes_through_the_bridge_and_none_through_grafana():
-    """The bridge posts every Slack alert, not Grafana. For critical alerts that is
-    load-bearing — an incoming webhook never reveals the message ts that Loom needs
-    to route the thread — and routing the fallback the same way keeps one channel,
-    one credential, and one rendering."""
+def test_every_delivered_alert_uses_the_loom_bridge():
+    """Both receivers open a Loom session on the Slack thread they announce."""
     points = {point["name"]: point for point in _load(ALERTING / "contact-points.yaml")["contactPoints"]}
     assert {receiver["type"] for receiver in points["ops-critical"]["receivers"]} == {"email", "webhook"}
     assert {receiver["type"] for receiver in points["ops-slack"]["receivers"]} == {"webhook"}
@@ -414,7 +416,7 @@ def test_every_slack_alert_goes_through_the_bridge_and_none_through_grafana():
     (loom,) = [receiver for receiver in points["ops-critical"]["receivers"] if receiver["type"] == "webhook"]
     assert loom["settings"] == {"url": "http://127.0.0.1:8081/alerts/loom", "httpMethod": "POST"}
     (fallback,) = points["ops-slack"]["receivers"]
-    assert fallback["settings"] == {"url": "http://127.0.0.1:8081/alerts/slack", "httpMethod": "POST"}
+    assert fallback["settings"] == {"url": "http://127.0.0.1:8081/alerts/loom", "httpMethod": "POST"}
 
 
 def test_finelog_health_alert_pages_critical_after_five_minutes():
@@ -496,7 +498,7 @@ def test_run_health_alerts_split_paging_from_announcing():
     }
 
 
-def test_announcing_run_health_reaches_slack_without_a_triage_session():
+def test_announcing_run_health_reaches_slack_with_a_triage_session():
     # severity=warning alone is muted by dashboard-only, so the announcing rule
     # needs the notification=slack route, which is matched first and unmuted.
     (rule,) = [rule for rule in _rules() if rule["uid"] == "training-run-health-degraded"]
@@ -787,6 +789,20 @@ def test_every_sql_selector_has_a_matching_variable():
                 assert variable in variables, f"{name}: ${variable} used but not declared"
 
 
+def test_every_queried_panel_says_what_it_measures():
+    # A panel's description is the only place the dashboard says what its series mean.
+    for name, dashboard in _stitched_dashboards().items():
+        for panel in _all_panels(dashboard):
+            queries_sql = any(
+                param["key"] == "sql"
+                for target in panel.get("targets", [])
+                for param in target.get("url_options", {}).get("params", [])
+            )
+            if not panel.get("title") or not queries_sql:
+                continue
+            assert panel.get("description", "").strip(), f"{name}: {panel['title']} has no description"
+
+
 def test_dashboard_links_point_at_provisioned_dashboards():
     # Deleting a dashboard silently strands every nav link that named it.
     uids = {dashboard["uid"] for dashboard in _stitched_dashboards().values()}
@@ -946,19 +962,19 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('levanter', ?, 'cw-a', ?, ?, ?, 'phase', ?, NULL, ?, ?)",
         [
-            ("hero-run", "/u/hero-run-coord/train", "attempt-old", "0", 1, fixed_now_ms - 80 * 60_000, 1),
-            ("hero-run", "/u/hero-run-coord/train", "attempt-old", "0", 1, fixed_now_ms - 2 * 60_000, 2),
+            ("hero-run", "/marin/hero-run-coord/train", "attempt-old", "0", 1, fixed_now_ms - 80 * 60_000, 1),
+            ("hero-run", "/marin/hero-run-coord/train", "attempt-old", "0", 1, fixed_now_ms - 2 * 60_000, 2),
             (
                 "hero-run",
-                "/u/hero-run-coord/train",
+                "/marin/hero-run-coord/train",
                 "attempt-current",
                 "0",
                 0,
                 fixed_now_ms - 4 * 60 * 60_000,
                 1,
             ),
-            ("hero-run", "/u/hero-run-coord/train", "attempt-current", "0", 1, fixed_now_ms - 60_000, 3),
-            ("hero-run", "/u/hero-run-coord/train", "attempt-replica", "1", 1, fixed_now_ms - 30_000, 4),
+            ("hero-run", "/marin/hero-run-coord/train", "attempt-current", "0", 1, fixed_now_ms - 60_000, 3),
+            ("hero-run", "/marin/hero-run-coord/train", "attempt-replica", "1", 1, fixed_now_ms - 30_000, 4),
             ("other-run", "/u/other-run-coord/train", "other-attempt", "0", 1, fixed_now_ms - 20_000, 5),
         ],
     )
@@ -978,18 +994,21 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
     database.executemany(
         'INSERT INTO "iris.task_state" VALUES (?, ?, ?, ?, ?, ?, ?)',
         [
-            ("cw-a", "/u/hero-run-coord", datetime(2026, 8, 21, 11, 50, tzinfo=UTC), 4, 3, 2, 160),
-            ("cw-a", "/u/hero-run-coord-1", datetime(2026, 8, 21, 11, 59, 30, tzinfo=UTC), 1, 2, 3, 170),
-            ("cw-b", "/u/hero-run-coord", datetime(2026, 8, 21, 11, 59, 40, tzinfo=UTC), 0, 0, 0, 176),
+            ("cw-a", "/marin/hero-run-coord", datetime(2026, 8, 21, 11, 50, tzinfo=UTC), 4, 3, 2, 160),
+            ("cw-a", "/marin/hero-run-coord-1", datetime(2026, 8, 21, 11, 59, 30, tzinfo=UTC), 1, 2, 3, 170),
+            ("cw-b", "/marin/hero-run-coord", datetime(2026, 8, 21, 11, 59, 40, tzinfo=UTC), 0, 0, 0, 176),
             ("cw-a", "/u/other-run-coord", datetime(2026, 8, 21, 11, 59, 45, tzinfo=UTC), 0, 0, 0, 176),
         ],
     )
 
     dataset = training_overview_dataset("hero-run", fixed_now_ms - 90 * 60_000, fixed_now_ms, 60_000)
     sql_by_ref = {
-        "A": f"WITH training_rows AS ({dataset.sources[0].sql}) {dataset.views['execution_attempt']}",
-        "B": dataset.sources[1].sql,
-        "C": dataset.sources[2].sql,
+        "A": (
+            f"WITH attempts AS ({dataset.sources[1].sql.replace('FIRST_VALUE(', 'FIRST(')}) "
+            f"{dataset.views['execution_attempt']}"
+        ),
+        "B": dataset.sources[2].sql,
+        "C": dataset.sources[3].sql,
     }
     database.execute(
         """
@@ -1007,28 +1026,28 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
         [
             (
                 "cw-a",
-                "/u/hero-run-coord/train/0",
+                "/marin/hero-run-coord/train/0",
                 0,
                 "TaskRetryScheduled",
                 datetime(2026, 8, 21, 11, 50, tzinfo=UTC),
             ),
             (
                 "cw-a",
-                "/u/hero-run-coord-1/train/1",
+                "/marin/hero-run-coord-1/train/1",
                 1,
                 "CoscheduledSiblingRequeued",
                 datetime(2026, 8, 21, 11, 59, tzinfo=UTC),
             ),
             (
                 "cw-a",
-                "/u/hero-run-coord/train/2",
+                "/marin/hero-run-coord/train/2",
                 0,
                 "TaskRunning",
                 datetime(2026, 8, 21, 11, 59, 30, tzinfo=UTC),
             ),
             (
                 "cw-b",
-                "/u/hero-run-coord/train/3",
+                "/marin/hero-run-coord/train/3",
                 0,
                 "TaskRetryScheduled",
                 datetime(2026, 8, 21, 11, 59, 40, tzinfo=UTC),
@@ -1136,25 +1155,26 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
         "INSERT INTO \"levanter.metrics\" VALUES ('levanter', ?, ?, ?, ?, ?, 'phase', 1, NULL, ?, ?)",
         [
             # An attempt that ran two hours on a CoreWeave cluster and then failed.
-            ("hero-run", "cw-a", "/u/hero-run-coord/train", "attempt-one", "0", at - 6 * hour, 1),
-            ("hero-run", "cw-a", "/u/hero-run-coord/train", "attempt-one", "0", at - 4 * hour, 2),
+            ("hero-run", "cw-a", "/marin/hero-run-coord/train", "attempt-one", "0", at - 6 * hour, 1),
+            ("hero-run", "cw-a", "/marin/hero-run-coord/train", "attempt-one", "0", at - 4 * hour, 2),
             # Its successor, a fresh job on the hub, whose rows carry no origin cluster.
-            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two", "0", at - 2 * hour, 3),
-            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two", "0", at - hour, 4),
+            ("hero-run", "", "/marin/hero-run-coord-2/train", "attempt-two", "0", at - 2 * hour, 3),
+            ("hero-run", "", "/marin/hero-run-coord-2/train", "attempt-two", "0", at - hour, 4),
             # A replica of that attempt, and another run: neither is a row of this table.
-            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two-replica", "1", at - hour, 5),
+            ("hero-run", "", "/marin/hero-run-coord-2/train", "attempt-two-replica", "1", at - hour, 5),
             ("other-run", "cw-a", "/u/other-run-coord/train", "other-attempt", "0", at - hour, 6),
         ],
     )
     dataset = training_overview_dataset("hero-run", at - 3 * hour, at, 60_000)
-    sql = f"WITH training_rows AS ({dataset.sources[0].sql}) {dataset.views['attempts']}"
+    sql = f"WITH attempts AS ({dataset.sources[1].sql.replace('FIRST_VALUE(', 'FIRST(')}) "
+    sql += dataset.views["attempts"]
 
     # Newest first, so the top row is the last attempt whether or not it still runs. The
     # Iris dashboard filters backends by peer id and reserves `local` for its own, which
     # is the hub finelog leaves unlabeled.
     assert database.execute(sql).fetchall() == [
-        (at - 2 * hour, "marin", "/u/hero-run-coord-2/train", 3_600.0, "local"),
-        (at - 6 * hour, "cw-a", "/u/hero-run-coord/train", 7_200.0, "cw-a"),
+        (at - 2 * hour, "marin", "/marin/hero-run-coord-2/train", 3_600.0, "local"),
+        (at - 6 * hour, "cw-a", "/marin/hero-run-coord/train", 7_200.0, "cw-a"),
     ]
 
 

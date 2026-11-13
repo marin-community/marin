@@ -6,6 +6,7 @@ from functools import lru_cache, partial
 import hashlib
 import json
 import logging
+import math
 import pathlib
 import time
 from typing import Literal, Optional, TypeAlias, cast, overload
@@ -14,6 +15,7 @@ import warnings
 import jax
 import jax.numpy as jnp
 import jaxlib
+from jax._src.mesh import get_concrete_mesh
 from jaxtyping import Array, Float, Int
 from finestore.cache import PersistentKvCache
 from rigging.cache import (
@@ -24,6 +26,7 @@ from rigging.cache import (
 )
 
 from levanter.kernels.pallas import autotune_utils
+from levanter.utils.jax_utils import multihost_allgather_sync
 
 from .config import BlockSizes
 from .tuned_block_sizes import (
@@ -73,9 +76,9 @@ _DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
 _IMPLEMENTATION_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 _SELECTED_IMPL_LOGGED: set[str] = set()
 _AUTOTUNE_ON_MISS_ENV_VAR = "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS"
-# Bump the trailing version when the entry encoding changes so stale entries are ignored.
+# Bump the prefix when entry encoding changes; bump the source schema when selection semantics change.
 _AUTOTUNE_BLOCK_SIZE_PREFIX = "levanter_kernel_autotune/fused_cross_entropy_loss/block_sizes_v2"
-_AUTOTUNE_SOURCE_SCHEMA = "fused-cross-entropy-autotune-v3"
+_AUTOTUNE_SOURCE_SCHEMA = "fused-cross-entropy-autotune-v5"
 
 
 class _NoViableCandidate:
@@ -224,6 +227,29 @@ def _implementation_matches_current_backend(impl_name: str, *, fn: ArrayImpl | N
 
 def _autotune_enabled() -> bool:
     return autotune_utils.env_flag(_AUTOTUNE_ON_MISS_ENV_VAR, default=True)
+
+
+def _autotune_process_ids(*values: jax.Array) -> tuple[int, ...]:
+    """Return the process IDs that participate in this kernel invocation."""
+    for value in values:
+        sharding = autotune_utils.named_sharding_of(value)
+        if sharding is not None and isinstance(sharding.mesh, jax.sharding.Mesh):
+            process_ids = tuple(sorted({device.process_index for device in sharding.mesh.devices.flat}))
+            if jax.process_index() in process_ids:
+                return process_ids
+
+    mesh = get_concrete_mesh()
+    if isinstance(mesh, jax.sharding.Mesh) and not mesh.empty:
+        process_ids = tuple(sorted({device.process_index for device in mesh.devices.flat}))
+        if jax.process_index() in process_ids:
+            return process_ids
+    return tuple(range(jax.process_count()))
+
+
+def _autotune_allgather(value, process_ids: tuple[int, ...]):
+    if process_ids == tuple(range(jax.process_count())):
+        return multihost_allgather_sync(value)
+    return multihost_allgather_sync(value, process_ids=process_ids)
 
 
 _AUTOTUNE_CACHE = AutotuneBlockSizeCache(
@@ -398,7 +424,7 @@ def _candidate_block_sizes(
     return deduped
 
 
-def _benchmark_block_sizes_candidate(
+def _compile_block_sizes_candidate(
     *,
     fn: ArrayImpl,
     candidate: BlockSizes,
@@ -409,7 +435,7 @@ def _benchmark_block_sizes_candidate(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
     return_argmax: bool,
-) -> float:
+) -> Callable[..., jax.Array]:
     def _loss_only(x_value: jax.Array, labels_value: jax.Array, w_value: jax.Array) -> jax.Array:
         kwargs = dict(
             block_sizes=candidate,
@@ -440,15 +466,47 @@ def _benchmark_block_sizes_candidate(
             compile_time,
         )
 
-    if autotune_utils.contains_tracer(x, labels, w):
-        return compile_time
+    return benchmark_fn
 
+
+def _run_block_sizes_candidate(
+    benchmark_fn: Callable[..., jax.Array],
+    x: jax.Array,
+    labels: jax.Array,
+    w: jax.Array,
+) -> float:
     jitted = jax.jit(benchmark_fn)
     start = time.perf_counter()
     out = jitted(x, labels, w)
     jax.block_until_ready(out)
     run_time = time.perf_counter() - start
     return run_time
+
+
+def _benchmark_block_sizes_candidate(
+    *,
+    fn: ArrayImpl,
+    candidate: BlockSizes,
+    x: jax.Array,
+    labels: jax.Array,
+    w: jax.Array,
+    dtype: Optional[jnp.dtype],
+    logit_soft_cap: Optional[float],
+    precision: jax.lax.PrecisionLike,
+    return_argmax: bool,
+) -> float:
+    benchmark_fn = _compile_block_sizes_candidate(
+        fn=fn,
+        candidate=candidate,
+        x=x,
+        labels=labels,
+        w=w,
+        dtype=dtype,
+        logit_soft_cap=logit_soft_cap,
+        precision=precision,
+        return_argmax=return_argmax,
+    )
+    return _run_block_sizes_candidate(benchmark_fn, x, labels, w)
 
 
 def _autotune_block_sizes_on_miss(
@@ -463,7 +521,9 @@ def _autotune_block_sizes_on_miss(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
     return_argmax: bool,
+    process_ids: tuple[int, ...] | None = None,
 ) -> BlockSizes:
+    """Select the first jointly compilable candidate while tracing, or the fastest at runtime."""
     if not _autotune_enabled():
         return inferred
     cache_key = _autotune_cache_key(
@@ -479,6 +539,29 @@ def _autotune_block_sizes_on_miss(
         return_argmax=return_argmax,
     )
     cached = _AUTOTUNE_CACHE.get(cache_key) if cache_key is not None else None
+    if process_ids is None:
+        process_ids = _autotune_process_ids(x, labels, w)
+    distributed = len(process_ids) > 1
+    tracing = autotune_utils.contains_tracer(x, labels, w)
+    candidates = _candidate_block_sizes(impl_name, inferred, x=x, w=w, dtype=dtype)
+    if distributed:
+        # Every rank must enter the same rendezvous, even when only some ranks
+        # have a local cache hit or can construct a persistent cache key.
+        states = _autotune_allgather(
+            {
+                "key": cache_key,
+                "cached": _encode_autotune_entry(cached) if cached is not None else None,
+                "candidates": [_encode_autotune_entry(candidate) for candidate in candidates],
+            },
+            process_ids,
+        )
+        if any(state["candidates"] != states[0]["candidates"] for state in states[1:]):
+            raise RuntimeError("Fused CE autotune candidates differ across JAX processes")
+        shared_key = cache_key is not None and all(state["key"] == cache_key for state in states)
+        cached = _decode_autotune_entry(states[0]["cached"]) if shared_key and states[0]["cached"] else None
+    else:
+        shared_key = cache_key is not None
+
     if cached is not None:
         if isinstance(cached, _NoViableCandidate):
             logger.info(
@@ -493,44 +576,89 @@ def _autotune_block_sizes_on_miss(
         logger.info("Fused CE autotune cache hit for %s. Using cached block sizes %s.", impl_name, cached)
         return cached
 
-    candidates = _candidate_block_sizes(impl_name, inferred, x=x, w=w, dtype=dtype)
-    logger.info(
-        "Fused CE autotune miss for %s. Sweeping %d block-size candidates.",
-        impl_name,
-        len(candidates),
-    )
+    logger.info("Fused CE autotune miss for %s. Checking %d block-size candidates.", impl_name, len(candidates))
     best: BlockSizes | None = None
     best_score = float("inf")
     errors: list[Exception] = []
     for candidate in candidates:
-        try:
-            score = _benchmark_block_sizes_candidate(
-                fn=fn,
-                candidate=candidate,
-                x=x,
-                labels=labels,
-                w=w,
-                dtype=dtype,
-                logit_soft_cap=logit_soft_cap,
-                precision=precision,
-                return_argmax=return_argmax,
-            )
-        except Exception as exc:
-            errors.append(exc)
-            continue
+        if distributed:
+            try:
+                prepared = _compile_block_sizes_candidate(
+                    fn=fn,
+                    candidate=candidate,
+                    x=x,
+                    labels=labels,
+                    w=w,
+                    dtype=dtype,
+                    logit_soft_cap=logit_soft_cap,
+                    precision=precision,
+                    return_argmax=return_argmax,
+                )
+            except Exception as exc:
+                errors.append(exc)
+                prepared = None
+
+            # No rank may execute the candidate until every rank has compiled it.
+            if not all(_autotune_allgather(prepared is not None, process_ids)):
+                continue
+            assert prepared is not None
+            if tracing:
+                best = candidate
+                break
+            try:
+                score = _run_block_sizes_candidate(prepared, x, labels, w)
+            except Exception as exc:
+                errors.append(exc)
+                score = None
+            timings = _autotune_allgather(score if score is not None and math.isfinite(score) else None, process_ids)
+            if any(timing is None for timing in timings):
+                continue
+            score = math.fsum(cast(float, timing) for timing in timings) / len(timings)
+        else:
+            try:
+                if tracing:
+                    _compile_block_sizes_candidate(
+                        fn=fn,
+                        candidate=candidate,
+                        x=x,
+                        labels=labels,
+                        w=w,
+                        dtype=dtype,
+                        logit_soft_cap=logit_soft_cap,
+                        precision=precision,
+                        return_argmax=return_argmax,
+                    )
+                    best = candidate
+                    break
+                else:
+                    score = _benchmark_block_sizes_candidate(
+                        fn=fn,
+                        candidate=candidate,
+                        x=x,
+                        labels=labels,
+                        w=w,
+                        dtype=dtype,
+                        logit_soft_cap=logit_soft_cap,
+                        precision=precision,
+                        return_argmax=return_argmax,
+                    )
+            except Exception as exc:
+                errors.append(exc)
+                continue
+
         if score < best_score:
             best_score = score
             best = candidate
 
     if best is None:
-        if cache_key is not None:
+        if shared_key:
             _AUTOTUNE_CACHE.put(cache_key, _NO_VIABLE_CANDIDATE)
         raise ExceptionGroup(
             f"Fused CE autotune found no viable block-size candidates for {impl_name}",
-            errors or [RuntimeError(f"No candidates generated for {impl_name}.")],
+            errors or [RuntimeError(f"No viable candidate for {impl_name}.")],
         )
 
-    if cache_key is not None:
+    if shared_key:
         _AUTOTUNE_CACHE.put(cache_key, best)
     logger.info("Fused CE autotune selected block sizes %s for %s.", best, impl_name)
     return best
@@ -682,6 +810,42 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         explicit = True
         user_requested_impls = True
 
+    needs_inferred_block_sizes = not explicit_block_sizes and any(
+        not isinstance(impl, str) or impl not in ("xla", "xla_fast_bwd", "reference") for impl in impls
+    )
+    if needs_inferred_block_sizes:
+        inferred, has_tuned_match = infer_block_sizes_with_tuned_match(
+            x.shape[0], x.shape[1], w.shape[1], dtype=dtype, x_dtype=x.dtype, w_dtype=w.dtype
+        )
+    else:
+        inferred, has_tuned_match = None, False
+
+    process_ids = _autotune_process_ids(x, labels, w)
+    if len(process_ids) > 1:
+        # The sweep's rendezvous cannot help if one rank takes a tuned-table hit,
+        # disables tuning, or chooses a different implementation before entering it.
+        plan = {
+            "implementations": [
+                impl if isinstance(impl, str) else f"{type(impl).__module__}.{type(impl).__qualname__}"
+                for impl in impls
+            ],
+            "explicit": explicit,
+            "user_requested_impls": user_requested_impls,
+            "block_sizes": _encode_autotune_entry(resolved_block_sizes) if resolved_block_sizes is not None else None,
+            "inferred": _encode_autotune_entry(inferred) if inferred is not None else None,
+            "has_tuned_match": has_tuned_match,
+            "autotune_enabled": _autotune_enabled() if needs_inferred_block_sizes else None,
+            "shape": (x.shape, labels.shape, w.shape),
+            "dtypes": (str(x.dtype), str(labels.dtype), str(w.dtype), str(dtype)),
+            "backend": jax.default_backend(),
+            "logit_soft_cap": logit_soft_cap,
+            "precision": str(precision),
+            "return_argmax": return_argmax,
+        }
+        plans = _autotune_allgather(plan, process_ids)
+        if any(peer != plans[0] for peer in plans[1:]):
+            raise RuntimeError(f"Fused CE selection differs across JAX processes: {dict(zip(process_ids, plans))}")
+
     errors: list[Exception] = []
     for impl in impls:
         _raise_if_renamed_implementation(impl)
@@ -691,14 +855,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         elif impl_for_call in ("xla", "xla_fast_bwd", "reference"):
             block_sizes_for_impl = None
         elif isinstance(impl_for_call, str) and impl_for_call in ("pallas_tpu", "batched_xla"):
-            inferred, has_tuned_match = infer_block_sizes_with_tuned_match(
-                x.shape[0],
-                x.shape[1],
-                w.shape[1],
-                dtype=dtype,
-                x_dtype=x.dtype,
-                w_dtype=w.dtype,
-            )
+            assert inferred is not None
             fn = IMPLEMENTATIONS.get(impl_for_call)
             if fn is None or not _implementation_matches_current_backend(impl_for_call, fn=fn):
                 block_sizes_for_impl = inferred
@@ -717,6 +874,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                         logit_soft_cap=logit_soft_cap,
                         precision=precision,
                         return_argmax=return_argmax,
+                        process_ids=process_ids,
                     )
                 except Exception as exc:
                     if explicit:
@@ -725,14 +883,8 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                     errors.append(exc)
                     continue
         else:
-            block_sizes_for_impl = infer_block_sizes(
-                x.shape[0],
-                x.shape[1],
-                w.shape[1],
-                dtype=dtype,
-                x_dtype=x.dtype,
-                w_dtype=w.dtype,
-            )
+            assert inferred is not None
+            block_sizes_for_impl = inferred
         if callable(impl_for_call):
             try:
                 kwargs = dict(

@@ -9,6 +9,8 @@ from typing import Any, Optional, Protocol, runtime_checkable
 import equinox as eqx
 import haliax
 import jax
+import jax.numpy as jnp
+from jax.sharding import AxisType
 
 from haliax import Axis
 
@@ -16,7 +18,14 @@ import levanter
 import levanter.config
 import levanter.utils.logging as logging_utils
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
-from levanter.compat.hf_checkpoints import DEFAULT_MAX_SHARD_SIZE, RepoRef, load_tokenizer
+from levanter.compat.hf_checkpoints import (
+    DEFAULT_EXPORT_HOST_BUDGET_BYTES,
+    DEFAULT_MAX_SHARD_SIZE,
+    MAX_CONCURRENT_HF_SHARDS,
+    RepoRef,
+    build_generation_config,
+    load_tokenizer,
+)
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
@@ -38,12 +47,16 @@ class ConvertLmConfig:
     upload_to_hf: Optional[RepoRef] = None  # if specified, attempt to upload this checkpoint to the hf hub
     checkpoint_subpath: str = "model"
     max_shard_size: int = DEFAULT_MAX_SHARD_SIZE
+    export_host_budget_bytes: int = DEFAULT_EXPORT_HOST_BUDGET_BYTES
+    max_concurrent_shards: int = MAX_CONCURRENT_HF_SHARDS
+    export_dtype: str | None = None
 
     model: LmConfig = LlamaConfig()
     save_tokenizer: bool = True  # if True, save the tokenizer to the output directory
     tokenizer: str | None = None  # if specified, use this tokenizer instead of the one from the model config
     override_vocab_size: Optional[int] = None  # if specified, override the vocab size in the config
     config_overrides: Optional[dict] = None  # if specified, override the config with these values
+    hf_generation_eos_token_ids: list[int] | None = None
 
     use_cpu: bool = False
 
@@ -57,9 +70,12 @@ def main(config: ConvertLmConfig):
     if tokenizer_spec is None:
         tokenizer = converter.tokenizer
     else:
-        tokenizer = load_tokenizer(tokenizer_spec)
+        tokenizer_ref = RepoRef.from_string(tokenizer_spec)
+        tokenizer = load_tokenizer(tokenizer_ref.model_name_or_path, revision=tokenizer_ref.revision)
 
     if tokenizer is None:
+        if config.hf_generation_eos_token_ids is not None:
+            raise ValueError("hf_generation_eos_token_ids requires a tokenizer")
         vocab_size = config.override_vocab_size or getattr(config.model, "vocab_size", None)
         if vocab_size is None:
             raise ValueError("override_vocab_size is required when exporting without a tokenizer")
@@ -71,7 +87,8 @@ def main(config: ConvertLmConfig):
 
     exit_stack = ExitStack()
     if config.use_cpu:
-        exit_stack.enter_context(local_cpu_mesh())
+        mesh_axis_type = AxisType.Explicit if config.model.requires_explicit_mesh_axes else AxisType.Auto
+        exit_stack.enter_context(local_cpu_mesh(mesh_axis_type))
     else:
         # exit_stack.enter_context(Mesh(jax.local_devices(), "dev"))
         exit_stack.enter_context(config.trainer.device_mesh)
@@ -106,6 +123,11 @@ def main(config: ConvertLmConfig):
             upload_to_hf=config.upload_to_hf or False,
             save_tokenizer=config.save_tokenizer,
             max_shard_size=config.max_shard_size,
+            export_host_budget_bytes=config.export_host_budget_bytes,
+            max_concurrent_shards=config.max_concurrent_shards,
+            dtype=jnp.dtype(config.export_dtype) if config.export_dtype is not None else None,
+            generation_config=build_generation_config(tokenizer, config.hf_generation_eos_token_ids),
+            field_dtype_overrides=config.trainer.field_dtype_overrides,
         )
 
 

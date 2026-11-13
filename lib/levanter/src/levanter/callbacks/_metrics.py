@@ -88,7 +88,10 @@ def log_performance_stats(
     batch_schedule: int | BatchSchedule,
     flops_per_example: Optional[float] = None,
     prefix: Optional[str] = "throughput",
+    *,
+    flops_offset: float = 0.0,
 ):
+    """Log throughput, adding historical FLOPs not represented by the current shape."""
     if isinstance(batch_schedule, int):
         batch_schedule = BatchSchedule(batch_schedule)
 
@@ -134,7 +137,7 @@ def log_performance_stats(
         dict_to_log["total_tokens"] = total_tokens
 
         if flops_per_example:
-            total_flops = flops_per_example * total_examples
+            total_flops = flops_offset + flops_per_example * total_examples
             dict_to_log["total_gflops"] = total_flops / 1e9
 
         throughput = compute_instant_throughput(

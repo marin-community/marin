@@ -13,14 +13,12 @@ from dataclasses import dataclass
 from rigging.timing import Timestamp
 
 from iris.cluster.constraints import (
-    AVAILABILITY_PREFIX,
     AttributeValue,
     Constraint,
     ConstraintIndex,
     ConstraintOp,
     DeviceType,
     PlacementRequirements,
-    availability_key,
     device_variant_constraint,
     evaluate_constraint,
     extract_placement_requirements,
@@ -38,7 +36,14 @@ from iris.cluster.controller.autoscaler.models import (
     UnmetDemand,
 )
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
-from iris.cluster.types import AcceleratorType, CapacityType, gpu_device, tpu_device
+from iris.cluster.types import (
+    AVAILABILITY_PREFIX,
+    AcceleratorType,
+    CapacityType,
+    availability_key,
+    gpu_device,
+    tpu_device,
+)
 from iris.rpc import job_pb2
 
 # Synthetic task id stem for an availability probe (see availability_probe_entries).

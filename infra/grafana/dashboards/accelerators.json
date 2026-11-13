@@ -240,7 +240,8 @@
           ]
         }
       ],
-      "timeFrom": "10m"
+      "timeFrom": "10m",
+      "maxDataPoints": 100
     },
     {
       "id": 2,
@@ -331,7 +332,8 @@
           ]
         }
       ],
-      "timeFrom": "10m"
+      "timeFrom": "10m",
+      "maxDataPoints": 100
     },
     {
       "id": 3,
@@ -422,7 +424,8 @@
           ]
         }
       ],
-      "timeFrom": "10m"
+      "timeFrom": "10m",
+      "maxDataPoints": 100
     },
     {
       "id": 4,
@@ -521,7 +524,8 @@
           ]
         }
       ],
-      "timeFrom": "10m"
+      "timeFrom": "10m",
+      "maxDataPoints": 100
     },
     {
       "id": 5,
@@ -621,7 +625,8 @@
           ]
         }
       ],
-      "timeFrom": "10m"
+      "timeFrom": "10m",
+      "maxDataPoints": 100
     },
     {
       "id": 7,
@@ -731,7 +736,8 @@
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 100
     },
     {
       "id": 9,
@@ -912,7 +918,8 @@
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 100
     },
     {
       "id": 11,
@@ -1083,7 +1090,8 @@
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 100
     },
     {
       "id": 12,
@@ -1256,7 +1264,8 @@
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 100
     },
     {
       "id": 13,
@@ -1401,7 +1410,8 @@
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 100
     },
     {
       "id": 14,
@@ -1504,7 +1514,8 @@
           ]
         }
       ],
-      "timeFrom": "30m"
+      "timeFrom": "30m",
+      "maxDataPoints": 100
     },
     {
       "id": 15,
@@ -1635,7 +1646,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 100
     },
     {
       "id": 16,
@@ -1738,7 +1750,8 @@
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 100
     },
     {
       "id": 17,
@@ -1949,7 +1962,8 @@
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 100
     }
   ]
 }

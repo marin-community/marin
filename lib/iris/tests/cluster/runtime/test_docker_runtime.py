@@ -3,14 +3,17 @@
 
 """Tests for DockerRuntime mount resolution, staging, and container creation."""
 
+import json
 import subprocess
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.docker import DockerRuntime, _security_flags
-from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
+from iris.cluster.runtime.docker import EGRESS_NETWORK, EGRESS_RESOLV_CONF, DockerRuntime, _security_flags
+from iris.cluster.runtime.types import NETWORK_MODE_HOST, NETWORK_MODE_NONE, ContainerConfig, MountKind, MountSpec
 from iris.rpc import job_pb2
+from rigging.timing import Duration
 
 
 @pytest.fixture
@@ -134,6 +137,48 @@ def test_run_container_shm_limit_matches_memory_or_tpu_fallback(
     assert create_command[create_command.index("--shm-size") + 1] == f"{expected_shm_mb}m"
 
 
+@pytest.mark.parametrize(
+    "network_mode, resolv_conf, expect_sysctls",
+    [
+        (NETWORK_MODE_NONE, None, False),
+        (NETWORK_MODE_HOST, None, False),
+        (NETWORK_MODE_HOST, "/cache/egress-dns/task_attempt_0/resolv.conf", False),
+        ("bridge", None, True),
+        (EGRESS_NETWORK, EGRESS_RESOLV_CONF, False),
+    ],
+)
+def test_create_container_network_flags(monkeypatch, tmp_path, runtime, network_mode, resolv_conf, expect_sysctls):
+    """The container joins the configured network and resolver; only a plain bridge gets sysctl tuning."""
+    commands: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+        stdout = "container-id\n" if cmd[:2] == ["docker", "create"] else ""
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
+
+    workdir = tmp_path / "task-workdir"
+    workdir.mkdir()
+    config = ContainerConfig(
+        image="iris-task:latest",
+        entrypoint=job_pb2.RuntimeEntrypoint(run_command=job_pb2.CommandEntrypoint(argv=["true"])),
+        env={},
+        mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
+        network_mode=network_mode,
+        resolv_conf=Path(resolv_conf) if resolv_conf else None,
+        workdir_host_path=workdir,
+    )
+
+    runtime.create_container(config).run()
+
+    create_command = next(command for command in commands if command[:2] == ["docker", "create"])
+    assert create_command[create_command.index("--network") + 1] == network_mode
+    assert ("--sysctl" in create_command) == expect_sysctls
+    resolv_mounts = [arg for arg in create_command if arg.endswith(":/etc/resolv.conf:ro")]
+    assert resolv_mounts == ([f"{resolv_conf}:/etc/resolv.conf:ro"] if resolv_conf else [])
+
+
 def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
     """stage_bundle extracts bundle and writes workdir files."""
     calls: list = []
@@ -194,12 +239,67 @@ def test_security_flags_docker_access_mounts_socket():
     assert "--cap-drop" in flags
 
 
-def test_security_flags_gvisor_uses_runsc_runtime_and_default_caps():
-    """gVisor selects the runsc runtime and keeps docker's default caps (no cap-drop)."""
-    flags = _security_flags(job_pb2.CONTAINER_PROFILE_GVISOR, is_tpu_run=False)
+@pytest.mark.parametrize("profile", [job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX])
+def test_security_flags_gvisor_profiles_use_runsc_runtime_and_default_caps(profile):
+    flags = _security_flags(profile, is_tpu_run=False)
     assert flags == ["--runtime", "runsc"]
     # in-guest root needs the default cap set, so the container is NOT cap-dropped
     # or privileged — gVisor provides the host isolation instead.
     assert "--cap-drop" not in flags
     assert "--privileged" not in flags
     assert "no-new-privileges" not in flags
+
+
+@pytest.mark.parametrize("legacy_container", [False, True])
+def test_docker_discovery_restores_submitted_termination_grace(monkeypatch, runtime, tmp_path, legacy_container):
+    labels = {}
+
+    def docker(cmd, **kwargs):
+        if cmd[:2] == ["docker", "create"]:
+            for index, argument in enumerate(cmd[:-1]):
+                if argument == "--label":
+                    key, value = cmd[index + 1].split("=", 1)
+                    labels[key] = value
+            stdout = "container-id\n"
+        elif cmd[:2] == ["docker", "ps"]:
+            stdout = "container-id\n"
+        elif cmd[:2] == ["docker", "inspect"]:
+            stdout = json.dumps(
+                [
+                    {
+                        "Id": "container-id",
+                        "Config": {"Labels": labels},
+                        "State": {"Running": True},
+                        "Mounts": [{"Destination": "/app", "Source": str(tmp_path)}],
+                    }
+                ]
+            )
+        else:
+            stdout = ""
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", docker)
+    runtime.create_container(
+        ContainerConfig(
+            image="iris-task:latest",
+            entrypoint=job_pb2.RuntimeEntrypoint(run_command=job_pb2.CommandEntrypoint(argv=["train"])),
+            env={},
+            task_id="/user/checkpoint/0",
+            attempt_id=2,
+            attempt_uid="attempt-2",
+            termination_grace=Duration.from_ms(60123),
+            mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
+            workdir_host_path=tmp_path,
+        )
+    ).run()
+
+    if legacy_container:
+        labels.pop("iris.termination_grace_ms")
+
+    discovered = runtime.discover_containers()
+
+    assert len(discovered) == 1
+    assert discovered[0].task_id == "/user/checkpoint/0"
+    assert discovered[0].attempt_id == 2
+    expected = Duration.from_seconds(10) if legacy_container else Duration.from_ms(60123)
+    assert discovered[0].termination_grace == expected

@@ -56,7 +56,7 @@ A hand-rolled instance of exactly the paved path — build on it, don't greenfie
 
 ### Docs surface
 
-- `mkdocs.yml` nav is the source of truth. Reports live under **Experiments** → `reports/index.md` (entries are GitHub-issue + WandB + Data-Browser links, never hosted HTML).
+- `mkdocs.yml` nav is the source of truth. Reports live under **Experiments** → `reports/index.md` (entries link to GitHub issues and WandB; the Data Browser was retired in [#8624](https://github.com/marin-community/marin/pull/8624)).
 - Natural home for a "how to publish an analysis page" doc: `docs/tutorials/` next to `storage-bucket.md`. Discoverability: link from `docs/reports/index.md`.
 
 ## What surprised me / correction

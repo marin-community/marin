@@ -13,7 +13,7 @@ import jax.numpy as jnp
 import jmp
 import numpy as np
 import optax
-from iris.runtime.jax_init import initialize_jax
+from iris.jax.init import initialize_jax
 from jax.experimental import multihost_utils
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P

@@ -1069,14 +1069,15 @@ class ScalingGroup:
     def matches_constraints(self, constraints: Sequence[Constraint]) -> bool:
         """Check if this group satisfies the given constraints.
 
-        Only evaluates routing constraints (device-type, device-variant,
-        preemptible, region, zone). Non-routing constraints (tpu-name, etc.)
-        and unknown constraints are scheduler-only and skipped here. CPU
-        device-type constraints are also skipped since CPU jobs match any group.
+        Only evaluates required routing constraints (device-type, device-variant,
+        preemptible, region, zone). Preferred constraints rank groups rather than
+        filter them. Non-routing constraints (tpu-name, etc.) and unknown
+        constraints are scheduler-only and skipped here. CPU device-type
+        constraints are also skipped since CPU jobs match any group.
         """
         attrs = self.to_attributes()
         for c in constraints:
-            if is_cpu_device_type_constraint(c):
+            if c.is_soft or is_cpu_device_type_constraint(c):
                 continue
             desc = CONSTRAINT_REGISTRY.get(c.key)
             if desc is None or not desc.routing:

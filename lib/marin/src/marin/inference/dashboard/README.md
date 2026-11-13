@@ -10,13 +10,27 @@ bundled workspace and the PyPI `marin-core` wheel.
 ```bash
 npm install
 npm run build          # rebuild ../serve_dashboard.html (commit the result)
-npm run build:check    # vue-tsc, then build
+npm run build:check    # vue-tsc, tests, then build
 npm run dev            # local dev server (relative /v1, /info, /health fetches
                        # need a Marin serve dashboard server behind it)
 ```
 
 After editing anything under `src/`, rerun `npm run build` and commit the
 regenerated artifact alongside the source change.
+
+## Compare models
+
+Open **Compare** from a Marin serve dashboard, then paste the second model's
+dashboard URL. Both URLs must have the same browser origin, such as two Iris
+capability URLs on one controller. The shared composer sends each prompt to
+both endpoints. Each model receives its own prior messages on later turns.
+For any completed turn, select **Left is better**, **Right is better**, **Tie**,
+or **Both bad**. Click the selected choice again to clear it. The latest paired
+transcripts and selections are stored in the same browser's local storage as
+chat history. **New comparison** clears them. The second endpoint URL is not
+stored because its capability token grants access to that server; reconnect it
+after reloading the page to continue the saved comparison. No selection is
+sent to a server.
 
 ## Chat template controls
 
@@ -34,11 +48,62 @@ template arguments. Functions entered in **Python tools** are converted to the
 standard OpenAI `tools` request field so the served model's active template
 formats them.
 
+When a reply reaches **Max tokens**, Chat warns that it may be incomplete. This
+applies whether the model stopped during thinking or after starting an answer.
+Increase **Max tokens** and retry the prompt.
+
 Enable **Raw chat** above the Chat composer to replace the rendered messages
 with one plain-text transcript of the entire chat. The transcript includes the
 system and user messages, unparsed assistant `content` and reasoning fields,
 structured tool calls, tool results, and errors. The OpenAI-compatible response
 does not include numeric token IDs, so the dashboard cannot display those.
+
+Enable **vLLM debug** beside Raw chat to record request stats on each assistant
+reply. Open **Request stats** below a reply to see server-reported time to first
+token (TTFT), queue time, generation time, mean inter-token latency (the average
+gap between generated tokens), output tokens per second, and prompt/output token
+counts. The checkbox is off by default. It works with streaming and buffered
+chat responses. The dashboard requests usage at the end of a streaming chat
+response only while the checkbox is enabled. Stats are saved with the browser's
+conversation history but are excluded from Raw chat and shared-chat links.
+
+Start the serving process with `--vllm-arg=--enable-per-request-metrics` to
+receive timings. The foldout explains when the server does not return them; token
+counts still appear when the response includes usage. A single-token response
+can have no mean inter-token latency.
+
+## Rendered output and shared chats
+
+Assistant messages render Markdown. Unfenced HTML and XML from the model are
+displayed as literal text instead of DOM elements. The Markdown parser places a
+raw markup region in a code block when it classifies the region as a block;
+tags embedded in prose remain inline. This preserves custom tags such as
+`<ticket_analysis>` and prevents model output from adding active HTML to the
+dashboard.
+
+Choose **Share chat** to store a snapshot in the dashboard process and copy a
+link whose URL fragment contains its 16-character ID. The link length does not
+grow with the transcript. The snapshot includes the title, model name, user and
+assistant message text, and assistant errors. It excludes reasoning, tool calls,
+tool results, the system prompt, custom template instructions, Python tool
+source, shell workspace, and unparsed raw protocol fields. The share operation
+does not redact excluded data that was copied into included message text or an
+error.
+
+The UTF-8 JSON request body for each snapshot is limited to 512 KiB. An
+oversized snapshot is rejected, and the share button reports **Copy failed**.
+The dashboard process retains the newest 128 snapshots in memory. A snapshot is
+unavailable after it is evicted or the serving process restarts. Opening a valid
+link fetches the snapshot from the same dashboard process, saves it in that
+browser's conversation history, and removes the ID fragment from the address
+bar. A missing or invalid ID opens an empty chat and displays an import error.
+
+The snapshot ID is not a credential. Retrieval requires the dashboard URL that
+contains the Iris capability token. That token authorizes the routes for one
+`marin-serve iris` serving endpoint, including inference, tool, and shared-chat
+requests. The command that mints the URL prints its expiration time. Share chat
+links only with trusted users. The share operation grants the same access as the
+current dashboard URL; it does not narrow or revoke that access.
 
 ## Custom Python tools
 
@@ -78,17 +143,33 @@ result to the next request as structured `tool_calls` and `role: "tool"`
 messages. The same template then renders the result in its trained format.
 The server derives schemas from the function syntax without executing the
 source. Pydantic validates arguments before each call and the return value
-afterward. Each call runs in a fresh ShellSim environment that cannot access
-the host filesystem, processes, network, environment variables, or clock. The
-simulation is limited to 10 million CPU ticks, 64 MiB of memory, 4 MiB of disk,
-and 1 MiB of output. An outer worker also enforces a 10-second wall timeout,
-and source is limited to 64 KiB. ShellSim implements a source-compatible subset
-of Python rather than full CPython, so unsupported modules and language features
-fail the tool call.
+afterward. Calls run in isolated ShellSim environments with CPython and NumPy,
+prepared on the first Python-tool invocation or shell command. Guest code has no
+ambient host filesystem, process, network, environment or clock access.
 
-One model response counts as one round, including a response with multiple
-calls. The UI executes calls from the eighth round, stops before another model
-request, and displays a limit error.
+If a call returns `503` with `Dashboard tool runtime preparation failed`, inspect
+the serving task's logs for the underlying package download or cache error.
+ShellSim 0.1.39 uses
+`https://public.oa.dev/shellsim/ports/catalog.json`; 0.1.38 uses
+`shellsim.rjp.io`, which can return HTTP 502. Relaunch the serving job with its
+original `uv run marin-serve iris ...` command from an updated checkout to use
+the current lockfile and catalog. A running dashboard keeps its catalog
+selection for the process lifetime. Transient preparation failures are retried
+on the next tool call.
+
+Within one user turn, each model response that contains one or more calls counts
+as one tool round. **Max tool rounds** in **More settings** controls the number
+of rounds in that turn. The default value, `0`, allows unlimited rounds. For a
+positive value, the UI executes calls from the final allowed round, stops before
+another model request, and displays a limit error.
+
+The UI also stops before executing the third identical tool call in a row. A
+call is identical when its function name and arguments match; object key order
+does not affect the comparison. Multiple calls in one response are checked in
+execution order. A call with another function name or different arguments
+resets the repetition count. The count resets at the start of each user turn.
+Calls that return tool errors still count because the UI records the call before
+execution.
 
 ## ShellSim agent workspaces
 
@@ -130,11 +211,30 @@ limited to 32 commits and approximately 4 MiB of text changes; older commits
 are dropped first when necessary. Binary files and common generated directories
 such as `node_modules`, `.venv`, `target`, and `__pycache__` are skipped. A
 conversation may replay at most 32 commands totaling 128 KiB; each command is
-limited to 16 KiB. Each simulation is limited to 50 million CPU ticks, 64 MiB
-of memory, 16 MiB of disk, and 2 MiB of output, with the same 10-second outer
+limited to 16 KiB. Each simulation has 4 billion fuel units, 1 GiB memory,
+512 MiB disk and 2 MiB output, with the same 10-second outer
 worker timeout used for custom Python tools.
 
 After the endpoint becomes ready, `marin-serve iris` prints a capability URL.
 Possession of that URL authorizes inference and simulated Python tool calls.
-It also authorizes ShellSim commands and bounded public GitHub clones. Share
-the URL only with trusted users and treat it as a credential.
+It also authorizes ShellSim commands, bounded public GitHub clones, and, when
+enabled, web searches. Share the URL only with trusted users and treat it as a
+credential.
+
+## Web search
+
+The **Web search** checkbox above the Chat composer adds a `web_search` tool,
+backed by Parallel's search API, to the request's `tools` field. It is shown
+only when the serving job holds the Iris secret `PARALLEL_API_KEY`. The
+dashboard server adds the key to each call, so the browser never receives it.
+Each search is billed to the account that owns the key.
+
+```bash
+uv run marin-serve iris MODEL --cluster marin --secret PARALLEL_API_KEY env:PARALLEL_API_KEY
+```
+
+A custom launcher that calls `build_dashboard_app` directly must submit the same
+secret and pass `web_search=parallel_web_search_from_secret()` from
+`marin.inference.web_search`. In brokered mode, the model worker jobs do not
+receive the key; in direct mode, the model server shares the dashboard's task
+and can read it.

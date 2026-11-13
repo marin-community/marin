@@ -23,22 +23,13 @@ it is correct, and that you can explain why it matters.
 
 ## Setup
 
-1. Clone the repository
-2. Create and activate a virtual environment
-3. Install dependencies
-4. Set up the Git hook that runs `infra/pre-commit.py`
+Complete the [installation guide](../tutorials/installation.md), then install
+the development dependencies and the Git hook that runs `infra/pre-commit.py`:
 
 ```bash
-git clone https://github.com/marin-community/marin.git
-cd marin
-uv venv --python 3.12
-source .venv/bin/activate
 uv sync --package marin-core --group dev
 make setup_pre_commit
 ```
-
-Alternatively, you can install all the core dependencies and build the `marin-core`
-package with `make init`.
 
 ### Linting
 
@@ -60,10 +51,11 @@ live-cluster, Docker, and manual markers by default. Do not pass `-m 'not slow'`
 `-m` replaces the whole default expression, so it re-selects the cluster and
 Docker tests it looks like it is narrowing.
 
-The root pytest configuration loads `marin.pytest_timeout_guard`. Keep that package
-importable in any selected test environment. The guard dumps thread state and starts a
-delayed hard-kill timer when a signal-based timeout cannot stop a test; an import failure
-is a test-environment error, not a product-test failure.
+The root and standalone Levanter pytest configurations load
+`infra.ci.pytest_timeout_guard` from the checkout through their configured Python
+paths. The guard dumps thread state and starts a delayed hard-kill timer when a
+signal-based timeout cannot stop a test; an import failure is a test-environment
+error, not a product-test failure.
 
 ### Opening a pull request
 
@@ -73,8 +65,8 @@ Before opening a pull request:
 2. Run `uv run --no-project infra/ci/run_tests.py`.
 3. If your change adds, removes, renames, or rewires docs pages or docs-owned links, run `uv run python infra/check_docs_source_links.py`.
 4. If your change is docs-heavy, run `uv run mkdocs build --strict`.
-5. If your change adds or rewrites substantial prose, do a final prose-only review using `./.agents/skills/writing-style/SKILL.md`. Remove generic significance framing, stock AI-writing templates, and polished filler that does not add information.
-6. Follow `./.agents/skills/writing-style/pull-requests.md` for the PR title and body. The body becomes the squash-merge commit message: lead with what changes, then why, and retain the evidence and caveats a future reader needs.
+5. If your change adds or rewrites substantial prose, do a final prose-only review using [the writing guide](writing-style/index.md). Remove generic significance framing, stock AI-writing templates, and polished filler that does not add information.
+6. Follow [the PR writing guide](writing-style/pull-requests.md) for the PR title and body. The body becomes the squash-merge commit message: lead with what changes, then why, and retain the evidence and caveats a future reader needs.
 7. If the work came from an issue, end the PR body with `Fixes #NNNN` or `Part of #NNNN`.
 8. After pushing, verify the relevant GitHub CI checks pass before considering the PR ready for review.
 

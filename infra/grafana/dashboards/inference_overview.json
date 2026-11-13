@@ -236,7 +236,8 @@
         "y": 8,
         "w": 24,
         "h": 8
-      }
+      },
+      "maxDataPoints": 360
     },
     {
       "type": "timeseries",
@@ -339,7 +340,8 @@
         "y": 16,
         "w": 24,
         "h": 7
-      }
+      },
+      "maxDataPoints": 360
     },
     {
       "panelRef": "inference_tokens",
@@ -450,7 +452,8 @@
         "y": 23,
         "w": 12,
         "h": 7
-      }
+      },
+      "maxDataPoints": 360
     },
     {
       "panelRef": "inference_requests",
@@ -572,7 +575,8 @@
         "y": 30,
         "w": 6,
         "h": 7
-      }
+      },
+      "maxDataPoints": 360
     },
     {
       "panelRef": "inference_tpot",

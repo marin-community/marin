@@ -79,5 +79,6 @@
       ]
     }
   ],
-  "timeFrom": "10m"
+  "timeFrom": "10m",
+  "maxDataPoints": 100
 }

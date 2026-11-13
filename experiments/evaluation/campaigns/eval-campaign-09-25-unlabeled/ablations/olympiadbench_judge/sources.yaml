@@ -1,0 +1,65 @@
+# Frozen from the 2026-10-09 campaign tracker. These are the actual scored trace archives.
+results:
+  - model: open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02
+    old_score: 0.273
+    source: s3://marin-us-east-02a/marin/evals/20261003-113944-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-olympiadbench-ccf4/results
+  - model: open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom
+    old_score: 0.160
+    source: s3://marin-us-east-02a/marin/evals/20261003-150503-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom-olympiadbench-9fed/results
+  - model: Qwen/Qwen3.6-35B-A3B
+    old_score: 0.333
+    source: s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-olympiadbench-c938/results
+  - model: Qwen/Qwen3-Coder-30B-A3B-Instruct
+    old_score: 0.427
+    source: s3://marin-us-east-02a/marin/evals/20260927-132258-Qwen-Qwen3-Coder-30B-A3B-Instruct-olympiadbench-a1e6/results
+  - model: Qwen/Qwen3-Next-80B-A3B-Instruct
+    old_score: 0.543
+    source: s3://marin-us-east-02a/marin/evals/20260927-132440-Qwen-Qwen3-Next-80B-A3B-Instruct-olympiadbench-27ba/results
+  - model: inclusionAI/Ling-lite-1.5
+    old_score: 0.343
+    source: s3://marin-us-east-02a/marin/evals/20260927-132622-inclusionAI-Ling-lite-1.5-olympiadbench-ea92/results
+  - model: google/gemma-4-26B-A4B-it
+    old_score: 0.653
+    source: s3://marin-us-east-02a/marin/evals/20260927-132655-google-gemma-4-26B-A4B-it-olympiadbench-9492/results
+  - model: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
+    old_score: 0.173
+    source: s3://marin-us-east-02a/marin/evals/20260927-142008-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-olympiadbench-0aeb/results
+  - model: openai/gpt-oss-20b
+    old_score: 0.527
+    source: s3://marin-us-east-02a/marin/evals/20260927-182339-openai-gpt-oss-20b-olympiadbench-e90e/results
+  - model: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16
+    old_score: 0.357
+    source: s3://marin-us-east-02a/marin/evals/20260927-210818-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-olympiadbench-83ce/results
+  - model: moonshotai/Kimi-Linear-48B-A3B-Instruct
+    old_score: 0.293
+    source: s3://marin-us-east-02a/marin/evals/20260928-012306-moonshotai-Kimi-Linear-48B-A3B-Instruct-olympiadbench-8d48/results
+  - model: arcee-ai/Trinity-Mini
+    old_score: 0.157
+    source: s3://marin-us-east-02a/marin/evals/20260928-072724-arcee-ai-Trinity-Mini-olympiadbench-74cb/results
+  - model: open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92
+    old_score: 0.427
+    source: s3://marin-us-east-02a/marin/evals/20260927-131730-open-athena-Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92-olympiadbench-6144/results
+  - model: open-athena/Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38
+    old_score: 0.350
+    source: s3://marin-us-east-02a/marin/evals/20260927-131658-open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38-olympiadbench-d60a/results
+  - model: open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21
+    old_score: 0.193
+    source: s3://marin-us-east-02a/marin/evals/20260927-131914-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-olympiadbench-0955/results
+  - model: laion/snowball-67b-a2b-relay-sft-allkimi-step1203
+    old_score: 0.383
+    source: s3://marin-us-east-02a/marin/evals/20261001-090850-laion-snowball-67b-a2b-relay-sft-allkimi-step1203-olympiadbench-d703/results
+  - model: laion/snowball-67b-a2b-relay-sft-acont-step999
+    old_score: 0.393
+    source: s3://marin-us-east-02a/marin/evals/20261001-094747-laion-snowball-67b-a2b-relay-sft-acont-step999-olympiadbench-dd48/results
+  - model: IFM/K2-Horizon-MoVA-36B-A4B
+    old_score: 0.363
+    source: s3://marin-us-east-02a/marin/evals/20261006-112031-K2-Horizon-campaign-olympiadbench-991c/results
+  - model: zai-org/GLM-4.7-Flash
+    old_score: 0.030
+    source: s3://marin-us-east-02a/marin/evals/20261003-204333-zai-org-GLM-4.7-Flash-olympiadbench-212e/results
+  - model: Aleph-Alpha/Kolibri-1
+    old_score: 0.207
+    source: s3://marin-us-east-02a/marin/evals/20261003-210313-Aleph-Alpha-Kolibri-1-olympiadbench-d6e8/results
+  - model: open-athena/Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04
+    old_score: 0.393
+    source: s3://marin-us-east-02a/marin/evals/20261004-165735-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04-olympiadbench-acd7/results

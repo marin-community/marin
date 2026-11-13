@@ -25,7 +25,6 @@ from zephyr.readers import load_parquet
 from experiments.datakit.embeddings.luxical import pipeline as luxical_pipeline
 from experiments.datakit.embeddings.luxical.pipeline import (
     _load_records_bounded,
-    rows_per_chunk,
     sample_document,
 )
 
@@ -51,29 +50,6 @@ def test_truncation_never_exceeds_the_cap():
 def test_truncation_bounds_a_pathological_document():
     """The case that defeats every batch-level bound: a multi-MB single document."""
     assert len(sample_document("q" * 20_000_000, 32 * 1024)) == 32 * 1024
-
-
-# ---- chunk sizing ------------------------------------------------------------
-
-
-def test_rows_per_chunk_shrinks_as_rows_grow():
-    """A megabyte-document source must get far fewer rows per chunk than a small one."""
-    target = 64 * 1024 * 1024
-    small = rows_per_chunk(num_rows=10_000, nbytes=10_000 * 2_000, target_bytes=target)
-    large = rows_per_chunk(num_rows=10_000, nbytes=10_000 * 5_000_000, target_bytes=target)
-    assert large < small
-    assert large >= 1, "never zero: a single oversized row must still be materializable"
-
-
-def test_rows_per_chunk_stays_within_the_byte_target():
-    target = 1_000_000
-    avg = 250_000
-    n = rows_per_chunk(num_rows=100, nbytes=100 * avg, target_bytes=target)
-    assert n * avg <= target
-
-
-def test_rows_per_chunk_handles_an_empty_batch():
-    assert rows_per_chunk(num_rows=0, nbytes=0, target_bytes=1_000) == 1
 
 
 # ---- bounded reader ----------------------------------------------------------
@@ -126,7 +102,7 @@ def test_reader_materializes_a_row_group_in_several_bounded_pieces(tmp_path, mon
     batch = next(iter(pq.ParquetFile(path).iter_batches(batch_size=40)))
     wrapper = _CountingBatch(batch)
     monkeypatch.setattr(luxical_pipeline, "load_parquet_batch", lambda _source: iter([wrapper]))
-    monkeypatch.setattr(luxical_pipeline, "_READ_CHUNK_TARGET_BYTES", 20_000)
+    monkeypatch.setattr(luxical_pipeline, "READ_CHUNK_TARGET_BYTES", 20_000)
 
     records = list(_load_records_bounded(path, doc_sample_chars=10_000_000))
 

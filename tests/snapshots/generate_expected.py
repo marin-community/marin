@@ -6,12 +6,9 @@ Usage:
 
 import json
 import os
-import re
 
-from bs4 import BeautifulSoup
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
-from marin.schemas.web.selectors import ARXIV_BLACKLISTED_SELECTORS, WIKI_BLACKLISTED_SELECTORS
-from marin.transform.ar5iv.transform_ar5iv import clean_html
+from marin.schemas.web.selectors import WIKI_BLACKLISTED_SELECTORS
 from marin.transform.stackexchange.transform_stackexchange import prepare_md_template
 from marin.transform.wikipedia.transform_wikipedia import clean_wiki_html
 from marin.web.convert import convert_page
@@ -40,31 +37,6 @@ def transform_wiki(html: str) -> str:
         ),
     )
     return output["content"]
-
-
-def transform_ar5iv(html: str) -> str:
-    """Transform ar5iv HTML to markdown."""
-    bs4_html = BeautifulSoup(html, "html.parser")
-    html = str(bs4_html)
-    filtered_html = clean_html(html, remove_reference_section=True)
-
-    output = convert_page(
-        filtered_html,
-        config=ResiliparseConfig(
-            links=False,
-            prepend_title=True,
-            skip_elements=ARXIV_BLACKLISTED_SELECTORS,
-            markdownify_config=HtmlToMarkdownConfig(
-                include_images=False,
-                include_links=False,
-            ),
-        ),
-    )
-
-    content = output["content"]
-    # Remove citation references
-    content = re.sub(r"\s?\\\[(?:\d+(?:,\s*\d+)*)\\\]", "", content)
-    return content
 
 
 def transform_stackexchange(json_str: str) -> str:
@@ -108,7 +80,6 @@ def transform_dclm_hq(html: str) -> str:
 DATASETS = {
     "web/resiliparse": (".html", transform_web),
     "wiki": (".html", transform_wiki),
-    "ar5iv": (".html", transform_ar5iv),
     "stackexchange": (".json", transform_stackexchange),
     "dclm_hq": (".html", transform_dclm_hq),
 }

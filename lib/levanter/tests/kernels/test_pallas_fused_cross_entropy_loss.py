@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
+import threading
 import warnings
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import cast
 
 import jax
@@ -16,6 +19,7 @@ from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import tuned_block_sizes
 from levanter.kernels.pallas.fused_cross_entropy_loss import xla as fused_xla
 from levanter.kernels.pallas.fused_cross_entropy_loss.config import BlockSizes
+from levanter.kernels.pallas.fused_cross_entropy_loss.grad_in_forward import linear_softmax_cross_entropy_weighted_sum
 from levanter.kernels.pallas.fused_cross_entropy_loss.reference import (
     linear_softmax_cross_entropy_loss_reference,
     linear_softmax_cross_entropy_loss_streaming,
@@ -150,6 +154,53 @@ def test_fused_cross_entropy_grad_matches_reference():
     assert jnp.allclose(gw_api, gw_ref, atol=grad_tol, rtol=grad_tol)
 
 
+# 6 rows: three full blocks of 2, or two blocks of 4 with two zero-weight padding rows.
+@pytest.mark.parametrize("token_block_size", [2, 4])
+def test_weighted_sum_grad_in_forward_matches_reference(token_block_size):
+    x, w, y = _make_toy_inputs()
+    x, y = x.reshape(6, 4), y.reshape(6)
+    weight = jnp.array([1.0, 0.0, 0.5, 2.0, 1.0, 0.0], dtype=jnp.float32)
+    logsumexp_weight = 0.2
+
+    def weighted_sum(x, w, weight):
+        return linear_softmax_cross_entropy_weighted_sum(
+            x, y, w, weight, logsumexp_weight=logsumexp_weight, token_block_size=token_block_size
+        )
+
+    def reference(x, w, weight):
+        loss, lse = linear_softmax_cross_entropy_loss_reference(x, y, w)
+        return jnp.sum(weight * (loss + logsumexp_weight * lse**2))
+
+    value, grads = jax.value_and_grad(weighted_sum, argnums=(0, 1, 2))(x, w, weight)
+    ref_value, ref_grads = jax.value_and_grad(reference, argnums=(0, 1, 2))(x, w, weight)
+
+    tol = 3e-5 if jax.default_backend() == "tpu" else 1e-5
+    # The undifferentiated call takes the loss-only primal; value_and_grad takes the gradient forward.
+    np.testing.assert_allclose(weighted_sum(x, w, weight), ref_value, atol=tol, rtol=tol)
+    np.testing.assert_allclose(value, ref_value, atol=tol, rtol=tol)
+    for actual, expected in zip(grads, ref_grads, strict=True):
+        np.testing.assert_allclose(actual, expected, atol=tol, rtol=tol)
+
+
+def test_weighted_sum_grad_in_forward_without_z_loss_stays_finite_for_huge_logits():
+    # lse**2 overflows float32 at these logits; a disabled z-loss must not turn 0 * inf into NaN.
+    x = jnp.ones((1, 1), dtype=jnp.float32)
+    w = jnp.array([[2e19, 0.0]], dtype=jnp.float32)
+    y = jnp.array([1], dtype=jnp.int32)
+    weight = jnp.ones((1,), dtype=jnp.float32)
+
+    def weighted_sum(x, w):
+        return linear_softmax_cross_entropy_weighted_sum(x, y, w, weight, logsumexp_weight=None, token_block_size=1)
+
+    value, grads = jax.value_and_grad(weighted_sum, argnums=(0, 1))(x, w)
+    ref_loss, _ = linear_softmax_cross_entropy_loss_reference(x, y, w)
+
+    np.testing.assert_allclose(weighted_sum(x, w), ref_loss[0], rtol=1e-6)
+    np.testing.assert_allclose(value, ref_loss[0], rtol=1e-6)
+    for grad in grads:
+        assert np.all(np.isfinite(np.asarray(grad)))
+
+
 def test_bwd_delta_supertile_soft_cap_scales_label_term():
     x = jnp.array([[4.0, -3.0], [2.5, 3.5]], dtype=jnp.float32)
     w_supertile = jnp.array(
@@ -241,6 +292,7 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
     assert jnp.allclose(gw_custom, gw_stream, atol=1e-5, rtol=1e-5)
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize("activation_scale", [1.0, 30.0, 1000.0])
 def test_xla_streaming_custom_vjp_grad_matches_reference_in_bfloat16(activation_scale):
     """Gradient parity for bfloat16 activations and a bfloat16 head, across logit magnitudes.
@@ -779,6 +831,7 @@ def test_default_implementation_on_cpu_skips_expected_tpu_warning():
     assert not any("requires TPU backend" in str(warning.message) for warning in caught)
 
 
+@pytest.mark.tpu
 def test_fused_cross_entropy_default_matches_reference():
     backend = jax.default_backend()
     if backend == "tpu":
@@ -825,6 +878,7 @@ def test_fused_cross_entropy_default_matches_reference():
     assert jnp.allclose(loss, loss_ref, atol=1e-4, rtol=1e-4)
 
 
+@pytest.mark.tpu
 def test_fused_cross_entropy_default_grad_matches_reference():
     backend = jax.default_backend()
     if backend == "tpu":
@@ -878,6 +932,7 @@ def test_fused_cross_entropy_default_grad_matches_reference():
     assert jnp.allclose(gw_default, gw_ref, atol=1e-4, rtol=1e-4)
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize(
     ("implementation", "required_backend", "vocab_size", "block_sizes"),
     [
@@ -1322,7 +1377,7 @@ def test_benchmark_candidate_handles_real_shard_map_tracers():
     assert float(score) >= 0.0
 
 
-def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pytest.MonkeyPatch):
+def test_pallas_tpu_autotune_selects_first_viable_for_real_shard_map_tracers(monkeypatch: pytest.MonkeyPatch):
     partition_spec = jax.sharding.PartitionSpec
     mesh = jax.sharding.Mesh(
         np.array(jax.devices()[:1]),
@@ -1343,7 +1398,7 @@ def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pyte
     )
     inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
     seen_block_sizes: list[fused_api.BlockSizes | None] = []
-    benchmarked_candidates: list[fused_api.BlockSizes] = []
+    compiled_candidates: list[fused_api.BlockSizes] = []
     faster = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)
     slower = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=512)
 
@@ -1365,12 +1420,14 @@ def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pyte
         lambda impl_name, inferred_block_sizes, **kwargs: [inferred_block_sizes, slower, faster],
     )
 
-    def fake_benchmark(**kwargs):
+    def fake_compile(**kwargs):
         candidate = kwargs["candidate"]
-        benchmarked_candidates.append(candidate)
-        return 1.0 if candidate == faster else 2.0
+        compiled_candidates.append(candidate)
+        if candidate == inferred:
+            raise RuntimeError("candidate cannot compile")
+        return lambda *args: args[0]
 
-    monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", fake_benchmark)
+    monkeypatch.setattr(fused_api, "_compile_block_sizes_candidate", fake_compile)
     monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_impl)
     monkeypatch.setattr(
         fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(fused_api.PersistentKvCache.in_memory())
@@ -1397,9 +1454,8 @@ def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pyte
     out = mapped(x, y, w)
     out.block_until_ready()
 
-    assert benchmarked_candidates == [inferred, slower, faster]
-    assert seen_block_sizes[-1] == faster
-    assert faster in seen_block_sizes
+    assert compiled_candidates == [inferred, slower]
+    assert seen_block_sizes[-1] == slower
 
 
 def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypatch: pytest.MonkeyPatch):
@@ -1593,6 +1649,144 @@ def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):
     assert winner_1 == faster
     assert winner_2 == faster
     assert calls["bench"] == 3
+
+
+def test_distributed_fused_ce_autotune_skips_failed_compile_and_chooses_lowest_mean(monkeypatch: pytest.MonkeyPatch):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    labels = jnp.zeros((4,), dtype=jnp.int32)
+    candidates = [BlockSizes(128, 128, v) for v in (128, 256, 512)]
+    rank_timings = ((1.0, 2.0, 0.1), (10.0, 2.0, None))
+    context = threading.local()
+    condition = threading.Condition()
+    exchanged: dict[int, dict[int, object]] = {}
+    executed: dict[int, list[BlockSizes]] = {0: [], 1: []}
+
+    @dataclass(frozen=True)
+    class Device:
+        process_index: int
+
+    mesh = jax.sharding.Mesh(np.array([Device(1), Device(2)], dtype=object), ("data",))
+    sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data"))
+
+    def allgather(value, *, process_ids):
+        assert process_ids == (1, 2)
+        sequence = context.sequence
+        context.sequence += 1
+        with condition:
+            round_values = exchanged.setdefault(sequence, {})
+            round_values[context.rank] = value
+            condition.notify_all()
+            assert condition.wait_for(lambda: len(round_values) == 2, timeout=5)
+            return [round_values[index] for index in range(2)]
+
+    def compile_candidate(*, candidate, **kwargs):
+        del kwargs
+        if rank_timings[context.rank][candidates.index(candidate)] is None:
+            raise RuntimeError("candidate failed on this rank")
+        return candidate
+
+    def run_candidate(candidate, *args):
+        del args
+        executed[context.rank].append(candidate)
+        return rank_timings[context.rank][candidates.index(candidate)]
+
+    def fake_impl(x_value, labels_value, w_value, **kwargs):
+        del labels_value, w_value, kwargs
+        return x_value, x_value
+
+    monkeypatch.setattr(jax, "process_count", lambda: 3)
+    monkeypatch.setattr(jax, "process_index", lambda: context.rank + 1)
+    monkeypatch.setattr(fused_api.autotune_utils, "named_sharding_of", lambda _value: sharding)
+    monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
+    monkeypatch.setattr(fused_api, "_autotune_cache_key", lambda **kwargs: None)
+    monkeypatch.setattr(fused_api, "_candidate_block_sizes", lambda *args, **kwargs: candidates)
+    monkeypatch.setattr(fused_api, "_compile_block_sizes_candidate", compile_candidate)
+    monkeypatch.setattr(fused_api, "_run_block_sizes_candidate", run_candidate)
+    monkeypatch.setattr(fused_api, "multihost_allgather_sync", allgather)
+
+    def run_rank(rank):
+        context.rank = rank
+        context.sequence = 0
+        return fused_api._autotune_block_sizes_on_miss(
+            impl_name="batched_xla",
+            fn=fake_impl,
+            x=x,
+            labels=labels,
+            w=w,
+            inferred=candidates[0],
+            dtype=jnp.float32,
+            logit_soft_cap=None,
+            precision=None,
+            return_argmax=False,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        winners = list(executor.map(run_rank, range(2)))
+
+    assert winners == [candidates[1], candidates[1]]
+    assert executed == {0: candidates[:2], 1: candidates[:2]}
+
+
+@pytest.mark.parametrize("different_setting", ["tuned_match", "autotune_enabled"])
+def test_distributed_fused_ce_rejects_rank_local_selection_before_sweep(
+    monkeypatch: pytest.MonkeyPatch, different_setting: str
+):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    labels = jnp.zeros((4,), dtype=jnp.int32)
+    inferred = BlockSizes(128, 128, 128)
+    faster = BlockSizes(128, 128, 256)
+    context = threading.local()
+    condition = threading.Condition()
+    exchanged: dict[int, object] = {}
+
+    def allgather(value):
+        with condition:
+            exchanged[context.rank] = value
+            condition.notify_all()
+            assert condition.wait_for(lambda: len(exchanged) == 2, timeout=5)
+            return [exchanged[index] for index in range(2)]
+
+    def fake_impl(x_value, labels_value, w_value, *, block_sizes, **kwargs):
+        del labels_value, w_value, kwargs
+        output = jnp.full((x_value.shape[0],), block_sizes.v_block_size, dtype=jnp.float32)
+        return output, jnp.zeros_like(output)
+
+    def infer_for_rank(*args, **kwargs):
+        del args, kwargs
+        return inferred, different_setting == "tuned_match" and context.rank == 0
+
+    monkeypatch.setattr(jax, "process_count", lambda: 2)
+    monkeypatch.setattr(fused_api, "multihost_allgather_sync", allgather)
+    monkeypatch.setattr(fused_api, "infer_block_sizes_with_tuned_match", infer_for_rank)
+    monkeypatch.setattr(
+        fused_api, "_autotune_enabled", lambda: different_setting != "autotune_enabled" or context.rank == 0
+    )
+    sweep_called = []
+
+    def fake_autotune(**kwargs):
+        sweep_called.append(kwargs)
+        return faster
+
+    monkeypatch.setattr(fused_api, "_autotune_block_sizes_on_miss", fake_autotune)
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "batched_xla", fake_impl)
+
+    def run_rank(rank):
+        context.rank = rank
+        try:
+            fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+                x, labels, w, reduction=None, implementation="batched_xla"
+            )
+        except RuntimeError as exc:
+            return exc
+        return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(run_rank, range(2)))
+
+    assert all(isinstance(result, RuntimeError) for result in results)
+    assert not sweep_called
 
 
 def _run_autotune_miss(impl_name: str = "pallas_tpu", *, vocab: int = 16):
@@ -1800,6 +1994,7 @@ def test_shared_autotune_helper_change_invalidates_fused_ce_revision(tmp_path, m
     assert changed != original
 
 
+@pytest.mark.tpu
 def test_fused_cross_entropy_pallas_bwd_matches_reference():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")
@@ -1976,6 +2171,7 @@ def test_infer_block_sizes_tpu_v4_updated_tuning(
     assert block_sizes == expected
 
 
+@pytest.mark.tpu
 def test_infer_block_sizes_tpu_v4_huge_batch_small_h_jits_with_pallas():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")
@@ -2164,6 +2360,7 @@ def test_infer_block_sizes_skips_invalid_tuned_entry(monkeypatch: pytest.MonkeyP
     assert block_sizes == fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024)
 
 
+@pytest.mark.tpu
 def test_fused_cross_entropy_default_non_divisible_vocab_matches_reference():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")
@@ -2206,6 +2403,7 @@ def test_fused_cross_entropy_default_non_divisible_vocab_matches_reference():
     assert jnp.allclose(gw_default, gw_ref, atol=1e-4, rtol=1e-4)
 
 
+@pytest.mark.tpu
 def test_fused_cross_entropy_pallas_non_divisible_vocab_dx_matches_xla():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")
@@ -2248,6 +2446,7 @@ def test_fused_cross_entropy_pallas_non_divisible_vocab_dx_matches_xla():
     assert jnp.allclose(gw_pallas, gw_xla, atol=1e-4, rtol=1e-4)
 
 
+@pytest.mark.tpu
 def test_fused_cross_entropy_pallas_backward_matches_xla():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")
@@ -2290,6 +2489,7 @@ def test_fused_cross_entropy_pallas_backward_matches_xla():
     assert jnp.allclose(gw_pallas, gw_xla, atol=1e-4, rtol=1e-4)
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize("implementation", ["pallas_tpu"])
 def test_fused_cross_entropy_pallas_backward_matches_xla_infer_blocks(implementation: str):
     if jax.default_backend() != "tpu":
@@ -2371,6 +2571,7 @@ def test_xla_fast_backward_leaves_forward_bitwise_identical(logit_soft_cap):
     assert np.array_equal(np.asarray(value_slow), np.asarray(value_fast))
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
 def test_xla_fast_backward_matches_default_backward(dtype):
     x, w, make = _fast_bwd_case(dtype)
@@ -2392,6 +2593,7 @@ def test_xla_fast_backward_batch_tiling_is_equivalent():
     assert jnp.allclose(gw_untiled, gw_tiled, atol=1e-4, rtol=1e-4)
 
 
+@pytest.mark.tpu
 def test_xla_fast_backward_is_no_worse_than_default_against_float32_reference():
     """At the hero loop ratio (many batch blocks per vocab block) the default backward
     accumulates grad_w in the activation dtype; the fast backward must not be worse."""
@@ -2535,6 +2737,7 @@ def test_xla_fast_backward_emits_no_scatter():
     assert "tensor<256x128xf32>, tensor<64x128xf32>" not in text
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize(
     "rows,fast_backward,soft_cap",
     [(17, False, None), (35, False, 1.3), (17, True, None), (35, True, 1.3), (32, False, None)],

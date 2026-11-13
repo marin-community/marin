@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import gc
+import functools
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 import equinox as eqx
@@ -32,8 +32,10 @@ from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_conf
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
+from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
@@ -69,6 +71,8 @@ class TrainLmConfig:
     hf_upload: Optional[str] = None
     hf_save_steps: int = 10000
     hf_save_dtype: Optional[str] = None
+    hf_save_chat_template: Optional[str] = None
+    """Chat template embedded in the HF export's tokenizer instead of the tokenizer's own."""
     hf_generation_eos_token_ids: Optional[list[int]] = None
 
     adapter: AdaptorConfig = field(default_factory=NoAdaptorConfig)
@@ -108,6 +112,27 @@ def _restore_lm_model_from_partial_checkpoint(
     return eqx.combine(checkpointed_trainables, source_model)
 
 
+def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmConfig:
+    """Reapply the requested Snowball runtime settings after an HF config reload.
+
+    HF metadata supplies architecture fields. Keep the requested runtime settings,
+    reference checkpoint, and tokenizer.
+    """
+    if not isinstance(requested, SnowballConfig):
+        return reloaded
+    if not isinstance(reloaded, SnowballConfig):
+        raise ValueError("HF reload changed the Snowball model type")
+    return replace(
+        reloaded,
+        router_dot_fp32=requested.router_dot_fp32,
+        moe_implementation=requested.moe_implementation,
+        moe_capacity_factor=requested.moe_capacity_factor,
+        fp32_activations=requested.fp32_activations,
+        reference_checkpoint=requested.reference_checkpoint,
+        tokenizer=requested.tokenizer,
+    )
+
+
 def _load_lm_model_from_configured_source(
     *,
     config: TrainLmConfig,
@@ -122,20 +147,22 @@ def _load_lm_model_from_configured_source(
         assert converter is not None
         model = converter.load_pretrained(
             config.model.model_type,
-            config=config.model if not config.use_hf_model_config else None,
+            # main already resolved HF architecture and reapplied runtime-only settings.
+            # Passing None here would reload a second time and discard those settings.
+            config=config.model,
             axis_mapping=parameter_axis_mapping,
-            dtype=trainer.mp.compute_dtype,
+            dtype=hf_load_dtype(trainer.mp),
         )
         model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
     elif (
         config.initialize_from_checkpoint_path is not None or config.initialize_model_from_checkpoint_path is not None
     ):
-        # Both build a fresh base model and load only the checkpoint's `model` subtree into it (weights
-        # only, strict). They differ only in how main() drives them, not in how the base is loaded here.
+        # Both load the checkpoint's `model` subtree into an abstract template. They differ
+        # only in how main() uses the loaded weights.
         source = config.initialize_from_checkpoint_path or config.initialize_model_from_checkpoint_path
         checkpoint_path = latest_checkpoint_path(source)
-        model = config.model.build(Vocab, key=model_key)
-        model = load_checkpoint(model, checkpoint_path, subpath="model")
+        model = eqx.filter_eval_shape(config.model.build, Vocab, key=model_key)
+        model = load_checkpoint(model, checkpoint_path, subpath="model", axis_mapping=parameter_axis_mapping)
         model = hax.shard(model, parameter_axis_mapping)
         model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
     else:
@@ -148,6 +175,9 @@ def _load_lm_model_from_configured_source(
 
 
 def main(config: TrainLmConfig):
+    if isinstance(config.model, SnowballConfig) and config.model.router_dot_fp32:
+        if config.trainer.field_dtype_overrides.get("router_bias") != jnp.dtype("float32"):
+            raise ValueError("FP32 router dot requires trainer.field_dtype_overrides to map router_bias to float32")
     tokenizer = config.data.the_tokenizer
 
     # The three weight-init sources are mutually exclusive: HF conversion, native full-state restore, and
@@ -189,7 +219,10 @@ def main(config: TrainLmConfig):
         if config.use_hf_model_config:
             # TODO: log diff of old and new config
             # NB: gross mutability
-            config.model = converter.config_from_hf_config(converter.default_hf_config)
+            config.model = preserve_hf_runtime_settings(
+                converter.config_from_hf_config(converter.default_hf_config),
+                config.model,
+            )
     elif isinstance(config.model, HFCompatConfig):
         converter = config.model.hf_checkpoint_converter()
         converter = converter.replaced(tokenizer=tokenizer)
@@ -264,7 +297,27 @@ def main(config: TrainLmConfig):
         tagged_eval_datasets = config.data.tagged_eval_sets(Pos)
 
         adapter_key = jrandom.fold_in(model_key, ord("a"))
-        if isinstance(config.adapter, NoAdaptorConfig):
+        load_source_model = functools.partial(
+            _load_lm_model_from_configured_source,
+            config=config,
+            converter=converter,
+            Vocab=Vocab,
+            model_key=model_key,
+            adapter_key=adapter_key,
+            parameter_axis_mapping=parameter_axis_mapping,
+            trainer=trainer,
+        )
+        _, resuming = trainer.checkpoint_load_plan()
+        weight_source = config.initialize_from_hf or config.initialize_model_from_checkpoint_path is not None
+        if weight_source and not resuming:
+            logger.info("Initializing trainer state directly from pretrained weights")
+            initial_model = load_source_model()
+            state = trainer.initial_state(
+                training_key,
+                model=initial_model,
+                is_trainable=config.adapter.trainable_filter(initial_model),
+            )
+        elif isinstance(config.adapter, NoAdaptorConfig):
             state = trainer.initial_state(training_key, model_init=lambda: config.model.build(Vocab, key=model_key))
         else:
             initial_model = config.adapter.apply(
@@ -278,64 +331,18 @@ def main(config: TrainLmConfig):
                 is_trainable=config.adapter.trainable_filter(initial_model),
             )
 
-        if int(state.step) == 0 and config.initialize_from_checkpoint_path is not None:
+        if not resuming and config.initialize_from_checkpoint_path is not None:
             checkpoint_path = latest_checkpoint_path(config.initialize_from_checkpoint_path)
             state = load_checkpoint(state, checkpoint_path)
             # reset to step 0, we're just initializing weights here
             state = dataclasses.replace(state, step=jnp.array(0))
 
-        if int(state.step) == 0:
-            # TODO: I don't love that we init the model twice, but it's not a big deal i think?
-            if config.initialize_from_hf:
-                # initialize from an hf pretrained model
-                assert converter is not None
-                logger.info(
-                    "No training checkpoint found. Initializing model from HF checkpoint"
-                    f" '{converter.reference_checkpoint}'"
-                )
-                source = "HF checkpoint"
-            elif config.initialize_model_from_checkpoint_path is not None:
-                # Weights-only native init: the same "load weights, fresh optimizer, step 0" path as
-                # initialize_from_hf, so it goes through the same loader (which also applies any adapter to
-                # the loaded base). The load itself is strict — every model leaf must be present.
-                logger.info(
-                    "No training checkpoint found. Initializing model weights from native checkpoint"
-                    f" '{config.initialize_model_from_checkpoint_path}' (fresh optimizer, step 0)."
-                )
-                source = "native checkpoint"
-            else:
-                source = None
-
-            if source is not None:
-                # this is a bit gross, but we want to free up the memory from the model we just built
-                state = dataclasses.replace(state, model=None)
-                gc.collect()
-                model = _load_lm_model_from_configured_source(
-                    config=config,
-                    converter=converter,
-                    Vocab=Vocab,
-                    model_key=model_key,
-                    adapter_key=adapter_key,
-                    parameter_axis_mapping=parameter_axis_mapping,
-                    trainer=trainer,
-                )
-                state = dataclasses.replace(state, model=model)
-            else:
-                logger.info("No checkpoint found. Starting from scratch.")
-        elif not isinstance(config.adapter, NoAdaptorConfig):
+        if resuming and not isinstance(config.adapter, NoAdaptorConfig):
             logger.info(
                 "Adapter checkpoints only store trainable weights. Reconstructing the base LM model from the "
                 "configured source before overlaying resumed adapter parameters."
             )
-            source_model = _load_lm_model_from_configured_source(
-                config=config,
-                converter=converter,
-                Vocab=Vocab,
-                model_key=model_key,
-                adapter_key=adapter_key,
-                parameter_axis_mapping=parameter_axis_mapping,
-                trainer=trainer,
-            )
+            source_model = load_source_model()
             state = dataclasses.replace(
                 state,
                 model=_restore_lm_model_from_partial_checkpoint(
@@ -366,7 +373,7 @@ def main(config: TrainLmConfig):
                 trainer.device_mesh,
                 compute_axis_mapping,
                 max_eval_examples_per_ds,
-                mp=config.trainer.mp,
+                mp=trainer.mp,
                 checkpoint_path=checkpoint_path,
             )
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
@@ -412,6 +419,7 @@ def main(config: TrainLmConfig):
                 hf_save_steps=config.hf_save_steps,
                 hf_save_dtype=config.hf_save_dtype,
                 generation_config=build_generation_config(tokenizer, config.hf_generation_eos_token_ids),
+                chat_template=config.hf_save_chat_template,
                 peft_save_path=config.peft_save_path,
                 peft_hf_upload=config.peft_hf_upload,
                 merged_hf_save_path=config.merged_hf_save_path,

@@ -14,7 +14,8 @@ from iris.cli.job import (
 )
 from iris.cli.job import run as run_cmd
 from iris.cluster.config import load_config
-from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, availability_key
+from iris.cluster.constraints import ConstraintOp, WellKnownAttribute
+from iris.cluster.types import availability_key
 from iris.rpc import job_pb2
 
 
@@ -30,6 +31,13 @@ def test_load_env_vars_single_key():
     """Test env var with no value (empty string)."""
     result = load_env_vars([["KEY_ONLY"]])
     assert result["KEY_ONLY"] == ""
+
+
+def test_load_env_vars_keeps_ambient_credentials_out_of_submission(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HF_TOKEN", "sentinel-hf-secret")
+    monkeypatch.setenv("WANDB_API_KEY", "sentinel-wandb-secret")
+    assert load_env_vars([["FLAG", "value"]]) == {"FLAG": "value"}
 
 
 def test_load_env_vars_invalid_key():

@@ -28,7 +28,15 @@ from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH, resolve_endpoint_uri
 from iris.cluster.node_agent import SERVICE_NAME
 from iris.cluster.node_agent.cache_reclaim import run_cache_reclaimer
-from iris.cluster.node_agent.metrics import DeviceMetric, NodeMetrics, NodeTarget, publish_node_telemetry
+from iris.cluster.node_agent.metrics import (
+    DeviceMetric,
+    FilesystemSample,
+    NodeMetrics,
+    NodeTarget,
+    publish_node_telemetry,
+)
+from iris.cluster.node_agent.storage_health import run_storage_health
+from iris.cluster.node_agent.uv_cache_recovery import run_uv_cache_recovery
 from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
 from iris.cluster.platforms.k8s.types import (
@@ -47,6 +55,7 @@ from iris.rpc import job_pb2
 logger = logging.getLogger(__name__)
 
 DEFAULT_COLLECTION_INTERVAL = 60.0
+NODE_AGENT_SHUTDOWN_TIMEOUT = 10.0
 # Generous enough that ordinary apiserver latency, including a control plane under
 # load, does not fail a collection cycle; collection runs once per interval, so a
 # slow call delays one sample rather than overlapping the next.
@@ -68,6 +77,8 @@ _DCGM_NAME_VALUE = "dcgm-exporter"
 # CoreWeave bare-metal nodes mount the NVMe RAID here; the RAM-disk root ("/")
 # is the fallback for a cluster laid out differently.
 _PREFERRED_DISK_MOUNTS = ("/mnt/local", "/")
+# Runtime execs need free space on the root filesystem even when the NVMe cache is empty.
+_RUNTIME_FILESYSTEM_MOUNTS = ("/", "/tmp")
 
 # Interfaces whose byte counters are not real host traffic (loopback, CNI
 # plumbing, container veths). Everything else — physical NICs (enp*, eth*),
@@ -363,6 +374,7 @@ class HostSample:
     net_recv_bytes: int
     net_sent_bytes: int
     boot_time_seconds: int | None
+    filesystems: tuple[FilesystemSample, ...]
 
 
 @dataclass(frozen=True)
@@ -517,6 +529,11 @@ def parse_node_exporter(text: str, *, disk_mounts: tuple[str, ...] = _PREFERRED_
         net_recv_bytes=net_recv,
         net_sent_bytes=net_sent,
         boot_time_seconds=boot_time,
+        filesystems=tuple(
+            FilesystemSample(mountpoint=mount, total_bytes=fs_size[mount], available_bytes=fs_avail[mount])
+            for mount in _RUNTIME_FILESYSTEM_MOUNTS
+            if mount in fs_size and mount in fs_avail
+        ),
     )
 
 
@@ -695,6 +712,7 @@ class NodeStatsScraper:
                 metrics.mem_total_bytes = host.mem_total_bytes
                 metrics.disk_used_bytes = host.disk_used_bytes
                 metrics.disk_total_bytes = host.disk_total_bytes
+                metrics.filesystems = host.filesystems
                 metrics.net_recv_bytes = host.net_recv_bytes
                 metrics.net_sent_bytes = host.net_sent_bytes
             if gpu is not None:
@@ -861,25 +879,38 @@ def collect_once(
     telemetry.record_runtime_health()
 
 
-def _collect_telemetry(config: IrisClusterConfig, k8s: CloudK8sService, node_name: str, stop: threading.Event) -> None:
+def _configure_telemetry(
+    config: IrisClusterConfig,
+    k8s: CloudK8sService,
+    node_name: str,
+) -> tuple[str, NodeTarget]:
     log_service_endpoint = _log_service_endpoint(config)
-    endpoint = log_service_endpoint + TELEMETRY_ENDPOINT_PATH
     target = _node_target(k8s, node_name)
+    telemetry.configure(
+        endpoint=log_service_endpoint + TELEMETRY_ENDPOINT_PATH,
+        service=SERVICE_NAME,
+        attributes={
+            "node_name": target.name,
+            "node_uid": target.node_uid,
+            "role": str(telemetry.TelemetryRole.WORKER),
+        },
+    )
+    return log_service_endpoint, target
+
+
+def _collect_telemetry(
+    log_service_endpoint: str,
+    target: NodeTarget,
+    k8s: CloudK8sService,
+    node_name: str,
+    stop: threading.Event,
+) -> None:
     log_client = LogClient.connect(log_service_endpoint)
     try:
         task_stats_collector = TaskStatsCollector(
             k8s,
             node_name,
             log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
-        )
-        telemetry.configure(
-            endpoint=endpoint,
-            service=SERVICE_NAME,
-            attributes={
-                "node_name": target.name,
-                "node_uid": target.node_uid,
-                "role": str(telemetry.TelemetryRole.WORKER),
-            },
         )
         scraper = NodeStatsScraper(k8s)
         while not stop.is_set():
@@ -894,9 +925,30 @@ def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event
     """Run configured node maintenance and telemetry until shutdown."""
     config = load_config(config_path)
     k8s = CloudK8sService(namespace=namespace, timeout=K8S_API_TIMEOUT)
+    telemetry_context = (
+        _configure_telemetry(config, k8s, node_name)
+        if config.finelog.config or LOG_SERVER_ENDPOINT_NAME in config.endpoints
+        else None
+    )
+    storage_health: threading.Thread | None = None
+    if config.kubernetes_provider.node_health is not None and config.kubernetes_provider.node_health.storage is not None:
+        storage_health = threading.Thread(
+            target=run_storage_health,
+            args=(k8s, node_name, config.kubernetes_provider.node_health.storage, stop),
+            name="storage-health",
+            daemon=True,
+        )
+        storage_health.start()
+    cache_dir = Path(config.kubernetes_provider.cache_dir or DEFAULT_TASK_CACHE_DIR)
+    cache_recovery = threading.Thread(
+        target=run_uv_cache_recovery,
+        args=(cache_dir, stop),
+        name="uv-cache-recovery",
+        daemon=True,
+    )
+    cache_recovery.start()
     cache_reclaimer: threading.Thread | None = None
     if config.kubernetes_provider.cache_max_age is not None:
-        cache_dir = Path(config.kubernetes_provider.cache_dir or DEFAULT_TASK_CACHE_DIR)
         cache_reclaimer = threading.Thread(
             target=run_cache_reclaimer,
             args=(cache_dir, config.kubernetes_provider.cache_max_age, stop),
@@ -905,11 +957,15 @@ def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event
         )
         cache_reclaimer.start()
     try:
-        if config.finelog.config or LOG_SERVER_ENDPOINT_NAME in config.endpoints:
-            _collect_telemetry(config, k8s, node_name, stop)
+        if telemetry_context is not None:
+            log_service_endpoint, target = telemetry_context
+            _collect_telemetry(log_service_endpoint, target, k8s, node_name, stop)
         else:
             stop.wait()
     finally:
         stop.set()
+        if storage_health is not None:
+            storage_health.join(timeout=NODE_AGENT_SHUTDOWN_TIMEOUT)
+        cache_recovery.join(timeout=NODE_AGENT_SHUTDOWN_TIMEOUT)
         if cache_reclaimer is not None:
-            cache_reclaimer.join(timeout=10.0)
+            cache_reclaimer.join(timeout=NODE_AGENT_SHUTDOWN_TIMEOUT)

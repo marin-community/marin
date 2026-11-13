@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Three bounded sources shared by the Training run dashboard."""
+"""Bounded metric and execution sources for the Training run dashboard."""
 
 from dashboard_dataset import DashboardDataset, SourceQuery, bounded_bucket_ms, validate_value
 from hero_health import DROP_FRACTION_MAX, ROUTER_BIAS_MAX, ROUTER_ENTROPY_MIN
@@ -81,6 +81,7 @@ def training_overview_dataset(
     start_ms: int,
     end_ms: int,
     requested_bucket_ms: int,
+    view: str | None = None,
 ) -> DashboardDataset:
     """Build bounded Training sources and fixed local projections."""
     validate_value("run", run, max_length=TRAINING_MAX_RUN_LENGTH)
@@ -96,70 +97,46 @@ def training_overview_dataset(
     bucket = f"{start_ms} + (timestamp_ms - {start_ms}) - (timestamp_ms - {start_ms}) % {bucket_ms}"
     attempts_start_ms = max(0, end_ms - TRAINING_MAX_WINDOW_MS)
     metrics_sql = f"""
-WITH metric_rows AS (
-    SELECT {bucket} AS t,
-           COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
-           execution_uid,
-           CAST(NULL AS VARCHAR) AS job_id,
-           name,
-           SUM(value) / NULLIF(COUNT(value), 0) AS value,
-           MIN(value) AS min_value,
-           MAX(value) AS max_value,
-           SUM(value) AS sum_value,
-           COUNT(value) AS sample_count,
-           MAX(step) AS step,
-           MIN(timestamp_ms) AS first_ms,
-           MAX(timestamp_ms) AS last_ms
-    FROM "levanter.metrics"
-    WHERE run_id = {sql_string(run)}
-      AND name IN ({sql_values(_METRIC_NAMES)})
-      AND timestamp_ms >= {start_ms}
-      AND timestamp_ms < {end_ms}
-    GROUP BY 1, 2, 3, 5
-), attempt_rows AS (
-    SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
-           execution_uid, job_id, value, step, timestamp_ms, seq
-    FROM "levanter.metrics"
-    WHERE run_id = {sql_string(run)}
-      AND name = 'phase'
-      AND process_index = 0
-      AND job_id IS NOT NULL
-      AND execution_uid IS NOT NULL
-      AND timestamp_ms >= {attempts_start_ms}
-      AND timestamp_ms < {end_ms}
-), attempts AS (
-    SELECT MAX(timestamp_ms) AS t,
-           origin_cluster,
-           execution_uid,
-           job_id,
-           '__attempt' AS name,
-           MAX(value) AS value,
-           MIN(value) AS min_value,
-           MAX(value) AS max_value,
-           SUM(value) AS sum_value,
-           COUNT(value) AS sample_count,
-           MAX(step) AS step,
-           MIN(timestamp_ms) AS first_ms,
-           MAX(timestamp_ms) AS last_ms
-    FROM attempt_rows
-    GROUP BY 2, 3, 4
-), current_phase AS (
-    SELECT origin_cluster, execution_uid, job_id, value
-    FROM attempt_rows
-    ORDER BY timestamp_ms DESC, seq DESC, origin_cluster, job_id, execution_uid
-    LIMIT 1
-), attempt_output AS (
-    SELECT attempts.t, attempts.origin_cluster, attempts.execution_uid, attempts.job_id, attempts.name,
-           COALESCE(current_phase.value, attempts.value) AS value,
-           attempts.min_value, attempts.max_value, attempts.sum_value, attempts.sample_count,
-           attempts.step, attempts.first_ms, attempts.last_ms
-    FROM attempts
-    LEFT JOIN current_phase USING (origin_cluster, execution_uid, job_id)
-)
-SELECT * FROM metric_rows
-UNION ALL
-SELECT * FROM attempt_output
+SELECT {bucket} AS t,
+       COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+       execution_uid,
+       CAST(NULL AS VARCHAR) AS job_id,
+       name,
+       SUM(value) / NULLIF(COUNT(value), 0) AS value,
+       MIN(value) AS min_value,
+       MAX(value) AS max_value,
+       SUM(value) AS sum_value,
+       COUNT(value) AS sample_count,
+       MAX(step) AS step,
+       MIN(timestamp_ms) AS first_ms,
+       MAX(timestamp_ms) AS last_ms
+FROM "levanter.metrics"
+WHERE run_id = {sql_string(run)}
+  AND name IN ({sql_values(_METRIC_NAMES)})
+  AND timestamp_ms >= {start_ms}
+  AND timestamp_ms < {end_ms}
+GROUP BY 1, 2, 3, 5
 ORDER BY t, name, execution_uid
+LIMIT {TRAINING_MAX_METRIC_ROWS + 1}
+""".strip()
+    attempts_sql = f"""
+SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+       execution_uid,
+       job_id,
+       FIRST_VALUE(value ORDER BY timestamp_ms DESC, seq DESC) AS value,
+       MIN(timestamp_ms) AS first_ms,
+       MAX(timestamp_ms) AS last_ms,
+       FIRST_VALUE(seq ORDER BY timestamp_ms DESC, seq DESC) AS last_seq
+FROM "levanter.metrics"
+WHERE run_id = {sql_string(run)}
+  AND name = 'phase'
+  AND process_index = 0
+  AND job_id IS NOT NULL
+  AND execution_uid IS NOT NULL
+  AND timestamp_ms >= {attempts_start_ms}
+  AND timestamp_ms < {end_ms}
+GROUP BY 1, 2, 3
+ORDER BY last_ms DESC, last_seq DESC, origin_cluster, job_id, execution_uid
 LIMIT {TRAINING_MAX_METRIC_ROWS + 1}
 """.strip()
 
@@ -224,7 +201,7 @@ SELECT MAX(CASE WHEN name = 'phase' THEN max_value END) AS phase,
        SUM(CASE WHEN name = 'train_loss' THEN sum_value END)
            / NULLIF(SUM(CASE WHEN name = 'train_loss' THEN sample_count END), 0) AS train_loss,
        ({end_ms} - MAX(last_ms)) / 1000.0 AS sample_age_seconds
-FROM training_rows WHERE name <> '__attempt'
+FROM training_rows
 """.strip()
         ),
         "loss": (
@@ -317,8 +294,8 @@ GROUP BY 1 ORDER BY 1
             f"""
 SELECT ({end_ms} - first_ms) / 1000.0 AS attempt_age_seconds,
        CASE WHEN value = 0 THEN ({end_ms} - first_ms) / 1000.0 END AS initialization_age_seconds
-FROM training_rows WHERE name = '__attempt'
-ORDER BY last_ms DESC LIMIT 1
+FROM attempts
+ORDER BY last_ms DESC, last_seq DESC, origin_cluster, job_id, execution_uid LIMIT 1
 """.strip()
         ),
         "execution_tasks": "SELECT * FROM task_state",
@@ -379,19 +356,40 @@ SELECT first_ms AS started_ms,
        job_id AS job,
        (last_ms - first_ms) / 1000.0 AS active_seconds,
        CASE WHEN origin_cluster = 'marin' THEN 'local' ELSE origin_cluster END AS iris_cluster
-FROM training_rows WHERE name = '__attempt'
+FROM attempts
 ORDER BY started_ms DESC
 """.strip()
         ),
     }
+    sources = {
+        "training_rows": SourceQuery("training_rows", metrics_sql, TRAINING_MAX_METRIC_ROWS),
+        "attempts": SourceQuery("attempts", attempts_sql, TRAINING_MAX_METRIC_ROWS),
+        "task_state": SourceQuery("task_state", task_state_sql, 1),
+        "task_events": SourceQuery("task_events", task_event_sql, 1),
+    }
+    execution_sources = {
+        "attempts": "attempts",
+        "execution_attempt": "attempts",
+        "execution_tasks": "task_state",
+        "execution_retries": "task_events",
+    }
+    cache_key: tuple[str | int, ...]
+    if view is not None:
+        if view not in views:
+            raise ValueError(f"unknown Training overview view {view!r}")
+        source_name = execution_sources.get(view, "training_rows")
+        sources = {source_name: sources[source_name]}
+        views = {name: sql for name, sql in views.items() if execution_sources.get(name, "training_rows") == source_name}
+        # Execution history is independent of graph width and visible range.
+        cache_key = (run, end_ms, source_name)
+        if source_name == "training_rows":
+            cache_key = (run, start_ms, end_ms, bucket_ms, source_name)
+    else:
+        cache_key = (run, start_ms, end_ms, bucket_ms, "all")
     return DashboardDataset(
         name="Training overview",
-        cache_key=(run, start_ms, end_ms, bucket_ms),
-        sources=(
-            SourceQuery("training_rows", metrics_sql, TRAINING_MAX_METRIC_ROWS),
-            SourceQuery("task_state", task_state_sql, 1),
-            SourceQuery("task_events", task_event_sql, 1),
-        ),
+        cache_key=cache_key,
+        sources=tuple(sources.values()),
         setup_sql=(),
         views=views,
         max_result_rows=TRAINING_MAX_RESULT_ROWS,

@@ -41,7 +41,7 @@ export const CHAT_EXAMPLES: ChatExample[] = [
   {
     label: 'Agent · Fix a failing test',
     prompt:
-      'Use the bash tool to inspect this repository, run python3.14 test_calculator.py, fix the bug, rerun the test, and show the Git diff before summarizing the change.',
+      'Use the bash tool to inspect this repository, run python test_calculator.py, fix the bug, rerun the test, and show the Git diff before summarizing the change.',
     workspaceFiles: {
       'calculator.py': `def add(left: int, right: int) -> int:
     return left - right
@@ -69,7 +69,7 @@ print("test passed")
   {
     label: 'Agent · Repair a configuration',
     prompt:
-      'Use the bash tool to run python3.14 check_config.py, update config.json so the check passes, rerun it, and show the Git diff before explaining what changed.',
+      'Use the bash tool to run python check_config.py, update config.json so the check passes, rerun it, and show the Git diff before explaining what changed.',
     workspaceFiles: {
       'config.json': `{
   "workers": 2,

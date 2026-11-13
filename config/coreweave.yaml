@@ -6,7 +6,7 @@ data:
   # carry their `signing_region`. Consumed by rigging temp-path routing and the
   # shared infra/buckets Pulumi project.
   region_buckets:
-    na:          { bucket: marin-na,          store: r2 }
+    rno2a: { bucket: marin-rno2a, store: coreweave, signing_region: RNO2A }
     us-east-02a: { bucket: marin-us-east-02a, store: coreweave, signing_region: US-EAST-02A }
     us-east-08a: { bucket: hero-checkpoints, store: coreweave, signing_region: US-EAST-08A }
     us-west-04a: { bucket: marin-us-west-04a, store: coreweave, signing_region: US-WEST-04A }
@@ -20,9 +20,6 @@ data:
       endpoint_env: CW_S3_ENDPOINT
       key_id_env: CW_KEY_ID
       key_secret_env: CW_KEY_SECRET
-    r2:
-      endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
-      endpoint_env: R2_S3_ENDPOINT
-      key_id_env: R2_KEY_ID
-      key_secret_env: R2_KEY_SECRET
-  root: s3://marin-na/marin
+      temp_bucket: { bucket: marin-us-east-08a, store: coreweave, signing_region: US-EAST-08A }
+      checkpoint_read_buckets: [hero-checkpoints]
+  root: s3://marin-us-east-02a/marin

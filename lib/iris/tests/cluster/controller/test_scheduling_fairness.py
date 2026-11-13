@@ -197,7 +197,7 @@ def test_batch_childs_spend_does_not_count_against_the_budget():
             assert compute_user_spend(snap).keys() == {"bob"}
 
 
-def test_spend_and_worker_scheduler_use_authenticated_email():
+def test_spend_and_worker_scheduler_use_job_owner():
     email = "russell.power@openathena.ai"
     with make_controller_state() as state:
         spend_id = JobName.root("power", "spend")
@@ -214,7 +214,7 @@ def test_spend_and_worker_scheduler_use_authenticated_email():
         )
         with state._db.transaction() as cur:
             submit_job_in_tx(cur, job_id=pending_id, request=pending_request, submitting_user=email)
-            writes.set_user_budget(cur, email, 1, job_pb2.PRIORITY_BAND_INTERACTIVE, Timestamp.now())
+            writes.set_user_budget(cur, "power", 1, job_pb2.PRIORITY_BAND_INTERACTIVE, Timestamp.now())
 
         with state._db.read_snapshot() as snap:
             context = build_scheduling_context(
@@ -226,5 +226,5 @@ def test_spend_and_worker_scheduler_use_authenticated_email():
         gated = apply_scheduling_gates(context, max_tasks_per_job_per_cycle=100)
         order = compute_scheduling_order(context, gated)
 
-        assert context.user_spend == {email: 6}
+        assert context.user_spend == {"power": 6}
         assert order.task_band_map[pending_id.task(0)] == job_pb2.PRIORITY_BAND_BATCH

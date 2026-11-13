@@ -12,7 +12,7 @@ from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 import fsspec
 from braceexpand import braceexpand
-from pyarrow import RecordBatch
+from pyarrow import RecordBatch, Schema
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 
@@ -212,7 +212,7 @@ class WriteOp:
     writer_type: Literal["jsonl", "parquet", "binary", "vortex"]
 
     # Format-specific parameters (only used by relevant writer)
-    schema: object | None = None  # For parquet (pyarrow.Schema)
+    schema: Schema | None = None
     skip_existing: bool = False  # Skip writing if output file already exists
 
     def __repr__(self):
@@ -823,7 +823,7 @@ class Dataset(Generic[T]):
     def write_parquet(
         self,
         output_pattern: str | Callable[[int, int], str],
-        schema: object | None = None,
+        schema: Schema | None = None,
         skip_existing: bool = False,
     ) -> "Dataset[str]":
         """Write records as Parquet files.
@@ -851,7 +851,7 @@ class Dataset(Generic[T]):
     def write_vortex(
         self,
         output_pattern: str | Callable[[int, int], str],
-        schema: object | None = None,
+        schema: Schema | None = None,
         skip_existing: bool = False,
     ) -> "Dataset[str]":
         """Write records as Vortex files."""

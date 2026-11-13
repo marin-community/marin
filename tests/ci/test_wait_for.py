@@ -1,13 +1,85 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
 from scripts.ci import wait_for
 
 PR_URL = "https://github.com/marin-community/marin/pull/123"
+
+
+def test_ci_source_unsupported_gh_json_flag_exits_with_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    gh = tmp_path / "gh"
+    gh.write_text("#!/bin/sh\nprintf '%s\\n' 'unknown flag: --json' >&2\nexit 1\n")
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path), prepend=":")
+
+    result = CliRunner().invoke(
+        wait_for.main,
+        [
+            "--repo",
+            "marin-community/marin",
+            "--timeout",
+            "1s",
+            "--initial-interval",
+            "0.001s",
+            "--max-interval",
+            "0.001s",
+            "--jitter",
+            "0",
+            "github.ci 123",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "unknown flag: --json" in result.output
+
+
+def test_ci_source_waits_for_checks_after_gh_reports_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    gh = tmp_path / "gh"
+    gh.write_text(
+        r"""#!/bin/sh
+counter="$(dirname "$0")/counter"
+count=0
+if [ -e "$counter" ]; then
+  count=$(cat "$counter")
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$counter"
+if [ "$count" -le 5 ]; then
+  printf '%s\n' "no checks reported on the 'topic' branch" >&2
+  exit 1
+fi
+printf '%s\n' '[{"name":"unit","bucket":"pass","state":"SUCCESS"}]'
+"""
+    )
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path), prepend=":")
+
+    result = CliRunner().invoke(
+        wait_for.main,
+        [
+            "--repo",
+            "marin-community/marin",
+            "--timeout",
+            "5s",
+            "--initial-interval",
+            "0.001s",
+            "--max-interval",
+            "0.001s",
+            "--jitter",
+            "0",
+            "github.ci 123",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["result"]["conclusion"] == "success"
 
 
 def _pr_snapshot(

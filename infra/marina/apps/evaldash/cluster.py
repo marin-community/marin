@@ -27,8 +27,7 @@ from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-
-from .discovery import resolve_internal_ip
+from marina.discovery import resolve_internal_ip
 
 logger = logging.getLogger(__name__)
 

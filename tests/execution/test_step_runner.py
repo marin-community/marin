@@ -5,6 +5,7 @@ import contextvars
 import json
 import os
 from pathlib import Path
+from threading import Event
 
 import marin.execution.step_runner as step_runner_module
 import pytest
@@ -429,6 +430,35 @@ def test_runner_max_concurrent(tmp_path: Path):
 
     train_artifact = read_artifact(steps[2].output_path, TrainMetadata)
     assert train_artifact.tokens_seen > 0
+
+
+def test_runner_keeps_ready_dependents_ahead_of_later_branches(tmp_path):
+    """A queued independent download must not delay the earlier branch's verifier."""
+    discovered = Event()
+    executed = []
+
+    def download(_output_path):
+        assert discovered.wait(timeout=10)
+        executed.append("download")
+
+    first = StepSpec(name="download", output_path_prefix=str(tmp_path), fn=download)
+    verified = StepSpec(
+        name="verify",
+        output_path_prefix=str(tmp_path),
+        deps=[first],
+        fn=lambda _: executed.append("verify"),
+    )
+    later = StepSpec(
+        name="later-download", output_path_prefix=str(tmp_path), fn=lambda _: executed.append("later-download")
+    )
+
+    def steps():
+        yield verified
+        yield later
+        discovered.set()
+
+    StepRunner().run(steps(), max_concurrent=1)
+    assert executed == ["download", "verify", "later-download"]
 
 
 def test_runner_walks_transitive_deps(tmp_path: Path):

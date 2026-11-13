@@ -19,10 +19,12 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from experiments.grug.moe_hero_ep.checkpoints import hero_checkpoint_paths
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleStore
 from experiments.grug.moe_hero_ep.ops.vibe_check.config import (
+    FIRST_SAMPLED_STEP,
     SAMPLING_GPUS_PER_NODE,
     STORE_ROOT,
     TARGET_CLUSTER,
     discover_requests,
+    sampling_model,
     sampling_resources,
     sampling_spec,
 )
@@ -43,7 +45,7 @@ CONTROLLER_CLUSTER = "marin"
     type=click.Choice([mode.value for mode in SubmissionMode]),
     default=SubmissionMode.NEXT.value,
     show_default=True,
-    help="Submit the next request or all unfinished checkpoints in the current discovery set.",
+    help="Keep two jobs active, or submit all unfinished checkpoints in the current discovery set.",
 )
 @click.option(
     "--priority",
@@ -78,7 +80,14 @@ def main(action: str, store_root: str, priority: str | None, submission: str) ->
                 handle.write(summary)
         return
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    requests = discover_requests(hero_checkpoint_paths(), spec, revision, target_cluster=TARGET_CLUSTER)
+    requests = discover_requests(
+        hero_checkpoint_paths(),
+        spec,
+        sampling_model(),
+        revision,
+        first_step=FIRST_SAMPLED_STEP,
+        target_cluster=TARGET_CLUSTER,
+    )
     if action == "inventory":
         for request in sorted(requests, key=lambda value: value.checkpoint.step):
             logger.info("%s step=%d %s", request.sample_id, request.checkpoint.step, request.checkpoint.uri)

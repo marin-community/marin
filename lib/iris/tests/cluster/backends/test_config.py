@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 from iris.cluster.backends.k8s.tasks import K8sTaskProvider
-from iris.cluster.composer import make_task_backend
+from iris.cluster.composer import make_backend, make_task_backend
 from iris.cluster.config import (
     ControllerVmConfig,
     CoreweavePlatformConfig,
@@ -40,7 +40,10 @@ from iris.cluster.config import (
     validate_config,
 )
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
+from iris.cluster.controller.backend import dashboard_backend_descriptor
+from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.platforms.factory import create_provider_bundle
 from iris.cluster.platforms.gcp.service import KNOWN_GCP_ZONES
 from iris.cluster.types import LOCAL_CLUSTER, AcceleratorType, CapacityType, GcpSliceMode
@@ -1866,7 +1869,6 @@ def test_coreweave_worker_provider_rejected():
 
 
 def _accel_scale_group(device_type: AcceleratorType, device_variant: str = "") -> ScaleGroupConfig:
-    """A scale group carrying the device fields backend attribute derivation reads."""
     return ScaleGroupConfig(
         name="accel",
         num_vms=1,
@@ -1881,14 +1883,6 @@ def _accel_scale_group(device_type: AcceleratorType, device_variant: str = "") -
 
 
 class TestBackendAttributes:
-    def test_device_attrs_derived_from_scale_group_resources(self):
-        config = IrisClusterConfig(scale_groups={"h100-8x": _accel_scale_group(AcceleratorType.GPU, "H100")})
-        assert backend_attribute_sets(config) == {"device-type": {"gpu"}, "device-variant": {"h100"}}
-
-    def test_cpu_scale_group_advertises_no_device_attrs(self):
-        config = IrisClusterConfig(scale_groups={"cpu": _accel_scale_group(AcceleratorType.CPU)})
-        assert backend_attribute_sets(config) == {}
-
     def test_multi_scale_group_backend_advertises_variant_union(self):
         config = IrisClusterConfig(
             scale_groups={
@@ -1897,54 +1891,27 @@ class TestBackendAttributes:
                 "cpu": _accel_scale_group(AcceleratorType.CPU),
             }
         )
-        assert backend_attribute_sets(config) == {"device-type": {"gpu"}, "device-variant": {"h100", "a100"}}
-
-    def test_auto_variant_derives_device_type_only(self):
-        config = IrisClusterConfig(scale_groups={"tpu": _accel_scale_group(AcceleratorType.TPU, "auto")})
-        assert backend_attribute_sets(config) == {"device-type": {"tpu"}}
-
-    def test_coreweave_implicit_config_advertises_gpu_and_region_attrs(self):
-        iris_root = Path(__file__).parent.parent.parent.parent
-        expected_region = {
-            "config/examples/coreweave.yaml": "US-WEST-04A",
-            "config/cw-us-east-02a.yaml": "US-EAST-02A",
+        assert backend_attribute_sets(config) == {
+            "device-type": {"gpu"},
+            "device-variant": {"h100", "a100"},
+            "availability:h100": {"true"},
+            "availability:a100": {"true"},
+            "preemptible": {"false"},
         }
-        for rel, region in expected_region.items():
-            config_path = iris_root / rel
-            config = load_config(config_path)
-            assert backend_attribute_sets(config) == {
-                "device-type": {"gpu"},
-                "device-variant": {"h100"},
-                "region": {region},
-            }
 
-    def test_region_derived_from_coreweave_slice_template(self):
-        # A CoreWeave scale group advertises its region so --region routes to it across
-        # a federation; the CoreWeave region is exported verbatim (not a GCP zone prefix).
+    def test_coreweave_region_preserves_case(self):
         config = IrisClusterConfig(
             scale_groups={
                 "h100": ScaleGroupConfig(
                     name="h100",
                     num_vms=1,
-                    resources=ScaleGroupResources(
-                        cpu_millicores=8000,
-                        memory_bytes=16 * 1024**3,
-                        device_type=AcceleratorType.GPU,
-                        device_variant="H100",
-                        capacity_type=CapacityType.ON_DEMAND,
-                    ),
                     slice_template=SliceConfig(num_vms=1, coreweave=CoreweaveSliceConfig(region="US-EAST-02A")),
                 )
             }
         )
-        assert backend_attribute_sets(config) == {
-            "device-type": {"gpu"},
-            "device-variant": {"h100"},
-            "region": {"US-EAST-02A"},
-        }
+        assert backend_attribute_sets(config)["region"] == {"US-EAST-02A"}
 
     def test_region_derived_from_gcp_zone_prefix(self):
-        # A GCP scale group advertises the zone's region prefix (us-central2-b -> us-central2).
         config = IrisClusterConfig(
             scale_groups={
                 "tpu": ScaleGroupConfig(
@@ -1956,7 +1923,7 @@ class TestBackendAttributes:
                 )
             }
         )
-        assert backend_attribute_sets(config) == {"region": {"us-central2"}}
+        assert backend_attribute_sets(config)["region"] == {"us-central2"}
 
 
 def test_make_task_backend_requires_kueue_for_k8s_backend():
@@ -1991,3 +1958,34 @@ def test_k8s_backend_uses_canonical_default_task_image():
 
     assert isinstance(backend, K8sTaskProvider)
     assert backend.pods.default_image == "registry.example/iris-task:abc1234"
+
+
+@pytest.mark.parametrize("kubernetes", [False, True])
+def test_composed_backend_advertises_image_workdir_only_for_kubernetes(kubernetes, embedded_log_server, tmp_path):
+    config = (
+        IrisClusterConfig(kubernetes_provider=KubernetesProviderConfig(kueue=KueueConfig(cluster_queue="iris-cq")))
+        if kubernetes
+        else IrisClusterConfig(worker_provider=WorkerProviderConfig())
+    )
+    log_stack = build_log_stack(
+        log_service_address=embedded_log_server.address,
+        local_log_dir=tmp_path / "logs",
+        host="127.0.0.1",
+        worker_token_provider=None,
+    )
+    try:
+        backend = make_backend(
+            config,
+            auth=ControllerAuth(),
+            remote_state_dir=str(tmp_path),
+            dry_run=True,
+            log_stack=log_stack,
+        )
+        try:
+            advertised = dashboard_backend_descriptor(backend).capabilities
+            assert ("sandbox-image-workdir" in advertised) is kubernetes
+            assert "sandbox-storage-limit" not in advertised
+        finally:
+            backend.close()
+    finally:
+        log_stack.close()

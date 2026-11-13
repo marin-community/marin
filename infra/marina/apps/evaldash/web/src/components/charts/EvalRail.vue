@@ -10,9 +10,9 @@
  */
 import { computed } from 'vue'
 import { RUN_STATUS, type MissingCell, type PanelCell } from '@/types/api'
-import { formatCoverage, formatInterval, formatScore } from '@/utils/formatting'
+import { formatInterval, formatScore } from '@/utils/formatting'
 import { scoreColor } from '@/utils/score'
-import { type BestCell } from '@/utils/panel'
+import { cellCoverageLabel, scoredItemsLabel, type BestCell } from '@/utils/panel'
 import { tip, type TipContent } from '@/composables/tooltip'
 
 interface HistoryPoint {
@@ -71,7 +71,7 @@ const gauges = computed<Gauge[]>(() =>
         }
       }
       const kind =
-        gap.status === RUN_STATUS.INFRA_FAILED
+        gap.status === RUN_STATUS.INFRA_FAILED || gap.status === 'running'
           ? 'infra'
           : gap.status === RUN_STATUS.ARTIFACT_FAILED
             ? 'artifact'
@@ -87,7 +87,7 @@ const gauges = computed<Gauge[]>(() =>
     const whiskerHeight = Math.max(0, Math.min(1, cell.high) - Math.max(0, cell.low)) * H.value
     const bestY = best ? Math.max(0, Math.min(1, best.value)) * H.value : 0
     const isBest = best?.model === props.model
-    const coverage = formatCoverage(cell.coverage)
+    const coverage = cellCoverageLabel(cell)
     return {
       task, cell, kind: 'score', fillH, whiskerBottom, whiskerHeight, bestY, isBest,
       color: scoreColor(v),
@@ -96,7 +96,7 @@ const gauges = computed<Gauge[]>(() =>
         lines: [
           { label: props.model, value: formatScore(cell.value) },
           { label: '95% interval', value: formatInterval(cell.low, cell.high) },
-          { label: 'metric', value: `${cell.metric} · ${cell.n_scored} items`, tone: 'muted' },
+          { label: 'metric', value: `${cell.metric} · ${scoredItemsLabel(cell)}`, tone: 'muted' },
           { label: 'coverage', value: coverage || 'not reported', tone: 'muted' },
           isBest
             ? { label: 'fleet best', value: 'this model', tone: 'best' }
