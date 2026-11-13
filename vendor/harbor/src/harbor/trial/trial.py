@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from rigging.timing import active_timeout
+
 from harbor_config.errors import ErrorCategory, error_category
 from harbor_config.models.trial.config import TaskConfig
 
@@ -707,9 +709,12 @@ class Trial(ABC):
         timeout_error: asyncio.TimeoutError,
     ) -> Any:
         """Bound a phase while preserving persistence failures and caller cancellation."""
-        task = asyncio.ensure_future(awaitable)
         try:
-            done, _ = await asyncio.wait({task}, timeout=timeout_sec)
+            async with active_timeout(timeout_sec):
+                task = asyncio.ensure_future(awaitable)
+                done, _ = await asyncio.wait({task})
+        except TimeoutError:
+            done = set()
         except asyncio.CancelledError as cancellation:
             task.cancel()
             self._track_cleanup_task(task)
@@ -1408,7 +1413,7 @@ class Trial(ABC):
         await self.agent_environment.empty_dirs([target], chmod=False)
         await self.agent_environment.upload_dir(source_dir=source, target_dir=target)
         if self.task.config.environment.os != TaskOS.WINDOWS:
-            await self.agent_environment.exec(
+            await self.agent_environment.exec_control(
                 f"chmod -R a+rX {target}",
                 user="root",
             )

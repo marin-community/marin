@@ -304,6 +304,24 @@ delay fields. Count these events separately from task outcomes. Provider errors
 remain infrastructure evidence and receive no oracle score. Command
 execution is not replayed after an ambiguous response.
 
+Harbor's Daytona adapter selects `ProviderWaitPolicy.JOB`: safe harness controls,
+artifact reads/writes and resource probes retry within the enclosing job's
+overall timeout. Each provider request has a 60-second timeout. Request duration
+and retry backoff pause Harbor phase clocks and Shellbox command clocks; the declared
+source-command limits remain active during source execution. Run qualification
+under a bounded job whose overall clock continues advancing during provider
+waits, and retain retry events separately from task verdicts.
+Direct Shellbox callers retain phase-bound behavior unless they explicitly select
+the job policy.
+
+Retryable controls include read-only metadata/resource probes, private staging-file
+operations, fixed-content artifact transfers and named sandbox deletion.
+Source execution remains single-shot after an ambiguous response. An ambiguous
+process-group termination falls back to sandbox teardown; it cannot safely be
+replayed after PID reuse. Named sandbox deletion and private-file cleanup are
+idempotent. External cancellation disables recovery retries during cancellation
+cleanup and retains its existing cleanup deadline and primary exception.
+
 ## Making a dataset Daytona-safe
 
 A dataset is Daytona-safe when it runs on the RL org as configured: its tasks

@@ -27,6 +27,7 @@ from harbor.host_capabilities import HostCapabilities
 from daytona import (
     CreateSnapshotParams,
     DaytonaNotFoundError,
+    DaytonaTimeoutError,
     Resources,
 )
 from daytona_api_client_async import SnapshotState
@@ -46,6 +47,11 @@ from harbor.environments.shellsim import ShellSimEnvironment
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.task.task import Task
 from harbor.models.trial.paths import TrialPaths
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
+from harbor.models.trial.config import EnvironmentConfig as TrialEnvironmentConfig
+from harbor.models.environment_type import EnvironmentType
+from harbor.trial.trial import Trial
+import harbor.environments.factory as environment_factory
 from harbor.verifier.verifier import Verifier
 from shellbox.http_service import HttpRequest, serve_http
 from tests.unit.environments.transport import ChrootProcessMachine, ProcessMachine, available_port
@@ -786,3 +792,67 @@ def test_task_snapshot_source_selects_and_validates_the_task_environment(tmp_pat
 
     with pytest.raises(UnsupportedMachineSpec, match="registry image or Dockerfile"):
         task_snapshot_source(None, tmp_path / "absent")
+
+
+@pytest.mark.asyncio
+async def test_daytona_trial_resource_probe_wait_preserves_source_budget_and_verdict(tmp_path, monkeypatch):
+    loop = asyncio.get_running_loop()
+    now = loop.time
+    offset = [0.0]
+    monkeypatch.setattr(loop, "time", lambda: now() + offset[0])
+
+    async def backoff(delay):
+        offset[0] += delay
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr("shellbox.backends.daytona.provider.sleep", backoff)
+    counters = tmp_path / "cgroup"
+    counters.mkdir()
+    (counters / "cpu.stat").write_text("usage_usec 1500000\n")
+    (counters / "memory.events").write_text("oom_kill 2\n")
+
+    class ProbeTransport(ProcessMachine):
+        failed = False
+
+        def argument(self, value):
+            return super().argument(value.replace("/sys/fs/cgroup", str(counters)))
+
+        async def run(self, command):
+            if any("cpu.stat" in arg for arg in command.argv) and not self.failed:
+                self.failed = True
+                raise DaytonaTimeoutError("Provider resource probe timed out", headers={"Retry-After": "17"})
+            return await super().run(command)
+
+    class ProbeFactory:
+        async def create(self, spec):
+            return ProbeTransport(tmp_path / "guest", spec)
+
+    class ProbeEnvironment(DaytonaEnvironment):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.factory = ProbeFactory()
+
+    monkeypatch.setattr(environment_factory, "_load_environment_class", lambda _: ProbeEnvironment)
+    task = tmp_path / "task"
+    for name in ("environment", "solution", "tests"):
+        (task / name).mkdir(parents=True)
+    (task / "instruction.md").write_text("Write done to answer.txt.")
+    (task / "task.toml").write_text(
+        '[agent]\ntimeout_sec=2\n[verifier]\ntimeout_sec=2\n'
+        '[environment]\ndocker_image="fixture"\nworkdir="/workspace"\n'
+    )
+    (task / "solution/solve.sh").write_text("printf done > answer.txt; printf 'once\\n' >> runs\n")
+    (task / "tests/test.sh").write_text(
+        f'test "$(cat answer.txt)" = done && printf 1 > {tmp_path / "guest/logs/verifier/reward.txt"}\n'
+    )
+    trial = await Trial.create(TrialConfig(
+        task=TaskConfig(path=task), trials_dir=tmp_path / "trials",
+        environment=TrialEnvironmentConfig(type=EnvironmentType.DAYTONA),
+        agent=AgentConfig(name="oracle", kwargs={"resource_usage_filename": "resource-usage.json"}),
+    ))
+    result = await trial.run()
+    assert result.exception_info is None
+    assert result.verifier_result.rewards == {"reward": 1.0}
+    assert (tmp_path / "guest/workspace/runs").read_text().splitlines() == ["once"]
+    assert (trial.paths.agent_dir / "exit-code.txt").read_text() == "0"
+    assert json.loads((trial.paths.agent_dir / "resource-usage.json").read_text())["oom_kills"] == 0

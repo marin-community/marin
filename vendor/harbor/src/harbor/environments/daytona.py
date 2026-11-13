@@ -44,6 +44,8 @@ from shellbox.backends.daytona.snapshot import (
     validate_source,
 )
 from shellbox.image import DockerfileSource, RegistryImage
+from shellbox.backends.daytona.provider import PROVIDER_REQUEST_TIMEOUT, ProviderWaitPolicy, retry_provider_call
+from functools import partial
 from shellbox.machine import MachineSpec, NetworkPolicy, UnsupportedMachineSpec
 from shellbox.process_session import (
     acquire_owned,
@@ -125,10 +127,12 @@ class DaytonaEnvironment(BaseEnvironment):
             client_factory = (
                 connection.client_factory() if connection is not None else None
             )
+        self.provider_wait_policy = ProviderWaitPolicy.JOB
         self.factory = DaytonaMachineFactory(
             client_factory,
             ttl_minutes=ttl_minutes,
             create_timeout=create_timeout,
+            provider_wait_policy=self.provider_wait_policy,
             network_policy=policy,
         )
         self.model_endpoint, self.model_name = model_endpoint, model_name
@@ -220,8 +224,8 @@ class DaytonaEnvironment(BaseEnvironment):
             )
             targets = self._mount_targets(writable_only=True)
             if targets:
-                result = await self.exec(
-                    self._ensure_dirs_command(targets, chmod=True), cwd="/"
+                result = await self.exec_control(
+                    self._ensure_dirs_command(targets, chmod=True), cwd="/", timeout_sec=PROVIDER_REQUEST_TIMEOUT, user="root"
                 )
                 if result.return_code:
                     raise RuntimeError("Failed to prepare Daytona artifact paths")
@@ -279,6 +283,14 @@ class DaytonaEnvironment(BaseEnvironment):
             env=self._merge_env(env) or {},
             timeout_sec=timeout_sec,
             user=str(effective_user) if effective_user is not None else None,
+        )
+
+    async def exec_control(self, command: str, *, timeout_sec: int | None = None, user: str | int | None = None, cwd: str | None = None) -> ExecResult:
+        if self.provider_wait_policy is ProviderWaitPolicy.PHASE:
+            return await super().exec_control(command, timeout_sec=timeout_sec, user=user, cwd=cwd)
+        return await retry_provider_call(
+            "sandbox.control_command", partial(self.exec, command, timeout_sec=PROVIDER_REQUEST_TIMEOUT, user=user, cwd=cwd),
+            wait_policy=self.provider_wait_policy,
         )
 
     async def upload_file(self, source_path: Path | str, target_path: str) -> None:
