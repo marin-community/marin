@@ -9,12 +9,18 @@ Runs are names under the hill-climb TTL output root or full URIs.
 """
 
 import argparse
+import io
 import json
 import math
+
+import numpy as np
 
 from rigging.filesystem.factory import open_url
 
 OUTPUT_ROOT = "s3://marin-us-east-02a/tmp/ttl=14d/hero-vllm-hillclimb/runs"
+REFERENCE = "s3://marin-us-east-02a/tmp/ttl=14d/hero-vllm-hillclimb/reference/ref-a4"
+# NextTokenObservation family screen (vLLM #110/#119/#129): probability error bound vs JAX.
+ABSOLUTE_PROBABILITY_BOUND = 0.075
 GPUS = 16
 # Thresholds (see the gate proposal): relative probability error vs the accepted baseline, the
 # same-rank co-batching log-prob bound, and the near-tie margin that excuses a greedy divergence.
@@ -130,10 +136,56 @@ def load_table(load: dict) -> list[dict]:
     return sorted(rows, key=lambda row: row["C"])
 
 
+def load_reference(uri: str = REFERENCE) -> dict[tuple[str, int], tuple[np.ndarray, np.ndarray]]:
+    """(case_id, position) -> (top token ids, top log-probs), sorted by log-prob descending."""
+    with open_url(f"{uri}/reference.npz", "rb") as handle:
+        arrays = np.load(io.BytesIO(handle.read()))
+    with open_url(f"{uri}/reference.json", "r") as handle:
+        case_ids = json.load(handle)["case_ids"]
+    rows = {}
+    for case, position, ids, logprobs in zip(
+        arrays["row_case"], arrays["row_position"], arrays["top_ids"], arrays["top_logprobs"], strict=True
+    ):
+        order = np.argsort(-logprobs)
+        rows[(case_ids[int(case)], int(position))] = (ids[order], logprobs[order])
+    return rows
+
+
+def g1a(scores: dict, reference: dict) -> dict:
+    """Score each vLLM position against JAX: probability error, reference top-5 coverage, supported winner."""
+    worst = {"max_probability_error": 0.0}
+    failures = []
+    positions = 0
+    for case_id, result in scores.items():
+        for position, returned in enumerate(result["positions"]):
+            key = (case_id, position)
+            if key not in reference or not returned:
+                continue
+            ids, logprobs = reference[key]
+            ref = dict(zip(ids.tolist(), logprobs.tolist(), strict=True))
+            floor = math.exp(float(logprobs[-1]))
+            actual = {int(t): lp for t, lp in returned}
+            errors = [abs(math.exp(lp) - (math.exp(ref[t]) if t in ref else floor)) for t, lp in actual.items()]
+            top5 = ids[:5].tolist()
+            missing = [t for t in top5 if t not in actual]
+            winner = max(actual, key=actual.get)
+            gap = math.exp(float(logprobs[0])) - (math.exp(ref[winner]) if winner in ref else 0.0)
+            max_error = max(errors)
+            positions += 1
+            if max_error > worst["max_probability_error"]:
+                worst = {"max_probability_error": max_error, "case": case_id, "position": position}
+            if missing or max_error > ABSOLUTE_PROBABILITY_BOUND or gap > 2 * max_error + 1e-6:
+                failures.append(
+                    {"case": case_id, "position": position, "max_error": max_error, "missing_top5": missing, "gap": gap}
+                )
+    return {"positions": positions, "worst": worst, "failures": len(failures), "first_failures": failures[:10], "pass": not failures}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("control")
     parser.add_argument("candidate", nargs="?")
+    parser.add_argument("--reference", default=REFERENCE)
     args = parser.parse_args()
     report: dict = {}
     for role, run in (("control", args.control), ("candidate", args.candidate)):
@@ -146,6 +198,17 @@ def main() -> None:
             "g2": g2(gates) if gates and "invariance" in gates else gates,
             "load": load_table(load) if load and "error" not in load else load,
         }
+    reference = load_reference(args.reference)
+    for role in ("control", "candidate"):
+        run = getattr(args, role)
+        gates = _load(run, "gates") if run else None
+        if gates and "score" in gates:
+            report[role]["g1a_vs_jax"] = g1a(gates["score"], reference)
+        long = _load(run, "long") if run else None
+        if long:
+            report[role]["g5_vs_jax"] = {
+                case: g1a({case: value["score"]}, reference) for case, value in long.items() if case.startswith("long")
+            }
     if args.candidate:
         control_gates, candidate_gates = _load(args.control, "gates"), _load(args.candidate, "gates")
         if control_gates and candidate_gates and "score" in control_gates and "score" in candidate_gates:
