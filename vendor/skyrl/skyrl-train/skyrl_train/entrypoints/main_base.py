@@ -43,6 +43,7 @@ from marinskyrl.runtime_options import (
     static_preference_pairs_requested,
 )
 from marinskyrl.resource_locator import RolloutModelLoading
+from marinskyrl.role_placement import POLICY_ROLE, role_resources
 from skyrl_train.dataset.preference_pairs import PreferencePairFormat
 
 if TYPE_CHECKING:
@@ -474,12 +475,15 @@ class BasePPOExp:
         )  # noqa: PLC0415
 
         timeout = int(self.cfg.trainer.distributed.placement_group_timeout_seconds) if timeout is None else timeout
-        if not policy_strict_spread_eligible(self.cfg):
+        resources = role_resources(POLICY_ROLE, ray.cluster_resources())
+        if not policy_strict_spread_eligible(self.cfg) and not resources:
             return None
 
         from ray.util.placement_group import placement_group as _placement_group
 
         bundles = policy_spread_bundles(self.cfg)
+        for bundle in bundles:
+            bundle.update({name: amount * bundle["GPU"] for name, amount in resources.items()})
         per_gpu = policy_per_gpu_bundles_enabled(self.cfg)
         # Per-GPU bundles ({GPU:1} x world_size) must NOT use STRICT_SPREAD
         # (that would force each single-GPU bundle onto a distinct node).

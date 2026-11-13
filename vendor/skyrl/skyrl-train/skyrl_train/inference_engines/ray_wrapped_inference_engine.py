@@ -15,6 +15,7 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 from transformers import AutoConfig, PretrainedConfig
 
 from marinskyrl.inference_placement import COLOCATED_EXPERT_BLOCK_GPU_COUNT, InferenceReplicaPlacement
+from marinskyrl.role_placement import inference_role, role_resources
 from skyrl_train.inference_engines.base import (
     InferenceEngineInterface,
     InferenceEngineInput,
@@ -692,9 +693,10 @@ def create_ray_wrapped_inference_engines(
         elif needs_per_engine_pg:
             # Each engine owns a group. TP/PP and ordinary DP groups remain node-local.
             # PACK prefers fewer nodes but permits spanning them for verified TP=PP=1 EP replicas.
-            for _ in range(num_inference_engines):
+            for engine_index in range(num_inference_engines):
+                resources = role_resources(inference_role(engine_index), ray.cluster_resources())
                 pg = placement_group(
-                    [{"GPU": 1, "CPU": 1} for _ in range(per_engine_gpu_count)],
+                    [{"GPU": 1, "CPU": 1, **resources} for _ in range(per_engine_gpu_count)],
                     strategy="PACK" if cross_node_ep else "STRICT_PACK",
                 )
                 per_engine_pgs.append(pg)
