@@ -21,8 +21,10 @@ const GIB: i64 = 1024 * MIB;
 pub struct CompactionConfig {
     /// L0->L1 at 64 MiB, L1->L2 at 256 MiB, L2->L3 (terminal) at 256 MiB.
     pub level_targets: Vec<i64>,
-    /// Per-level fanout cap. Promotes a non-terminal level once its contiguous
-    /// run reaches this many segments, even if the byte target isn't met.
+    /// Per-level fanout trigger. Promotes a non-terminal level once its
+    /// contiguous run reaches this many segments, even if the byte target isn't
+    /// met, and caps the inputs of an L1-or-higher job. L0 jobs are capped by
+    /// `max_l0_inputs`.
     pub max_segments_per_level: usize,
     /// Most L0 inputs one job takes once `max_segments_per_level` triggers it.
     /// L0s are one flush each, often a few hundred KB, so a backlog drains in
