@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import math
-import random
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -21,7 +20,7 @@ import click
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
-from marin.execution.artifact import Artifact, is_mutable_version, read_record, result_type_name
+from marin.execution.artifact import is_mutable_version, read_record, result_type_name
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.experiment.namespacing import user_owned_name
@@ -53,6 +52,7 @@ from skyrlrecipe.documents import MISSING, get_path, merge_mappings, set_path
 from skyrlrecipe.model import Section
 from skyrlrecipe.sampling import EvalSamplingParams
 from skyrlrecipe.settings import parse_setting as typed_setting_value
+from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
 from experiments.post_training.task_curation.driver import CANONICAL_ARTIFACT_ROOT
 from experiments.post_training.task_curation.selection import (
@@ -60,6 +60,7 @@ from experiments.post_training.task_curation.selection import (
     SELECTION_PREFIX,
     SUMMARY_FILENAME,
     TASK_MANIFEST_FILENAME,
+    TASK_SPEC_COLUMN,
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
 )
@@ -68,8 +69,8 @@ REPO_ROOT = find_project_root(Path(__file__))
 RUN_PREFIX = "checkpoints/snowball-rl"
 UPDATE_SECONDS_METRIC = "speed/update_seconds"
 GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
-# Fraction of a native panel that must be scored before its scores count.
-MINIMUM_PANEL_COVERAGE = 0.99
+# Fraction of a native task_set that must be scored before its scores count.
+MINIMUM_SCORED_FRACTION = 0.99
 SEED = 20261020
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
@@ -236,9 +237,12 @@ class Evaluation:
             return default
         if self.source == "tasks":
             return selection
-        if self.source == "eval_lite":
-            return selection_artifact(eval_lite)
-        raise ValueError(f"unknown evaluation source: {self.source}")
+        return selection_artifact(eval_lite)
+
+    def bound_tasks(self, tasks: ArtifactStep, seed: int, *, revision: str) -> ArtifactStep:
+        if self.sample is None:
+            return tasks
+        return sampled_tasks_step(tasks, self.file, self.sample, seed, revision=revision)
 
 
 @dataclass(frozen=True)
@@ -335,7 +339,7 @@ class Training:
                         type="best_checkpoint",
                         initial_model_uri=initial_model_uri,
                         expected_tasks=expected_tasks,
-                        minimum_scored_tasks=math.ceil(MINIMUM_PANEL_COVERAGE * expected_tasks),
+                        minimum_scored_tasks=math.ceil(MINIMUM_SCORED_FRACTION * expected_tasks),
                     ),
                     HFModelSaveCallback(
                         type="hf_model_save",
@@ -521,50 +525,6 @@ class Metric:
     window: WindowStatistic = WindowStatistic.MEAN
 
 
-@dataclass(frozen=True)
-class Preset:
-    revision: str
-    focus: Focus
-    duration: Duration
-    recipe: Recipe
-    updates: int
-    measured: range
-    tasks_input: Literal["forbidden", "required", "optional"]
-    accepts_settings: bool
-    accepts_init: bool
-    accepts_replicates: bool
-    accepts_control: bool
-    gated: bool
-    resume_mode: Literal["none", "latest"]
-    best_checkpoint_export: bool
-    publishes: bool
-    shared_control: str | None
-    owned_keys: frozenset[str]
-    setting_sections: frozenset[str] | None
-    data_settings: frozenset[str]
-    tasks: str = _DEFAULT_TASKS
-    model: ArtifactHfModel = _DEFAULT_MODEL
-    patch: RecipePatch = field(default_factory=RecipePatch)
-    eval_lite: str = _DEFAULT_EVAL_LITE
-    evaluations: tuple[Evaluation, ...] = ()
-    checkpoint_every: int | None = None
-    guards: tuple[Metric, ...] = ()
-    objectives: tuple[Metric, ...] = ()
-    gaps: tuple[Gap, ...] = ()
-    budget: str = "hours to days"
-
-    def __post_init__(self) -> None:
-        training_mode_patch(self.recipe.mode, self.patch)
-        numerics_patch(self.recipe.numerics, self.patch)
-        for evaluation in self.evaluations[1:]:
-            if evaluation.every is not None or evaluation.at_start:
-                raise ValueError(f"non-primary evaluation {evaluation.name} accepts neither every nor at_start")
-
-    @property
-    def name(self) -> str:
-        return f"{self.focus}-{self.duration}"
-
-
 def override_document(settings: tuple[str, ...]) -> dict:
     """Canonical explicit user values for preset ownership and stored input identity."""
     document = {}
@@ -579,8 +539,7 @@ def override_document(settings: tuple[str, ...]) -> dict:
 def configure_evaluation(
     evaluation: Evaluation, config: RecipePatch, tasks: ArtifactStep, *, revision: str
 ) -> tuple[RecipePatch, tuple[ArtifactDataSource, ...]]:
-    if evaluation.sample is not None:
-        tasks = sampled_tasks_step(tasks, evaluation.file, evaluation.sample, SEED, revision=revision)
+    tasks = evaluation.bound_tasks(tasks, SEED, revision=revision)
     sampling = evaluation.profile.sampling_params
     configured = config.merge(
         RecipePatch(
@@ -713,15 +672,15 @@ _GAPS = (
     Gap.NO_AGENTIC_TASKS,
     Gap.NO_IMAGE_SANDBOX,
 )
-_PANEL = EVALUATIONS["eval_lite_100"]
-_BATCH_KEYS = frozenset(
-    {
-        "trainer.train_batch_size",
-        "trainer.policy_mini_batch_size",
-        "generator.n_samples_per_prompt",
-        "trainer.micro_train_batch_size_per_gpu",
-    }
-)
+_TASK_SET = EVALUATIONS["eval_lite_100"]
+BATCH_SETTINGS = {
+    "trainer.train_batch_size": "train_batch_size",
+    "trainer.policy_mini_batch_size": "policy_mini_batch_size",
+    "generator.n_samples_per_prompt": "n_samples_per_prompt",
+    "trainer.micro_train_batch_size_per_gpu": "micro_train_batch_size_per_gpu",
+}
+
+_BATCH_KEYS = frozenset(BATCH_SETTINGS)
 _OWNED_KEYS = (
     frozenset(
         {
@@ -741,7 +700,6 @@ _OWNED_KEYS = (
 _GATED_KEYS = frozenset(
     {
         "trainer.max_steps",
-        "trainer.seed",
         "trainer.logger",
         "trainer.project_name",
         "context_budget",
@@ -752,6 +710,57 @@ _GATED_KEYS = frozenset(
 _SPEED_KEYS = frozenset(
     {"generator.sampling_params.logprobs", "trainer.training_metrics", "generator.apply_overlong_filtering"}
 )
+
+
+@dataclass(frozen=True)
+class Preset:
+    revision: str
+    focus: Focus
+    duration: Duration
+    recipe: Recipe
+    updates: int
+    measured: range
+    tasks_input: Literal["forbidden", "required", "optional"]
+    accepts_settings: bool
+    accepts_init: bool
+    accepts_replicates: bool
+    accepts_control: bool
+    gated: bool
+    resume_mode: Literal["none", "latest"]
+    best_checkpoint_export: bool
+    publishes: bool
+    shared_control: str | None
+    owned_keys: frozenset[str]
+    setting_sections: frozenset[str] | None
+    data_settings: frozenset[str]
+    tasks: str = _DEFAULT_TASKS
+    model: ArtifactHfModel = _DEFAULT_MODEL
+    eval_lite: str = _DEFAULT_EVAL_LITE
+    evaluations: tuple[Evaluation, ...] = ()
+    checkpoint_every: int | None = None
+    guards: tuple[Metric, ...] = ()
+    objectives: tuple[Metric, ...] = ()
+    gaps: tuple[Gap, ...] = ()
+    budget: str = "hours to days"
+
+    def __post_init__(self) -> None:
+        if not set(self.measured).issubset(self.recipe.layout.workload.planned_steps(self.updates)):
+            raise ValueError("measured window must lie within the planned steps")
+        for evaluation in self.evaluations[1:]:
+            if evaluation.every is not None or evaluation.at_start:
+                raise ValueError(f"non-primary evaluation {evaluation.name} accepts neither every nor at_start")
+
+    @property
+    def name(self) -> str:
+        return f"{self.focus}-{self.duration}"
+
+    @property
+    def guarded(self) -> Evaluation | None:
+        if not self.gated or not self.evaluations:
+            return None
+        return next((evaluation for evaluation in self.evaluations if evaluation.held_out), self.evaluations[0])
+
+
 _LEARNING_MEDIUM = Preset(
     tasks_input="forbidden",
     accepts_settings=True,
@@ -783,7 +792,7 @@ PRESETS = MappingProxyType(
         preset.name: preset
         for preset in (
             Preset(
-                revision="2026.11.11.1",
+                revision="2026.11.13.1",
                 tasks_input="forbidden",
                 accepts_settings=True,
                 accepts_init=False,
@@ -809,7 +818,7 @@ PRESETS = MappingProxyType(
                 budget="14-17 min; 2 H100-h",
             ),
             Preset(
-                revision="2026.11.11.1",
+                revision="2026.11.13.1",
                 tasks_input="required",
                 accepts_settings=False,
                 accepts_init=False,
@@ -931,7 +940,7 @@ PRESETS = MappingProxyType(
                 recipe=_ASYNC_P40,
                 updates=100,
                 measured=range(1, 101),
-                evaluations=(replace(_PANEL, every=10, at_start=True),),
+                evaluations=(replace(_TASK_SET, every=10, at_start=True),),
                 checkpoint_every=10,
                 gaps=_GAPS,
             ),
@@ -959,29 +968,22 @@ def evaluation_answer_count(evaluation: Evaluation, tasks: ArtifactStep) -> int:
 
 
 def _write_sample(selection: str, filename: str, count: int, seed: int, output: str) -> None:
-    generator = random.Random(seed)
-    rows = []
-    seen = 0
     fs, key = filesystem_for(prefix_join(selection, f"{filename}.parquet"))
     with fs.open(key, "rb") as stream:
         source = pq.ParquetFile(stream)
         schema = source.schema_arrow
-        for batch in source.iter_batches(batch_size=256):
-            for row in batch.to_pylist():
-                seen += 1
-                if len(rows) < count:
-                    rows.append(row)
-                else:
-                    index = generator.randrange(seen)
-                    if index < count:
-                        rows[index] = row
+        _, rows = seeded_sample(
+            (row for batch in source.iter_batches(batch_size=256) for row in batch.to_pylist()),
+            size=count,
+            key=lambda row: seeded_order(json.loads(row[TASK_SPEC_COLUMN])["id"], seed),
+        )
     if len(rows) != count:
         raise ValueError(f"selection has only {len(rows)} eligible tasks; {count} are required")
     fs, key = filesystem_for(prefix_join(output, f"{filename}.parquet"))
     fs.makedirs(str(PurePosixPath(key).parent), exist_ok=True)
     with fs.open(key, "wb") as stream:
         pq.write_table(pa.Table.from_pylist(rows, schema=schema), stream)
-    for name in (TASK_MANIFEST_FILENAME, SUMMARY_FILENAME):
+    for name in (TASK_MANIFEST_FILENAME,):
         source_fs, source_key = filesystem_for(prefix_join(selection, name))
         if source_fs.exists(source_key):
             fs, key = filesystem_for(prefix_join(output, name))
@@ -1003,14 +1005,6 @@ def sampled_tasks_step(selection: ArtifactStep, filename: str, count: int, seed:
     )
 
 
-BATCH_SETTINGS = {
-    "trainer.train_batch_size": "train_batch_size",
-    "trainer.policy_mini_batch_size": "policy_mini_batch_size",
-    "generator.n_samples_per_prompt": "n_samples_per_prompt",
-    "trainer.micro_train_batch_size_per_gpu": "micro_train_batch_size_per_gpu",
-}
-
-
 def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Preset) -> RecipePatch:
     """Validate typed settings, then enforce the preset's input and measurement ownership."""
     try:
@@ -1027,9 +1021,7 @@ def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Prese
     owners = {
         "use the preset's declared owned keys": any(has(path) for path in preset.owned_keys),
         "choose network transport in Layout": any(key.startswith("NCCL_") for key in values.get("extra_env", {})),
-        "evaluation requests are fixed by the preset": (
-            has("trainer.callbacks") or any(key.startswith("eval_") for key in (*trainer, *generator))
-        ),
+        "evaluation requests are fixed by the preset": any(key.startswith("eval_") for key in (*trainer, *generator)),
         "select curated data with --tasks": has("data") and bool(values["data"].keys() - preset.data_settings),
         "use the preset's permitted setting sections": (
             preset.setting_sections is not None
@@ -1042,8 +1034,9 @@ def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Prese
     return updated
 
 
-def default_selection(preset: Preset) -> ArtifactStep[Artifact]:
-    return selection_artifact(preset.tasks)
+def task_selections(preset: Preset, tasks: ArtifactStep | None = None) -> tuple[ArtifactStep, ArtifactStep]:
+    default = selection_artifact(preset.tasks)
+    return default, tasks or default
 
 
 def cluster_config_path(cluster: str) -> str:
@@ -1088,10 +1081,10 @@ def selection_artifact(value: str) -> ArtifactStep:
     return ArtifactStep.adopt(f"{SELECTION_PREFIX}/{name}", version, str(StoragePath(SELECTION_ROOT) / name / version))
 
 
-def published_artifact(value: str, *, revision: str) -> ArtifactStep:
+def published_artifact(value: str) -> ArtifactStep:
     name, separator, version = value.rpartition("@")
     if not separator:
-        name, version = value, revision
+        raise click.BadParameter("use NAME@VERSION for published artifacts")
     if is_mutable_version(version):
         raise click.BadParameter("use an immutable artifact version instead of dev")
     root = str(StoragePath(artifact_prefix(P40.cluster)) / name / version)
@@ -1112,15 +1105,8 @@ def run_path(cluster: str, name: str, version: str) -> str:
     return str(StoragePath(artifact_prefix(cluster)) / name / version)
 
 
-def panel_evaluation(preset: Preset) -> Evaluation | None:
-    return next(
-        (
-            evaluation
-            for evaluation in preset.evaluations
-            if any(metric.key.startswith(evaluation.name + "/") for metric in preset.guards)
-        ),
-        None,
-    )
+def eval_lite_evaluation(preset: Preset) -> Evaluation | None:
+    return next((evaluation for evaluation in preset.evaluations if evaluation.held_out), None)
 
 
 def utc_millis(value: str) -> int:

@@ -31,30 +31,26 @@ from pathlib import Path
 import click
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
-from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, run
+from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, run
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.rl_progress import Change, Comparison, ComparisonRole, Invariant, Label, Verdict
 from marin.rl.skyrl import (
-    MISSING_CONFIG_VALUE,
     SkyRLReceiptLookupError,
     SkyRLRun,
-    declared_config_value,
     read_skyrl_launch_receipt,
-    set_config_value,
     skyrl_cpu_command,
 )
-from marin.rl.skyrl_records import read_stored_skyrl_receipt
+from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_receipt, recorded_launch
 from pydantic import BaseModel
-from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
 from scipy.stats import t
-from skyrlrecipe.documents import MISSING, get_path
+from skyrlrecipe.documents import MISSING, get_path, set_path
 from tabulate import tabulate
 
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_recipe as recipe
-from experiments.post_training.snowball_rl_command import EXIT_CODES, REFUSAL_EXIT_CODE, SnowballCommand
+from experiments.post_training.snowball_rl_command import EXIT_CODES, SnowballCommand
 from experiments.post_training.snowball_rl_scoring import GATE_INPUTS_FILENAME as GATE_INPUTS_FILENAME
 from experiments.post_training.snowball_rl_scoring import (
     GateInputs,
@@ -69,7 +65,7 @@ from experiments.post_training.snowball_rl_scoring import (
 from experiments.post_training.snowball_rl_scoring import training_invariants as training_invariants
 
 OUTCOME_PREFIX = "generate/outcome/"
-GATE_REVISION = "2026.11.10"
+GATE_REVISION = "2026.11.13"
 GATE_REPORT_FILENAME = "gate_report.json"
 GATE_MARKDOWN_FILENAME = "gate_report.md"
 
@@ -125,7 +121,7 @@ def validate_candidate(preset: presets.Preset, inputs: GateInputs, *, control: b
             receipt = read_stored_skyrl_receipt(path)
             if receipt is None:
                 raise InvalidComparison(f"control receipt is unavailable: {path}")
-            _check_control_config(receipt.native.config, current)
+            _check_control_config(receipt.native.config, current, recorded_launch(receipt))
 
 
 def gate_inputs(
@@ -150,7 +146,7 @@ class RunMetadata(GateInputs):
     base_commit: str | None = None
     dirty: bool | None = None
     replicates: int
-    panel: str | None = None
+    eval_lite: str | None = None
     engines: tuple[dict, ...] = ()
     attempt_ids: tuple[str, ...] = ()
     config_changes: tuple[str, ...] = ()
@@ -162,7 +158,7 @@ class ControlMetadata(BaseModel):
     runs: int
     gate_revision: str = GATE_REVISION
     engines: tuple[dict, ...] = ()
-    panel: str | None = None
+    eval_lite: str | None = None
 
 
 class GateReport(Artifact):
@@ -175,6 +171,9 @@ class GateReport(Artifact):
     invariants: tuple[Invariant, ...]
     comparisons: tuple[Comparison, ...]
     gaps: tuple[str, ...]
+
+    def rows(self, *roles: ComparisonRole) -> tuple[Comparison, ...]:
+        return tuple(row for row in self.comparisons if row.role in roles)
 
 
 @dataclass(frozen=True)
@@ -280,60 +279,45 @@ def _compare(
     noise = calibrate({pin: [run.values for run in group] for pin, group in controls.items()})
     values = [run.values for run in runs]
     n_control = sum(map(len, controls.values()))
-    objectives = {metric.key: metric for metric in preset.objectives}
-    rows = []
-    for metric in preset.guards:
-        role = ComparisonRole.OBJECTIVE if metric.key in objectives else ComparisonRole.CONSTRAINT
-        row = _comparison(
-            metric.key,
-            role,
-            values,
-            noise.get(metric.key),
-            n_control,
-            len(preset.guards),
-            higher_is_better=metric.higher_is_better,
-        )
-        if row.delta is None:
-            raise InvalidComparison(f"missing or non-finite guard metric: {metric.key}")
-        if row.sd == 0:
-            raise InvalidComparison(
-                f"control variation is zero for guard metric: {metric.key}; calibration is unavailable"
-            )
-        signed = row.delta * (1 if metric.higher_is_better else -1)
-        rows.append(row.model_copy(update={"passes": signed >= -row.tolerance}))
+    objectives = {metric.key for metric in preset.objectives}
     built_in = {(metric.key, metric.higher_is_better) for metric in preset.guards}
-    for text in dict.fromkeys(requirements):
-        requirement = parse_requirement(text)
-        if requirement.bound is not None or (requirement.key, requirement.higher_is_better) in built_in:
-            continue
-        row = _comparison(
-            requirement.key,
-            ComparisonRole.REQUIREMENT,
-            values,
-            noise.get(requirement.key),
-            n_control,
-            higher_is_better=requirement.higher_is_better,
+    declarations = [
+        (
+            metric,
+            ComparisonRole.OBJECTIVE if metric.key in objectives else ComparisonRole.CONSTRAINT,
+            len(preset.guards),
+            True,
         )
-        if row.delta is None or row.tolerance is None:
-            raise InvalidComparison(
-                f"missing or zero-variation requirement metric: {requirement.key}; use a number bound"
-            )
-        signed = row.delta * (1 if requirement.higher_is_better else -1)
-        rows.append(row.model_copy(update={"passes": signed >= -row.tolerance}))
-    guard_keys = {metric.key for metric in preset.guards}
-    for metric in preset.objectives:
-        if metric.key not in guard_keys:
-            rows.append(
-                _comparison(
-                    metric.key,
-                    ComparisonRole.OBJECTIVE,
-                    values,
-                    noise.get(metric.key),
-                    n_control,
-                    len(preset.objectives),
-                    higher_is_better=metric.higher_is_better,
+        for metric in preset.guards
+    ]
+    declarations.extend(
+        (requirement, ComparisonRole.REQUIREMENT, 1, True)
+        for text in dict.fromkeys(requirements)
+        if (requirement := parse_requirement(text)).bound is None
+        and (requirement.key, requirement.higher_is_better) not in built_in
+    )
+    declarations.extend(
+        (metric, ComparisonRole.OBJECTIVE, len(preset.objectives), False)
+        for metric in preset.objectives
+        if metric.key not in {guard.key for guard in preset.guards}
+    )
+    rows = []
+    for metric, role, count, required in declarations:
+        row = _comparison(
+            metric.key, role, values, noise.get(metric.key), n_control, count, higher_is_better=metric.higher_is_better
+        )
+        if required:
+            kind = "requirement" if role == ComparisonRole.REQUIREMENT else "guard"
+            if row.delta is None:
+                raise InvalidComparison(f"missing or non-finite {kind} metric: {metric.key}")
+            if row.sd == 0:
+                raise InvalidComparison(
+                    f"control variation is zero for {kind} metric: {metric.key}; "
+                    "use a numeric bound for a relative requirement"
                 )
-            )
+            signed = row.delta * (1 if metric.higher_is_better else -1)
+            row = row.model_copy(update={"passes": signed >= -row.tolerance})
+        rows.append(row)
     selected = {row.metric for row in rows}
     prefixes = tuple(evaluation.name + "/" for evaluation in preset.evaluations)
     for key in sorted(set().union(*values, noise) - selected):
@@ -358,43 +342,19 @@ def _compare(
 
 def _render_markdown(report: GateReport) -> str:
     lines = [f"# {report.preset}"]
-    for title, rows in (
+    tables = (
         (
             "Objectives",
-            [
-                row.model_dump(
-                    include={"metric", "control", "run", "delta_percent", "noise_percent", "passes", "change"}
-                )
-                for row in report.comparisons
-                if row.role == ComparisonRole.OBJECTIVE
-            ],
+            (ComparisonRole.OBJECTIVE,),
+            {"metric", "control", "run", "delta_percent", "noise_percent", "passes", "change"},
         ),
-        (
-            "Constraints",
-            [
-                row.model_dump(include={"metric", "control", "run", "passes"})
-                for row in report.comparisons
-                if row.role in (ComparisonRole.CONSTRAINT, ComparisonRole.REQUIREMENT)
-            ],
-        ),
-        ("Invariants", [row.model_dump() for row in report.invariants]),
-        (
-            "Reported",
-            [
-                row.model_dump(include={"metric", "control", "run", "delta", "change"})
-                for row in report.comparisons
-                if row.role == ComparisonRole.REPORTED
-            ],
-        ),
-        (
-            "Breakdown",
-            [
-                row.model_dump(include={"metric", "tasks", "control", "control_min", "control_max", "run"})
-                for row in report.comparisons
-                if row.role == ComparisonRole.SLICE
-            ],
-        ),
-    ):
+        ("Constraints", (ComparisonRole.CONSTRAINT, ComparisonRole.REQUIREMENT), {"metric", "control", "run", "passes"}),
+        ("Invariants", (), None),
+        ("Reported", (ComparisonRole.REPORTED,), {"metric", "control", "run", "delta", "change"}),
+        ("Breakdown", (ComparisonRole.SLICE,), {"metric", "tasks", "control", "control_min", "control_max", "run"}),
+    )
+    for title, roles, fields in tables:
+        rows = [row.model_dump(include=fields) for row in (report.rows(*roles) if roles else report.invariants)]
         lines += ["", f"## {title}", "", tabulate(rows, "keys", "github", floatfmt=".8g", missingval="unavailable")]
     lines += ["", f"Result: {report.verdict}" + (f" ({report.label})" if report.label else "")]
     if report.reason:
@@ -420,15 +380,16 @@ def _config_values(value, prefix: str = "") -> dict[str, object]:
     return {prefix: value}
 
 
-def comparison_config(launch: dict) -> dict[str, object]:
+def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> dict[str, object]:
     """Compare complete native configuration with declared runtime aliases resolved."""
+    recorded = recorded or RecordedLaunch.from_document(launch, attempt=launch["run"]["attempt_id"])
     config = deepcopy(launch)
     inputs = launch["inputs"]
 
     def replace_alias(path, aliases, replacement):
-        current = declared_config_value(config, path)
+        current = get_path(config, path)
         if any(current == alias for alias in aliases):
-            set_config_value(config, path, replacement)
+            set_path(config, path, replacement)
 
     def sources_at(sources, prefix):
         normalized = []
@@ -438,21 +399,24 @@ def comparison_config(launch: dict) -> dict[str, object]:
             normalized.append(copied)
         return normalized
 
-    def bound_data(values, sources, normalized, path):
+    def bound_data(values, sources, descriptors, normalized, path):
         if not isinstance(values, list) or len(values) != len(sources):
             raise InvalidComparison(f"native data binding differs from declared inputs: {path}")
-        for value, source in zip(values, sources, strict=True):
-            aliases = [prefix_join(source[key], source["relative_path"]) for key in ("uri", "local_path")]
+        for value, source, descriptor in zip(values, sources, descriptors, strict=True):
+            aliases = [prefix_join(root, descriptor.relative_path) for root in (descriptor.uri, descriptor.local_path)]
             if value != source and value not in aliases:
                 raise InvalidComparison(f"native data binding differs from declared inputs: {path}")
         return normalized
 
-    for name, path in (("train_data", "skyrl.data.train_data"), ("validation_data", "skyrl.data.val_data")):
+    for name, path, descriptors in (
+        ("train_data", "skyrl.data.train_data", recorded.train_data),
+        ("validation_data", "skyrl.data.val_data", recorded.validation_data),
+    ):
         sources = inputs[name]
         normalized = sources_at(sources, f"inputs.{name}")
         config["inputs"][name] = normalized
         if sources:
-            set_config_value(config, path, bound_data(declared_config_value(config, path), sources, normalized, path))
+            set_path(config, path, bound_data(get_path(config, path), sources, descriptors, normalized, path))
         else:
             filename = "train.parquet" if name == "train_data" else "validation.parquet"
             aliases = [[str(Path(home) / "data/gsm8k" / filename)] for home in (str(Path.home()), "/root")]
@@ -469,13 +433,13 @@ def comparison_config(launch: dict) -> dict[str, object]:
                     else bound_data(
                         profile["data_files"],
                         sources,
+                        recorded.evaluation_data[name],
                         normalized,
                         f"skyrl.trainer.callbacks.{index}.additional_evaluations.{name}.data_files",
                     )
                 )
 
-    model = inputs["model"]
-    aliases = [model["uri"], model["local_path"]]
+    aliases = [recorded.model_uri, recorded.model_local_path]
     config["inputs"]["model"]["local_path"] = "<model-staging>"
     for path in (
         "skyrl.trainer.policy.model.path",
@@ -485,12 +449,12 @@ def comparison_config(launch: dict) -> dict[str, object]:
         "skyrl.generator.model_name",
         "skyrl.generator.trajectory_retention.model_path",
     ):
-        value = declared_config_value(config, path)
-        if value is MISSING_CONFIG_VALUE:
+        value = get_path(config, path)
+        if value is MISSING:
             continue
         if value not in aliases:
             raise InvalidComparison(f"native model binding differs from declared inputs: {path}")
-        set_config_value(config, path, "<model-staging>")
+        set_path(config, path, "<model-staging>")
     replace_alias(
         "skyrl.generator.engine_init_kwargs.served_model_name",
         [uri.rstrip("/").rsplit("/", 1)[-1] for uri in aliases],
@@ -514,11 +478,11 @@ def comparison_config(launch: dict) -> dict[str, object]:
         "iris.job_name",
         "iris.wandb_entity",
     ):
-        set_config_value(config, path, f"<identity:{path}>")
+        set_path(config, path, f"<identity:{path}>")
     replace_alias("skyrl.trainer.run_name", [launch["iris"]["job_name"]], "<launcher-run-name>")
     replace_alias(
         "skyrl.generator.trajectory_retention.run_id",
-        [launch["run"]["id"], launch["iris"]["job_name"]],
+        [recorded.run_id, launch["iris"]["job_name"]],
         "<run-identity>",
     )
     runtime = config["skyrl"].get("runtime", {})
@@ -539,42 +503,40 @@ def _current_configs(preset: presets.Preset, inputs: GateInputs) -> tuple[dict, 
                     preset,
                     name=f"current-config-{index}",
                     tasks=presets.selection_artifact(candidate.tasks) if candidate.tasks else None,
-                    init=(
-                        presets.published_artifact(candidate.init, revision=preset.revision) if candidate.init else None
-                    ),
+                    init=(presets.published_artifact(candidate.init) if candidate.init else None),
                     settings=candidate.settings,
                 )
                 step = recipe.run_step(preset, spec)
-                context = StepContext.for_run(
-                    str(root / f"run-{index}"),
-                    presets.artifact_prefix(preset.recipe.layout.cluster),
-                    runtime_args=step.runtime_args,
-                    deps=step.deps,
-                )
                 path = root / f"config-{index}.yaml"
-                path.write_text(step.build_config(context).launch_config_yaml)
+                path.write_text(
+                    materialized_config(step, presets.artifact_prefix(preset.recipe.layout.cluster)).launch_config_yaml
+                )
                 paths.append(str(path))
             except (ValueError, click.BadParameter) as error:
                 raise InvalidComparison("recorded inputs cannot build the current preset") from error
 
-        native_root = str(presets.REPO_ROOT / "vendor/skyrl")
-        program = (
-            "import json,sys\nfrom pathlib import Path\nfrom omegaconf import OmegaConf\n"
-            "from cloud.iris import launch_config\nimport skyrl_train,marinskyrl\n"
-            f"assert all(Path(module.__file__).resolve().is_relative_to({native_root!r}) "
-            "for module in (launch_config,skyrl_train,marinskyrl))\n"
-            "print(json.dumps([OmegaConf.to_container(launch_config.load_launch_config(path), resolve=True) "
-            "for path in sys.argv[1:]]))\n"
+        return tuple(compose_configs(paths))
+
+
+def compose_configs(paths: Sequence[str]) -> list[dict]:
+    """Load launch files with the native SkyRL composer in its CPU environment."""
+    native_root = str(presets.REPO_ROOT / "vendor/skyrl")
+    program = (
+        "import json,sys\nfrom pathlib import Path\nfrom omegaconf import OmegaConf\n"
+        "from cloud.iris import launch_config\nimport skyrl_train,marinskyrl\n"
+        f"assert all(Path(module.__file__).resolve().is_relative_to({native_root!r}) "
+        "for module in (launch_config,skyrl_train,marinskyrl))\n"
+        "print(json.dumps([OmegaConf.to_container(launch_config.load_launch_config(path), resolve=True) "
+        "for path in sys.argv[1:]]))\n"
+    )
+    try:
+        result = subprocess.run(
+            skyrl_cpu_command("python", "-c", program, *paths), capture_output=True, text=True, timeout=120
         )
-        try:
-            result = subprocess.run(
-                skyrl_cpu_command("python", "-c", program, *paths), capture_output=True, text=True, timeout=120
-            )
-            result.check_returncode()
-            defaults, expected = json.loads(result.stdout.splitlines()[-1])
-        except (subprocess.SubprocessError, ValueError, IndexError) as error:
-            raise InvalidComparison("current preset recipe cannot be composed") from error
-    return defaults, expected
+        result.check_returncode()
+        return json.loads(result.stdout.splitlines()[-1])
+    except (subprocess.SubprocessError, ValueError, IndexError) as error:
+        raise InvalidComparison("current preset recipe cannot be composed") from error
 
 
 def _changed_config_keys(left: dict[str, object], right: dict[str, object]) -> set[str]:
@@ -605,8 +567,8 @@ def _setting_keys(inputs: GateInputs, keys: set[str]) -> set[str]:
     return allowed
 
 
-def _check_control_config(config: dict, current: dict[str, object]) -> None:
-    differences = _changed_config_keys(comparison_config(config), current)
+def _check_control_config(config: dict, current: dict[str, object], recorded: RecordedLaunch | None = None) -> None:
+    differences = _changed_config_keys(comparison_config(config, recorded), current)
     if differences:
         raise InvalidComparison(f"control config differs from current preset defaults: {', '.join(sorted(differences))}")
 
@@ -633,7 +595,7 @@ def _write_gate(
             fields = {"tree": "tree_hash", "base_commit": "base_commit", "dirty": "dirty"}
             metadata = metadata.model_copy(
                 update={
-                    "panel": runs[0].panel,
+                    "eval_lite": runs[0].eval_lite,
                     "engines": tuple(run.engine for run in runs),
                     "attempt_ids": tuple(run.attempt_id for run in runs),
                     **{field: runs[0].provenance[key] for field, key in fields.items()},
@@ -652,7 +614,7 @@ def _write_gate(
         if not runs or not controls:
             raise InvalidComparison("comparison needs recorded runs and control replicates")
         control = control.model_copy(
-            update={"panel": controls[0].panel, "engines": tuple(run.engine for run in controls)}
+            update={"eval_lite": controls[0].eval_lite, "engines": tuple(run.engine for run in controls)}
         )
         for pin, group in grouped.items():
             for candidate in group:
@@ -665,8 +627,8 @@ def _write_gate(
             )
         if any(candidate.version != preset.revision for candidate in runs):
             raise InvalidComparison("preset revision differs")
-        if any(candidate.panel_ids != controls[0].panel_ids for candidate in (*runs, *controls)):
-            raise InvalidComparison("held-out panel task IDs differ")
+        if any(candidate.task_set_ids != controls[0].task_set_ids for candidate in (*runs, *controls)):
+            raise InvalidComparison("held-out evaluation task IDs differ")
         if any(candidate.evaluation_identity != controls[0].evaluation_identity for candidate in (*runs, *controls)):
             raise InvalidComparison("evaluation protocol or held-out TaskSpec content differs")
         if any(candidate.missing_tokens for candidate in (*runs, *controls)):
@@ -677,13 +639,13 @@ def _write_gate(
         explicit = _setting_keys(inputs, set(current) | set(expected))
         metadata = metadata.model_copy(update={"config_changes": tuple(sorted(changed | explicit))})
         for candidate in runs:
-            differences = _changed_config_keys(comparison_config(candidate.config), expected)
+            differences = _changed_config_keys(comparison_config(candidate.config, candidate.recorded), expected)
             if differences:
                 raise InvalidComparison(
                     f"candidate config differs from recorded inputs: {', '.join(sorted(differences))}"
                 )
         for candidate in controls:
-            _check_control_config(candidate.config, current)
+            _check_control_config(candidate.config, current, candidate.recorded)
         comparisons = _compare(preset, runs, grouped, inputs.requirements)
         verdict, label = _verdict(invariants, comparisons)
     except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
@@ -706,10 +668,9 @@ def _write_gate(
         ),
         (GATE_MARKDOWN_FILENAME, _render_markdown(report)),
     ):
-        fs, key = filesystem_for(str(StoragePath(output) / name))
-        fs.makedirs(key.rsplit("/", 1)[0], exist_ok=True)
-        with fs.open(key, "wt") as stream:
-            stream.write(value)
+        path = StoragePath(output) / name
+        path.parent.mkdirs()
+        path.write_text(value)
     return report
 
 
@@ -859,38 +820,32 @@ def main(
     if (candidate_name is None) == (leave_out is None):
         raise click.UsageError("choose --candidate NAME[@VERSION] or --leave-out r<index>")
     preset = presets.PRESETS[preset_name]
-    try:
-        pins = control_pins(preset)
-        index = None
-        if leave_out is not None:
-            if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= pins[0].runs:
-                raise click.BadParameter(f"choose r0 through r{pins[0].runs - 1}", param_hint="--leave-out")
-            index = int(leave_out[1:])
-            candidate_name = presets.control_name(pins[0].preset, pins[0].commit, index)
-        name, separator, version = candidate_name.partition("@")
-        source = presets.run_path(preset.recipe.layout.cluster, name, version if separator else preset.revision)
-        namespace = user_owned_name(
-            f"{presets.RUN_PREFIX}/rescore/{preset_name}-{fingerprint_hash(canonical_json((source, pins, index)))}"
-        )
-        recorded = GateInputs(preset_name=pins[0].preset) if index is not None else read_gate_inputs(source)
-        if index is None and recorded.preset_name != preset_name:
-            raise InvalidComparison(f"recorded preset is {recorded.preset_name}, not {preset_name}")
-        inputs = recorded.model_copy(
-            update={"requirements": tuple(dict.fromkeys((*recorded.requirements, *requirements)))}
-        )
-        for text in inputs.requirements:
-            parse_requirement(text)
-        step = _gate_artifact(
-            f"{namespace}/gate-n1-{pins[0].commit}",
-            preset,
-            (f"{name}@{version if separator else preset.revision}",),
-            inputs,
-            index,
-            run_paths=(source,),
-        )
-    except (InvalidComparison, FileNotFoundError) as error:
-        click.echo(json.dumps({"preset": preset_name, "verdict": Verdict.INVALID.value, "reason": str(error)}))
-        raise click.exceptions.Exit(REFUSAL_EXIT_CODE) from error
+    pins = control_pins(preset)
+    index = None
+    if leave_out is not None:
+        if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= pins[0].runs:
+            raise click.BadParameter(f"choose r0 through r{pins[0].runs - 1}", param_hint="--leave-out")
+        index = int(leave_out[1:])
+        candidate_name = presets.control_name(pins[0].preset, pins[0].commit, index)
+    name, separator, version = candidate_name.partition("@")
+    source = presets.run_path(preset.recipe.layout.cluster, name, version if separator else preset.revision)
+    namespace = user_owned_name(
+        f"{presets.RUN_PREFIX}/rescore/{preset_name}-{fingerprint_hash(canonical_json((source, pins, index)))}"
+    )
+    recorded = GateInputs(preset_name=pins[0].preset) if index is not None else read_gate_inputs(source)
+    if index is None and recorded.preset_name != preset_name:
+        raise InvalidComparison(f"recorded preset is {recorded.preset_name}, not {preset_name}")
+    inputs = recorded.model_copy(update={"requirements": tuple(dict.fromkeys((*recorded.requirements, *requirements)))})
+    for text in inputs.requirements:
+        parse_requirement(text)
+    step = _gate_artifact(
+        f"{namespace}/gate-n1-{pins[0].commit}",
+        preset,
+        (f"{name}@{version if separator else preset.revision}",),
+        inputs,
+        index,
+        run_paths=(source,),
+    )
     report = run(step)[0]
     payload = {
         "report": str(StoragePath(report.path) / GATE_REPORT_FILENAME),

@@ -90,6 +90,7 @@ CI_BROAD_TRIGGERS: frozenset[str] = frozenset({"infra/ci/select_tests.py", ".git
 BROAD_TRIGGERS = LOCAL_BROAD_TRIGGERS | CI_BROAD_TRIGGERS
 
 MARIN_NATIVE_CONFIG_TESTS = {
+    "tests/rl/test_rl_launch_documents.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
     "experiments/post_training/curriculum_rl/test_launch.py": (
         "vendor/skyrl/cloud/iris/",
         "vendor/skyrl/skyrl-train/skyrl_train/config/",
@@ -786,12 +787,6 @@ def classify(
     forced: set[str] = set()
     native_changed: set[str] = set()
     experiment_asset_areas: set[str] = set()
-
-    launch_census = "tests/rl/test_rl_launch_documents.py"
-    if (repo_root / launch_census).is_file() and any(
-        path.startswith(("vendor/skyrl/", "lib/skyrlrecipe/")) for path in changed_files
-    ):
-        direct_tests["marin"].append(launch_census)
 
     for filepath in changed_files:
         if filepath in broad_triggers:

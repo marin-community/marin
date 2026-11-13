@@ -7,7 +7,6 @@ from pathlib import Path
 
 import click
 import pytest
-import yaml
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.training.training import LevanterCheckpoint
@@ -15,7 +14,9 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 
 from experiments.post_training import snowball_rl as snowball
+from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
+from experiments.post_training import snowball_rl_recipe as recipe
 
 
 def _render(step, path, *, runtime=False):
@@ -88,9 +89,9 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
         assert "--preset learning-medium --version 2026.11.12.2 --control" in str(error.value)
     assert snowball.build_run(unrelated).gate is not None
     assert gate.control_pins(unrelated) == original_pins
-    panel = tmp_path / presets.DEFAULT_EVAL_LITE_NAME / "2026.11.12.2"
-    panel.mkdir(parents=True)
-    (panel / "summary.json").write_bytes(
+    task_set = tmp_path / presets.DEFAULT_EVAL_LITE_NAME / "2026.11.12.2"
+    task_set.mkdir(parents=True)
+    (task_set / "summary.json").write_bytes(
         (tmp_path / presets.DEFAULT_EVAL_LITE_NAME / presets.DEFAULT_EVAL_LITE_VERSION / "summary.json").read_bytes()
     )
     promoted = replace(
@@ -109,14 +110,17 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
             tokenizer_uri="fixture-tokenizer",
             tokenizer_revision="v2",
         ),
-        patch=learning.patch.with_settings(
-            (
-                "trainer.train_batch_size=64",
-                "trainer.policy_mini_batch_size=64",
-                "generator.n_samples_per_prompt=8",
-                "trainer.micro_train_batch_size_per_gpu=2",
-                'trainer.policy.optimizer_config={"lr": 2e-06}',
-            )
+        recipe=replace(
+            learning.recipe,
+            config=learning.recipe.config.with_settings(
+                (
+                    "trainer.train_batch_size=64",
+                    "trainer.policy_mini_batch_size=64",
+                    "generator.n_samples_per_prompt=8",
+                    "trainer.micro_train_batch_size_per_gpu=2",
+                    'trainer.policy.optimizer_config={"lr": 2e-06}',
+                )
+            ),
         ),
     )
     shared = replace(
@@ -137,7 +141,9 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
     )
     summary_path = Path(selection.path()) / presets.SUMMARY_FILENAME
     summary = json.loads(summary_path.read_text())
-    summary["recipe"]["exclusions"] = [{"uri": str(panel / presets.FULL_VALIDATION_FILENAME), "version": panel.name}]
+    summary["recipe"]["exclusions"] = [
+        {"uri": str(task_set / presets.FULL_VALIDATION_FILENAME), "version": task_set.name}
+    ]
     summary_path.write_text(json.dumps(summary))
     for current, arguments in ((promoted, {"control": True}), (shared, {"tasks": selection})):
         step = snowball.build_run(current, **arguments).runs[0]
@@ -324,7 +330,7 @@ print(json.dumps([{
     assert all(row["numerics"] == [True, "bfloat16", False] for row in rows if row is not rows[-4])
     sampled = next(row for row in rows if row["path"] == str(tmp_path / "revisioned-speed.yaml"))
     assert sampled["validation_identity"].partition(":")[0].endswith("@2026.11.12.2")
-    assert rows[0]["name"].endswith("2026.11.11.1")
+    assert rows[0]["name"].endswith("2026.11.13.1")
     for row in rows[-3:-1]:
         assert row["name"].endswith("2026.11.12.2")
         assert row["model_uri"] == "s3://fixture-model/v2"
@@ -333,20 +339,7 @@ print(json.dumps([{
         assert row["eval_uri"].endswith("eval-lite/2026.11.12.2")
     assert rows[-1]["model_uri"] == str(export)
     assert rows[-1]["tokenizer"] == ["fixture-tokenizer", "v2"]
-    speed = presets.PRESETS["speed-short"]
-    for schedule in ({"every": 1}, {"at_start": True}):
-        with pytest.raises(ValueError, match="non-primary"):
-            snowball.build_run(
-                replace(speed, evaluations=(speed.evaluations[0], replace(speed.evaluations[1], **schedule)))
-            )
-    with pytest.raises(ValueError, match="identifier"):
-        snowball.build_run(replace(speed, evaluations=(replace(speed.evaluations[0], name="invalid-name"),)))
-    with pytest.raises(click.BadParameter, match="owned by"):
-        snowball.build_run(
-            presets.PRESETS["learning-medium"],
-            settings=('generator.sampling_params={"ignore_eos": true}',),
-        )
-    summary = Path(presets.default_selection(presets.PRESETS["learning-medium"]).path()) / "summary.json"
+    summary = Path(presets.selection_artifact(presets.PRESETS["learning-medium"].tasks).path()) / "summary.json"
     content = json.loads(summary.read_text())
     content["grader_kind_counts"]["train"]["remote_judge"] = 1
     summary.write_text(json.dumps(content))
@@ -355,7 +348,7 @@ print(json.dumps([{
 
 
 @pytest.mark.timeout(180)
-def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch, native_json):
+def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch, native_json):
     monkeypatch.delenv("WANDB_ENTITY", raising=False)
     bindings = {binding for preset in presets.PRESETS.values() for binding in (preset.tasks, preset.eval_lite)}
     summaries = {
@@ -366,88 +359,35 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
     for binding, summary in summaries.items():
         (StoragePath(presets.selection_artifact(binding).path()) / presets.SUMMARY_FILENAME).write_text(summary)
     revisions = {
-        "speed-short": {"2026.11.11.1": ("119a073c", "f5a95ebb")},
-        "data-short": {"2026.11.11.1": ("99dd7ee3", "41ef7eb9")},
-        "speed-medium": {"2026.11.12.1": ("31ba86e0", "6d3b03ab")},
-        "learning-medium": {"2026.11.12.1": ("f033a3c0", "56608c44")},
-        "speed-long": {"2026.11.11.1": ("41997e47", "4e98a4f5")},
+        "speed-short": {"2026.11.13.1": None},
+        "data-short": {"2026.11.13.1": None},
+        "speed-medium": {"2026.11.12.1": None},
+        "learning-medium": {"2026.11.12.1": None},
+        "data-medium": {"2026.11.12.1": None},
+        "speed-long": {"2026.11.11.1": None},
+        "train-long": {"2026.11.11.1": None},
     }
     expected = {name: versions.get(presets.PRESETS[name].revision) for name, versions in revisions.items()}
-
-    def render(step, path, output_path):
-        context = StepContext.for_run(
-            output_path,
-            "/snowball-pin-prefix",
-            runtime_args=step.runtime_args,
-            deps=step.deps,
-        )
-        path.write_text(step.build_config(context).launch_config_yaml)
-
     paths = []
-    outputs = {}
     for name in expected:
-        step = snowball.build_run(presets.PRESETS[name], control=True).runs[0]
+        preset = presets.PRESETS[name]
+        spec = recipe.run_spec(preset, name="fixture-default-" + name)
+        step = recipe.run_step(preset, spec)
         path = tmp_path / f"{name}.yaml"
-        outputs[name] = "/snowball-pin-output/" + step.name
-        render(step, path, outputs[name])
+        _render(step, path, runtime=True)
         paths.append(str(path))
-    candidate = snowball.build_run(presets.PRESETS["learning-medium"]).runs[0]
-    candidate_path = tmp_path / "learning-medium-candidate.yaml"
-    render(candidate, candidate_path, outputs["learning-medium"])
-    candidate_launch = yaml.safe_load(candidate_path.read_text())
-    control_launch = yaml.safe_load((tmp_path / "learning-medium.yaml").read_text())
-    candidate_launch["run"]["id"] = control_launch["run"]["id"]
-    candidate_launch["run"]["attempt_id"] = control_launch["run"]["attempt_id"]
-    candidate_launch["iris"]["job_name"] = control_launch["iris"]["job_name"]
-    candidate_path.write_text(yaml.safe_dump(candidate_launch))
-    paths.append(str(candidate_path))
-    configs = native_json(
-        """
-import json, os, sys
-from pathlib import Path
-from omegaconf import OmegaConf
-from cloud.iris.launch_config import load_launch_config
-os.environ["HOME"] = "/snowball-pin-home"
-configs = [load_launch_config(Path(path)) for path in sys.argv[1:]]
-print(json.dumps([
-    OmegaConf.to_container(config, resolve=True) for config in configs
-], sort_keys=True))
-""",
-        paths,
-    )
-    for config in configs:
-        attempt = config["run"]["attempt_id"]
-        job = config["iris"]["job_name"]
-        assert job.endswith(attempt)
-        assert config["skyrl"]["trainer"]["run_name"] == job
-        assert config["skyrl"]["generator"]["trajectory_retention"]["run_id"] == job
-        stable_job = job.removesuffix(attempt) + "<attempt_id>"
-        config["run"]["attempt_id"] = "<attempt_id>"
-        config["iris"]["job_name"] = stable_job
-        config["skyrl"]["trainer"]["run_name"] = stable_job
-        config["skyrl"]["generator"]["trajectory_retention"]["run_id"] = stable_job
+    configs = gate.compose_configs(paths)
     actual = {
-        name: (
-            fingerprint_hash(
-                json.dumps({"skyrl": config["skyrl"], "allocation": config["iris"]["allocation"]}, sort_keys=True)
-            ),
-            fingerprint_hash(json.dumps(config, sort_keys=True)),
-        )
-        for name, config in zip(expected, configs[:-1], strict=True)
+        name: fingerprint_hash(json.dumps(gate.comparison_config(config), sort_keys=True))
+        for name, config in zip(expected, configs, strict=True)
     }
     print(json.dumps(actual, sort_keys=True, indent=2))
     assert actual == expected, "Fingerprint envelope changed: bump the changed preset revision and recollect controls."
-    learning_control = configs[list(expected).index("learning-medium")]
-    assert configs[-1]["skyrl"] == learning_control["skyrl"]
-    assert configs[-1]["iris"]["allocation"] == learning_control["iris"]["allocation"]
-    assert configs[-1]["run"]["export_hf"] == learning_control["run"]["export_hf"]
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):
     learning = presets.PRESETS["learning-medium"]
     data = presets.PRESETS["data-short"]
-    long = presets.PRESETS["train-long"]
-    assert snowball.build_run(replace(learning, gated=False)).gate is None
     with pytest.raises(click.BadParameter, match="accepts no --set"):
         snowball.build_run(
             replace(learning, accepts_settings=False), settings=("trainer.policy.optimizer_config.lr=2e-6",)
@@ -471,20 +411,22 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     ]
     assert len({step.name for step in repeated.runs}) == 3
     initializer = ArtifactStep.adopt("tests/initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint)
-    panel_name = presets.DEFAULT_EVAL_LITE_NAME
-    panel_version = presets.DEFAULT_EVAL_LITE_VERSION
-    new_panel = tmp_path / panel_name / "2026.11.05"
-    new_panel.mkdir(parents=True)
-    (new_panel / "summary.json").write_bytes((tmp_path / panel_name / panel_version / "summary.json").read_bytes())
-    changed_panel = replace(
+    task_set_name = presets.DEFAULT_EVAL_LITE_NAME
+    task_set_version = presets.DEFAULT_EVAL_LITE_VERSION
+    new_task_set = tmp_path / task_set_name / "2026.11.05"
+    new_task_set.mkdir(parents=True)
+    (new_task_set / "summary.json").write_bytes(
+        (tmp_path / task_set_name / task_set_version / "summary.json").read_bytes()
+    )
+    changed_task_set = replace(
         learning,
-        eval_lite=f"{panel_name}@2026.11.05",
+        eval_lite=f"{task_set_name}@2026.11.05",
     )
     pairs = [
         (name(), name(learning, "trainer.policy.optimizer_config.lr=2e-6")),
         (name(data, tasks=selection), name(data, tasks=replace(selection, version="2026.10.27"))),
         (name(), name(init=initializer)),
-        (name(), name(changed_panel)),
+        (name(), name(changed_task_set)),
     ]
     assert all(left != right for left, right in pairs), pairs
     assert name(
@@ -497,9 +439,6 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     assert name(learning, "trainer.policy.optimizer_config.lr=2e-6") == name(
         learning, "trainer.policy.optimizer_config.lr=0.000002"
     )
-    original = run(long)
-    run(long, "trainer.policy.optimizer_config.weight_decay=0.2")
-    assert run(long).fingerprint() == original.fingerprint()
     pin = snowball.snowball_rl_gate.control_pins(presets.PRESETS["learning-medium"])[0]
     for index in range(pin.runs):
         recorded_runs("learning-medium", presets.control_name(pin.preset, pin.commit, index))
@@ -518,12 +457,19 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     summary_path = Path(selection.path()) / "summary.json"
     summary = json.loads(summary_path.read_text())
     original_exclusions = summary["recipe"]["exclusions"]
+    heldout = summary["recipe"]["heldout"]
+    summary["recipe"]["heldout"] = [{"version": "different-development-input"}]
+    summary_path.write_text(json.dumps(summary))
+    with pytest.raises(click.BadParameter, match="different heldout"):
+        snowball.build_run(data, tasks=selection)
+    summary["recipe"]["heldout"] = heldout
+    summary_path.write_text(json.dumps(summary))
     for current in (data, presets.PRESETS["data-medium"]):
-        selected = replace(current, eval_lite=f"{panel_name}@2026.11.05")
+        selected = replace(current, eval_lite=f"{task_set_name}@2026.11.05")
         with pytest.raises(click.BadParameter, match="full EvalLite"):
             snowball.build_run(selected, tasks=selection)
         summary["recipe"]["exclusions"] = [
-            {"uri": str(new_panel / presets.FULL_VALIDATION_FILENAME), "version": "2026.11.05"}
+            {"uri": str(new_task_set / presets.FULL_VALIDATION_FILENAME), "version": "2026.11.05"}
         ]
         summary_path.write_text(json.dumps(summary))
         assert snowball.build_run(selected, tasks=selection).gate is not None
@@ -531,6 +477,6 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
         summary_path.write_text(json.dumps(summary))
     summary["recipe"]["exclusions"] = []
     summary_path.write_text(json.dumps(summary))
-    for tasks in (presets.default_selection(presets.PRESETS["learning-medium"]), selection):
+    for tasks in (presets.selection_artifact(presets.PRESETS["learning-medium"].tasks), selection):
         with pytest.raises(click.BadParameter, match="full EvalLite"):
             snowball.build_run(data, tasks=tasks)

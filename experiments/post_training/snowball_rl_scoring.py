@@ -20,9 +20,17 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from marin.execution.artifact import read_record
+from marin.execution.lazy import ArtifactStep
 from marin.rl.rl_progress import Invariant
 from marin.rl.skyrl import read_skyrl_launch_receipt
-from marin.rl.skyrl_records import attempt_tracking, read_skyrl_launch_config, read_skyrl_metrics
+from marin.rl.skyrl_records import (
+    RecordedLaunch,
+    RecordedSource,
+    attempt_tracking,
+    read_skyrl_launch_config,
+    read_skyrl_metrics,
+    recorded_launch,
+)
 from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
@@ -31,15 +39,15 @@ from taskcompendium.grading_result import Outcome
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training.task_curation.selection import TASK_MANIFEST_FILENAME, TASK_SPEC_COLUMN, TRAIN_FILENAME
 
+SLICE_COLUMNS = ("family", "aaii_category", "agentic")
+
 EVAL_SCORE_SCHEMA = pa.schema(
     [
         ("evaluation", pa.string()),
         ("step", pa.int32()),
         ("item", pa.string()),
         ("attempt", pa.int32()),
-        ("family", pa.string()),
-        ("aaii_category", pa.string()),
-        ("agentic", pa.bool_()),
+        *((column, pa.bool_() if column == "agentic" else pa.string()) for column in SLICE_COLUMNS),
         ("score", pa.float64()),
         ("scored", pa.bool_()),
     ]
@@ -84,91 +92,100 @@ def _evaluation_answers(dump_root: StoragePath) -> list[EvaluationAnswer]:
     return answers
 
 
-def evaluation_answers(run_output: str) -> list[EvaluationAnswer]:
-    launch = read_skyrl_launch_config(run_output)
-    return _evaluation_answers(StoragePath(launch["artifacts"]["export_root"]) / "dumped_evals")
+def _recorded_config(run_output: str) -> RecordedLaunch:
+    document = read_skyrl_launch_config(run_output)
+    return RecordedLaunch.from_document(document, attempt=document["run"]["attempt_id"])
 
 
-def recorded_sources(launch: dict, name: str) -> list[dict]:
-    return launch["inputs"].get("evaluation_data", {}).get(name, launch["inputs"]["validation_data"])
+def evaluation_answers(run_output: str, launch: RecordedLaunch | None = None) -> list[EvaluationAnswer]:
+    launch = launch or _recorded_config(run_output)
+    return _evaluation_answers(StoragePath(launch.export_root) / "dumped_evals")
 
 
-def native_prefix(launch: dict, name: str) -> str:
-    return f"eval/{name}/" if name in launch["inputs"].get("evaluation_data", {}) else "eval/"
+def recorded_sources(launch: RecordedLaunch, name: str) -> list[RecordedSource]:
+    return launch.evaluation_data.get(name, launch.validation_data)
 
 
-def recorded_identity(source: dict) -> tuple[str, str]:
-    name, separator, version = source["identity"].partition(":")[0].rpartition("@")
+def native_prefix(launch: RecordedLaunch, name: str) -> str:
+    return f"eval/{name}/" if name in launch.evaluation_data else "eval/"
+
+
+def recorded_identity(source: RecordedSource) -> tuple[str, str]:
+    name, separator, version = source.identity.partition(":")[0].rpartition("@")
     if not name or not separator or not version:
         raise ValueError("expected NAME@VERSION")
     return name, version
 
 
-class RecordedPanel(NamedTuple):
+class RecordedTaskSet(NamedTuple):
     task_ids: tuple[str, ...]
     task_set_sha256: str
 
 
-def read_recorded_panel(launch: dict, name: str) -> RecordedPanel:
-    """Read panel task IDs and a hash of the sorted raw TaskSpec strings."""
+def read_recorded_task_set(launch: RecordedLaunch, name: str) -> RecordedTaskSet:
+    """Read evaluation task IDs and a hash of the sorted raw TaskSpec strings."""
     pairs = []
     for source in recorded_sources(launch, name):
-        path = StoragePath(source["uri"]) / source["relative_path"]
+        path = StoragePath(source.uri) / source.relative_path
         fs, key = filesystem_for(str(path))
         with fs.open(key, "rb") as stream:
             for raw in pq.read_table(stream, columns=[TASK_SPEC_COLUMN])[TASK_SPEC_COLUMN].to_pylist():
                 pairs.append((json.loads(raw)["id"], raw))
     payload = json.dumps(sorted(pairs), separators=(",", ":"), ensure_ascii=False).encode()
-    return RecordedPanel(tuple(task_id for task_id, _ in pairs), hashlib.sha256(payload).hexdigest())
+    return RecordedTaskSet(tuple(task_id for task_id, _ in pairs), hashlib.sha256(payload).hexdigest())
 
 
-def evaluation_protocol(launch: dict, name: str) -> dict:
+def evaluation_protocol(launch: RecordedLaunch, name: str) -> dict:
     """The evaluation request recorded by native configuration composition."""
-    config = launch["skyrl"]
-    generator = config["generator"]
-    sampling = deepcopy(generator["eval_sampling_params"])
-    samples = generator["eval_n_samples_per_prompt"]
-    if name in launch["inputs"].get("evaluation_data", {}):
+    sampling = deepcopy(launch.eval_sampling_params)
+    samples = launch.eval_n_samples_per_prompt
+    length = launch.eval_max_generate_length
+    if name in launch.evaluation_data:
         profile = next(
             (
                 profile
-                for callback in config["trainer"]["callbacks"]
-                if callback["type"] == "evaluation"
-                for key, profile in (callback.get("additional_evaluations") or {}).items()
+                for callback in launch.callbacks or ()
+                if callback.type == "evaluation"
+                for key, profile in (callback.additional_evaluations or {}).items()
                 if key == name
             ),
             None,
         )
         if profile is None:
             raise InvalidComparison(f"expected one recorded evaluation profile for {name}")
-        sampling = deepcopy(profile["sampling_params"])
-        samples = profile["n_samples_per_prompt"]
+        sampling = deepcopy(profile.sampling_params)
+        samples = profile.n_samples_per_prompt
+        length = profile.max_generate_length
     return {
         "sampling_params": sampling,
         "n_samples_per_prompt": samples,
         "context_budget": {
-            "max_new_tokens_per_turn": sampling["max_generate_length"],
-            "max_turns": generator["max_turns"],
+            "max_new_tokens_per_turn": length,
+            "max_turns": launch.max_turns,
         },
-        "max_prompt_length": config["trainer"]["max_prompt_length"],
-        "chat_template": generator.get("chat_template"),
-        "task_env": {key: value for key, value in launch["runtime"]["task_env"].items() if not key.startswith("VLLM_")},
+        "max_prompt_length": launch.max_prompt_length,
+        "chat_template": launch.chat_template,
+        "task_env": {key: value for key, value in launch.task_env.items() if not key.startswith("VLLM_")},
     }
 
 
-def panel_scores(
-    evaluation: presets.Evaluation, run_output: str, primary_answers: list[EvaluationAnswer] | None = None
+def evaluation_scores(
+    evaluation: presets.Evaluation,
+    run_output: str,
+    primary_answers: list[EvaluationAnswer] | None = None,
+    *,
+    launch: RecordedLaunch | None = None,
 ) -> pa.Table:
-    launch = read_skyrl_launch_config(run_output)
+    launch = launch or _recorded_config(run_output)
     sources = recorded_sources(launch, evaluation.name)
     answers = (
-        _evaluation_answers(StoragePath(launch["artifacts"]["export_root"]) / evaluation.name / "dumped_evals")
+        _evaluation_answers(StoragePath(launch.export_root) / evaluation.name / "dumped_evals")
         if native_prefix(launch, evaluation.name) != "eval/"
-        else evaluation_answers(run_output) if primary_answers is None else primary_answers
+        else evaluation_answers(run_output, launch) if primary_answers is None else primary_answers
     )
     manifest = {}
     for source in sources:
-        manifest.update(task_manifest(StoragePath(source["uri"])))
+        manifest.update(task_manifest(StoragePath(source.uri)))
     attempts = Counter()
     rows = []
     for step, path, row in answers:
@@ -177,7 +194,7 @@ def panel_scores(
             raise InvalidComparison(f"evaluation answer lacks a TaskSpec id: {path}")
         metadata = manifest.get(item, {})
         if evaluation.held_out and not metadata:
-            raise InvalidComparison(f"panel task {item} is absent from its task manifest")
+            raise InvalidComparison(f"evaluation task {item} is absent from its task manifest")
         verdict = row.get("verification")
         verified = bool(verdict and verdict["status"] == "verified")
         score = 0.0
@@ -210,7 +227,7 @@ def score_slices(scores: pa.Table) -> dict[str, list[dict]]:
             continue
         evaluation = row["evaluation"]
         keys = [f"{evaluation}/mean"]
-        for column in ("family", "aaii_category", "agentic"):
+        for column in SLICE_COLUMNS:
             value = row[column]
             if value is not None:
                 value = str(value).lower() if column == "agentic" else value
@@ -221,7 +238,7 @@ def score_slices(scores: pa.Table) -> dict[str, list[dict]]:
     for evaluation in {key.split("/", 1)[0] for key in groups}:
         agentic = [key for key in groups if key.startswith(f"{evaluation}/agentic/")]
         if len(agentic) == 1:
-            # A panel without both kinds of task has no agentic split; its one slice repeats the overall mean.
+            # A task set without both kinds of task has no agentic split; its one slice repeats the overall mean.
             del groups[agentic[0]]
     return dict(groups)
 
@@ -387,15 +404,15 @@ def _session_invariants(
     counts = Counter(row["item"] for row in rows)
     holds = len(rows) == expected and set(counts.values()) == {evaluation.answers} and set(counts) == set(task_ids)
     result = [Invariant(name=f"{name}/batch_finished", value=len(rows), limit=expected, comparator="==", holds=holds)]
-    if any(metric.key.startswith(evaluation.name + "/") for metric in preset.guards):
+    if evaluation == preset.guarded:
         coverage = len({row["item"] for row in rows if row["scored"]}) / (expected // evaluation.answers)
         result.append(
             Invariant(
-                name=f"{name}/panel_scored_fraction",
+                name=f"{name}/scored_fraction",
                 value=coverage,
-                limit=presets.MINIMUM_PANEL_COVERAGE,
+                limit=presets.MINIMUM_SCORED_FRACTION,
                 comparator=">=",
-                holds=coverage >= presets.MINIMUM_PANEL_COVERAGE,
+                holds=coverage >= presets.MINIMUM_SCORED_FRACTION,
             )
         )
     return result
@@ -404,12 +421,13 @@ def _session_invariants(
 @dataclass(frozen=True)
 class RunData:
     config: dict
+    recorded: RecordedLaunch
     path: str
     version: str
-    panel: str | None
+    eval_lite: str | None
     provenance: dict
     values: dict[str, float]
-    panel_ids: dict[str, frozenset[str]]
+    task_set_ids: dict[str, frozenset[str]]
     invariants: tuple[Invariant, ...]
     missing_tokens: bool
     slices: dict[str, int]
@@ -419,44 +437,38 @@ class RunData:
     attempt_id: str
 
 
-def _recorded_panel(launch: dict, evaluation: presets.Evaluation) -> str:
+def _recorded_selection(launch: RecordedLaunch, evaluation: presets.Evaluation) -> str:
     try:
         identities = {"@".join(recorded_identity(source)) for source in recorded_sources(launch, evaluation.name)}
         if len(identities) != 1:
-            raise ValueError("expected one panel identity")
+            raise ValueError("expected one task selection identity")
         identity = identities.pop()
         return identity
     except (KeyError, TypeError, AttributeError, ValueError) as error:
-        raise InvalidComparison(f"recorded panel version is missing or malformed: {error}") from error
+        raise InvalidComparison(f"recorded task set version is missing or malformed: {error}") from error
 
 
-def _panel_identity(preset: presets.Preset, launch: dict, inputs: GateInputs) -> str | None:
-    evaluation = presets.panel_evaluation(preset)
+def _eval_lite_identity(
+    preset: presets.Preset, launch: RecordedLaunch, default: ArtifactStep, selection: ArtifactStep, seed: int
+) -> str | None:
+    evaluation = presets.eval_lite_evaluation(preset)
     if evaluation is None:
         return None
-    default = presets.default_selection(preset)
-    selection = presets.selection_artifact(inputs.tasks) if inputs.tasks else default
     selected = evaluation.tasks(selection, default, preset.eval_lite)
-    panel = f"{selected.name.removeprefix(presets.SELECTION_PREFIX + '/')}@{selected.version}"
-    binding = selected
-    if evaluation.sample is not None:
-        binding = presets.sampled_tasks_step(
-            selected,
-            evaluation.file,
-            evaluation.sample,
-            launch["skyrl"]["trainer"]["seed"],
-            revision=preset.revision,
-        )
+    task_set = f"{selected.name.removeprefix(presets.SELECTION_PREFIX + '/')}@{selected.version}"
+    binding = evaluation.bound_tasks(selected, seed, revision=preset.revision)
     expected = f"{binding.name}@{binding.version}"
     sources = recorded_sources(launch, evaluation.name)
-    recorded = _recorded_panel(launch, evaluation)
+    recorded = _recorded_selection(launch, evaluation)
     if recorded != expected:
         raise InvalidComparison(
-            f"recorded panel differs from preset: expected {panel} ({expected}); recorded {recorded}"
+            f"recorded task set differs from preset: expected {task_set} ({expected}); recorded {recorded}"
         )
-    if evaluation.held_out and any(source["relative_path"] != f"{evaluation.file}.parquet" for source in sources):
-        raise InvalidComparison(f"recorded panel file differs from preset {panel}: expected {evaluation.file}.parquet")
-    return panel
+    if evaluation.held_out and any(source.relative_path != f"{evaluation.file}.parquet" for source in sources):
+        raise InvalidComparison(
+            f"recorded task set file differs from preset {task_set}: expected {evaluation.file}.parquet"
+        )
+    return task_set
 
 
 def training_invariants(preset: presets.Preset, metrics: Mapping[int, Mapping[str, float]]) -> tuple[Invariant, ...]:
@@ -482,47 +494,53 @@ def load_run(
     planned = workload.planned_steps(preset.updates)
     training = [row for step, row in sorted(metrics.items()) if step in planned]
     invariants = list(training_invariants(preset, metrics))
-    answers = evaluation_answers(path) if preset.evaluations else []
-    launch = terminal.native.config
-    tracking = attempt_tracking(terminal)
     try:
-        recorded_panels = {
-            evaluation.name: read_recorded_panel(launch, evaluation.name) for evaluation in preset.evaluations
+        launch = recorded_launch(terminal)
+    except ValueError as error:
+        raise InvalidComparison(str(error)) from None
+    answers = evaluation_answers(path, launch) if preset.evaluations else []
+    tracking = attempt_tracking(terminal, launch)
+    try:
+        recorded_task_sets = {
+            evaluation.name: read_recorded_task_set(launch, evaluation.name) for evaluation in preset.evaluations
         }
         identities = {
             evaluation.name: (
-                (recorded_panels[evaluation.name].task_set_sha256 if evaluation.held_out else None),
+                (recorded_task_sets[evaluation.name].task_set_sha256 if evaluation.held_out else None),
                 evaluation_protocol(launch, evaluation.name),
             )
             for evaluation in preset.evaluations
         }
     except (KeyError, TypeError, ValueError) as error:
         raise InvalidComparison(f"recorded evaluation identity is malformed: {error}") from error
-    panel = _panel_identity(preset, launch, inputs)
-    scores, initial_scores, panel_ids = [EVAL_SCORE_SCHEMA.empty_table()], [], {}
-    default = presets.default_selection(preset)
-    selection = presets.selection_artifact(inputs.tasks) if inputs.tasks else default
+    default, selection = presets.task_selections(
+        preset, presets.selection_artifact(inputs.tasks) if inputs.tasks else None
+    )
+    task_set = _eval_lite_identity(
+        preset, launch, default, selection, terminal.native.config["skyrl"]["trainer"]["seed"]
+    )
+    scores, initial_scores, task_set_ids = [EVAL_SCORE_SCHEMA.empty_table()], [], {}
     for evaluation in preset.evaluations:
-        quality = evaluation.held_out and any(metric.key.startswith(evaluation.name + "/") for metric in preset.guards)
+        quality = evaluation.held_out and evaluation == preset.guarded
         expected = presets.evaluation_answer_count(evaluation, evaluation.tasks(selection, default, preset.eval_lite))
-        table = panel_scores(evaluation, path, answers)
+        table = evaluation_scores(evaluation, path, answers, launch=launch)
         initial = table.filter(pc.equal(table["step"], 0))
         table = table.filter(pc.equal(table["step"], workload.scored_step(preset.updates)))
         scores.append(table)
         initial_scores.append(initial)
         ids = frozenset(table["item"].to_pylist())
         if evaluation.held_out:
-            panel_ids[evaluation.name] = ids
+            task_set_ids[evaluation.name] = ids
         sessions = [(evaluation.name, table, workload.metric_step(preset.updates))]
         if evaluation.at_start:
             if initial.num_rows and frozenset(initial["item"].to_pylist()) != ids:
-                raise InvalidComparison(f"initial and final panel task IDs differ: {path}")
+                raise InvalidComparison(f"initial and final evaluation task IDs differ: {path}")
             sessions.append((evaluation.name + "/initial", initial, 0))
         prefix = native_prefix(launch, evaluation.name) + "all/outcome/"
         for session_name, session, metric_step in sessions:
             invariants.extend(
                 _session_invariants(
-                    session_name, session, evaluation, preset, expected, recorded_panels[evaluation.name].task_ids
+                    session_name, session, evaluation, preset, expected, recorded_task_sets[evaluation.name].task_ids
                 )
             )
             if quality:
@@ -559,20 +577,20 @@ def load_run(
     if result.started_at and result.finished_at:
         seconds = (presets.utc_millis(result.finished_at) - presets.utc_millis(result.started_at)) / 1000
         if seconds > 0:
-            allocation = launch["iris"]["allocation"]
-            h100_hours = seconds * allocation["num_nodes"] * allocation["gpus_per_node"] / 3600
+            h100_hours = seconds * launch.num_nodes * launch.gpus_per_node / 3600
     slices = {key: len({row["item"] for row in rows}) for key, rows in score_slices(final).items()}
     record = read_record(path)
     if record is None:
         raise FileNotFoundError(f"no artifact record at {path}")
     return RunData(
-        config=launch,
+        config=terminal.native.config,
+        recorded=launch,
         path=path,
         version=record.version,
-        panel=panel,
+        eval_lite=task_set,
         provenance=terminal.native.result.provenance,
         values=values,
-        panel_ids=panel_ids,
+        task_set_ids=task_set_ids,
         invariants=tuple(invariants),
         missing_tokens=missing,
         slices=slices,

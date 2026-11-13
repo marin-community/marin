@@ -1,5 +1,23 @@
 # Snowball RL experiments
 
+Run an experiment from a named preset. The command binds the versioned task selection,
+Datakit SFT weights and tokenizer, GPU layout, evaluation schedule and measurement window.
+
+## Which experiment to run
+
+| change | presets |
+|---|---|
+| vLLM wheel, kernel or engine option | speed-short, then speed-medium |
+| trainer kernel, parallelism, recompute or exact numerics | speed-medium, then learning-medium |
+| weight synchronization | speed-medium |
+| fp8 experts or KV-cache precision | speed-medium, then learning-medium; a person assesses the trade-off |
+| loss, estimator, optimizer, schedule, reward, task sampling or batch shape | learning-medium |
+| task selection | data-short, then data-medium |
+| SFT initializer | learning-medium with `--init` |
+| startup latency | speed-medium, which reports startup |
+| asynchronous grading, admission or loop performance | speed-long |
+| release training | train-long |
+
 ## The loop
 
 1. [Curate tasks](../references/task-curation.md#run-a-campaign) into an admitted corpus.
@@ -10,9 +28,6 @@
 4. Read the [verdict](#compare-with-controls) for a gated run.
 
 ## Run a preset
-
-Run an experiment from a named preset. The command binds the versioned task selection,
-Datakit SFT weights and tokenizer, GPU layout, evaluation schedule and measurement window.
 
 ```bash
 uv run python -m experiments.post_training.snowball_rl --preset speed-short --version dev
@@ -33,13 +48,13 @@ W&B URLs and a Grafana dashboard link. Set `WANDB_API_KEY` before submission;
 
 | preset | allocation | workload and measurement |
 |---|---|---|
-| speed-short | 8 H100, east | 512 training tasks × four answers × 4,096 tokens; engine tokens/s/GPU, then full-panel quality; about 15 minutes |
+| speed-short | 8 H100, east | 512 training tasks × four answers × 4,096 tokens; engine tokens/s/GPU, then full EvalLite quality; about 15 minutes |
 | data-short | 8 H100, east | 256 candidate training tasks × four answers, up to 8,192 tokens; mixed-answer fraction; about 15 minutes |
 | speed-medium | 40 H100, east | ten asynchronous updates with staleness 2 and TIS with 4,096-token answers; median update time over updates 2–10 and staleness-0 k3 mismatch; asynchronous runtime unmeasured |
 | speed-long | 40 H100, east | 20 asynchronous updates, staleness 2 and TIS; median update time over updates 3–20 and staleness-0 k3 mismatch; 45–75 minutes |
 | learning-medium | 40 H100, east | full greedy EvalLite at update 0 and after 25 asynchronous RLOO-N updates with staleness 2 and TIS; final equal-family mean and score gain per H100-hour; asynchronous runtime unmeasured |
 | data-medium | 40 H100, east | learning-medium on candidate tasks, using learning-medium controls |
-| train-long | 40 H100, east | asynchronous training, default 100 updates; checkpoints, 100-task panel every ten updates and HF export; no verdict |
+| train-long | 40 H100, east | asynchronous training, default 100 updates; checkpoints, EvalLite-100 every ten updates and HF export; no verdict |
 
 East is `cw-us-east-02a`. The 40-H100 layout has 32 policy GPUs and eight engine GPUs,
 128 prompts × four answers and a 24,576-token window. Natural replies allow 8,192 tokens.
@@ -69,8 +84,6 @@ Custom selections must use the default heldout development input and record the 
 frozen EvalLite in their recipe's `exclusions`. The builder checks those recorded inputs.
 Create an immutable candidate through [task curation](../references/task-curation.md#final-task-selection).
 Selections with AI-judged tasks are refused before submission.
-The collected controls retain `snowball-100k@2026.11.04.1`; the updated selection recipe is a
-separate unpublished version and must be built before use.
 
 `--init NAME@VERSION` on a learning or train-long preset selects a published model or kept
 HF export. Learning-medium and data-medium retain final HF weights for both controls and
@@ -90,14 +103,14 @@ in their shared names. Collect controls only for an authorized calibration.
 The gate writes `gate_report.json` and `gate_report.md`. Status opens with objective values
 (control → candidate), percentage change and calibrated noise percentage, followed by constraints,
 invariants and the verdict and label. Training score gain per H100-hour uses the run's update-0
-and final panel scores, native elapsed time and allocated GPUs. Missing elapsed time makes that
+and final task set scores, native elapsed time and allocated GPUs. Missing elapsed time makes that
 objective unavailable.
 
 JSON stores each comparison once in `comparisons`, with an `objective`, `constraint`,
 `requirement`, `reported` or `slice` role. An objective that is also guarded has its `passes`
 value on the same row. `run.attempt_ids` identifies the native attempts being compared.
 The typed preset, normalized settings, tasks, initializer and requirements are saved in
-`gate_inputs.json` beside the native receipt, including for Python `build_run` callers.
+`gate_inputs.json` beside the native receipt.
 Re-scoring reads that file rather than interpreting a command line.
 
 The gate selects exact control names in `snowball_rl_gate.CONTROLS` at the selected preset's
@@ -131,15 +144,15 @@ Add repeatable conditions with `--require 'KEY<=NUMBER'`, `KEY>=NUMBER`, `KEY<=c
 uses `k=1` independently; repeating a built-in condition uses its existing row. Requirements
 cannot widen a built-in guard's threshold. A relative requirement with zero spread needs a
 numeric bound. Preflight checks the key against control r0's computed metrics. Train-long and
-controls refuse requirements. Python callers use `build_run(requirements=(...))`. Requirements
+controls refuse requirements. Requirements
 affect report identity, while training names and configurations stay fixed.
 
 All planned updates must finish. Training policy loss, final loss, logged loss statistics and
-gradients must be finite, panel coverage must reach 99%, grader infrastructure failures must be
+gradients must be finite, task set coverage must reach 99%, grader infrastructure failures must be
 at most 1%, and fixed-length speed replies must have the prescribed length. The grader-error
 check uses the conservative upper bound on overlapping error and rollout-failure counts; a
 bound above 1% fails. Missing or inconsistent counters fail that invariant. Missing receipts,
-provenance, guards, mismatch counts, or incompatible panel/configuration evidence make the
+provenance, guards, mismatch counts, or incompatible task set/configuration evidence make the
 comparison INVALID.
 
 Run stored comparisons on CPU:
@@ -151,8 +164,6 @@ uv run python -m experiments.post_training.snowball_rl_gate \
   --preset speed-medium --leave-out r0
 ```
 
-Automatic gates use the requirements on the current command. A cached native run retains its
-original saved inputs; standalone re-scoring appends requirements to those original inputs.
 Leave-one-out uses a control pin's fixed
 default inputs and compares that replicate against the remaining controls. Reports use the
 caller's namespace under `MARIN_PREFIX`; controls are read-only. Status lists changed RL paths
@@ -160,10 +171,10 @@ against the control commit, or gives the reason a local git comparison is unavai
 
 ## Change a preset's default
 
-1. Edit that preset's `tasks`, `model`, `eval_lite` or `settings` in `snowball_rl_presets.py`.
-   Each field starts with a shared default. To promote a winning setting for one preset, give
-   that preset `settings=(*_DEFAULT_SETTINGS, "trainer.policy.optimizer_config.lr=2.0e-6")`;
-   editing `_DEFAULT_SETTINGS` changes every preset that uses it.
+1. Edit that preset's `tasks`, `model`, `eval_lite` or `recipe` in `snowball_rl_presets.py`.
+   A preset's `Recipe.config` is its typed override point; merge a `RecipePatch` there for a
+   preset-specific default. `_DEFAULT_PATCH` supplies shared settings; `Recipe.numerics` selects
+   trainer and engine precision and batch invariance.
 2. Bump that preset's `revision`. Data-medium shares learning-medium's settings and revision.
 3. From the repository root, print the actual native/allocation and full-envelope hashes:
 
@@ -174,27 +185,20 @@ against the control commit, or gives the reason a local git comparison is unavai
    A new revision intentionally fails until its printed pair is added under that preset in
    the test's `revisions` table. Inspect the composed settings before accepting the pair.
    The full-envelope hash includes actual execution memory and priority.
-4. Collect controls from a clean checkout of the final source. For example, replace `REVISION`
-   with learning-medium's revision and run:
-
-   ```bash
-   uv run python -m experiments.post_training.snowball_rl --preset learning-medium --version REVISION --control --replicates 4 --run --wait
-   ```
-
-   Pin that preset's source, revision and count in `snowball_rl_gate.CONTROLS`, preserving the
-   other entries. Use the exact short `base_commit` recorded in the controls' result provenance
-   (the collection checkout's `git rev-parse --short HEAD`), not a later pin-edit commit.
-   Its entry has the form `"learning-medium": (ControlPin("learning-medium", "BASE_COMMIT", "REVISION", 4),)`.
-5. Run `uv run python -m experiments.post_training.snowball_rl_gate --preset learning-medium --leave-out r0`
-   for each replicate (`r0` through `r3` in this example). Every leave-one-out verdict must PASS.
+4. Controls are collected by CI after the default change merges, once per changed default.
+   That CI workflow is planned separately; control collection is not a merge gate.
+   The manual `--control` command remains available for an explicitly authorized calibration.
+   Source, revision and replicate count live in `snowball_rl_gate.CONTROLS`.
+5. Validate a newly collected cohort with `snowball_rl_gate --leave-out rN` for every replicate.
+   Every leave-one-out verdict must PASS.
 
 ## Tasks and evaluation
 
 The [EvalLite](../references/task-curation.md#evallite) is the held-out set that
 `speed-short`, the learning and data presets and `train-long` evaluate: 1,500 public benchmark
 tasks graded on the training machines, and a 100-task fast subset. It shows whether a change moves
-scores on tasks the model never trains on, measured against controls on the same panel; it is not a
-headline benchmark. To change it, follow that link; a new panel version needs new controls. Named panels request one greedy answer per task, with natural replies
+scores on tasks the model never trains on, measured against controls on the same task set; it is not a
+headline benchmark. To change it, follow that link; a new task set version needs new controls. Named task sets request one greedy answer per task, with natural replies
 up to `EVAL_REPLY_TOKENS`. Engine defaults are FLASH_ATTN, prefix caching on and batch invariance off.
 
 Evaluation identity compares the stored TaskSpec strings and the request: merged sampling,
@@ -213,26 +217,12 @@ over kept, scored answers. Setup covers task/verifier startup and staging; gradi
 verifier setup. Both exclude cleanup. Reports average each statistic over the measured updates.
 
 Learning/data medium evaluates at update 0 and 25. Train-long evaluates before training and
-every ten updates. Speed-short measures its primary throughput before its full-panel evaluation;
+every ten updates. Speed-short measures its primary throughput before its full EvalLite evaluation;
 quality answers and timing stay outside that throughput window. Metrics and attempt receipts
 live in FineStore tables under `exports/run-records/`; primary answers use `exports/dumped_evals/`.
 Speed-short quality answers use `exports/eval_lite/dumped_evals/eval_only/`. The configured export
 root identifies their actual locations.
 
-## Which experiment to run
-
-| change | presets |
-|---|---|
-| vLLM wheel, kernel or engine option | speed-short, then speed-medium |
-| trainer kernel, parallelism, recompute or exact numerics | speed-medium, then learning-medium |
-| weight synchronization | speed-medium |
-| fp8 experts or KV-cache precision | speed-medium, then learning-medium; a person assesses the trade-off |
-| loss, estimator, optimizer, schedule, reward, task sampling or batch shape | learning-medium |
-| task selection | data-short, then data-medium |
-| SFT initializer | learning-medium with `--init` |
-| startup latency | speed-medium, which reports startup |
-| asynchronous grading, admission or loop performance | speed-long |
-| release training | train-long |
 
 ## Gaps
 

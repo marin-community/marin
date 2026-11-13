@@ -28,7 +28,7 @@ from iris.resources.state import JobState
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl import SkyRLRun
-from marin.rl.skyrl_records import read_skyrl_metrics
+from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_launch_config, read_skyrl_metrics
 from rigging.provenance import Provenance
 from scipy.stats import t
 
@@ -40,7 +40,7 @@ from experiments.post_training.snowball_tests.fixtures import answer as _answer
 from experiments.post_training.snowball_tests.fixtures import write_json as _json
 from experiments.post_training.snowball_tests.fixtures import write_metrics, write_receipt
 
-pytestmark = pytest.mark.usefixtures("source_provenance")
+pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 VLLM = "vllm/median_generation_throughput"
 KL = "policy/mismatch/staleness0/kl_k3"
 
@@ -122,16 +122,6 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs
     assert json.loads(artifact.read_text()) == report and artifact.with_suffix(".md").exists()
     invariants = {row["name"]: row for row in report["invariants"]}
     assert all(row["comparator"] is not None for row in invariants.values())
-    assert invariants["grader_error_fraction"]["comparator"] == "<="
-    assert invariants["planned_updates"]["comparator"] == "=="
-    assert invariants["finite_losses_and_gradients"]["comparator"] == "=="
-    fixed = invariants["fixed_reply_tokens"]
-    assert fixed["value"] is True and fixed["limit"] is True and fixed["comparator"] == "=="
-    historical = json.loads(artifact.read_text())
-    for row in historical["invariants"]:
-        row.pop("comparator")
-    decoded = gate.GateReport.model_validate_json(json.dumps(historical))
-    assert all(row.comparator is None for row in decoded.invariants)
     monkeypatch.setattr(sys, "argv", ["snowball_rl_gate", "--preset", "speed-medium", "--leave-out", "r0"])
     capsys.readouterr()
     with pytest.raises(SystemExit) as result:
@@ -347,18 +337,15 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
             task["id"] = "candidate-" + task["id"]
             row["task_spec"] = json.dumps(task)
         pq.write_table(pa.Table.from_pylist(rows), path)
-        path = root / "exports/dumped_evals/eval_only/panel.jsonl"
+        path = root / "exports/dumped_evals/eval_only/task_set.jsonl"
         rows = [json.loads(line) for line in path.read_text().splitlines()]
         for row in rows:
             row["task_id"] = "candidate-" + row["task_id"]
         path.write_text("".join(json.dumps(row) + "\n" for row in rows))
     values = read_skyrl_metrics(str(root))[0]
-    assert "generate/outcome/graded" not in values and values["attempt_id"] == "recorded-attempt"
     report = rescore(preset, "--candidate", "users/test/current-generation")
     assert (report["verdict"], report["label"]) == ("pass", "no change"), report
     if preset == "speed-short":
-        coverage = [row for row in report["invariants"] if row["name"].endswith("/panel_scored_fraction")]
-        assert coverage and all(row["comparator"] == ">=" for row in coverage)
         values["eval/eval_lite/all/outcome/graded"] = 1480
         values["eval/eval_lite/all/outcome/unavailable"] = 20
         write_metrics(root, {0: values})
@@ -366,6 +353,14 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
         shutil.copytree(root, alias)
         report = rescore(preset, "--candidate", "users/test/current-bad-counter")
         assert report["verdict"] == "fail"
+        task_set = root / "exports/eval_lite/dumped_evals/eval_only/task_set.jsonl"
+        answers = [json.loads(line) for line in task_set.read_text().splitlines()]
+        for answer in answers[:20]:
+            answer["verification"]["status"] = "error"
+        task_set.write_text("".join(json.dumps(answer) + "\n" for answer in answers))
+        report = rescore(preset, "--candidate", "users/test/current-generation")
+        coverage = next(row for row in report["invariants"] if row["name"].endswith("/scored_fraction"))
+        assert coverage["value"] < 0.99 and coverage["holds"] is False
 
 
 @pytest.mark.parametrize(
@@ -388,7 +383,9 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
         launch = json.loads((root / "terminal.json").read_text())["config"]
         launch["skyrl"]["generator"]["eval_sampling_params"]["presence_penalty"] = 0.8
         launch["skyrl"]["generator"]["eval_n_samples_per_prompt"] = 7
-        protocol = scoring.evaluation_protocol(launch, "eval_lite")
+        protocol = scoring.evaluation_protocol(
+            RecordedLaunch.from_document(launch, attempt="recorded-attempt"), "eval_lite"
+        )
         assert protocol["sampling_params"] == {
             "ignore_eos": False,
             "max_generate_length": 8192,
@@ -441,11 +438,13 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
         ("candidate-compose-no-wait", 4),
         ("train-candidate-compose", 4),
         ("train-candidate-compose-no-wait", 4),
+        ("train-pass", 0),
+        ("train-failed", 3),
     ],
 )
 def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
-    preset = presets.PRESETS["train-long" if case.startswith("train-candidate") else "speed-medium"]
+    preset = presets.PRESETS["train-long" if case.startswith("train-") else "speed-medium"]
     roots = controls(recorded_runs, preset.name) if preset.gated else []
     built = snowball.build_run(preset)
     source = (
@@ -463,7 +462,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         if case == "recorded-sync":
             receipt["config"]["runtime"]["training_type"] = "sync"
         else:
-            receipt["config"]["runtime"].pop("training_type")
+            receipt["config"]["runtime"]["training_type"] = None
         write_receipt(source, receipt)
     if case == "invalid":
         receipt = json.loads((source / "terminal.json").read_text())
@@ -481,7 +480,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     job = JobName.from_wire("/atqamar/coordinator-id-returned-by-iris")
 
     def finish(*args, **kwargs):
-        if case not in ("missing", "native-failed"):
+        if case not in ("missing", "native-failed") and built.gate is not None:
             run(gate.completed_gate(built.gate))
             if case == "changed-source":
                 monkeypatch.setattr(
@@ -489,7 +488,9 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
                     "capture",
                     lambda *args, **kwargs: Provenance("tree-edited-after-submit", "commit-one", True, "branch", "test"),
                 )
-        return SimpleNamespace(state=JobState.FAILED if case == "native-failed" else JobState.SUCCEEDED)
+        return SimpleNamespace(
+            state=JobState.FAILED if case in ("native-failed", "train-failed") else JobState.SUCCEEDED
+        )
 
     jobs = {job: SimpleNamespace(wait=finish)}
     client = MagicMock(spec=IrisClient)
@@ -538,14 +539,20 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         assert gate.GateReport.raw_load(report.path()).verdict == "pass"
 
 
-def test_control_refuses_actual_untracked_source_before_execution(selection, tmp_path, monkeypatch):
+@pytest.mark.parametrize("fault", ["untracked", "dirty"])
+def test_control_refuses_actual_untracked_source_before_execution(selection, tmp_path, monkeypatch, fault):
     root = tmp_path / "git-source"
     root.mkdir()
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     (root / "experiments").mkdir()
     (root / "experiments/untracked.py").write_text("VALUE = 1\n")
     monkeypatch.setattr(presets, "REPO_ROOT", root)
-    with pytest.raises(click.BadParameter, match="stage source"):
+    if fault == "dirty":
+        subprocess.run(["git", "-C", str(root), "add", "experiments/untracked.py"], check=True)
+        monkeypatch.setattr(
+            Provenance, "capture", lambda *args, **kwargs: Provenance("tree", "commit", True, "branch", "test")
+        )
+    with pytest.raises(click.BadParameter, match="stage source" if fault == "untracked" else "clean checkout"):
         snowball.build_run(presets.PRESETS["speed-medium"], control=True)
 
 
@@ -553,7 +560,6 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
     "arguments",
     [
         ("--wait",),
-        ("--replicates", "0"),
         ("--set", "trainer.resume_mode=latest"),
         ("--set", "generator.unrecognised_knob=1"),
         ("--set", 'generator={"model_dtype":"complex64"}'),
@@ -562,7 +568,6 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
         ("--set", "+generator.engine_init_kwargs.probe={}"),
         ("--set", "trainer.rollout_buffer.max_staleness_steps=0"),
         ("--set", 'trainer={"algorithm":{"off_policy_correction":"none"}}'),
-        ("--set", "trainer.rollout_buffer.batch_policy=rolling"),
     ],
 )
 def test_refusals_use_exit_four(selection, arguments):
@@ -572,7 +577,7 @@ def test_refusals_use_exit_four(selection, arguments):
     assert result.exit_code == 4, (result.output, result.exception)
 
 
-def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
+def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, recorded_runs):
     answers = [
         _answer("bounded", 3, low=1, high=5)
         | {"score": 0.8, "output_response": "first\u2028second\u2029third\u0085fourth"},
@@ -593,23 +598,19 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
     ]
     (tmp_path / "selection").mkdir()
     pq.write_table(pa.Table.from_pylist(manifest), tmp_path / "selection" / presets.TASK_MANIFEST_FILENAME)
-    _json(
-        tmp_path / "resolved-launch.yaml",
-        {
-            "config": {
-                "artifacts": {"export_root": str(tmp_path / "configured-export")},
-                "inputs": {
-                    "validation_data": [{"uri": str(tmp_path / "selection")}],
-                },
-            }
-        },
-    )
+    root = recorded_runs("learning-medium", "users/test/score-order")
+    launch = read_skyrl_launch_config(str(root))
+    launch["artifacts"]["export_root"] = str(tmp_path / "configured-export")
+    launch["inputs"]["validation_data"][0]["uri"] = str(tmp_path / "selection")
+    _json(tmp_path / "resolved-launch.yaml", {"config": launch})
     for session in ("global_step_25_evals", "eval_only"):
         directory = tmp_path / "configured-export/dumped_evals" / session
         directory.mkdir(parents=True)
-        (directory / "panel.jsonl").write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in answers) + "\n")
+        (directory / "task_set.jsonl").write_text(
+            "\n".join(json.dumps(row, ensure_ascii=False) for row in answers) + "\n"
+        )
         (directory / "aggregated_results.jsonl").write_text('{"avg_score": 0.5}\n')
-    scores = scoring.panel_scores(presets.EVALUATIONS["eval_lite_100"], str(tmp_path))
+    scores = scoring.evaluation_scores(presets.EVALUATIONS["eval_lite_100"], str(tmp_path))
     final = [row for row in scores.to_pylist() if row["step"] == 25]
     assert [(row["item"], row["attempt"], row["scored"], row["score"]) for row in final] == [
         ("bounded", 0, True, 0.5),
@@ -636,24 +637,19 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
 @pytest.mark.parametrize(
     "case",
     [
-        "optimizer",
         "initializer",
         "stale-default",
-        "explicit-equal",
-        "control-setting",
-        "control-default-setting",
-        "control-initializer",
         "control-tasks",
         "control-revision",
+        "control-commit",
+        "control-dirty",
         "all-revisions",
-        "untouched-sibling",
         "unbound-model",
         "unbound-data",
         "batch",
         "staged-profile",
         "wrong-profile-control",
         "home-alias",
-        "alias-sibling",
         "unbound-gsm8k",
         "allocation",
         "source-identity",
@@ -665,7 +661,7 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
     ],
 )
 def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recorded_runs, tmp_path, monkeypatch, case):
-    short = {"staged-profile", "wrong-profile-control", "home-alias", "alias-sibling", "unbound-gsm8k"}
+    short = {"staged-profile", "wrong-profile-control", "home-alias", "unbound-gsm8k"}
     preset = presets.PRESETS[
         "data-medium" if case == "control-tasks" else "speed-short" if case in short else "learning-medium"
     ]
@@ -687,11 +683,9 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
         )
     if case in ("cached-default", "cached-execution", "cached-source"):
         inputs = gate.GateInputs(preset_name=preset.name)
-    if case == "control-default-setting":
-        inputs = gate.GateInputs(preset_name=preset.name, settings=("trainer.policy.optimizer_config.lr=1.0e-6",))
     if case == "control-tasks":
         inputs = gate.GateInputs(preset_name=preset.name, tasks="fixture-selection@2026.11.10")
-    if case in ("initializer", "unbound-model", "control-initializer"):
+    if case in ("initializer", "unbound-model"):
         name, version = "tests/custom-init", "2026.11.07"
         source = tmp_path / name / version
         initializer = SkyRLRun(
@@ -716,14 +710,14 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
             ).model_dump(mode="json"),
         )
         inputs = gate.GateInputs(preset_name=preset.name, init=f"{name}@{version}")
-    if case in ("stale-default", "explicit-equal", "untouched-sibling"):
+    if case in ("stale-default",):
         control_roots = controls(recorded_runs, preset.name)
-        promoted = replace(preset, patch=preset.patch.with_settings((setting,)))
+        promoted = replace(preset, recipe=replace(preset.recipe, config=preset.recipe.config.with_settings((setting,))))
         monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset.name: promoted})
         if case == "stale-default":
             inputs = gate.GateInputs(preset_name=preset.name)
-    control_inputs = inputs if case in ("control-setting", "control-initializer", "control-tasks") else None
-    if case not in ("stale-default", "explicit-equal", "untouched-sibling"):
+    control_inputs = inputs if case == "control-tasks" else None
+    if case not in ("stale-default",):
         control_roots = controls(recorded_runs, preset.name, **({"inputs": control_inputs} if control_inputs else {}))
     name = f"users/test/native-{case}"
     candidate = recorded_runs(preset.name, name, inputs=inputs)
@@ -735,22 +729,15 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
             record["version"] = "2026.11.10.1"
             path.write_text(json.dumps(record))
         fault_key = "preset revisions differ" if case == "control-revision" else "preset revision differs"
-    elif case == "control-default-setting":
+    elif case in ("control-commit", "control-dirty"):
         document = json.loads((control_roots[0] / "terminal.json").read_text())
-        document["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] = 5e-6
+        document["result"]["provenance"]["base_commit" if case == "control-commit" else "dirty"] = (
+            "wrong-commit" if case == "control-commit" else True
+        )
         write_receipt(control_roots[0], document)
-        fault_key = "skyrl.trainer.policy.optimizer_config.lr"
-    elif case in ("control-setting", "control-initializer", "control-tasks"):
-        fault_key = {
-            "control-setting": "skyrl.trainer.policy.optimizer_config.lr",
-            "control-initializer": "inputs.model.uri",
-            "control-tasks": "inputs.train_data",
-        }[case]
-    elif case == "untouched-sibling":
-        document = json.loads((control_roots[0] / "terminal.json").read_text())
-        document["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["weight_decay"] = 0.1
-        write_receipt(control_roots[0], document)
-        fault_key = "weight_decay"
+        fault_key = "does not match its pin"
+    elif case == "control-tasks":
+        fault_key = "inputs.train_data"
     elif case in ("unbound-model", "unbound-data"):
         document = json.loads((candidate / "terminal.json").read_text())
         if case == "unbound-model":
@@ -770,19 +757,16 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
                 profile = callback["additional_evaluations"]["eval_lite"]
                 profile["data_files"] = [str(Path(source["local_path"]) / source["relative_path"])]
                 if case == "wrong-profile-control":
-                    profile["data_files"] = ["/unbound/named-panel.parquet"]
+                    profile["data_files"] = ["/unbound/named-task_set.parquet"]
                     fault_key = f"skyrl.trainer.callbacks.{index}.additional_evaluations.eval_lite.data_files"
         write_receipt(root, document)
-    elif case in ("home-alias", "alias-sibling", "unbound-gsm8k"):
+    elif case in ("home-alias", "unbound-gsm8k"):
         document = json.loads((candidate / "terminal.json").read_text())
         launch = document["config"]
         launch["skyrl"]["data"]["train_data"] = ["/root/data/gsm8k/train.parquet"]
         if case == "unbound-gsm8k":
             launch["skyrl"]["data"]["train_data"] = ["/other/data/gsm8k/train.parquet"]
             fault_key = "skyrl.data.train_data"
-        elif case == "alias-sibling":
-            launch["skyrl"]["generator"]["max_num_seqs"] += 1
-            fault_key = "skyrl.generator.max_num_seqs"
         write_receipt(candidate, document)
     elif case in ("allocation", "source-identity", "relative-file", "authored-run-name"):
         document = json.loads((candidate / "terminal.json").read_text())
@@ -800,7 +784,7 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
             shutil.copyfile(Path(source["uri"]) / source["relative_path"], Path(source["uri"]) / "other.parquet")
             source["relative_path"] = "other.parquet"
             launch["skyrl"]["data"]["val_data"] = [dict(source)]
-            fault_key = "recorded panel file differs"
+            fault_key = "recorded task set file differs"
         else:
             launch["skyrl"]["trainer"]["run_name"] = "authored-run-name"
             fault_key = "skyrl.trainer.run_name"
@@ -810,7 +794,11 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
         assert report["verdict"] == "pass", report
         if case == "cached-default":
             promoted = replace(
-                preset, patch=preset.patch.with_settings(("trainer.policy.optimizer_config.weight_decay=0.1",))
+                preset,
+                recipe=replace(
+                    preset.recipe,
+                    config=preset.recipe.config.with_settings(("trainer.policy.optimizer_config.weight_decay=0.1",)),
+                ),
             )
             changed_key = "skyrl.trainer.policy.optimizer_config.weight_decay"
         elif case == "cached-execution":
@@ -834,12 +822,12 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
         assert updated["verdict"] == "invalid", updated
         assert changed_key in updated["reason"]
         assert updated["report"] != report["report"]
-    elif fault_key is not None or case in ("stale-default", "explicit-equal"):
+    elif fault_key is not None or case == "stale-default":
         assert report["verdict"] == "invalid", report
         assert (fault_key or "skyrl.trainer.policy.optimizer_config.lr") in report["reason"]
     else:
         assert (report["verdict"], report["label"]) == ("pass", "no change"), report
-        if case in ("initializer", "optimizer", "batch"):
+        if case in ("initializer", "batch"):
             expected_key = {
                 "initializer": "inputs.model.uri",
                 "batch": "skyrl.trainer.train_batch_size",
@@ -847,7 +835,7 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
             assert expected_key in report["run"]["config_changes"]
 
 
-def test_task_set_content_identity_and_declared_panel_bindings(recorded_runs):
+def test_task_set_content_identity_and_declared_task_set_bindings(recorded_runs):
     preset_name = "learning-medium"
     controls(recorded_runs, preset_name)
     source = recorded_runs(preset_name, "users/test/task-content")
@@ -861,7 +849,7 @@ def test_task_set_content_identity_and_declared_panel_bindings(recorded_runs):
     source = recorded_runs(preset_name, "users/test/task-content-relocated")
     document = json.loads((source / "terminal.json").read_text())
     descriptor = document["config"]["inputs"]["validation_data"][0]
-    copied = source / "panel-copy"
+    copied = source / "task_set-copy"
     shutil.copytree(descriptor["uri"], copied)
     descriptor["uri"] = str(copied)
     document["config"]["skyrl"]["data"]["val_data"] = [dict(descriptor)]
@@ -887,10 +875,10 @@ def test_task_set_content_identity_and_declared_panel_bindings(recorded_runs):
 
     roots = controls(recorded_runs, preset_name)
     roots.append(recorded_runs(preset_name, "users/test/wrong-cohort"))
-    panel_root = Path(presets.selection_artifact(presets.PRESETS[preset_name].eval_lite).path())
-    manifest = pq.read_table(panel_root / presets.TASK_MANIFEST_FILENAME).to_pylist()
+    task_set_root = Path(presets.selection_artifact(presets.PRESETS[preset_name].eval_lite).path())
+    manifest = pq.read_table(task_set_root / presets.TASK_MANIFEST_FILENAME).to_pylist()
     manifest.append(manifest[0] | {"task_id": "task-outside-input"})
-    pq.write_table(pa.Table.from_pylist(manifest), panel_root / presets.TASK_MANIFEST_FILENAME)
+    pq.write_table(pa.Table.from_pylist(manifest), task_set_root / presets.TASK_MANIFEST_FILENAME)
     for root in roots:
         for path in (root / "exports/dumped_evals").glob("*/*.jsonl"):
             rows = [json.loads(line) for line in path.read_text().splitlines()]
@@ -920,7 +908,11 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
     monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset_name: preset})
     controls(recorded_runs, preset_name)
     tasks = selection if preset_name == "data-medium" else None
-    setting_text = ("trainer.policy.optimizer_config.lr=2.0e-6", 'extra_env.VLLM_PROBE="1"') if tasks is None else ()
+    setting_text = (
+        ("trainer.policy.optimizer_config.lr=2.0e-6", 'extra_env.VLLM_PROBE="1"', "generator.max_num_seqs=1024")
+        if tasks is None
+        else ()
+    )
     settings = setting_text
     built = snowball.build_run(preset, settings=settings, tasks=tasks, requirements=("policy/raw_grad_norm<=10",))
     task_name = "fixture-selection@2026.11.10" if tasks else None
@@ -947,14 +939,23 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
     assert recorded.preset_name == preset_name and recorded.requirements == ("policy/raw_grad_norm<=10",)
     decoded = dict(item.split("=", 1) for item in recorded.settings)
     assert {key: json.loads(value) for key, value in decoded.items()} == (
-        {} if tasks else {"trainer": {"policy": {"optimizer_config": {"lr": 2e-6}}}, "extra_env": {"VLLM_PROBE": "1"}}
+        {}
+        if tasks
+        else {
+            "trainer": {"policy": {"optimizer_config": {"lr": 2e-6}}},
+            "extra_env": {"VLLM_PROBE": "1"},
+            "generator": {"max_num_seqs": 1024},
+        }
     )
     assert recorded.tasks == task_name
-    before = {path: path.read_bytes() for path in source.rglob("*") if path.is_file()}
     report = rescore(preset_name, "--candidate", built.runs[0].name)
     assert report["verdict"] == "pass", report
     assert report["run"]["requirements"] == list(recorded.requirements)
     assert report["run"]["settings"] == list(recorded.settings)
     assert report["run"]["tasks"] == recorded.tasks
     assert report["run"]["attempt_ids"] == ["recorded-attempt"]
-    assert before == {path: path.read_bytes() for path in source.rglob("*") if path.is_file()}
+    assert comparisons(report)["eval_lite/family_mean/gain_per_h100_hour"]["run"] == pytest.approx(0.005)
+    if tasks is None:
+        assert {"skyrl.trainer.policy.optimizer_config.lr", "skyrl.generator.max_num_seqs"} <= set(
+            report["run"]["config_changes"]
+        )

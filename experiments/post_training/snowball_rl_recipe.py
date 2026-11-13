@@ -70,40 +70,32 @@ def _training_config(
                 sampling_params=sections.SamplingParams(ignore_eos=recipe.fixed_reply_tokens is not None),
             ),
         ),
-        preset.patch,
         presets.training_mode_patch(recipe.mode),
-        presets.numerics_patch(recipe.numerics, recipe.config, preset.patch),
+        presets.numerics_patch(recipe.numerics, recipe.config),
     )
     return presets.apply_settings(config, settings, preset)
 
 
-def _model_input(preset: presets.Preset, init: ArtifactStep | None) -> SkyRLModelSource:
-    if init is None:
-        return preset.model
-    if init.artifact_type is SkyRLRun:
+def _model_input(preset: presets.Preset, init: ArtifactStep | None) -> tuple[SkyRLModelSource, str | None]:
+    if init is not None and init.artifact_type is SkyRLRun:
         record = read_record(init.path())
-        if record is None:
-            raise click.BadParameter("the initializer requires a completed published artifact record")
-        result = record.result or {}
-        if not result.get("hf_model_uri"):
-            raise click.BadParameter("the initializer run has no HF export")
-        return SkyRLPolicyModel(init)
-    return ArtifactHfModel(init, preset.model.tokenizer_uri, preset.model.tokenizer_revision)
-
-
-def _initial_model_uri(model: SkyRLModelSource) -> str:
-    if isinstance(model, SkyRLPolicyModel):
-        record = read_record(model.step.path())
         uri = (record.result or {}).get("hf_model_uri") if record is not None else None
         if not isinstance(uri, str) or not uri:
             raise click.BadParameter("the initializer requires a completed HF export")
-        return uri
+        return SkyRLPolicyModel(init), uri
+    model = (
+        preset.model
+        if init is None
+        else ArtifactHfModel(init, preset.model.tokenizer_uri, preset.model.tokenizer_revision)
+    )
+    if not preset.best_checkpoint_export:
+        return model, None
     if model.relative_path is not None:
-        return prefix_join(model.step.path(), model.relative_path)
+        return model, prefix_join(model.step.path(), model.relative_path)
     exports = discover_hf_checkpoints(model.step.path())
     if not exports:
         raise click.BadParameter("the initializer artifact has no HF export")
-    return exports[-1]
+    return model, exports[-1]
 
 
 def _refuse_judged(summary: dict, filename: str) -> None:
@@ -121,23 +113,23 @@ def run_spec(
 ) -> SkyRLSpec:
     """Build the complete default recipe with explicit candidate inputs and settings."""
     config = _training_config(preset, settings)
-    initial = config.to_skyrl()
+    explicit = presets.override_document(settings)
     batch_changes = {
-        field: value for key, field in presets.BATCH_SETTINGS.items() if (value := get_path(initial, key)) is not MISSING
+        field: value
+        for key, field in presets.BATCH_SETTINGS.items()
+        if (value := get_path(explicit, key)) is not MISSING
     }
     if batch_changes:
         workload = preset.recipe.layout.workload.with_batches(batch_changes)
         preset = replace(preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, workload=workload)))
         micro_batch, in_flight = workload.batch_parameters(config)
-        explicit = presets.override_document(settings)
         derived = {}
         if get_path(explicit, "trainer.micro_forward_batch_size_per_gpu") is MISSING:
             derived["micro_forward_batch_size_per_gpu"] = micro_batch
         if get_path(explicit, "trainer.rollout_buffer.max_in_flight") is MISSING:
             derived["rollout_buffer"] = {"max_in_flight": in_flight}
         config = config.merge(RecipePatch.from_document({"trainer": derived}))
-    default = presets.default_selection(preset)
-    selection = tasks or default
+    default, selection = presets.task_selections(preset, tasks)
     _refuse_judged(presets.selection_summary(selection), "train")
     chosen = preset.evaluations
     workload = preset.recipe.layout.workload
@@ -151,8 +143,12 @@ def run_spec(
     except (TypeError, ValueError) as error:
         raise click.BadParameter(str(error)) from error
     config = config.merge(numerics.patch())
-    preset = replace(preset, updates=config.trainer.max_steps)
-    model = _model_input(preset, init)
+    preset = replace(
+        preset,
+        updates=config.trainer.max_steps,
+        measured=preset.measured if preset.gated else tuple(workload.planned_steps(config.trainer.max_steps)),
+    )
+    model, initial_model_uri = _model_input(preset, init)
     validation_data = ()
     evaluation_data = []
     profiles = {}
@@ -184,7 +180,7 @@ def run_spec(
                     chosen[0] if chosen else None,
                     profiles,
                     expected_tasks,
-                    _initial_model_uri(model) if preset.best_checkpoint_export else None,
+                    initial_model_uri if preset.best_checkpoint_export else None,
                 ),
             )
         )
