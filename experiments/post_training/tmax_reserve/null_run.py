@@ -42,7 +42,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from experiments.post_training.tmax_reserve.waves import run_in_waves
+from experiments.post_training.tmax_reserve.waves import HeadroomGate, run_in_waves
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +79,7 @@ PROBE_KEYSTROKES = (
     f'python3 -c "$(echo {base64.b64encode(_PROBE_PY.encode()).decode()} | base64 -d)"; echo PROBE_DONE\n'
 )
 PROBE_DURATION = 60
+HEADROOM_POLL_SECONDS = 300
 EGRESS_LINE = re.compile(r"^EGRESS (\S+) (.+)$", re.MULTILINE)
 TMUX_LINE = re.compile(r"^TMUX (.+)$", re.MULTILINE)
 
@@ -221,7 +222,10 @@ def summarize(trials: list[dict], probes: dict[str, list[dict]], controls: set[s
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--policy", type=Path, required=True, help="The pilot Harbor policy (local dataset path).")
-    parser.add_argument("--wave-size", type=int, required=True, help="Tasks per wave (see waves.py).")
+    parser.add_argument("--wave-size", type=int, required=True, help="Most tasks per wave (see waves.py).")
+    parser.add_argument("--min-wave-size", type=int, required=True, help="Wait rather than run a smaller wave.")
+    parser.add_argument("--snapshot-quota", type=int, required=True, help="The account's snapshot quota.")
+    parser.add_argument("--headroom-wait", type=int, required=True, help="Seconds to wait for room per wave.")
     parser.add_argument("--max-sandbox-hours", type=float, required=True, help="Stop after the wave that passes it.")
     parser.add_argument("--controls", type=Path, help="JSON {task name: known-good shell commands}.")
     parser.add_argument("--output", type=Path, required=True, help="New local directory for jobs and the summary.")
@@ -254,6 +258,7 @@ def main() -> None:
     )
     driver_env = {"DAYTONA_API_KEY": require_secret("DAYTONA_API_KEY"), CANDIDATE_API_KEY_ENV: "EMPTY"}
     driver_env.update({key: os.environ[key] for key in DAYTONA_RUNTIME_ENV_KEYS if key in os.environ})
+    gate = HeadroomGate(args.snapshot_quota, args.min_wave_size, HEADROOM_POLL_SECONDS, args.headroom_wait)
     try:
         run_in_waves(
             config,
@@ -261,6 +266,7 @@ def main() -> None:
             driver_env,
             lambda: InferenceBackendState.READY,
             args.wave_size,
+            gate,
             args.output,
             args.max_sandbox_hours,
         )

@@ -4,7 +4,8 @@
 """Run a Harbor dataset in waves so its Daytona snapshots fit the account's snapshot quota.
 
 Shellbox builds one named snapshot per distinct build context and keeps it. A wave holds at most ``wave_size`` tasks
-(every attempt of a task stays in its wave). After each wave, the snapshots of that wave's tasks are deleted by the
+(every attempt of a task stays in its wave), and only as many as the account's free snapshot slots allow
+(``HeadroomGate``). After each wave, the snapshots of that wave's tasks are deleted by the
 names Shellbox gives them, each after a fresh ``get``; no other snapshot is touched.
 """
 
@@ -15,6 +16,7 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -73,9 +75,40 @@ def _snapshots(command: str, *arguments: str, env: Mapping[str, str]) -> object:
     return json.loads(result.stdout.strip().splitlines()[-1])
 
 
-def waves(tasks: list[str], wave_size: int) -> list[list[str]]:
-    ordered = sorted(tasks)
-    return [ordered[i : i + wave_size] for i in range(0, len(ordered), wave_size)]
+@dataclasses.dataclass(frozen=True)
+class HeadroomGate:
+    """Wait before each wave until ``quota`` minus the account's non-general snapshots fits the wave."""
+
+    quota: int
+    min_wave_size: int
+    poll_interval: int
+    max_wait: int
+
+
+def next_wave_size(free: int, remaining: int, max_size: int, min_size: int) -> int | None:
+    """Tasks the next wave may take with ``free`` snapshot slots, or None to wait for more room."""
+    size = min(max_size, free, remaining)
+    return size if size >= min(min_size, remaining) and size > 0 else None
+
+
+def _await_wave_size(
+    driver_env: Mapping[str, str], gate: HeadroomGate, remaining: int, max_size: int, work: Path
+) -> int:
+    deadline = time.monotonic() + gate.max_wait
+    while True:
+        usage = _snapshots("usage", env=driver_env)
+        free = gate.quota - usage["non_general"]
+        with (work / "headroom.jsonl").open("a") as log:
+            log.write(
+                json.dumps({"time": datetime.datetime.now(datetime.UTC).isoformat(), "free": free, **usage}) + "\n"
+            )
+        size = next_wave_size(free, remaining, max_size, gate.min_wave_size)
+        if size is not None:
+            return size
+        if time.monotonic() + gate.poll_interval > deadline:
+            raise WaveAbort(f"only {free} free snapshot slots after waiting {gate.max_wait / 3600:.1f} h")
+        logger.info("%d free snapshot slots; waiting %d s", free, gate.poll_interval)
+        time.sleep(gate.poll_interval)
 
 
 def run_in_waves(
@@ -83,22 +116,32 @@ def run_in_waves(
     overlay: HarborRuntimeOverlay,
     driver_env: Mapping[str, str],
     backend_state: Callable[[], InferenceBackendState],
-    wave_size: int,
+    max_wave_size: int,
+    gate: HeadroomGate,
     work: Path,
     max_sandbox_hours: float,
 ) -> list[Path]:
     """Run ``overlay.dataset_path`` wave by wave; return each wave's jobs directory.
 
-    Stops (``WaveAbort``) after a wave with a lane error, or once live sandbox hours pass ``max_sandbox_hours``.
-    Writes ``<work>/snapshot-names.json`` before the first wave and ``<work>/snapshot-deletions.jsonl`` as it goes.
+    Each wave takes as many remaining tasks (in name order) as the free snapshot slots allow, up to
+    ``max_wave_size``. Stops (``WaveAbort``) when the gate times out, after a wave with a lane error, or once live
+    sandbox hours pass ``max_sandbox_hours``. Writes ``<work>/account.json``, ``<work>/snapshot-names.json``,
+    ``<work>/headroom.jsonl`` and ``<work>/snapshot-deletions.jsonl``.
     """
     dataset = Path(overlay.dataset_path)
     task_names = sorted(path.name for path in dataset.iterdir() if path.is_dir())
     names = _snapshots("names", *(str(dataset / task) for task in task_names), env=driver_env)
     (work / "snapshot-names.json").write_text(json.dumps(names, indent=1))
+    account = _snapshots("usage", env=driver_env)
+    (work / "account.json").write_text(json.dumps(account, indent=1))
+    logger.info("Daytona account: organizations %s", account["organization_ids"])
     jobs_dirs = []
     sandbox_seconds = 0.0
-    for index, wave in enumerate(waves(task_names, wave_size)):
+    remaining = list(task_names)
+    index = 0
+    while remaining:
+        size = _await_wave_size(driver_env, gate, len(remaining), max_wave_size, work)
+        wave, remaining = remaining[:size], remaining[size:]
         wave_dir = work / "waves" / f"w{index:02d}"
         for task in wave:
             shutil.copytree(dataset / task, wave_dir / "tasks" / task)
@@ -128,4 +171,5 @@ def run_in_waves(
             raise WaveAbort(f"wave {index} had {len(errors)} lane errors, e.g. {errors[0]!r}")
         if sandbox_seconds / 3600 > max_sandbox_hours:
             raise WaveAbort(f"live sandbox-h {sandbox_seconds / 3600:.2f} passed {max_sandbox_hours}")
+        index += 1
     return jobs_dirs

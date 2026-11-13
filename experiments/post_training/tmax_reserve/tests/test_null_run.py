@@ -4,7 +4,7 @@
 import json
 
 from experiments.post_training.tmax_reserve.null_run import ALLOWED_HOST, PROBE_KEYSTROKES, ScriptedModel, summarize
-from experiments.post_training.tmax_reserve.waves import wave_usage, waves
+from experiments.post_training.tmax_reserve.waves import next_wave_size, wave_usage
 
 INSTRUCTIONS = {"a": "Count the lines in data.txt.", "b": "Sort the CSV by date."}
 
@@ -56,10 +56,12 @@ def test_summary_flags_egress_beyond_the_allowed_host_and_nonzero_null_rewards()
     assert summary["probes_with_tmux"] == 1 and summary["probes_incomplete"] == 1
 
 
-def test_waves_cover_every_task_once_within_the_size():
-    tasks = [f"t{i:02d}" for i in range(45)]
-    split = waves(list(reversed(tasks)), 20)
-    assert [len(w) for w in split] == [20, 20, 5] and [t for w in split for t in w] == tasks
+def test_next_wave_size_fits_free_slots_and_waits_below_the_minimum():
+    assert next_wave_size(free=24, remaining=200, max_size=16, min_size=4) == 16
+    assert next_wave_size(free=9, remaining=200, max_size=16, min_size=4) == 9
+    assert next_wave_size(free=3, remaining=200, max_size=16, min_size=4) is None
+    assert next_wave_size(free=-3, remaining=200, max_size=16, min_size=4) is None
+    assert next_wave_size(free=10, remaining=2, max_size=16, min_size=4) == 2
 
 
 def test_wave_usage_counts_live_sandbox_time_and_lane_errors(tmp_path):

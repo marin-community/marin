@@ -5,6 +5,7 @@
 
 ``names TASK_DIR...`` prints ``{task: snapshot name}`` through Shellbox's own naming path. ``delete NAMES_JSON``
 deletes each named snapshot after a fresh ``get``, skipping names that no longer exist, and prints what it did.
+``usage`` prints the account's non-general snapshot count and their organization ids.
 Only names computed from our own task folders are ever passed to ``delete``.
 """
 
@@ -22,6 +23,24 @@ def names(task_dirs: list[Path]) -> dict[str, str]:
     return {
         task.name: context_identity(task / "environment", (task / "task.toml").read_bytes())
         for task in sorted(task_dirs)
+    }
+
+
+def usage() -> dict:
+    """The account's non-general snapshot count (what the quota limits) and the organizations they belong to."""
+    client = Daytona(DaytonaConfig(api_key=os.environ["DAYTONA_API_KEY"]))
+    snapshots, page = [], 1
+    while True:
+        result = client.snapshot.list(page=page, limit=100)
+        snapshots += result.items
+        if page >= result.total_pages:
+            break
+        page += 1
+    own = [snapshot for snapshot in snapshots if not snapshot.general]
+    return {
+        "non_general": len(own),
+        "general": len(snapshots) - len(own),
+        "organization_ids": sorted({snapshot.organization_id for snapshot in own if snapshot.organization_id}),
     }
 
 
@@ -45,6 +64,8 @@ def main() -> None:
     command, *arguments = sys.argv[1:]
     if command == "names":
         print(json.dumps(names([Path(arg) for arg in arguments])))
+    elif command == "usage":
+        print(json.dumps(usage()))
     elif command == "delete":
         print(json.dumps(delete(json.loads(Path(arguments[0]).read_text()))))
     else:
