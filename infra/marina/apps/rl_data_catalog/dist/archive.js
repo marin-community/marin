@@ -12,7 +12,7 @@ async function selected(id) {
   const review = await json(`api/archive/reviews/${encodeURIComponent(id)}`), target = $("selected");
   $("reviews").hidden = true; $("search").hidden = true;
   target.append(node("h2", review.source_id), node("p", `Review ID: ${review.id}`));
-  const collection = node("details"); collection.append(node("summary", "Original review collection"), node("pre", JSON.stringify(review.collection, null, 2))); target.append(collection);
+  const collection = node("details"); collection.append(node("summary", "Original review collection"), node("pre", JSON.stringify(review.collection, null, 2))); target.append(repairRecommendations(review.collection), collection);
   target.append(node("h2", "Saved artifacts"));
   for (const artifact of review.artifacts) {const paragraph = node("p"), anchor = node("a", artifact.path); anchor.href = `api/archive/reviews/${encodeURIComponent(id)}/artifacts/${artifact.path.split("/").map(encodeURIComponent).join("/")}`; anchor.target = "_blank"; anchor.rel = "noopener"; paragraph.append(anchor); target.append(paragraph);}
 }

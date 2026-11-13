@@ -1,6 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import builtins
+import hashlib
+import importlib
 import json
 import shutil
 import uuid
@@ -9,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
+from types import ModuleType
 from typing import Any, cast
 
 import pyarrow as pa
@@ -36,7 +40,14 @@ from finestore.rl.curation import (
 )
 from finestore.rl.source_identity import canonical_source_id
 from finestore.store import DataStore
-from marina.applets import AppletServices, validate_query
+from marina.applets import (
+    AppletServices,
+    load_backend_entrypoint,
+    package_applet,
+    read_applet_package,
+    remove_backend_revision,
+    validate_query,
+)
 from marina.client import AppletQuery
 from shellbox.machine import Backend
 from shellbox.requirements import Requirement, Support
@@ -48,9 +59,13 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
 
+from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
+from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, prepare_preview
+from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
+from infra.marina.apps.rl_data_catalog.server.quality import result
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
@@ -608,6 +623,8 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
         shutil.rmtree(tmp_path)
         assert client.get("/curriculum").json()["release_id"] == "next"
         assert client.get("/curriculum", params={"release": "first"}).json()["release_id"] == "first"
+        releases = client.get("/curriculum/releases").json()["releases"]
+        assert [(row["release_id"], row["selected"]) for row in releases] == [("next", True), ("first", False)]
         with engine.begin() as connection:
             connection.execute(text("DROP TABLE curriculum_matches"))
             connection.execute(text("DROP TABLE curriculum_tasks"))
@@ -825,6 +842,7 @@ def test_source_grade_uses_sample_fractions_and_zero_output(catalog_database, ve
             .one()
         )
     assert row["grade"] == expected
+    assert result({}, dict(row)) == expected.upper()
     assert row["issue_count"] == sum(v in {"bad", "some_issues"} for v in verdicts)
     assert row["result_reviewed"] == sum(v not in {"unknown", "missing_task"} for v in verdicts)
     if verdicts == ["good"] * 99 + ["bad"]:
@@ -895,6 +913,11 @@ def test_historical_alias_urls_keep_assessments_packets_and_sql_counts(catalog_d
             packet = client.get("/evidence", params={"source_id": identifier, "task_id": "one"}).json()["packet"]
             assert packet == original_packet
             assert client.get("/source-fingerprint", params={"source_id": identifier}).json()["source_id"] == current
+            detail = client.get("/source", params={"source_id": identifier}).json()
+            assert detail["declaration"]["id"] == current
+            assert detail["assessment"]["pipeline_key"] == "frozen"
+            assert detail["backend_capabilities"]["basis"] == "unassessed"
+            assert detail["result"] == "GOOD"
 
 
 def test_historical_curriculum_alias_keeps_counts_samples_and_pagination(catalog_database, catalog_query, tmp_path):
@@ -966,3 +989,163 @@ def test_frozen_backend_survey_digest_survives_canonical_source_projection(tmp_p
     survey = BackendSurvey.model_validate(raw)
     assert survey.sources[0].source_id == "HuggingFaceH4:aime24"
     assert canonical_sha256(survey.identity_payload()) == canonical_sha256(raw)
+
+
+def test_preview_package_imports_canonical_models_without_new_shared_runtime_modules(tmp_path, monkeypatch):
+    checkout = Path(__file__).resolve().parents[3]
+    output = tmp_path / "preview"
+    prepare_preview(checkout, output)
+    package = read_applet_package(package_applet(output))
+    assert package.manifest.applet_id == PREVIEW_APP_ID
+    original_import = builtins.__import__
+
+    def old_runtime_import(name, global_namespace=None, local_namespace=None, fromlist=(), level=0):
+        if level == 0 and name in {
+            "finestore.rl.curation",
+            "finestore.rl.source_identity",
+            "taskcompendium.source_fingerprints",
+        }:
+            raise ModuleNotFoundError(name)
+        return original_import(name, global_namespace, local_namespace, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", old_runtime_import)
+    applet_id = uuid.uuid4()
+    try:
+        module, _ = load_backend_entrypoint(applet_id, 1, package)
+        backend = cast(ModuleType, module)
+        record = backend.canonical_source_record({"id": "MarinSkyRL:gsm8k", "declaration": {"id": "MarinSkyRL:gsm8k"}})
+        assert record["id"] == record["declaration"]["id"] == "OpenAI:gsm8k"
+        quality_module = importlib.import_module(backend.__name__.rsplit(".", 1)[0] + ".quality")
+        assert (
+            quality_module.result(
+                {
+                    "quality_result": {
+                        "reviewed": 10,
+                        "issue_count": 1,
+                        "issues": [],
+                        "repair_recommendation": "Review evidence",
+                    }
+                },
+                None,
+            )
+            == "GOOD"
+        )
+    finally:
+        remove_backend_revision(applet_id, 1, package.digest)
+
+
+def test_role_projection_requires_receipt_and_preserves_frozen_sample_roles(catalog_database, catalog_query, tmp_path):
+    path = curriculum_release(tmp_path, "insufficient_context")
+    raw_release = json.loads(path.read_text())
+    raw_release["release_id"] = canonical_sha256({key: raw_release[key] for key in ("lineage", "sources", "inventory")})
+    raw_coverage = json.loads((tmp_path / "coverage.json").read_text())
+    raw_coverage["alignment_release_id"] = raw_release["release_id"]
+    identity_keys = (
+        "alignment_release_id",
+        "subject_distance",
+        "capability_distance",
+        "source_sample_size",
+        "area_sample_size",
+    )
+    raw_coverage["coverage_id"] = canonical_sha256(
+        {**{key: raw_coverage[key] for key in identity_keys}, "version": COVERAGE_VERSION}
+    )
+    corrected_release = {
+        **raw_release,
+        "sources": [
+            {**row, "intended_use": "eval"} if row["source_id"] == "Marin:a" else row for row in raw_release["sources"]
+        ],
+    }
+    corrected_release["release_id"] = canonical_sha256(
+        {key: corrected_release[key] for key in ("lineage", "sources", "inventory")}
+    )
+    corrected_coverage = {**raw_coverage, "alignment_release_id": corrected_release["release_id"]}
+    corrected_coverage["coverage_id"] = canonical_sha256(
+        {**{key: corrected_coverage[key] for key in identity_keys}, "version": COVERAGE_VERSION}
+    )
+    documents = {}
+    for name, release, coverage in (
+        ("raw", raw_release, raw_coverage),
+        ("corrected", corrected_release, corrected_coverage),
+    ):
+        release_path, coverage_path = tmp_path / f"{name}-release.json", tmp_path / f"{name}-coverage.json"
+        release_path.write_text(json.dumps(release))
+        coverage_path.write_text(json.dumps(coverage))
+        documents[name] = {
+            "release_uri": str(release_path),
+            "release_sha256": hashlib.sha256(release_path.read_bytes()).hexdigest(),
+            "release_id": release["release_id"],
+            "coverage_uri": str(coverage_path),
+            "coverage_sha256": hashlib.sha256(coverage_path.read_bytes()).hexdigest(),
+            "coverage_id": coverage["coverage_id"],
+        }
+    source = next(row for row in raw_release["sources"] if row["source_id"] == "Marin:a")
+    vector_manifest = tmp_path / "vectors.json"
+    vector_manifest.write_text(json.dumps({"cache_hits": 4, "cache_misses": 0}))
+    note = {
+        "schema_version": 1,
+        "kind": "source-use-correction",
+        "policy_ruling": {"session_id": "fixture", "message_id": "approval", "timestamp": "2026-11-13T00:00:00Z"},
+        **documents,
+        "changes": [
+            {
+                **{key: source[key] for key in ("source_id", "source_key", "population", "task_count")},
+                "dataset_id": "fixture",
+                "dataset_revision": "1",
+                "recorded_use": "train",
+                "effective_use": "eval",
+            }
+        ],
+        "vector_cache": {
+            "manifest_uri": str(vector_manifest),
+            "manifest_sha256": hashlib.sha256(vector_manifest.read_bytes()).hexdigest(),
+            "cache_hits": 4,
+            "cache_misses": 0,
+        },
+    }
+    note_path = tmp_path / "role-projection.json"
+    note_path.write_text(json.dumps(note))
+    reference = ManifestReference(uri=str(note_path), sha256=hashlib.sha256(note_path.read_bytes()).hexdigest())
+    load_curriculum(documents["raw"]["release_uri"], documents["raw"]["coverage_uri"], catalog_query)
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "graded", source_id="Marin:a")
+    load_catalog(CurationCatalog(root), catalog_query)
+    args = (documents["corrected"]["release_uri"], documents["corrected"]["coverage_uri"], catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        with pytest.raises(ValueError, match="lineage"):
+            load_curriculum(*args)
+        with pytest.raises(ValueError, match="current catalog policy"):
+            load_curriculum(*args, role_projection=reference)
+        assert client.get("/curriculum").json()["release_id"] == raw_coverage["coverage_id"]
+        with catalog_database.begin() as connection:
+            connection.execute(
+                text("UPDATE atlas_sources SET declaration=jsonb_set(declaration, '{is_benchmark}', 'true')")
+            )
+        changed_coverage = {**corrected_coverage, "sample_paths": ["unapproved-samples.parquet"]}
+        changed_path = Path(documents["corrected"]["coverage_uri"])
+        changed_path.write_text(json.dumps(changed_coverage))
+        changed_note = {
+            **note,
+            "corrected": {**note["corrected"], "coverage_sha256": hashlib.sha256(changed_path.read_bytes()).hexdigest()},
+        }
+        changed_note_path = tmp_path / "changed-note.json"
+        changed_note_path.write_text(json.dumps(changed_note))
+        changed_reference = ManifestReference(
+            uri=str(changed_note_path), sha256=hashlib.sha256(changed_note_path.read_bytes()).hexdigest()
+        )
+        with pytest.raises(ValueError, match="changes frozen data"):
+            load_curriculum(*args, role_projection=changed_reference)
+        assert client.get("/curriculum").json()["release_id"] == raw_coverage["coverage_id"]
+        changed_path.write_text(json.dumps(corrected_coverage))
+        load_curriculum(*args, role_projection=reference)
+        assert client.get("/curriculum", params={"intended_use": "eval"}).json()["totals"]["denominator"] == 300
+        assert client.get("/curriculum", params={"intended_use": "train"}).json()["totals"]["denominator"] == 100
+        detail = client.get("/curriculum/task", params={"source_id": "Marin:a", "task_id": "one"}).json()["task"]
+        assert detail["intended_use"] == "eval" and detail["recorded_intended_use"] == "train"
+        with catalog_database.connect() as connection:
+            assert connection.execute(
+                text("SELECT DISTINCT detail->>'intended_use' FROM curriculum_tasks")
+            ).scalars().all() == ["train"]
+        for ref in documents.values():
+            assert hashlib.sha256(Path(ref["release_uri"]).read_bytes()).hexdigest() == ref["release_sha256"]
+            assert hashlib.sha256(Path(ref["coverage_uri"]).read_bytes()).hexdigest() == ref["coverage_sha256"]

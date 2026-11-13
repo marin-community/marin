@@ -136,6 +136,22 @@ SAMPLE_SQL = (
 
 
 def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
+    @api.get("/curriculum/releases")
+    def releases() -> dict[str, Any]:
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT l.release_id, l.release_uri, l.manifest->>'created_at' AS created_at,
+                        l.load_id=c.load_id AS selected
+                    FROM curriculum_loads l JOIN curriculum_current c
+                        ON l.load_id=c.load_id OR l.load_id=c.previous_load_id
+                    WHERE c.name='latest' ORDER BY selected DESC
+                    """
+                )
+            ).mappings()
+            return {"releases": [dict(row) for row in rows]}
+
     @api.get("/curriculum")
     def coverage(
         filters: Annotated[CoverageQuery, Depends(coverage_query)],
@@ -241,6 +257,7 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             "hierarchy": manifest["nodes"],
             "lineage": manifest["lineage"],
             "scope_summary": scope_summary,
+            "role_projection": manifest.get("role_projection"),
         }
 
     @api.get("/curriculum/tasks")
@@ -317,23 +334,33 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
     def task(source_id: str, task_id: str, release: str = "") -> dict[str, Any]:
         with engine.connect() as connection:
             metadata = loaded_release(connection, release)
-            detail = connection.execute(
-                text(
-                    """
-                SELECT detail FROM curriculum_tasks WHERE load_id=:load_id
-                    AND source_id IN (:source_id, :original_source_id) AND task_id=:task_id
+            detail = (
+                connection.execute(
+                    text(
+                        """
+                SELECT t.detail, s.alignment->>'intended_use' AS intended_use
+                FROM curriculum_tasks t JOIN curriculum_sources s USING(load_id, source_id)
+                WHERE t.load_id=:load_id AND t.source_id IN (:source_id, :original_source_id) AND t.task_id=:task_id
             """
-                ),
-                {
-                    "load_id": metadata["load_id"],
-                    "source_id": canonical_source_id(source_id),
-                    "original_source_id": original_source_id(source_id),
-                    "task_id": task_id,
-                },
-            ).scalar_one_or_none()
+                    ),
+                    {
+                        "load_id": metadata["load_id"],
+                        "source_id": canonical_source_id(source_id),
+                        "original_source_id": original_source_id(source_id),
+                        "task_id": task_id,
+                    },
+                )
+                .mappings()
+                .one_or_none()
+            )
         if detail is None:
             raise HTTPException(404, "Task is outside the loaded alignment population")
         return {
             "release_id": metadata["release_id"],
-            "task": {**detail, "source_id": canonical_source_id(detail["source_id"])},
+            "task": {
+                **detail["detail"],
+                "source_id": canonical_source_id(detail["detail"]["source_id"]),
+                "recorded_intended_use": detail["detail"]["intended_use"],
+                "intended_use": detail["intended_use"],
+            },
         }
