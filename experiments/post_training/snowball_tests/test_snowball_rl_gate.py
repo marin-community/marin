@@ -473,7 +473,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         receipt = json.loads((roots[-1] / "terminal.json").read_text())
         receipt["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] = 5e-6
         write_receipt(roots[-1], receipt)
-    job = JobName.from_wire("/atqamar/coordinator-id-returned-by-iris")
+    job = JobName.from_wire("/test-user/coordinator-id-returned-by-iris")
 
     def finish(*args, **kwargs):
         if case not in ("missing", "native-failed") and built.gate is not None:
@@ -500,7 +500,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     if case == "child":
-        monkeypatch.setenv("IRIS_TASK_ID", "/atqamar/coordinator/0")
+        monkeypatch.setenv("IRIS_TASK_ID", "/test-user/coordinator/0")
         client.submit.side_effect = AssertionError("coordinator execution submitted another job")
     try:
         result = CliRunner().invoke(

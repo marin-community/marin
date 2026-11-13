@@ -2,7 +2,7 @@
   "receipt": {
     "result": {
       "state": "succeeded",
-      "iris_job_id": "/atqamar/checkpoints-snowball-rl-control-learning-medium-648b5687f0-r0-2026.11.11.1-coordinator-c6f8a606/checkpoints-snowball-rl-control-learning-medium-648b5687f0-r0-2026.11.11.1-6388601f29d7",
+      "iris_job_id": "/test-user/checkpoints-snowball-rl-control-learning-medium-648b5687f0-r0-2026.11.11.1-coordinator-c6f8a606/checkpoints-snowball-rl-control-learning-medium-648b5687f0-r0-2026.11.11.1-6388601f29d7",
       "started_at": "2026-11-07T07:11:19.776000+00:00",
       "finished_at": "2026-11-07T08:51:35.243000+00:00",
       "provenance": {
