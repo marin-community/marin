@@ -21,6 +21,7 @@ from marin.rl.skyrl import SkyRLRunConfig
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.secrets import require_secret
 
+from experiments.post_training.long_loop.adopted_sft import is_hf_export
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation
 from experiments.post_training.long_loop.launch_validation import validate_launch
 from experiments.post_training.long_loop.run_spec import resolve_spec, stage_blockers
@@ -102,7 +103,8 @@ def main(
     version = resolve_version(resolved["name"], None)
     terminal = build_spec_graph(resolved, version, through=through)
     model_config = None
-    if through != "sft" and resolved["adopted_handoff"] is None:
+    adopted_hf = resolved["adopted_sft"] is not None and is_hf_export(resolved["adopted_sft"])
+    if through != "sft" and resolved["adopted_handoff"] is None and not adopted_hf:
         # SFT preserves the initializer architecture, but its export does not exist at submission.
         initializer = resolved["initializer"]
         model_config = Path(
