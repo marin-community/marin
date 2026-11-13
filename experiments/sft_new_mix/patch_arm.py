@@ -18,7 +18,7 @@ from pathlib import Path
 
 import draccus
 import yaml
-from levanter.store.cache import CacheLedger
+from levanter.store.cache import LEDGER_FILE_NAME
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -95,12 +95,13 @@ def write_catalog(output: str, replacements: dict[str, str]) -> None:
     ``replacements`` maps a component name to the store directory that replaces
     it; the entry's ledger is read from that store.
     """
+    configure_coreweave_s3()
     catalog = json.loads(StoragePath(CONTROL_CATALOG).read_text())
     entries = catalog["splits"]["train"]
     for name, cache_dir in replacements.items():
         if name not in entries:
             raise ValueError(f"{name} is not a train component of the control catalog")
-        ledger = json.loads(CacheLedger.load(cache_dir).to_json())
+        ledger = json.loads((StoragePath(cache_dir) / LEDGER_FILE_NAME).read_text())
         logger.info(
             "%s: %s rows -> %s rows, %s tokens -> %s tokens",
             name,
