@@ -15,6 +15,7 @@ JSON line per row: tokens, loss tokens, and the weighted NLL sum.
 """
 
 import argparse
+import dataclasses
 import functools
 import gzip
 import json
@@ -32,8 +33,12 @@ from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
 from iris.cluster.setup_scripts import default_setup_script
 from iris.rpc import job_pb2
+from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.model_config import load_model_config
+from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.backend import ModelSpec
 from marin.inference.config import VllmEngineConfig, VllmLauncherType, VllmSource
+from marin.inference.iris import remote_inference
 from marin.inference.iris_vllm import iris_vllm_launch
 from marin.inference.vllm_backend import VllmBackend
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -53,6 +58,11 @@ REVISION = "8c76b22afc38f5e95360c83ca88008f00b5ae1e0"
 # them, so rows also report the NLL of text targets only.
 FIRST_SPECIAL_ID = 128000
 GPUS = 8
+# The campaign serve path lowers this model config exactly as the eval campaign does (direct DP8 args, STREAM load).
+CAMPAIGN_MODEL_CONFIG = (
+    "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/model-configs/"
+    "open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05.yaml"
+)
 MAX_MODEL_LEN = 73728
 MAX_NUM_BATCHED_TOKENS = 7168
 MAX_NUM_SEQS = 32
@@ -64,7 +74,7 @@ def _token_id(key) -> int:
     return int(str(key).removeprefix("token_id:"))
 
 
-def score_row(url: str, api_model: str, row: dict) -> dict:
+def score_row(url: str, api_model: str, row: dict, headers: dict | None = None) -> dict:
     ids, weights = row["input_ids"], row["loss_weights"]
     if len(ids) != len(weights) or weights[-1]:
         raise ValueError(f"row {row['cell']}:{row['row']} weights do not follow the shifted convention")
@@ -80,6 +90,7 @@ def score_row(url: str, api_model: str, row: dict) -> dict:
             "return_tokens_as_token_ids": True,
             "return_token_ids": True,
         },
+        headers=headers or {},
         timeout=REQUEST_TIMEOUT,
     )
     response.raise_for_status()
@@ -117,15 +128,70 @@ def read_cell(uri: str) -> list[dict]:
     return [json.loads(line) for line in gzip.decompress(StoragePath(uri).read_bytes()).splitlines()]
 
 
-def run_job(cells: list[str], output: str, passes: int, repo: str, revision: str) -> None:
-    """Iris entrypoint: score every cell ``passes`` times, each pass in a fresh vLLM engine."""
-    logging.basicConfig(level=logging.INFO)
-    configure_coreweave_s3()
+def read_cells(cells: list[str]) -> dict[str, list[dict]]:
     rows = {uri: read_cell(uri) for uri in cells}
     for uri, cell_rows in rows.items():
         too_long = [r["row"] for r in cell_rows if len(r["input_ids"]) > MAX_MODEL_LEN - 1]
         if too_long:
             raise ValueError(f"{uri}: rows longer than max_model_len: {too_long[:5]}")
+    return rows
+
+
+def score_cells(url: str, api_model: str, rows: dict[str, list[dict]], output: str, index: int, headers=None):
+    """Score every cell against one running engine and write ``pass-<index>/<cell>.jsonl``."""
+    for uri, cell_rows in rows.items():
+        started = time.monotonic()
+        with ThreadPoolExecutor(IN_FLIGHT) as pool:
+            scored = list(pool.map(functools.partial(score_row, url, api_model, headers=headers), cell_rows))
+        seconds = time.monotonic() - started
+        name = uri.rsplit("/", 1)[1].removesuffix(".jsonl.gz")
+        StoragePath(prefix_join(output, f"pass-{index}/{name}.jsonl")).write_text(
+            "".join(json.dumps(s) + "\n" for s in scored)
+        )
+        tokens = sum(s["tokens"] for s in scored)
+        loss = sum(s["loss_tokens"] for s in scored)
+        nll = sum(s["nll_sum"] for s in scored)
+        logger.info(
+            "pass %d %s: %d rows, %d tokens in %.0f s (%.0f tok/s), mean NLL %.6f over %d loss tokens",
+            index,
+            name,
+            len(scored),
+            tokens,
+            seconds,
+            tokens / seconds,
+            nll / loss,
+            loss,
+        )
+
+
+def run_campaign_job(cells: list[str], output: str, passes: int, repo: str, revision: str, cluster: str) -> None:
+    """Iris CPU entrypoint: serve through the eval campaign's 10/05 path, one fresh server per pass."""
+    logging.basicConfig(level=logging.INFO)
+    configure_coreweave_s3()
+    rows = read_cells(cells)
+    model = load_model_config(MARIN_ROOT / CAMPAIGN_MODEL_CONFIG)
+    if (repo, revision) != (model.location, model.revision):
+        model = dataclasses.replace(model, name=repo.replace("/", "-"), location=repo, revision=revision)
+    accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=GPUS, target_cluster=cluster)
+    # Both scored repos are public, so no token reaches the serving jobs.
+    inference = inference_config_for_model(
+        model, accelerator, env_vars={}, priority=job_pb2.PRIORITY_BAND_INTERACTIVE, api_model="student"
+    )
+    # Keep the serving job on the scorer's cluster; the lowering leaves its placement open.
+    resources = dataclasses.replace(inference.iris.worker_resources, target_cluster=cluster)
+    inference = dataclasses.replace(inference, iris=dataclasses.replace(inference.iris, worker_resources=resources))
+    for index in range(passes):
+        with remote_inference(inference) as session:
+            endpoint = session.model.endpoint
+            headers = {"Authorization": f"Bearer {endpoint.api_key}"} if endpoint.api_key else {}
+            score_cells(endpoint.url("completions"), endpoint.model, rows, output, index, headers)
+
+
+def run_job(cells: list[str], output: str, passes: int, repo: str, revision: str) -> None:
+    """Iris entrypoint: score every cell ``passes`` times, each pass in a fresh vLLM engine."""
+    logging.basicConfig(level=logging.INFO)
+    configure_coreweave_s3()
+    rows = read_cells(cells)
     spec = ModelSpec(
         weights=repo,
         api_model="student",
@@ -142,10 +208,10 @@ def run_job(cells: list[str], output: str, passes: int, repo: str, revision: str
             source=VllmSource.MARIN_FORK,
             max_num_batched_tokens=MAX_NUM_BATCHED_TOKENS,
             max_num_seqs=MAX_NUM_SEQS,
+            # No {"distributed":true} loader config here: vLLM accepts it only with the object-store streamer,
+            # and this path loads the HF repo with the default loader.
             extra_args=(
                 "--enable-expert-parallel",
-                "--model-loader-extra-config",
-                '{"distributed":true}',
                 "--no-enable-prefix-caching",
                 "--revision",
                 revision,
@@ -157,29 +223,7 @@ def run_job(cells: list[str], output: str, passes: int, repo: str, revision: str
             assert launch.is_leader, "PP=1 means one task, which is the leader"
             with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env) as env:
                 env.wait_until_ready()
-                url = f"{env.server_url}/completions"
-                for uri, cell_rows in rows.items():
-                    started = time.monotonic()
-                    with ThreadPoolExecutor(IN_FLIGHT) as pool:
-                        scored = list(pool.map(functools.partial(score_row, url, spec.api_model), cell_rows))
-                    seconds = time.monotonic() - started
-                    name = uri.rsplit("/", 1)[1].removesuffix(".jsonl.gz")
-                    target = prefix_join(output, f"pass-{index}/{name}.jsonl")
-                    StoragePath(target).write_text("".join(json.dumps(s) + "\n" for s in scored))
-                    tokens = sum(s["tokens"] for s in scored)
-                    loss = sum(s["loss_tokens"] for s in scored)
-                    nll = sum(s["nll_sum"] for s in scored)
-                    logger.info(
-                        "pass %d %s: %d rows, %d tokens in %.0f s (%.0f tok/s), mean NLL %.6f over %d loss tokens",
-                        index,
-                        name,
-                        len(scored),
-                        tokens,
-                        seconds,
-                        tokens / seconds,
-                        nll / loss,
-                        loss,
-                    )
+                score_cells(f"{env.server_url}/completions", spec.api_model, rows, output, index)
 
 
 def main() -> None:
@@ -191,17 +235,28 @@ def main() -> None:
     parser.add_argument("--revision", default=REVISION, help="pinned HF commit of --repo")
     parser.add_argument("--timeout-hours", type=float, default=4.0)
     parser.add_argument("--cluster", choices=sorted(OUTPUT_ROOTS), default="cw-rno2a")
+    parser.add_argument(
+        "--serve",
+        choices=("direct", "campaign"),
+        default="direct",
+        help="direct: one GPU job runs vLLM itself; campaign: a CPU job serves through the eval campaign path",
+    )
     args = parser.parse_args()
     if not args.output.startswith(OUTPUT_ROOTS[args.cluster]):
         raise ValueError(f"{args.cluster} outputs go under {OUTPUT_ROOTS[args.cluster]}<N>d/")
-    request = JobRequest(
-        name=f"teacher-nll-{os.urandom(4).hex()}",
-        entrypoint=Entrypoint.from_callable(
-            run_job, args=[args.cells, args.output, args.passes, args.repo, args.revision]
-        ),
-        resources=ResourceConfig.with_gpu(
+    job_args = [args.cells, args.output, args.passes, args.repo, args.revision]
+    if args.serve == "campaign":
+        entrypoint = Entrypoint.from_callable(run_campaign_job, args=[*job_args, args.cluster])
+        resources = ResourceConfig.with_cpu(cpu=4, ram="32g", target_cluster=args.cluster)
+    else:
+        entrypoint = Entrypoint.from_callable(run_job, args=job_args)
+        resources = ResourceConfig.with_gpu(
             "H100", count=GPUS, cpu=64, ram="512g", disk="512g", target_cluster=args.cluster
-        ),
+        )
+    request = JobRequest(
+        name=f"teacher-nll-{args.serve}-{os.urandom(4).hex()}",
+        entrypoint=entrypoint,
+        resources=resources,
         environment=create_environment(
             setup_scripts=[default_setup_script(packages=["marin-core"])],
             env_vars={"HF_HUB_DISABLE_XET": "1"},

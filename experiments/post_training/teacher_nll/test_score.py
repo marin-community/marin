@@ -20,7 +20,7 @@ class FakeResponse:
 
 
 def fake_post(logprobs):
-    def post(url, json, timeout):
+    def post(url, json, timeout, headers):
         ids = json["prompt"]
         prompt_logprobs = [None] + [
             {f"token_id:{t}": {"logprob": logprobs[i], "rank": 1}} for i, t in enumerate(ids[1:])
