@@ -159,6 +159,9 @@ class LMBackend:
                 parameters.pop("temperature", None)
             parameters.update(overrides)
             parameters.pop("do_sample", None)
+        elif isinstance(self.model, TemplateAPI) and do_sample is False:
+            # An lm-eval task that declares greedy decoding without a temperature.
+            parameters.setdefault("temperature", 0.0)
         if request.output_token_cap is not None:
             parameters["max_gen_toks"] = min(
                 parameters.get("max_gen_toks", request.output_token_cap), request.output_token_cap,

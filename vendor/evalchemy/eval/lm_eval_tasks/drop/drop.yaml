@@ -27,6 +27,8 @@ should_decontaminate: true
 doc_to_decontamination_query: "{{passage}} {{question}}"
 generation_kwargs:
   until: !function eval.generation_stops.DROP_STOP_SEQUENCES
+  do_sample: false
+  temperature: 0.0
 filter_list:
   - name: extract_answer
     filter:

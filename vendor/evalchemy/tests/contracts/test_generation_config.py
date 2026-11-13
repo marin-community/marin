@@ -955,6 +955,35 @@ def test_native_source_sends_declared_sampling_and_applies_caller_settings(endpo
         assert payload["max_tokens"] == overrides["max_gen_toks"]
 
 
+@pytest.mark.parametrize("model_class", [LocalChatCompletion, LocalCompletionsAPI])
+@pytest.mark.parametrize("generation_kwargs, greedy", [({"do_sample": False}, True), ({"max_gen_toks": 64}, False)])
+def test_native_source_without_temperature_is_greedy_only_when_declared(
+    endpoint, tmp_path, model_class, generation_kwargs, greedy
+):
+    dataset = tmp_path / "questions.jsonl"
+    dataset.write_text(json.dumps({"question": "Six times seven?", "answer": "\\boxed{42}"}) + "\n")
+    config = {
+        "task": "generation_probe", "dataset_path": "json",
+        "dataset_kwargs": {"data_files": {"test": str(dataset)}}, "test_split": "test",
+        "output_type": "generate_until", "doc_to_text": "{{question}}", "doc_to_target": "{{answer}}",
+        "metric_list": [{"metric": "exact_match"}], "num_fewshot": 0, "generation_kwargs": generation_kwargs,
+    }
+    (tmp_path / "generation_probe.yaml").write_text(yaml.safe_dump(config))
+    args = Namespace(model=LOCAL_CHAT_COMPLETIONS if model_class is LocalChatCompletion else LOCAL_COMPLETIONS,
+                     model_args="", gen_kwargs={}, num_fewshot=0, limit=1,
+                     seed=[0, 1234, 1234, 1234], apply_chat_template=model_class is LocalChatCompletion)
+    evaluate(
+        _model(endpoint, model_class), SimpleNamespace(tasks={}), TaskManager(include_path=str(tmp_path)),
+        ["generation_probe"], {"generation_probe": LM_EVAL_ROUTE}, [1], args=args,
+    )
+    payload = endpoint.requests[0]
+    if greedy:
+        assert payload["temperature"] == 0
+    else:
+        assert "temperature" not in payload
+    assert "seed" not in payload
+
+
 def test_context_preflight_caps_the_effective_generation_request(endpoint):
     class Tokenizer:
         def apply_chat_template(self, _messages, **_kwargs):
