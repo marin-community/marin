@@ -121,6 +121,9 @@ evaluations:
   mrcr-65k:
     benchmark: mrcr
     protocol: 65k
+  longbench-v2-thinking:
+    benchmark: longbench-v2
+    protocol: thinking
 suites:
   smoke:
   - mmlu-smoke
