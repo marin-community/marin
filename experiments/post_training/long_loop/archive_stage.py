@@ -26,6 +26,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.redaction import redact_string
 from rigging.secrets import require_secret
+from wandb import env as wandb_env
 from wandb.apis.public.runhistory.downloads import IncompleteRunHistoryError
 
 from experiments.grug.moe_hero_ep.ops.upload_hf import RESPONSIBLE_USE, WARNING
@@ -297,6 +298,8 @@ def _wandb_export(refs: list[dict], settings: dict, destination: str) -> tuple[l
                 "WANDB_API_KEY": require_secret("WANDB_API_KEY"),
                 "WANDB_BASE_URL": settings["base_url"],
             }
+            # The isolated SDK must not reuse the parent's different wandb-core protocol.
+            env.pop(wandb_env.SERVICE, None)
             backup = subprocess.run([*command, "backup", str(path), "--run", run_path], env=env, capture_output=True)
             if backup.returncode:
                 # The pinned CLI serializes exception types as traceback lines.

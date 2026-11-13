@@ -131,6 +131,8 @@ source bundle; older runs need archive-only postprocessing to use a later fix.
 The archive recipe pins `wandb.package`, `wandb.sdk_version` and `wandb.base_url`.
 Both export paths use that API origin explicitly: newer SDK defaults can target
 a different service from the one hosting the recorded training runs.
+The isolated exporter starts its own `wandb-core` process; it does not inherit
+the parent's `WANDB_SERVICE` connection across SDK versions.
 
 ### CPU data and configuration validation
 

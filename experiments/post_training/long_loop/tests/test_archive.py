@@ -286,6 +286,8 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
 
         def exporter(args, *, env, **kwargs):
             config = yaml.safe_load(Path(args[args.index("backup") + 1]).read_text())
+            assert "WANDB_SERVICE" not in env
+            assert os.environ["WANDB_SERVICE"] == "parent-sdk-service"
             assert args[args.index("--with") + 1] == "wandb==" + settings["wandb"]["sdk_version"]
             assert config["source"]["base_url"] == env["WANDB_BASE_URL"] == settings["wandb"]["base_url"]
             return subprocess.CompletedProcess(
@@ -295,6 +297,7 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
         monkeypatch.setattr(archive_stage.subprocess, "run", exporter)
         monkeypatch.setenv("WANDB_API_KEY", "fake-for-offline-test")
         monkeypatch.setenv("WANDB_BASE_URL", "https://api.forge.coreweave.com")
+        monkeypatch.setenv("WANDB_SERVICE", "parent-sdk-service")
     document(
         Path(roots["sft"]) / "consumed-config.json",
         {
