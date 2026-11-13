@@ -1567,6 +1567,13 @@ uv run python -m experiments.post_training.task_curation.oracle_filter calibrate
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
   --output-dir /path/to/oracle-run-v2 --environment daytona --concurrency 128
 
+# LOCAL: prepared digest-pinned images via umoci and shellbox-images.json,
+# in PRIVILEGED Iris CPU workers with loop devices. This route supports only root commands.
+uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
+  --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
+  --output-dir /path/to/oracle-local-v2 --environment local --concurrency 4 \
+  --environment-kwargs '{"image_cache":"/cache/shellbox-images","cgroup_parent":"/sys/fs/cgroup/marin-liveness","disk_root":"/cache/shellbox-disks"}'
+
 # IRIS-SANDBOX: intended invocation after SANDBOX disk qualification.
 # Currently rejects declared storage; do not use for calibrated cohorts.
 uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
@@ -1590,13 +1597,92 @@ contents; commands run in separate process groups so a timeout or cancellation
 can stop a command while preserving the task filesystem for the verifier.
 Images must provide `setsid` and a readable `/proc`.
 
-Prepared-image submission requires the separate `sandbox-image-workdir` backend
+LOCAL accepts declared `storage_mb` only with an explicit `disk_root` whose
+`LocalDiskPool` host probe passes. The worker needs Linux root in the existing
+PRIVILEGED pod, `/dev/loop-control`, available loop devices, ext4 and OverlayFS,
+and `mkfs.ext4`, `mount`, `umount`, `losetup`, `findmnt` and `umoci`. The disk root
+must be root-owned mode 0700 in a private or slave mount namespace. Missing
+capabilities fail before task acquisition; an unconfigured LOCAL worker continues
+to reject storage declarations. This route requires no controller change or gVisor.
+Harbor runs verification in a worker thread before sandbox acquisition and reuses
+the verified pool for concurrent trials in the same worker process, mount
+namespace and disk root. Each allocation also reclaims abandoned leases, without
+repeating the full host probe.
+
+Each container gets a sparse image of exactly `storage_mb * 1024 * 1024` bytes,
+formatted as ext4 with no reserved root blocks. Filesystem metadata and journal
+consume part of that capacity. Prepared image contents are shared read-only
+OverlayFS lower layers outside the budget. Copy-up, whiteouts, new root files,
+`/tmp`, workdirs, `/dev/shm`, uploads and command stdout/stderr/input spool files
+consume the container's ext4 budget. `/dev` permits device I/O but disallows
+creating regular files; `/dev/shm` binds back to ext4. Read-only package/program
+mounts remain outside the budget. Provision the worker disk for the sum of active
+limits plus image caches and host artifacts; sparse images do not reserve that
+physical capacity.
+
+This accounting differs by backend: Daytona requests whole GiB rounded up through
+its service API, whose image/filesystem accounting is provider-controlled. Docker
+passes `--storage-opt size` to a supporting storage driver for the writable layer;
+its separate tmpfs and bind/volume mounts are outside that layer. LOCAL's ext4
+filesystem includes its scratch and shared-memory directories. For a foreground
+command, a disk-limit outcome requires a failed exit (nonzero or signal) and
+either zero available inodes or fewer available bytes than the larger of 1 MiB
+and 0.5% of the declared filesystem size. The trusted host launcher samples the task's ext4
+filesystem immediately after reaping the command, before command spools close.
+Successful commands remain successful while full. With inodes available,
+failed commands at or above that byte headroom threshold remain ordinary failures,
+including commands that reclaim sufficient space before exiting. Guest stderr text never establishes exhaustion, and output
+truncation or a zero output limit cannot hide the capacity sample. A private
+one-byte host report records the sample; guest code does not inherit its FD.
+Block capacity uses `f_bavail`; `f_bfree` also includes ext4's
+[reserved metadata pool](https://raw.githubusercontent.com/torvalds/linux/master/fs/ext4/super.c),
+which remains reserved even with `mkfs.ext4 -m 0`.
+`DISK_FAILURE_MIN_HEADROOM_BYTES` and `DISK_FAILURE_HEADROOM_FRACTION` define the
+classification threshold: a bulk allocation can fail while a smaller write
+still fits. Treating that near-capacity failure as disk pressure lets calibration
+double its current trial disk allocation when the task has no declared disk limit.
+A failed or signalled command near capacity (zero available inodes, or available bytes < max(1 MiB, 0.5% of `storage_mb` MiB)) is classified DISK even if its failure is unrelated, because doubling disk on an ambiguous near-full failure is cheap during calibration, while missing a real limit causes oracle qualification to wrongly exclude the task instead of retrying with more disk.
+The threshold classifies failures; it adds no bytes to the filesystem and gives
+command spools no extra storage allowance.
+
+Shellbox reports `DiskLimitExceeded` with `ResourceLimit.DISK`, translated by
+Harbor to `SandboxDiskFullError` (or `AgentDiskFullError` during the agent phase).
+Calibration classifies the explicit disk signal before infrastructure verdicts
+and doubles only missing disk limits. A declared fixed disk limit remains fixed
+and records a resource exclusion when exceeded.
+
+Command spools remain inside the quota, with no extra storage allowance. A
+`run()` command can successfully consume the final inode while its three
+anonymous spools are open. Closing those spools releases their inodes for the
+next command. If an `open_process()` command consumes every inode using pipe
+output, the next `run()` may fail to create its spool before guest execution.
+The host samples that failure before closing other spools already created for
+the same `run()`; a failure within the capacity threshold is a typed disk failure. The host report
+is trusted launcher control metadata, like namespace configuration, outside the
+task filesystem; stdout, stderr and stdin payloads remain charged.
+
+A guardian owns each filesystem until task teardown unmounts OverlayFS and ext4
+and releases the autoclear loop device. Closing the owner pipe on driver death
+also invokes cleanup. Startup reclaims allocations with released leases and
+leaves live neighbours intact. Cleanup errors retain the allocation for recovery
+and fail visibly; cleanup never lazily unmounts or detaches unrelated loop devices.
+Run the bounded disk correctness tests explicitly in an authorized privileged
+CPU worker:
+
+```bash
+uv run --package marin-shellbox --group test pytest \
+  lib/shellbox/tests/test_local_disk.py -o addopts='' -m manual -q -s
+```
+
+LOCAL honors `allow_internet` and supports only root commands.
+
+Iris prepared-image submission requires the separate `sandbox-image-workdir` backend
 capability, even without declared disk. Older controllers are rejected before
 submission because they hide the image's `/app` under an empty volume. This
 capability describes image preservation and does not qualify storage enforcement.
 
-Iris SANDBOX storage enforcement is unqualified. Harbor reports no storage-limit
-capability and rejects declared `storage_mb` for this environment. The Shellbox
+Iris SANDBOX storage enforcement has not been validated. Harbor reports no
+storage-limit capability and rejects declared `storage_mb` for `iris-sandbox`. The Shellbox
 adapter also requires a direct Kubernetes controller advertising
 `sandbox-storage-limit` before submitting any declared disk; current controllers
 do not advertise it. Sandbox-profile pods cannot start on the pinned CPU pool
@@ -2036,6 +2122,11 @@ converter version/revision, TaskSpec digest, task count and declared Use.
 `SourceInfo.lexical_contamination` receives matching metrics. Stale input or Use
 changes clear raw metrics; an existing valid current release proof is preserved.
 Training measurements alone do not supply private-release admission proof.
+For retained evaluation releases, measure the current private pin and bind its
+receipt after retained-release selection updates the actor input. An older
+upstream-pin benchmark measurement stays in lineage and cannot substitute for
+the current-pin receipt. Evaluation and benchmark receipts retain every task
+without remediation.
 
 ```bash
 uv run python -m experiments.post_training.task_curation.lexical_registration \
@@ -2099,6 +2190,52 @@ QUICK writes an inspection view with zero admitted rows.
 assessments into exact-input SHARED/SEPARATE evidence before declaration binding.
 It reads only the assessment column and preserves unavailable and mismatched
 assessments; it does not filter tasks.
+
+For frozen populations without a stored census, `grading_census` applies the same
+`assess_grading_environment`, `count_grading_environment` and
+`grading_environment_census` functions to every serialized TaskSpec:
+
+```bash
+uv run iris --cluster marin job run --target-cluster cw-us-east-02a \
+  --cpu 8 --memory 32G --disk 64G --enable-extra-resources \
+  --sync-package marin-core --extra cpu --extra dedup \
+  --priority production --timeout 259200 --no-wait -- \
+  python -m experiments.post_training.task_curation.grading_census \
+  --inputs s3://BUCKET/frozen-grading-inputs.json \
+  --output-root s3://BUCKET/new-grading-version --workers 8
+```
+
+Each input contains a `SourceTextPopulation` and its matching `ActorCensusInput`.
+Run in the input bucket's region: `marin-us-east-02a` uses `cw-us-east-02a`,
+and `marin-rno2a` uses `cw-rno2a`, with outputs in the same bucket.
+The command checks the frozen population manifest and complete
+task count, then writes per-task IDs, content hashes, required/declared boundaries,
+statuses and reasons to `tasks.parquet`. Validation failures remain unassessable
+with their reasons. Unavailable graders and boundary mismatches retain their
+existing assessment statuses. The receipt keeps the original actor binding and
+adds an aggregate SHA-256 of serialized TaskSpec bytes, traversing sorted Parquet
+paths and each file's row order; older population
+digests used conversion order and cannot be compared to this scan digest.
+Existing output directories are refused; select a new version for reruns.
+
+Stage the downloaded regional `receipts.json` indexes into a new directory:
+
+```bash
+uv run python -m experiments.post_training.task_curation.grading_binding \
+  --censuses east-receipts.json rno2a-receipts.json \
+  --output-dir STAGE/experiments/post_training/task_curation/datasets/grading_census_receipts
+```
+
+Archive that stage with the [registry publication command](#updating-pinned-registry-receipts),
+then commit its returned references. `grading_census_receipts()` lazily verifies
+and loads them when building the source catalog.
+
+`bind_grading_census` attaches evidence only when the configured source pin,
+converter version and full actor input still match. This census measures grading
+boundaries without executing graders or qualifying integrity contracts.
+`SOURCE_ENV_INCOMPATIBLE_WITH_GRADER` continues to require a failed grader trial's
+verdict and source-environment evidence in an `OracleTaskReceipt`; a static census cannot
+establish that failure.
 
 Combined training receipts use disjoint duplicate-first accounting:
 `measured_tasks = retained_tasks + duplicate_dropped_tasks + dropped_tasks`.

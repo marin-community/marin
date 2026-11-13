@@ -9,6 +9,13 @@ immutable manifest containing the complete active file set for every table. A
 successful write returns the version of `HEAD` as a `CommitToken`. Readers resolve
 `HEAD` once and keep that manifest for the lifetime of their `ReadView`.
 
+Manifests retain schema and shard paths under the original archive root. Copying
+the archive's files to another root does not rebase those references: reads may
+continue using original files, while writes can fail with `already exists with
+different metadata`. Create a new writable archive at a fresh root with
+`DataStore.open`; use a fresh cache root with `PersistentKvCache.at`. Keep the
+original files while any manifest still references them.
+
 ## Transactions
 
 Register table contracts on the store, then use a transaction when several tables

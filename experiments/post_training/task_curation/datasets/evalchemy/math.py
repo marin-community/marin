@@ -4,6 +4,7 @@
 """Pinned Evalchemy math populations and source sampling policies."""
 
 from dataclasses import replace
+from enum import StrEnum
 from functools import partial
 
 from taskcompendium.evaluation.corpus import chat_item
@@ -92,7 +93,13 @@ def math_dataset(
     )
 
 
-def olympiad_source(*, judged: bool) -> RlDataSource[EvalDataset]:
+class OlympiadProtocol(StrEnum):
+    DETERMINISTIC = "deterministic"
+    JUDGED = "judged"
+
+
+def olympiad_source(protocol: OlympiadProtocol) -> RlDataSource[EvalDataset]:
+    judged = protocol is OlympiadProtocol.JUDGED
     benchmark = "OlympiadBench" if judged else "OlympiadBenchDeterministic"
     count = 10 if judged else 1
     return RlDataSource(
@@ -215,4 +222,10 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             ),
         ),
     )
-    return [*base_sources(), aime, amc, olympiad_source(judged=False), olympiad_source(judged=True)]
+    return [
+        *base_sources(),
+        aime,
+        amc,
+        olympiad_source(OlympiadProtocol.DETERMINISTIC),
+        olympiad_source(OlympiadProtocol.JUDGED),
+    ]

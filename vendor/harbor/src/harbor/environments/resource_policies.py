@@ -1,6 +1,7 @@
 from harbor.environments.capabilities import EnvironmentResourceCapabilities
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import ResourceMode
+from shellbox.backends.local.disk import LocalDiskPool
 
 
 def validate_local_resources(
@@ -8,6 +9,7 @@ def validate_local_resources(
     *,
     cpu_enforcement_policy: ResourceMode,
     memory_enforcement_policy: ResourceMode,
+    disk_pool: LocalDiskPool | None = None,
 ) -> None:
     """Validate local resource declarations independently of worker controller availability."""
     if ResourceMode.IGNORE in (cpu_enforcement_policy, memory_enforcement_policy):
@@ -23,13 +25,13 @@ def validate_local_resources(
         memory_enforcement_policy=memory_enforcement_policy,
     )
     if (
-        task.storage_mb is not None
+        (task.storage_mb is not None and disk_pool is None)
         or task.gpus
         or task.gpu_types
         or task.tpu is not None
     ):
         raise ValueError(
-            "Local prepared sandboxes do not enforce storage, GPU, or TPU allocations"
+            "Local storage requires a host-verified disk_root; GPU and TPU allocations are unsupported"
         )
 
 
