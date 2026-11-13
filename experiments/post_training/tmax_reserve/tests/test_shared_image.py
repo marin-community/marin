@@ -11,6 +11,7 @@ import pytest
 from experiments.post_training.tmax_reserve import shared_image
 from experiments.post_training.tmax_reserve.shared_image import (
     CONTEXT_FILE_MODE,
+    FAILED_STEP_MARK,
     IMAGE_B_ENV,
     Template,
     package_shared,
@@ -93,6 +94,31 @@ def test_setup_runs_post_install_then_the_tmux_step_with_template_env_and_retrie
     assert len(calls) == 5 and calls[4].startswith("rm -rf /var/lib/apt/lists/")
     assert (tmp_path / "cwd").read_text().strip() == "/"
     assert (tmp_path / "env").read_text().split() == [IMAGE_B_ENV["GOPATH"], "/root"]
+    assert (
+        result.stderr.splitlines()[-1] == f"{FAILED_STEP_MARK} attempt 1 line 5 exit 1: [ $(wc -l < {counter}) -ge 2 ]"
+    )
+
+
+def test_setup_logs_unhandled_failing_steps_without_changing_the_script(tmp_path):
+    (tmp_path / "post_install.sh").write_text(
+        "false || echo handled\n"
+        "if false; then :; fi\n"
+        "install_it() { missing-tool --flag; }\n"
+        "install_it\n"
+        f'echo "$0 ${{BASH_ENV:-unset}} $SETUP_ATTEMPT" > {tmp_path}/seen\n'
+    )
+    (tmp_path / "setup.sh").write_text(setup_script(_shimmed_env(tmp_path, parse_dockerfile(TEMPLATE_A).env)))
+
+    result = subprocess.run(["bash", str(tmp_path / "setup.sh")], capture_output=True, text=True)
+
+    assert result.returncode == 0
+    # A failing function body is reported in the function and again at its call; handled steps never.
+    assert [line for line in result.stderr.splitlines() if line.startswith(FAILED_STEP_MARK)] == [
+        f"{FAILED_STEP_MARK} attempt 1 line 3 exit 127: missing-tool --flag",
+        f"{FAILED_STEP_MARK} attempt 1 line 4 exit 127: missing-tool --flag",
+    ]
+    # The script sees its own path as $0, and the tracing variables do not reach it or its children.
+    assert (tmp_path / "seen").read_text().split() == [str(tmp_path / "post_install.sh"), "unset"]
 
 
 def test_setup_fails_after_two_failed_attempts(tmp_path):
