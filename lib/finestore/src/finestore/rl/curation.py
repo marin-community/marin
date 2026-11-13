@@ -391,7 +391,8 @@ class DecontaminatedRelease(CatalogRecord):
     duplicate_manifest_uri: str | None = None
     dedup_census_uri: str | None = None
     original_dataset_id: str | None = None
-    original_dataset_revision: str | None = None
+    # Acquired files use a SHA-256 content pin; remote datasets use a Git commit.
+    original_dataset_revision: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
 
 class LexicalReceipt(CatalogRecord):
