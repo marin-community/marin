@@ -780,10 +780,16 @@ class Trial(ABC):
         self, *, source_dir: PurePosixPath, target_dir: Path
     ) -> bool:
         try:
-            await self.agent_environment.download_dir(
-                source_dir=source_dir.as_posix(),
-                target_dir=target_dir,
+            await self._await_phase(
+                self.agent_environment.download_dir(
+                    source_dir=source_dir.as_posix(),
+                    target_dir=target_dir,
+                ),
+                timeout_sec=self.config.trial_cleanup_grace_sec,
+                timeout_error=TimeoutError("Agent log download timed out"),
             )
+        except (PhaseCancellationError, ArtifactPersistenceError):
+            raise
         except Exception:
             self.logger.warning(
                 "Failed to download logs to %s",
@@ -798,11 +804,17 @@ class Trial(ABC):
         for hook in hooks:
             self.logger.debug("Running verifier collect hook: %r", hook.command)
             try:
-                result = await self.agent_environment.exec(
-                    hook.command,
-                    timeout_sec=math.ceil(hook.timeout_sec),
-                    user=hook.user,
+                result = await self._await_phase(
+                    self.agent_environment.exec(
+                        hook.command,
+                        timeout_sec=math.ceil(hook.timeout_sec),
+                        user=hook.user,
+                    ),
+                    timeout_sec=hook.timeout_sec,
+                    timeout_error=TimeoutError("Verifier collect hook timed out"),
                 )
+            except (PhaseCancellationError, ArtifactPersistenceError):
+                raise
             except Exception:
                 self.logger.warning(
                     "Verifier collect hook failed: command=%r",
@@ -844,16 +856,44 @@ class Trial(ABC):
         self, *, source_dir: Path, target_dir: PurePosixPath
     ) -> None:
         try:
-            await self.agent_environment.upload_dir(
-                source_dir=source_dir,
-                target_dir=target_dir.as_posix(),
+            await self._await_phase(
+                self.agent_environment.upload_dir(
+                    source_dir=source_dir,
+                    target_dir=target_dir.as_posix(),
+                ),
+                timeout_sec=self.config.trial_cleanup_grace_sec,
+                timeout_error=TimeoutError("Agent log upload timed out"),
             )
+        except (PhaseCancellationError, ArtifactPersistenceError):
+            raise
         except Exception:
             self.logger.warning(
                 "Failed to upload %s logs back to environment",
                 source_dir.name,
                 exc_info=True,
             )
+
+    async def _download_artifacts(
+        self,
+        artifacts_dir: Path,
+        *,
+        artifacts: Sequence[str | ArtifactConfig] | None = None,
+    ) -> None:
+        try:
+            await self._await_phase(
+                self._artifact_handler.download_artifacts(
+                    self.agent_environment,
+                    artifacts_dir,
+                    source_artifacts_dir=self.agent_env_paths.artifacts_dir,
+                    artifacts=artifacts,
+                ),
+                timeout_sec=self.config.trial_cleanup_grace_sec,
+                timeout_error=TimeoutError("Trial artifact download timed out"),
+            )
+        except asyncio.TimeoutError as exc:
+            # Separate verifiers may consume these files. A truncated transfer
+            # must not turn an infrastructure failure into a negative grade.
+            raise RuntimeServiceError("Trial artifact download timed out") from exc
 
     async def _run_shared_verifier(
         self,

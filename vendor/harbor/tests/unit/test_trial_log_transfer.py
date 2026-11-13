@@ -92,10 +92,9 @@ class _DiagnosticLogFailureEnvironment(BaseEnvironment):
         return ExecResult(stdout="", stderr="", return_code=0)
 
 
-class _FlakyLogTransferEnvironment:
-    capabilities = SimpleNamespace(mounted=False)
-
-    def __init__(self) -> None:
+class _FlakyLogTransferEnvironment(_DiagnosticLogFailureEnvironment):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
         self.downloaded = False
 
     async def download_dir(self, source_dir: str, target_dir: Path) -> None:
@@ -109,17 +108,13 @@ class _FlakyLogTransferEnvironment:
         raise RuntimeError("Daytona filesystem unavailable")
 
 
-def _trial_for_log_transfer(tmp_path: Path) -> SimpleNamespace:
-    return SimpleNamespace(
-        _are_agent_logs_downloaded=False,
-        agent_environment=_FlakyLogTransferEnvironment(),
-        agent_env_paths=SimpleNamespace(agent_dir=PurePosixPath("/logs/agent")),
-        paths=SimpleNamespace(agent_dir=tmp_path / "agent"),
-        config=SimpleNamespace(
-            agent=SimpleNamespace(upload_agent_logs=True),
-        ),
-        logger=logging.getLogger("test.trial-log-transfer"),
+async def _trial_for_log_transfer(tmp_path: Path, monkeypatch) -> Trial:
+    monkeypatch.setattr(
+        environment_factory,
+        "_load_environment_class",
+        lambda _: _FlakyLogTransferEnvironment,
     )
+    return await Trial.create(_scored_trial_config(tmp_path))
 
 
 def _scored_trial_config(tmp_path: Path) -> TrialConfig:
@@ -176,9 +171,9 @@ async def test_log_download_failure_does_not_block_scoring(
 
 
 async def test_failed_log_download_keeps_exception_context_and_can_retry(
-    tmp_path: Path, caplog
+    tmp_path: Path, caplog, monkeypatch
 ) -> None:
-    trial = _trial_for_log_transfer(tmp_path)
+    trial = await _trial_for_log_transfer(tmp_path, monkeypatch)
 
     with caplog.at_level(logging.WARNING, logger=trial.logger.name):
         await Trial._download_agent_logs(trial)
@@ -193,9 +188,9 @@ async def test_failed_log_download_keeps_exception_context_and_can_retry(
 
 
 async def test_failed_log_upload_keeps_exception_context(
-    tmp_path: Path, caplog
+    tmp_path: Path, caplog, monkeypatch
 ) -> None:
-    trial = _trial_for_log_transfer(tmp_path)
+    trial = await _trial_for_log_transfer(tmp_path, monkeypatch)
 
     with caplog.at_level(logging.WARNING, logger=trial.logger.name):
         await Trial._upload_agent_logs(trial)
