@@ -60,11 +60,9 @@
 #task-detail pre { font: 12px/1.7 ui-monospace, monospace; background: #f1f4ef; padding: 16px; border-radius: 5px; }
 #task-detail .description { font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
 #task-detail details { margin-top: 22px; font-size: 12px; }
-#detail-matches table { table-layout: fixed; }
+#detail-matches table { table-layout: auto; }
 #detail-matches td { height: auto; padding: 9px 7px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 #detail-matches th { position: static; padding: 9px 7px; font-size: 11px; }
-#detail-matches th:first-child { width: 42%; }
-#detail-matches th:last-child { width: 27%; }
 #detail-matches .score { text-align: right; font-variant-numeric: tabular-nums; }
 .score-status { color: #657c6b; font-size: 11px; }
 .score-status.outside { color: #95652b; }
