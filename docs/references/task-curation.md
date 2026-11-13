@@ -1209,8 +1209,10 @@ of its allocated capacity. A bare exit 137 does not establish OOM, and unavailab
 CPU counters do not establish CPU saturation.
 
 Stop increasing at 16 CPU, 64 GiB memory, 128 GiB disk, a four-hour agent timeout
-and a 30-minute verifier timeout. A failure at its applicable cap, or a
-non-resource failure, becomes an exclusion with its signal and trial evidence.
+and a 30-minute verifier timeout. A failure at its applicable cap becomes an
+exclusion with its resource signal and trial evidence. For every task, including
+tasks without retries, a scored non-resource failure is `oracle_failed`; an
+unscored non-resource failure is `resource_calibration:infrastructure`.
 The receipt retains every attempt and the final per-task shape. It reports a
 uniform source shape only when every task passed at that shape. A failure in an
 explicitly fixed dimension is excluded at its declared limit.
