@@ -78,12 +78,12 @@ def test_grader_scores_the_last_program_on_public_and_private_tests(monkeypatch,
     assert grade(task, reply) == reward
 
 
-class _RunsCommand:
+class _ReferencesGlobal:
     def __reduce__(self):
         return (print, ("payload executed",))
 
 
 def test_private_tests_that_reference_a_global_are_rejected_without_running(capsys):
-    result = converted(source_row(encoded_private_tests(_RunsCommand())))
+    result = converted(source_row(encoded_private_tests(_ReferencesGlobal())))
     assert isinstance(result, ImportRejection)
     assert "payload executed" not in capsys.readouterr().out
