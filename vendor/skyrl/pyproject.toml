@@ -104,7 +104,7 @@ megatron = [
     "cuda-toolkit[nvcc,cccl]==13.2.2 ; sys_platform == 'linux'",
     "accelerate>=1.14,<2 ; sys_platform == 'linux'",
     "causal-conv1d==1.7.0+marin.cu132torch2141.1 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    # Use FA2 without the optional bundled FA4 code; see scripts/wheels/FA2.md.
+    # Native FA2 source and compatibility checks: scripts/wheels/README.md.
     "flash-attn==2.8.3.post2+marin.fa2.cu132torch2141.1 ; sys_platform == 'linux'",
     "flash-linear-attention==0.4.2 ; sys_platform == 'linux'",
     "mamba-ssm==2.3.2.post1+marin.cu132torch2141.1 ; sys_platform == 'linux' and platform_machine == 'x86_64'",

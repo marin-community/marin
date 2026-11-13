@@ -480,7 +480,7 @@ class GrugSharedExperts(nn.Module):
             expert.backward_dw()
 
 
-# TE 2.19 BF16 FC1 changed fixed local rows when peer expert row counts changed.
+# TE 2.19 and 2.21 BF16 FC1 change fixed local rows when peer expert row counts change.
 # A 1 KiB workspace passed the repro but was slower and needed a global allocator patch.
 # Revisit when native TE passes Grug's peer-batch parity and trainer checks without that cost.
 class GrugColumnParallelGroupedLinear(TEColumnParallelGroupedLinear):
