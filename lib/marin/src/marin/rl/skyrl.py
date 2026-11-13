@@ -14,7 +14,7 @@ import tomllib
 import uuid
 from collections import deque
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
@@ -58,7 +58,6 @@ _TRACE_JOBS_SUBDIR = "trace_jobs"
 _TRAJECTORIES_SUBDIR = "trajectories"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
-GENERATE_ENTRYPOINT = "generate"
 BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
 SKYRL_PROJECT = Path("vendor/skyrl")
 # The SkyRL runtime is packaged separately, so its matching limit is checked there too.
@@ -101,6 +100,12 @@ def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpu
         )
 
 
+def _training_entrypoint() -> str:
+    from skyrlrecipe import RLEntrypoint  # noqa: PLC0415 - optional authoring dependency
+
+    return RLEntrypoint.STANDARD.value
+
+
 @dataclass(frozen=True)
 class SkyRLRolePlan:
     """Training role geometry and registered training entrypoint.
@@ -123,7 +128,15 @@ class SkyRLRolePlan:
     micro_train_batch_size_per_gpu: int
     n_samples_per_prompt: int
     reference_num_nodes: int | None = None
-    entrypoint: Literal["standard", "taskcompendium", "terminal_bench"] = "standard"
+    entrypoint: str = field(default_factory=_training_entrypoint)
+
+    def __post_init__(self) -> None:
+        from skyrlrecipe import RLEntrypoint  # noqa: PLC0415 - optional authoring dependency
+
+        selected = RLEntrypoint(self.entrypoint)
+        if selected not in (RLEntrypoint.STANDARD, RLEntrypoint.TASKCOMPENDIUM):
+            raise ValueError("SkyRL training plans support standard or taskcompendium entrypoints")
+        object.__setattr__(self, "entrypoint", selected.value)
 
     @property
     def colocate_policy_ref(self) -> bool:
@@ -221,7 +234,12 @@ class SkyRLGenerationPlan:
     """Inference allocation with the canonical native role geometry."""
 
     geometry: SkyRLRolePlan
-    entrypoint: Literal["generate", "terminal_bench_generate"] = GENERATE_ENTRYPOINT
+
+    @property
+    def entrypoint(self) -> str:
+        from skyrlrecipe import RLEntrypoint  # noqa: PLC0415 - optional authoring dependency
+
+        return RLEntrypoint.GENERATE.value
 
     @property
     def num_nodes(self) -> int:
