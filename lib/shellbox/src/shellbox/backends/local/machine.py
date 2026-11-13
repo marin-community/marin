@@ -22,7 +22,6 @@ import signal
 import sys
 import tarfile
 import tempfile
-from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -1084,13 +1083,12 @@ def _check_mounts(mounts: tuple[Mount, ...]) -> None:
     missing = [str(mount.host) for mount in mounts if not mount.host.exists()]
     if missing:
         raise ValueError(f"Mounted host paths do not exist: {', '.join(missing)}")
-    destinations = Counter(mount.guest for mount in mounts)
     for mount in mounts:
         if not mount.guest.is_absolute():
             raise UnsupportedMachineSpec(f"The local backend mounts only at absolute guest paths: {mount.guest}")
         if _within(mount.guest, SYSTEM_DIRECTORIES):
             raise UnsupportedMachineSpec(f"The local backend cannot mount inside a host system directory: {mount.guest}")
-        if destinations[mount.guest] > 1 or any(parent in destinations for parent in mount.guest.parents):
+        if any(other is not mount and mount.guest.is_relative_to(other.guest) for other in mounts):
             raise UnsupportedMachineSpec(f"The local backend's mount {mount.guest} lies inside another mount")
 
 
