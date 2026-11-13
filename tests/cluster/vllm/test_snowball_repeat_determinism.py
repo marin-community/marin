@@ -30,11 +30,12 @@ H100_CLUSTER = "cw-rno2a"
 PENDING_TIMEOUT = 45 * 60.0
 RUNTIME_TIMEOUT = 45 * 60.0
 
-# Launch label -> compile mode. The two deterministic launches are compared with each other.
+# Launch label -> compile mode. The two launches of each mode are compared with each other.
 LAUNCHES = {
     "deterministic-a": CompileMode.DETERMINISTIC,
     "deterministic-b": CompileMode.DETERMINISTIC,
     "default": CompileMode.DEFAULT,
+    "default-b": CompileMode.DEFAULT,
 }
 
 
