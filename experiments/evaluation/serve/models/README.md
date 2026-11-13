@@ -158,7 +158,7 @@ settings to the caller. `--vllm-release` reads a JSON `VllmGpuRelease` object (`
 `source_commit`, `version`, `torch_backend`, `torch_version`, `wheels`). Each wheel has `architecture`,
 `sm_targets`, `url` and `sha256`. This uses the existing promoted-wheel verifier for one deployment;
 it does not change the shared runtime pin or publish a release. Without this option, normal
-serving runtime selection applies. Both processes log their effective versions and launch commands.
+serving runtime selection applies. Both processes log their selected runtimes.
 
 Send the same `X-Session-ID` on later turns. The router selects a DP rank through the upstream
 `X-data-parallel-rank` dispatch header; the leader's internal vLLM load balancer must reach all
@@ -185,8 +185,7 @@ release=promoted_release, ...)` with
 `IrisConfig(serving_geometry=ServingGeometry(1, 16, 1, 4, data_parallel_size_local=4), ...)`, one native
 group and no broker. `VllmBackend.start()` returns a `VllmEnvironment`; call `wait_until_ready()`
 before consuming its routed `server_url`. `worker_server_url` and `command` retain the direct
-worker URL and vLLM launch record. The environment accepts the runner's existing `collect_metrics`,
-`collect_nccl` and `compilation_cache_mode` controls. The lower-level
+worker URL and vLLM launch record. The lower-level
 `vllm_router(config, worker_urls, data_parallel_size=N)` context supports independently addressable
 workers with equal DP sizes. Each URL must reach all `N` native ranks. Managed serving derives this
 count from the native vLLM arguments; the router does not configure the worker topology.

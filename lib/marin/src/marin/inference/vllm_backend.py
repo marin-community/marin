@@ -148,8 +148,6 @@ class VllmBackend:
                 launcher=launcher,
                 compilation_cache_mode=self.config.compilation_cache,
                 extra_metric_families=self.config.extra_metric_families,
-                collect_metrics=self.config.collect_metrics,
-                collect_nccl=self.config.collect_nccl,
                 router=self.config.router,
                 router_port=self.port,
                 wait_for_ready=False,

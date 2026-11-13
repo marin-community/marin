@@ -309,8 +309,6 @@ class VllmEngineConfig:
     max_num_seqs: int | None = None
     extra_args: tuple[str, ...] = ()
     extra_metric_families: frozenset[str] = frozenset()
-    collect_metrics: bool = True
-    collect_nccl: bool = True
     speculative: SpeculativeServingConfig | None = None
     router: VllmRouterConfig | None = None
 

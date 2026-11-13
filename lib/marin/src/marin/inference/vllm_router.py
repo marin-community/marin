@@ -128,15 +128,16 @@ def vllm_router(
             except (requests.ConnectionError, requests.Timeout):
                 return False
 
-        ExponentialBackoff(initial=0.1, maximum=2).wait_until_or_raise(
-            ready,
-            timeout=Duration.from_seconds(startup_timeout_seconds),
-            error_message=f"vLLM Router did not become ready; logs: {log_dir}",
-        )
+        try:
+            ExponentialBackoff(initial=0.1, maximum=2).wait_until_or_raise(
+                ready,
+                timeout=Duration.from_seconds(startup_timeout_seconds),
+                error_message=f"vLLM Router did not become ready; logs: {log_dir}",
+            )
+        except Exception:
+            logger.error("vLLM Router startup failed; logs: %s\n%s", log_dir, router.logs_tail())
+            raise
         yield router
-    except Exception:
-        logger.error("vLLM Router failed; logs: %s\n%s", log_dir, router.logs_tail())
-        raise
     finally:
         # Signal the session even if uvx's parent already exited. A surviving
         # Python/Rust child must not retain the listener after a failed launch.

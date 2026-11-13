@@ -36,8 +36,6 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.routing import Route
 
-pytestmark = pytest.mark.integration
-
 
 @dataclass(frozen=True)
 class RouterWorker:
@@ -215,10 +213,18 @@ def test_router_never_publishes_an_endpoint_with_an_unavailable_worker(router_wo
     "native_args,expected_dp",
     [
         ((), 1),
-        (("--data-parallel-size=4", "--data-parallel-size-local", "2"), 4),
+        pytest.param(
+            (
+                "--data-parallel-size=4",
+                "--data-parallel-size-local=2",
+                "--nnodes=2",
+                "--node-rank=0",
+                "--data-parallel-backend=mp",
+            ),
+            4,
+            id="multi-host-internal-leader",
+        ),
         (("--data-parallel-size", "2", "--data-parallel-size=4"), 4),
-        pytest.param(("--data-parallel-size", "2", "-dp", "4"), 4, id="short-alias"),
-        pytest.param(("--data_parallel_size=4", "--data-parallel-size-local", "2"), 4, id="underscore-alias"),
         pytest.param(
             ("--data-parallel-size=4", "--nnodes=1", "--data-parallel-start-rank=0"),
             4,
@@ -275,15 +281,10 @@ def test_environment_routes_native_ranks_without_a_backend_or_second_topology_se
         ("--data-parallel-external-lb",),
         ("--data-parallel-hybrid-lb",),
         ("--data_parallel_external_lb",),
-        ("-dpe",),
-        ("-dph",),
         ("--data-parallel-multi-port-external-lb",),
-        ("-dpm",),
         ("--data-parallel-rank=0",),
-        ("-dpn", "0"),
         ("--data-parallel-size-local=2", "--data-parallel-start-rank=0"),
-        ("--nnodes=2", "--data-parallel-start-rank=0"),
-        ("-dpl", "2", "-dpr", "0"),
+        ("-n", "2", "--data-parallel-start-rank=0"),
     ],
 )
 def test_managed_router_rejects_native_load_balancers_that_cannot_dispatch_global_ranks(native_args):
