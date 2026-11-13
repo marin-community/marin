@@ -47,6 +47,40 @@ def test_openai_adapter_accepts_litellm_drop_params_option(monkeypatch):
     assert "drop_params" not in request
 
 
+def test_context_limited_model_retries_unrelated_bad_request(monkeypatch):
+    _compacting_model_class(monkeypatch)
+    module = importlib.import_module("mini_swe_model")
+    responses = iter(
+        (
+            httpx.Response(
+                400,
+                json={"error": {"message": "Context limit reached", "type": "invalid_request_error"}},
+            ),
+            httpx.Response(200, json=_tool_response().model_dump()),
+        )
+    )
+
+    def transport(request):
+        if request.url.path == "/tokenize":
+            return httpx.Response(200, json={"count": 128, "max_model_len": 32768})
+        return next(responses)
+
+    monkeypatch.setattr(
+        httpx.Client, "_transport_for_url", lambda self, url: httpx.MockTransport(transport)
+    )
+    # Exercise normal retry handling without its wall-clock backoff.
+    monkeypatch.setattr("tenacity.nap.time.sleep", lambda _: None)
+    model = module.ContextLimitedModel(
+        model_name="hosted_vllm/served-model",
+        api_base="http://model/v1",
+        context_window=32768,
+        max_output_tokens=768,
+        cost_tracking="ignore_errors",
+    )
+    result = model.query([{"role": "user", "content": "Run echo next"}])
+    assert [action["command"] for action in result["extra"]["actions"]] == ["echo next"]
+
+
 def _compacting_model_class(monkeypatch):
     root = Path(__file__).parents[4] / "src" / "harbor"
     monkeypatch.syspath_prepend(str(root / "agents" / "installed"))
@@ -313,14 +347,16 @@ def test_compaction_falls_back_to_bounded_excerpt_when_summary_fails(monkeypatch
         "model_format",
         "max_turns",
         "summarization_threshold_chars",
+        "rejected_context",
     ),
     [
-        (32000, 65536, 16384, 768, True, "openai", None, 256),
-        (16000, 16384, 16384, 384, True, "openai", None, None),
-        (32000, 65536, 128, 128, True, "openai", None, None),
-        (32000, 65536, 16384, 768, False, "openai", None, None),
-        (32000, 65536, 16384, 768, True, "k2_horizon", None, None),
-        (32000, 65536, 16384, 768, True, "openai", 1, None),
+        (32000, 65536, 16384, 768, True, "openai", None, 256, False),
+        (16000, 16384, 16384, 384, True, "openai", None, None, False),
+        (32000, 65536, 128, 128, True, "openai", None, None, False),
+        (32000, 65536, 16384, 768, False, "openai", None, None, False),
+        (32000, 65536, 16384, 768, True, "k2_horizon", None, None, False),
+        (32000, 65536, 16384, 768, True, "openai", 1, None, False),
+        (32000, 65536, 16384, 768, True, "openai", None, None, True),
     ],
 )
 async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
@@ -334,6 +370,7 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
     model_format,
     max_turns,
     summarization_threshold_chars,
+    rejected_context,
 ):
     root = Path(__file__).parents[4] / "src" / "harbor"
     monkeypatch.syspath_prepend(str(root / "agents" / "installed"))
@@ -342,7 +379,7 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
     if summarization_threshold_chars is not None:
         counts_sequence.append(128)
     if max_turns is None:
-        counts_sequence.append(min(32768, server_context))
+        counts_sequence.append(prompt_tokens if rejected_context else min(32768, server_context))
     counts = iter(counts_sequence)
     tokenized = []
     tokenization_trial_ids = []
@@ -405,6 +442,11 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
                 200, json={"count": next(counts), "max_model_len": server_context}
             )
         assert request.url.path == "/v1/chat/completions"
+        if rejected_context and completions:
+            return httpx.Response(
+                400,
+                json={"error": {"message": "Context limit reached", "type": "context_length_exceeded", "code": 400}},
+            )
         assert "drop_params" not in payload
         # Keep the real SDK signature and serialization in the tested path.
         payload["extra_headers"] = dict(request.headers)
@@ -490,6 +532,8 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
             "logprobs": [[-0.2, -0.3]],
         }
     ]
+    if rejected_context:
+        assert (context.n_input_tokens, context.n_output_tokens) == (prompt_tokens, expected)
     if custom_config:
         assert agent_completions[0]["temperature"] == 0.25
     assert tokenized[0]["messages"] == agent_completions[0]["messages"]
