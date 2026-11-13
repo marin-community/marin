@@ -674,6 +674,8 @@ the grading session validates required plugins after loading the frozen baseline
 Conftest plugin imports keep pytest's normal test-path handling.
 The `-I -S` launcher restores standard `site` builtins such as `help` after
 adding dependency sites and before importing `sitecustomize`.
+Product subprocesses launched through `sys.executable` also load the source
+interpreter's live dependency sites from a protected startup-path file.
 The runner disables live plugin autoload
 and clears the test environment,
 including PYTHONPATH, PYTEST_ADDOPTS, LD_PRELOAD and user-site loading. Verifyit
@@ -1228,6 +1230,35 @@ Changing these reviewer instructions changes `ReviewerSpec` and invalidates prio
 request-cache entries; preserve the old review artifacts when correcting a rubric.
 See the [campaign command](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#complete-retained-population-review).
 
+### Inventory calibration prerequisites
+
+Before dispatching a backfill, inspect every retained contract against its frozen
+combined duplicate/lexical drop plan. This CPU census records missing execution
+requirements, original oracle resources, grading boundaries and task-level
+static blockers. Mutable image inputs, missing package locks and fragment-only
+oracles require a separately versioned repair. A source with zero static blockers
+still requires production calibration, provider quota checks and complete receipts.
+
+```bash
+uv run --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.calibration_inventory \
+  --retention-plans FROZEN_PLANS.json --source-ids SOURCE_IDS.json \
+  --prepared-inputs FROZEN_INPUT_ARTIFACTS.json \
+  --output-root REGIONAL_VERSIONED_URL --workers 4
+```
+
+`--prepared-inputs` maps source IDs to previously frozen FULL-QC input artifacts.
+Their per-task and runtime hashes bind the inventory to the reviewed contracts.
+Without a prior index, hashes are observations and every task records a missing
+frozen-index blocker. Legacy aggregate digests identify population metadata;
+they cannot verify a reordered stream of stored TaskSpecs.
+
+Use an explicit data-local Iris target, the campaign's authorized priority and a
+three-day timeout. The command preserves all input TaskSpecs and writes per-task
+hashes and blockers plus source summaries. Reusing an output prefix is rejected;
+interrupted attempts require a fresh version. These inventories supply no
+execution admission, calibration result or publication evidence.
+
 ### Full-population oracle filter
 
 Every admitted TaskSpec must declare `execution_requirements`: `cpus`,
@@ -1241,7 +1272,9 @@ Calibration runs inside the full-population oracle filter. Tasks with declared
 limits are validated at exactly those limits. For a task without declared limits,
 stage a new package at 1 CPU, 2 GiB memory, 2 GiB disk, a five-minute agent
 timeout and a one-minute verifier timeout. Preserve any limits already explicit
-in the native package; calibrate only missing dimensions. After a failed trial, double only the
+in the native package; calibrate only missing dimensions. Existing native TOML
+literals remain unchanged; only missing keys are inserted. Added native settings
+still require an exact content-review payload comparison before cache reuse. After a failed trial, double only the
 dimension identified by its failure: memory for an explicit OOM kill, disk for
 ENOSPC or a typed Iris `RESOURCE_LIMIT_DISK` eviction, agent timeout for an agent
 timeout, or verifier timeout for a verifier timeout. Also double CPU on an agent timeout when measured CPU use reaches 90%

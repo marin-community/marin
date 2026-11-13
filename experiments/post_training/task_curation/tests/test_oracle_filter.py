@@ -15,6 +15,7 @@ import pyarrow.parquet as pq
 import pytest
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
+from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.pipeline.oracle_filter import NoOracleLivenessReceipt, OracleExclusionReason, require_oracle_filter
 from taskcompendium.runtime.resources import inline_resource
 
@@ -226,10 +227,10 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
         filter_cohort(cohort, task_map, tmp_path / "jobs", tmp_path / "stale/tasks.parquet")
 
 
-@pytest.mark.parametrize("declared", [False, True])
+@pytest.mark.parametrize(("declared", "native_declared"), [(True, True), (False, False), (False, True)])
 @pytest.mark.parametrize("canonical", [False, True])
 def test_population_calibration_doubles_missing_limits_but_preserves_swe_declarations(
-    tmp_path, monkeypatch, declared, canonical
+    tmp_path, monkeypatch, declared, native_declared, canonical
 ):
     row = prebuilt_task("task")
     envelope = json.loads(row["lowered_task_spec"])
@@ -261,9 +262,10 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
     (native / "task.toml").write_text(
         "[environment]\ncpus=2\nmemory_mb=4096\nstorage_mb=10240\n"
         "[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=600\n"
-        if declared
+        if native_declared
         else "[environment]\n"
     )
+    native_document = (native / "task.toml").read_bytes()
     mapping = tmp_path / "map.json"
     write_task_map(cohort, native.parent, mapping)
     production_run = subprocess.run
@@ -313,7 +315,9 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
     output = tmp_path / "filtered/tasks.parquet"
     receipt = filter_cohort(cohort, run / "task-map.json", run, output)
     entry = receipt.tasks[task.id]
-    if declared:
+    if native_declared:
+        final_native = Path(entry.calibration.attempts[-1].result["config"]["task"]["path"]) / "task.toml"
+        assert final_native.read_bytes() == native_document
         assert shapes == [swe]
         assert not entry.passed
         assert entry.exclusion_reason == "resource_calibration:oom"
@@ -332,7 +336,12 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
             )
             assert import_taskcompendium_cohort(
                 PrebuiltCohort(
-                    name="calibrated", version="1", repo="open-athena/calibrated", revision="a" * 40, expected_rows=1
+                    intended_use=IntendedUse.TRAIN,
+                    name="calibrated",
+                    version="1",
+                    repo="open-athena/calibrated",
+                    revision="a" * 40,
+                    expected_rows=1,
                 )
             ) == str(output)
         else:

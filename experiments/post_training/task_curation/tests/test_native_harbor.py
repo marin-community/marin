@@ -18,7 +18,7 @@ from taskcompendium.grading_environment import assess_grading_environment
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.conversion import convert_row
 from taskcompendium.pipeline.inputs import ConversionContext
-from taskcompendium.pipeline.models import NormalizedTask, RawRow
+from taskcompendium.pipeline.models import IntendedUse, NormalizedTask, RawRow
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -33,8 +33,9 @@ from experiments.post_training.task_curation.within_source_binding import bind_w
 
 
 @pytest.mark.parametrize("separate_solution", [False, True])
+@pytest.mark.parametrize("intended_use", [IntendedUse.TRAIN, IntendedUse.EVAL])
 def test_native_package_round_trip_keeps_state_boundary_private_files_and_modes(
-    separate_solution, tmp_path, monkeypatch
+    separate_solution, intended_use, tmp_path, monkeypatch
 ):
     files = {
         "instruction.md": (b"Repair /work and preserve the service state.", 0o644),
@@ -108,7 +109,12 @@ def test_native_package_round_trip_keeps_state_boundary_private_files_and_modes(
             build_path="native import fixture",
         ),
         config=PrebuiltCohort(
-            name="native", version="2026.11.12.1", repo="fixture/native", revision="pin", expected_rows=1
+            intended_use=intended_use,
+            name="native",
+            version="2026.11.12.1",
+            repo="fixture/native",
+            revision="pin",
+            expected_rows=1,
         ),
         pipeline=native_release.import_native_quick,
     )
@@ -120,6 +126,7 @@ def test_native_package_round_trip_keeps_state_boundary_private_files_and_modes(
     assert not (output / "final").exists()
     manifest = json.loads((output / "manifest.json").read_text())
     assert manifest["mode"] == "quick"
+    assert manifest["intended_use"] == intended_use.value
     assert manifest["grading_environment"]["assessed_tasks"] == manifest["converted_rows"] == 1
 
     incomplete = task.model_copy(

@@ -32,6 +32,8 @@ from experiments.post_training.task_curation.environment_fidelity import missing
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, validate_native_package
 from experiments.post_training.task_curation.source import RlDataSource
 
+NATIVE_IMPORT_VERSION = "2026.11.13.2"
+
 
 @dataclass(frozen=True)
 class NativeQuickImport:
@@ -81,7 +83,7 @@ def run_native_import(invocation: NativeQuickImport) -> CampaignArtifact:
     shutil.copyfile(provenance, output / "upstream-conversion-manifest.json")
     manifest = {
         "mode": "quick",
-        "intended_use": "train",
+        "intended_use": config.intended_use.value,
         "task_format": "harbor",
         "input_rows": len(seen),
         "converted_rows": len(seen),
@@ -122,7 +124,7 @@ def import_native_quick(
 
     return ArtifactStep(
         name=f"native-harbor/{config.repo}/{config.revision}",
-        version=config.version,
+        version=NATIVE_IMPORT_VERSION,
         artifact_type=CampaignArtifact,
         run=run_native_import,
         build_config=build_config,

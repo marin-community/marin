@@ -300,6 +300,9 @@ private verifier resources. Task and curriculum text use the same Harrier
 checkpoint, retrieval instruction and normalization. `--worker-cpu` and
 `--worker-memory` size each CPU worker; `--max-workers` bounds the shared pool.
 The model loads inside workers when an embedding batch has cache misses.
+Model initialization is serialized within each process because Transformers
+temporarily changes Torch's default dtype. Concurrent workers reuse the cached
+backend after initialization.
 
 `--cache-dir` selects local workers and artifacts. `--review-cache` selects the
 shared inference cache, defaulting locally to `<cache-dir>/review-cache`.
@@ -548,7 +551,62 @@ rejected. Invalid observations
 remain unavailable in the computed Result and leave `coverage_complete=false`.
 Execution qualification remains pending.
 
+### Repair incomplete retained reviews
+
+After a source's primary pass finishes, freeze its strict assembled artifact and
+the SHA-256 of its `.artifact.json`. `full_qc_repair` preserves every completed
+primary observation, including uncertain valid verdicts, and retries only INVALID
+(malformed response) or UNAVAILABLE (no valid response) observations. Identity is
+checked against the retained TaskSpec and runtime hashes. The repair uses the same
+pinned model, rubric, payload and temperature with explicit 8,192-token initial
+and 16,384-token retry budgets.
+These budgets have a separate ReviewerSpec and exact-request cache identity.
+
+Run a batch-priority CPU job on the serving workers' cluster with a three-day
+timeout. Borrow an existing serving worker from the same primary campaign; this
+command neither starts nor stops serving jobs. It resolves that worker's current child registration
+before each request, including when batch preemption replaces the child. Keep
+the primary 48 workers running and use a separate output prefix and cache:
+
+```bash
+uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.full_qc_repair \
+  --primary s3://bucket/assembled/source/v1/attempts/PRIMARY \
+  --primary-sha256 PRIMARY_ARTIFACT_SHA256 \
+  --serving-root /owner/primary-worker \
+  --output s3://bucket/repair-overlay/source/v1 \
+  --review-cache s3://bucket/repair-overlay/request-cache --run
+```
+
+Omit `--run` to validate the frozen observations and print the primary, repair
+and composite identity hashes without model requests. The repair output contains
+every retained exact contract once. Each row records the selected review's
+reviewer identity and the SHA-256 of its primary records or repair receipt.
+Primary review JSON is copied byte for byte. The source identity lists both specs
+and their selection policy. Source issue counts, rates and verdicts use both sets
+of observations, retaining uncertainty separately; failed repairs
+leave coverage incomplete. Rerunning the same frozen primary and repair prefix
+reuses successful repair receipts without resampling them. Existing primary
+records and pointers are never changed. Oracle filtering and resource calibration
+remain separate requirements for execution qualification.
+
 ### CrossCode Python qualification candidate
+
+CrossCodeEval Python, TypeScript, Java and C# are evaluation sources. Python's
+native `tests/test_state.py` contains the Terminal-Bench canary; the evaluation
+policy applies to all four derived cohorts. Their explicit `intended_use` is
+`eval`, and TRAIN selection rejects even older artifacts that claim training
+eligibility. Within-source deduplication still applies; lexical overlap is
+measured without dropping evaluation tasks.
+
+All four frozen duplicate and combined-drop manifests are empty, so the private
+pins and all 7,763 task contracts are unchanged. [Drop-set equality evidence](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Fatlas%2Ffull-qc%2Fcrosscode-eval%2F2026.11.13.1%2Fretention-proof.json)
+is also available at
+`s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/crosscode-eval/2026.11.13.1/retention-proof.json`.
+Python's original pin retains FULL content QA: 500 valid reviews, eight issues
+(1.60%, GOOD), with zero unavailable or uncertain observations. That exact-pin
+content evidence does not establish execution qualification of Python's four-tier
+grading repair candidate.
 
 `crosscode_python` stages a new candidate for the frozen 500-task CrossCode Python
 population. Build the archived public actor context with the image builder first,
