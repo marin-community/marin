@@ -685,6 +685,7 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
             "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/alice/run",
         ),
         ("s3://marin-us-east-08a/tmp/ttl=3d/alice/run", 3, "s3://marin-us-east-08a/tmp/ttl=3d/alice/run"),
+        ("s3://marin-us-east-08a/tmp//ttl=3d/alice/run", 3, "s3://marin-us-east-08a/tmp/ttl=3d/alice/run"),
     ],
 )
 def test_skyrl_temporary_run_path_preserves_the_requested_lifecycle_prefix(

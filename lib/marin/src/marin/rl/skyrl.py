@@ -48,10 +48,13 @@ _COLOCATED_EXPERT_BLOCK_GPU_COUNT = 4
 
 def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
     """Return the lifecycle-managed storage path for a SkyRL run."""
-    temporary_root = marin_temp_bucket(ttl_days=ttl_days, source_prefix=output_path)
-    if output_path.startswith(temporary_root.rstrip("/") + "/"):
-        return output_path
-    return str(StoragePath(temporary_root) / _TEMPORARY_OUTPUT_PREFIX / StoragePath(output_path).key)
+    temporary_root = StoragePath(marin_temp_bucket(ttl_days=ttl_days, source_prefix=output_path))
+    output = StoragePath(output_path)
+    try:
+        output.relative_to(temporary_root)
+    except ValueError:
+        return str(temporary_root / _TEMPORARY_OUTPUT_PREFIX / output.key)
+    return str(output)
 
 
 @dataclass(frozen=True)
