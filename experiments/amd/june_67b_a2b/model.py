@@ -16,12 +16,15 @@ Same architecture, parameters and checkpoint layout as ``experiments/june_tpu_67
   after the layer scan; of June's router diagnostics only the router z-loss is computed (and always logged);
 - one remat policy saves the MoE dispatch and routing tensors, the attention residuals, GatedNorm's down projection
   and the head-gate logits;
-- the blocks always run in one array-stacked ``lax.scan`` whose checkpoint has ``prevent_cse=False``.
+- the blocks always run in one array-stacked ``lax.scan`` whose checkpoint has ``prevent_cse=False``;
+- the small replicated block weights' gradients are reduced once after the layer scan, and the scan routes the
+  trainer's microbatch reductions and ZeRO-1 gathers (``parallel.LayerRouting``).
 
 ``Transformer.init`` raises for config values this copy does not implement.
 """
 
 import functools
+from typing import NamedTuple
 
 import equinox as eqx
 import jax
@@ -73,6 +76,13 @@ from experiments.amd.june_67b_a2b.kernels.gated_norm import (
     pallas_gated_norm_supported,
 )
 from experiments.amd.june_67b_a2b.kernels.qk_norm_rope import pallas_qk_norm_rope_supported, qk_norm_rope, rope_tables
+from experiments.amd.june_67b_a2b.parallel import (
+    LayerRouting,
+    apply_gathers,
+    call_routed,
+    local_to_unreduced,
+    mark_replicated_reduced,
+)
 from experiments.june_tpu_67b_a2b.moe.model import (
     _BATCH_AXES,
     _GATED_NORM_RANK,
@@ -237,16 +247,21 @@ def _per_device(fn, *args, out_specs):
         outs = local(*args)
         return tuple(o if spec == "rows" else o[0] for o, spec in zip(outs, out_specs, strict=True))
     batch = act_spec[0] if len(act_spec) else None
-    in_specs = tuple(None if a is None else act_spec if a.ndim == 3 else P(*(None,) * a.ndim) for a in args)
+    in_specs = tuple(
+        None if a is None else act_spec if a.ndim == 3 else keep_reduced(P(*(None,) * a.ndim), a) for a in args
+    )
     specs = tuple(act_spec if spec == "rows" else P(batch, None) for spec in out_specs)
     return jax.shard_map(local, in_specs=in_specs, out_specs=specs, check_vma=False)(*args)
 
 
 def _weight_gradient(partials: jax.Array, weight: jax.Array) -> jax.Array:
-    """The weight gradient from per-device partial sums [n, D] (or the sum itself without a mesh)."""
+    """The weight gradient from per-device partial sums [n, D] (or the sum itself without a mesh): ``unreduced`` over
+    the batch axes for a weight marked ``reduced`` (its reduction waits for the caller), otherwise summed here."""
     partials = partials.astype(jnp.float32)
     if partials.ndim == 1:
         return partials.astype(weight.dtype)
+    if jax.typeof(weight).sharding.spec.reduced:
+        return local_to_unreduced(partials.astype(weight.dtype))
     return reshard(jnp.sum(partials, axis=0).astype(weight.dtype), jax.typeof(weight).sharding.spec)
 
 
@@ -317,8 +332,10 @@ def fused_norm_and_gate(
     the caller's later uses of ``h``) inside the norm's backward kernel, so callers that use ``x`` again must use the
     returned ``h`` instead. The kernels run per device under a ``shard_map`` over the activations' batch sharding; the
     GatedNorm's other matmuls stay global. The norm is computed in float32 from the unrounded residual sum and rounds
-    its outputs once, so it differs from June's separate modules at bfloat16 rounding level."""
-    return _norm_and_gate(x, residual, unshard(norm.weight), gated.w_down, gated.w_up, norm.eps, return_h)
+    its outputs once, so it differs from June's separate modules at bfloat16 rounding level. A norm weight marked
+    ``reduced`` gets an ``unreduced`` gradient, as without the fusion."""
+    weight = norm.weight if jax.typeof(norm.weight).sharding.spec.reduced else unshard(norm.weight)
+    return _norm_and_gate(x, residual, weight, gated.w_down, gated.w_up, norm.eps, return_h)
 
 
 def _router_z_loss_local(
@@ -637,6 +654,21 @@ class Transformer(eqx.Module):
         position_ids: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """The final hidden states and the per-layer router metrics (``<name>_per_layer``)."""
+        hidden, router_metrics, _ = self._forward(token_ids, mask, position_ids=position_ids)
+        return hidden, router_metrics
+
+    def _forward(
+        self,
+        token_ids: Int[Array, "B S"],
+        mask: AttentionMask | jax.Array | None,
+        *,
+        position_ids: jax.Array | None = None,
+        routing: LayerRouting = LayerRouting(),
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], LayerRouting]:
+        """The final hidden states, the per-layer router metrics, and ``routing`` with the gather buffers and gradient
+        sums as the layer scan returns them (see ``LayerRouting``)."""
+        if (routing.gather_sinks is None) != (routing.gather_buffers is None):
+            raise ValueError("gather_sinks and gather_buffers go together")
         if mask is None:
             mask = AttentionMask.causal()
         cfg = self.config
@@ -658,11 +690,34 @@ class Transformer(eqx.Module):
         )
 
         def scan_layer(carry, layer_inputs):
-            layer, use_long_mask = layer_inputs
-            return checkpoint(layer)(carry, short_mask, long_mask, use_long_mask, position_ids)
+            hidden, buffers, sums = carry
+            layer, use_long_mask, offsets, sinks, gather_sinks, index = layer_inputs
+            if gather_sinks is not None:
+                layer, buffers = apply_gathers(layer, gather_sinks, buffers, index)
+            args = (hidden, short_mask, long_mask, use_long_mask, position_ids)
+            if sums is None and offsets is None:
+                hidden, stats = checkpoint(layer)(*args)
+            else:
+                hidden, stats, *rest = checkpoint(call_routed)(layer, sums, offsets, sinks, index, *args)
+                sums = rest[0] if rest else None
+            return (hidden, buffers, sums), stats
 
-        hidden, stacked_stats = jax.lax.scan(
-            scan_layer, hidden, xs=(self.stacked_blocks.stacked, _long_layer_schedule(cfg.num_layers))
+        # The layer index locates each layer's rows in the gathers and sums; without them the scan does not carry it.
+        routed = any(x is not None for x in (routing.gather_sinks, routing.grad_sums, routing.grad_offsets))
+        layer_indices = jnp.arange(cfg.num_layers, dtype=jnp.int32) if routed else None
+        # The small replicated weights' gradients wait for one reduction after the scan.
+        stacked = mark_replicated_reduced(self.stacked_blocks.stacked)
+        (hidden, buffers, sums), stacked_stats = jax.lax.scan(
+            scan_layer,
+            (hidden, routing.gather_buffers, routing.grad_sums),
+            xs=(
+                stacked,
+                _long_layer_schedule(cfg.num_layers),
+                routing.grad_offsets,
+                routing.grad_sinks,
+                routing.gather_sinks,
+                layer_indices,
+            ),
         )
         # One cross-device reduction of the routing statistics for the whole layer stack.
         reduced = _reduce_routing_stats(stacked_stats)
@@ -673,7 +728,7 @@ class Transformer(eqx.Module):
             "router_z_loss_per_layer": reduced["router_z_loss"],
         }
         hidden = fused_norm_and_gate(hidden, None, self.final_norm, self.final_gated_norm, return_h=False)
-        return hidden, router_metrics
+        return hidden, router_metrics, routing._replace(gather_buffers=buffers, grad_sums=sums)
 
     @named_call
     def logits(self, token_ids: Int[Array, "B S"], mask: AttentionMask | jax.Array | None = None) -> jax.Array:
@@ -691,7 +746,35 @@ class Transformer(eqx.Module):
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array]]:
-        hidden, router_metrics = self(token_ids, mask=mask)
+        terms = self.next_token_loss_terms(
+            token_ids,
+            loss_weight,
+            mask=mask,
+            reduction=reduction,
+            logsumexp_weight=logsumexp_weight,
+            loss_dtype=loss_dtype,
+        )
+        loss = terms.cross_entropy_loss + terms.aux_loss if reduction != "none" else terms.cross_entropy_loss
+        if not return_router_metrics:
+            return loss
+        return loss, summarize_loss_metrics(terms.router_metrics, terms.cross_entropy_loss, terms.aux_loss)
+
+    def next_token_loss_terms(
+        self,
+        token_ids: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        *,
+        mask: AttentionMask | jax.Array | None = None,
+        reduction: str = "mean",
+        logsumexp_weight: float | None = None,
+        loss_dtype: jnp.dtype = jnp.float32,
+        routing: LayerRouting = LayerRouting(),
+    ) -> "LossTerms":
+        """The loss terms, the raw per-layer router metrics and ``routing`` as the layer scan returns it.
+
+        Callers that combine several batches, such as the trainer's microbatches, combine the raw metrics and
+        summarize them once (``summarize_loss_metrics``)."""
+        hidden, router_metrics, routing = self._forward(token_ids, mask, routing=routing)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
@@ -703,23 +786,37 @@ class Transformer(eqx.Module):
             dtype=loss_dtype,
         )
         # No load-balancing loss. The router z-loss is always logged; at weight 0 it stays out of the loss, so the
-        # backward does not differentiate it.
+        # backward does not differentiate it. A mean over the valid tokens.
         router_z_loss = router_metrics["router_z_loss_per_layer"]
         if self.config.router_z_loss_coef == 0:
             aux_loss = jnp.zeros((), jnp.float32)
         else:
             aux_loss = self.config.router_z_loss_coef * jnp.mean(router_z_loss)
-        loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
-        if not return_router_metrics:
-            return loss
-        metrics: dict[str, jax.Array] = {
-            "qb_beta_per_layer": router_metrics["qb_beta_per_layer"],
-            "train/cross_entropy_loss": cross_entropy_loss,
-            "train/router/aux_loss_weighted": aux_loss,
-            MOE_DROPPED_ASSIGNMENTS_METRIC: router_metrics["capacity_overflow_per_layer"],
-            MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC: router_metrics["skipped_assignments_per_layer"],
-            "train/router/router_z_loss": jnp.mean(router_z_loss),
-        }
-        for i in range(router_z_loss.shape[0]):
-            metrics[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
-        return loss, metrics
+        return LossTerms(cross_entropy_loss, aux_loss, router_metrics, routing)
+
+
+class LossTerms(NamedTuple):
+    """``Transformer.next_token_loss_terms``."""
+
+    cross_entropy_loss: jax.Array
+    aux_loss: jax.Array
+    router_metrics: dict[str, jax.Array]
+    routing: LayerRouting
+
+
+def summarize_loss_metrics(
+    router_metrics: dict[str, jax.Array], cross_entropy_loss: jax.Array, aux_loss: jax.Array
+) -> dict[str, jax.Array]:
+    """The training metrics ``next_token_loss`` returns from the raw per-layer router metrics and the loss terms."""
+    router_z_loss = router_metrics["router_z_loss_per_layer"]
+    metrics: dict[str, jax.Array] = {
+        "qb_beta_per_layer": router_metrics["qb_beta_per_layer"],
+        "train/cross_entropy_loss": cross_entropy_loss,
+        "train/router/aux_loss_weighted": aux_loss,
+        MOE_DROPPED_ASSIGNMENTS_METRIC: router_metrics["capacity_overflow_per_layer"],
+        MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC: router_metrics["skipped_assignments_per_layer"],
+        "train/router/router_z_loss": jnp.mean(router_z_loss),
+    }
+    for i in range(router_z_loss.shape[0]):
+        metrics[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
+    return metrics

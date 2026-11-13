@@ -12,8 +12,8 @@ front and ends with the median step time from step 2 on, tokens/s, model TFLOP/s
 Example, two 8-GPU MI355X nodes, expert parallelism within each node and data parallelism across them::
 
     srun -N2 --ntasks-per-node=1 python experiments/amd/june_67b_a2b/synthetic_benchmark.py \\
-        --size full --steps 30 --gpus-per-node 8 --expert-axis 8 --replica-axis 2 --batch-size 32 \\
-        --attention gpu_pallas_triton_flash --watch-interval 0
+        --size full --steps 30 --gpus-per-node 8 --expert-axis 8 --replica-axis 2 --batch-size 512 \\
+        --microbatches 4 --zero1 --attention gpu_pallas_triton_flash --watch-interval 0
 """
 
 import argparse
@@ -39,9 +39,9 @@ from experiments.amd.june_67b_a2b.run_config import (
     log_run_config,
     shared_run_id,
 )
-from experiments.amd.june_67b_a2b.train import _run_grug_local
+from experiments.amd.june_67b_a2b.train import GrugRunConfig, _run_grug_local
 from experiments.june_tpu_67b_a2b.moe.synthetic_benchmark import log_model_flops, report_memory, synthetic_examples
-from experiments.june_tpu_67b_a2b.moe.train import GrugRunConfig, _compute_flops
+from experiments.june_tpu_67b_a2b.moe.train import _compute_flops
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

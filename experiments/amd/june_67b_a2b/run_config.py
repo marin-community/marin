@@ -3,9 +3,9 @@
 
 """Command line to ``GrugRunConfig`` for the AMD June scripts (no Fray or Iris).
 
-The options cover the model size, the mesh, the batch, the attention kernel, profiling and logging. The kernels and
-the loop are fixed in the model and trainer code, so there are no options for them. A script adds its own options on
-top: the synthetic benchmark its step count and flat Adam.
+The options cover the model size, the mesh, the batch and its microbatches, ZeRO-1, the attention kernel, profiling
+and logging. The kernels and the loop are fixed in the model and trainer code, so there are no options for them. A
+script adds its own options on top: the synthetic benchmark its step count and flat Adam.
 """
 
 import argparse
@@ -29,9 +29,9 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import multihost_broadcast_sync
 
 from experiments.amd.june_67b_a2b.model import MOE_IMPLEMENTATION
+from experiments.amd.june_67b_a2b.train import GrugTrainerConfig
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.synthetic_benchmark import FIRST_TIMED_STEP, snowball_model
-from experiments.june_tpu_67b_a2b.moe.train import GrugTrainerConfig
 
 logger = logging.getLogger("amd_june_run")
 
@@ -75,7 +75,20 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--layers", type=int, help="Override the preset layer count.")
     parser.add_argument("--seq-len", type=int, help="Override the preset sequence length.")
     parser.add_argument(
-        "--batch-size", type=int, help="Global batch of one step in sequences (default: one per device)."
+        "--batch-size",
+        type=int,
+        help="Global batch of one step in sequences (default: one per device per microbatch).",
+    )
+    parser.add_argument(
+        "--microbatches",
+        type=int,
+        default=1,
+        help="Run each step's batch as this many microbatches, reducing the gradients once per step (1 = all at once).",
+    )
+    parser.add_argument(
+        "--zero1",
+        action="store_true",
+        help="Shard the expert weights' parameters and optimizer state over the replicas (needs --microbatches >= 2).",
     )
     parser.add_argument("--mp", help="jmp policy override, e.g. 'p=f32,c=float16' (default: preset).")
     parser.add_argument("--expert-axis", type=int, default=1, help="Expert-parallel mesh axis size (1 = FSDP only).")
@@ -124,7 +137,7 @@ def build_model(args: argparse.Namespace) -> tuple[GrugModelConfig, str]:
 
 
 def global_batch_size(args: argparse.Namespace) -> int:
-    batch_size = jax.device_count() if args.batch_size is None else args.batch_size
+    batch_size = jax.device_count() * args.microbatches if args.batch_size is None else args.batch_size
     if batch_size == 1:
         # jnp.roll in the next-token loss slices the (1, seq_len) token grid to (1, 1), and under an explicit mesh JAX
         # drops the sharding of that slice, then rejects concatenating it with the (1, seq_len - 1) remainder.
@@ -177,11 +190,13 @@ def build_trainer(
 
 
 def build_grug_trainer(args: argparse.Namespace, trainer: TrainerConfig, *, save_checkpoints: bool) -> GrugTrainerConfig:
-    """June's Grug trainer config with the command line's mesh."""
+    """The AMD Grug trainer config with the command line's mesh, microbatches and ZeRO-1."""
     return GrugTrainerConfig(
         trainer=trainer,
         expert_axis_size=args.expert_axis,
         replica_axis_size=args.replica_axis,
+        microbatches=args.microbatches,
+        zero1=args.zero1,
         save_checkpoints=save_checkpoints,
         step_timeout=args.step_timeout or None,
     )
@@ -191,7 +206,8 @@ def log_run_config(
     args: argparse.Namespace, model: GrugModelConfig, trainer: TrainerConfig, batch_size: int, flops_per_example: float
 ) -> None:
     logger.info(
-        "size=%s layers=%d hidden=%d experts=%d topk=%d heads=%d kv=%d batch=%d seq_len=%d window=%d mp=%s "
+        "size=%s layers=%d hidden=%d experts=%d topk=%d heads=%d kv=%d batch=%d microbatches=%d zero1=%s "
+        "seq_len=%d window=%d mp=%s "
         "expert_axis=%d replica_axis=%d attention=%s moe=%s capacity=%s pooled_capacity=%s watch_interval=%d "
         "flops_per_example=%.4e",
         args.size,
@@ -202,6 +218,8 @@ def log_run_config(
         model.num_heads,
         model.num_kv_heads,
         batch_size,
+        args.microbatches,
+        args.zero1,
         model.max_seq_len,
         model.sliding_window,
         trainer.mp,
