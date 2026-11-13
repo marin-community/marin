@@ -22,48 +22,48 @@ Each response turn can generate up to 8,192 tokens, with at most four turns.
 
 ## Prerequisites and inputs
 
-This entrypoint depends on [cross-host planning #11299](https://github.com/marin-community/marin/pull/11299),
-[Hero MuonH #11301](https://github.com/marin-community/marin/pull/11301) and the
-[qualified GPU runtime #11307](https://github.com/marin-community/marin/pull/11307).
-While they remain unmerged, use a revision containing all three. The entrypoint
-PR records the exact integration revision used for validation.
+This entrypoint requires [cross-host planning #11299](https://github.com/marin-community/marin/pull/11299),
+[Hero MuonH #11301](https://github.com/marin-community/marin/pull/11301), the
+[qualified GPU runtime #11307](https://github.com/marin-community/marin/pull/11307),
+[Harbor harness binding #11324](https://github.com/marin-community/marin/pull/11324)
+and the shared [native checkpoint support](../references/rl-launching.md#native-checkpoint-inputs).
+Until these changes merge, use a revision containing all of them. The entrypoint
+PR records the combined revision used for validation.
 
 Provide Iris and regional S3 credentials, W&B access, and `DAYTONA_RL_API_KEY`
 and `DAYTONA_EVAL_API_KEY`. Supply HF credentials if any selected input requires
 Hub access. Harbor tasks use the configured privileged container profile, which
 requires Iris admin authorization. See [RL launching](../references/rl-launching.md).
 
-The following private example was checked on November 13, 2026. Its model is the
-completed schema-3 export of SFT step 400407, export ID
-`a4759d7fccffdb2fa0eb29770fc89097f501b7871f581ba83e00c8d90fe86e1b`.
-Its portable-model identity is
-`sha256:47a79c09972a1c8c25afb527a412354d81cd27b003726e3901f2c34939253abf`.
-The data contains four original mixed tasks, including two Harbor tasks.
-Both inputs were written on November 13 under a three-day TTL; treat them as
-expiring on November 16. Adoption does not extend their retention. Replace these
-URIs and the input version with retained artifacts for later runs.
+Choose a completed schema-3 BF16 SFT export with its portable-model manifest,
+and a tokenizer artifact pinned to the revision used by that export. Select
+ordinary mixed-task Parquet data compatible with this recipe, including its
+Harbor harness mapping. The model, tokenizer and tasks must remain available
+through the planned run and recovery window. Adoption does not extend storage
+retention. Give each changed input set a new immutable `INPUT_VERSION`.
+
+Replace the placeholders below with those artifact locations and identities:
 
 ```bash
 export MARIN_PREFIX=s3://marin-us-east-08a
-MODEL=s3://marin-us-east-08a/tmp/ttl=3d/romain/mochi-three-rack/2026.11.13.01a1c926.a1/hf-sft
-TASKS=s3://marin-us-east-08a/tmp/ttl=3d/romain/mochi-three-rack/2026.11.13.01a1c926.a1/data/normal
-INPUT_VERSION=2026.11.13.9400
-TOKENIZER_REVISION=3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09
+MODEL='s3://<regional-bucket>/<retained-schema-3-export>'
+TASKS='s3://<regional-bucket>/<retained-mixed-task-directory>'
+INPUT_VERSION='<immutable-input-version>'
+TOKENIZER_REVISION='<tokenizer-commit>'
+SMOKE_VERSION='<new-smoke-version>'
+CONTINUATION_VERSION='<new-continuation-version>'
 ```
-
-Browse the [model](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Ftmp%2Fttl%3D3d%2Fromain%2Fmochi-three-rack%2F2026.11.13.01a1c926.a1%2Fhf-sft)
-and [tasks](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Ftmp%2Fttl%3D3d%2Fromain%2Fmochi-three-rack%2F2026.11.13.01a1c926.a1%2Fdata%2Fnormal)
-through Filer with Marina login.
 
 ## Fresh start and continuation
 
-Build the graph and write its source launch configuration without submitting:
+Start with two updates. Build the graph and write its source launch configuration
+without submitting:
 
 ```bash
 COMMON=(--model-uri "$MODEL" --tokenizer-revision "$TOKENIZER_REVISION"
         --data-uri "$TASKS" --input-version "$INPUT_VERSION")
 uv run python -m experiments.post_training.mochi_rl.launch "${COMMON[@]}" \
-  --version 2026.11.13.1 --max-steps 20 --config-output mochi-launch.yaml
+  --version "$SMOKE_VERSION" --max-steps 2 --config-output mochi-launch.yaml
 ```
 
 Inspect the model/data locators, role allocation, context budget and checkpoint
@@ -73,20 +73,23 @@ its latest completed native checkpoint when one exists.
 
 To extend a run or recover into a new output version, set `NATIVE` to the exact
 completed native checkpoint directory, such as your run's
-`checkpoints/global_step_20`, then run:
+`checkpoints/global_step_2`, then run:
 
 ```bash
 uv run python -m experiments.post_training.mochi_rl.launch "${COMMON[@]}" \
-  --version 2026.11.13.2 --max-steps 25 --resume-uri "$NATIVE" \
+  --version "$CONTINUATION_VERSION" --max-steps 5 --resume-uri "$NATIVE" \
   --config-output mochi-resume.yaml
 ```
 
 Inspect it, then add `--run`. `--max-steps` is the absolute stopping step, so it
 must exceed the restored step. Native continuation restores model, optimizer,
 scheduler, trainer counter and available rollout state. It writes new checkpoints
-under the new output version. To recover that continuation, select its latest
-completed checkpoint with a new version; `--resume-uri` always selects the exact
-checkpoint supplied. Keep the model, tokenizer, data and topology compatible.
+under the new output version. Recover an interrupted continuation by repeating
+its command with the same version and inputs, including `--resume-uri`.
+Automatic recovery loads that output's latest completed checkpoint first; it
+uses the supplied starting checkpoint only while the output has none. A corrupt
+marker, missing selected checkpoint or load failure stops recovery. Keep the
+model, tokenizer, data and topology compatible.
 Find checkpoints under `artifacts.checkpoint_root` in the preview YAML, then
 append `/global_step_N` for the completed step.
 

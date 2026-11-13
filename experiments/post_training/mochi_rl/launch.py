@@ -12,7 +12,7 @@ from iris.cluster.client.job_info import get_job_info
 from iris.rpc import job_pb2
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
-from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
+from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
@@ -24,7 +24,6 @@ from marin.rl.skyrl import (
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRun,
-    SkyRLRunConfig,
     SkyRLSpec,
     SkyRLTopology,
     skyrl_step,
@@ -108,7 +107,7 @@ def build_run(
             )
         )
     )
-    step = skyrl_step(
+    return skyrl_step(
         SkyRLSpec(
             name=name,
             version=version,
@@ -119,25 +118,11 @@ def build_run(
             topology=topology,
             retention=retention,
             seed=SEED,
+            resume_checkpoint=resume,
         ),
         execution,
         export_hf=False,
     )
-    if resume is None:
-        return step
-    build_config = step.build_config
-
-    def resume_config(ctx: StepContext) -> SkyRLRunConfig:
-        config = build_config(ctx)
-        launch = yaml.safe_load(config.launch_config_yaml)
-        launch["skyrl"] = (
-            SkyRLRecipe.from_document(launch["skyrl"])
-            .merge(RecipePatch(trainer=sections.Trainer(resume_mode="from_path", resume_path=ctx.artifact_path(resume))))
-            .to_skyrl()
-        )
-        return replace(config, launch_config_yaml=yaml.safe_dump(launch, sort_keys=False))
-
-    return replace(step, build_config=resume_config, deps=(*step.deps, resume))
 
 
 @click.command(help=__doc__)
@@ -160,10 +145,7 @@ def build_run(
     show_default=True,
     help="GPU job wall-clock limit. Resume from a completed checkpoint if reached.",
 )
-@click.option("--resume-uri", help="Exact native RL checkpoint directory, including model and optimizer state.")
-@click.option(
-    "--recipe", "recipe_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=RECIPE_PATH
-)
+@click.option("--resume-uri", help="Starting native RL checkpoint; recovery prefers this run's saved progress.")
 @click.option("--checkpoint-count", type=click.IntRange(1, 10), default=RETENTION.resume_checkpoint_count)
 @click.option("--ttl-days", type=click.IntRange(min=1), default=RETENTION.temporary_storage_ttl_days)
 @click.option(
@@ -181,7 +163,6 @@ def main(
     max_steps: int,
     job_timeout_hours: int,
     resume_uri: str | None,
-    recipe_path: Path,
     checkpoint_count: int,
     ttl_days: int,
     config_output: Path | None,
@@ -208,7 +189,6 @@ def main(
         train_data=train_data,
         max_steps=max_steps,
         resume=resume,
-        recipe_path=recipe_path,
         execution=replace(
             EXECUTION,
             job_timeout_seconds=job_timeout_hours * 3600,

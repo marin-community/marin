@@ -7,14 +7,10 @@ from pathlib import Path
 import pytest
 import yaml
 from click.testing import CliRunner
-from marin.execution.artifact import Artifact
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
-from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import graph_handles
-from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel
-from marin.training.training import LevanterCheckpoint
 
-from experiments.post_training.mochi_rl.launch import build_run, main
+from experiments.post_training.mochi_rl.launch import main
 
 
 @pytest.mark.parametrize("resume_step", [None, 13])
@@ -73,27 +69,10 @@ def test_cli_renders_direct_training_and_native_continuation(
     assert launch["run"]["mode"] == "train" and not launch["run"]["export_hf"]
     assert trainer["callbacks"][0]["save_steps"] == trainer["ckpt_interval"]
     assert "/tmp/ttl=3d/" in launch["artifacts"]["checkpoint_root"]
-    assert trainer["resume_mode"] == ("latest" if resume_step is None else "from_path")
+    assert trainer["resume_mode"] == "latest"
     if resume_step is not None:
-        assert trainer["resume_path"] == str(native)
+        assert inputs["resume_checkpoint"]["uri"] == str(native)
         assert launch["artifacts"]["checkpoint_root"] != str(native.parent)
-
-
-def test_native_checkpoint_is_an_input_to_one_training_stage(tmp_path: Path) -> None:
-    model = ArtifactStep.adopt("inputs/model", "2026.11.13", str(tmp_path / "model"), kind=LevanterCheckpoint)
-    tasks = ArtifactStep.adopt("inputs/tasks", "2026.11.13", str(tmp_path / "tasks"))
-    native = ArtifactStep.adopt("inputs/native", "2026.11.13", str(tmp_path / "native"), kind=Artifact)
-    step = build_run(
-        name="checkpoints/direct-mochi",
-        version="2026.11.13",
-        model=ArtifactHfModel(model, str(tmp_path / "tokenizer"), "pinned", relative_path=""),
-        train_data=(ArtifactDataSource(tasks, "train.parquet"),),
-        max_steps=16,
-        resume=native,
-    )
-    graph = graph_handles([step])
-    assert [handle for handle in graph if handle.adopt_source is None] == [step]
-    assert set(graph) == {model, tasks, native, step}
 
 
 def test_each_continuation_has_its_own_checkpoint_input(tmp_path: Path) -> None:
@@ -111,10 +90,12 @@ def test_each_continuation_has_its_own_checkpoint_input(tmp_path: Path) -> None:
                 max_steps=25,
                 job_timeout_hours=24,
                 resume_uri=str(tmp_path / version / "checkpoint"),
-                recipe_path=Path(__file__).with_name("recipe.yaml"),
                 checkpoint_count=2,
                 ttl_days=3,
                 config_output=None,
             )
-        checkpoints.append(next(dep for dep in graph_handles([step]) if dep.name.endswith("/inputs/resume")))
+        graph = graph_handles([step])
+        assert [handle for handle in graph if handle.adopt_source is None] == [step]
+        assert len(graph) == 4  # Model, tasks and starting checkpoint feed one training stage.
+        checkpoints.append(next(dep for dep in graph if dep.name.endswith("/inputs/resume")))
     assert len({(checkpoint.name, checkpoint.version) for checkpoint in checkpoints}) == 2
