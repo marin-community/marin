@@ -191,7 +191,8 @@ def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
 
 def _is_source_recipe(config: DictConfig) -> bool:
     return (
-        config.run.mode == RunMode.TRAIN and not config.runtime.entrypoint
+        config.run.mode == RunMode.TRAIN
+        and not config.runtime.entrypoint
         or "context_budget" in config.skyrl
         or "config_groups" in config.skyrl
     )
@@ -364,6 +365,13 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     runtime = raw["runtime"]
     entrypoint = runtime["entrypoint"]
     registered_rl_entrypoint_module(entrypoint)
+    if raw["inputs"]["starting_checkpoint"] is not None and entrypoint in (
+        RL_ENTRYPOINTS[RLEntrypoint.GENERATE],
+        RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH_GENERATE],
+    ):
+        raise ValueError(
+            "Generation cannot restore inputs.starting_checkpoint; inputs.model requires a Hugging Face model."
+        )
     if (
         skyrl.get("generator", {}).get("weight_sync_transport") == WeightSyncTransport.EXPERT_BLOCK
         and skyrl.get("trainer", {}).get("placement", {}).get("colocate_all")

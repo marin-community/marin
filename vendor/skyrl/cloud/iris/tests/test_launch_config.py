@@ -48,6 +48,18 @@ def test_starting_checkpoint_resolves_without_overriding_resume_mode(tmp_path: P
     assert resolved.skyrl.trainer.resume_path == checkpoint["uri"]
 
 
+@pytest.mark.parametrize("entrypoint", ["generate", "terminal_bench_generate"])
+def test_generation_rejects_starting_checkpoint(tmp_path: Path, entrypoint: str) -> None:
+    raw = raw_launch_config()
+    raw["skyrl"]["entrypoint"] = entrypoint
+    raw["inputs"]["starting_checkpoint"] = {"uri": "s3://seed/global_step_2", "identity": "seed@2:abc"}
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+
+    with pytest.raises(ValueError, match="starting_checkpoint"):
+        load_launch_config(path)
+
+
 def test_training_channels_require_compatible_weight_transport() -> None:
     config = get_default_config()
     config.trainer.algorithm.batch_invariant = True
