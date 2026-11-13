@@ -27,7 +27,6 @@ function value(row, key) {
   if (key === 'updated') return row.updated_at;
   return row[key];
 }
-// The default view keeps sources whose QA executed and did not find them defective.
 function shownByDefault(row) { return row.quality !== 'QUICK' && row.result !== 'BAD'; }
 function filtered() {
   const search = $('search').value.trim().toLowerCase();
