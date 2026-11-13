@@ -3,8 +3,7 @@
 
 """Typed declarations of Marin's eval policy: which candidates run which evaluations, with which exceptions.
 
-Candidates are model catalog entries and evaluations are launcher evaluation definitions, so a policy
-that names an unknown model or benchmark fails when its module is imported.
+Candidates wrap model catalog entries and evaluations hold launcher evaluation definitions.
 """
 
 from collections import Counter

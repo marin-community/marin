@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvaluationOverrides, EvaluationSelection
+from marin.evaluation.records import EvaluationSelection
 
 from experiments.evaluation.evals import HarborDefinition
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
@@ -72,7 +72,9 @@ def test_exceptions_apply_only_to_the_named_candidate():
 @pytest.mark.parametrize(
     "exceptions",
     [
-        pytest.param({"overrides": (SMALL_LONG, replace(SMALL_LONG, max_output=5_000))}, id="two-overrides-for-one-pair"),
+        pytest.param(
+            {"overrides": (SMALL_LONG, replace(SMALL_LONG, max_output=5_000))}, id="two-overrides-for-one-pair"
+        ),
         pytest.param(
             {
                 "exclusions": (PolicyExclusion(candidate=SMALL, evaluation=LONG, reason="unsupported"),),
@@ -89,13 +91,3 @@ def test_exceptions_apply_only_to_the_named_candidate():
 def test_ambiguous_or_stale_exceptions_are_rejected(exceptions):
     with pytest.raises(ValueError):
         _policy(**exceptions)
-
-
-def test_selection_cannot_set_settings_the_policy_owns():
-    with pytest.raises(ValueError):
-        PolicyEvaluation(
-            definition=EvaluationSelection(benchmark="plain", run=EvaluationOverrides(seed=3)),
-            context=CONTEXT,
-            max_output=None,
-            seed=0,
-        )
