@@ -156,7 +156,10 @@ engine slice = tensor parallel * pipeline parallel
 engine ranks = engine slice * data parallel
 ```
 
-For disaggregated roles, one engine's ranks must fit within one node. For colocated roles, each
+For disaggregated roles, one engine's ranks must fit within one node, except vLLM TP1/PP1
+engines with EP=DP>1. Those engines use one-GPU placement bundles across hosts; the runtime
+checks every worker's host, GPU UUID and parallel ranks before expert-block publication.
+For colocated roles, each
 TP-by-PP slice must fit within and divide a policy node; DP replicas occupy separate slices. Expert
 parallel size must divide `tensor parallel * data parallel`; pipeline stages form separate expert
 groups. Total planned GPUs are:

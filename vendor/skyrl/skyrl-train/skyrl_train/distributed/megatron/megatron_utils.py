@@ -391,6 +391,11 @@ def restore_offloaded_optimizer_state(optimizer) -> None:
         # Bucket tensors replace state after HDO's load hooks. Rebind moments,
         # restore FP32 masters and place state on the native optimizers' devices.
         inner._sync_hdo_state_to_sub_optimizers()
+        if inner.param_update_in_fp32:
+            # HDO copied the restored master into its newly built CPU/GPU
+            # parameter. Keeping the old tensor here retains a second master
+            # until the next step, when host memory is needed for gradients.
+            inner._sync_sub_optimizers_state_to_hdo()
 
 
 def preprocess_packed_seqs(

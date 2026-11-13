@@ -16,12 +16,31 @@ from cloud.iris.export_hf_checkpoint import (
 from cloud.iris.launch_config import validate_iris_allocation
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
 from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
-from skyrl_train.callbacks.builtin import HFModelSaveCallback
+from skyrl_train.callbacks.builtin import CheckpointCallback, HFModelSaveCallback
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.hf_export import read_hf_export_request
 from skyrl_train.trainer import RayPPOTrainer
+from skyrl_train.utils.trainer_utils import ResumeMode
 from skyrl_train.hf_export_schema import HFExportRequest
 from marinskyrl.checkpoint_paths import selected_export_step
+
+
+def test_explicit_resume_path_rejects_missing_checkpoint(tmp_path: Path) -> None:
+    trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+    trainer.resume_mode = ResumeMode.FROM_PATH
+    trainer.cfg = OmegaConf.create({"trainer": {"resume_path": str(tmp_path / "global_step_5")}})
+
+    with pytest.raises(FileNotFoundError):
+        trainer.load_checkpoints()
+
+
+def test_disabled_checkpoint_schedule_keeps_step_and_train_end_without_a_save_request() -> None:
+    callback = CheckpointCallback(save_steps=-1, save_on_train_end=False)
+    state = TrainerState(global_step=10, epoch=1, total_steps=10, num_steps_per_epoch=5)
+    control = TrainerControl()
+    callback.on_step_end(state, control)
+    callback.on_train_end(state, control)
+    assert not control.should_save
 
 
 def _training_config():

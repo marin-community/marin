@@ -62,6 +62,45 @@ def test_generation_launch_keeps_its_rollout_role():
     assert derive_num_nodes(plan) == 2
 
 
+def test_cross_host_expert_parallel_rollout_uses_four_trays_beside_twelve_policy_trays():
+    plan = derive_role_plan(
+        skyrl_config(
+            **{
+                "environment.env_class": "gsm8k",
+                "trainer.algorithm.policy_loss_type": "regular",
+                "trainer.placement.policy_num_nodes": 12,
+                "trainer.placement.policy_num_gpus_per_node": 4,
+                "generator.num_inference_engines": 1,
+                "generator.inference_engine_data_parallel_size": 16,
+                "generator.inference_engine_expert_parallel_size": 16,
+            }
+        )
+    )
+    rollout = plan.claim(ModelRoleKind.ROLLOUT)
+    assert rollout.num_nodes == 4
+    assert rollout.gpus_per_node == 4
+    assert derive_num_nodes(plan) == 16
+
+
+@pytest.mark.parametrize("backend", ["vllm", "sglang"])
+def test_host_local_expert_parallel_engines_keep_whole_engine_node_packing(backend):
+    # Four three-GPU engines need four four-GPU rollout hosts, plus the policy.
+    plan = derive_role_plan(
+        skyrl_config(
+            **{
+                "environment.env_class": "gsm8k",
+                "trainer.algorithm.policy_loss_type": "regular",
+                "trainer.placement.policy_num_gpus_per_node": 4,
+                "generator.backend": backend,
+                "generator.num_inference_engines": 4,
+                "generator.inference_engine_data_parallel_size": 3,
+                "generator.inference_engine_expert_parallel_size": 3,
+            }
+        )
+    )
+    assert derive_num_nodes(plan) == 5
+
+
 @pytest.mark.parametrize("runner", ["task", "harbor"])
 def test_preference_pair_task_validation_reserves_generation_capacity(runner):
     plan = derive_role_plan(skyrl_config(**{"trainer.evaluation_runner": runner}))

@@ -1,3 +1,4 @@
+import gc
 import os
 import math
 import random
@@ -37,6 +38,10 @@ from skyrl_train.distributed.megatron.checkpoint_restore import (
     defer_model_weights_to_optimizer,
     restore_model_weights_from_optimizer,
 )
+from skyrl_train.distributed.megatron.optimizer_checkpoint import (
+    restore_hybrid_adam_bucket_steps,
+    restore_in_host_order,
+)
 from marinskyrl.remote_io import abort_multipart_uploads
 
 from megatron.core.dist_checkpointing.strategies import base as ckpt_base
@@ -51,6 +56,7 @@ from megatron.core.dist_checkpointing.strategies.fully_parallel import (
 )
 from transformers import PreTrainedTokenizer
 from megatron.core.optimizer import ChainedOptimizer, DistributedOptimizer
+from megatron.core.optimizer.cpu_offloading import HybridDeviceOptimizer
 from megatron.core.optimizer.clip_grads import clip_grad_by_total_norm_fp32
 from skyrl_train.distributed.step_policy import (
     NonfiniteStepPolicy,
@@ -93,6 +99,12 @@ def _saved_optimizer_sharding_type(common_state: dict) -> str:
 
 
 _MUONH_CHECKPOINT_RECIPE = "MuonH"
+
+
+def _muonh_checkpoint_recipe(optimizer_config) -> str:
+    if optimizer_config.get("optimizer_kwargs", {}).get("expert_normalization", "per_expert") == "all_experts":
+        return f"{_MUONH_CHECKPOINT_RECIPE}:hero_ep_all_experts"
+    return _MUONH_CHECKPOINT_RECIPE
 
 
 def _muonh_fp32_substates(optimizer_state: dict) -> list[dict]:
@@ -350,7 +362,7 @@ class MegatronStrategy(DistributedStrategy):
             )
             if self.optimizer_config is not None and str(self.optimizer_config.optimizer).lower() == "muonh":
                 _muonh_fp32_groups_as_mapping(sharded_state_dict["optimizer"])
-                sharded_state_dict["optimizer_recipe"] = _MUONH_CHECKPOINT_RECIPE
+                sharded_state_dict["optimizer_recipe"] = _muonh_checkpoint_recipe(self.optimizer_config)
                 sharded_state_dict["optimizer_recipe_step"] = _muonh_adamh_step(optimizer)
         if scheduler:
             sharded_state_dict["lr_scheduler"] = scheduler.state_dict()
@@ -438,7 +450,7 @@ class MegatronStrategy(DistributedStrategy):
         with remote_checkpoint_metadata(ckpt_dir) as read_dir:
             if optimizer and load_training_state:
                 common_state = dist_checkpointing.load_common_state_dict(read_dir)
-                if muonh and common_state.get("optimizer_recipe") != _MUONH_CHECKPOINT_RECIPE:
+                if muonh and common_state.get("optimizer_recipe") != _muonh_checkpoint_recipe(self.optimizer_config):
                     raise ValueError("Checkpoint does not contain Grug MuonH optimizer state")
                 if muonh and "optimizer_recipe_step" not in common_state:
                     raise ValueError("Checkpoint does not contain Grug AdamH step state")
@@ -485,17 +497,32 @@ class MegatronStrategy(DistributedStrategy):
             )
             if muonh:
                 _muonh_fp32_groups_as_lists(state_dict["optimizer"])
-            optimizer.load_state_dict(state_dict.pop("optimizer"))
-            if muonh:
-                _restore_muonh_adamh_step(optimizer, common_state["optimizer_recipe_step"])
-            restore_offloaded_optimizer_state(optimizer)
+
+            def restore_optimizer():
+                optimizer.load_state_dict(state_dict.pop("optimizer"))
+                if muonh:
+                    _restore_muonh_adamh_step(optimizer, common_state["optimizer_recipe_step"])
+                restore_offloaded_optimizer_state(optimizer)
+                load_megatron_grads_to_gpu(model)
+                # Release replaced pinned copies before the next local worker restores.
+                torch.cuda.synchronize()
+                torch.accelerator.memory.empty_host_cache()
+
+            children = optimizer.chained_optimizers if isinstance(optimizer, ChainedOptimizer) else [optimizer]
+            if (
+                not muonh
+                and saved_type == "dp_reshardable"
+                and any(isinstance(child.optimizer, HybridDeviceOptimizer) for child in children)
+            ):
+                if str(self.optimizer_config.optimizer).lower() in ("adam", "adamw"):
+                    restore_hybrid_adam_bucket_steps(state_dict["optimizer"])
+                # dp_reshardable bucket restore is rank-local. HDO rebuilds pinned
+                # copies; doing all four tray workers together exceeded host RAM.
+                restore_in_host_order(restore_optimizer)
+            else:
+                restore_optimizer()
             if model_weights_from_optimizer:
                 restore_model_weights_from_optimizer(optimizer, model)
-            load_megatron_grads_to_gpu(model)
-            # Restoring a CPU-offloaded optimizer rebuilds its pinned host copies, and PyTorch keeps the
-            # replaced blocks cached for reuse that never comes, so the next save would need that much more host memory.
-            torch.cuda.synchronize()
-            torch.accelerator.memory.empty_host_cache()
             self.log("Loaded optimizer state dict.")
 
         if scheduler and load_training_state:
@@ -517,6 +544,14 @@ class MegatronStrategy(DistributedStrategy):
             states = extra_state.get("client_state", {}) or {}
             self.log("Loaded client state from checkpoint.")
 
+        # The sharded descriptors retain the replaced optimizer storage until
+        # this frame exits. Drop them before returning cached pinned blocks to
+        # the host, so the first resumed update has room for CPU gradients.
+        del sharded_state_dict, model_sharded_state_dict, state_dict
+        if optimizer and load_training_state:
+            gc.collect()
+            torch.cuda.synchronize()
+            torch.accelerator.memory.empty_host_cache()
         return ckpt_dir, states
 
     def save_hf_model(self, bridge, model: MegatronModelWrapper, output_dir: str, tokenizer=None, **kwargs) -> None:

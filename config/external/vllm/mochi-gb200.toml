@@ -1,0 +1,18 @@
+# Task-scoped experimental pin. The promoted gpu.toml remains unchanged.
+[release]
+release_tag = "mochi-experimental-20261111-3004cd8f1632"
+source_commit = "3004cd8f163299116b96d1b324cfff418c387388"
+version = "0.0.0.dev20261110+mochi.3004cd8f1632.cu132"
+torch_backend = "cu132"
+torch_version = "2.14.1+cu132"
+
+[[release.wheels]]
+architecture = "aarch64"
+sm_targets = ["10.0"]
+url = "https://github.com/yonromai/vllm/releases/download/mochi-experimental-20261111-3004cd8f1632/vllm-0.0.0.dev20261110%2Bmochi.3004cd8f1632.cu132-cp38-abi3-manylinux_2_28_aarch64.whl"
+sha256 = "3f9818101c9a741a596ade632844d9f90d63208b5a57d150d6f96aea98190a14"
+
+[qualification]
+scope = "Mochi/GB200-only experiment; general-release gates remain outstanding"
+native_source_commit = "5fa2e9bad66dcc2b9836e657323214aefc179a7f"
+manifest_url = "https://github.com/yonromai/vllm/releases/download/mochi-experimental-20261111-3004cd8f1632/mochi-wheel-manifest.json"

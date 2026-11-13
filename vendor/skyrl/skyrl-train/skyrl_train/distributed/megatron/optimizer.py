@@ -23,12 +23,14 @@ import torch
 from megatron.core.optimizer import OptimizerConfig, ParamKey, ParamWithNamePredicate, get_standard_config_overrides
 from megatron.core.optimizer import get_megatron_optimizer as get_megatron_optimizer_native
 from megatron.core.optimizer.cpu_offloading import HybridDeviceOptimizer
-from megatron.core.optimizer.emerging_optimizers import EmergingOptimizerEntry, _EMERGING_OPTIMIZERS
+from megatron.core.optimizer.emerging_optimizers import _EMERGING_OPTIMIZERS, EmergingOptimizerEntry
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.utils import get_model_config
-
-from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH, megatron_grug_route
-
+from skyrl_train.distributed.megatron.grug_muonh import (
+    MegatronGrugMuonH,
+    megatron_grug_expert_bank,
+    megatron_grug_route,
+)
 
 _GRUG_MUONH_NAME = "grug_muonh"
 _GRUG_EMERGING_ROUTES = ("grug_muonh_qkv", "grug_muonh_gate_up", "grug_adamh")
@@ -87,12 +89,23 @@ def _grug_muonh_extra(optim_config: Mapping) -> dict:
     if not isinstance(raw, Mapping):
         raise TypeError("MuonH optimizer_kwargs must be a mapping")
     extra = dict(raw)
-    known = {"adam_lr", "momentum", "nesterov", "backend_steps", "epsilon", "muon_epsilon", "offload_momentum"}
+    known = {
+        "adam_lr",
+        "momentum",
+        "nesterov",
+        "backend_steps",
+        "epsilon",
+        "muon_epsilon",
+        "offload_momentum",
+        "expert_normalization",
+    }
     unknown = sorted(set(extra) - known)
     if unknown:
         raise ValueError(f"Unknown MuonH optimizer_kwargs: {unknown}")
     if "offload_momentum" in extra and not isinstance(extra["offload_momentum"], bool):
         raise TypeError("MuonH offload_momentum must be a bool")
+    if extra.get("expert_normalization", "per_expert") not in ("per_expert", "all_experts"):
+        raise ValueError("MuonH expert_normalization must be per_expert or all_experts")
     if float(optim_config.get("weight_decay", 0.0)) != 0.0:
         raise ValueError("MuonH requires weight_decay=0")
     return extra
@@ -135,6 +148,15 @@ def _register_grug_muonh(optim_config: Mapping) -> None:
             "muon_eps": muon_eps,
             "qkv_split_shapes": (query_rows, kv_rows, kv_rows),
             "offload_momentum": extra.get("offload_momentum", False),
+            "parameter_banks": {
+                parameter: bank
+                for chunk in model_chunks
+                for name, parameter in chunk.named_parameters()
+                if (bank := megatron_grug_expert_bank(name)) is not None
+            }
+            if extra.get("expert_normalization", "per_expert") == "all_experts"
+            else {},
+            "expert_parallel_group": pg_collection.ep,
         }
 
     entry = EmergingOptimizerEntry(
