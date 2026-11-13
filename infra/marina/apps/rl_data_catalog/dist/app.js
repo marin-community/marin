@@ -188,7 +188,7 @@ function details(row) {
   $('detail-name').textContent = row.display_name; $('detail-notes').textContent = row.notes;
   const controls = row.curation?.verification;
   const fields = [
-    ['Origin', originOf(row)], ['Build path', row.build_path], ['Status', row.status], ['Quality', row.quality], ['Result', resultLabels[resultKey(row)]],
+    ['Origin', originOf(row)], ['Build path', row.build_path], ['Status', row.status], ['Quality', row.quality], ['Result', resultLabels[resultKey(row)] + (row.result && row.result_provisional ? ' · provisional' : '')],
     ['Unique examples', row.within_source_dedup?.unique_count], ['Raw converted tasks', row.within_source_dedup?.raw_count], ['Within-source duplicates dropped', row.within_source_dedup?.within_source_duplicates], ['Use', useLabels[value(row, 'use')]],
     ['Coverage basis', row.coverage?.basis], ['Coverage gap', row.coverage?.unavailable_reason],
     ['Oracle validation', row.oracle_validation && (oracleValidationLabels[row.oracle_validation] ?? row.oracle_validation)],

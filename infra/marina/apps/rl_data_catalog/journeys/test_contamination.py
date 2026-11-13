@@ -80,7 +80,12 @@ def test_complete_sample_is_final_and_unfinished_reviews_are_provisional(journey
     for name in ("sample-uncertain", "full-inflight", "full-uncertain"):
         expect(page.locator(f'tr[data-source-id="Marin:{name}"] .result-provisional')).to_have_text("Good · provisional")
     page.set_viewport_size({"width": 390, "height": 844})
+    page.locator('tr[data-source-id="Marin:sample-uncertain"] .source-name').click()
+    result_field = page.locator("#detail-fields .field").filter(has=page.get_by_text("Result", exact=True)).locator("dd")
+    expect(result_field).to_have_text("Good · provisional")
+    page.locator("#close-details").click()
     complete.locator(".source-name").click()
+    expect(result_field).to_have_text("Good")
     page.get_by_role("link", name="All quality evidence", exact=True).click()
     expect(page.locator("#labels .result-provisional")).to_have_count(0)
     expect(page.locator("#sections")).to_contain_text("Required content review complete")
