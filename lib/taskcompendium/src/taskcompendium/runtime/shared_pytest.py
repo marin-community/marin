@@ -321,6 +321,17 @@ print(json.dumps({'sites':sorted(sites),'executable':sys.executable,
         cwd=root,
         timeout=120,
     )
+    child_site = Path(
+        checked(
+            [contract["interpreter"], "-I", "-c", "import sysconfig;print(sysconfig.get_path('purelib'))"],
+            cwd=root,
+            timeout=30,
+        ).strip()
+    )
+    # Product subprocesses use this interpreter too; retain their live source dependencies.
+    (child_site / "taskcompendium-source-sites.pth").write_text(
+        "import site;" + ";".join(f"site.addsitedir({path!r})" for path in info["sites"]) + "\n"
+    )
     # Repository-owned plugins are product code, including editable/path installs.
     package_probe = """import importlib.metadata as m,json,pathlib,packaging.requirements
 from packaging.utils import canonicalize_name
