@@ -9,7 +9,6 @@ import os
 import shlex
 import subprocess
 import sys
-import sysconfig
 import tempfile
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -49,7 +48,22 @@ def shared_runtime(request):
             "import candidate, dependency\ndef test_value(): assert candidate.VALUE + dependency.VALUE == 1\n"
         )
         test_path = "test_case.py"
-        if request.param == "local-plugin":
+        if request.param in {"entrypoints", "entrypoint-block", "entrypoint-required"}:
+            blocked = request.param == "entrypoint-block"
+            (workspace / "pytest.ini").write_text(
+                "[pytest]\nfilterwarnings = error\n"
+                + ("required_plugins = baseline-plugin\n" if request.param == "entrypoint-required" else "")
+                + "addopts = --baseline-enabled"
+                + (" -p no:baseline-z" if blocked else "")
+                + "\n"
+            )
+            (workspace / "test_case.py").write_text(
+                "import candidate\ndef test_value(source_value, pytestconfig):\n"
+                "    assert candidate.VALUE == source_value\n"
+                "    assert pytestconfig.pluginmanager.hasplugin('baseline')\n"
+                f"    assert pytestconfig.pluginmanager.hasplugin('baseline-z') == {not blocked}\n"
+            )
+        elif request.param == "local-plugin":
             plugin = workspace / "tests/local_fixture/plugin.py"
             plugin.parent.mkdir(parents=True)
             plugin.write_text("import pytest\n@pytest.fixture\ndef source_value(): return 1\n")
@@ -73,14 +87,20 @@ def shared_runtime(request):
                 configuration = "[pytest]\npythonpath = extras\n"
             (workspace / request.param).write_text(configuration)
         task_python = base / "task-python"
-        subprocess.run([sys.executable, "-m", "venv", "--copies", "--without-pip", str(task_python)], check=True)
+        source_python = request.config.getoption("--shared-source-python") or sys.executable
+        subprocess.run(
+            [Path(source_python).resolve(), "-m", "venv", "--copies", "--without-pip", str(task_python)], check=True
+        )
         site = Path(
             subprocess.check_output(
                 [str(task_python / "bin/python"), "-I", "-c", "import sysconfig;print(sysconfig.get_path('purelib'))"],
                 text=True,
             ).strip()
         )
-        (site / "test-dependencies.pth").write_text(sysconfig.get_path("purelib") + "\n")
+        source_site = subprocess.check_output(
+            [source_python, "-I", "-c", "import sysconfig;print(sysconfig.get_path('purelib'))"], text=True
+        ).strip()
+        (site / "test-dependencies.pth").write_text(source_site + "\n")
         (site / "dependency.py").write_text("VALUE = 0\n")
         (site / "baseline_plugin.py").write_text("# Source-required pytest plugin\n")
         metadata = site / "baseline_plugin-1.dist-info"
@@ -91,6 +111,25 @@ def shared_runtime(request):
             "baseline_plugin.py,,\nbaseline_plugin-1.dist-info/METADATA,,\n"
             "baseline_plugin-1.dist-info/entry_points.txt,,\nbaseline_plugin-1.dist-info/RECORD,,\n"
         )
+        if request.param in {"entrypoints", "entrypoint-block", "entrypoint-required"}:
+            (site / "baseline_plugin.py").unlink()
+            package = site / "baseline_plugin"
+            package.mkdir()
+            (package / "__init__.py").write_text("")
+            (package / "a.py").write_text(
+                "import baseline_plugin.z, pytest\n"
+                "def pytest_addoption(parser): parser.addoption('--baseline-enabled', action='store_true')\n"
+                "@pytest.fixture\ndef source_value(): return 1\n"
+            )
+            (package / "z.py").write_text("VALUE = 1\n")
+            (metadata / "entry_points.txt").write_text(
+                "[pytest11]\nbaseline = baseline_plugin.a\nbaseline-z = baseline_plugin.z\n"
+            )
+            (metadata / "RECORD").write_text(
+                "baseline_plugin/__init__.py,,\nbaseline_plugin/a.py,,\nbaseline_plugin/z.py,,\n"
+                "baseline_plugin-1.dist-info/METADATA,,\nbaseline_plugin-1.dist-info/entry_points.txt,,\n"
+                "baseline_plugin-1.dist-info/RECORD,,\n"
+            )
         contract = SharedIntegrityContract(
             dependency_state=SharedDependencyState.AGENT_MUTABLE,
             workspace=str(workspace),
@@ -214,7 +253,18 @@ def test_shared_controller_restores_contract_paths_and_preserves_other_files(sha
 
 
 @pytest.mark.parametrize(
-    "shared_runtime", ["local-plugin", "pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg"], indirect=True
+    "shared_runtime",
+    [
+        "local-plugin",
+        "pytest.ini",
+        "pyproject.toml",
+        "tox.ini",
+        "setup.cfg",
+        "entrypoints",
+        "entrypoint-block",
+        "entrypoint-required",
+    ],
+    indirect=True,
 )
 def test_shared_grading_restores_source_plugin_and_config_semantics(shared_runtime):
     runtime = shared_runtime
@@ -232,5 +282,5 @@ def test_shared_grading_restores_source_plugin_and_config_semantics(shared_runti
     assert runtime.grade()["reward"] == 0
     (workspace / "candidate.py").write_text("VALUE = 1\n")
     verdict = runtime.grade()
-    assert verdict["status"] == "scored"
+    assert verdict["status"] == "scored", verdict
     assert verdict["reward"] == 1
