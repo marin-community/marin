@@ -548,6 +548,41 @@ rejected. Invalid observations
 remain unavailable in the computed Result and leave `coverage_complete=false`.
 Execution qualification remains pending.
 
+### Repair incomplete retained reviews
+
+After a source's primary pass finishes, freeze its strict assembled artifact and
+the SHA-256 of its `.artifact.json`. `full_qc_repair` preserves every completed
+primary observation, including uncertain verdicts, and retries only INVALID or
+UNAVAILABLE observations. The repair uses the same pinned model, rubric, payload
+and temperature with explicit 8,192-token initial and 16,384-token retry budgets.
+These budgets have a separate ReviewerSpec and exact-request cache identity.
+
+Run a batch-priority CPU job on the serving workers' cluster with a three-day
+timeout. Borrow an existing owned primary worker; this command neither starts
+nor stops serving jobs. It resolves that worker's current child registration
+before each request, including when batch preemption replaces the child. Keep
+the primary 48 workers running and use a separate output prefix and cache:
+
+```bash
+uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.full_qc_repair \
+  --primary s3://bucket/assembled/source/v1/attempts/PRIMARY \
+  --primary-sha256 PRIMARY_ARTIFACT_SHA256 \
+  --serving-root /owner/primary-worker \
+  --output s3://bucket/repair-overlay/source/v1 \
+  --review-cache s3://bucket/repair-overlay/request-cache --run
+```
+
+Omit `--run` to validate the frozen observations and print the primary, repair
+and composite identity hashes without model requests. The repair output contains
+every retained exact contract once. Each row records the selected review's
+reviewer identity and hashed origin; primary review JSON is copied byte for
+byte. The source identity lists both specs and their selection policy. Result
+uses both sets of observations, retaining uncertainty separately; failed repairs
+leave coverage incomplete. Rerunning the same frozen primary and repair prefix
+reuses successful repair receipts without resampling them. Existing primary
+records and pointers are never changed. Execution qualification remains pending.
+
 ### CrossCode Python qualification candidate
 
 `crosscode_python` stages a new candidate for the frozen 500-task CrossCode Python

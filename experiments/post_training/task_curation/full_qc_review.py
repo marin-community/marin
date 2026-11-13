@@ -259,6 +259,18 @@ def write_review_result(
                 logger.info(
                     "%s: %d / %d retained contracts reviewed", inputs.source_id, len(reviews), inputs.retained_count
                 )
+    return write_source_result(inputs, reviewer, rubric, records_path, reviews, receipts)
+
+
+def write_source_result(
+    inputs: FullQCInputs,
+    reviewer: dict,
+    rubric: ReviewRubric,
+    records_path: StoragePath,
+    reviews: Sequence[ReviewRecord],
+    receipts: list[str],
+) -> FullQCReview:
+    """Record an immutable source summary for persisted retained observations."""
     if len(reviews) != inputs.retained_count or len({row.task_id for row in reviews}) != inputs.retained_count:
         raise ValueError("Source review does not cover every retained task exactly once")
     result = FullQCReview(
