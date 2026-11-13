@@ -16,6 +16,7 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.curation import CurationMode
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from pydantic import BaseModel, ConfigDict, PositiveInt
@@ -47,7 +48,6 @@ from zephyr.writers import write_parquet_file
 
 from experiments.post_training.task_curation.curation_catalog import MANIFEST_FILENAME
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import BLENDS
-from finestore.rl.curation import CurationMode
 
 SELECTION_PREFIX = "rl-data/task-selection"
 SELECTION_INPUT_PREFIX = "rl-data/selection-inputs"

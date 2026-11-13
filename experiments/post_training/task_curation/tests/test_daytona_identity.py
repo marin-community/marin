@@ -9,7 +9,6 @@ import io
 import tarfile
 
 import pytest
-
 from harbor.environments.daytona import machine_spec
 from shellbox.backends.daytona.snapshot import snapshot_request_for_spec
 from shellbox.image import DockerfileSource, RegistryImage
