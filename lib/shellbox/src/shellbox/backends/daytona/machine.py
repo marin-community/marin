@@ -49,6 +49,7 @@ from shellbox.machine import (
     ExitReason,
     MachineSpec,
     NetworkPolicy,
+    ProcessScope,
     Result,
     UnsupportedMachineSpec,
     check_execution_requirements,
@@ -94,6 +95,19 @@ def _validated_source(source: RegistryImage | DockerfileSource) -> RegistryImage
     return source
 
 
+def snapshot_identity(source: RegistryImage | DockerfileSource, resources: Resources) -> str:
+    """The snapshot name :class:`DaytonaMachineFactory` would create for this pair.
+
+    Validates the source the way ``_prepare`` does (rejecting ADD and Dockerfiles
+    outside the context root) and derives the deterministic name from the build
+    context contents or registry reference plus the resource shape. Measurement
+    code calls this to count snapshots through the production naming path.
+    """
+    source = _validated_source(source)
+    identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
+    return f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
+
+
 async def _snapshot_metadata(client: AsyncDaytona, name: str) -> Snapshot:
     """Retry transient snapshot metadata reads within the caller's startup deadline."""
     backoff = ExponentialBackoff(initial=1, maximum=2, factor=2, jitter=0)
@@ -110,8 +124,7 @@ async def _snapshot_metadata(client: AsyncDaytona, name: str) -> Snapshot:
 
 async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSource, resources: Resources) -> str:
     """Build or await a snapshot identified by its source and resource requirements."""
-    identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
-    name = f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
+    name = snapshot_identity(source, resources)
     try:
         snapshot = await _snapshot_metadata(client, name)
     except DaytonaNotFoundError:
@@ -323,6 +336,9 @@ class DaytonaMachine:
                 await finish_owned(own_cleanup(self.close()))
             except BaseException as close_error:
                 cancellation.add_note(f"Daytona machine cleanup failed ({type(close_error).__name__})")
+
+    async def open_process_scope(self) -> ProcessScope:
+        raise UnsupportedMachineSpec("Daytona does not provide confirmed scoped descendant teardown")
 
     async def run(self, command: Command) -> Result:
         if self._closed:
