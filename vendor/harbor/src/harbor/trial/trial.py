@@ -43,7 +43,7 @@ from harbor.models.trial.result import (
     TrialCompletion,
 )
 from harbor.models.verifier.result import VerifierResult
-from harbor.resource_usage import resource_counters, write_resource_usage
+from harbor.resource_usage import RESOURCE_COUNTER_TIMEOUT_SEC, resource_counters, write_resource_usage
 from harbor.skills import ResolvedSkill, resolve_skills
 from harbor.tasks.client import TaskClient
 from harbor.trial.artifact_handler import ArtifactHandler
@@ -908,7 +908,10 @@ class Trial(ABC):
                     ) from exc
 
         usage_filename = self.config.agent.kwargs.get("resource_usage_filename")
-        counters = await resource_counters(environment) if usage_filename else {}
+        counters = (
+            await self._measure_verifier_resources(resource_counters(environment), timeout_sec)
+            if usage_filename else {}
+        )
         started = time.monotonic()
         try:
             return await self._await_phase(
@@ -920,7 +923,29 @@ class Trial(ABC):
             )
         finally:
             if usage_filename:
-                await write_resource_usage(environment, self.paths.verifier_dir / usage_filename, counters, started)
+                try:
+                    await self._measure_verifier_resources(
+                        write_resource_usage(environment, self.paths.verifier_dir / usage_filename, counters, started),
+                        timeout_sec,
+                    )
+                except Exception:
+                    self.logger.exception("Verifier resource counters unavailable after execution")
+
+    async def _measure_verifier_resources(
+        self, awaitable: Awaitable[Any], timeout_sec: float | None
+    ) -> Any:
+        deadline = (
+            RESOURCE_COUNTER_TIMEOUT_SEC if timeout_sec is None
+            else min(RESOURCE_COUNTER_TIMEOUT_SEC, timeout_sec)
+        )
+        try:
+            return await self._await_phase(
+                awaitable,
+                timeout_sec=deadline,
+                timeout_error=TimeoutError("Verifier resource measurement timed out"),
+            )
+        except TimeoutError as error:
+            raise RuntimeServiceError("Verifier resource measurement timed out") from error
 
     async def _run_separate_verifier(
         self,
