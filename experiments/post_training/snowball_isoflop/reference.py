@@ -25,11 +25,11 @@ from rigging.timing import Duration
 from experiments.post_training.snowball_isoflop.budget import budgeted_map
 from experiments.post_training.snowball_isoflop.config import (
     PREFIX,
+    REFERENCE_VERSION,
     SEQ_LEN,
     SIZES,
     SPECIAL_IDS,
     TASK_TIMEOUT,
-    VERSION,
     Cell,
     Mask,
     build_pod,
@@ -49,11 +49,11 @@ def reference_config(size: int, variant: ReferenceVariant = ReferenceVariant.RAW
     cell = Cell(size, Mask.FULL, 0, 20, (20,), "reference")
     base = build_pod(cell).train_config
     suffix = "" if variant == ReferenceVariant.RAW_RING else f"-{variant}"
-    root = f"{PREFIX}/{VERSION}/reference-d{size}{suffix}"
+    root = f"{PREFIX}/{REFERENCE_VERSION}/reference-d{size}{suffix}"
     receipt = model_receipt(size)
     trainer = replace(
         base.trainer,
-        id=f"{VERSION}-reference-d{size}{suffix}",
+        id=f"{REFERENCE_VERSION}-reference-d{size}{suffix}",
         max_eval_batches=1,
         tracker=JsonFileTrackerConfig(output_path=root),
     )
@@ -120,7 +120,7 @@ def main():
         return
     if not 0 < args.h100_hour_limit <= 24:
         parser.error("References require a cap within the approved 24-H100-hour envelope")
-    root = StoragePath(f"{PREFIX}/{VERSION}/reference-manager-{args.variant}-{args.size or 'all'}")
+    root = StoragePath(f"{PREFIX}/{REFERENCE_VERSION}/reference-manager-{args.variant}-{args.size or 'all'}")
     budgeted_map(
         {str(size): size for size in sizes},
         partial(submit_reference, variant=args.variant),

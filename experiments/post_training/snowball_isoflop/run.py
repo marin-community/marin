@@ -80,7 +80,12 @@ def main():
     logging.basicConfig(level=logging.INFO)
     for cell in cells:
         gate = build_pod(cell).train_config.initial_eval_match
-        if gate is None or not StoragePath(gate.reference_path).exists():
+        if (
+            gate is None
+            or gate.pre_reseed_reference_path is None
+            or not StoragePath(gate.reference_path).exists()
+            or not StoragePath(gate.pre_reseed_reference_path).exists()
+        ):
             raise ValueError(f"Missing upstream reference evaluation for d{cell.size}; no training jobs submitted")
     manager_root = StoragePath(f"{PREFIX}/{VERSION}/manager-{args.phase}-{args.size or 'all'}")
     if args.initial_concurrent is not None:

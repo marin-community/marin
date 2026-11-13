@@ -26,6 +26,7 @@ class InitialEvalMatchConfig:
     max_examples_per_dataset: int
     special_token_ids: tuple[int, ...]
     absolute_tolerance: float = 1e-3
+    pre_reseed_reference_path: str | None = None
 
 
 def evaluation_input_audit(evaluator: TaggedEvaluator, special_token_ids: tuple[int, ...]) -> dict:

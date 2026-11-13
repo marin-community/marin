@@ -160,6 +160,53 @@ def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmC
     )
 
 
+def check_initial_evaluation(
+    model: LmHeadModel,
+    gate: InitialEvalMatchConfig,
+    trainer: Trainer,
+    reference_path: str,
+    output_root: StoragePath | None,
+    stage: str,
+) -> dict:
+    """Audit and compare one initialization stage, preserving failed evaluations."""
+    batch = trainer.config.EvalBatch
+    evaluator = TaggedEvaluator(
+        EvalBatch=batch,
+        tagged_eval_sets=gate.data.tagged_eval_sets(model.Pos.resize(gate.sequence_length)),
+        loss_fn=functools.partial(lm_eval_loss, EvalBatch=batch, mp=trainer.mp),
+        tokenizer=gate.data.the_tokenizer,
+        device_mesh=trainer.device_mesh,
+        axis_mapping=trainer.compute_axis_mapping,
+        max_examples_per_dataset=gate.max_examples_per_dataset,
+    )
+    metrics = eval_model(evaluator, model, prefix="eval")
+    audit = evaluation_input_audit(evaluator, gate.special_token_ids)
+    if output_root is not None:
+        write_evaluation_result(str(output_root / f"{stage}-result.json"), metrics, audit)
+    reference = json.loads(StoragePath(reference_path).read_text())
+    match = initial_eval_match(reference, metrics, audit, gate.absolute_tolerance)
+    match["reference_path"] = reference_path
+    prefix = stage.replace("-", "_")
+    levanter.tracker.log({f"{prefix}/loss": match["initial_loss"], f"{prefix}/delta": match["delta"]}, step=0)
+    if gate.pre_reseed_reference_path is not None and stage == "initial-eval" and output_root is not None:
+        raw_match = json.loads((output_root / "initial-eval-raw-match.json").read_text())
+        match["raw_match"] = raw_match
+        match["raw_loss"] = raw_match["initial_loss"]
+        match["post_reseed_loss"] = match["initial_loss"]
+        match["intentional_reseed_delta"] = match["initial_loss"] - raw_match["initial_loss"]
+        match["reference_reseed_delta"] = match["reference_loss"] - raw_match["reference_loss"]
+        levanter.tracker.log(
+            {
+                "initial_eval/intentional_reseed_delta": match["intentional_reseed_delta"],
+                "initial_eval/reference_reseed_delta": match["reference_reseed_delta"],
+            },
+            step=0,
+        )
+    if output_root is not None and jax.process_index() == 0:
+        (output_root / f"{stage}-match.json").write_text(json.dumps(match, indent=2))
+    return match
+
+
 def _load_lm_model_from_configured_source(
     *,
     config: TrainLmConfig,
@@ -195,6 +242,16 @@ def _load_lm_model_from_configured_source(
     else:
         model = config.model.build(Vocab, key=model_key)
 
+    gate = config.initial_eval_match
+    if gate is not None and gate.pre_reseed_reference_path is not None:
+        check_initial_evaluation(
+            model,
+            gate,
+            trainer,
+            gate.pre_reseed_reference_path,
+            StoragePath(config.hf_save_path).parent if config.hf_save_path is not None else None,
+            "initial-eval-raw",
+        )
     if config.snowball_sft is not None:
         model = reseed_snowball_head(model, config.snowball_sft)
 
@@ -412,31 +469,14 @@ def main(config: TrainLmConfig):
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.model)})
         if config.initial_eval_match is not None and not resuming:
             gate = config.initial_eval_match
-            gate_pos = Pos.resize(gate.sequence_length)
-            evaluator = TaggedEvaluator(
-                EvalBatch=EvalBatch,
-                tagged_eval_sets=gate.data.tagged_eval_sets(gate_pos),
-                loss_fn=functools.partial(lm_eval_loss, EvalBatch=EvalBatch, mp=trainer.mp),
-                tokenizer=tokenizer,
-                device_mesh=trainer.device_mesh,
-                axis_mapping=compute_axis_mapping,
-                max_examples_per_dataset=gate.max_examples_per_dataset,
+            check_initial_evaluation(
+                state.eval_model,
+                gate,
+                trainer,
+                gate.reference_path,
+                StoragePath(config.hf_save_path).parent if config.hf_save_path is not None else None,
+                "initial-eval",
             )
-            initial_metrics = eval_model(evaluator, state.eval_model, prefix="eval")
-            audit = evaluation_input_audit(evaluator, gate.special_token_ids)
-            if config.hf_save_path is not None:
-                write_evaluation_result(
-                    str(StoragePath(config.hf_save_path).parent / "initial-eval-result.json"), initial_metrics, audit
-                )
-            reference = json.loads(StoragePath(gate.reference_path).read_text())
-            match = initial_eval_match(reference, initial_metrics, audit, gate.absolute_tolerance)
-            levanter.tracker.log(
-                {"initial_eval/loss": match["initial_loss"], "initial_eval/delta": match["delta"]}, step=0
-            )
-            if config.hf_save_path is not None and jax.process_index() == 0:
-                (StoragePath(config.hf_save_path).parent / "initial-eval-match.json").write_text(
-                    json.dumps(match, indent=2)
-                )
 
         max_eval_examples_per_ds = config.trainer.max_eval_batches
         if max_eval_examples_per_ds is not None:
