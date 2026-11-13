@@ -344,6 +344,7 @@ SKYRL_INTERNAL_ENGINE_KWARGS = frozenset(
         "data_parallel_size",  # Set from generator config
         "seed",  # Set from config
         "enable_prefix_caching",  # Set from generator config
+        "enable_chunked_prefill",  # Set from generator config
         "dtype",  # Set from generator.model_dtype
         "gpu_memory_utilization",  # Set from generator config
         "max_num_batched_tokens",  # Set from generator config
