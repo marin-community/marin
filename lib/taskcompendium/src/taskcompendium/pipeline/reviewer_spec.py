@@ -92,6 +92,7 @@ class ReviewerSpec:
     model: str
     model_revision: str
     endpoint: JudgeEndpoint
+    precision: str = "unspecified"
     temperature: float | None = 0.7
     reasoning_effort: str = "low"
     max_tokens: int = DEFAULT_REVIEW_MAX_TOKENS

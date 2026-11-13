@@ -179,12 +179,10 @@ class LocalJudgeEndpoint:
         config = inference_config_for_model(
             model, self.accelerator, env_vars=self.env_vars, priority=self.priority, api_model=definition.spec.model
         )
-        environment = config.iris.worker_environment
         engine = config.engine
         if self.worker_image is not None:
             if not isinstance(engine, VllmEngineConfig):
                 raise ValueError("A preinstalled judge image requires the vLLM engine")
-            environment = replace(environment, workspace=None, docker_image=self.worker_image)
             engine = replace(engine, launcher=VllmLauncherType.PREINSTALLED)
         if self.worker_timeout is not None and isinstance(engine, VllmEngineConfig):
             engine = replace(engine, startup_timeout_seconds=int(self.worker_timeout.to_seconds()))
@@ -193,8 +191,11 @@ class LocalJudgeEndpoint:
             engine=engine,
             iris=replace(
                 config.iris,
-                worker_resources=replace(config.iris.worker_resources, target_cluster=self.accelerator.target_cluster),
-                worker_environment=environment,
+                worker_resources=replace(
+                    config.iris.worker_resources,
+                    target_cluster=self.accelerator.target_cluster,
+                    image=self.worker_image or config.iris.worker_resources.image,
+                ),
                 worker_timeout=self.worker_timeout,
                 endpoint_ready_timeout_seconds=(
                     self.worker_timeout.to_seconds()

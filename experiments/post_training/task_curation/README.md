@@ -391,3 +391,38 @@ uv run python -m experiments.post_training.task_curation.count_inputs \
 
 The command verifies HF download revision metadata and reads parquet footers.
 Sum only declared files; row selectors require their own complete count.
+
+## Complete retained-population review
+
+`full_qc_inputs` indexes the combined deduplication and lexical remainder against
+the frozen `SourceTextPopulation`. It records task and runtime hashes separately,
+and reports missing execution requirements. Indexing does not qualify execution
+or establish FULL quality.
+
+`full_qc` validates a full-population oracle/resource receipt against those exact
+contracts before allocating a local reviewer. Retained non-oracle tasks require
+calibration-only positive controls and independent negative liveness receipts.
+Repair and calibrate a new candidate population before indexing it when the
+original contracts are incomplete; the review command does not change contracts.
+
+Provide a JSON list with `inputs_path`, `qualification_receipt`, and `output_path`
+for each source. Run inside a CPU Iris job with batch priority, a three-day timeout,
+and an explicit target cluster. The local GLM children use batch priority, a
+three-day timeout, and cw-us-east-08a. The immutable public checkpoint, serving
+image, precision, model YAML digest, sampling settings, and endpoint identity
+participate in reviewer evidence and request caches. The existing relay retains
+its separate unverified checkpoint identity.
+
+```bash
+uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.full_qc \
+  --work s3://bucket/campaign/work.json \
+  --campaign-output s3://bucket/campaign/review-v1 --run
+```
+
+Omit `--run` to validate qualification and print the pinned reviewer identity
+without reserving GPUs. Successful batches are reused by exact request identity;
+failed and preempted attempts remain in versioned output paths. Each source
+completion writes task-level observations, computed Result and repair guidance,
+and a campaign record linking the qualification receipt and serving jobs. This
+command does not publish datasets or alter Atlas admission.

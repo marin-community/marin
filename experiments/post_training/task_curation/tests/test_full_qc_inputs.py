@@ -29,12 +29,14 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.pipeline.review import ReviewBatchResult
 from taskcompendium.runtime.resources import inline_resource
 
+from experiments.post_training.task_curation.full_qc import qualify_inputs
 from experiments.post_training.task_curation.full_qc_artifacts import FullQCInputs, FullQCReview, RetentionPlan
 from experiments.post_training.task_curation.full_qc_inputs import InputConfig, prepare_inputs
 from experiments.post_training.task_curation.full_qc_review import review_inputs
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
+from lib.taskcompendium.tests.oracle_filter_fixtures import oracle_receipt
 
 
 @pytest.fixture
@@ -230,3 +232,75 @@ def test_deployment_mutation_invalidates_completed_review_evidence(qc_inputs, tm
     pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), shard)
     with pytest.raises(ValueError, match="differs from prepared contract"):
         review_inputs(inputs, replace(reviewer, available=False), rubric, output)
+
+
+def test_qualification_requires_matching_full_population_and_retained_execution(qc_inputs, tmp_path):
+    config, documents = qc_inputs
+    tasks = [TaskSpec.model_validate(document) for document in documents]
+    tasks[2] = tasks[2].model_copy(
+        update={
+            "execution_requirements": tasks[0].execution_requirements,
+            "context": (
+                tasks[2].context.model_copy(
+                    update={
+                        "events": (tasks[2].context.events[0].model_copy(update={"content": "A distinct public task."}),)
+                    }
+                )
+            ),
+        }
+    )
+    files = write_text_population(
+        ((task.model_dump(mode="json"), {"deployment": 1}) for task in tasks),
+        str(tmp_path / "qualified-population"),
+    )
+    old = SourceTextPopulation.raw_load(config.population_path)
+    population = old.model_copy(
+        update={
+            "path": str(tmp_path / "qualified-population"),
+            "main_output_dir": files.main_output_dir,
+            "specs_output_dir": files.specs_output_dir,
+            "text_sha256": files.text_sha256,
+            "task_specs_sha256": files.task_specs_sha256,
+        }
+    )
+    write_record(
+        ArtifactRecord(
+            output_path=population.path,
+            result_type=result_type_name(type(population)),
+            result=population.result_payload(),
+        )
+    )
+    inputs = prepare_inputs(
+        replace(
+            config,
+            population_path=population.path,
+            retention=config.retention.model_copy(
+                update={
+                    "input_artifact": population.path,
+                    "task_specs_sha256": population.task_specs_sha256,
+                }
+            ),
+        )
+    )
+    receipt = oracle_receipt(tasks, failed=frozenset({"dropped"}))
+    runtime_digest = canonical_sha256({"deployment": 1})
+    entries = {}
+    for task_id, entry in receipt.tasks.items():
+        liveness = entry.no_oracle_liveness
+        entries[task_id] = entry.model_copy(
+            update={
+                "runtime_sha256": runtime_digest,
+                "no_oracle_liveness": (
+                    liveness.model_copy(update={"runtime_sha256": runtime_digest}) if liveness else None
+                ),
+            }
+        )
+    receipt = receipt.model_copy(update={"tasks": entries})
+    path = tmp_path / "qualification.json"
+    path.write_text(receipt.model_dump_json())
+    assert qualify_inputs(inputs, str(path)) == file_sha256(StoragePath(str(path)))
+    stale = dict(entries)
+    stale["kept"] = stale["kept"].model_copy(update={"runtime_sha256": canonical_sha256({"deployment": 2})})
+    path.write_text(receipt.model_copy(update={"tasks": stale}).model_dump_json())
+    with pytest.raises(ValueError, match="another task or runtime"):
+        qualify_inputs(inputs, str(path))
