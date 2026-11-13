@@ -19,6 +19,8 @@ serve:
   - --enable-expert-parallel
   - --model-loader-extra-config
   - '{"distributed":true}'
+  - --override-generation-config
+  - '{"temperature":0.6,"top_p":0.95}'
   chat_template: "{{ bos_token }}\n{%- if enable_thinking is defined -%}\n  {%- if\
     \ enable_thinking is sameas true -%}\n    {%- set _reasoning_mode = \"/think\"\
     \ -%}\n  {%- elif enable_thinking is sameas false -%}\n    {%- set _reasoning_mode\

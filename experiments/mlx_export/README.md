@@ -123,6 +123,6 @@ uvx --from mlx-lm==0.32.2 mlx_lm.server --model <mlx repo or dir> --trust-remote
 
 Requests must use `"model": "default_model"`. `--temp 1.0 --top-p 1.0` matches vLLM, which samples at
 temperature 1.0 when the request and `generation_config.json` set none; `mlx_lm.server` is greedy by
-default, and Evalchemy omits temperature so the server default applies. Without `--max-tokens` the server stops at 512 tokens,
+default, and curated evaluations send no temperature, so the server default applies. Without `--max-tokens` the server stops at 512 tokens,
 mid-thought. pi needs `compat.chatTemplateKwargs: {"enable_thinking": {"$var": "thinking.enabled"}}`
 in `models.json` for its thinking toggle to reach the template.

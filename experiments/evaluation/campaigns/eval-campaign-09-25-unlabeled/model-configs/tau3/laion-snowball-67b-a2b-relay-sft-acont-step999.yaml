@@ -22,6 +22,8 @@ serve:
   - --enable-expert-parallel
   - --model-loader-extra-config
   - '{"distributed":true}'
+  - --override-generation-config
+  - '{"temperature":0.6,"top_p":0.95}'
 
 # Benchmark configs select the policy thinking mode through the model's chat template.
 agent:
