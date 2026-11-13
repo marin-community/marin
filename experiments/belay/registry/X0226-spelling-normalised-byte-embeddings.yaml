@@ -1,0 +1,15 @@
+id: X0226
+slug: spelling-normalised-byte-embeddings
+name: Spelling-normalised byte embeddings
+category: Embeddings and inputs
+summary: 'Try adding **spelling-normalised byte embeddings** to the input. Each token''s input embedding row gets a learned
+  sum over the first 8 UTF-8 bytes of its surface string, one 256 x d table per byte position. Read the bytes after stripping
+  leading spaces and lowercasing, so " The", "the" and "The" share every byte row. Add two small feature rows to keep what
+  the normalisation removes: leading space…'
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6862858613
+  author: armorfaye
+  approved_by: ClassicLarry
