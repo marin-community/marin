@@ -20,7 +20,7 @@ from taskcompendium.pipeline.oracle_filter import (
     next_trial_requirements,
     require_oracle_filter,
 )
-from taskcompendium.pipeline.resource_calibration import ResourceDimension
+from taskcompendium.pipeline.resource_calibration import FailureSignal, ResourceDimension
 
 from .oracle_filter_fixtures import oracle_receipt
 from .pipeline_stages import SOURCE_FILES
@@ -131,3 +131,17 @@ def test_no_oracle_admission_requires_exact_empty_submission_liveness(changes):
         entry["exclusion_reason"] = OracleExclusionReason.NO_ORACLE_LIVENESS.value
     receipt = OracleFilterReceipt.model_validate(document)
     assert require_oracle_filter(current, receipt) is (not changes)
+
+
+@pytest.mark.parametrize("exception_type", ["DiskLimitExceeded", "SandboxDiskFullError", "AgentDiskFullError"])
+def test_disk_limit_evidence_doubles_disk_even_with_an_infrastructure_verdict(exception_type):
+    current = task()
+    document = oracle_receipt([current]).tasks[current.id].calibration.attempts[0].model_dump(mode="json")
+    document["result"]["exception_info"] = {"exception_type": exception_type}
+    document["result_sha256"] = canonical_sha256(document["result"])
+    document["verdict"] = {"status": "infra_error"}
+    trial = OracleTrialReceipt.model_validate(document)
+    assert trial.failure_signal is FailureSignal.DISK_FULL
+    assert next_trial_requirements(trial, {}, VerifierResourceProfile(mode=GradingEnvironmentMode.SHARED)) == (
+        current.execution_requirements.model_copy(update={"storage_mb": current.execution_requirements.storage_mb * 2})
+    )

@@ -1284,8 +1284,8 @@ in the native package; calibrate only missing dimensions. Existing native TOML
 literals remain unchanged; only missing keys are inserted. Added native settings
 still require an exact content-review payload comparison before cache reuse. After a failed trial, double only the
 dimension identified by its failure: memory for an explicit OOM kill, disk for
-ENOSPC, agent timeout for an agent timeout, or verifier timeout for a verifier
-timeout. Also double CPU on an agent timeout when measured CPU use reaches 90%
+ENOSPC or a typed Iris `RESOURCE_LIMIT_DISK` eviction, agent timeout for an agent
+timeout, or verifier timeout for a verifier timeout. Also double CPU on an agent timeout when measured CPU use reaches 90%
 of its allocated capacity. A bare exit 137 does not establish OOM, and unavailable
 CPU counters do not establish CPU saturation.
 
@@ -1418,12 +1418,12 @@ uv run python -m experiments.post_training.task_curation.oracle_filter calibrate
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
   --output-dir /path/to/oracle-run-v2 --environment daytona --concurrency 128
 
-# LOCAL: prepared digest-pinned images via umoci and shellbox-images.json,
-# on Iris CPU workers. This route supports only root commands.
+# IRIS-SANDBOX: intended invocation after SANDBOX disk qualification.
+# Currently rejects declared storage; do not use for calibrated cohorts.
 uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
-  --output-dir /path/to/oracle-local-v2 --environment local --concurrency 4 \
-  --environment-kwargs '{"image_cache":"/cache/shellbox-images","cgroup_parent":"/sys/fs/cgroup/marin-liveness"}'
+  --output-dir /path/to/oracle-iris-v2 --environment iris-sandbox --concurrency 4 \
+  --environment-kwargs '{"cluster":"cw-us-east-02a","pool":"cpu-genoa","priority":"batch","ttl":259200}'
 
 uv run python -m experiments.post_training.task_curation.oracle_filter collect \
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/oracle-run-v2/task-map.json \
@@ -1432,13 +1432,52 @@ uv run python -m experiments.post_training.task_curation.oracle_filter collect \
 ~~~
 
 DAYTONA normally runs about 128 concurrent sandboxes in the RL organization
-when the cohort's snapshot identities fit the cap. Otherwise use LOCAL on Iris
-CPU workers, with the task's own prepared images. Concurrency does not waive
-snapshot or CPU capacity limits. LOCAL honors allow_internet and cannot run
-nonroot task commands; choose a supporting route when the task requires them.
+when the cohort's snapshot identities fit the cap. The `iris-sandbox` environment
+uses prepared image references from `shellbox-images.json` and submits exactly
+one sandbox container and replica per Iris job. It takes `cluster`, `pool`,
+`priority` (`batch` by default, or `production`) and `ttl` in seconds. A TTL of
+259200 gives each job a three-day timeout. Images retain their prepared `/app`
+contents; commands run in separate process groups so a timeout or cancellation
+can stop a command while preserving the task filesystem for the verifier.
+Images must provide `setsid` and a readable `/proc`.
 
-Use CPU Iris workers at production priority with a three-day job timeout.
-Run `collect` against the same calibrated run; there is no second oracle pass.
+Prepared-image submission requires the separate `sandbox-image-workdir` backend
+capability, even without declared disk. Older controllers are rejected before
+submission because they hide the image's `/app` under an empty volume. This
+capability describes image preservation and does not qualify storage enforcement.
+
+Iris SANDBOX storage enforcement is unqualified. Harbor reports no storage-limit
+capability and rejects declared `storage_mb` for this environment. The Shellbox
+adapter also requires a direct Kubernetes controller advertising
+`sandbox-storage-limit` before submitting any declared disk; current controllers
+do not advertise it. Sandbox-profile pods cannot start on the pinned CPU pool
+([#11343](https://github.com/marin-community/marin/issues/11343)); H100 startup
+is blocked separately ([#10090](https://github.com/marin-community/marin/issues/10090)).
+See the [runtime incident](https://marina.oa.dev/echo/wiki/976).
+
+The candidate pod manifest sets ephemeral-storage to exactly
+`storage_mb * 1024**2` bytes, with zero harness allowance. The driver stays outside
+the pod. Kubelet's runtime accounting must include task writes and command files
+for this to enforce disk. Its accounting and eviction are asynchronous. A real
+`CONTAINER_PROFILE_SANDBOX` overflow on the pinned pool must establish the disk
+boundary, with the node's `runsc.toml` `overlay2` setting recorded beside raw
+kubelet eviction evidence. A restricted-profile overflow does not qualify this
+path; a memory-backed overlay can turn disk pressure into an OOM. Follow the
+[deployment checklist](rl-data-atlas.md#deployment-checklist) before enabling
+storage admission or advertising the capability. Deployment/restart requires
+separate user authorization.
+
+Only newly annotated sandbox pods receive typed own-limit storage failures:
+`RESOURCE_LIMIT_DISK`, Shellbox `DiskLimitExceeded`, then Harbor disk-full.
+Calibration doubles disk as for ENOSPC, including alongside an infrastructure
+verifier verdict. Ordinary jobs and node disk-pressure evictions retain their
+previous retry classification. The shared-worker bubblewrap `local` environment
+remains separate. `iris-sandbox` honors `allow_internet`, supports root commands
+and one container, and rejects service groups and process-session model relays.
+
+Use CPU Iris jobs with a three-day job timeout. Select the campaign's approved
+priority explicitly through `priority`; use production for the bounded
+disk-overflow correctness check. Run `collect` against the same calibrated run; there is no second oracle pass.
 Each attempt uses a fresh container and a fresh native package directory.
 Preserve the original packages, trials and published prefixes; select a new
 output version when rerunning.

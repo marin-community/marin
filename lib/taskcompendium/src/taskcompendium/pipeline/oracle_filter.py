@@ -105,12 +105,14 @@ class OracleTrialReceipt(BaseModel):
 
     @property
     def failure_signal(self) -> FailureSignal:
-        if (self.verdict or {}).get("status") == "infra_error":
-            return FailureSignal.INFRASTRUCTURE
         usage = self.resource_usage.model_copy(
             update={"oom_kills": self.resource_usage.oom_kills + self.verifier_resource_usage.oom_kills}
         )
         signal = failure_signal(self.result.get("exception_info"), self.failure_log, usage)
+        if signal is FailureSignal.DISK_FULL:
+            return signal
+        if (self.verdict or {}).get("status") == "infra_error":
+            return FailureSignal.INFRASTRUCTURE
         if self.infrastructure_retry is not None and not self.scored and signal is FailureSignal.NON_RESOURCE:
             return FailureSignal.INFRASTRUCTURE
         return signal
