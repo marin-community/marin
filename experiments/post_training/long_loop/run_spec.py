@@ -114,6 +114,15 @@ def resolve_spec(path: Path, *, smoke: bool) -> dict:
         sft_manifest["data"][field] = read_pin(draccus.decode(FilePin, pin), directory)
     for name in ("sft", "rl", "evaluation", "endpoint", "archive", "initializer", "tokenizer", "execution"):
         result[name] = read_pin(getattr(spec, name), directory)
+    evaluation = result["evaluation"]
+    if "benchmarks" in evaluation:
+        attempts = evaluation["attempts_per_selected_task"]
+        if not evaluation["benchmarks"] or set(evaluation["benchmarks"]) != set(attempts):
+            raise ValueError("A path-limited evaluation must list exactly the paths in attempts_per_selected_task")
+        if evaluation["supported_path_count"] != len(attempts) or evaluation["expected_rollouts"] != evaluation[
+            "tasks_per_benchmark"
+        ] * sum(attempts.values()):
+            raise ValueError("Path-limited evaluation counts disagree with its selected paths")
     for stage in ("rl", "evaluation"):
         validate_stage_config(result[stage]["config"], stage)
         for field in ("rendezvous_timeout", "cluster_join_timeout", "driver_liveness_timeout"):

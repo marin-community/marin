@@ -40,13 +40,24 @@ from vendor.skyrl.marinskyrl.resource_locator import validate_replayable_model_r
 WHEELS_REVISION = "d5dd315d58f0f47514dd0a2208e90e2a48541328"
 
 
-def prepare_micro(*, output: str, dataset: str, revision: str, wheels_revision: str, tasks_per_benchmark: int) -> None:
+def prepare_micro(
+    *,
+    output: str,
+    dataset: str,
+    revision: str,
+    wheels_revision: str,
+    tasks_per_benchmark: int,
+    benchmarks: list[str] | None = None,
+) -> None:
+    """Pin the Micro210 attempts to evaluate; ``benchmarks`` limits them to those paths."""
     path = hf_hub_download(dataset, "data/validation.parquet", repo_type="dataset", revision=revision)
     table = pq.read_table(path)
     if table.num_rows != 210:
         raise ValueError("Pinned Micro210 must contain 210 unique tasks")
     expanded_path = hf_hub_download(dataset, "data/validation-rollouts.parquet", repo_type="dataset", revision=revision)
-    expanded, receipt = selected_rollouts(table, pq.read_table(expanded_path), tasks_per_benchmark)
+    expanded, receipt = selected_rollouts(
+        table, pq.read_table(expanded_path), tasks_per_benchmark, None if benchmarks is None else frozenset(benchmarks)
+    )
     prepared = repaired_table(expanded, wheels_revision)
     receipt.update(dataset=dataset, revision=revision, wheels_revision=wheels_revision)
     receipt["unique_source_sha256"] = hashlib.sha256(Path(path).read_bytes()).hexdigest()

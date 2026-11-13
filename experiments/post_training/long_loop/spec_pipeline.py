@@ -188,6 +188,8 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
                 revision=data["revision"],
                 wheels_revision=data["wheels_revision"],
                 tasks_per_benchmark=evaluation["tasks_per_benchmark"],
+                # Only a path-limited rerun passes this, so full runs keep their fingerprints.
+                **({"benchmarks": evaluation["benchmarks"]} if "benchmarks" in evaluation else {}),
             )
         )
         eval_inputs = wrap(replace(eval_inputs, deps=(*eval_inputs.deps, *(policy.deps() if after is None else after))))

@@ -11,18 +11,26 @@ import pyarrow as pa
 from experiments.post_training.long_loop.eval_runtime.profile import SKIPPED_BENCHMARKS
 
 
-def selected_rollouts(unique: pa.Table, expanded: pa.Table, tasks_per_benchmark: int) -> tuple[pa.Table, dict]:
+def selected_rollouts(
+    unique: pa.Table, expanded: pa.Table, tasks_per_benchmark: int, benchmarks: frozenset[str] | None = None
+) -> tuple[pa.Table, dict]:
+    """Select ``tasks_per_benchmark`` tasks per supported path; ``benchmarks`` restricts the paths."""
+    available = set(unique["benchmark"].to_pylist()) - set(SKIPPED_BENCHMARKS)
+    if benchmarks is not None and (not benchmarks or not benchmarks <= available):
+        raise ValueError(f"Requested benchmarks are not supported paths: {sorted(set(benchmarks or ()) - available)}")
     selected = {}
     counts = Counter()
     for row in unique.to_pylist():
         benchmark = row["benchmark"]
         if benchmark in SKIPPED_BENCHMARKS or counts[benchmark] >= tasks_per_benchmark:
             continue
+        if benchmarks is not None and benchmark not in benchmarks:
+            continue
         if row["task_id"] in selected:
             raise ValueError("Unique evaluation table repeats a task identity")
         selected[row["task_id"]] = row
         counts[benchmark] += 1
-    expected_paths = set(unique["benchmark"].to_pylist()) - set(SKIPPED_BENCHMARKS)
+    expected_paths = available if benchmarks is None else set(benchmarks)
     if set(counts) != expected_paths or any(count != tasks_per_benchmark for count in counts.values()):
         raise ValueError("Evaluation selection does not cover the requested tasks in every supported path")
     chosen = []
