@@ -1,0 +1,42 @@
+Classify single-nucleotide variants for Mendelian disease.
+Each FASTA contains a 255-base reference DNA sequence.
+Each compact VCF describes one substitution in its accompanying sequence.
+POS is 1-based relative to that sequence, not a genomic coordinate.
+REF and ALT use the displayed sequence orientation.
+A: pathogenic
+B: benign
+Respond with exactly one letter: A or B.
+
+Example 1:
+```fasta
+>sequence
+{example_1_reference_sequence}
+```
+```vcf
+#CHROM	POS	ID	REF	ALT
+sequence	128	V01	{example_1_ref_base}	{example_1_alt_base}
+```
+Answer: {example_1_letter}
+
+Example 2:
+```fasta
+>sequence
+{example_2_reference_sequence}
+```
+```vcf
+#CHROM	POS	ID	REF	ALT
+sequence	128	V01	{example_2_ref_base}	{example_2_alt_base}
+```
+Answer: {example_2_letter}
+
+Query:
+```fasta
+>sequence
+{reference_sequence}
+```
+```vcf
+#CHROM	POS	ID	REF	ALT
+sequence	128	V01	{ref_base}	{alt_base}
+```
+Which classification applies to variant V01 in the query?
+Answer:

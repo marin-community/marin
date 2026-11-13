@@ -1,0 +1,24 @@
+Classify variant V01 for Mendelian disease.
+The FASTA contains a 255-base reference DNA sequence.
+The compact VCF describes one substitution in that sequence.
+POS is 1-based relative to the displayed sequence, not a genomic coordinate.
+REF and ALT use the displayed sequence orientation.
+
+Reference sequence:
+```fasta
+>sequence
+{reference_sequence}
+```
+
+Variant:
+```vcf
+#CHROM	POS	ID	REF	ALT
+sequence	128	V01	{ref_base}	{alt_base}
+```
+
+Which classification applies to variant V01?
+A: pathogenic
+B: benign
+Respond with exactly one letter: A or B.
+
+Answer:
