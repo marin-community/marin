@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 SERVE_GPU = "H100"
 SERVE_GPU_COUNT = 8
-# An agent command that installs or refreshes apt packages; the mirror is reachable under the lockdown.
+# An agent command that installs or refreshes apt packages; the lockdown blocks the mirror, so a download is a leak.
 APT_COMMAND = re.compile(r"\bapt(?:-get)?\s+(?:-\S+\s+)*(?:install|update|upgrade)\b")
 # apt's download lines name the mirror it fetched from.
 APT_FETCH = re.compile(r"\bGet:\d+ https?://\S*ubuntu\.com")
