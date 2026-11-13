@@ -1,0 +1,560 @@
+{
+ "attention_backend": "FLASH_ATTN",
+ "case_reports": [
+  {
+   "case_id": "code-humaneval-01",
+   "distinct_fingerprints_across_ranks": 1,
+   "fingerprint_by_rank": [
+    "d7d8b712c04ea84d",
+    "d7d8b712c04ea84d",
+    "d7d8b712c04ea84d",
+    "d7d8b712c04ea84d",
+    "d7d8b712c04ea84d",
+    "d7d8b712c04ea84d",
+    "d7d8b712c04ea84d",
+    "d7d8b712c04ea84d"
+   ],
+   "mean_logprob_range_across_ranks": 0.0,
+   "prompt_tokens": 118,
+   "rank_groups": [
+    8
+   ],
+   "same_rank_concurrent_matches": 8,
+   "same_rank_serial_repeat_matches": 8,
+   "summed_logprob_by_rank": [
+    "-0x1.284be35cb21a0p+5",
+    "-0x1.284be35cb21a0p+5",
+    "-0x1.284be35cb21a0p+5",
+    "-0x1.284be35cb21a0p+5",
+    "-0x1.284be35cb21a0p+5",
+    "-0x1.284be35cb21a0p+5",
+    "-0x1.284be35cb21a0p+5",
+    "-0x1.284be35cb21a0p+5"
+   ],
+   "summed_logprob_range_across_ranks": 0.0
+  },
+  {
+   "case_id": "code-humaneval-02",
+   "distinct_fingerprints_across_ranks": 1,
+   "fingerprint_by_rank": [
+    "560c2537832bbe74",
+    "560c2537832bbe74",
+    "560c2537832bbe74",
+    "560c2537832bbe74",
+    "560c2537832bbe74",
+    "560c2537832bbe74",
+    "560c2537832bbe74",
+    "560c2537832bbe74"
+   ],
+   "mean_logprob_range_across_ranks": 0.0,
+   "prompt_tokens": 120,
+   "rank_groups": [
+    8
+   ],
+   "same_rank_concurrent_matches": 8,
+   "same_rank_serial_repeat_matches": 8,
+   "summed_logprob_by_rank": [
+    "-0x1.5d88d0c5104e0p+6",
+    "-0x1.5d88d0c5104e0p+6",
+    "-0x1.5d88d0c5104e0p+6",
+    "-0x1.5d88d0c5104e0p+6",
+    "-0x1.5d88d0c5104e0p+6",
+    "-0x1.5d88d0c5104e0p+6",
+    "-0x1.5d88d0c5104e0p+6",
+    "-0x1.5d88d0c5104e0p+6"
+   ],
+   "summed_logprob_range_across_ranks": 0.0
+  },
+  {
+   "case_id": "code-humaneval-03",
+   "distinct_fingerprints_across_ranks": 1,
+   "fingerprint_by_rank": [
+    "bffeb2790cbcc584",
+    "bffeb2790cbcc584",
+    "bffeb2790cbcc584",
+    "bffeb2790cbcc584",
+    "bffeb2790cbcc584",
+    "bffeb2790cbcc584",
+    "bffeb2790cbcc584",
+    "bffeb2790cbcc584"
+   ],
+   "mean_logprob_range_across_ranks": 0.0,
+   "prompt_tokens": 116,
+   "rank_groups": [
+    8
+   ],
+   "same_rank_concurrent_matches": 8,
+   "same_rank_serial_repeat_matches": 8,
+   "summed_logprob_by_rank": [
+    "-0x1.9d053e1b84940p+6",
+    "-0x1.9d053e1b84940p+6",
+    "-0x1.9d053e1b84940p+6",
+    "-0x1.9d053e1b84940p+6",
+    "-0x1.9d053e1b84940p+6",
+    "-0x1.9d053e1b84940p+6",
+    "-0x1.9d053e1b84940p+6",
+    "-0x1.9d053e1b84940p+6"
+   ],
+   "summed_logprob_range_across_ranks": 0.0
+  },
+  {
+   "case_id": "code-humaneval-04",
+   "distinct_fingerprints_across_ranks": 1,
+   "fingerprint_by_rank": [
+    "8215e2960e997a06",
+    "8215e2960e997a06",
+    "8215e2960e997a06",
+    "8215e2960e997a06",
+    "8215e2960e997a06",
+    "8215e2960e997a06",
+    "8215e2960e997a06",
+    "8215e2960e997a06"
+   ],
+   "mean_logprob_range_across_ranks": 0.0,
+   "prompt_tokens": 104,
+   "rank_groups": [
+    8
+   ],
+   "same_rank_concurrent_matches": 8,
+   "same_rank_serial_repeat_matches": 8,
+   "summed_logprob_by_rank": [
+    "-0x1.1596f92224000p+6",
+    "-0x1.1596f92224000p+6",
+    "-0x1.1596f92224000p+6",
+    "-0x1.1596f92224000p+6",
+    "-0x1.1596f92224000p+6",
+    "-0x1.1596f92224000p+6",
+    "-0x1.1596f92224000p+6",
+    "-0x1.1596f92224000p+6"
+   ],
+   "summed_logprob_range_across_ranks": 0.0
+  },
+  {
+   "case_id": "code-humaneval-05",
+   "distinct_fingerprints_across_ranks": 1,
+   "fingerprint_by_rank": [
+    "fcdff1d35809780b",
+    "fcdff1d35809780b",
+    "fcdff1d35809780b",
+    "fcdff1d35809780b",
+    "fcdff1d35809780b",
+    "fcdff1d35809780b",
+    "fcdff1d35809780b",
+    "fcdff1d35809780b"
+   ],
+   "mean_logprob_range_across_ranks": 0.0,
+   "prompt_tokens": 205,
+   "rank_groups": [
+    8
+   ],
+   "same_rank_concurrent_matches": 8,
+   "same_rank_serial_repeat_matches": 8,
+   "summed_logprob_by_rank": [
+    "-0x1.49a1c26fbc100p+7",
+    "-0x1.49a1c26fbc100p+7",
+    "-0x1.49a1c26fbc100p+7",
+    "-0x1.49a1c26fbc100p+7",
+    "-0x1.49a1c26fbc100p+7",
+    "-0x1.49a1c26fbc100p+7",
+    "-0x1.49a1c26fbc100p+7",
+    "-0x1.49a1c26fbc100p+7"
+   ],
+   "summed_logprob_range_across_ranks": 0.0
+  },
+  {
+   "case_id": "code-humaneval-06",
+   "distinct_fingerprints_across_ranks": 1,
+   "fingerprint_by_rank": [
+    "35d2d9dbfef54445",
+    "35d2d9dbfef54445",
+    "35d2d9dbfef54445",
+    "35d2d9dbfef54445",
+    "35d2d9dbfef54445",
+    "35d2d9dbfef54445",
+    "35d2d9dbfef54445",
+    "35d2d9dbfef54445"
+   ],
+   "mean_logprob_range_across_ranks": 0.0,
+   "prompt_tokens": 132,
+   "rank_groups": [
+    8
+   ],
+   "same_rank_concurrent_matches": 8,
+   "same_rank_serial_repeat_matches": 8,
+   "summed_logprob_by_rank": [
+    "-0x1.ede17ed508780p+6",
+    "-0x1.ede17ed508780p+6",
+    "-0x1.ede17ed508780p+6",
+    "-0x1.ede17ed508780p+6",
+    "-0x1.ede17ed508780p+6",
+    "-0x1.ede17ed508780p+6",
+    "-0x1.ede17ed508780p+6",
+    "-0x1.ede17ed508780p+6"
+   ],
+   "summed_logprob_range_across_ranks": 0.0
+  },
+  {
+   "case_id": "instruction-ifeval-01",
+   "distinct_fingerprints_across_ranks": 1,
+   "fingerprint_by_rank": [
+    "c92d10a3287059e1",
+    "c92d10a3287059e1",
+    "c92d10a3287059e1",
+    "c92d10a3287059e1",
+    "c92d10a3287059e1",
+    "c92d10a3287059e1",
+    "c92d10a3287059e1",
+    "c92d10a3287059e1"
+   ],
+   "mean_logprob_range_across_ranks": 0.0,
+   "prompt_tokens": 75,
+   "rank_groups": [
+    8
+   ],
+   "same_rank_concurrent_matches": 8,
+   "same_rank_serial_repeat_matches": 8,
+   "summed_logprob_by_rank": [
+    "-0x1.624ddd0b1e000p+7",
+    "-0x1.624ddd0b1e000p+7",
+    "-0x1.624ddd0b1e000p+7",
+    "-0x1.624ddd0b1e000p+7",
+    "-0x1.624ddd0b1e000p+7",
+    "-0x1.624ddd0b1e000p+7",
+    "-0x1.624ddd0b1e000p+7",
+    "-0x1.624ddd0b1e000p+7"
+   ],
+   "summed_logprob_range_across_ranks": 0.0
+  },
+  {
+   "case_id": "instruction-ifeval-02",
+   "distinct_fingerprints_across_ranks": 1,
+   "fingerprint_by_rank": [
+    "311a6d9456af7da5",
+    "311a6d9456af7da5",
+    "311a6d9456af7da5",
+    "311a6d9456af7da5",
+    "311a6d9456af7da5",
+    "311a6d9456af7da5",
+    "311a6d9456af7da5",
+    "311a6d9456af7da5"
+   ],
+   "mean_logprob_range_across_ranks": 0.0,
+   "prompt_tokens": 31,
+   "rank_groups": [
+    8
+   ],
+   "same_rank_concurrent_matches": 8,
+   "same_rank_serial_repeat_matches": 8,
+   "summed_logprob_by_rank": [
+    "-0x1.b2be597680000p+6",
+    "-0x1.b2be597680000p+6",
+    "-0x1.b2be597680000p+6",
+    "-0x1.b2be597680000p+6",
+    "-0x1.b2be597680000p+6",
+    "-0x1.b2be597680000p+6",
+    "-0x1.b2be597680000p+6",
+    "-0x1.b2be597680000p+6"
+   ],
+   "summed_logprob_range_across_ranks": 0.0
+  },
+  {
+   "case_id": "knowledge-mmlu-05",
+   "distinct_fingerprints_across_ranks": 1,
+   "fingerprint_by_rank": [
+    "05ac8070ed9b79eb",
+    "05ac8070ed9b79eb",
+    "05ac8070ed9b79eb",
+    "05ac8070ed9b79eb",
+    "05ac8070ed9b79eb",
+    "05ac8070ed9b79eb",
+    "05ac8070ed9b79eb",
+    "05ac8070ed9b79eb"
+   ],
+   "mean_logprob_range_across_ranks": 0.0,
+   "prompt_tokens": 383,
+   "rank_groups": [
+    8
+   ],
+   "same_rank_concurrent_matches": 8,
+   "same_rank_serial_repeat_matches": 8,
+   "summed_logprob_by_rank": [
+    "-0x1.f5023d3d750c0p+8",
+    "-0x1.f5023d3d750c0p+8",
+    "-0x1.f5023d3d750c0p+8",
+    "-0x1.f5023d3d750c0p+8",
+    "-0x1.f5023d3d750c0p+8",
+    "-0x1.f5023d3d750c0p+8",
+    "-0x1.f5023d3d750c0p+8",
+    "-0x1.f5023d3d750c0p+8"
+   ],
+   "summed_logprob_range_across_ranks": 0.0
+  },
+  {
+   "case_id": "knowledge-mmlu-06",
+   "distinct_fingerprints_across_ranks": 1,
+   "fingerprint_by_rank": [
+    "db9c6c6e15118679",
+    "db9c6c6e15118679",
+    "db9c6c6e15118679",
+    "db9c6c6e15118679",
+    "db9c6c6e15118679",
+    "db9c6c6e15118679",
+    "db9c6c6e15118679",
+    "db9c6c6e15118679"
+   ],
+   "mean_logprob_range_across_ranks": 0.0,
+   "prompt_tokens": 444,
+   "rank_groups": [
+    8
+   ],
+   "same_rank_concurrent_matches": 8,
+   "same_rank_serial_repeat_matches": 8,
+   "summed_logprob_by_rank": [
+    "-0x1.45c148b0ce2d0p+9",
+    "-0x1.45c148b0ce2d0p+9",
+    "-0x1.45c148b0ce2d0p+9",
+    "-0x1.45c148b0ce2d0p+9",
+    "-0x1.45c148b0ce2d0p+9",
+    "-0x1.45c148b0ce2d0p+9",
+    "-0x1.45c148b0ce2d0p+9",
+    "-0x1.45c148b0ce2d0p+9"
+   ],
+   "summed_logprob_range_across_ranks": 0.0
+  },
+  {
+   "case_id": "math-gsm8k-01",
+   "distinct_fingerprints_across_ranks": 1,
+   "fingerprint_by_rank": [
+    "5bc6523ec36bc6ed",
+    "5bc6523ec36bc6ed",
+    "5bc6523ec36bc6ed",
+    "5bc6523ec36bc6ed",
+    "5bc6523ec36bc6ed",
+    "5bc6523ec36bc6ed",
+    "5bc6523ec36bc6ed",
+    "5bc6523ec36bc6ed"
+   ],
+   "mean_logprob_range_across_ranks": 0.0,
+   "prompt_tokens": 382,
+   "rank_groups": [
+    8
+   ],
+   "same_rank_concurrent_matches": 8,
+   "same_rank_serial_repeat_matches": 8,
+   "summed_logprob_by_rank": [
+    "-0x1.21643289f3fa4p+8",
+    "-0x1.21643289f3fa4p+8",
+    "-0x1.21643289f3fa4p+8",
+    "-0x1.21643289f3fa4p+8",
+    "-0x1.21643289f3fa4p+8",
+    "-0x1.21643289f3fa4p+8",
+    "-0x1.21643289f3fa4p+8",
+    "-0x1.21643289f3fa4p+8"
+   ],
+   "summed_logprob_range_across_ranks": 0.0
+  },
+  {
+   "case_id": "math-gsm8k-02",
+   "distinct_fingerprints_across_ranks": 1,
+   "fingerprint_by_rank": [
+    "77e36d50c7fab966",
+    "77e36d50c7fab966",
+    "77e36d50c7fab966",
+    "77e36d50c7fab966",
+    "77e36d50c7fab966",
+    "77e36d50c7fab966",
+    "77e36d50c7fab966",
+    "77e36d50c7fab966"
+   ],
+   "mean_logprob_range_across_ranks": 0.0,
+   "prompt_tokens": 345,
+   "rank_groups": [
+    8
+   ],
+   "same_rank_concurrent_matches": 8,
+   "same_rank_serial_repeat_matches": 8,
+   "summed_logprob_by_rank": [
+    "-0x1.ee7a951a0e148p+7",
+    "-0x1.ee7a951a0e148p+7",
+    "-0x1.ee7a951a0e148p+7",
+    "-0x1.ee7a951a0e148p+7",
+    "-0x1.ee7a951a0e148p+7",
+    "-0x1.ee7a951a0e148p+7",
+    "-0x1.ee7a951a0e148p+7",
+    "-0x1.ee7a951a0e148p+7"
+   ],
+   "summed_logprob_range_across_ranks": 0.0
+  },
+  {
+   "case_id": "structured-structeval-01",
+   "distinct_fingerprints_across_ranks": 1,
+   "fingerprint_by_rank": [
+    "e0abc9150619746f",
+    "e0abc9150619746f",
+    "e0abc9150619746f",
+    "e0abc9150619746f",
+    "e0abc9150619746f",
+    "e0abc9150619746f",
+    "e0abc9150619746f",
+    "e0abc9150619746f"
+   ],
+   "mean_logprob_range_across_ranks": 0.0,
+   "prompt_tokens": 304,
+   "rank_groups": [
+    8
+   ],
+   "same_rank_concurrent_matches": 8,
+   "same_rank_serial_repeat_matches": 8,
+   "summed_logprob_by_rank": [
+    "-0x1.224b22b85be00p+9",
+    "-0x1.224b22b85be00p+9",
+    "-0x1.224b22b85be00p+9",
+    "-0x1.224b22b85be00p+9",
+    "-0x1.224b22b85be00p+9",
+    "-0x1.224b22b85be00p+9",
+    "-0x1.224b22b85be00p+9",
+    "-0x1.224b22b85be00p+9"
+   ],
+   "summed_logprob_range_across_ranks": 0.0
+  },
+  {
+   "case_id": "structured-structeval-02",
+   "distinct_fingerprints_across_ranks": 1,
+   "fingerprint_by_rank": [
+    "903d5c0d029f1aeb",
+    "903d5c0d029f1aeb",
+    "903d5c0d029f1aeb",
+    "903d5c0d029f1aeb",
+    "903d5c0d029f1aeb",
+    "903d5c0d029f1aeb",
+    "903d5c0d029f1aeb",
+    "903d5c0d029f1aeb"
+   ],
+   "mean_logprob_range_across_ranks": 0.0,
+   "prompt_tokens": 257,
+   "rank_groups": [
+    8
+   ],
+   "same_rank_concurrent_matches": 8,
+   "same_rank_serial_repeat_matches": 8,
+   "summed_logprob_by_rank": [
+    "-0x1.c345fa7ec8600p+8",
+    "-0x1.c345fa7ec8600p+8",
+    "-0x1.c345fa7ec8600p+8",
+    "-0x1.c345fa7ec8600p+8",
+    "-0x1.c345fa7ec8600p+8",
+    "-0x1.c345fa7ec8600p+8",
+    "-0x1.c345fa7ec8600p+8",
+    "-0x1.c345fa7ec8600p+8"
+   ],
+   "summed_logprob_range_across_ranks": 0.0
+  },
+  {
+   "case_id": "structured-structeval-03",
+   "distinct_fingerprints_across_ranks": 1,
+   "fingerprint_by_rank": [
+    "97e93fac05172fff",
+    "97e93fac05172fff",
+    "97e93fac05172fff",
+    "97e93fac05172fff",
+    "97e93fac05172fff",
+    "97e93fac05172fff",
+    "97e93fac05172fff",
+    "97e93fac05172fff"
+   ],
+   "mean_logprob_range_across_ranks": 0.0,
+   "prompt_tokens": 260,
+   "rank_groups": [
+    8
+   ],
+   "same_rank_concurrent_matches": 8,
+   "same_rank_serial_repeat_matches": 8,
+   "summed_logprob_by_rank": [
+    "-0x1.74bdf6d6f1e80p+8",
+    "-0x1.74bdf6d6f1e80p+8",
+    "-0x1.74bdf6d6f1e80p+8",
+    "-0x1.74bdf6d6f1e80p+8",
+    "-0x1.74bdf6d6f1e80p+8",
+    "-0x1.74bdf6d6f1e80p+8",
+    "-0x1.74bdf6d6f1e80p+8",
+    "-0x1.74bdf6d6f1e80p+8"
+   ],
+   "summed_logprob_range_across_ranks": 0.0
+  },
+  {
+   "case_id": "structured-structeval-04",
+   "distinct_fingerprints_across_ranks": 1,
+   "fingerprint_by_rank": [
+    "9ab2a24e7c45c358",
+    "9ab2a24e7c45c358",
+    "9ab2a24e7c45c358",
+    "9ab2a24e7c45c358",
+    "9ab2a24e7c45c358",
+    "9ab2a24e7c45c358",
+    "9ab2a24e7c45c358",
+    "9ab2a24e7c45c358"
+   ],
+   "mean_logprob_range_across_ranks": 0.0,
+   "prompt_tokens": 283,
+   "rank_groups": [
+    8
+   ],
+   "same_rank_concurrent_matches": 8,
+   "same_rank_serial_repeat_matches": 8,
+   "summed_logprob_by_rank": [
+    "-0x1.f9c36360a9380p+8",
+    "-0x1.f9c36360a9380p+8",
+    "-0x1.f9c36360a9380p+8",
+    "-0x1.f9c36360a9380p+8",
+    "-0x1.f9c36360a9380p+8",
+    "-0x1.f9c36360a9380p+8",
+    "-0x1.f9c36360a9380p+8",
+    "-0x1.f9c36360a9380p+8"
+   ],
+   "summed_logprob_range_across_ranks": 0.0
+  },
+  {
+   "case_id": "knowledge-longbench-02",
+   "distinct_fingerprints_across_ranks": 1,
+   "fingerprint_by_rank": [
+    "bef4e008dcd65441",
+    "bef4e008dcd65441",
+    "bef4e008dcd65441",
+    "bef4e008dcd65441",
+    "bef4e008dcd65441",
+    "bef4e008dcd65441",
+    "bef4e008dcd65441",
+    "bef4e008dcd65441"
+   ],
+   "mean_logprob_range_across_ranks": 0.0,
+   "prompt_tokens": 15025,
+   "rank_groups": [
+    8
+   ],
+   "same_rank_concurrent_matches": 8,
+   "same_rank_serial_repeat_matches": 8,
+   "summed_logprob_by_rank": [
+    "-0x1.765fdd6d66ef5p+14",
+    "-0x1.765fdd6d66ef5p+14",
+    "-0x1.765fdd6d66ef5p+14",
+    "-0x1.765fdd6d66ef5p+14",
+    "-0x1.765fdd6d66ef5p+14",
+    "-0x1.765fdd6d66ef5p+14",
+    "-0x1.765fdd6d66ef5p+14",
+    "-0x1.765fdd6d66ef5p+14"
+   ],
+   "summed_logprob_range_across_ranks": 0.0
+  }
+ ],
+ "cases": 17,
+ "cases_identical_across_ranks": 17,
+ "compile_mode": "deterministic",
+ "launch_digest": "9e7eda3c11a6b363",
+ "max_mean_logprob_range_across_ranks": 0.0,
+ "max_summed_logprob_range_across_ranks": 0.0,
+ "prompt_logprobs": 0,
+ "ranks": 8,
+ "same_rank_concurrent_matches": 136,
+ "same_rank_pairs": 136,
+ "same_rank_serial_repeat_matches": 136
+}
