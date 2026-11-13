@@ -34,7 +34,7 @@ From the repository root:
 
 ```bash
 node --check infra/marina/apps/rl_progress/dist/app.js
-uv run pytest infra/marina/tests/test_rl_progress.py
+uv run pytest -m integration infra/marina/tests/test_rl_progress.py
 uv run marina validate infra/marina/apps/rl_progress
 uv run marina release infra/marina/apps/rl_progress --local --json
 ```
