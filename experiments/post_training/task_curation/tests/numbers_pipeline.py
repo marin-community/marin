@@ -8,7 +8,6 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from finestore.rl.curation import OversightEvidence, OversightLevel
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
@@ -117,9 +116,6 @@ def number_source(path: Path, name: str = "numbers") -> RlDataSource[NumbersConf
             upstream_name=name,
             build_path="test",
             origin=SourceOrigin.MARIN,
-            oversight=OversightEvidence(
-                level=OversightLevel.FULL, verification="Fixture arithmetic ingestion is executed and checked locally."
-            ),
             daytona_snapshot_count=0,
             daytona_machine_slots=0,
             daytona_execution_failures=0,

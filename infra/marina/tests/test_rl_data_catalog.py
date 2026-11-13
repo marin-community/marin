@@ -61,14 +61,14 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
 
-from experiments.post_training.task_curation.datasets.admission_censuses import admission_census_receipts
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
 from experiments.post_training.task_curation.tests.admission_fixtures import (
-    isolated_admission_census as isolated_admission_census,
+    actor_census_input,
+    grading_evidence,
+    with_declaration_admission_census,
 )
 from experiments.post_training.task_curation.tests.admission_fixtures import (
-    register_admission_census,
-    with_declaration_admission_census,
+    isolated_admission_census as isolated_admission_census,
 )
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
@@ -283,7 +283,7 @@ def publish_sample(
         daytona_machine_slots=0,
         daytona_execution_failures=0,
         daytona_count_basis="Fixture tasks contain no actor environment.",
-        grading_environment=grading_environment,
+        grading_environment=grading_environment or grading_evidence(3 - duplicates),
         family="Marin:math",
         tags=[],
         task_count=3 - duplicates,
@@ -301,7 +301,7 @@ def publish_sample(
         kind="Dataset",
         status="Available",
         pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": "1", "files": []},
-        actor_census_input=register_admission_census(source_id, "fixture", "1", "1", 3 - duplicates),
+        actor_census_input=actor_census_input("fixture", "1", "1", 3 - duplicates),
     )
     curation = CurationSummary(
         status="completed",
@@ -773,24 +773,21 @@ def test_atlas_blocks_invalid_admission_census_without_replacing_selected_catalo
     load_catalog(CurationCatalog(root), catalog_query)
     publish_sample(root, "next")
     source_id = "Marin:math"
-    receipt = admission_census_receipts()[source_id]
+    catalog = CurationCatalog(root)
+    source = next(row for row in catalog.sources("next") if row.id == source_id)
+    declaration = source.declaration.model_dump(mode="json")
     if failure == "missing":
-        del admission_census_receipts()[source_id]
+        declaration["grading_environment"] = None
     elif failure == "stale":
-        admission_census_receipts()[source_id] = receipt.model_copy(
-            update={"input": receipt.input.model_copy(update={"dataset_revision": "stale"})}
-        )
+        declaration["actor_census_input"]["dataset_revision"] = "stale"
     else:
-        admission_census_receipts()[source_id] = type(receipt).model_validate(
-            {
-                **receipt.model_dump(),
-                "runnable_grader_tasks": 2,
-                "no_grader_tasks": 1,
-                "grader_kinds": {"verifyit": 2, "none": 1},
-                "missing_grader_reasons": {"No reward model": 1},
-            }
-        )
-    with pytest.raises(ValueError, match=r"Admission census|without runnable graders"):
+        declaration["grading_environment"]["reason_counts"] = {"No executable grader is declared": 3}
+    changed = {**source.model_dump(mode="json"), "declaration": declaration}
+    with DataStore.open(root) as store:
+        register_catalog(store)
+        with store.transaction() as transaction:
+            transaction.table(INVENTORY).add(changed)
+    with pytest.raises(ValueError, match=r"Admission census|Actor census input|without runnable graders"):
         load_catalog(CurationCatalog(root), catalog_query)
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         assert client.get("/sources").json()["snapshot_id"] == "reviewed"

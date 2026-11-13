@@ -33,6 +33,7 @@ from finestore.rl.curation import (
 from finestore.rl.source_identity import canonical_source_id
 from marin.execution.lazy import ArtifactStep
 
+from experiments.post_training.task_curation.admission_binding import population_admission_blocker
 from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.decontamination import require_private_release
@@ -269,6 +270,19 @@ class RlDataSource[ConfigT: CatalogConfig]:
         inherited_legacy_admission = info.id in GRANDFATHERED_MARINSKYRL_SOURCES and info.inherited_admission is not None
         blockers = []
         dataset = self.dataset
+        actor = info.actor_census_input
+        if actor is not None and (
+            dataset is None
+            or (actor.dataset_id, actor.dataset_revision, actor.converter_version)
+            != (dataset.name, dataset.revision, self.version)
+        ):
+            blockers.append("actor census does not cover the current configured input")
+        if blocker := population_admission_blocker(
+            actor,
+            info.within_source_dedup.unique_count if info.within_source_dedup else 0,
+            info.grading_environment,
+        ):
+            blockers.append(blocker)
         try:
             require_private_release(
                 info.lexical_contamination, dataset.name if dataset else None, dataset.revision if dataset else None

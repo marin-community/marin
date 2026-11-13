@@ -325,6 +325,16 @@ per-task Parquet records retain mismatches, unavailable graders and validation
 failures with their reasons. A changed source binding clears stale grading
 evidence before catalog export. See the
 [grading census procedure](task-curation.md#curation-modes-and-oversight-levels).
+Admission uses the grading evidence carried by each declaration. The actor input
+must match the configured dataset pin and converter version; every retained task
+must have a grading assessment, and the retained population must be nonempty.
+The explicit missing-executable-grader reason blocks admission. Other unavailable
+boundary assessments remain visible without being relabeled as missing graders.
+Native Harbor packages must pass package validation during import and grading
+census. QUICK conversion can run before admission evidence exists. Publication,
+metadata refresh and Atlas loading reject SAMPLE/FULL entries without a computed
+content Result before changing the selected snapshot.
+
 The offline `daytona_census` command measures registered converters' TaskSpec
 outputs before admission gates and records admission rejections separately.
 An all-rejected population retains its measured execution cost and a BAD

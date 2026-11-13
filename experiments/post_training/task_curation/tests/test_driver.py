@@ -22,12 +22,15 @@ from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import Command, HostImage, Mount, NetworkPolicy
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.local import LocalRuntime, local_runtime
 from zephyr.readers import load_parquet
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
+from experiments.post_training.task_curation import driver
 from experiments.post_training.task_curation import pipeline as processor
+from experiments.post_training.task_curation import sources as source_catalog
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.environment import Environment
@@ -704,3 +707,13 @@ def test_quick_conversion_can_collect_actor_evidence_before_catalog_publication(
     output = tmp_path / "output" / source.name / "numbers.json"
     assert json.loads(output.read_text()) == [2, 4]
     assert source.catalog_declaration is None
+
+
+def test_quick_selection_does_not_require_admission_for_unrelated_sources(tmp_path, monkeypatch):
+    source = number_source(tmp_path / "input")
+    unrelated = number_source(tmp_path / "other", "unqualified")
+    monkeypatch.setattr(driver, "all_sources", lambda: {source.info.id: source, unrelated.info.id: unrelated})
+
+    monkeypatch.setattr(source_catalog, "all_sources", driver.all_sources)
+    monkeypatch.setattr(driver, "runnable_sources", source_catalog.runnable_sources)
+    assert driver._selected_sources((source.name,), SourceProcessingMode.QUICK) == {source.name: source}
