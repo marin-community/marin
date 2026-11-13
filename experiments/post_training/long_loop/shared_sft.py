@@ -115,7 +115,7 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         seq_len=recipe["seq_len"],
         batch_size=recipe["batch_size"],
         mesh=mesh,
-        pack=recipe["pack"],
+        pack=bool(recipe["pack"]),
         wandb_project=recipe["wandb_project"],
     )
 
