@@ -6,7 +6,7 @@
 from functools import cache
 from pathlib import Path
 
-from finestore.rl.source_identity import canonical_source_id
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 from experiments.post_training.task_curation.registry import read_registry_json
 

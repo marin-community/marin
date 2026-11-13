@@ -16,12 +16,10 @@ APP_SOURCE = Path("infra/marina/apps/rl_data_catalog")
 PRODUCTION_APP_ID = "fb11c931-5861-4878-8bb5-a964d652b45f"
 PREVIEW_APP_ID = "c9742a15-fb46-4d56-bc88-aa916351ebd3"
 MODEL_SOURCES = {
-    "source_identity.py": "lib/finestore/src/finestore/rl/source_identity.py",
     "curation.py": "lib/finestore/src/finestore/rl/curation.py",
     "source_fingerprints.py": "lib/taskcompendium/src/taskcompendium/source_fingerprints.py",
 }
 IMPORT_RELOCATIONS = {
-    "from finestore.rl.source_identity import ": "from .bundled.source_identity import ",
     "from finestore.rl.curation import ": "from .bundled.curation import ",
     "from taskcompendium.source_fingerprints import ": "from .bundled.source_fingerprints import ",
 }
@@ -43,16 +41,15 @@ def prepare_preview(checkout: Path, output: Path) -> None:
     modules = []
     for name, relative in MODEL_SOURCES.items():
         raw = (checkout / relative).read_bytes()
-        relocated = raw.decode().replace("from finestore.rl.source_identity import ", "from .source_identity import ")
-        payload = relocated.encode()
-        (bundled / name).write_bytes(payload)
+        digest = hashlib.sha256(raw).hexdigest()
+        (bundled / name).write_bytes(raw)
         modules.append(
             {
                 "source": relative,
-                "source_sha256": hashlib.sha256(raw).hexdigest(),
+                "source_sha256": digest,
                 "packaged": f"server/bundled/{name}",
-                "packaged_sha256": hashlib.sha256(payload).hexdigest(),
-                "transformation": "Package-relative imports only; definitions unchanged",
+                "packaged_sha256": digest,
+                "transformation": "Unchanged",
             }
         )
     for relative in ("server/app.py", "server/curriculum.py", "server/quality.py", "server/contamination.py"):

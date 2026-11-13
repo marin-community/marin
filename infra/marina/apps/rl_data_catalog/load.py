@@ -33,6 +33,14 @@ from experiments.post_training.task_curation.admission_binding import (
     require_declaration_admission,
 )
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
+from experiments.post_training.task_curation.catalog_identity import (
+    backend_survey_payload,
+    canonical_assessment,
+    canonical_backend_survey,
+    canonical_identity_survey,
+    canonical_snapshot_source,
+    identity_survey_payload,
+)
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 
 MAX_BATCH_BYTES = 1_000_000
@@ -140,6 +148,8 @@ def load_catalog(
 ) -> dict[str, Any]:
     """Stage and validate a snapshot, then select it if the serving pointer is unchanged."""
     started = time.monotonic()
+    backend_map = canonical_backend_survey(backend_map.model_dump(mode="json"))
+    identities = canonical_identity_survey(identities.model_dump(mode="json"))
     snapshot = catalog.current()
     if (backend_map.catalog_root, backend_map.snapshot_id) != (catalog.root, snapshot.snapshot_id):
         raise ValueError("Backend map belongs to another catalog snapshot; survey the selected catalog")
@@ -147,8 +157,8 @@ def load_catalog(
         raise ValueError("Backend map uses another requirement schema; rerun the survey")
     if (identities.catalog_root, identities.snapshot_id) != (catalog.root, snapshot.snapshot_id):
         raise ValueError("Source identity map belongs to another catalog snapshot")
-    identity_id = canonical_sha256(identities.identity_payload())
-    survey_id = canonical_sha256(backend_map.identity_payload())
+    identity_id = canonical_sha256(identity_survey_payload(identities))
+    survey_id = canonical_sha256(backend_survey_payload(backend_map))
     current = query(
         """
         SELECT c.load_id, l.catalog_root, l.snapshot_id, l.review_completeness_version,
@@ -199,7 +209,7 @@ def load_catalog(
             "review_completeness_version": REVIEW_COMPLETENESS_VERSION,
         },
     )
-    sources = list(catalog.sources(snapshot.snapshot_id))
+    sources = [canonical_snapshot_source(source) for source in catalog.sources(snapshot.snapshot_id)]
     if retired := {source.id for source in sources} & retired_admission_source_ids():
         raise ValueError(f"Retired sources remain in the selected catalog: {sorted(retired)}")
     for source in sources:
@@ -266,7 +276,7 @@ def load_catalog(
         if key is None:
             require_content_result(source.declaration, source.curation, key)
             continue
-        assessment = catalog.assessment(key)
+        assessment = canonical_assessment(catalog.assessment(key))
         if assessment.source_id != source.id:
             raise ValueError("Selected assessment belongs to another source")
         populations, items = catalog.populations(key), list(catalog.items(key))
@@ -349,8 +359,8 @@ def load_catalog(
 @click.option("--source-identities", type=click.Path(exists=True, path_type=Path), required=True)
 def main(catalog_root: str, applet_id: str, service_url: str, backend_map: Path, source_identities: Path) -> None:
     configure_coreweave_s3()
-    survey = BackendSurvey.model_validate_json(backend_map.read_text())
-    identities = SourceIdentitySurvey.model_validate_json(source_identities.read_text())
+    survey = canonical_backend_survey(json.loads(backend_map.read_text()))
+    identities = canonical_identity_survey(json.loads(source_identities.read_text()))
     click.echo(
         json.dumps(load_catalog(CurationCatalog(catalog_root), applet_query(service_url, applet_id), survey, identities))
     )
