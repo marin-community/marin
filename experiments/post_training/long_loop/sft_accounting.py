@@ -17,7 +17,7 @@ from haliax import Axis
 from levanter.data.dataset import MappedAsyncDataset, PermutationDataset, SlicedAsyncDataset
 from levanter.data.mixture import ConcatDataset, MixtureDataset
 from levanter.data.packing import pack_documents
-from levanter.data.text.datasets import CausalLmDataset, PackedTokenDataset, TokenSeqDataset
+from levanter.data.text.datasets import CausalLmDataset, PackedTokenDataset, TokenSeqDataset, _resolve_pack_config
 from levanter.main.train_lm import TrainLmConfig
 from levanter.utils.thread_utils import blocking_wait
 from rigging.filesystem.storage_path import StoragePath
@@ -83,7 +83,9 @@ async def sample_origin(dataset, index: int, *, child: str = "") -> SampleOrigin
     raise TypeError(f"Unsupported SFT accounting source: {type(dataset).__name__}")
 
 
-def sequence_statistics(rows: list[dict], sequence_length: int, batch_size: int, step_seconds: float) -> dict:
+def sequence_statistics(
+    rows: list[dict], sequence_length: int, batch_size: int, step_seconds: float, *, max_segments: int
+) -> dict:
     """Summarize actual sample lengths; packing and compute savings are estimates."""
     lengths = np.asarray([row["real_tokens"] for row in rows], dtype=np.int64)
     positions = len(rows) * sequence_length
@@ -101,7 +103,10 @@ def sequence_statistics(rows: list[dict], sequence_length: int, batch_size: int,
     packed = (
         len(
             pack_documents(
-                np.asarray(document_lengths), sequence_length, max_segments_per_example=64, slice_strategy="left"
+                np.asarray(document_lengths),
+                sequence_length,
+                max_segments_per_example=max_segments,
+                slice_strategy="left",
             )
         )
         if rows
@@ -148,6 +153,7 @@ def sequence_statistics(rows: list[dict], sequence_length: int, batch_size: int,
             batch_size * sequence_length / step_seconds * real / positions if positions else 0.0
         ),
         "position_proportional_compute_fraction_on_padding": (positions - real) / positions if positions else 0.0,
+        "counterfactual_max_segments": max_segments,
         "greedy_packed_retained_sequences": packed,
         "greedy_packed_update_equivalent": packed / batch_size,
         "ideal_packed_retained_sequence_lower_bound": (real + sequence_length - 1) // sequence_length,
@@ -241,6 +247,7 @@ def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
         content = manifest.read_bytes()
     write_once(str(StoragePath(output) / "realized-samples.jsonl"), content)
     files.append({"name": "realized-samples.jsonl", "sha256": hashlib.sha256(content).hexdigest()})
+    max_segments, _ = _resolve_pack_config(settings["pack"])
     by_source = defaultdict(list)
     for row in rows:
         by_source[row["source"]].append(row)
@@ -259,12 +266,15 @@ def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
         "timing_source": settings["timing_source"],
         "limitations": (
             "Padding compute/MFU share assumes cost proportional to positions; not a hardware MFU measurement. "
-            "Repacking and unpacking are counterfactual estimates without changing the sampled documents. "
+            "Repacking combines retained sampled documents into one counterfactual pool at the configured cap; "
+            "it does not preserve source-specific grouping or change the training data. Unpacking is also estimated. "
             "Replay loss is causal and is not labeled assistant loss."
         ),
-        "overall": sequence_statistics(rows, length, batch, settings["measured_step_seconds"]),
+        "overall": sequence_statistics(
+            rows, length, batch, settings["measured_step_seconds"], max_segments=max_segments
+        ),
         "per_source": {
-            name: sequence_statistics(items, length, batch, settings["measured_step_seconds"])
+            name: sequence_statistics(items, length, batch, settings["measured_step_seconds"], max_segments=max_segments)
             for name, items in sorted(by_source.items())
         },
     }
