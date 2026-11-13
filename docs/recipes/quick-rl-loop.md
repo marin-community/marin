@@ -125,6 +125,11 @@ entry point. After the short run succeeds, use a fresh `RUN_VERSION` and
 Each `all` or `sft` version trains its own SFT from the base model; a later
 `all` run with the same version reuses a committed SFT. Use `--stage rl` as the
 fixed reference when comparing a new SFT against the Datakit SFT checkpoint.
+
+`--init-from` replaces the weights the first stage starts from. For `all` and
+`sft` it is the SFT initializer: a Hugging Face `repo@revision` or an export
+directory. For `rl` it is the export directory RL starts from. RL always uses
+the Datakit SFT tokenizer.
 The selected data stays cached; training does not curate or resample it.
 
 The launcher binds `train.parquet` and `validation.parquet` from that artifact.

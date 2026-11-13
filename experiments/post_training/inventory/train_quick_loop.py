@@ -4,7 +4,7 @@
 """Run a short Snowball SFT from the pre-trained base, then RL on the Snowball 100k selection.
 
 --stage rl skips SFT and starts RL from the frozen Datakit SFT checkpoint, which gives a
-fixed reference for comparing runs.
+fixed reference for comparing runs. --init-from replaces the weights the first stage starts from.
 """
 
 from dataclasses import replace
@@ -55,6 +55,7 @@ SFT_MESH = MeshConfig(
 )
 ARTIFACT_NAME = "checkpoints/snowball-inventory"
 SFT_ARTIFACT_NAME = "checkpoints/snowball-inventory-sft"
+INIT_ARTIFACT_NAME = "checkpoints/snowball-inventory-init"
 SELECTION_PREFIX = "rl-data/task-selection"
 DEFAULT_SELECTION_URI = "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04"
 CLUSTER = "cw-us-east-02a"
@@ -182,26 +183,34 @@ def build_run(
     *,
     selection: ArtifactStep[Artifact],
     stage: Stage = Stage.ALL,
+    init_from: str | None = None,
     rl_steps: int = DEFAULT_RL_STEPS,
     sft_steps: int = DEFAULT_SFT_STEPS,
     export_hf: bool = False,
     reproducible_serving: bool = False,
 ) -> ArtifactStep:
-    """Bind the stage's model source, selected canonical tasks and terminal outputs."""
+    """Bind the stage's model source, selected canonical tasks and terminal outputs.
+
+    Args:
+        init_from: Weights the first stage starts from. SFT accepts a Hugging Face ``repo@revision``
+            or an export directory and defaults to the pre-trained base. The RL-only stage accepts
+            an export directory and defaults to the frozen Datakit SFT checkpoint.
+    """
     if stage is Stage.RL:
-        frozen = ArtifactStep.adopt(
-            f"models/snowball-datakit-sft-{MODEL_REVISION}",
-            MODEL_VERSION,
-            MODEL_URI,
-            kind=LevanterCheckpoint,
-        )
-        model = ArtifactHfModel(step=frozen, tokenizer_uri=MODEL_ID, tokenizer_revision=MODEL_REVISION, relative_path="")
+        if init_from is None:
+            start = ArtifactStep.adopt(
+                f"models/snowball-datakit-sft-{MODEL_REVISION}", MODEL_VERSION, MODEL_URI, kind=LevanterCheckpoint
+            )
+        else:
+            start = ArtifactStep.adopt(user_owned_name(INIT_ARTIFACT_NAME), version, init_from, kind=LevanterCheckpoint)
+        model = ArtifactHfModel(step=start, tokenizer_uri=MODEL_ID, tokenizer_revision=MODEL_REVISION, relative_path="")
     else:
         sft = sft_step(
             replace(
                 SNOWBALL_SFT,
                 name=user_owned_name(SFT_ARTIFACT_NAME),
                 version=version,
+                model=replace(SNOWBALL_SFT.model, model_ref=init_from or SNOWBALL_SFT.model.model_ref),
                 num_train_steps=sft_steps,
                 mesh=SFT_MESH,
             ),
@@ -268,6 +277,11 @@ def build_run(
     "rl: RL only, from the frozen Datakit SFT checkpoint.",
 )
 @click.option(
+    "--init-from",
+    help="Weights the first stage starts from. all/sft: a Hugging Face repo@revision or export directory "
+    "[default: the pre-trained base]. rl: an export directory [default: the frozen Datakit SFT checkpoint].",
+)
+@click.option(
     "--sft-steps", type=click.IntRange(min=1), default=DEFAULT_SFT_STEPS, show_default=True, help="SFT updates."
 )
 @click.option("--rl-steps", type=click.IntRange(min=1), default=DEFAULT_RL_STEPS, show_default=True, help="RL updates.")
@@ -279,7 +293,13 @@ def build_run(
 )
 @rl_build_options
 def main(
-    selection_uri: str, stage: str, sft_steps: int, rl_steps: int, export_hf: bool, reproducible_serving: bool
+    selection_uri: str,
+    stage: str,
+    init_from: str | None,
+    sft_steps: int,
+    rl_steps: int,
+    export_hf: bool,
+    reproducible_serving: bool,
 ) -> ArtifactStep:
     name = user_owned_name(ARTIFACT_NAME)
     selection_uri = selection_uri.rstrip("/")
@@ -296,6 +316,7 @@ def main(
         resolve_version(name, None),
         selection=selection,
         stage=Stage(stage),
+        init_from=init_from,
         rl_steps=rl_steps,
         sft_steps=sft_steps,
         export_hf=export_hf,
