@@ -126,7 +126,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
             finished_at=(
                 None
                 if case == "lineage-missing-window"
-                else "2026-11-06T18:40:00+00:00" if case == "negative-duration" else "2026-11-06T17:40:00+00:00"
+                else "2026-11-06T15:40:00+00:00" if case == "negative-duration" else "2026-11-06T17:40:00+00:00"
             ),
         )
         native_ancestor = LaunchReceipt.model_validate(ancestor)
