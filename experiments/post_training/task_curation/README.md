@@ -423,9 +423,14 @@ Reviewer-spec changelog (2026-11-13):
 | v2 repair | 262,144 | 8,192 / 16,384 | Existing incomplete-only repair policy |
 | v3 | 524,288 | 8,192 / 16,384 | Future FULL-QC starts |
 
-V3 retains GLM-5.3's pinned checkpoint, FP8 precision, temperature 0.7, low
-reasoning effort, three attempts, payload revision 4 and the task-quality-v2
-rubric. Prompt character budgets remain explicit and unchanged (512,000 by
+V3 constructs a literal ReviewerSpec: GLM-5.3 revision
+`aca966e4e02791568aa6a4ced368624b3d897f42`, API model `glm-5.3`, FP8 precision,
+temperature 0.7, top_p 0.95, top_k 0 (disabled), low reasoning effort, three
+attempts, payload revision 4 and the task-quality-v2 rubric with its content hash.
+Its explicit serving pin checks the checkpoint, API name and context independently
+of shared relay presets. Top_p matches the pinned model's generation configuration;
+top_k disables a token-count cap in vLLM 0.28.0. Optional sampling overrides are
+absent from existing v2 requests and identity, preserving its frozen caches. Prompt character budgets remain explicit and unchanged (512,000 by
 default); they are separate from the serving token context. Compilation and CUDA
 graphs remain enabled. The v3 YAML has not yet been exercised by a live GPU job.
 
