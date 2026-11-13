@@ -154,8 +154,6 @@ def parse_rl_config(document: Mapping[str, Any] | DictConfig) -> ParsedRLConfig:
     terminal_bench = materialized_raw.get("terminal_bench")
     data = dict(raw.get("data", {}))
     data.pop("kind", None)
-    # SkyRL sets some vLLM engine kwargs internally; a declared duplicate fails at startup.
-    validate_engine_init_kwargs(generator.get("engine_init_kwargs", {}))
     trainer = resolve_paths_in_dict(trainer, skip_keys=TRAINER_NON_PATH_KEYS)
     generator = resolve_paths_in_dict(generator)
     parse_speculative_decoding_config(
