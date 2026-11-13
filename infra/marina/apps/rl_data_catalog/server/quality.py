@@ -79,17 +79,29 @@ def review_completeness(
         return None
     return {
         **asdict(completeness),
-        "provisional": (
-            completeness.provisional
-            and not (
-                declaration.quality_result_finalization is QualityResultFinalization.COMPLETE
-                or (
-                    declaration.quality_result_finalization is QualityResultFinalization.ACCEPTED_INCOMPLETE
-                    and declaration.quality_result_waiver is not None
-                )
-            )
-        ),
+        "provisional": completeness.provisional and not final_whole_source_result(declaration.model_dump(mode="json")),
     }
+
+
+def final_whole_source_result(declaration: dict[str, Any]) -> bool:
+    """Accept finality only when its state and evidence account for the retained population."""
+    review = declaration.get("quality_result")
+    qc = declaration.get("independent_qc")
+    retained = (declaration.get("within_source_dedup") or {}).get("unique_count")
+    if review is None or qc is None or retained is None:
+        return False
+    unavailable = review.get("unavailable_count", 0)
+    if (
+        review.get("sample_count") != retained
+        or qc["reviewed"] != review["reviewed"] + review.get("uncertain_count", 0)
+        or qc["reviewed"] + unavailable != retained
+    ):
+        return False
+    finalization = declaration.get("quality_result_finalization")
+    waiver = declaration.get("quality_result_waiver")
+    if finalization == QualityResultFinalization.COMPLETE:
+        return unavailable == 0 and waiver is None
+    return finalization == QualityResultFinalization.ACCEPTED_INCOMPLETE and unavailable > 0 and waiver is not None
 
 
 def quality(declaration: dict[str, Any], curation: dict[str, Any] | None) -> Quality:
@@ -97,15 +109,7 @@ def quality(declaration: dict[str, Any], curation: dict[str, Any] | None) -> Qua
     review = declaration.get("quality_result")
     qc = declaration.get("independent_qc")
     retained = declaration.get("within_source_dedup", {}).get("unique_count")
-    if (
-        retained
-        and qc is not None
-        and review is not None
-        and declaration.get("quality_result_finalization") == QualityResultFinalization.ACCEPTED_INCOMPLETE
-        and declaration.get("quality_result_waiver") is not None
-        and qc["reviewed"] == review["reviewed"] + review.get("uncertain_count", 0)
-        and qc["reviewed"] + review.get("unavailable_count", 0) == retained
-    ):
+    if final_whole_source_result(declaration):
         return Quality.FULL
     if (
         retained

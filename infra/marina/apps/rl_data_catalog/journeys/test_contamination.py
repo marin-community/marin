@@ -14,7 +14,7 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
     page.emulate_media(color_scheme=theme)
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-all").check()
-    expect(page.locator("#rows tr")).to_have_count(18)
+    expect(page.locator("#rows tr")).to_have_count(20)
     expected = {
         "clean": "NO ISSUES",
         "stale-clean": "NOT MEASURED",
@@ -71,8 +71,10 @@ def test_complete_sample_is_final_and_unfinished_reviews_are_provisional(journey
     expect(complete.locator(".level")).to_have_text("SAMPLE")
     expect(complete.locator(".result-provisional")).to_have_count(0)
     expect(complete.locator("td").nth(4)).to_have_text("Good")
-    for name in ("sample-uncertain", "full-inflight", "full-uncertain"):
+    for name in ("sample-uncertain", "full-inflight", "full-uncertain", "full-false-complete", "sample-false-waiver"):
         expect(page.locator(f'tr[data-source-id="Marin:{name}"] .result-provisional')).to_have_text("Good · provisional")
+    for name in ("full-false-complete", "sample-false-waiver"):
+        expect(page.locator(f'tr[data-source-id="Marin:{name}"] .level')).to_have_text("SAMPLE")
     page.set_viewport_size({"width": 390, "height": 844})
     page.locator('tr[data-source-id="Marin:sample-uncertain"] .source-name').click()
     result_field = page.locator("#detail-fields .field").filter(has=page.get_by_text("Result", exact=True)).locator("dd")
