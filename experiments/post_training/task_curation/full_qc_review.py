@@ -35,6 +35,7 @@ from experiments.post_training.task_curation.full_qc_artifacts import (
     FullQCReview,
     FullQCReviewShard,
 )
+from experiments.post_training.task_curation.full_qc_inputs import task_contract
 from experiments.post_training.task_curation.published_census import population_documents
 
 logger = logging.getLogger(__name__)
@@ -192,11 +193,7 @@ def contract_batches(inputs: FullQCInputs) -> Iterator[ContractBatch]:
         if identifier not in index:
             continue
         task = TaskSpec.model_validate(document)
-        contract = {
-            "task_id": task.id,
-            "task_sha256": canonical_sha256(task.model_dump(mode="json")),
-            "runtime_sha256": canonical_sha256(deployment),
-        }
+        contract = task_contract(task, deployment)
         if task.id in seen or contract != index[task.id]:
             raise ValueError(f"Task differs from prepared contract: {task.id}")
         seen.add(task.id)

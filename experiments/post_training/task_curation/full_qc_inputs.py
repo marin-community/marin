@@ -43,6 +43,14 @@ class InputConfig:
     output_path: str
 
 
+def task_contract(task: TaskSpec, runtime: dict) -> dict[str, str]:
+    return {
+        "task_id": task.id,
+        "task_sha256": canonical_sha256(task.model_dump(mode="json")),
+        "runtime_sha256": canonical_sha256(runtime),
+    }
+
+
 def prepare_inputs(config: InputConfig) -> FullQCInputs:
     """Index the complete remainder, preserving separate execution diagnostics."""
     plan = config.retention
@@ -90,13 +98,7 @@ def prepare_inputs(config: InputConfig) -> FullQCInputs:
                 seen.add(task.id)
                 if task.id in drop_ids:
                     continue
-                rows.append(
-                    {
-                        "task_id": task.id,
-                        "task_sha256": canonical_sha256(task.model_dump(mode="json")),
-                        "runtime_sha256": canonical_sha256(runtime),
-                    }
-                )
+                rows.append(task_contract(task, runtime))
                 count += 1
                 task_bytes += len(task.model_dump_json().encode())
                 oracle_tasks += has_oracle_solution(task)
