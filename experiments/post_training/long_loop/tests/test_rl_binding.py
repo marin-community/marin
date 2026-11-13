@@ -10,6 +10,7 @@ import draccus
 import pytest
 import yaml
 from marin.execution.lazy import ArtifactStep, StepContext
+from marin.rl.cli import _coordinator_request
 from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, SkyRLRolePlan
 
 from experiments.post_training.long_loop import rl
@@ -52,3 +53,19 @@ def test_real_builder_binds_selected_model_and_attempt_trace_paths(monkeypatch, 
     assert "PENDING" not in built.launch_config_yaml
     assert config["generator"]["trajectory_retention"]["run_id"] == document["run"]["id"]
     assert config["terminal_bench"]["installed_agent"]["output_path"].startswith(document["artifacts"]["attempts_root"])
+    environment = {
+        "MARIN_PREFIX": "s3://test/output",
+        "MARIN_TEMP_PREFIX": "s3://test/tmp",
+        "HF_TOKEN": "offline-hf",
+        "WANDB_API_KEY": "offline-wandb",
+        "DAYTONA_RL_API_KEY": "offline-rl",
+        "DAYTONA_EVAL_API_KEY": "offline-eval",
+        "DAYTONA_TARGET": "us",
+        "TOGETHER_API_KEY": "offline-judge",
+    }
+    _, request = _coordinator_request(
+        [step], "experiments.post_training.long_loop", ("--run",), 1, Path.cwd(), environment
+    )
+    assert request.environment.env_vars["HF_TOKEN"] == "offline-hf"
+    assert request.environment.env_vars["WANDB_API_KEY"] == "offline-wandb"
+    assert request.environment.env_vars["DAYTONA_RL_API_KEY"] == "offline-rl"
