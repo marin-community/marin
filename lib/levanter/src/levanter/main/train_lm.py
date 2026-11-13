@@ -36,7 +36,12 @@ from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.eval import TaggedEvaluator, eval_model, lm_eval_loss
-from levanter.eval_audit import InitialEvalMatchConfig, evaluation_input_audit, initial_eval_match
+from levanter.eval_audit import (
+    InitialEvalMatchConfig,
+    evaluation_input_audit,
+    initial_eval_match,
+    write_evaluation_result,
+)
 from rigging.filesystem.storage_path import StoragePath
 from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.llama import LlamaConfig
@@ -419,6 +424,10 @@ def main(config: TrainLmConfig):
             )
             initial_metrics = eval_model(evaluator, state.eval_model, prefix="eval")
             audit = evaluation_input_audit(evaluator, gate.special_token_ids)
+            if config.hf_save_path is not None:
+                write_evaluation_result(
+                    str(StoragePath(config.hf_save_path).parent / "initial-eval-result.json"), initial_metrics, audit
+                )
             reference = json.loads(StoragePath(gate.reference_path).read_text())
             match = initial_eval_match(reference, initial_metrics, audit, gate.absolute_tolerance)
             levanter.tracker.log(

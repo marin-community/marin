@@ -37,8 +37,8 @@ def evaluation_input_audit(evaluator: TaggedEvaluator, special_token_ids: tuple[
     scored_tokens = 0.0
     counts = {str(token): 0 for token in special_token_ids}
     for batch, _tags in evaluator.loader:
-        tokens = np.asarray(multihost_utils.process_allgather(batch.tokens.array), dtype=np.int32)
-        weights = np.asarray(multihost_utils.process_allgather(batch.loss_weight.array), dtype=np.float32)
+        tokens = np.asarray(multihost_utils.process_allgather(batch.tokens.array, tiled=True), dtype=np.int32)
+        weights = np.asarray(multihost_utils.process_allgather(batch.loss_weight.array, tiled=True), dtype=np.float32)
         tokens_hash.update(tokens.tobytes())
         weights_hash.update(weights.tobytes())
         if not isinstance(batch.attn_mask, AttentionMask):
@@ -47,7 +47,7 @@ def evaluation_input_audit(evaluator: TaggedEvaluator, special_token_ids: tuple[
         segments = (
             np.zeros(tokens.shape, dtype=np.int64)
             if segment_ids is None
-            else np.asarray(multihost_utils.process_allgather(segment_ids.array), dtype=np.int64)
+            else np.asarray(multihost_utils.process_allgather(segment_ids.array, tiled=True), dtype=np.int64)
         )
         segments_hash.update(segments.tobytes())
         positions += tokens.size
