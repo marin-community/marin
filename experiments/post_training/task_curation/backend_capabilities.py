@@ -172,14 +172,20 @@ def source_map(
     )
 
 
-def converted_specs(paths: list[Path], column: str) -> Iterable[dict]:
+def converted_specs(paths: list[Path], column: str, runtime_column: str | None = None) -> Iterable[dict]:
     """Stream converted spec JSON without retaining private task payloads."""
+    columns = [column, runtime_column] if runtime_column is not None else [column]
     for path in paths:
-        for batch in pq.ParquetFile(path).iter_batches(batch_size=32, columns=[column]):
-            for encoded in batch.column(0).to_pylist():
+        for batch in pq.ParquetFile(path).iter_batches(batch_size=32, columns=columns):
+            for row in batch.to_pylist():
+                encoded = row[column]
                 if encoded is None:
                     raise ValueError(f"Null converted spec in {path}")
-                yield json.loads(encoded)
+                task = json.loads(encoded)
+                if runtime_column is None:
+                    yield task
+                    continue
+                yield {"task": task, "runtime": json.loads(row[runtime_column])}
 
 
 def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) -> BackendSurvey:
@@ -208,7 +214,7 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
                 digests[f"{index}:{path.name}"] = hashlib.file_digest(stream, "sha256").hexdigest()
         measured = source_map(
             source_id,
-            converted_specs(paths, entry["column"]),
+            converted_specs(paths, entry["column"], entry.get("runtime_column")),
             matrix,
             checkers,
             digests,
@@ -219,6 +225,9 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
         if measured.task_count != entry["expected_tasks"]:
             raise ValueError(f"Converted population differs from manifest: {source_id}")
         selected[source_id] = measured
+    unassessed = [source_id for source_id in source_ids if source_id not in selected]
+    if unassessed and not manifest.get("unassessed_reason"):
+        raise ValueError("Sources without converted inputs require a declared unassessed_reason")
     limits = {
         backend: {
             "max_concurrent_sandboxes": None,
@@ -239,12 +248,14 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
         schema_sha256=backend_schema_sha256(),
         matrix=matrix,
         deployment_limits=limits,
+        local_disk_pool=manifest.get("local_disk_root"),
         runtime_defaults=runtime_defaults,
         sources=[
             selected.get(source_id)
             or BackendSourceMap(
                 source_id=source_id,
                 basis="unassessed",
+                reason=manifest["unassessed_reason"],
                 task_count=0,
                 inputs={},
                 demands={},
@@ -287,6 +298,8 @@ def main() -> None:
         }
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     disk_pool = LocalDiskPool(args.local_disk_root) if args.local_disk_root is not None else None
+    if disk_pool is not None:
+        manifest = {**manifest, "local_disk_root": str(args.local_disk_root)}
     survey = build_survey(manifest, production_checkers(local_disk_pool=disk_pool), revision)
     args.output.write_text(survey.model_dump_json(indent=2) + "\n")
     print(

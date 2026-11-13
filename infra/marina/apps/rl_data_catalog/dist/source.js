@@ -146,6 +146,7 @@ async function render(data, sourceId) {
   const capabilities = data.backend_capabilities;
   sections.push(card('Backend requirements and overlap', [
     ['Measurement basis', capabilities?.basis], ['Measured tasks', capabilities?.basis === 'converted_spec_census' ? capabilities.task_count : null],
+    ['Unassessed reason', capabilities?.basis === 'unassessed' ? capabilities.reason : null],
     ['Role assignments', capabilities?.role_backend_assignments], ['Declared requirements', capabilities?.demands],
     ['Backend fit and blockers', capabilities?.backends], ['Duplicate group', data.duplicate_group],
     ['Full backend matrix', link('Open the backend survey', 'api/backends')],

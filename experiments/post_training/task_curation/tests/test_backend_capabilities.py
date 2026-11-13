@@ -4,10 +4,13 @@
 """Schema evolution and the production lock-grader incompatibility."""
 
 import ast
+import json
 from dataclasses import fields
 from pathlib import Path
 from typing import get_args, get_type_hints
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
@@ -20,7 +23,7 @@ from shellbox.requirements import (
     Requirement,
     Support,
 )
-from shellbox.survey import capability_matrix
+from shellbox.survey import capability_matrix, production_checkers
 from taskcompendium.backend_fields import (
     ENVIRONMENT_FIELDS,
     EXECUTION_FIELDS,
@@ -32,10 +35,10 @@ from taskcompendium.backend_fields import (
     SCRIPT_GRADER_FIELDS,
     TASK_FIELDS,
 )
-from taskcompendium.backend_requirements import RuntimeProfile
+from taskcompendium.backend_requirements import BackendSourceMap, RuntimeProfile
 from taskcompendium.models import EnvironmentRequirements, ExecutionRequirements, ScriptGrader, TaskResource, TaskSpec
 
-from experiments.post_training.task_curation.backend_capabilities import source_map
+from experiments.post_training.task_curation.backend_capabilities import build_survey, source_map
 
 ROOT = Path(__file__).resolve().parents[4]
 RUNTIME = RuntimeProfile(
@@ -190,3 +193,91 @@ def test_actor_capacity_preserves_independent_separate_grader_profile():
     )
     assert mapped.resource_ranges["agent"]["memory_mb"] == (4096, 4096)
     assert mapped.resource_ranges["grader"]["memory_mb"] == (8192, 8192)
+
+
+def _runtime_defaults() -> dict:
+    profile = RUNTIME.model_dump(mode="json")
+    return {"agent": profile, "grader": profile}
+
+
+def _write_spec_parquet(path: Path, documents: list[dict]) -> None:
+    table = pa.Table.from_pylist(
+        [
+            {"task_spec": json.dumps(document["task"]), "runtime": json.dumps(document.get("runtime") or {})}
+            for document in documents
+        ]
+    )
+    pq.write_table(table, path)
+
+
+def _survey_manifest(source_ids: list[str], inputs: list[dict]) -> dict:
+    return {
+        "catalog_root": "test:catalog",
+        "snapshot_id": "test-snapshot",
+        "source_ids": source_ids,
+        "runtime_defaults": _runtime_defaults(),
+        "inputs": inputs,
+    }
+
+
+def test_runtime_column_applies_published_runtime_allocations(tmp_path):
+    task = {
+        "id": "budgeted",
+        "environment_requirements": {
+            "command_semantics": "linux_process",
+            "docker_image": "example/image@sha256:" + "0" * 64,
+        },
+        "grader": {"kind": "none"},
+    }
+    runtime = {"task_machine": {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240}, "verifier_machine": {}}
+    path = tmp_path / "specs.parquet"
+    _write_spec_parquet(path, [{"task": task, "runtime": runtime}])
+    manifest = _survey_manifest(
+        ["cohort"],
+        [
+            {
+                "source_id": "cohort",
+                "paths": [str(path)],
+                "column": "task_spec",
+                "runtime_column": "runtime",
+                "expected_tasks": 1,
+            }
+        ],
+    )
+    survey = build_survey(manifest, production_checkers(), "rev")
+    measured = survey.sources[0]
+    assert measured.task_count == 1
+    assert measured.resource_ranges["agent"]["storage_mb"] == (10240, 10240)
+    assert measured.demands["agent"][Requirement.STORAGE] == 1
+    assert measured.backends["docker"].task_counts == {Support.PARTIAL: 1}
+
+
+def test_unassessed_sources_require_and_carry_reason():
+    manifest = _survey_manifest(["absent"], [])
+    with pytest.raises(ValueError, match="unassessed_reason"):
+        build_survey(manifest, production_checkers(), "rev")
+    manifest["unassessed_reason"] = "No converted population is bound to this snapshot revision."
+    survey = build_survey(manifest, production_checkers(), "rev")
+    row = survey.sources[0]
+    assert row.source_id == "absent"
+    assert row.basis == "unassessed"
+    assert row.reason == manifest["unassessed_reason"]
+    assert row.task_count == 0 and not row.backends and not row.demands
+
+
+def test_survey_reason_is_bound_to_assessment_basis():
+    base = dict(
+        source_id="cohort",
+        task_count=1,
+        inputs={},
+        demands={},
+        resource_ranges={},
+        backends={},
+        role_backend_assignments={},
+        grading_environment=None,
+    )
+    with pytest.raises(ValueError, match="Unassessed sources require their reason"):
+        BackendSourceMap.model_validate({**base, "basis": "unassessed"})
+    with pytest.raises(ValueError, match="Only unassessed sources carry a reason"):
+        BackendSourceMap.model_validate({**base, "basis": "converted_spec_census", "reason": "unused"})
+    BackendSourceMap.model_validate({**base, "basis": "converted_spec_census"})

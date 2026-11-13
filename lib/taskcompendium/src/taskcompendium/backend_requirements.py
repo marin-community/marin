@@ -85,6 +85,8 @@ class BackendSourceMap(BaseModel):
 
     source_id: SourceId
     basis: Literal["converted_spec_census", "unassessed"]
+    reason: str | None = None
+    """Why a source has no converted population; required for unassessed rows only."""
     task_count: int
     inputs: dict[str, str]
     demands: dict[str, dict[Requirement, int]]
@@ -96,6 +98,15 @@ class BackendSourceMap(BaseModel):
     """The published grading-boundary census, carried through without re-assessment."""
     integrity_contracts: dict | None = None
     """Optional contract census bound to the same published input population."""
+
+    @model_validator(mode="after")
+    def validate_reason(self) -> "BackendSourceMap":
+        if self.basis == "unassessed":
+            if not self.reason:
+                raise ValueError("Unassessed sources require their reason")
+        elif self.reason is not None:
+            raise ValueError("Only unassessed sources carry a reason")
+        return self
 
 
 class BackendSurvey(BaseModel):
@@ -112,6 +123,8 @@ class BackendSurvey(BaseModel):
     runtime_defaults: dict[str, RuntimeProfile]
     matrix: list[CapabilityCell]
     deployment_limits: dict[str, dict]
+    local_disk_pool: str | None = None
+    """Worker path of the verified LOCAL disk pool backing the local checker, if any."""
     sources: list[BackendSourceMap]
 
     def identity_payload(self) -> dict:
