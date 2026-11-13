@@ -566,7 +566,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     before_ids = {
         (row["run_id"], row["attempt_id"]) for row in client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()["runs"]
     }
-    monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset.name: replace(preset, revision="2026.11.12.1")})
+    monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset.name: replace(preset, revision="2026.11.12.2")})
     reload(publication)
     with pytest.raises(click.UsageError, match="current control pins"):
         publication.publish_controls(preset.name, service_url="http://localhost")
