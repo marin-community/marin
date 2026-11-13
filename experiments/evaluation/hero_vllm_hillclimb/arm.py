@@ -106,6 +106,25 @@ RELEASES = {
     ),
 }
 
+# Rafal's resolved compilation config. Without grug_moe_short_conv in splitting_ops the fork's
+# ShortConv guard silently downgrades cudagraph_mode to NONE (about 3x slower decode).
+BASE_COMPILATION = {
+    "cudagraph_mode": "PIECEWISE",
+    "splitting_ops": [
+        "vllm::unified_attention_with_output",
+        "vllm::unified_kv_cache_update",
+        "vllm::grug_moe_short_conv",
+    ],
+    "inductor_compile_config": {
+        "enable_auto_functionalized_v2": False,
+        "combo_kernels": True,
+        "benchmark_combo_kernel": True,
+    },
+}
+# vLLM's capture list at max_num_seqs 32 (max size 64); pinning it keeps prefills of 65-128 tokens off
+# the graph path when max_num_seqs grows.
+BASELINE_CAPTURE_SIZES = [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64]
+
 # Rafal's resolved serving flags, minus the dashboard-only chat template and generation config.
 BASELINE_ARGS = (
     "--enable-expert-parallel",
@@ -124,24 +143,8 @@ BASELINE_ARGS = (
     '{"distributed": true, "concurrency": 4, "memory_limit": 17179869184}',
     "--enable-per-request-metrics",
     "--trust-remote-code",
-    # Rafal's resolved compilation config. Without grug_moe_short_conv in splitting_ops the fork's
-    # ShortConv guard silently downgrades cudagraph_mode to NONE (about 3x slower decode).
     "--compilation-config",
-    json.dumps(
-        {
-            "cudagraph_mode": "PIECEWISE",
-            "splitting_ops": [
-                "vllm::unified_attention_with_output",
-                "vllm::unified_kv_cache_update",
-                "vllm::grug_moe_short_conv",
-            ],
-            "inductor_compile_config": {
-                "enable_auto_functionalized_v2": False,
-                "combo_kernels": True,
-                "benchmark_combo_kernel": True,
-            },
-        }
-    ),
+    json.dumps(BASE_COMPILATION),
 )
 # Rafal's server runs a single API server process (its log shows one APIServer pid). Only the
 # leader starts API servers; headless followers reject the flag.
@@ -151,6 +154,14 @@ LEADER_ARGS = ("--api-server-count", "1")
 # replaces the same baseline flag (and its value) rather than being appended twice.
 CANDIDATE_ARGS = {
     "mns64": ("--max-num-seqs", "64"),
+    "mns64p": (
+        "--max-num-seqs",
+        "64",
+        "--compilation-config",
+        json.dumps(BASE_COMPILATION | {"cudagraph_capture_sizes": BASELINE_CAPTURE_SIZES}),
+    ),
+    "mns128": ("--max-num-seqs", "128"),
+    "mbt8192": ("--max-num-batched-tokens", "8192"),
     "a2a-nvl1": ("--all2all-backend", "flashinfer_nvlink_one_sided"),
     "a2a-nvl2": ("--all2all-backend", "flashinfer_nvlink_two_sided"),
 }
@@ -193,18 +204,32 @@ _PHASES = {"gates": gate_probes, "long": long_probes, "load": load_sweep}
 
 
 async def _run_probes(base_url: str, config: ArmConfig, cases: dict) -> None:
-    """Run each requested phase; a failed phase is recorded and the next still runs on the warm server."""
+    """Run each requested phase; a failed phase is recorded and the next still runs on the warm server.
+
+    The load sweep is saved after every concurrency point so a preemption keeps finished points.
+    """
     failures = []
     async with Client(base_url, SERVED_NAME) as client:
         for phase in config.phases:
             started = time.time()
+            uri = f"{config.output_uri}/{phase}.json"
             try:
-                results = await _PHASES[phase](client, cases, config.probes)
+                if phase == "load":
+                    results = await load_sweep(
+                        client,
+                        cases,
+                        config.probes,
+                        on_progress=lambda partial, uri=uri, started=started: _write_json(
+                            uri, partial | {"partial": True, "seconds": time.time() - started}
+                        ),
+                    )
+                else:
+                    results = await _PHASES[phase](client, cases, config.probes)
             except Exception as error:
                 logger.exception("phase %s failed", phase)
                 failures.append(phase)
                 results = {"error": repr(error)}
-            _write_json(f"{config.output_uri}/{phase}.json", results | {"seconds": time.time() - started})
+            _write_json(uri, results | {"seconds": time.time() - started})
     if failures:
         raise RuntimeError(f"probe phases failed: {failures}")
 
@@ -357,7 +382,7 @@ def main() -> None:
     )
     releases = args.sequence.split(",") if args.sequence else [args.release]
     assert all(item.split(":")[0] in RELEASES for item in releases), releases
-    assert all(item.split(":")[1] in CANDIDATE_ARGS for item in releases if ":" in item), releases
+    assert all(item.split(":")[1] in (*CANDIDATE_ARGS, "tp2") for item in releases if ":" in item), releases
     configs = [
         _variant_config(
             args, name if len(releases) == 1 else f"{name}-v{i}-{item.replace(':', '-')}", item, geometry, iris_config
@@ -399,19 +424,69 @@ def main() -> None:
 
 
 def _with_flags(base: tuple[str, ...], flags: tuple[str, ...]) -> tuple[str, ...]:
-    """Replace each (flag, value) pair of ``flags`` in ``base``, appending flags not present."""
+    """Replace each (flag, value) pair of ``flags`` in ``base``, appending flags not present.
+
+    An empty value marks a bare boolean flag.
+    """
     out = list(base)
     for flag, value in zip(flags[::2], flags[1::2], strict=True):
-        if flag in out:
+        if value == "":
+            if flag not in out:
+                out.append(flag)
+        elif flag in out:
             out[out.index(flag) + 1] = value
         else:
             out += [flag, value]
     return tuple(out)
 
 
+# TP2 needs #119 (merged onto 0ac9dcb with schema-3 fixes, shipped as an aarch64 overlay wheel) and its
+# qualified NCCL recipe: native NCCL all-reduce only, no fused all-reduce passes.
+TP2_OVERLAY = (
+    "/tmp/claude-1003/-home-marin-projects-marin-mcwitt-vllm-hillclimb/733e1485-ce36-453f-89af-6cfa733976dc/"
+    "scratchpad/wheel/tp119.url:920f91b3f8cbfe14ba7c1502be4bc1ed97e305f6b90a3e5bbf8079b184d52b90"
+)
+TP2_ENV = (
+    ("VLLM_ALLREDUCE_USE_FLASHINFER", "0"),
+    ("VLLM_ALLREDUCE_USE_FLASHINFER_PCIE_IPC", "0"),
+    ("VLLM_ALLREDUCE_USE_SYMM_MEM", "0"),
+    ("VLLM_USE_NCCL_SYMM_MEM", "0"),
+)
+TP2_FLAGS = (
+    "--disable-custom-all-reduce",
+    "",
+    "--compilation-config",
+    json.dumps(
+        BASE_COMPILATION | {"pass_config": {"fuse_allreduce_rms": False, "enable_sp": False, "fuse_gemm_comms": False}}
+    ),
+)
+
+
+def _overlay(release: VllmGpuRelease, spec: str) -> VllmGpuRelease:
+    url_file, sha256 = spec.rsplit(":", 1)
+    url = Path(url_file).read_text().strip()
+    return replace(
+        release,
+        wheels=tuple(
+            replace(wheel, url=url, sha256=sha256) if wheel.architecture == "aarch64" else wheel
+            for wheel in release.wheels
+        ),
+    )
+
+
 def _variant_config(args, name, item, geometry, iris_config) -> ArmConfig:
     tag, _, label = item.partition(":")
     release = RELEASES[tag]
+    tensor_parallel_size = args.tensor_parallel_size
+    env = tuple(tuple(entry.split("=", 1)) for entry in args.env)
+    flags: tuple[str, ...] = CANDIDATE_ARGS[label] if label in CANDIDATE_ARGS else ()
+    if label == "tp2":
+        assert tag == "0ac9dcb", "the #119 overlay is built on 0ac9dcb"
+        release = _overlay(release, TP2_OVERLAY)
+        tensor_parallel_size = 2
+        geometry = replace(geometry, tensor_parallel_size=2, data_parallel_size=GPUS_PER_HOST // 2)
+        env = (*env, *TP2_ENV)
+        flags = TP2_FLAGS
     if args.overlay_wheel:
         url_file, sha256 = args.overlay_wheel.rsplit(":", 1)
         url = Path(url_file).read_text().strip()
@@ -427,7 +502,7 @@ def _variant_config(args, name, item, geometry, iris_config) -> ArmConfig:
         source=VllmSource.MARIN_FORK,
         gpu_release=release,
         startup_timeout_seconds=3600,
-        extra_args=_with_flags((*_baseline_args(args.drop_arg), *args.vllm_arg), CANDIDATE_ARGS[label] if label else ()),
+        extra_args=_with_flags((*_baseline_args(args.drop_arg), *args.vllm_arg), flags),
     )
     model = ServedModelConfig(
         weights=WEIGHTS,
@@ -435,7 +510,7 @@ def _variant_config(args, name, item, geometry, iris_config) -> ArmConfig:
         tokenizer=TOKENIZER,
         tokenizer_revision=TOKENIZER_REVISION,
         dtype="bfloat16",
-        tensor_parallel_size=args.tensor_parallel_size,
+        tensor_parallel_size=tensor_parallel_size,
     )
     return ArmConfig(
         name=name,
@@ -456,7 +531,7 @@ def _variant_config(args, name, item, geometry, iris_config) -> ArmConfig:
             long_lengths=tuple(int(n) for n in args.long_lengths.split(",")),
             data_parallel_size=geometry.global_data_parallel_size,
         ),
-        env=tuple(tuple(item.split("=", 1)) for item in args.env),
+        env=env,
     )
 
 

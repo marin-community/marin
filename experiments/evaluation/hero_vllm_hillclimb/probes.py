@@ -252,7 +252,7 @@ async def _stream_request(client: Client, body: dict, record: dict) -> None:
     record["stamps"] = stamps
 
 
-async def load_sweep(client: Client, cases: dict, config: ProbeConfig) -> dict:
+async def load_sweep(client: Client, cases: dict, config: ProbeConfig, on_progress=None) -> dict:
     """Closed-loop RL-rollout-like load: short chat prompts, fixed-length sampled outputs."""
     prompts = [case["tokens"] for case in cases["load"]]
     results = {}
@@ -267,6 +267,8 @@ async def load_sweep(client: Client, cases: dict, config: ProbeConfig) -> dict:
         )
         single.append(record)
     results["c1"] = _summarize(single, concurrency=1, window=None)
+    if on_progress is not None:
+        on_progress(results)
     logger.info("C1: %s", {k: v for k, v in results["c1"].items() if k != "requests"})
 
     for concurrency in config.load.concurrencies:
@@ -299,6 +301,8 @@ async def load_sweep(client: Client, cases: dict, config: ProbeConfig) -> dict:
         window = (firsts[min(concurrency, len(firsts)) - 1], last_submit[0])
         results[f"c{concurrency}"] = _summarize(records, concurrency=concurrency, window=window)
         results[f"c{concurrency}"]["makespan"] = time.monotonic() - start
+        if on_progress is not None:
+            on_progress(results)
         logger.info("C%d: %s", concurrency, {k: v for k, v in results[f"c{concurrency}"].items() if k != "requests"})
     return results
 
