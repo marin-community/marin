@@ -58,6 +58,7 @@ from verifyit.modes.grade_judge import (
 
 from harbor.agents.taskcompendium import (
     TaskSpecAgent,
+    TaskSpecChatAgent,
     TaskSpecEmptyAgent,
     TaskSpecOracleAgent,
     empty_attempt,
@@ -294,8 +295,16 @@ class TaskSpecTrial(Trial):
         self.judge_endpoint = kwargs.pop("model_endpoint", None)
         supplied_model = kwargs.pop("model_name", None)
         judge = judge_spec(task.grader)
-        if judge is not None and supplied_model is not None and supplied_model != judge.model:
-            raise ValueError("Judge model conflicts with the original TaskSpec")
+        self.judge_model = None
+        if judge is not None:
+            if judge.model.strip():
+                if supplied_model is not None and supplied_model != judge.model:
+                    raise ValueError("Judge model conflicts with the original TaskSpec")
+                self.judge_model = judge.model
+            else:
+                if supplied_model is None or not supplied_model.strip():
+                    raise ValueError("TaskSpec judge requires an explicit model_name when its declared model is blank")
+                self.judge_model = supplied_model
         options = {
             "bwrap",
             "umoci",
@@ -357,6 +366,7 @@ class TaskSpecTrial(Trial):
             self.attempt = self.agent.attempt or self.attempt
             await self._record_exception(error)
         finally:
+            self.attempt = self.agent.attempt or self.attempt
             self.result.agent_execution.finished_at = self._now()
             if self.machine is not None:
                 await self.machine.finish_usage()
@@ -403,12 +413,13 @@ class TaskSpecTrial(Trial):
         if judge is not None:
             if not self.judge_endpoint:
                 raise ValueError("TaskSpec judge requires model_endpoint with its declared model")
+            assert self.judge_model is not None
             relay = ModelRelay.from_endpoint(
                 self.judge_endpoint,
-                judge.model,
+                self.judge_model,
                 authentication=self.host_capabilities.model_authentication,
             )
-            connection = JudgeConnection("http://127.0.0.1:8787/v1", "EMPTY", default_model=judge.model)
+            connection = JudgeConnection("http://127.0.0.1:8787/v1", "EMPTY", default_model=self.judge_model)
         if isinstance(grader, VerifyitGrader) and (grader.environment is None or judge is not None):
             return await self._grade_in_process(relay, connection)
         assert grader.environment is not None
@@ -525,6 +536,8 @@ class TaskSpecTrial(Trial):
             self.paths.agent_dir / "conversation.json",
             self.attempt.conversation.model_dump_json(),
         )
+        if isinstance(self.agent, TaskSpecChatAgent) and self.agent.model_input is not None:
+            await _persist(self.paths.agent_dir / "model-input.json", self.agent.model_input.model_dump_json())
 
     async def _collect_runtime_logs(self) -> None:
         pass

@@ -14,15 +14,15 @@ from rolloutengine.harness.shell import ShellHarness, task_prompt
 from rolloutengine.models import (
     ModelRequest,
     ModelTurn,
-    RolloutInterrupted,
     RolloutLimits,
     TraceMode,
 )
 from rolloutengine.recorder import harness_rollout
 from shellbox.machine import Command, ExitReason, Machine
-from taskcompendium.chat import assistant_message, chat_conversation
+from taskcompendium.chat import assistant_message, chat_conversation, chat_input
 from taskcompendium.models import (
     AnswerType,
+    ConversationInput,
     ConversationTrace,
     GradingAttempt,
     TaskSpec,
@@ -78,6 +78,8 @@ class TaskSpecAgent(BaseAgent):
 
 
 class TaskSpecChatAgent(TaskSpecAgent):
+    model_input: ConversationInput | None = None
+
     @staticmethod
     def name() -> str:
         return "task-spec-chat"
@@ -100,6 +102,7 @@ class TaskSpecChatAgent(TaskSpecAgent):
             model = ChatModel(client, split_provider_model_name(self.model_alias)[1], self.max_tokens)
 
             async def record(request: ModelRequest) -> ModelTurn:
+                self.model_input = chat_input(list(request.messages))
                 turn = await model(request)
                 self.attempt = GradingAttempt(
                     chat_conversation([*request.messages, turn.message]),
@@ -107,19 +110,14 @@ class TaskSpecChatAgent(TaskSpecAgent):
                 )
                 return turn
 
-            try:
-                rollout = await harness_rollout(
-                    ShellHarness(command_timeout=None, prompt=original_prompt),
-                    task,
-                    record,
-                    limits=limits.model_copy(update={"max_turns": self.max_turns}),
-                    machine=machine,
-                    trace=TraceMode.MESSAGES,
-                )
-            except RolloutInterrupted as error:
-                rollout = error.rollout
-                if not rollout.conversations:
-                    raise
+            rollout = await harness_rollout(
+                ShellHarness(command_timeout=None, prompt=original_prompt),
+                task,
+                record,
+                limits=limits.model_copy(update={"max_turns": self.max_turns}),
+                machine=machine,
+                trace=TraceMode.MESSAGES,
+            )
             if rollout.conversations:
                 self.attempt = GradingAttempt(
                     chat_conversation(list(rollout.conversations[-1].messages)),

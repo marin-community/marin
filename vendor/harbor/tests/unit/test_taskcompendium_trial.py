@@ -19,6 +19,7 @@ from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import Backend
 from taskcompendium.harbor.adapter import write_harbor_task
 from taskcompendium.convert.answers import exact_answer_task
+from taskcompendium.importers.evalchemy.financebench import convert_finance
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -37,6 +38,7 @@ from taskcompendium.models import (
     verifyit_spec,
 )
 from taskcompendium.pipeline.models import RawRow
+from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.submission import conversation_messages
@@ -342,6 +344,109 @@ async def test_environmentless_grader_runs_inside_declared_limits_without_actor(
     assert (selected.cpus, selected.memory_mb, selected.storage_mb) == (1, 2048, 2048)
     assert machines.machines[0].closed
     assert TaskSpec.model_validate_json(machines.machines[0].local("/tests/task-spec.json").read_text()) == task
+
+
+@pytest.mark.parametrize("name,model", [("financebench", "selected-judge"), ("financebench", None), ("language-mixing", "conflicting-judge")])
+@pytest.mark.asyncio
+async def test_judge_model_selection_respects_source_delegation(tmp_path, monkeypatch, name, model):
+    task = (
+        convert_finance(
+            RawRow("finance", Source(dataset="PatronusAI/financebench", revision="fixture-pin", row="0", importer_revision="1"),
+                {"evidence_text": "Revenue was 42 dollars.", "question": "What was revenue?", "answer": "42 dollars"}),
+            ConversionContext(inputs={}, grader_environment=None),
+        )
+        if name == "financebench" else original_task(name)
+    )
+    directory = tmp_path / "task"
+    write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
+    original = (directory / "task-spec.json").read_bytes()
+    response = tmp_path / "response.json"
+    if model == "selected-judge":
+        response.write_text(json.dumps([{"role": "assistant", "content": "42 dollars"}]))
+    machines = Machines(tmp_path / "sandboxes")
+    bind_factory(monkeypatch, machines, tmp_path / "disks")
+    monkeypatch.setattr(adapter.StoragePath, "exists", lambda path: True)
+    with running_review_server() as server:
+        endpoint = f"http://127.0.0.1:{server.server_port}/v1"
+        server.judge_replies.append(JudgeReply("correct"))
+
+        async def relay_boundary(machine, stack, service_tasks, *, judge, candidate):
+            assert judge.model == model
+            machines.machines[-1].env[BASE_URL_ENV] = endpoint
+
+        monkeypatch.setattr(adapter, "start_model_relays", relay_boundary)
+        kwargs = {"model_endpoint": endpoint, "disk_root": str(tmp_path / "disks")}
+        if model is not None:
+            kwargs["model_name"] = model
+        trial = await Trial.create(TrialConfig(
+            task=TaskConfig(path=directory), trial_name="judge-model", trials_dir=tmp_path / "trials",
+            agent=AgentConfig(name="task-spec-response", kwargs={"response_path": str(response)}),
+            environment=EnvironmentConfig(kwargs=kwargs),
+        ))
+        result = await trial.run()
+        if model == "selected-judge":
+            assert result.exception_info is None, result.exception_info
+            assert result.verifier_result.rewards == {"reward": 1.0}
+            assert server.requests[0]["model"] == model
+            assert len(machines.machines) == 1
+        else:
+            assert result.exception_info.exception_type == "ValueError"
+            assert result.verifier_result is None
+            assert server.requests == []
+            assert machines.machines == []
+            assert not response.exists()  # A missing model must fail before candidate execution.
+    assert (directory / "task-spec.json").read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_provider_outage_after_shell_turn_retains_history_without_scoring(tmp_path, monkeypatch):
+    task = exact_answer_task(
+        RawRow("outage", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
+        prompt="Use the shell, then answer 42.", answers=("42",), ignore_case=False,
+    ).model_copy(update={"environment_requirements": EnvironmentRequirements(
+        capabilities=("shell", "filesystem"), command_semantics=CommandSemantics.LINUX_PROCESS,
+        packages_lock="fixture-lock", working_directory="/app",
+    )})
+    directory = tmp_path / "task"
+    write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
+    machines = Machines(tmp_path / "sandboxes")
+    bind_factory(monkeypatch, machines, tmp_path / "disks")
+    monkeypatch.setattr(adapter.StoragePath, "exists", lambda path: True)
+    monkeypatch.setattr("taskcompendium.runtime.environment.local_runtime", lambda path: LockedRuntime(tmp_path))
+    requests = []
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        if len(requests) == 2:
+            return httpx.Response(503, json={"error": {"message": "provider unavailable", "type": "server_error"}})
+        return httpx.Response(200, json={
+            "id": "shell-turn", "object": "chat.completion", "created": 0, "model": "candidate",
+            "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
+                "role": "assistant", "content": None, "tool_calls": [{"id": "shell-call", "type": "function",
+                    "function": {"name": "shell", "arguments": json.dumps({"command": "printf 'partial observation\\n'"})}}],
+            }}], "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18},
+        })
+
+    real_client = agents.AsyncOpenAI
+    monkeypatch.setattr(agents, "AsyncOpenAI", lambda **kwargs: real_client(
+        **kwargs, http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ))
+    trial = await Trial.create(TrialConfig(
+        task=TaskConfig(path=directory), trial_name="provider-outage", trials_dir=tmp_path / "trials",
+        agent=AgentConfig(name="task-spec-chat", model_name="openai/candidate", kwargs={
+            "api_base": "https://candidate.fixture/v1", "max_turns": 3, "max_tokens": 128,
+        }), environment=EnvironmentConfig(kwargs={"disk_root": str(tmp_path / "disks")}),
+    ))
+    result = await trial.run()
+    assert len(requests) == 2
+    assert result.exception_info.exception_type == "RolloutInterrupted"
+    assert result.verifier_result is None
+    assert not (trial.paths.verifier_dir / "verdict.json").exists()
+    trace = ConversationInput.model_validate_json((trial.paths.agent_dir / "model-input.json").read_text())
+    messages = conversation_messages(trace.events)
+    assert any(message["role"] == "tool" and json.loads(message["content"])["stdout"] == "partial observation\n" for message in messages)
+    assert len(machines.machines) == 1
+    assert machines.machines[0].closed
 
 
 @pytest.mark.parametrize("exit_code", [0, 1])
