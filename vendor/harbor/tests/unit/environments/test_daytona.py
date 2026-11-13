@@ -5,6 +5,10 @@
 
 import asyncio
 import json
+import os
+import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +35,7 @@ from harbor.agents.terminus_2.tmux_session import (
 )
 from harbor.environments import model_relay
 from harbor.environments.daytona import DaytonaEnvironment
+from harbor.environments.execution import execute_shellbox_command
 from harbor.environments.local import LocalEnvironment
 from harbor.environments.model_relay import ModelRelay
 from harbor.environments.qemu import QemuEnvironment
@@ -41,7 +46,42 @@ from harbor.models.trial.paths import TrialPaths
 from harbor.verifier.verifier import Verifier
 from shellbox.http_service import HttpRequest, serve_http
 from shellbox.machine import Command, MachineSpec, PackageSpec
-from tests.unit.environments.transport import ProcessMachine, available_port
+from tests.unit.environments.transport import ChrootProcessMachine, ProcessMachine, available_port
+
+
+@pytest.mark.skipif(sys.platform != "linux" or os.geteuid() != 0, reason="Real Linux chroot needs root")
+@pytest.mark.parametrize("with_bash", [False, True])
+async def test_large_setup_command_runs_in_selected_shell_with_original_environment(tmp_path, with_bash):
+    root = tmp_path / "guest"
+    for binary in ("/bin/sh", "/bin/bash") if with_bash else ("/bin/sh",):
+        libraries = subprocess.check_output(["ldd", binary], text=True)
+        for source in {binary, *re.findall(r"/\S+", libraries)}:
+            target = root / source.lstrip("/")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+    (root / "workspace").mkdir()
+    machine = ChrootProcessMachine(root, MachineSpec(PackageSpec(), workdir="/workspace"))
+    # The source's 72 KB setup fits one Linux argument; duplicating it exceeds MAX_ARG_STRLEN.
+    command = (
+        "#" + "x" * 72_000 + "\n"
+        "printf '%s\\n' \"$SETUP_VALUE\" \"$PWD\" \"${BASH_VERSION:+bash}\"\n"
+        "printf '%s\\n' 'source stderr' >&2\n"
+        "exit 23\n"
+    )
+    try:
+        result = await execute_shellbox_command(
+            machine,
+            command,
+            cwd="/workspace",
+            env={"SETUP_VALUE": "quotes'\" and unicode λ"},
+            timeout_sec=10,
+            user="root",
+        )
+        assert result.return_code == 23
+        assert result.stdout.splitlines() == ["quotes'\" and unicode λ", "/workspace", "bash" if with_bash else ""]
+        assert result.stderr == "source stderr\n"
+    finally:
+        await machine.close()
 
 
 class ProcessFactory:

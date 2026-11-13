@@ -8,6 +8,7 @@ import os
 import shutil
 import signal
 import socket
+from dataclasses import replace
 from pathlib import Path
 
 from shellbox.machine import Command, ExitReason, MachineSpec, Result
@@ -136,3 +137,28 @@ class ProcessMachine:
         self.closed = True
         await self.quiesce_commands()
         await asyncio.gather(*(session.close() for session in self.sessions))
+
+
+class ChrootProcessMachine(ProcessMachine):
+    """Execute commands in a real minimal Linux filesystem with its own shells."""
+
+    def argument(self, value: str) -> str:
+        return value
+
+    async def run(self, command: Command) -> Result:
+        return await super().run(
+            replace(
+                command,
+                argv=(
+                    "/usr/sbin/chroot",
+                    str(self.root),
+                    "/bin/sh",
+                    "-c",
+                    'cd "$1"; shift; exec "$@"',
+                    "chroot-transport",
+                    command.cwd or self.spec.workdir,
+                    *command.argv,
+                ),
+                cwd="/",
+            )
+        )
