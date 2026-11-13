@@ -9,7 +9,7 @@ from experiments.post_training.task_curation.environment import Archive, Environ
 BASIC_GRADER = Environment(requirements=("tomli-w==1.2.0",))
 PYTHON_GRADER = Environment(requirements=("numpy==2.3.5",))
 # The vendored LiveCodeBench scorer preloads NumPy and pandas for every submission.
-LIVECODEBENCH_GRADER = Environment(requirements=("numpy==2.3.5", "pandas==2.2.2"))
+LIVECODEBENCH_GRADER = Environment(requirements=(*PYTHON_GRADER.requirements, "pandas==2.2.2"))
 # Harness Unicode normalization uses NumPy's fixed-width string operations.
 ALIAS_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "numpy==2.3.5"))
 MATH_GRADER = Environment(
