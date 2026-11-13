@@ -197,7 +197,7 @@ def test_cli_snapshots_private_backend_connection_after_dotenv_and_isolates_gues
         return SimpleNamespace()
 
     monkeypatch.setattr(
-        "shellbox.backends.daytona.connection.AsyncDaytona",
+        "daytona.AsyncDaytona",
         lambda config: SimpleNamespace(config=config),
     )
     monkeypatch.setattr("harbor.environments.daytona.DaytonaMachineFactory", factory)

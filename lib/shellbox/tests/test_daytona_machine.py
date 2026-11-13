@@ -10,6 +10,8 @@ import shlex
 import shutil
 import signal
 import stat
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack
 from dataclasses import replace
@@ -31,6 +33,7 @@ from daytona import (
     Resources,
 )
 from daytona_api_client_async import SnapshotState
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.machine import (
     DaytonaMachine,
     DaytonaMachineFactory,
@@ -1254,6 +1257,37 @@ def test_daytona_network_policy_parses_declarative_fields() -> None:
     }
     with pytest.raises(ValueError, match="Unknown Daytona network policy fields"):
         DaytonaNetworkPolicy.from_config({"mode": "block_all", "extra": "value"})
+
+
+def test_connection_hides_the_api_key_from_every_representation() -> None:
+    connection = DaytonaConnection(
+        api_key="synthetic-secret-key", api_url="https://fixture.invalid/api", target="fixture"
+    )
+    factory = connection.client_factory()
+
+    assert "synthetic-secret-key" not in repr(connection)
+    assert "synthetic-secret-key" not in repr(factory)
+    with pytest.raises(ValueError, match="explicit api_key, api_url and target"):
+        DaytonaConnection(api_url="https://fixture.invalid/api", target="fixture").client_factory()
+
+
+def test_connection_module_imports_without_the_daytona_sdk() -> None:
+    script = "\n".join(
+        (
+            "import sys",
+            "sys.modules['daytona'] = None  # the optional extra is absent",
+            "import shellbox.backends.daytona.connection",
+            "connection = shellbox.backends.daytona.connection.DaytonaConnection(",
+            "    api_key='synthetic-secret-key', api_url='https://fixture.invalid/api', target='fixture'",
+            ")",
+            "factory = connection.client_factory()",
+            "assert callable(factory)",
+            "print('resolved')",
+        )
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert "resolved" in result.stdout
 
 
 def test_snapshot_request_interchange_round_trips_the_identity() -> None:

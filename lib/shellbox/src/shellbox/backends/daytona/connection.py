@@ -5,9 +5,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from functools import partial
-
-from daytona import AsyncDaytona, DaytonaConfig
+from typing import Any
 
 DEFAULT_DAYTONA_API_URL = "https://app.daytona.io/api"
 
@@ -20,22 +18,25 @@ class DaytonaConnection:
     authenticate against the wrong account. Fields may stay unset on hosts
     that do not use Daytona; creating a client requires every value, so an
     incomplete connection fails where the account is used instead of falling
-    back to ambient credentials. The API key is hidden from ``repr``.
+    back to ambient credentials. Neither the connection nor its client
+    factory exposes the API key through ``repr``, and this module imports
+    without the optional Daytona SDK, which is only loaded when a client is
+    created.
     """
 
     api_key: str | None = field(default=None, repr=False)
     api_url: str | None = None
     target: str | None = None
 
-    def client_factory(self) -> Callable[[], AsyncDaytona]:
+    def client_factory(self) -> Callable[[], Any]:
         """Validate the connection and return a callable that builds SDK clients."""
         if not (self.api_key and self.api_url and self.target):
             raise ValueError("Daytona requires an explicit api_key, api_url and target")
-        return partial(
-            AsyncDaytona,
-            DaytonaConfig(
-                api_key=self.api_key,
-                api_url=self.api_url,
-                target=self.target,
-            ),
-        )
+        api_key, api_url, target = self.api_key, self.api_url, self.target
+
+        def client() -> Any:
+            from daytona import AsyncDaytona, DaytonaConfig  # guard the optional SDK dependency
+
+            return AsyncDaytona(DaytonaConfig(api_key=api_key, api_url=api_url, target=target))
+
+        return client
