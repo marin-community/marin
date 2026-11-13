@@ -522,6 +522,11 @@ command does not publish datasets or alter Atlas admission.
 
 ### Review frozen SAMPLE content panels
 
+Requests using ReviewerSpec V3 have a 1,200-second HTTP deadline to give its
+16,384-token output retry more time. ReviewerSpec V2 retains 300 seconds. The
+client deadline preserves the pinned model, prompt, sampling parameters, token
+budgets and reviewer cache identity.
+
 [`admission_inventory`](../../../docs/references/task-curation.md#declarations)
 counts each pinned source population and selects at most 100 TaskSpecs by
 seed-zero task-ID ordering. The queue is a JSON array of complete, unchanged rows

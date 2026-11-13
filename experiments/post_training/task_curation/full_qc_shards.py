@@ -17,6 +17,7 @@ from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training.task_curation.full_qc import (
+    REVIEW_REQUEST_TIMEOUTS,
     REVIEW_RUBRIC,
     ReadyChatReviewer,
     ReviewerVersion,
@@ -73,6 +74,7 @@ def review_work(work: list[ShardWork], args: argparse.Namespace) -> None:
                 source_spec,
                 query_cache_root=args.review_cache,
                 max_concurrent=SHARD_REQUEST_CONCURRENCY // args.batch_workers,
+                request_timeout=REVIEW_REQUEST_TIMEOUTS[args.reviewer_version],
             )
             output = StoragePath(row.shard_output_path) / f"{args.shard_index:03}"
             result = review_shard(
