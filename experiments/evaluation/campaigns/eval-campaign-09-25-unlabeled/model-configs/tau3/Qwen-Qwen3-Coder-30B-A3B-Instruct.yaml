@@ -1,7 +1,7 @@
 # tau3-pi-only serving override: 131072 context, 32768 per-turn output.
 # Qwen3-Coder-30B-A3B-Instruct: non-thinking coder MoE. Mirrors the Marin catalog entry with the
 # policy's pinned revision and 73,728-token MRCR context. The generation-config override only
-# reaches Harbor agents; curated evaluation benchmarks send their own temperature.
+# reaches Harbor agents and evaluation benchmarks that declare no temperature.
 name: Qwen-Qwen3-Coder-30B-A3B-Instruct
 location: Qwen/Qwen3-Coder-30B-A3B-Instruct
 revision: b2cff646eb4bb1d68355c01b18ae02e7cf42d120

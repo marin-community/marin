@@ -222,7 +222,7 @@ def text_generation_evaluation(
                 version=EXPLICIT_TEMPLATE_VERSION,
                 operation=OperationKind.TEXT_GENERATION,
                 sampling=sampling,
-                trials=TrialPolicy(count=1, seed=None),
+                trials=TrialPolicy(count=1, seed=0),
                 metrics=tuple(Metric(name=metric, kind=MetricKind.BINARY, higher_is_better=True) for metric in metrics),
                 primary_metric=metrics[0],
                 num_fewshot=template.fewshot.shots,
@@ -280,9 +280,9 @@ def _compile_lm_eval_text_generation(
                 version="2026.11.13",
                 operation=OperationKind.TEXT_GENERATION,
                 sampling=Sampling(
-                    temperature=0, top_p=None, top_k=None, max_tokens=None, stop=stop, chat_template_kwargs={}
+                    temperature=None, top_p=None, top_k=None, max_tokens=None, stop=stop, chat_template_kwargs={}
                 ),
-                trials=TrialPolicy(count=1, seed=None),
+                trials=TrialPolicy(count=1, seed=0),
                 num_fewshot=shots,
                 metrics=tuple(
                     Metric(

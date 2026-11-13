@@ -76,14 +76,14 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                         version="2026.11.13",
                         operation=OperationKind.CHAT_GENERATION,
                         sampling=Sampling(
-                            temperature=0,
+                            temperature=None,
                             top_p=None,
                             top_k=None,
                             max_tokens=256,
                             stop=(),
                             chat_template_kwargs={},
                         ),
-                        trials=TrialPolicy(count=1, seed=None),
+                        trials=TrialPolicy(count=1, seed=0),
                         metrics=tuple(
                             Metric(
                                 name=metric,

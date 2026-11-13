@@ -82,14 +82,14 @@ def instruction_following_evaluation(
                     else OperationKind.CHAT_GENERATION
                 ),
                 sampling=Sampling(
-                    temperature=0,
+                    temperature=None,
                     top_p=None,
                     top_k=None,
                     max_tokens=max_tokens,
                     stop=(),
                     chat_template_kwargs={} if profile is InstructionProfile.HARNESS else {"enable_thinking": False},
                 ),
-                trials=TrialPolicy(count=1, seed=None),
+                trials=TrialPolicy(count=1, seed=0),
                 metrics=tuple(
                     Metric(
                         name=name,
