@@ -23,7 +23,6 @@ A failed snapshot or write is logged and drops that transaction's rows; it never
 rolls back the controller's own writes or stops its later post-commit hooks.
 """
 
-import json
 import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -39,7 +38,7 @@ from sqlalchemy.engine.cursor import CursorResult
 from iris.cluster.constraints import get_device_variant
 from iris.cluster.controller.codec import proto_from_json
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
-from iris.cluster.redaction import redact_env_inputs, redact_string
+from iris.cluster.redaction import redact_env_inputs, redact_job_tags, redact_string
 from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisJobTask, IrisTaskAttempt, stats_timestamp
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
@@ -205,14 +204,6 @@ def _free_text(value: str | None) -> str | None:
     return redact_string(value) if value is not None else None
 
 
-def _redacted_tags(tags_json: str | None) -> str | None:
-    """Job tags are user-written but kept for reporting: each value stays
-    readable, with token-like strings redacted as in ``_free_text``."""
-    if tags_json is None:
-        return None
-    return json.dumps({name: redact_string(value) for name, value in json.loads(tags_json).items()})
-
-
 def _dt(value: Timestamp | None) -> datetime | None:
     return value.as_naive_utc() if value is not None else None
 
@@ -277,7 +268,7 @@ def _snapshot_jobs(cur: RowCursor, tables: ControllerRowTables, marked: _Marked,
                     backend_id=r.backend_id,
                     placement=r.cluster,
                     ts=ts,
-                    tags=_redacted_tags(r.tags_json),
+                    tags=redact_job_tags(r.tags_json),
                 )
             )
 

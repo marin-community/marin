@@ -139,6 +139,14 @@ def redact_submit_argv(argv: list[str]) -> list[str]:
     return out
 
 
+def redact_job_tags(tags_json: str | None) -> str | None:
+    """Job tags as a JSON object, each value kept readable with token-like strings
+    redacted, as for the free-text error columns; ``None`` when untagged."""
+    if tags_json is None:
+        return None
+    return json.dumps({name: redact_string(value) for name, value in json.loads(tags_json).items()})
+
+
 def _redacted_provenance(raw: str) -> dict[str, object] | None:
     """The launch provenance's fields, each redacted; ``None`` if *raw* does not parse."""
     try:
