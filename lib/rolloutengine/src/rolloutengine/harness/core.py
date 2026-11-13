@@ -62,29 +62,21 @@ class ModelSession(Protocol):
     raises, so a harness that asks again in a loop does not stop other attempts.
     """
 
-    async def start(self, prompt: Prompt, *, context_recovery: ContextRecovery = ContextRecovery.NEVER) -> ModelTurn:
+    async def start(self, prompt: Prompt) -> ModelTurn:
         """Start a new conversation with ``prompt`` and return the model's turn.
 
         A later ``start`` replaces the chat, for example after the harness makes its history shorter or
         changes its tools. The rollout keeps the earlier conversations.
-        ``context_recovery`` selects when a transport's ``ContextRejected`` becomes a non-mutating
-        ``ContextWindowExceeded``. Otherwise the session applies its original error. ``AFTER_TURN``
-        counts completed model turns across all conversations in this attempt.
         """
         ...
 
     async def reply(
-        self,
-        observations: tuple[dict[str, Any], ...],
-        *,
-        token_ids: tuple[int, ...] | None = None,
-        context_recovery: ContextRecovery = ContextRecovery.NEVER,
+        self, observations: tuple[dict[str, Any], ...], *, token_ids: tuple[int, ...] | None = None
     ) -> ModelTurn:
         """Send ``observations`` after the model's last message, and return the next turn.
 
         ``token_ids`` pins the exact tokens of the next prompt. They must start with the tokens served so far:
         under ``TraceMode.EXACT_TOKENS``, other tokens break the token contract before the request is sent.
-        ``context_recovery`` has the same meaning as on ``start``.
         """
         ...
 
@@ -107,6 +99,11 @@ class ModelSession(Protocol):
 
 class Harness(Protocol):
     """The agent loop for a task: what the model sees, which tools run, and when the attempt ends."""
+
+    @property
+    def context_recovery(self) -> ContextRecovery:
+        """When the session lets this harness recover from a context rejection during an attempt."""
+        ...
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
         """Raise an error if this harness cannot run ``task`` under ``limits``, before any machine starts."""

@@ -67,6 +67,8 @@ async def run_harbor_trial(
 class HarborTrialHarness:
     """Let Harbor finish verification after the model reaches its rollout limit."""
 
+    context_recovery = ContextRecovery.AFTER_TURN
+
     def __init__(self, run_trial: Callable[[AgentCompletion], Awaitable[TrialResult]], reward_key: str) -> None:
         self.run_trial = run_trial
         self.reward_key = reward_key
@@ -94,13 +96,9 @@ class HarborTrialHarness:
                         and prompt.options == last[0].options
                         and prompt.messages[: len(history)] == history
                     ):
-                        turn = await session.reply(
-                            prompt.messages[len(history) :],
-                            token_ids=prompt.token_ids,
-                            context_recovery=ContextRecovery.AFTER_TURN,
-                        )
+                        turn = await session.reply(prompt.messages[len(history) :], token_ids=prompt.token_ids)
                     else:
-                        turn = await session.start(prompt, context_recovery=ContextRecovery.AFTER_TURN)
+                        turn = await session.start(prompt)
                 except LimitReached as error:
                     stopped = error.stop_reason
                     raise AgentGenerationStopped(stopped) from error

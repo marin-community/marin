@@ -37,6 +37,8 @@ class AgentHarness:
     cancelled calls and for the shutdown of the agent.
     """
 
+    context_recovery = ContextRecovery.ALWAYS
+
     agent: AgentRun
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
@@ -100,13 +102,9 @@ class _Completions:
                     and prompt.options == last.prompt.options
                     and prompt.messages[: len(history)] == history
                 ):
-                    turn = await self.session.reply(
-                        prompt.messages[len(history) :],
-                        token_ids=prompt.token_ids,
-                        context_recovery=ContextRecovery.ALWAYS,
-                    )
+                    turn = await self.session.reply(prompt.messages[len(history) :], token_ids=prompt.token_ids)
                 else:
-                    turn = await self.session.start(prompt, context_recovery=ContextRecovery.ALWAYS)
+                    turn = await self.session.start(prompt)
             except RolloutEnded:
                 self.end()
             else:

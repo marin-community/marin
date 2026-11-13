@@ -175,11 +175,20 @@ class _Recorder:
     and records a sent request that has no answer. Final observations replace such a request.
     """
 
-    def __init__(self, model: Model, limits: RolloutLimits, mode: TraceMode, events: EventSink):
+    def __init__(
+        self,
+        model: Model,
+        limits: RolloutLimits,
+        mode: TraceMode,
+        events: EventSink,
+        *,
+        context_recovery: ContextRecovery,
+    ):
         self.model = model
         self.limits = limits
         self.mode = mode
         self.events = events
+        self.context_recovery = context_recovery
         self.earlier: list[ConversationRecord] = []
         self.conversation: _Conversation | None = None
         self.request: _Request | None = None
@@ -210,7 +219,7 @@ class _Recorder:
             return tuple(conversation.messages)
         return next((record.messages for record in reversed(self.earlier) if record.steps), None)
 
-    async def start(self, prompt: Prompt, *, context_recovery: ContextRecovery = ContextRecovery.NEVER) -> ModelTurn:
+    async def start(self, prompt: Prompt) -> ModelTurn:
         await self._enter()
         current = self.conversation
         if current is not None and (
@@ -224,14 +233,10 @@ class _Recorder:
             deadlines.total.reschedule(asyncio.get_running_loop().time() + self.limits.total_turn_timeout)
         conversation = _Conversation(prompt, self.mode)
         request = _Request(self.step_observations, None, conversation, self._waited())
-        return await self._send(request, conversation.request((), prompt.token_ids), context_recovery)
+        return await self._send(request, conversation.request((), prompt.token_ids))
 
     async def reply(
-        self,
-        observations: tuple[dict[str, Any], ...],
-        *,
-        token_ids: tuple[int, ...] | None = None,
-        context_recovery: ContextRecovery = ContextRecovery.NEVER,
+        self, observations: tuple[dict[str, Any], ...], *, token_ids: tuple[int, ...] | None = None
     ) -> ModelTurn:
         await self._enter()
         conversation = self.conversation
@@ -253,7 +258,7 @@ class _Recorder:
             self.model_error = RolloutContractError("Pinned prompt tokens must start with the tokens served so far")
             raise RolloutEnded("The pinned prompt broke the token contract") from self.model_error
         request = _Request(observations, token_ids, None, self._waited())
-        return await self._send(request, conversation.request(observations, token_ids), context_recovery)
+        return await self._send(request, conversation.request(observations, token_ids))
 
     def record(
         self,
@@ -339,9 +344,7 @@ class _Recorder:
         self.stopped = True
         raise LimitReached(self.stop_reason)
 
-    async def _send(
-        self, request: _Request, model_request: ModelRequest, context_recovery: ContextRecovery
-    ) -> ModelTurn:
+    async def _send(self, request: _Request, model_request: ModelRequest) -> ModelTurn:
         self.request = request
         self._set_tool_deadline(None)
         started = time.monotonic()
@@ -352,14 +355,7 @@ class _Recorder:
         try:
             try:
                 async with call:
-                    try:
-                        outcome: ModelTurn | Exception = await self.model(model_request)
-                    except ContextRejected as rejection:
-                        if context_recovery == ContextRecovery.ALWAYS or (
-                            context_recovery == ContextRecovery.AFTER_TURN and self.has_response
-                        ):
-                            raise ContextWindowExceeded(str(rejection)) from rejection.error
-                        outcome = rejection.error
+                    outcome: ModelTurn | Exception = await self.model(model_request)
             except Exception as error:
                 outcome = error
             if task.cancelling() > cancelling:
@@ -377,13 +373,14 @@ class _Recorder:
             outcome = TimeoutError("The model turn deadline expired")
         if self._ended():
             raise RolloutEnded("The harness ended, or a deadline expired, while the model generated")
-        if isinstance(outcome, ContextWindowExceeded):
-            # Nothing was served. Preserve the pending turn so either a shorter
-            # reply or a compacted conversation can be submitted under the same
-            # attempt deadline and cumulative token/turn limits.
-            self.request = None
-            self._set_tool_deadline(self.limits.tool_turn_timeout)
-            raise outcome
+        if isinstance(outcome, ContextRejected):
+            if self.context_recovery == ContextRecovery.ALWAYS or (
+                self.context_recovery == ContextRecovery.AFTER_TURN and self.has_response
+            ):
+                self.request = None
+                self._set_tool_deadline(self.limits.tool_turn_timeout)
+                raise ContextWindowExceeded(str(outcome)) from outcome.error
+            outcome = outcome.error
         self._record_request(request)
         conversation = self.conversation
         assert conversation is not None
@@ -568,7 +565,7 @@ async def harness_rollout(
     """
     harness.check(task, limits)
     run_id = uuid.uuid4().hex if run_id is None else run_id
-    recorder = _Recorder(model, limits, trace, events)
+    recorder = _Recorder(model, limits, trace, events, context_recovery=harness.context_recovery)
     cleanup = _Cleanup(limits.cleanup_timeout)
     async with AsyncExitStack() as resources:
         context = HarnessContext(task, limits, machine, events, _CleanupScope(resources, cleanup), run_id)
