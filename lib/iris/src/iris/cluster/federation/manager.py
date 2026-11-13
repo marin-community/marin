@@ -22,6 +22,7 @@ import logging
 import threading
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from enum import StrEnum
 from typing import TypeVar
 
 from connectrpc.code import Code
@@ -74,6 +75,14 @@ _PEER_RPC_ERRORS = (ConnectError, ConnectionError, OSError)
 # auth failures are excluded — a federation bearer is minted per request, so
 # UNAUTHENTICATED is a key/clock/rollout transient that a later attempt can clear.
 _TERMINAL_HANDOFF_CODES = frozenset({Code.ALREADY_EXISTS, Code.PERMISSION_DENIED, Code.INVALID_ARGUMENT})
+
+
+class _PeerLoop(StrEnum):
+    """The per-peer background loops; the value tags their failure metric."""
+
+    HEARTBEAT = "heartbeat"
+    SYNC = "sync"
+
 
 # Failures the background loops log and retry rather than raise. A rising count for one
 # peer means its handoffs or sync are failing on every pass.
@@ -364,7 +373,7 @@ class FederationManager:
         return peer
 
     def _run_loop(
-        self, stop_event: threading.Event, step: Callable[[], None], interval: float, *, loop: str, peer_id: str
+        self, stop_event: threading.Event, step: Callable[[], None], interval: float, *, loop: _PeerLoop, peer_id: str
     ) -> None:
         """Run ``step`` every ``interval`` seconds until ``stop_event`` is set."""
         while not stop_event.is_set():
@@ -379,7 +388,7 @@ class FederationManager:
 
     def _run_peer_heartbeat_loop(self, stop_event: threading.Event, peer: FederationPeer) -> None:
         self._run_loop(
-            stop_event, peer.probe, self._heartbeat_interval.to_seconds(), loop="heartbeat", peer_id=peer.peer_id
+            stop_event, peer.probe, self._heartbeat_interval.to_seconds(), loop=_PeerLoop.HEARTBEAT, peer_id=peer.peer_id
         )
 
     def _run_peer_sync_loop(self, stop_event: threading.Event, peer: FederationPeer) -> None:
@@ -387,7 +396,7 @@ class FederationManager:
             stop_event,
             lambda: self._sync_peer_once(peer),
             self._sync_interval.to_seconds(),
-            loop="sync",
+            loop=_PeerLoop.SYNC,
             peer_id=peer.peer_id,
         )
 
