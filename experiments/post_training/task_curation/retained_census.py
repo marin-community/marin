@@ -49,7 +49,7 @@ def retained_population(publication: PublicationReceipt, output: str, converter_
         rows.clear()
         partition += 1
 
-    for path in sorted(StoragePath(publication.specs_output_dir + "/*.parquet").glob(), key=str):
+    for path in sorted((StoragePath(publication.specs_output_dir) / "*.parquet").glob(), key=str):
         with path.open("rb") as stream:
             for batch in pq.ParquetFile(stream).iter_batches(batch_size=16, columns=["task_spec", "task_sha256"]):
                 for row in batch.to_pylist():

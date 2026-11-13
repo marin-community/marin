@@ -78,7 +78,7 @@ def filter_population(plan: ReleasePlan, specs_dir: str, output: Path, original:
     with pq.ParquetWriter(output, TASK_SCHEMA, compression="zstd") as writer:
         original_writer = None if original is None else pq.ParquetWriter(original, TASK_SCHEMA, compression="zstd")
         try:
-            for path in sorted(StoragePath(specs_dir + "/*.parquet").glob(), key=str):
+            for path in sorted((StoragePath(specs_dir) / "*.parquet").glob(), key=str):
                 shard_count = 0
                 with path.open("rb") as stream:
                     for batch in pq.ParquetFile(stream).iter_batches(batch_size=16):

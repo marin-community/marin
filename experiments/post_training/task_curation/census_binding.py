@@ -12,6 +12,7 @@ from pathlib import Path
 from finestore.rl.curation import ActorCensusInput, DaytonaMeasurement, IntegrityContractSummary
 from finestore.rl.source_identity import SourceId, canonical_source_id
 from pydantic import BaseModel, ConfigDict, model_validator
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
@@ -106,7 +107,7 @@ def receipt_from_census(census: Mapping, summary: IntegrityContractSummary | Non
             converter_revision=census["converter_revision"],
             measured_tasks=census["task_count"],
             task_specs_sha256=census["task_specs_sha256"],
-            evidence_url=census["path"] + "/.artifact.json",
+            evidence_url=str(StoragePath(census["path"]) / ".artifact.json"),
         ),
         measurement=DaytonaMeasurement.model_validate(
             {name: census[name] for name in DaytonaMeasurement.model_fields if name in census}

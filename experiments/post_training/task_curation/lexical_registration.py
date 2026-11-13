@@ -10,6 +10,7 @@ from pathlib import Path
 
 from finestore.rl.curation import ActorCensusInput, LexicalContaminationEvidence
 from finestore.rl.source_identity import canonical_source_map
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
@@ -43,7 +44,7 @@ def measurement_receipts(
             converter_revision=population.converter_revision,
             measured_tasks=population.task_count,
             task_specs_sha256=population.task_specs_sha256,
-            evidence_url=population.path + "/.artifact.json",
+            evidence_url=str(StoragePath(population.path) / ".artifact.json"),
         )
         actor = actor_receipts.get(source_id)
         if actor is None or population_input.model_dump(exclude={"evidence_url"}) != actor.input.model_dump(

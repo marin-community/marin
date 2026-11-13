@@ -34,7 +34,7 @@ def grading_receipt(census: dict, output_root: str) -> RetainedGradingReceipt:
     """Count the retained importer's persisted assessments without parsing task payloads."""
     counts = Counter()
     normalized = census["normalized_path"]
-    for path in sorted(StoragePath(normalized + "/normalize/*.parquet").glob(), key=str):
+    for path in sorted((StoragePath(normalized) / "normalize/*.parquet").glob(), key=str):
         with path.open("rb") as stream:
             for batch in pq.ParquetFile(stream).iter_batches(batch_size=1000, columns=["grading_environment"]):
                 for assessment in batch.column(0).to_pylist():
