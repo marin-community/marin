@@ -620,9 +620,11 @@ checks the advertised model; an unregistered worker is skipped until it returns.
 The command neither starts nor stops serving jobs. Keep the primary 48 workers
 running and use a separate output prefix and cache.
 
-Set `--batch-workers` explicitly, from one to 16. The writer streams fixed groups
-of that many original 32-task batches and processes each group concurrently;
-it never queues the whole source in memory. Each batch admits at most four
+Set `--batch-workers` explicitly, from one to 16. Inference groups contain only
+original 32-task batches with incomplete primary observations, so intervening
+valid batches do not consume worker slots. Only one group of TaskSpecs is queued
+at a time. Completed repair results remain in memory until a second source pass
+writes every retained batch in its original order. Each batch admits at most four
 requests, so the CLI adds at most 64 concurrent repair requests across the
 borrowed serving pool. Physical routing and concurrency do not change the
 reviewer, request-cache or composite identity. Only incomplete primary contracts
