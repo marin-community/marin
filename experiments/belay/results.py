@@ -7,13 +7,14 @@ The verdict is a fixed rule per Track (``config.TRACKS``): Δ against the same-s
 Δ ≤ -noise a win, Δ ≥ +noise a loss and anything between noise.
 """
 
+import math
 from dataclasses import dataclass
 from enum import StrEnum
 from statistics import median
 
 import wandb
 
-from experiments.belay.config import CONFIG, Baseline, Rule
+from experiments.belay.config import CONFIG, Baseline, ProjectionBasis, Rule
 
 
 class Verdict(StrEnum):
@@ -89,6 +90,43 @@ def wall_step_time(timestamps: dict[int, float]) -> float:
     if len(steps) < 2:
         raise SystemExit(f"refusing: fewer than two logged steps in {WALL_STEPS}")
     return (timestamps[steps[-1]] - timestamps[steps[0]]) / (steps[-1] - steps[0])
+
+
+@dataclass(frozen=True)
+class Projection:
+    """A complete ladder carried to hero compute (``ladder_projection``)."""
+
+    delta: float
+    """The variant's projected Paloma macro loss minus the recipe's, at hero compute."""
+    multiplier: float
+    """The compute the recipe would need to reach the variant's projected loss, over the hero compute."""
+    alpha: float
+    """The variant's fitted exponent (the recipe's is the basis ``alpha``)."""
+    extrapolation: float
+    """Hero compute over the largest rung's."""
+
+
+def ladder_projection(deltas: dict[str, float], basis: ProjectionBasis) -> Projection:
+    """Fit the variant's rungs (the recipe's fitted loss plus each rung's Paloma macro Δ, at the rung's FLOPs) with the
+    recipe's form, floor + A·C^-alpha, by least squares in log space, and compare the two curves at hero compute."""
+    if set(deltas) != set(basis.rung_flops):
+        raise ValueError(f"a projection needs every rung {sorted(basis.rung_flops)}, got {sorted(deltas)}")
+
+    def recipe(flops: float) -> float:
+        return basis.floor + basis.a * flops**-basis.alpha
+
+    xs = [math.log(basis.rung_flops[r]) for r in deltas]
+    ys = [math.log(recipe(basis.rung_flops[r]) + d - basis.floor) for r, d in deltas.items()]
+    mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+    slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True)) / sum((x - mx) ** 2 for x in xs)
+    variant = basis.floor + math.exp(my - slope * mx) * basis.hero_flops**slope
+    multiplier = ((variant - basis.floor) / basis.a) ** (-1 / basis.alpha) / basis.hero_flops
+    return Projection(
+        delta=variant - recipe(basis.hero_flops),
+        multiplier=multiplier,
+        alpha=-slope,
+        extrapolation=basis.hero_flops / max(basis.rung_flops.values()),
+    )
 
 
 def measure(name: str, metric: str, skip: int = SKIP_STEPS) -> Measure:

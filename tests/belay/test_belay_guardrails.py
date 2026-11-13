@@ -55,7 +55,7 @@ from experiments.belay.code_change import (
     refuse_flag_off_change,
     refuse_outside_allowed,
 )
-from experiments.belay.config import CONFIG, TRACKS, WEEKLY_BRANCH, Track
+from experiments.belay.config import CONFIG, PROJECTION_BASIS, TRACKS, WEEKLY_BRANCH, Track
 from experiments.belay.page import (
     Idea,
     PageState,
@@ -76,8 +76,16 @@ from experiments.belay.posts import (
     title,
     updated,
 )
-from experiments.belay.registry_entry import potential_of, reset_checkout, with_step_time
-from experiments.belay.results import Verdict, after_equal_data, change, overall_verdict, verdict, wall_step_time
+from experiments.belay.registry_entry import latest_ladder_trials, potential_of, reset_checkout, with_step_time
+from experiments.belay.results import (
+    Verdict,
+    after_equal_data,
+    change,
+    ladder_projection,
+    overall_verdict,
+    verdict,
+    wall_step_time,
+)
 from experiments.belay.submit import (
     LADDER_RUNGS,
     HeroMfuResult,
@@ -100,7 +108,7 @@ from experiments.belay.submit import (
     tracks_of_comment,
     with_launched,
 )
-from experiments.belay.sync import is_belay_file, run_total_steps
+from experiments.belay.sync import is_belay_file, newest_suggestions, run_total_steps
 from experiments.grug.fast_track import belay_s7, belay_tracks
 
 MONDAY = datetime.date(2026, 11, 2)
@@ -980,3 +988,54 @@ def test_a_node_grant_counts_every_rung_of_the_idea() -> None:
     running = [IrisJob(f"/u/belay-X0037d{n}-seed0-coord", "running", "") for n in (512, 768)]
     with pytest.raises(SystemExit, match="node grant 2 for X0037d1024"):
         check_ladder_launch([Track.COMPETITIVE_D1024], running, 99, 2, "X0037d1024")
+
+
+def test_the_admin_page_lists_the_newest_suggestions_by_people_newest_first() -> None:
+    def comment(n: int, login: str = "someone", kind: str = "User") -> dict:
+        return {
+            "id": n,
+            "user": {"login": login, "type": kind},
+            "body": f"idea {n}",
+            "html_url": f"https://github.com/c/{n}",
+            "created_at": f"2026-11-{n:02d}T00:00:00Z",
+        }
+
+    comments = [comment(1), comment(2, "marin-belay-bot"), comment(3, "dependabot", "Bot"), comment(4), comment(5)]
+    listed = newest_suggestions(comments, limit=2)
+    assert [c["comment_id"] for c in listed] == ["5", "4"]
+    assert listed[0] == {
+        "comment_id": "5",
+        "author": "someone",
+        "body": "idea 5",
+        "url": "https://github.com/c/5",
+        "posted_at": "2026-11-05T00:00:00Z",
+    }
+
+
+def test_a_ladder_whose_gain_shrinks_with_scale_projects_to_a_loss_at_hero_compute() -> None:
+    shrinking = ladder_projection(
+        {"d512": -0.0426, "d768": -0.0215, "d1024": -0.0113, "d1280": -0.0059}, PROJECTION_BASIS
+    )
+    assert shrinking.delta == pytest.approx(0.0150, abs=5e-4)  # X0221 CPLM Plus
+    assert shrinking.multiplier < 1 and shrinking.alpha < PROJECTION_BASIS.alpha
+    steady = ladder_projection({r: -0.01 for r in PROJECTION_BASIS.rung_flops}, PROJECTION_BASIS)
+    assert -0.01 < steady.delta < 0 and steady.multiplier > 1
+    none = ladder_projection({r: 0.0 for r in PROJECTION_BASIS.rung_flops}, PROJECTION_BASIS)
+    assert none.delta == pytest.approx(0.0, abs=1e-9) and none.multiplier == pytest.approx(1.0)
+    with pytest.raises(ValueError, match="every rung"):
+        ladder_projection({"d512": -0.01}, PROJECTION_BASIS)
+
+
+def test_a_projection_uses_each_rungs_latest_result() -> None:
+    def trial(tid: str, rung: str, delta: float | None) -> dict:
+        return {"id": tid, "rung": rung, **({"delta": [delta]} if delta is not None else {})}
+
+    entry = {
+        "trials": [
+            trial("t001", "competitive-d512", -0.02),
+            trial("t002", "speedrun", -0.01),
+            trial("t003", "competitive-d512", -0.01),  # a relaunch
+            trial("t004", "competitive-d768", None),  # launched, no result yet
+        ]
+    }
+    assert {r: t["id"] for r, t in latest_ladder_trials(entry).items()} == {"d512": "t003"}

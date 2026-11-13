@@ -22,6 +22,9 @@ from experiments.belay.config import CONFIG, Protocol, Track
 from experiments.belay.page import Idea
 from experiments.belay.results import RunResult
 
+# A competitive ladder rung's Track is this prefix plus the rung (competitive-d768).
+COMPETITIVE_PREFIX = "competitive-"
+
 ENTRIES = "experiments/belay/registry"
 MAX_SUMMARY = 400
 
@@ -36,6 +39,23 @@ def require_registry_checkout() -> None:
     if branch != CONFIG.registry_branch:
         raise SystemExit(f"refusing: {CONFIG.registry_checkout} is on {branch}, not {CONFIG.registry_branch}")
     git(CONFIG.registry_checkout, "pull", "--ff-only", "--quiet", "origin", CONFIG.registry_branch)
+
+
+def latest_ladder_trials(entry: dict) -> dict[str, dict]:
+    """The entry's latest trial with a result on each competitive rung, by rung (``d768``)."""
+    latest = {}
+    for trial in entry.get("trials") or []:
+        rung = trial.get("rung") or ""
+        if rung.startswith(COMPETITIVE_PREFIX) and trial.get("delta"):
+            latest[rung.removeprefix(COMPETITIVE_PREFIX)] = trial
+    return latest
+
+
+def with_projection(text: str, projection: dict) -> str:
+    """The entry YAML ``text`` with its ladder's ``projection`` block (``ladder_projection_block``)."""
+    entry = yaml.safe_load(text)
+    entry["projection"] = projection
+    return yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120)
 
 
 def reset_checkout(checkout: Path, branch: str) -> list[str]:
@@ -223,8 +243,11 @@ def entry_with_results(registry_id: str, results: list[RunResult]) -> tuple[Path
     entry = yaml.safe_load(path.read_text())
     by_name = {r.name: r for r in results}
     controls = {r.seed: r for r in results if r.control}
-    for trial in entry.get("trials", []):
-        runs = [by_name[n] for n in trial.get("wandb", []) if n in by_name]
+    # A run name reused by a relaunch (the same experiment run after a crash) belongs to its latest trial only.
+    filled: set[str] = set()
+    for trial in reversed(entry.get("trials", [])):
+        runs = [by_name[n] for n in trial.get("wandb", []) if n in by_name and n not in filled]
+        filled.update(r.name for r in runs)
         if not runs:
             continue
         trial["loss"] = [round(r.loss, 4) for r in runs]

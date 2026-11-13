@@ -223,6 +223,38 @@ COMPETITIVE_MINUTES = {"d512": 180, "d768": 720, "d1024": 1080, "d1280": 1440}
 COMPETITIVE_BASELINE_RUNS = {"d512": "s7n-d512", "d768": "s7n-d768", "d1024": "s7n-d1024", "d1280": "s7n-d1280L16"}
 
 
+@dataclass(frozen=True)
+class ProjectionBasis:
+    """What a ladder is carried to hero compute against: the recipe's own four-rung fit of Paloma macro loss,
+    L(C) = floor + A·C^-alpha on analytic training FLOPs C, the FLOPs of each rung, and the hero compute (the hardware
+    budget at the recipe's hero-scale MFU). The Belay page's scaling chart draws the same fit (web/scaling.json)."""
+
+    recipe: str
+    fitted: str
+    """When the fit was made, and from which runs."""
+    floor: float
+    a: float
+    alpha: float
+    rung_flops: dict[str, float]
+    hero_flops: float
+
+
+PROJECTION_BASIS = ProjectionBasis(
+    recipe="Belay Ckpt Oct 20 2026 (s7n)",
+    fitted="2026-11-01, on s7n-d512, s7n-d768, s7n-d1024 and s7n-d1280L16",
+    floor=1.2,
+    a=62.036,
+    alpha=0.08657,
+    rung_flops={
+        "d512": 1.3854098248748237e18,
+        "d768": 9.387976435672547e18,
+        "d1024": 5.74045241436065e19,
+        "d1280": 2.2954122115236338e20,
+    },
+    hero_flops=2.7e24 * 0.342,  # 300k GB200-hours of hardware FLOPs at the recipe's 34.2% hero-scale MFU
+)
+
+
 def _vanilla_or_moe(track: str, size: str) -> Baseline:
     name = "Vanilla Track" if track == "vanilla" else "Basic MoE"
     return Baseline(

@@ -81,6 +81,7 @@ from experiments.belay.config import (
     CONFIG,
     CONTROL_RUN,
     COREWEAVE_S3_ENDPOINT,
+    PROJECTION_BASIS,
     TRACKS,
     WEEKLY_BRANCH,
     Baseline,
@@ -133,11 +134,13 @@ from experiments.belay.registry_entry import (
     entry_path,
     entry_url,
     entry_with_results,
+    latest_ladder_trials,
     load_entry,
     potential_of,
     record_code_commit,
     replace_code_commit,
     require_registry_checkout,
+    with_projection,
     with_step_time,
 )
 from experiments.belay.results import (
@@ -146,6 +149,7 @@ from experiments.belay.results import (
     Verdict,
     after_equal_data,
     compared,
+    ladder_projection,
     measure,
     overall_verdict,
     verdict,
@@ -1391,12 +1395,47 @@ def run_finished(experiment: str, *, dry_run: bool) -> None:
         print(f"{experiment} recorded; {len(rungs_left)} other rung(s) of {registry_id} still running")
         say_next("stop (the last rung to finish scores the entry)")
         return
+    if spec.track in LADDER_RUNGS:  # the ladder is complete: it is judged by its projection to hero compute
+        overall, status = record_projection(registry_id, dry_run=dry_run)
+        if idea is not None:
+            report_idea(idea.id, {"state": "recorded", "result": {**result, "summary": status}}, dry_run=dry_run)
     if overall is Verdict.WIN:
         adoption = f"See {url}. A maintainer decides on adoption into {CONFIG.recipe_name}."
         escalate(f"{registry_id}: {status}", adoption, idea_id, registry_id, dry_run=dry_run)
         say_next(f'{BELAY} score {registry_id} --score <0-10> --rationale "<one line>" --model <your model>')
         return
     say_next(f'{BELAY} score {registry_id} --score <0-10> --rationale "<one line>" --model <your model>   (section 2d)')
+
+
+def record_projection(registry_id: str, *, dry_run: bool) -> tuple[Verdict, str]:
+    """Carry the entry's complete ladder (its latest result on each rung) to hero compute, record the projection on
+    the entry, and return its verdict and status line. The verdict is final for a hero-MFU-matched ladder and
+    provisional for an equal-steps one, whose idea needs a hero-mfu result before it joins the recipe."""
+    path = entry_path(registry_id)
+    trials = latest_ladder_trials(load_entry(registry_id))
+    projection = ladder_projection({rung: t["delta"][0] for rung, t in trials.items()}, PROJECTION_BASIS)
+    matched = all(t.get("protocol") == Protocol.HERO_MFU_MATCHED for t in trials.values())
+    protocol = Protocol.HERO_MFU_MATCHED if matched else Protocol.EQUAL_STEPS
+    block = {
+        "delta": round(projection.delta, 4),
+        "multiplier": round(projection.multiplier, 3),
+        "alpha": round(projection.alpha, 5),
+        "recipe_alpha": PROJECTION_BASIS.alpha,
+        "hero_flops": float(f"{PROJECTION_BASIS.hero_flops:.3e}"),
+        "extrapolation": round(projection.extrapolation),
+        "protocol": protocol.value,
+        "trials": [trials[rung]["id"] for rung in PROJECTION_BASIS.rung_flops],
+        "basis": f"{PROJECTION_BASIS.recipe} fit of {PROJECTION_BASIS.fitted}",
+        "date": datetime.date.today().isoformat(),
+    }
+    text = with_projection(path.read_text(), block)
+    print(f"{'would write' if dry_run else 'writing'} the {registry_id} projection: {block}")
+    if not dry_run:
+        path.write_text(text)
+    commit_and_push([path], f"Belay registry: {registry_id} ladder projected to hero compute", dry_run=dry_run)
+    projected = verdict(projection.delta, TRACKS[Track.COMPETITIVE_D1280])
+    status = f"projected {projected} at hero compute (Δ {projection.delta:+.4f}, {projection.multiplier:.2f}x compute)"
+    return projected, status if matched else f"{status}; provisional: equal steps, needs hero-mfu before inclusion"
 
 
 def ladder_rungs_left(trials: list[dict], finished: dict) -> list[dict]:
@@ -2028,6 +2067,8 @@ def main(argv: list[str]) -> None:
     p.add_argument("run", help="a run that captured a profile (for example a hero-mfu run with --profile)")
     p.add_argument("--compare", help="a second run: also print a per-kernel diff against it")
     p.add_argument("--cluster", default=TRACKS[Track.HERO_MFU].cluster, help="where the run's profile lives")
+    p = command("project")
+    p.add_argument("registry_id", help="an entry whose ladder has a result on every rung")
     p = command("score")
     p.add_argument("registry_id", nargs="?")
     p.add_argument(
@@ -2094,6 +2135,8 @@ def main(argv: list[str]) -> None:
         code_change_finish(args.registry_id, settings, dry_run=args.dry_run)
     elif args.command == "run-finished":
         run_finished(args.registry_id, dry_run=args.dry_run)
+    elif args.command == "project":
+        print(record_projection(args.registry_id, dry_run=args.dry_run)[1])
     elif args.command == "score" and args.batch:
         score_batch(args.batch, args.model, dry_run=args.dry_run)
     elif args.command == "score":
