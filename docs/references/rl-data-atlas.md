@@ -90,14 +90,15 @@ pins, deduplication ledgers, lexical measurements, QC and archived assessment pa
 
 **Contamination** is computed from each source's lexical-decontamination record:
 
-- **NO ISSUES**: measured with zero overlapping tasks.
+- **NO ISSUES**: zero overlap measured for the current input pin or certified by
+  a validated current retained-release receipt.
 - **REMEDIATED**: TRAIN overlap was excluded in a new pinned private TaskCompendium
   release, with a validated remediation receipt matching the current dataset pin.
 - **MEASURED, EVAL**: EVAL or benchmark overlap is retained by policy; the overlapping
   count remains visible.
 - **REMEDIATION REQUIRED**: TRAIN overlap lacks verified remediation for the current
   private pin. This state violates the ingestion requirement.
-- **NOT MEASURED**: no record exists; cleanliness is unknown.
+- **NOT MEASURED**: no applicable current-pin record exists; cleanliness is unknown.
 
 Counts describe the measured input before duplicate and lexical exclusions. They do
 not describe residual overlap in the retained release or semantic decontamination.

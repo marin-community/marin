@@ -21,7 +21,7 @@ function value(row, key) {
   if (key === 'quality') return qualityOrder[row.quality];
   if (key === 'result') return resultKey(row);
   if (key === 'contamination') return row.contamination_status;
-  if (key === 'overlap') return row.lexical_contamination?.contaminated_tasks;
+  if (key === 'overlap') return row.contamination_status === 'NOT MEASURED' ? null : row.lexical_contamination?.contaminated_tasks;
   if (key === 'daytona') return row.daytona.state;
   if (key === 'area') return row.coverage?.top_area?.name;
   if (key === 'updated') return row.updated_at;
@@ -167,8 +167,8 @@ function sourceRow(row, others, canonical) {
     const badge = node('span', resultLabels[key] + (provisional ? ' · provisional' : ''), `chip quality-${resultClasses[key]}${provisional ? ' result-provisional' : ''}`);
     result.append(badge);
     const issueRate = node('td', row.issue_rate == null || !row.result ? '—' : `${(100 * row.issue_rate).toFixed(2)}%`, 'num issue-rate-cell');
-    const overlap = node('td', row.lexical_contamination ? number.format(row.lexical_contamination.contaminated_tasks) : '—', 'num overlap-cell');
-    overlap.title = row.lexical_contamination ? `${number.format(row.lexical_contamination.measured_tasks)} measured input tasks; exclusions and matched evaluations are in Evidence.` : 'No lexical measurement is recorded.';
+    const overlap = node('td', value(row, 'overlap') == null ? '—' : number.format(value(row, 'overlap')), 'num overlap-cell');
+    overlap.title = row.contamination_status === 'NOT MEASURED' ? 'No applicable current-pin lexical measurement. Historical evidence stays on the source page.' : row.lexical_contamination ? `${number.format(row.lexical_contamination.measured_tasks)} measured input tasks; exclusions and matched evaluations are in Evidence.` : 'No lexical measurement is recorded.';
     const area = node('td');
     if (row.coverage?.top_area) {
       const anchor = node('a', row.coverage.top_area.name, 'area-link');

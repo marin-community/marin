@@ -14,9 +14,11 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
     page.emulate_media(color_scheme=theme)
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-all").check()
-    expect(page.locator("#rows tr")).to_have_count(9)
+    expect(page.locator("#rows tr")).to_have_count(11)
     expected = {
         "clean": "NO ISSUES",
+        "stale-clean": "NOT MEASURED",
+        "clean-subset": "NO ISSUES",
         "remediated": "REMEDIATED",
         "eval": "MEASURED, EVAL",
         "required": "REMEDIATION REQUIRED",
@@ -33,6 +35,7 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
     expect(page.locator('tr[data-source-id="Marin:eval"] .overlap-cell')).to_have_text("1")
     expect(page.locator('tr[data-source-id="Marin:eval"] .issue-rate-cell')).to_have_text("0.00%")
     expect(page.locator('tr[data-source-id="Marin:unmeasured"] .overlap-cell')).to_have_text("—")
+    expect(page.locator('tr[data-source-id="Marin:stale-clean"] .overlap-cell')).to_have_text("—")
     expect(page.locator('tr[data-source-id="Marin:unmeasured"] .issue-rate-cell')).to_have_text("—")
     expect(page.locator('tr[data-source-id="Marin:eval"] .result-provisional')).to_have_text("Good · provisional")
     assert page.locator("#rows td:has(> .chip)").evaluate_all(

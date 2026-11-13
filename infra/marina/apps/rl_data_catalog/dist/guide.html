@@ -180,11 +180,11 @@
       <h3>Contamination</h3>
       <p>Contamination records lexical overlap with the evaluation corpus. Counts refer to the measured input population, before duplicate and lexical exclusions. This measurement does not establish semantic decontamination.</p>
       <dl>
-        <dt><span class="chip contamination-chip quality-good">NO ISSUES</span></dt><dd>A lexical measurement exists and reports zero overlapping tasks.</dd>
+        <dt><span class="chip contamination-chip quality-good">NO ISSUES</span></dt><dd>A zero-overlap measurement binds to the current input pin or a validated current retained-release receipt.</dd>
         <dt><span class="chip contamination-chip contamination-remediated">REMEDIATED</span></dt><dd>TRAIN overlap was found and excluded in a new pinned private TaskCompendium release. Its validated remediation receipt must match the current dataset pin.</dd>
         <dt><span class="chip contamination-chip quality-some_issues">MEASURED, EVAL</span></dt><dd>Overlap was measured for an EVAL or benchmark source and retained by policy. Inspect the overlapping-task count and matched evaluations in Evidence.</dd>
         <dt><span class="chip contamination-chip quality-bad contamination-required">REMEDIATION REQUIRED</span></dt><dd>TRAIN overlap is measured but the current private pin lacks verified remediation. This state violates ingestion requirements and requires attention before training selection.</dd>
-        <dt><span class="chip contamination-chip quality-unassessed">NOT MEASURED</span></dt><dd>No lexical-decontamination record exists. The source has no cleanliness claim.</dd>
+        <dt><span class="chip contamination-chip quality-unassessed">NOT MEASURED</span></dt><dd>No applicable current-pin lexical record exists. Historical evidence can remain available; the current source has no cleanliness claim.</dd>
       </dl>
     </div>
     <p>The outcome lists below group sources by recorded execution oversight and source status, independently of Quality. A source with FULL content review can still have execution qualification pending. Open a source for its exact pin, counts and evidence.</p>

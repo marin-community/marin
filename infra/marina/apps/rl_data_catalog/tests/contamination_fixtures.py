@@ -34,6 +34,8 @@ def contamination_declarations() -> list[tuple[str, SourceDeclaration]]:
     cases: list[tuple[str, str, dict[str, Any] | None, bool, str]] = [
         ("unmeasured", "NOT MEASURED", None, False, PIN),
         ("clean", "NO ISSUES", clean, False, PIN),
+        ("stale-clean", "NOT MEASURED", clean, False, "c" * 40),
+        ("clean-subset", "NO ISSUES", {**clean, "input_dataset_revision": "b" * 40}, False, PIN),
         ("remediated", "REMEDIATED", remediated, False, PIN),
         ("eval", "MEASURED, EVAL", flagged, True, PIN),
         ("required", "REMEDIATION REQUIRED", flagged, False, PIN),

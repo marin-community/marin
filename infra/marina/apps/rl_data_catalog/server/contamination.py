@@ -26,7 +26,12 @@ def contamination(declaration: dict[str, Any]) -> Contamination:
         return Contamination.NOT_MEASURED
     measured = LexicalContaminationEvidence.model_validate(evidence)
     if measured.contaminated_tasks == 0:
-        return Contamination.NO_ISSUES
+        current_pin = (declaration["dataset_id"], declaration["dataset_revision"])
+        if (measured.input_dataset_id, measured.input_dataset_revision) == current_pin:
+            return Contamination.NO_ISSUES
+        if measured.admission_blocker(*current_pin) is None:
+            return Contamination.NO_ISSUES
+        return Contamination.NOT_MEASURED
     if intended_use(declaration) == "eval":
         return Contamination.MEASURED_EVAL
     receipt = measured.receipt
