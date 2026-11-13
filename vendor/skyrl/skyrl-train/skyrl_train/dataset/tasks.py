@@ -194,7 +194,7 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     harness = (
         ASSISTANT_PREFIX_HARNESS
         if continues_assistant
-        else config.get("harness_by_dataset", {}).get(task.source.dataset, config["default_harness"])
+        else config["harness_by_dataset"].get(task.source.dataset, config["default_harness"])
     )
     session = {**config["session"], "task_session": harness}
     if task.source.dataset in config["max_turns_by_dataset"]:
