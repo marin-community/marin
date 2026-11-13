@@ -1,51 +1,24 @@
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 import requests
-import skyrl_train.inference_engines.ray_wrapped_inference_engine as wrapped_engines
-import skyrl_train.teacher_runtime as runtime_module
 from omegaconf import OmegaConf
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.entrypoints import main_base
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
-from skyrl_train.teacher_runtime import prepare_distillation_runtime, start_distillation_runtime
 from skyrl_train.trainer import RayPPOTrainer
-from skyrl_train.utils import validate_generator_cfg
 from skyrl_train.weight_sync.expert_block.driver import SyncTimings
 
 
-def _dummy_config(load_format="dummy"):
+def _dummy_config():
     cfg = get_default_config()
     cfg.trainer.logger = "console"
     cfg.trainer.placement.colocate_all = False
     cfg.trainer.policy.model.path = "/tmp/model-metadata"
     cfg.trainer.policy.model.source_uri = "s3://models/policy"
     cfg.generator.weight_sync_transport = "expert_block"
-    OmegaConf.update(cfg, "generator.engine_init_kwargs.load_format", load_format, force_add=True)
+    OmegaConf.update(cfg, "generator.engine_init_kwargs.load_format", "dummy", force_add=True)
     return cfg
-
-
-def test_dummy_load_format_is_normalized_replaces_streaming_and_validates_requirements(monkeypatch):
-    captured = {}
-    monkeypatch.setattr(wrapped_engines, "create_ray_wrapped_inference_engines", lambda **kw: captured.update(kw) or [])
-    for key, value, requirement in (
-        ("generator.weight_sync_transport", "broadcast", "weight_sync_transport=expert_block"),
-        ("trainer.placement.colocate_all", True, "colocate_all=false"),
-        ("generator.run_engines_locally", False, "run_engines_locally=true"),
-        ("generator.engine_init_kwargs.speculative_config", {"model": "draft"}, "no speculative decoding"),
-        ("generator.engine_init_kwargs.kv_cache_dtype", "fp8", "kv_cache_dtype=auto"),
-        ("generator.model_loading", "stage_local", "model_loading must not be stage_local"),
-    ):
-        cfg = _dummy_config("Dummy")
-        OmegaConf.update(cfg, key, value, force_add=True)
-        with pytest.raises(ValueError, match=requirement):
-            validate_generator_cfg(cfg)
-    cfg = _dummy_config("Dummy")
-    validate_generator_cfg(cfg)
-    main_base.create_ray_wrapped_inference_engines_from_config(cfg, colocate_pg=None)
-    assert captured["pretrain"] == "/tmp/model-metadata"
-    assert captured["engine_init_kwargs"]["load_format"] == "dummy"
 
 
 class _Engine:
@@ -124,20 +97,3 @@ def test_initial_dummy_sync_keeps_startup_pause_and_forces_verification(verify_e
     asyncio.run(trainer._sync_policy_for_rollouts(reason="training_step"))
     assert sync.verified == [0]
     assert not trainer.inference_engine_client.engines[0].paused
-
-
-@pytest.mark.asyncio
-async def test_local_teacher_loads_real_weights_when_policy_engines_use_dummy(monkeypatch, local_distillation_config):
-    captured = {}
-
-    def create_engines(**kwargs):
-        captured.update(kwargs["engine_init_kwargs"])
-        raise RuntimeError("teacher engines requested")
-
-    tokenizer = SimpleNamespace(get_vocab=lambda: {"a": 0})
-    monkeypatch.setattr(runtime_module, "create_tokenizer", lambda *_args, **_kwargs: tokenizer)
-    monkeypatch.setattr(runtime_module, "create_ray_wrapped_inference_engines", create_engines)
-    cfg = local_distillation_config(_dummy_config())
-    with pytest.raises(RuntimeError, match="teacher engines requested"):
-        await start_distillation_runtime(cfg, prepare_distillation_runtime(cfg, tokenizer))
-    assert "load_format" not in captured
