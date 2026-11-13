@@ -25,6 +25,7 @@ for short chat links. ``/feedback`` saves a model-feedback report to Marin stora
 when the server has a feedback prefix.
 """
 
+import asyncio
 import dataclasses
 import importlib.resources
 import json
@@ -48,7 +49,7 @@ from starlette.routing import Route
 
 from marin.inference.chat_template_protocol import ChatTemplateProtocol
 from marin.inference.http_proxy import forwardable_request_headers, forwardable_response_headers
-from marin.inference.model_feedback import FeedbackStore
+from marin.inference.model_feedback import save_feedback_report
 from marin.inference.python_tool_routes import (
     invoke_tool_response,
     python_tool_definitions_response,
@@ -63,6 +64,9 @@ logger = logging.getLogger(__name__)
 MAX_SHARED_CHAT_BYTES = 512 * 1024
 MAX_SHARED_CHATS = 128
 SHARED_CHAT_ID_BYTES = 12
+MAX_FEEDBACK_BYTES = 1024 * 1024
+# Per serving process; bounds what one dashboard URL holder can write to storage.
+MAX_FEEDBACK_REPORTS = 256
 
 
 @dataclass(frozen=True)
@@ -80,6 +84,22 @@ class ServingInfo:
     chat_template_protocol: ChatTemplateProtocol = field(default_factory=ChatTemplateProtocol)
 
 
+async def _json_object_body(request: Request, max_bytes: int, label: str) -> dict[str, object] | Response:
+    """Read a bounded JSON object body, or return the error response for the caller to send."""
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > max_bytes:
+            return JSONResponse({"error": f"{label} is too large"}, status_code=413)
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return JSONResponse({"error": f"{label} must be valid JSON"}, status_code=400)
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": f"{label} must be a JSON object"}, status_code=400)
+    return payload
+
+
 @dataclass
 class _ChatShareStore:
     max_bytes: int = MAX_SHARED_CHAT_BYTES
@@ -88,17 +108,9 @@ class _ChatShareStore:
     chats: OrderedDict[str, bytes] = field(default_factory=OrderedDict)
 
     async def create_response(self, request: Request) -> Response:
-        body = bytearray()
-        async for chunk in request.stream():
-            body.extend(chunk)
-            if len(body) > self.max_bytes:
-                return JSONResponse({"error": "shared chat is too large"}, status_code=413)
-        try:
-            payload = json.loads(body)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return JSONResponse({"error": "shared chat must be valid JSON"}, status_code=400)
-        if not isinstance(payload, dict):
-            return JSONResponse({"error": "shared chat must be a JSON object"}, status_code=400)
+        payload = await _json_object_body(request, self.max_bytes, "shared chat")
+        if isinstance(payload, Response):
+            return payload
 
         share_id = secrets.token_urlsafe(self.id_bytes)
         while share_id in self.chats:
@@ -113,6 +125,34 @@ class _ChatShareStore:
         if payload is None:
             return JSONResponse({"error": "shared chat not found"}, status_code=404)
         return Response(payload, media_type="application/json", headers={"cache-control": "no-store"})
+
+
+@dataclass
+class _FeedbackStore:
+    prefix: str
+    info: ServingInfo
+    max_bytes: int = MAX_FEEDBACK_BYTES
+    max_reports: int = MAX_FEEDBACK_REPORTS
+    saved: int = 0
+
+    async def create_response(self, request: Request) -> Response:
+        if self.saved >= self.max_reports:
+            return JSONResponse({"error": "this server has reached its feedback report limit"}, status_code=429)
+        report = await _json_object_body(request, self.max_bytes, "feedback report")
+        if isinstance(report, Response):
+            return report
+        if not str(report.get("description", "")).strip():
+            return JSONResponse({"error": "feedback report needs a description"}, status_code=400)
+        # Count before the write so concurrent requests cannot pass the limit together.
+        self.saved += 1
+        try:
+            location = await asyncio.to_thread(save_feedback_report, self.prefix, report, dataclasses.asdict(self.info))
+        except Exception:
+            self.saved -= 1
+            logger.exception("Could not save feedback report under %s", self.prefix)
+            return JSONResponse({"error": "could not save the feedback report"}, status_code=502)
+        logger.info("Saved feedback report %s", location)
+        return JSONResponse({"location": location}, status_code=201)
 
 
 def build_dashboard_app(
@@ -138,7 +178,7 @@ def build_dashboard_app(
     """
     state: dict[str, httpx.AsyncClient] = {}
     chat_shares = _ChatShareStore()
-    feedback = None if feedback_prefix is None else FeedbackStore(feedback_prefix, dataclasses.asdict(info))
+    feedback = None if feedback_prefix is None else _FeedbackStore(feedback_prefix, info)
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
