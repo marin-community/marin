@@ -18,7 +18,7 @@ from typing import IO
 import pytest
 import yaml
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
+from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, materialized_config
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
@@ -509,14 +509,7 @@ def test_starting_checkpoint_binds_dependency_identity_and_path() -> None:
         skyrl_step(dataclasses.replace(spec, starting_checkpoint=checkpoint), _execution()) for checkpoint in checkpoints
     ]
     for run, checkpoint in zip(runs, checkpoints, strict=True):
-        config = run.build_config(
-            StepContext.for_run(
-                output_path="s3://marin-us-east-08a/users/tester/continuation",
-                prefix="s3://marin-us-east-08a",
-                runtime_args=run.runtime_args,
-                deps=run.deps,
-            )
-        )
+        config = materialized_config(run, prefix="s3://marin-us-east-08a")
         launch = yaml.safe_load(config.launch_config_yaml)
         assert checkpoint in run.deps
         assert launch["inputs"]["starting_checkpoint"] == {
