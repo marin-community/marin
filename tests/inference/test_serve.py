@@ -939,6 +939,7 @@ def _invoke_iris_serve(monkeypatch, *args: str):
         yield client
 
     services = []
+    monkeypatch.setattr("marin.inference.iris_cli.prepare_hf_models", lambda model, engine, *_a, **_k: (model, engine))
     monkeypatch.setattr("marin.inference.iris_cli.find_project_root", lambda: Path.cwd())
     monkeypatch.setattr("marin.inference.iris_cli.connect_controller", connect)
     monkeypatch.setattr("marin.inference.iris_cli.IrisClient.remote", remote)

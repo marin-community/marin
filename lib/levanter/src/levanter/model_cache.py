@@ -217,7 +217,7 @@ def resolve_cached_model_path(
     return cache_hf_model(cache_path, repo, revision=revision, complete_marker=complete_marker)
 
 
-def resolve_hf_model_ref(model: str) -> str | None:
+def resolve_hf_model_ref(model: str, *, token: str | None = None) -> str | None:
     """Return a pinned ``repo@commit`` for a Hub model without deriving a storage path."""
     from levanter.compat.hf_checkpoints import _is_hf_model_id  # noqa: PLC0415  # optional dep: transformers
 
@@ -228,7 +228,7 @@ def resolve_hf_model_ref(model: str) -> str | None:
     if requested_revision is not None and _HF_COMMIT_PATTERN.fullmatch(requested_revision):
         resolved_revision = requested_revision.lower()
     else:
-        resolved_revision = model_info(repo, revision=requested_revision).sha
+        resolved_revision = model_info(repo, revision=requested_revision, token=token).sha
         if resolved_revision is None:
             raise ValueError(f"Hugging Face did not return a commit SHA for {model!r}")
     return f"{repo}@{resolved_revision}"

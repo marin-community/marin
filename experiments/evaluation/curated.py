@@ -9,7 +9,6 @@ from urllib.parse import urlsplit
 
 import yaml
 from huggingface_hub import HfApi
-from marin.evaluation.dataset_evaluator import DatasetEvaluator
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import (
     DEFAULT_EVALUATION_CONCURRENCY,
@@ -106,13 +105,12 @@ def corpus_key(step: ArtifactStep) -> str:
     return f"{step.name}@{step.version}"
 
 
-def executor_for(
+def settings_for(
     selection: EvaluationSelection,
-    protocol: ResolvedEvaluationSelection,
     model: ModelConfig,
     limit: int | None,
     seed: int | None,
-) -> DatasetEvaluator:
+) -> CuratedSettings:
     if model.effective_tokenizer_revision is None:
         raise ValueError("Curated evaluation requires an explicit tokenizer revision")
     run = selection.run
@@ -129,23 +127,17 @@ def executor_for(
             raise ValueError("judge_endpoint must be an HTTP URL without credentials")
         if not run.judge_api_key or any(not is_secret_reference(ref) for ref in run.judge_api_key):
             raise ValueError("A judge requires secret references in judge_api_key")
-    settings = CuratedSettings(
+    return CuratedSettings(
         concurrency=model.evaluation_num_concurrent or DEFAULT_EVALUATION_CONCURRENCY,
         max_tokens=run.max_tokens,
         source_limit=limit if limit is not None else run.limit,
         seed=seed if seed is not None else run.seed,
         judge=run.judge,
     )
-    return DatasetEvaluator(
-        tuple(corpus_key(step) for step in corpus_steps(protocol, CampaignRuntime())),
-        model,
-        settings,
-        run.judge_endpoint,
-    )
 
 
 def record_ref_for(
-    selection: EvaluationSelection, protocol: ResolvedEvaluationSelection, executor: DatasetEvaluator
+    selection: EvaluationSelection, protocol: ResolvedEvaluationSelection, settings: CuratedSettings
 ) -> EvalRef:
     return EvalRef(
         name=selection.name,
@@ -155,8 +147,12 @@ def record_ref_for(
         + canonical_sha256(
             {
                 "selection": selection.model_dump(mode="json"),
-                "settings": executor.settings.model_dump(mode="json", exclude={"concurrency"}),
+                "settings": settings.model_dump(mode="json", exclude={"concurrency"}),
             }
         ),
-        curated=CuratedRef(datasets=executor.datasets, settings=executor.settings, selection=protocol),
+        curated=CuratedRef(
+            datasets=tuple(corpus_key(step) for step in corpus_steps(protocol, CampaignRuntime())),
+            settings=settings,
+            selection=protocol,
+        ),
     )

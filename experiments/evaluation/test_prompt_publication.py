@@ -3,6 +3,7 @@
 
 """Exercise staged few-shot inputs through native publication and duplicate source identities."""
 
+import json
 from dataclasses import replace
 
 import pyarrow as pa
@@ -13,8 +14,10 @@ from fray.local_backend import LocalClient
 from marin.evaluation.records import PromptFormat
 from shellbox.machine import PackageSpec
 from taskcompendium.evaluation.corpus import evaluation_cases, evaluation_protocol
+from taskcompendium.evaluation.selection import select_cases
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
+from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
 from zephyr.context import ZephyrContext
 
 from experiments.evaluation.catalog import evaluation_benchmarks
@@ -126,3 +129,49 @@ def test_publication_compiles_selected_fewshots_and_retains_duplicate_rows(tmp_p
     assert published.curation.processed_rows == 2
     assert published.curation.raw_population_count == 2
     assert published.declaration.type == "eval"
+
+
+@pytest.mark.parametrize("benchmark", ["humanevalplus", "mbppplus", "ifbench"])
+@pytest.mark.parametrize("run_cap", [4096, 768])
+def test_generation_selection_preserves_context_derived_or_explicit_budget(tmp_path, benchmark, run_cap):
+    (source,) = evaluation_benchmarks()[benchmark].resolve()
+    dataset = source.config
+    assert dataset is not None
+    row = (
+        {"prompt": "Write a short answer.", "instruction_id_list": [], "kwargs": []}
+        if benchmark == "ifbench"
+        else {"prompt": "def answer():\n    pass", "evaluation_prompt": "Write a function returning 42."}
+    )
+    inputs = tmp_path / "source"
+    inputs.mkdir()
+    (inputs / "row.jsonl").write_text(json.dumps(row) + "\n")
+    recipe = replace(
+        source_recipe(
+            dataset.recipe,
+            {},
+            EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+                package_spec=PackageSpec(pypi_packages=dataset.recipe.grader.requirements),
+            ),
+        ),
+        source=SourceFiles("budget-regression", "1", ("row.jsonl",), SourceFormat.JSONL),
+    )
+    protocol = dataset.protocol.model_copy(update={"expected_population": 1})
+    root = str(tmp_path / "published")
+    client = LocalClient()
+    try:
+        with ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+            publish_evaluation_corpus(recipe, protocol, dataset.item_builder, context, str(inputs), root)
+    finally:
+        client.shutdown()
+    (decision,) = select_cases(
+        root,
+        protocol,
+        dataset_id="budget-regression",
+        context_window=16384,
+        max_tokens=run_cap,
+        limit=None,
+        tokenizer=None,
+    )
+    assert decision.case is not None
+    assert decision.record.max_tokens == run_cap

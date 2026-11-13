@@ -280,7 +280,7 @@ def _compile_lm_eval_text_generation(
                 version="2026.11.02",
                 operation=OperationKind.TEXT_GENERATION,
                 sampling=Sampling(
-                    temperature=0, top_p=None, top_k=None, max_tokens=None, stop=stop, chat_template_kwargs={}
+                    temperature=None, top_p=None, top_k=None, max_tokens=None, stop=stop, chat_template_kwargs={}
                 ),
                 trials=TrialPolicy(count=1, seed=None),
                 num_fewshot=shots,

@@ -366,7 +366,7 @@ def mixed_corpora(tmp_path):
                     }[benchmark],
                     sampling=(
                         Sampling(
-                            temperature=0.7 if benchmark == "chat" else 0,
+                            temperature=0.7 if benchmark == "chat" else None if benchmark == "sandbox" else 0,
                             top_p=None if benchmark == "sandbox" else 1,
                             top_k=9 if benchmark == "chat" else None,
                             max_tokens=8 if benchmark == "chat" else 6,
@@ -915,6 +915,8 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
     sandbox_wire = next(
         body for _, body in endpoint.requests if body.get("messages", [{}])[-1].get("content") == "chat/sandbox"
     )
+    assert "temperature" not in sandbox_wire
+    assert "seed" not in sandbox_wire
     assert "top_p" not in sandbox_wire
     chat = [sample for sample in samples if sample.task == "chat"]
     assert len(chat) == 8

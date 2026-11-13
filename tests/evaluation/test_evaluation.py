@@ -981,10 +981,10 @@ def test_launch_group_uses_resolved_federated_cluster_and_priority(monkeypatch):
     ]
     assert captured["priority_band"] == job_pb2.PRIORITY_BAND_INTERACTIVE
     child_env = captured["environment"].env_vars
+    assert "MARIN_PREFIX" not in child_env
     with monkeypatch.context() as child:
         child.delenv("MARIN_PREFIX")
         child.delenv("MARIN_TEMP_PREFIX")
-        child.setenv("MARIN_PREFIX", child_env["MARIN_PREFIX"])
         child.setenv("MARIN_TEMP_PREFIX", child_env["MARIN_TEMP_PREFIX"])
         assert marin_temp_bucket(14, prefix="eval") == "s3://marin-rno2a/tmp/ttl=14d/eval"
 

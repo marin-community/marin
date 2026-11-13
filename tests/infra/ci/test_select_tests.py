@@ -389,12 +389,19 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     ]
 
 
+def test_skyrl_changes_select_the_launch_census(tmp_path: Path) -> None:
+    census = "tests/rl/test_rl_launch_documents.py"
+    write(tmp_path, census, "def test_launch(): pass\n")
+    for changed in ("vendor/skyrl/uv.lock", "lib/skyrlrecipe/src/skyrlrecipe/recipe.py"):
+        assert leg_paths(select_matrix([changed], tmp_path), "marin") == [census]
+
+
 @pytest.mark.parametrize(
     "changed_path,suites",
     [
         (
             "lib/taskcompendium/src/taskcompendium/lowering.py",
-            ["rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            ["harbor-unit", "rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
         ),
         ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit", "skyrl-wheel", "taskforge-unit"]),
         (
@@ -432,7 +439,7 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ),
         (
             "lib/verifyit/src/verifyit/grading.py",
-            ["rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            ["harbor-unit", "rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
         ),
         (
             "lib/rigging/src/rigging/message.py",
@@ -468,6 +475,10 @@ def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_p
     [
         "experiments/post_training/task_curation/harbor_hub.py",
         "experiments/post_training/task_curation/tests/test_harbor_hub.py",
+        "experiments/post_training/task_curation/calibforge_rebuild.py",
+        "experiments/post_training/task_curation/tests/test_calibforge_rebuild.py",
+        "experiments/post_training/task_curation/daytona_identity.py",
+        "experiments/post_training/task_curation/tests/test_daytona_identity.py",
     ],
 )
 def test_harbor_acquisition_changes_select_isolated_runtime(tmp_path: Path, path: str) -> None:

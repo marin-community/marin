@@ -60,7 +60,12 @@ def fewshot_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 template=minerva_template(subject),
                 metrics=("exact_match,none", "math_verify,none"),
                 sampling=Sampling(
-                    temperature=0, top_p=None, top_k=None, max_tokens=None, stop=("Problem:",), chat_template_kwargs={}
+                    temperature=None,
+                    top_p=None,
+                    top_k=None,
+                    max_tokens=None,
+                    stop=("Problem:",),
+                    chat_template_kwargs={},
                 ),
                 scorer="minerva_math",
                 grader=MATH_GRADER,
@@ -87,7 +92,6 @@ def math_dataset(
     answer_field: str,
     population: int,
     trials: int,
-    temperature: float,
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     recipe = CurationRecipe(
         name="evalchemy-" + name,
@@ -113,14 +117,14 @@ def math_dataset(
                 version="2026.11.02",
                 operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
-                    temperature=temperature,
+                    temperature=None,
                     top_p=None,
                     top_k=None,
                     max_tokens=None,
                     stop=CHAT_REQUEST_STOPS,
                     chat_template_kwargs={"enable_thinking": True},
                 ),
-                trials=TrialPolicy(count=trials, seed=0 if temperature else None),
+                trials=TrialPolicy(count=trials, seed=None),
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
@@ -159,14 +163,14 @@ def olympiad_source(*, judged: bool) -> RlDataSource[EvaluationCorpusRecipe]:
                 version="2026.11.02",
                 operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
-                    temperature=0.7 if judged else 0,
+                    temperature=None,
                     top_p=1,
                     top_k=None,
                     max_tokens=32768,
                     stop=CHAT_REQUEST_STOPS,
                     chat_template_kwargs={"enable_thinking": True},
                 ),
-                trials=TrialPolicy(count=count, seed=0 if judged else None),
+                trials=TrialPolicy(count=count, seed=None),
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
@@ -187,7 +191,6 @@ def base_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             answer_field="answer",
             population=500,
             trials=1,
-            temperature=0,
         ),
         math_dataset(
             name="aime24",
@@ -202,13 +205,11 @@ def base_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             answer_field="expected_answer",
             population=30,
             trials=10,
-            temperature=0.7,
         ),
     ]
 
 
 def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
-    # AIME25 and AMC23 source generation sets do_sample=False despite temperature=.7.
     aime = math_dataset(
         name="aime25",
         benchmark="AIME25",
@@ -216,7 +217,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
         answer_field="answer",
         population=30,
         trials=10,
-        temperature=0,
     )
     amc = math_dataset(
         name="amc23",
@@ -225,7 +225,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
         answer_field="answer",
         population=40,
         trials=10,
-        temperature=0,
     )
     assert aime.config is not None and amc.config is not None
     assert aime.config.protocol.sampling is not None and amc.config.protocol.sampling is not None

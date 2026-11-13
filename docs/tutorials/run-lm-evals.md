@@ -32,6 +32,8 @@ inference, and submits evaluation workers. It cancels an evaluator before resumi
 its archive when inference is interrupted.
 
 The catalog fixes prompts, graders, shots, sampling, trials and context policies.
+Evalchemy protocols inherit the served model's temperature and seed unless the
+run explicitly overrides them, preserving the legacy launcher's request behavior.
 Native likelihood tasks use completion logprobs. Generation protocols specify chat
 or raw completion transport. Instruct-model menus choose separately published chat
 variants where the original entrypoint used a chat template. HumanEval's standard
@@ -78,6 +80,19 @@ Ordinary benchmark defaults are available through `--evals math500,gsm8k` withou
 a selection file. The repository's curated suite choices and run overrides live in
 `experiments/evaluation/configs/evalchemy.yaml`.
 
+Exactly one of `--model <registry-key>` or `--model-config <path>` is required.
+The latter accepts a model catalog YAML for a new export without adding it to the
+registry. `record.json` stores the normalized model schema under `model.config`
+for both forms, so the run record is self-contained. A dry run validates the
+selection and model without submitting an Iris job:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model-config /path/to/fresh-rl-checkpoint.yaml \
+  --evals smoke \
+  --dry-run
+```
+
 Shot count configures the benchmark's protocol builder. Curation compiles the
 selected demonstrations before inference. `prompt_format: chat` or `completion`
 selects a supported request format; otherwise planning resolves it for the model
@@ -111,7 +126,10 @@ Harbor execution is independent of curated TaskSpec evaluation.
 - `--no-wait`: return after submitting the orchestrator.
 
 Model `generation.max_gen_toks` and each selection's `run.max_tokens` cap protocol
-budgets. Protocol context policies still determine eligibility. Model chat-template
+budgets. HumanEvalPlus, MBPPPlus, and IFBench have no fixed protocol output cap;
+without an override, their allowance comes from the served context minus the
+prompt. GSM8K retains both extraction metrics and uses `flexible-extract` for its
+headline accuracy. Protocol context policies still determine eligibility. Model chat-template
 arguments provide defaults; benchmark arguments take precedence. A benchmark that
 turns thinking off can use the model's `thinking_off_template_kwargs` translation.
 

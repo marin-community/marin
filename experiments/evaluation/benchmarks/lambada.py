@@ -78,4 +78,4 @@ def benchmarks() -> list[EvaluationBenchmark]:
         ),
         pipeline=prepare_evaluation,
     )
-    return fixed_benchmarks([source], "harness", {"lambada_openai": "lambada"})
+    return fixed_benchmarks([source], names={"lambada_openai": "lambada"})

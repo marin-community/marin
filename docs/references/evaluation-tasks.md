@@ -322,7 +322,6 @@ Each verdict carries `accuracy`, `genomeqa_macro`, and parsing diagnostics. The
 macro metric gives motif questions weight 5 and other questions weight 1, so
 each of the six biological subtasks and its two formats contributes equally.
 Accuracy remains unweighted for actual correct counts. Evaluation items retain
-subtask, format, and cell groups for reporting. The shared reducer consumes these
-weights and groups; this adapter does not add public launcher registration. Keep
-question, prompt, and response artifacts in restricted
-storage pending sample-access controls.
+subtask, format, and cell groups for downstream reporting. Headline summary
+computation and public launcher registration remain separate work. Keep question,
+prompt, and response artifacts in restricted storage pending sample-access controls.

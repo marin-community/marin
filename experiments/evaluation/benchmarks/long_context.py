@@ -114,14 +114,14 @@ def mrcr_source(*, name: str, max_context: int) -> RlDataSource[EvaluationCorpus
                 version="2026.11.02",
                 operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
-                    temperature=0,
+                    temperature=None,
                     top_p=None,
                     top_k=None,
                     max_tokens=4096,
                     stop=(),
                     chat_template_kwargs={"enable_thinking": False},
                 ),
-                trials=TrialPolicy(count=1, seed=42),
+                trials=TrialPolicy(count=1, seed=None),
                 metrics=(
                     Metric(name="accuracy", kind=MetricKind.CONTINUOUS, higher_is_better=True),
                     Metric(name="prefix_hit_rate", kind=MetricKind.BINARY, higher_is_better=True),
@@ -167,7 +167,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                     version="2026.11.02",
                     operation=OperationKind.CHAT_GENERATION,
                     sampling=Sampling(
-                        temperature=0,
+                        temperature=None,
                         top_p=None,
                         top_k=None,
                         max_tokens=131072,

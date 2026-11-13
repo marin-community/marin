@@ -32,9 +32,9 @@ PANEL_SOURCE_COMMIT = "623134de90723e7f189036da005067f36817b6e7"
 
 def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     result = []
-    for name, rows, reader, seed in (
-        ("NUPA-Loose", 238926, read_nupa_sample, None),
-        ("NUPA5K-Loose", 5000, read_nupa_panel, 20222943),
+    for name, rows, reader in (
+        ("NUPA-Loose", 238926, read_nupa_sample),
+        ("NUPA5K-Loose", 5000, read_nupa_panel),
     ):
         inputs = (
             {
@@ -76,14 +76,14 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                         version="2026.11.02",
                         operation=OperationKind.CHAT_GENERATION,
                         sampling=Sampling(
-                            temperature=0,
+                            temperature=None,
                             top_p=None,
                             top_k=None,
                             max_tokens=256,
                             stop=(),
                             chat_template_kwargs={},
                         ),
-                        trials=TrialPolicy(count=1, seed=seed),
+                        trials=TrialPolicy(count=1, seed=None),
                         metrics=tuple(
                             Metric(
                                 name=metric,

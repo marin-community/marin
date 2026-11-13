@@ -52,8 +52,7 @@ def instruction_following_evaluation(
     source: HfSource,
     population: int,
     profile: InstructionProfile,
-    max_tokens: int,
-    seed: int,
+    max_tokens: int | None,
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     names = IFEVAL_METRICS if profile is InstructionProfile.HARNESS else IFBENCH_METRICS
     return RlDataSource(
@@ -83,14 +82,14 @@ def instruction_following_evaluation(
                     else OperationKind.CHAT_GENERATION
                 ),
                 sampling=Sampling(
-                    temperature=0,
+                    temperature=None,
                     top_p=None,
                     top_k=None,
                     max_tokens=max_tokens,
                     stop=(),
                     chat_template_kwargs={} if profile is InstructionProfile.HARNESS else {"enable_thinking": False},
                 ),
-                trials=TrialPolicy(count=1, seed=seed),
+                trials=TrialPolicy(count=1, seed=None),
                 metrics=tuple(
                     Metric(
                         name=name,
@@ -118,7 +117,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             population=541,
             profile=InstructionProfile.HARNESS,
             max_tokens=1280,
-            seed=1234,
         ),
         instruction_following_evaluation(
             name="ifbench",
@@ -128,8 +126,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             ),
             population=300,
             profile=InstructionProfile.IFBENCH,
-            max_tokens=1024,
-            seed=42,
+            max_tokens=None,
         ),
     ]
 

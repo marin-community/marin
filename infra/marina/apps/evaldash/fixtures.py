@@ -1001,8 +1001,8 @@ def build_native_fixtures(dest: str) -> list[str]:
     for name, shots, metric in (
         ("mmlu", 5, "acc,none"),
         ("humaneval", 0, "accuracy"),
-        ("gsm8k-0shot", 0, "exact_match,strict-match"),
-        ("gsm8k-5shot", 5, "exact_match,strict-match"),
+        ("gsm8k-0shot", 0, "exact_match,flexible-extract"),
+        ("gsm8k-5shot", 5, "exact_match,flexible-extract"),
     ):
         run_id = f"native-fixture-{name}"
         root = prefix_join(dest, f"{run_id}/results")

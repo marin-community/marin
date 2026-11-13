@@ -34,6 +34,8 @@ from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_e
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
+HUMANEVAL_FEWSHOT_VERSION = "2026.11.05.3"
+
 
 def python_source(
     *,
@@ -41,10 +43,9 @@ def python_source(
     suite: str,
     source: HfSource,
     population: int,
-    max_tokens: int,
+    max_tokens: int | None,
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     completion = suite == "humaneval"
-    sampled = suite == "cruxeval"
     return RlDataSource(
         info=SourceInfo(
             id="Evalchemy:" + suite,
@@ -68,14 +69,14 @@ def python_source(
                 version="2026.11.02",
                 operation=OperationKind.TEXT_GENERATION if completion else OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
-                    temperature=0.2 if sampled else 0,
+                    temperature=None,
                     top_p=None,
                     top_k=None,
                     max_tokens=max_tokens,
                     stop=HUMANEVAL_REQUEST_STOPS if completion else (),
                     chat_template_kwargs={} if completion else {"enable_thinking": False},
                 ),
-                trials=TrialPolicy(count=1, seed=42 if sampled else None),
+                trials=TrialPolicy(count=1, seed=None),
                 num_fewshot=0 if completion else None,
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
@@ -112,7 +113,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 SourceFormat.JSONL,
             ),
             population=164,
-            max_tokens=1024,
+            max_tokens=None,
         ),
         python_source(
             name="MBPPPlus",
@@ -125,7 +126,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 read=read_mbpp,
             ),
             population=378,
-            max_tokens=1024,
+            max_tokens=None,
         ),
         python_source(
             name="CruxEval",
@@ -156,14 +157,14 @@ def fewshot_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 recipe=replace(
                     dataset.recipe,
                     name="checkpoint-humaneval-10shot",
-                    version="2026.11.05.3-" + dataset.recipe.version,
+                    version=HUMANEVAL_FEWSHOT_VERSION + "-" + dataset.recipe.version,
                     source=replace(dataset.recipe.source, read=read_humaneval_fewshot),
                 ),
                 protocol=dataset.protocol.model_copy(
                     update={
                         "benchmark": "humaneval-10shot",
                         "num_fewshot": 10,
-                        "version": "2026.11.05.3",
+                        "version": HUMANEVAL_FEWSHOT_VERSION,
                     }
                 ),
             ),

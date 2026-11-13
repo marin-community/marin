@@ -63,7 +63,7 @@ def _compiled_variant(
 
 def fixed_benchmarks(
     sources: list[RlDataSource[EvaluationCorpusRecipe]],
-    protocol: str = "evalchemy",
+    protocol: str | None = None,
     names: dict[str, str] | None = None,
 ) -> list[EvaluationBenchmark]:
     """Expose already-fixed protocols, retaining dataset-owned partition membership."""
@@ -76,14 +76,15 @@ def fixed_benchmarks(
             OperationKind.CHAT_GENERATION: PromptFormat.CHAT,
             OperationKind.TEXT_GENERATION: PromptFormat.COMPLETION,
         }.get(dataset.protocol.operation)
-        variant = ProtocolVariant(protocol, dataset.protocol.num_fewshot, form)
+        protocol_name = protocol or dataset.protocol_name
+        variant = ProtocolVariant(protocol_name, dataset.protocol.num_fewshot, form)
         groups[name][variant].append(
             replace(
                 source,
                 config=replace(
                     dataset,
                     protocol=dataset.protocol.model_copy(update={"benchmark": name}),
-                    protocol_name=protocol,
+                    protocol_name=protocol_name,
                 ),
             )
         )

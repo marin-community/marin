@@ -41,7 +41,7 @@ POLICY_METRICS_2026_10_16: Mapping[str, PolicyMetric] = MappingProxyType(
         "humanevalplus": _curated("accuracy", "accuracy"),
         "mbppplus": _curated("accuracy", "accuracy"),
         "olympiadbench": _curated("accuracy", "accuracy"),
-        "gsm8k-0shot": _curated("exact_match,strict-match", "exact_match,strict-match"),
+        "gsm8k-0shot": _curated("exact_match,flexible-extract", "exact_match,flexible-extract"),
         "piqa": _curated("acc_norm,none", "acc_norm,none"),
         "winogrande": _curated("acc,none", "acc,none"),
         "boolq": _curated("acc,none", "acc,none"),

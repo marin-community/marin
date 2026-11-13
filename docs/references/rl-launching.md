@@ -96,6 +96,22 @@ Iris task
   stage immutable inputs -> patch task-local paths -> run(cfg.skyrl)
 ```
 
+Before submitting the GPU job, the CPU coordinator mirrors each Hub policy,
+`local_inference` teacher, and Hub draft model into the regional bucket. It reuses
+the existing cache and its retention period without refreshing object ages.
+Resolved mirror locators are recorded in `inputs.hugging_face_models`.
+
+GPU nodes restore policy and teacher snapshots from the mirror into their local
+HF cache before Ray starts. A missing mirror marker or file falls back to the
+existing direct-Hub download. Draft locators are rewritten to the mirror before
+submission; warm drafts read it without a cache lock. If any listed draft file or
+the completion marker is missing, node preparation repairs the mirror through
+the existing Hub cache path. Local and object-store inputs keep their loading paths.
+
+`prepare` only validates the config. Submitting Hub models requires Iris job
+context; run the [experiment entry point](#experiment-entry-point) with `--run`
+to start its CPU coordinator. A local launcher fails before downloading weights.
+
 The top-level sections name what they configure: `iris` owns allocation and routing, `ray` owns
 cluster bootstrap, `inputs` owns immutable model and data locators, `artifacts` owns durable and
 temporary outputs, and `skyrl` is the trainer's Hydra subtree. `launch_config` means the complete

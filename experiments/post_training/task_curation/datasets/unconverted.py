@@ -4,10 +4,14 @@
 """Sources retained in the inventory that do not yet have a conversion recipe."""
 
 
-from finestore.rl.curation import DaytonaSafety
-
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_REPO, TASKTROVE_REVISION
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
+from experiments.post_training.task_curation.source import (
+    EXCLUDED_TAG,
+    RlDataSource,
+    SourceInfo,
+    SourceReference,
+    TaskFormat,
+)
 
 TASKTROVE_INPUT = SourceReference(
     TASKTROVE_REPO,
@@ -34,14 +38,17 @@ def sources() -> list[RlDataSource]:
                 notes=(
                     "Native Harbor training tasks with reference solutions and programmatic component-reward verifiers. "
                     "The paper's private S2EBench is a separate evaluation set. "
-                    "Project-owned source is Apache-2.0; third-party skills and assets retain their own terms."
+                    "Project-owned source is Apache-2.0; third-party skills and assets retain their own terms. "
+                    "Snapshot requirement is unassessed: a registry sample found a distinct environment for "
+                    "every sampled task, so the cohort is not treated as safe, and a full per-task count "
+                    "is pending."
                 ),
+                task_format=TaskFormat.HARBOR,
                 dataset=SourceReference(
                     "skill2env/skill2env",
                     "sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c",
                     "https://hub.harborframework.com/datasets/skill2env/skill2env",
                 ),
-                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -56,7 +63,6 @@ def sources() -> list[RlDataSource]:
                     "explicitly accepted."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -65,7 +71,7 @@ def sources() -> list[RlDataSource]:
                 title="DCAgent/exp_rle_adversarial-v6",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=2726,
                 notes=(
                     "The legacy pytest grader performs source-specific Django discovery and loads extra "
@@ -73,7 +79,10 @@ def sources() -> list[RlDataSource]:
                     "oracle and needs a custom environment adapter."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=3,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -82,7 +91,7 @@ def sources() -> list[RlDataSource]:
                 title="DCAgent/exp_rpt_nemotron-cpp",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=4196,
                 notes=(
                     "GoogleTest tasks without shipped oracles. Sampled empty and trivial submissions "
@@ -90,7 +99,10 @@ def sources() -> list[RlDataSource]:
                     "uninstalled doctest dependency."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -99,14 +111,17 @@ def sources() -> list[RlDataSource]:
                 title="DCAgent/inferredbugs-sandboxes-verifier",
                 origin="Task Trove",
                 family="swe-repo",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=9659,
                 notes=(
                     "Never compiles or runs; regex on the rewritten method body with guards that accept "
                     "either polarity."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -115,14 +130,17 @@ def sources() -> list[RlDataSource]:
                 title="DCAgent/mix_h4_binary_easy",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=1996,
                 notes=(
                     "Mixed verifier shapes: eight of 10 sampled empty and trivial checks timed out, and "
                     "the crosscodeeval slice only checks that an import succeeds."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=5,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -131,14 +149,17 @@ def sources() -> list[RlDataSource]:
                 title="DCAgent/selfinstruct-naive-sandboxes-2-verified-v3",
                 origin="Task Trove",
                 family="shell-cmd",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=6665,
                 notes=(
                     "Per-task LLM-written test_state.py with loose file discovery and dead code. Task "
                     "ideas are usable; regenerate verifiers with an oracle/no-op gate."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -160,7 +181,10 @@ def sources() -> list[RlDataSource]:
                     "current review status before training use."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                daytona_safety=DaytonaSafety.UNSAFE,
+                daytona_snapshot_count=36884,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned release payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -182,7 +206,10 @@ def sources() -> list[RlDataSource]:
                     "before training use."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                daytona_safety=DaytonaSafety.UNSAFE,
+                daytona_snapshot_count=8436,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned release payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -191,11 +218,14 @@ def sources() -> list[RlDataSource]:
                 title="laion/codeelo-v2",
                 origin="Task Trove",
                 family="competitive-programming",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=500,
                 notes="Byte-identical generator to codeforces-v3 at 500 rows; merge, do not keep separately.",
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -204,14 +234,17 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_bugsinpy-v4",
                 origin="Task Trove",
                 family="swe-repo",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=479,
                 notes=(
                     "LLM-synthesized tests against a single-file stub, with assert True placeholders. "
                     "Rewrite against the real BugsInPy project suites."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -220,14 +253,17 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_codenet-python-v4",
                 origin="Task Trove",
                 family="competitive-programming",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=6975,
                 notes=(
                     "Only 3 hidden cases and whitespace-collapsing compare. Oracle present; regenerate "
                     "20+ cases per task."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -236,11 +272,14 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_crosscodeeval-csharp-v4",
                 origin="Task Trove",
                 family="code-completion",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=1768,
                 notes="0.25 reward for any identifier-shaped output; instruction coaches the hack.",
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -249,11 +288,14 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_crosscodeeval-java-v3",
                 origin="Task Trove",
                 family="code-completion",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=2139,
                 notes="Exact string match on a single line completion. Not agentic, no execution.",
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -262,11 +304,14 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_crosscodeeval-python-v2",
                 origin="Task Trove",
                 family="code-completion",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=500,
                 notes="0.25 for any non-empty output; instruction discloses the tiers.",
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -275,11 +320,14 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_crosscodeeval-typescript-v2",
                 origin="Task Trove",
                 family="code-completion",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=3356,
                 notes=("Re-skin of the Python variant with the same free 0.25 tier; metadata still says " "python."),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -288,11 +336,14 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_ghactions-v3",
                 origin="Task Trove",
                 family="ci-workflow",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=9930,
                 notes=("Instruction lists every job and step verbatim; workflow is never executed. " "Transcription."),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -301,7 +352,7 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_methods2test-large-v4",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=1194,
                 notes=(
                     "All 10 sampled shipped Java oracles failed because Maven could not resolve its "
@@ -309,7 +360,10 @@ def sources() -> list[RlDataSource]:
                     "environment."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -318,11 +372,14 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_nemotron-junit-v6",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=447,
                 notes="20% of sampled tasks contain unconditional fail() stubs the verifier restores.",
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -331,13 +388,16 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_scaffold-v3",
                 origin="Task Trove",
                 family="code-generation",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=3121,
                 notes=(
                     "LLM-synthesized stub-filling toys (TypeScript formatter shim, Flask hello page). " "Kata-grade."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -346,7 +406,7 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_stack-cpp-v4",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=7878,
                 notes=(
                     "Tests are lifted from real repositories with the repository stripped: sampled tasks "
@@ -354,7 +414,10 @@ def sources() -> list[RlDataSource]:
                     "reference Solution class inside the test."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -363,14 +426,17 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_stack-dockerfile-gpt5mini-v7",
                 origin="Task Trove",
                 family="tool-use",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=587,
                 notes=(
                     "587 rows of gpt-5-mini-written per-task test scripts whose instructions describe "
                     "containers that do not exist."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -379,14 +445,17 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_stack-go-v5",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=2275,
                 notes=(
                     "Tests import packages from the original repository (bridgr/internal/..., gosnowflake "
                     "internals) that are not in the task, so most tasks are unsolvable as specified."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -395,11 +464,14 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_stack-jest-v5",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=424,
                 notes="Spy-call contracts against a 90-package global npm image; 424 rows.",
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -408,14 +480,17 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_stack-junit-v6",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=843,
                 notes=(
                     "JUnit grading is real but every instruction cites a test path that does not exist "
                     "and scan-class-path counts any test class."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -424,11 +499,14 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_stack-php-large-v9",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=462,
                 notes="Fail-open exit paths, regex class discovery, 462 rows.",
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -437,7 +515,7 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_stack-pytest-large-v3",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=1782,
                 notes=(
                     "Stripped-repository pytest tasks without shipped oracles. Two of 10 sampled empty "
@@ -445,7 +523,10 @@ def sources() -> list[RlDataSource]:
                     "that weak stubs can satisfy."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -454,14 +535,17 @@ def sources() -> list[RlDataSource]:
                 title="laion/exp_rpt_stack-rspec-v4",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=8860,
                 notes=(
                     "Real Ruby test files but gems are never installed and some tasks are unsolvable "
                     "offline. Bake gems and drop tasks that fail the oracle gate."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -470,7 +554,7 @@ def sources() -> list[RlDataSource]:
                 title="laion/magicoder-v4",
                 origin="Task Trove",
                 family="llm-judge-freeform",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=4096,
                 notes=(
                     "Judge-only over a bundle of every file under /app collected by tests/"
@@ -478,7 +562,10 @@ def sources() -> list[RlDataSource]:
                     "needs its own converter. Vague refactor prompts, nothing executed."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -487,14 +574,17 @@ def sources() -> list[RlDataSource]:
                 title="laion/mix_h10_reward_proportional-v2",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=2858,
                 notes=(
                     "Four of 10 sampled trivial submissions received full credit because the codereval "
                     "slice tests a local mock rather than the solution."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=4,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -503,7 +593,7 @@ def sources() -> list[RlDataSource]:
                 title="laion/mix_h11_single_skill_only-v2",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=2859,
                 notes=(
                     "Mixed verifier shapes: eight of 10 sampled empty and trivial checks timed out; the "
@@ -511,7 +601,10 @@ def sources() -> list[RlDataSource]:
                     "tests."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=4,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -520,14 +613,17 @@ def sources() -> list[RlDataSource]:
                 title="laion/mix_h8_original_tests-v2",
                 origin="Task Trove",
                 family="unit-test-gen",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=2848,
                 notes=(
                     "All 10 sampled empty and trivial checks timed out, and prior inspection found import-"
                     "only test files in three of 10 tasks."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=4,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -536,7 +632,7 @@ def sources() -> list[RlDataSource]:
                 title="laion/nemotron-gym-agentic-function-calling-pivot-v3",
                 origin="Task Trove",
                 family="tool-use",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=9579,
                 notes=(
                     "Predict-the-next-call from a frozen transcript with exact key-set match. The only "
@@ -544,7 +640,10 @@ def sources() -> list[RlDataSource]:
                     "transcripts."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=2,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -553,14 +652,17 @@ def sources() -> list[RlDataSource]:
                 title="laion/nemotron-gym-agentic-indirect-prompt-injection-v3",
                 origin="Task Trove",
                 family="prompt-injection",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=1272,
                 notes=(
                     "Five of five reviewed rows use the same negative-only checker, which rewards a "
                     "generic reply or unrelated action without validating the required safe continuation."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -569,11 +671,14 @@ def sources() -> list[RlDataSource]:
                 title="laion/nemotron-gym-agentic-swe-pivot-v4",
                 origin="Task Trove",
                 family="tool-use",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=1541,
                 notes="No repo in the container; a 9B judge rates one predicted next action.",
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -582,7 +687,7 @@ def sources() -> list[RlDataSource]:
                 title="laion/nemotron-gym-cfbench-v4",
                 origin="Task Trove",
                 family="instruction-following",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=468,
                 notes=(
                     "Deterministic gate before the judge uses 31 constraint ids outside the IFEval "
@@ -590,7 +695,10 @@ def sources() -> list[RlDataSource]:
                     "1,478 tasks are gate-able today. Port the gate checks before converting."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -599,14 +707,17 @@ def sources() -> list[RlDataSource]:
                 title="laion/nemotron-gym-identity-following-v4",
                 origin="Task Trove",
                 family="instruction-following",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=21660,
                 notes=(
                     "Persona is NVIDIA's; judge-only. Rewrite with our identity and deterministic name/"
                     "language checks, or skip."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -615,11 +726,14 @@ def sources() -> list[RlDataSource]:
                 title="laion/nemotron-gym-instruction-following-adversarial-v5",
                 origin="Task Trove",
                 family="instruction-following",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=1000,
                 notes="Asks an LLM judge to count exactly five spelling errors.",
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -628,11 +742,14 @@ def sources() -> list[RlDataSource]:
                 title="laion/nemotron-gym-instruction-following-citation-v2",
                 origin="Task Trove",
                 family="instruction-following",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=9033,
                 notes="Grades presence of literal marker substrings; never checks the cited content.",
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -641,11 +758,14 @@ def sources() -> list[RlDataSource]:
                 title="laion/nemotron-gym-instruction-following-freeform-v2",
                 origin="Task Trove",
                 family="instruction-following",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=8869,
                 notes="Counts markdown tables and bullets; no content check.",
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -654,11 +774,14 @@ def sources() -> list[RlDataSource]:
                 title="laion/nemotron-gym-instruction-following-multiturnchat-v4",
                 origin="Task Trove",
                 family="instruction-following",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=1982,
                 notes="Required literal format contradicts the demonstrated turns; judge-only.",
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -667,11 +790,14 @@ def sources() -> list[RlDataSource]:
                 title="laion/nemotron-gym-inverse-ifeval-v4",
                 origin="Task Trove",
                 family="instruction-following",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=1000,
                 notes="Gate matches against a deliberately broken synthetic reference; then judge.",
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -680,14 +806,17 @@ def sources() -> list[RlDataSource]:
                 title="laion/nemotron-gym-knowledge-web-search-mcqa-v2",
                 origin="Task Trove",
                 family="qa-short-answer",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=2915,
                 notes=(
                     "Promises web search but ships no tool. Worth rewriting as a real search-tool env; "
                     "otherwise it is a 3k duplicate of mcqa."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -696,14 +825,17 @@ def sources() -> list[RlDataSource]:
                 title="laion/nemotron-gym-litmus-bench-v2",
                 origin="Task Trove",
                 family="math-answer",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=5232,
                 notes=(
                     "Instruction asks for ((answer)), verifier greps boxed or last number; SMILES tasks "
                     "with no RDKit. Fix format contract and install cheminformatics."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -712,7 +844,7 @@ def sources() -> list[RlDataSource]:
                 title="laion/nemotron-gym-math-advanced-calculations-v4",
                 origin="Task Trove",
                 family="math-answer",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=5291,
                 notes=(
                     "Instruction refers to tools that do not exist and only the last number is graded. "
@@ -720,7 +852,10 @@ def sources() -> list[RlDataSource]:
                     "every subexpression."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -729,11 +864,14 @@ def sources() -> list[RlDataSource]:
                 title="laion/nemotron-gym-multichallenge-vanilla-v3",
                 origin="Task Trove",
                 family="llm-judge-freeform",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=1050,
                 notes="Single subjective criterion with 'Expected answer: YES' embedded in the judge prompt.",
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -742,14 +880,17 @@ def sources() -> list[RlDataSource]:
                 title="laion/nemotron-gym-qa-abstention-v4",
                 origin="Task Trove",
                 family="qa-short-answer",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=3150,
                 notes=(
                     "Abstention is never rewarded so the framing is dead, reference leaks into judge "
                     "text, and it duplicates openqa."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -758,7 +899,7 @@ def sources() -> list[RlDataSource]:
                 title="laion/nemotron-gym-sysbench-v4",
                 origin="Task Trove",
                 family="instruction-following",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=1010,
                 notes=(
                     "Deterministic gate before the judge uses 31 constraint ids outside the IFEval "
@@ -766,7 +907,10 @@ def sources() -> list[RlDataSource]:
                     "1,478 tasks are gate-able today. Port the gate checks before converting."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -775,7 +919,7 @@ def sources() -> list[RlDataSource]:
                 title="laion/openswe-tasks-patched-v7-oracle-success",
                 origin="Task Trove",
                 family="swe-repo",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=11730,
                 notes=(
                     "No FAIL_TO_PASS ids: the v7 verifier scores whichever tests its custom pytest guard "
@@ -783,7 +927,10 @@ def sources() -> list[RlDataSource]:
                     "agent time. Needs its own converter."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=4,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -792,14 +939,17 @@ def sources() -> list[RlDataSource]:
                 title="laion/r2egym-patched-full-oracle-v3",
                 origin="Task Trove",
                 family="swe-repo",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=2574,
                 notes=(
                     "Grades by overlap between test_info.json and expected_output_json rather than by "
                     "pytest node id; not the trusted-paths shape the swe converters handle."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=5,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -808,7 +958,7 @@ def sources() -> list[RlDataSource]:
                 title="laion/swegym-tasks-patched-validated-v5",
                 origin="Task Trove",
                 family="swe-repo",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=2428,
                 notes=(
                     "Image ships no repository: the instruction clones it and runs make init at agent "
@@ -816,7 +966,10 @@ def sources() -> list[RlDataSource]:
                     "oracles fail on missing dependencies and the empty check cannot start."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=7,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -825,7 +978,7 @@ def sources() -> list[RlDataSource]:
                 title="laion/toolscale-v4",
                 origin="Task Trove",
                 family="tool-use",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=4048,
                 notes=(
                     "Good design (offline tool service) but the CLI script embeds the gold calls and "
@@ -833,7 +986,10 @@ def sources() -> list[RlDataSource]:
                     "strip the success criteria."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.UNSAFE,
+                daytona_snapshot_count=4048,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -842,11 +998,14 @@ def sources() -> list[RlDataSource]:
                 title="laion/tulu3-sft-personas-math-sandboxes-verified-v3",
                 origin="Task Trove",
                 family="math-answer",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=9998,
                 notes="Easy SFT persona math, gold in plaintext, carries the terminal-bench canary.",
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -861,7 +1020,10 @@ def sources() -> list[RlDataSource]:
                     "expected-status grading; oracle patches remain separate."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                daytona_safety=DaytonaSafety.UNSAFE,
+                daytona_snapshot_count=8101,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned release payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -870,14 +1032,17 @@ def sources() -> list[RlDataSource]:
                 title="SankalpKJ/nemotron-code-oracle-filtered",
                 origin="Task Trove",
                 family="competitive-programming",
-                tags=("agentic", "multi-turn", "excluded"),
+                tags=("agentic", "multi-turn", EXCLUDED_TAG),
                 count=15165,
                 notes=(
                     "Only test is the example shown in the prompt. Oracle solutions exist, so generate "
                     "hidden cases by fuzzing inputs through the oracle."
                 ),
                 dataset=TASKTROVE_INPUT,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -891,7 +1056,11 @@ def sources() -> list[RlDataSource]:
                     "Canonical SWE-Gym tasks with native test selection and grading; oracle patches " "remain separate."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                daytona_safety=DaytonaSafety.UNSAFE,
+                daytona_snapshot_count=2163,
+                daytona_count_basis=(
+                    "production snapshot_identity over pinned shard contexts; one Dockerfile but "
+                    "2,163 distinct per-task setup_repo.sh payloads"
+                ),
             )
         ),
         RlDataSource(
@@ -910,7 +1079,10 @@ def sources() -> list[RlDataSource]:
                     "and dependency resolution remain mutable."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                daytona_safety=DaytonaSafety.UNSAFE,
+                daytona_snapshot_count=2698,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned release payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -932,7 +1104,10 @@ def sources() -> list[RlDataSource]:
                     "hashes."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                daytona_safety=DaytonaSafety.UNSAFE,
+                daytona_snapshot_count=1000,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned release payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -954,7 +1129,10 @@ def sources() -> list[RlDataSource]:
                     "V2.6-RL-oss__general/source.json) for runtime revisions and file hashes."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                daytona_safety=DaytonaSafety.UNSAFE,
+                daytona_snapshot_count=989,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned release payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -968,7 +1146,10 @@ def sources() -> list[RlDataSource]:
                     "Canonical prompts with the complete native ABC-to-MIDI continuous scorer; no shipped " "solutions."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1000,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned release payloads; task.toml environment config"
+                ),
             )
         ),
         RlDataSource(
@@ -991,7 +1172,10 @@ def sources() -> list[RlDataSource]:
                     "hashes."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                daytona_safety=DaytonaSafety.SAFE,
+                daytona_snapshot_count=1,
+                daytona_count_basis=(
+                    "production snapshot_identity over the pinned release payloads; task.toml environment config"
+                ),
             )
         ),
     ]
