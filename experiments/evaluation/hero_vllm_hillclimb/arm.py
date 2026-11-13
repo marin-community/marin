@@ -117,6 +117,24 @@ BASELINE_ARGS = (
     '{"distributed": true, "concurrency": 4, "memory_limit": 17179869184}',
     "--enable-per-request-metrics",
     "--trust-remote-code",
+    # Rafal's resolved compilation config. Without grug_moe_short_conv in splitting_ops the fork's
+    # ShortConv guard silently downgrades cudagraph_mode to NONE (about 3x slower decode).
+    "--compilation-config",
+    json.dumps(
+        {
+            "cudagraph_mode": "PIECEWISE",
+            "splitting_ops": [
+                "vllm::unified_attention_with_output",
+                "vllm::unified_kv_cache_update",
+                "vllm::grug_moe_short_conv",
+            ],
+            "inductor_compile_config": {
+                "enable_auto_functionalized_v2": False,
+                "combo_kernels": True,
+                "benchmark_combo_kernel": True,
+            },
+        }
+    ),
 )
 # Rafal's server runs a single API server process (its log shows one APIServer pid). Only the
 # leader starts API servers; headless followers reject the flag.
@@ -176,6 +194,16 @@ async def _run_probes(base_url: str, config: ArmConfig, cases: dict) -> None:
         raise RuntimeError(f"probe phases failed: {failures}")
 
 
+def _assert_cuda_graphs(log_dir: str) -> None:
+    """G0: refuse to measure a server whose CUDA graphs were silently disabled."""
+    text = (Path(log_dir) / "stdout.log").read_text(errors="replace")
+    text += (Path(log_dir) / "stderr.log").read_text(errors="replace") if (Path(log_dir) / "stderr.log").exists() else ""
+    if "CUDAGraphMode.NONE" in text or "overriding cudagraph_mode to NONE" in text:
+        raise RuntimeError("G0 failed: vLLM resolved cudagraph_mode=NONE")
+    if "Capturing CUDA graphs" not in text:
+        raise RuntimeError("G0 failed: no CUDA graph capture in the vLLM log")
+
+
 def run_arm(config: ArmConfig) -> None:
     """Iris entrypoint for every task of an arm's gang."""
     configure_logging()
@@ -210,6 +238,7 @@ def run_arm(config: ArmConfig) -> None:
                         },
                     )
                     try:
+                        _assert_cuda_graphs(server.log_dir)
                         asyncio.run(_run_probes(server.server_url, config, _read_json(config.cases_uri)))
                     finally:
                         _copy_native_logs(server.log_dir, config.output_uri)
