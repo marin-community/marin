@@ -164,6 +164,7 @@ def test_cli_artifact_can_be_reloaded_by_another_process(qc_inputs, tmp_path):
 @dataclass(frozen=True)
 class ReviewService:
     available: bool = True
+    issue_quality: Quality = Quality.BAD
 
     @property
     def identity(self):
@@ -178,7 +179,7 @@ class ReviewService:
                 status=ReviewStatus.REVIEWED,
                 verdict=ReviewVerdict(
                     task_id=task.id,
-                    quality=Quality.BAD if task.id == "unshaped" else Quality.GOOD,
+                    quality=self.issue_quality if task.id == "unshaped" else Quality.GOOD,
                     confidence=Confidence.HIGH,
                     reference_status=ReferenceStatus.CONSISTENT,
                     defects=[Defect.RUBRIC_MISMATCH] if task.id == "unshaped" else [],
@@ -194,10 +195,11 @@ class ReviewService:
         return [None] * len(batches)
 
 
-def test_full_review_keeps_bad_tasks_and_resumes_without_the_provider(qc_inputs, tmp_path):
+@pytest.mark.parametrize("issue_quality", [Quality.BAD, Quality.ISSUES, Quality.GOOD])
+def test_full_review_keeps_issue_tasks_and_resumes_without_the_provider(qc_inputs, tmp_path, issue_quality):
     config, _ = qc_inputs
     inputs = prepare_inputs(config)
-    reviewer = ReviewService()
+    reviewer = ReviewService(issue_quality=issue_quality)
     rubric = ReviewRubric("quality", "1", ("Check the complete task contract.",))
     output = str(tmp_path / "reviews")
     result = review_inputs(inputs, reviewer, rubric, output)

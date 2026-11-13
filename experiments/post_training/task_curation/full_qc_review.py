@@ -18,7 +18,15 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.models import Confidence, Quality, ReviewRecord, ReviewRubric, ReviewStatus
+from taskcompendium.pipeline.models import (
+    Confidence,
+    Quality,
+    ReferenceStatus,
+    ReviewRecord,
+    ReviewRubric,
+    ReviewStatus,
+    ReviewVerdict,
+)
 from taskcompendium.pipeline.review import Reviewer, review_tasks
 
 from experiments.post_training.task_curation.full_qc_artifacts import FullQCInputs, FullQCReview
@@ -45,6 +53,14 @@ def load_inputs(path: str) -> FullQCInputs:
     return FullQCInputs.model_validate({**record.result, "path": path})
 
 
+def has_review_issues(verdict: ReviewVerdict) -> bool:
+    return (
+        verdict.quality in {Quality.ISSUES, Quality.BAD}
+        or bool(verdict.defects)
+        or verdict.reference_status is ReferenceStatus.CONFLICT
+    )
+
+
 def quality_result(reviews: Sequence[ReviewRecord]) -> SourceQualityResult:
     """Compute informational Result without treating missing observations as clean."""
     reviewed = unavailable = uncertain = 0
@@ -55,11 +71,13 @@ def quality_result(reviews: Sequence[ReviewRecord]) -> SourceQualityResult:
         if review.status is not ReviewStatus.REVIEWED or verdict is None:
             unavailable += 1
             continue
-        if verdict.quality is Quality.UNKNOWN or verdict.confidence is Confidence.LOW:
+        if verdict.confidence is Confidence.LOW or (
+            verdict.quality is Quality.UNKNOWN and not has_review_issues(verdict)
+        ):
             uncertain += 1
             continue
         reviewed += 1
-        if verdict.quality is not Quality.GOOD:
+        if has_review_issues(verdict):
             issue_count += 1
             if len(issues) < MAX_SUMMARY_ISSUES:
                 issues.append(f"{review.task_id}: {verdict.evidence}")
@@ -202,7 +220,15 @@ def review_inputs(inputs: FullQCInputs, reviewer: Reviewer, rubric: ReviewRubric
         attempted_count=len(reviews),
         result=quality_result(reviews),
         top_issues=dict(
-            Counter(str(defect) for row in reviews if row.verdict is not None for defect in row.verdict.defects)
+            Counter(
+                str(defect)
+                for row in reviews
+                if row.status is ReviewStatus.REVIEWED
+                and row.verdict is not None
+                and row.verdict.confidence is not Confidence.LOW
+                and has_review_issues(row.verdict)
+                for defect in row.verdict.defects
+            )
         ),
         records_path=str(records_path),
         records_sha256=file_sha256(records_path),
