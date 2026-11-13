@@ -1533,6 +1533,19 @@ inspect both phases through one `--jobs-dir`. No prior file is overwritten.
 The runner verifies the task, native files, declared limits, original backend
 configuration and pinned backend source before dispatch. The existing budget of
 three infrastructure attempts applies independently to this approved phase.
+Calibration and approved retry trials set `trial_attempt_timeout_sec` to 72 hours.
+This explicit wall-clock bound selects Daytona's JOB provider-wait policy;
+standalone Harbor trials without it keep PHASE behavior. Safe provider retries
+spend neither the three infrastructure attempts nor source execution time.
+Request duration and backoff pause phase clocks while the overall attempt clock
+advances. Controls and deletion use a 60-second per-call timeout and backoff capped
+at 120 seconds. Artifact transfers retain SDK timeouts appropriate for large files;
+snapshot and acquisition operations retain their SDK settings. Normal cleanup
+allows job-bounded provider recovery; cancellation cleanup and grace remain bounded
+by wall-clock time. Source commands execute once per attempt; an ambiguous source
+response remains infrastructure evidence.
+Preserve the original phase and replay approved provider-unscored tasks after a
+pinned backend repair, with the same native files and source limits.
 New attempts record that approved context; historical failure classifications
 remain unchanged, including old phases that stopped after one unknown error.
 Further phases require another explicit decision; the runner never schedules them

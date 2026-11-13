@@ -33,7 +33,7 @@ from daytona.common.snapshot import Snapshot
 from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
 
-from shellbox.backends.daytona.provider import retry_provider_call
+from shellbox.backends.daytona.provider import ProviderWaitPolicy, retry_provider_call
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from shellbox.machine import MachineSpec, UnsupportedMachineSpec
 
@@ -159,8 +159,12 @@ def snapshot_request_for_spec(spec: MachineSpec) -> SnapshotRequest:
     )
 
 
-async def _snapshot_metadata(client: AsyncDaytona, name: str, deadline: float | None) -> Snapshot:
-    return await retry_provider_call("snapshot.get", partial(client.snapshot.get, name), deadline=deadline)
+async def _snapshot_metadata(
+    client: AsyncDaytona, name: str, deadline: float | None, wait_policy: ProviderWaitPolicy
+) -> Snapshot:
+    return await retry_provider_call(
+        "snapshot.get", partial(client.snapshot.get, name), deadline=deadline, wait_policy=wait_policy
+    )
 
 
 async def _resolve_snapshot(client: AsyncDaytona, request: SnapshotRequest) -> Snapshot:
@@ -182,18 +186,24 @@ async def _resolve_snapshot(client: AsyncDaytona, request: SnapshotRequest) -> S
             return await client.snapshot.get(name)
 
 
-async def ensure_snapshot(client: AsyncDaytona, request: SnapshotRequest, *, deadline: float | None = None) -> str:
+async def ensure_snapshot(
+    client: AsyncDaytona,
+    request: SnapshotRequest,
+    *,
+    deadline: float | None = None,
+    wait_policy: ProviderWaitPolicy = ProviderWaitPolicy.PHASE,
+) -> str:
     """Create or recover the active snapshot under its deterministic name."""
     name = request.name
     snapshot = await retry_provider_call(
-        "snapshot.resolve", partial(_resolve_snapshot, client, request), deadline=deadline
+        "snapshot.resolve", partial(_resolve_snapshot, client, request), deadline=deadline, wait_policy=wait_policy
     )
     backoff = ExponentialBackoff(initial=1, maximum=10)
     while snapshot.state != SnapshotState.ACTIVE:
         if snapshot.state in FAILED_SNAPSHOT_STATES:
             raise RuntimeError(f"Daytona snapshot {name} is {snapshot.state}: {snapshot.error_reason}")
         await asyncio.sleep(backoff.next_interval())
-        snapshot = await _snapshot_metadata(client, name, deadline)
+        snapshot = await _snapshot_metadata(client, name, deadline, wait_policy)
     return name
 
 
@@ -311,7 +321,7 @@ async def purge_stale_snapshots(
             referenced_kept.append(name)
             continue
         try:
-            current = await _snapshot_metadata(client, name, None)
+            current = await _snapshot_metadata(client, name, None, ProviderWaitPolicy.PHASE)
         except DaytonaNotFoundError:
             continue
         current_class = classify_snapshot(current, now=observed_at, minimum_idle=minimum_idle)

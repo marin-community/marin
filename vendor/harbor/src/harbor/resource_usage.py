@@ -21,7 +21,7 @@ RESOURCE_COUNTER_TIMEOUT_SEC = 5
 async def resource_counters(environment: BaseEnvironment) -> dict[str, int]:
     if environment.os != TaskOS.LINUX:
         return {}
-    result = await environment.exec(
+    result = await environment.exec_control(
         command=RESOURCE_COUNTERS_COMMAND, timeout_sec=RESOURCE_COUNTER_TIMEOUT_SEC, user="root"
     )
     return {key: int(value) for line in result.stdout.splitlines() if len(parts := line.split()) == 2
