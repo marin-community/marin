@@ -149,7 +149,9 @@ LOG_REGISTERED_SCHEMA = Schema(
         Column(name="source", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
         # Substring-searched via contains()/LIKE.
         Column(name="data", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False, trigram_index=True),
-        # Its catalog bounds prune segments for time-range searches.
+        # Flagged so the catalog records each segment's time range: each segment
+        # covers a short span, but the key column is `key`, so key bounds say
+        # nothing about time.
         Column(name="epoch_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False, catalog_bounds=True),
         Column(name="level", type=stats_pb2.COLUMN_TYPE_INT32, nullable=False),
     ),
