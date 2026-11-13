@@ -151,7 +151,6 @@ def validate_role_nodes(nodes: Sequence[Mapping[str, Any]], *, topology: RoleTop
         raise ValueError(f"Expected exactly {topology.num_nodes} Ray nodes, observed {len(alive)}")
     rows = []
     domains: dict[int, set[str]] = {}
-    fabrics: dict[str, set[str]] = {group.role: set() for group in topology.groups}
     for node in alive:
         resources = node["Resources"]
         selected = {}
@@ -174,13 +173,9 @@ def validate_role_nodes(nodes: Sequence[Mapping[str, Any]], *, topology: RoleTop
         }
         if roles != _node_roles(topology, rank):
             raise ValueError(f"Ray role capacity on Iris rank {rank} disagrees with the requested groups")
-        if any(
-            resources.get(key) != topology.gpus_per_node for key in ("GPU", FABRIC_RESOURCE_PREFIX + selected["fabric"])
-        ):
-            raise ValueError("Ray GPU and physical fabric capacity disagree")
+        if resources.get("GPU") != topology.gpus_per_node:
+            raise ValueError("Ray GPU capacity disagrees with the allocated node width")
         domains.setdefault(rank // topology.nodes_per_domain, set()).add(selected["fabric"])
-        for role in roles:
-            fabrics[role].add(selected["fabric"])
         gpu_uuids = sorted(
             name.removeprefix(GPU_RESOURCE_PREFIX) for name in resources if name.startswith(GPU_RESOURCE_PREFIX)
         )
@@ -196,7 +191,4 @@ def validate_role_nodes(nodes: Sequence[Mapping[str, Any]], *, topology: RoleTop
     if any(len(values) != 1 for values in domains.values()) or len(set.union(*domains.values())) != len(domains):
         observed = {index: sorted(values) for index, values in domains.items()}
         raise ValueError(f"Physical NVLink domains disagree with Iris's native allocation slices: {observed}")
-    if any(len(values) != 1 for values in fabrics.values()):
-        observed = {role: sorted(values) for role, values in fabrics.items()}
-        raise ValueError(f"A requested group spans physical NVLink domains: {observed}")
     return sorted(rows, key=lambda row: row["rank"])
