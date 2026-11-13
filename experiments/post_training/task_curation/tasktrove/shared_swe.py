@@ -3,7 +3,6 @@
 
 """Ingestion-time SHARED SWE protection, independent of population-specific image builds."""
 
-import base64
 import hashlib
 import json
 import shlex
@@ -21,6 +20,7 @@ from experiments.post_training.task_curation.tasktrove.native_shared_swe import 
 
 BOOTSTRAP = "/opt/taskcompendium-shared-bootstrap/control.py"
 BOOTSTRAP_INPUT = "/tmp/taskcompendium-shared-input.json"
+BOOTSTRAP_ARCHIVE = "setup_files/taskcompendium-shared-input.zlib"
 SETUP_PREFIX = "## Environment Setup (complete these steps first)\n\n```bash\n"
 
 
@@ -68,7 +68,9 @@ def harden_shared_swe(
         "verifier_spec": render_spec(protected_spec),
         "test_files": test_files,
     }
-    packed = base64.b64encode(zlib.compress(json.dumps(payload).encode())).decode()
+    if BOOTSTRAP_ARCHIVE in files:
+        raise ValueError(f"Source task occupies protected bootstrap resource: {BOOTSTRAP_ARCHIVE}")
+    files[BOOTSTRAP_ARCHIVE] = zlib.compress(json.dumps(payload).encode())
     config = tomlkit.parse(files["task.toml"].decode())
     instruction = files["instruction.md"].decode()
     setup = ""
@@ -77,11 +79,12 @@ def harden_shared_swe(
         if not boundary:
             raise ValueError("Incomplete source environment setup block")
         instruction = instruction.removeprefix("\n---\n\n")
-    # The reference payload lives in task.toml's bounded setup, never the common
-    # image context: distinct task setup does not produce thousands of snapshots.
+    # Harbor uploads setup files before initialization and agent handoff. Keep
+    # per-task payloads out of both command arguments and the common image.
     unpack = (
-        "import base64,pathlib,zlib; "
-        f"pathlib.Path({BOOTSTRAP_INPUT!r}).write_bytes(zlib.decompress(base64.b64decode({packed!r})))"
+        "import pathlib,zlib; "
+        f"pathlib.Path({BOOTSTRAP_INPUT!r}).write_bytes("
+        f"zlib.decompress(pathlib.Path('/{BOOTSTRAP_ARCHIVE}').read_bytes()))"
     )
     control_python = "/opt/taskcompendium-shared-bootstrap/python"
     bootstrap_command = (
@@ -91,7 +94,7 @@ def harden_shared_swe(
         + f'control_python="{control_python}"\n'
         + f'"$control_python" -I -S -c {shlex.quote(unpack)}\n'
         + f'"$control_python" -I -S {BOOTSTRAP} bootstrap {BOOTSTRAP_INPUT}\n'
-        + f"rm {BOOTSTRAP_INPUT}\n"
+        + f"rm {BOOTSTRAP_INPUT} /{BOOTSTRAP_ARCHIVE}\n"
     )
     config["environment"]["setup"] = {"command": bootstrap_command, "timeout_sec": 1800.0}
     source_user = str(config["agent"].get("user", "root"))

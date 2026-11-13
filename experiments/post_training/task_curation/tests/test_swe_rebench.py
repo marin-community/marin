@@ -4,6 +4,7 @@
 """Patched repository graders preserve private tests and reject unresolved source results."""
 
 import json
+import random
 import shutil
 import subprocess
 import sys
@@ -340,11 +341,23 @@ def shared_python_package(repository: PatchedRepository, destination: Path, *, a
 
 
 @pytest.mark.docker
+@pytest.mark.parametrize("reference_size", [0, 160000], ids=["ordinary", "large-metadata"])
 @pytest.mark.parametrize("absolute_manifests", [False, True])
 @pytest.mark.parametrize("repair", [False, True])
 def test_generated_shared_python_harbor_payload_restores_private_manifests(
-    patched_repository, tmp_path, machines, absolute_manifests, repair
+    patched_repository, tmp_path, machines, absolute_manifests, repair, reference_size
 ):
+    if reference_size:
+        task = patched_repository.task
+        reference = inline_resource("large-reference.bin", random.Random(0).randbytes(reference_size))
+        patched_repository = replace(
+            patched_repository,
+            task=task.model_copy(
+                update={
+                    "resources": task.resources.model_copy(update={"verifier": (*task.resources.verifier, reference)})
+                }
+            ),
+        )
     package = tmp_path / "package"
     shared_python_package(patched_repository, package, absolute_manifests=absolute_manifests)
     subprocess.run(
