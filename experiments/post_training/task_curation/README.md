@@ -1,5 +1,11 @@
 # Task data curation
 
+To add a dataset to the RL Data Atlas, start with the Atlas
+[Getting started](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/guide.html)
+page. It shows every ingestion path, what each outcome guarantees and live
+per-outcome source counts. Its source is
+[`guide.html`](../../../infra/marina/apps/rl_data_catalog/dist/guide.html).
+
 [Dataset declarations](datasets/README.md) feed TaskSpec conversion and the RL
 Data Atlas through [all_sources()](sources.py). See the
 [reference](../../../docs/references/task-curation.md) for source fields, grading,
@@ -34,13 +40,22 @@ archived production population.
 Pass `--selection RECIPE.json` to a FULL campaign to append a
 `rl-data/task-selection/<name>/<version>` artifact after source admission.
 The recipe names the source IDs, assigns them to selection families, sets
-family quotas and pins the complete heldout source in retained storage.
+family quotas and pins the complete heldout inputs in retained storage.
 The step filters heldout overlap and cross-source duplicates before sampling,
 then writes canonical `task_spec` Parquet for training and evaluation.
 See the [quick RL loop](../../../docs/recipes/quick-rl-loop.md) for the current
 selection recipe and the training/evaluation handoff.
 See [task selection](../../../docs/references/task-curation.md#final-task-selection)
 for the recipe and resume commands.
+
+## EvalLite
+
+`--corpus <converted-corpus.json> --eval-lite
+experiments/post_training/task_curation/recipes/eval-lite.json`
+builds the EvalLite: 1,500 evaluation-only benchmark tasks that RL
+runs grade without containers or judges, and a 100-task fast subset. The
+[panel reference](../../../docs/references/task-curation.md#evallite)
+lists its parts and how to change them.
 
 ## Local conversion loop
 
@@ -63,8 +78,11 @@ Evaluation sources also use QUICK, with stricter publication checks that preserv
 the complete benchmark population. They publish canonical TaskSpec rows and
 evaluation protocol sidecars. See [evaluation tasks](../../../docs/references/evaluation-tasks.md)
 for declarations, outputs and the standard evaluation driver.
-`evaluation.py` binds `EvalDataset` recipes to
+`experiments.evaluation.preparation` binds `EvaluationCorpusRecipe` inputs to
 `taskcompendium.pipeline.evaluation.publish_evaluation_corpus`. Evaluation
+configuration and prompt compilation belong to `experiments/evaluation/`;
+shot counts are recorded with the resulting immutable tasks. Shared curation
+provides acquisition and inventory/catalog integration. Evaluation
 protocols use schema version 3 from `taskcompendium.evaluation.spec`; source
 adapters live under `taskcompendium.importers` and `taskcompendium.convert`,
 including reusable benchmark modules in `taskcompendium.importers.evalchemy`.
@@ -188,7 +206,7 @@ For a production FULL campaign, add
 Enable assessment and omit `--cache-dir`, which selects local execution and a
 local artifact root. Production reuses the remote artifact cache under
 `--artifact-root` (default `s3://marin-us-east-02a/marin`) and model requests under
-the explicit `--review-cache`. Reuse those locations, pinned inputs, recipe
+`--review-cache` (default `<artifact-root>/rl-data/review-cache`). Reuse those locations, pinned inputs, recipe
 versions, rubric and model revisions across campaigns. A new report directory or
 enabling assessment does not force recomputation of completed work. Switching
 artifact roots does not move cached work; verify artifact and model-cache reuse
@@ -329,7 +347,8 @@ temporarily changes Torch's default dtype. Concurrent workers reuse the cached
 backend after initialization.
 
 `--cache-dir` selects local workers and artifacts. `--review-cache` selects the
-shared inference cache, defaulting locally to `<cache-dir>/review-cache`.
+shared inference cache, defaulting to `<cache-dir>/review-cache` locally and
+`<artifact-root>/rl-data/review-cache` otherwise.
 Keep it across campaigns and worker-count changes. FineStore caches vectors by
 rendered text and embedding specification; Zephyr writes vector Parquet.
 Alignment reads that Parquet and keeps the curriculum matrix in worker memory.

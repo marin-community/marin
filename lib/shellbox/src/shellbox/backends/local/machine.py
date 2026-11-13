@@ -31,7 +31,7 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, cast
 
-from shellbox.backends.local import launch
+from shellbox.backends.local import launch, nix
 from shellbox.backends.local.cgroup import MachineCgroup, check_cgroup_parent, delegated_cgroup_parent
 from shellbox.backends.local.disk import LocalDisk, LocalDiskPool
 from shellbox.backends.local.images import PreparedLocalImage, cached_local_image, prepare_local_image
@@ -281,7 +281,9 @@ def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
     return (bwrap_path(), *(() if system is None else (Path(system),)))
 
 
-def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str | None:
+def _prepare_sandbox(
+    bwrap: Path, system_directories: SystemDirectories, mounts: tuple[Mount, ...], environment: dict[str, str]
+) -> str | None:
     """Return why namespace creation or command entry fails, or None when both work."""
 
     async def probe() -> str | None:
@@ -291,17 +293,23 @@ def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str 
             bwrap=bwrap,
             root=root,
             layers=layers,
-            mounts=(),
-            environment=CONTROL_ENVIRONMENT,
+            mounts=mounts,
+            environment=environment,
         )
         try:
-            async with asyncio.timeout(PROBE_TIMEOUT):
-                await machine._start_keeper()
-                result = await machine._control("exit 0", PurePosixPath("/"))
+            try:
+                async with asyncio.timeout(PROBE_TIMEOUT):
+                    await machine._start_keeper()
+                    result = await machine._control("exit 0", PurePosixPath("/"))
+            finally:
+                await machine.close()
         except (OSError, RuntimeError, TimeoutError) as error:
+            if machine._keeper is not None:
+                assert machine._keeper.stderr is not None
+                stderr = (await machine._keeper.stderr.read()).decode(errors="replace").strip()
+                if stderr:
+                    return stderr
             return str(error) or type(error).__name__
-        finally:
-            await machine.close()
         if result.exit_code == 0:
             return None
         return result.stderr.decode(errors="replace").strip() or f"exit status {result.exit_code}"
@@ -311,10 +319,15 @@ def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str 
         return executor.submit(asyncio.run, probe()).result()
 
 
-def _working_bwrap(candidates: Iterable[Path], system_directories: SystemDirectories) -> Path:
+def _working_bwrap(
+    candidates: Iterable[Path],
+    system_directories: SystemDirectories,
+    mounts: tuple[Mount, ...],
+    environment: dict[str, str],
+) -> Path:
     errors = []
     for candidate in candidates:
-        error = _prepare_sandbox(candidate, system_directories)
+        error = _prepare_sandbox(candidate, system_directories, mounts, environment)
         if error is None:
             return candidate
         errors.append(f"{candidate}: {error}")
@@ -405,6 +418,48 @@ def _pin_init(pid: int, namespace: int) -> int:
         os.close(directory)
 
 
+class LocalProcessScope:
+    """Agent command scope contained by a worker-owned cgroup."""
+
+    def __init__(self, machine: "LocalMachine", group: MachineCgroup):
+        self.machine = machine
+        self.group = group
+        self._closed = False
+        self._active: set[asyncio.Task[Result]] = set()
+        self._commands: dict[MachineCgroup, asyncio.Task[asyncio.subprocess.Process]] = {}
+        self._closing: asyncio.Task[None] | None = None
+
+    async def run(self, command: Command) -> Result:
+        if self._closed:
+            raise RuntimeError("Process scope is closed")
+        self.machine._check_open()
+        environment = {**self.machine._environment, **self.machine.spec.env, **command.env}
+        task = asyncio.create_task(self.machine._execute(command, environment, scope=self))
+        self._active.add(task)
+        try:
+            return await task
+        finally:
+            self._active.discard(task)
+
+    async def terminate(self) -> None:
+        if self._closing is None:
+            self._closed = True
+            self._closing = own_cleanup(self._terminate())
+        await await_cleanup(self._closing)
+
+    async def _terminate(self) -> None:
+        async def stop(group: MachineCgroup, acquisition: asyncio.Task[asyncio.subprocess.Process]) -> None:
+            self._commands.pop(group, None)
+            process = await finish_owned(acquisition)
+            await self.machine._stop_command(process, group)
+
+        await asyncio.gather(*(stop(group, acquisition) for group, acquisition in tuple(self._commands.items())))
+        if self._active:
+            await asyncio.gather(*tuple(self._active), return_exceptions=True)
+        await self.group.close()
+        self.machine._scopes.discard(self)
+
+
 class LocalMachine:
     """A persistent bubblewrap member, with commands entering pinned namespaces."""
 
@@ -434,6 +489,7 @@ class LocalMachine:
         self._command_cgroups: set[MachineCgroup] = set()
         self._background_cgroups: set[MachineCgroup] = set()
         self._run_commands: dict[MachineCgroup, asyncio.Task[asyncio.subprocess.Process]] = {}
+        self._scopes: set[LocalProcessScope] = set()
         self._keeper_cgroup: MachineCgroup | None = None
         self._bwrap = bwrap
         self._environment = environment
@@ -554,7 +610,7 @@ class LocalMachine:
                 "--clearenv",
                 "--setenv",
                 "PATH",
-                DEFAULT_PATH,
+                self._environment["PATH"],
                 "/bin/sh",
                 "-c",
                 'read -r ready && [ "$ready" = shellbox-ready ] || exit 1; exec sleep 2147483647',
@@ -659,6 +715,16 @@ class LocalMachine:
 
     async def run(self, command: Command) -> Result:
         return await self._execute(command, {**self._environment, **self.spec.env, **command.env})
+
+    async def open_process_scope(self) -> LocalProcessScope:
+        """Contain scoped commands and detached descendants outside the guest."""
+        self._check_open()
+        if self._cgroup is None:
+            raise UnsupportedMachineSpec("Process scopes require delegated cgroups")
+        group = self._cgroup.create_child()
+        scope = LocalProcessScope(self, group)
+        self._scopes.add(scope)
+        return scope
 
     async def open_process(self, command: Command) -> SubprocessSession:
         """Start a foreground process in the same pinned namespaces as run."""
@@ -772,7 +838,7 @@ class LocalMachine:
             Command(
                 ("/bin/sh", "-c", script, "sh", str(path)), cwd="/", stdin=stdin, output_limit_bytes=output_limit_bytes
             ),
-            CONTROL_ENVIRONMENT,
+            {**CONTROL_ENVIRONMENT, "PATH": self._environment["PATH"]},
         )
 
     def _command_config(self, command: Command, environment: dict[str, str]) -> dict:
@@ -853,7 +919,11 @@ class LocalMachine:
 
         await await_cleanup(own_cleanup(cleanup()))
 
-    async def _execute(self, command: Command, environment: dict[str, str]) -> Result:
+    async def _execute(
+        self, command: Command, environment: dict[str, str], *, scope: LocalProcessScope | None = None
+    ) -> Result:
+        if scope is not None and scope._closed:
+            raise RuntimeError("Process scope is closed")
         config = self._command_config(command, environment)
         # Anonymous output files let a successful foreground command finish even
         # when its background services keep stdout open. RLIMIT_FSIZE bounds writers.
@@ -884,7 +954,7 @@ class LocalMachine:
                     self._disk.check_limit()
                 raise
             assert self._root_fd is not None
-            group = self._new_command_cgroup()
+            group = scope.group.create_child() if scope is not None else self._new_command_cgroup()
             config["cgroup"] = None if group is None else str(group.path / "cgroup.procs")
             configuration.write(json.dumps(config).encode())
             configuration.seek(0)
@@ -911,7 +981,10 @@ class LocalMachine:
                 )
             )
             if group is not None:
-                self._run_commands[group] = acquisition
+                if scope is None:
+                    self._run_commands[group] = acquisition
+                else:
+                    scope._commands[group] = acquisition
             process = None
             try:
                 async with asyncio.timeout(command.timeout):
@@ -931,6 +1004,8 @@ class LocalMachine:
                         self._commands.add(process)
                     status_writer.close()
                     if group is not None:
+                        if scope is not None:
+                            scope._commands.pop(group, None)
                         await self._stop_command(process, group)
                     elif not self._closed:
                         await self.close()
@@ -948,7 +1023,11 @@ class LocalMachine:
             finally:
                 if process is not None:
                     self._commands.discard(process)
-                if group is not None and not self._closed and group in self._command_cgroups:
+                if scope is not None and group is not None and group in scope._commands and not self._closed:
+                    if not group.populated:
+                        await group.close()
+                        scope._commands.pop(group, None)
+                if scope is None and group is not None and not self._closed and group in self._command_cgroups:
                     if group.populated:
                         self._background_cgroups.add(group)
                     else:
@@ -1016,6 +1095,7 @@ class LocalMachine:
         await asyncio.shield(self._closing)
 
     async def _destroy(self) -> None:
+        await asyncio.gather(*(scope.terminate() for scope in tuple(self._scopes)))
         if self._cgroup is not None:
             self._cgroup.kill()
         # Kill the verified, pinned guest init before its host launcher. An
@@ -1114,7 +1194,7 @@ def check_local_environment(
     capabilities = LINUX_PROCESS_CAPABILITIES
     if cgroup_parent is not None:
         check_cgroup_parent(cgroup_parent)
-        capabilities = capabilities | {"retained_command_cancellation"}
+        capabilities = capabilities | {"retained_command_cancellation", "process_scope"}
     check_execution_requirements(
         requirements,
         spec,
@@ -1192,7 +1272,13 @@ class LocalMachineFactory:
         self.package_cache = package_cache if package_cache is not None else Path.home() / ".cache/shellbox/python"
         self.python_version = python_version
         self.system_directories = system_directories
-        self.bwrap = _working_bwrap(_bwrap_candidates(bwrap), system_directories)
+        candidates = _bwrap_candidates(bwrap)
+        self._system_mounts, self._system_bin_dirs = nix.system_programs()
+        environment = {
+            **CONTROL_ENVIRONMENT,
+            "PATH": os.pathsep.join((DEFAULT_PATH, *map(str, self._system_bin_dirs))),
+        }
+        self.bwrap = _working_bwrap(candidates, system_directories, self._system_mounts, environment)
         logger.info("Local backend sandboxes commands with %s, system directories %s", self.bwrap, system_directories)
 
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
@@ -1284,6 +1370,7 @@ class LocalMachineFactory:
         mounts = tuple(
             dict.fromkeys(
                 (
+                    *self._system_mounts,
                     *(Mount(directory, PurePosixPath(directory)) for directory in read_only),
                     *(Mount(mount.host.absolute(), mount.guest) for mount in host.mounts),
                 )
@@ -1309,6 +1396,8 @@ class LocalMachineFactory:
             raise
         try:
             if aliases is not None:
+                # The copied host file can be read-only, as on NixOS.
+                (root / "etc/hosts").unlink(missing_ok=True)
                 (root / "etc/hosts").write_text(aliases)
             environment = {
                 "PATH": os.pathsep.join(
@@ -1316,6 +1405,7 @@ class LocalMachineFactory:
                         *(str(directory.absolute()) for directory in host.bin_dirs),
                         *map(str, self.bin_dirs),
                         DEFAULT_PATH,
+                        *map(str, self._system_bin_dirs),
                     ]
                 ),
                 "HOME": str(HOME),

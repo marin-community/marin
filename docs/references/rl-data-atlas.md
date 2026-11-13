@@ -67,17 +67,35 @@ no current grade; archived evidence remains available. Every source has a regist
 QUICK records conversion without review. Source details show the latest curation outcome; the
 assessment page shows the curation associated with its selected grade.
 
+## Getting started page
+
+**Getting started** (`guide.html`) explains, for a reader new to Marin, every
+path from a candidate dataset to an Atlas source: the task format gate,
+environment fidelity, curation modes, qualification, Daytona safety and
+publication. It states what each outcome guarantees and links each step to the
+normative section of the [task curation reference](task-curation.md) and to the
+enforcing code. Per-outcome counts, Daytona labels and oracle-validation counts
+are computed in the browser from the same `/sources` response as **By source**,
+so they follow each catalog load without a code release. Sources from snapshots
+published before declarations carried an oversight level count as *oversight
+not declared*. Edit the rules in the reference first, then the page text in
+`infra/marina/apps/rl_data_catalog/dist/guide.html`, and release the app.
+
 ## Browsing sources
 
 **By source** lists each source's unique example count, training/evaluation use,
 Quality, Result, lexical contamination, actor-only Daytona verdict and leading
-curriculum area. Quality is QUICK for conversion without executed oversight and
-SAMPLE for recorded execution oversight. FULL requires a complete content-review
-assembly: independent QC and valid reviews cover every unique retained
-contract, with no unavailable observations. Uncertain reviews count toward coverage
-and remain separate from the conclusive Result denominator. The source details keep
-execution qualification separate. Partial content reviews show their coverage as
-provisional/incomplete. Result uses the inclusive issue-rate boundaries above.
+curriculum area. The levels define required content-review scope: QUICK converts
+without content review, SAMPLE requires a complete review of the selected sample,
+and FULL requires a complete review of the whole retained population. Execution qualification is recorded separately. Result uses the
+inclusive issue-rate boundaries above.
+
+The loader records required and conclusive reviewed counts plus coverage
+completeness. Result is provisional if coverage is incomplete or any required
+observation remains unreviewed or uncertain. A completed SAMPLE review is final
+for its sample; the Quality label alone never makes Result provisional. These
+counts follow the selected Result's review panel, not the execution campaign's
+processing mode or the source's entire population when only a sample is required.
 
 The default view hides QUICK and BAD entries and folds advisory duplicate groups.
 Expand a group to inspect matching members, or enable **Show QUICK-quality and
@@ -354,8 +372,8 @@ s3://marin-us-east-02a/marin/rl-data/catalog/production` to the
 [campaign command](task-curation.md#run-a-campaign) with assessment enabled.
 `--cache-dir` selects local execution and a local artifact root, so production
 publication rejects it. Production uses the shared artifact cache under
-`--artifact-root` (default `s3://marin-us-east-02a/marin`) and an explicit
-`--review-cache` for model requests. Reuse the existing cache locations, pinned
+`--artifact-root` (default `s3://marin-us-east-02a/marin`) and `--review-cache`
+(default `<artifact-root>/rl-data/review-cache`) for model requests. Reuse the existing cache locations, pinned
 inputs, recipe versions, rubric and model revisions to reuse completed work.
 Assessment can use cached results; enabling it does not force regrading.
 A new report directory does not invalidate the caches. Switching a local or GCP

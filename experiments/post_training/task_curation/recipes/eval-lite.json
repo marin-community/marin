@@ -1,0 +1,121 @@
+{
+  "development": {
+    "format": "task_spec",
+    "rows": 910,
+    "uri": "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04/full_validation.parquet",
+    "version": "2026.11.04"
+  },
+  "fast_counts": {
+    "agents": 11,
+    "competitive_coding": 18,
+    "general": 17,
+    "scientific_reasoning": 35,
+    "structural": 19
+  },
+  "name": "eval-lite",
+  "pass_rates": {
+    "uri": "s3://marin-us-east-02a/marin/rl-data/selection-inputs/eval-lite/pass-rates/2026.11.04.2/pass_rates.parquet",
+    "version": "2026.11.04.2",
+    "rows": 1500,
+    "model_revision": "fe666478454e79fe6027a0bab0388d9abd68f51a"
+  },
+  "seed": 20261104,
+  "sources": [
+    {
+      "aaii_category": "scientific_reasoning",
+      "count": 500,
+      "family": "scientific_reasoning",
+      "license": "unspecified by pinned card",
+      "source_id": "Evalchemy:math500",
+      "rows": 500,
+      "format": "evaluation"
+    },
+    {
+      "aaii_category": "scientific_reasoning",
+      "count": 20,
+      "family": "scientific_reasoning",
+      "license": "unspecified by pinned data",
+      "source_id": "Evalchemy:aime24",
+      "rows": 30,
+      "format": "evaluation"
+    },
+    {
+      "aaii_category": "coding",
+      "count": 164,
+      "family": "competitive_coding",
+      "license": "Apache-2.0",
+      "source_id": "Evalchemy:humanevalplus",
+      "rows": 164,
+      "format": "evaluation"
+    },
+    {
+      "aaii_category": "coding",
+      "count": 111,
+      "family": "competitive_coding",
+      "license": "Apache-2.0",
+      "source_id": "Evalchemy:mbppplus",
+      "rows": 378,
+      "format": "evaluation"
+    },
+    {
+      "aaii_category": "general",
+      "count": 200,
+      "family": "general",
+      "license": "MIT",
+      "source_id": "Evalchemy:mmlu-pro",
+      "rows": 12032,
+      "format": "evaluation"
+    },
+    {
+      "aaii_category": "general",
+      "count": 50,
+      "family": "general",
+      "license": "CC-BY-4.0",
+      "source_id": "Evalchemy:gpqa-diamond",
+      "rows": 198,
+      "format": "evaluation"
+    },
+    {
+      "aaii_category": "agents",
+      "count": 165,
+      "family": "agents",
+      "license": "CC-BY-4.0",
+      "source_id": "Nemotron:nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1/predicted-action",
+      "rows": 65559,
+      "format": "normalized"
+    },
+    {
+      "aaii_category": "format",
+      "count": 150,
+      "family": "structural",
+      "license": "Apache-2.0",
+      "source_id": "Evalchemy:ifeval",
+      "rows": 541,
+      "format": "evaluation"
+    },
+    {
+      "aaii_category": "format",
+      "count": 140,
+      "family": "structural",
+      "license": "unspecified by pinned card",
+      "source_id": "Evalchemy:ifbench",
+      "rows": 300,
+      "format": "evaluation"
+    }
+  ],
+  "training": [
+    {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04/train.parquet",
+      "version": "2026.11.04",
+      "rows": 100000,
+      "format": "task_spec"
+    },
+    {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04.1/train.parquet",
+      "version": "2026.11.04.1",
+      "rows": 100000,
+      "format": "task_spec"
+    }
+  ],
+  "version": "2026.11.11.1"
+}
