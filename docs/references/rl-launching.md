@@ -253,10 +253,12 @@ selecting a fresh checkpoint root.
 
 ### Native checkpoint inputs
 
-Set `SkyRLSpec.resume_checkpoint` to an artifact handle for a completed
+Set `SkyRLSpec.starting_checkpoint` to an artifact handle for a completed
 `global_step_N` directory. Use an immutable adoption name and version for each
-starting checkpoint. The launch document records its URI and identity under
-`inputs.resume_checkpoint`; the trainer reads native state directly.
+starting checkpoint. Use a new RL artifact version for each starting checkpoint;
+automatic recovery with the same version prefers that version's existing checkpoints.
+The launch document records its URI and identity under
+`inputs.starting_checkpoint`; the trainer reads native state directly.
 
 Automatic `resume_mode=latest` first uses the current run's latest checkpoint.
 If that run has no checkpoint marker, it uses the supplied starting checkpoint,
