@@ -185,7 +185,7 @@ impl SegmentIndexConfig {
         )
     }
 
-    fn exact_configs(&self) -> Vec<ExactIndexConfig> {
+    pub(crate) fn exact_configs(&self) -> Vec<ExactIndexConfig> {
         let mut configs = BTreeMap::new();
         for index in &self.indexes {
             let (column, values, value_counts): (&str, &[String], bool) = match index {

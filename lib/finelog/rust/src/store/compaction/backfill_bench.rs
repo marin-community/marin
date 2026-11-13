@@ -19,7 +19,7 @@ use arrow::array::{ArrayRef, Float64Array, Int32Array, Int64Array, RecordBatch, 
 use arrow::datatypes::SchemaRef;
 use parquet::arrow::ArrowWriter;
 
-use crate::indices::{format, write_segment_index, SegmentIndexConfig};
+use crate::indices::{exact, format, write_segment_index, SegmentIndexConfig};
 use crate::levanter_metrics_policy::levanter_metrics_schema;
 use crate::server::telemetry::telemetry_schema;
 use crate::store::compaction::executor::read_segment_projected;
@@ -419,6 +419,20 @@ fn bench_node_agent_index_backfill() {
     let index = Instant::now();
     let built = write_segment_index(&path, &batches, &config).unwrap();
     println!("stage index bundle: {:.1?}", index.elapsed());
+
+    // The bundle build's exact phases, timed alone so a change to either is
+    // visible against the whole build.
+    let sidecar_started = Instant::now();
+    let sidecar = exact::build_sidecar(&batches, &config.exact_configs())
+        .expect("node-agent policy configures exact indexes");
+    println!("  exact sidecar build: {:.1?}", sidecar_started.elapsed());
+    let sections_started = Instant::now();
+    let section_bytes =
+        exact::serialize_postings(&sidecar).len() + exact::serialize_counts(&sidecar).len();
+    println!(
+        "  exact section encode: {:.1?} ({section_bytes} bytes)",
+        sections_started.elapsed()
+    );
 
     let header = format::read_header(built.bundle.as_ref().unwrap()).unwrap();
     for section in &header.sections {
