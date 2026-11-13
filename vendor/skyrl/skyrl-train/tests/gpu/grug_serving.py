@@ -52,6 +52,7 @@ def grug_engine_client(
     *,
     shared_pg=None,
     inference_engine_enable_sleep: bool = False,
+    require_verified_placements: bool = False,
     moe_backend: str | None = None,
 ) -> InferenceEngineClient:
     """Start vLLM engines for a tiny Grug checkpoint."""
@@ -70,14 +71,15 @@ def grug_engine_client(
             seed=23,
             vllm_v1_disable_multiproc=True,
             enable_prefix_caching=False,
+            enable_chunked_prefill=cfg.generator.enable_chunked_prefill,
             enforce_eager=cfg.generator.enforce_eager,
             engine_init_timeout_seconds=remaining_timeout_seconds,
             shared_pg=shared_pg,
             gpu_memory_utilization=cfg.generator.gpu_memory_utilization,
             inference_engine_enable_sleep=inference_engine_enable_sleep,
+            require_verified_placements=require_verified_placements,
             max_num_batched_tokens=MAX_MODEL_LEN * cfg.generator.inference_engine_data_parallel_size,
             max_num_seqs=cfg.trainer.train_batch_size,
-            tokenizer=tokenizer,
             backend="vllm",
             engine_init_kwargs=engine_init_kwargs,
         )

@@ -90,7 +90,7 @@ def test_capability_url_redaction(url: str, expected: str) -> None:
 @pytest.fixture(autouse=True)
 def _no_model_cache(monkeypatch) -> None:
     """Serving tests here use placeholder model ids; model cache preparation has its own tests."""
-    monkeypatch.setattr(iris_module, "resolve_hf_model_ref", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(iris_module, "prepare_hf_models", lambda model, engine, *_args, **_kwargs: (model, engine))
 
 
 def _json_bytes(payload: object) -> bytes:

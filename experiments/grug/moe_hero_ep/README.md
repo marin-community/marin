@@ -160,7 +160,7 @@ Use the output only when `export-manifest.json` exists. It is written after
 all shards, `config.json` and `model.safetensors.index.json`. Completed
 destinations are refused on subsequent runs.
 
-### Private Hugging Face upload
+### Hugging Face upload
 
 After CPU export completes, upload it to a checkpoint-specific branch:
 
@@ -168,6 +168,7 @@ After CPU export completes, upload it to a checkpoint-specific branch:
 export: <the complete CpuExportConfig mapping used for conversion>
 expected_payload_bytes: <BF16 tensor payload from the export index>
 repo_id: open-athena/Marin-Mochi-535B-A23B
+expected_visibility: private
 branch: step-378000
 base_revision: <immutable HF main commit containing only repository metadata>
 model_card: README.md
@@ -175,6 +176,9 @@ license_file: LICENSE
 tokenizer: marin-community/marin-tokenizer
 tokenizer_revision: <pinned tokenizer commit>
 staging_dir: /cache/mochi-hf-staging
+max_files_per_commit: 8
+min_commit_interval: 75
+max_rate_limit_retries: 4
 ```
 
 ```bash
@@ -182,16 +186,39 @@ uv run --package marin-levanter python -m \
   experiments.grug.moe_hero_ep.ops.upload_hf --config_path upload.yaml
 ```
 
-The repository must already exist and remain private. New branches start from
-the pinned metadata-only commit. The uploader binds each branch to its export,
-card, license and tokenizer through `hf-upload-request.json`, then stages one
-shard at a time on disk. It validates source BF16 headers and hashes and checks
-Hub sizes and hashes before reusing uploaded files. Allow enough scratch disk
-for the largest shard.
+The repository must already exist. `expected_visibility` defaults to `private`;
+set it to `public` when uploading to an existing public repository. The uploader
+checks visibility before branch setup and every commit, and stops on a mismatch.
+It does not change repository visibility. This delivery setting may change when
+resuming the same artifact inputs; it is outside the pinned upload identity.
+New branches start from the pinned metadata-only commit. The uploader binds each
+branch to its export, card, license and tokenizer through `hf-upload-request.json`,
+then stages at most eight missing shards per commit. It validates source BF16
+headers and hashes and checks Hub sizes and hashes before reusing uploaded files.
+Eight largest Hero shards need about 58 GB of staging disk per worker; use a
+128 GB disk-backed scratch volume for each worker. Hugging Face also documents a
+separate [preupload workflow](https://huggingface.co/docs/huggingface_hub/en/guides/upload#preupload-lfs-files-before-commit)
+for pre-staging LFS files when a future uploader needs a smaller working set.
 
-Rerun the same upload configuration after an interrupted transfer. Changed
-inputs or unexpected Hub weights stop reuse. A checkpoint branch is complete
-only when `hf-upload-manifest.json` pins a verified weights commit. The uploader
+Every commit, including request and completion metadata, shares a per-worker
+limiter. The default 75-second interval also delays the first commit. Before
+starting uploads, coordinate the workers so that no more than four are active
+and no other job or client is creating commits in the repository. This keeps the
+workers below the repository commit limit of 256 per hour observed for Mochi.
+Increase the interval when running more uploaders, sharing the quota with other
+writers, or using a lower quota.
+
+HTTP 429 responses retry up to four times. A repository commit-limit response
+waits at least one hour, even when its generic API `Retry-After` header names a
+shorter delay. Other HTTP failures propagate. Completed shards remain reusable
+if the retry limit is exhausted.
+
+Rerun the same artifact inputs after an interrupted transfer; batch size and
+commit pacing may change. The uploader accepts completed v2 and v3 CPU exports
+without rewriting their requests. V2 exports require the original full export
+configuration; v3 separates execution limits from artifact identity. Changed
+artifact inputs or unexpected Hub weights stop reuse. A checkpoint branch is
+complete only when `hf-upload-manifest.json` pins a verified weights commit. The uploader
 checks the published model card and official OpenMDW 1.1 license before writing
 that marker. Artifact checks do not establish serving numerical parity; serving
 also needs a vLLM revision with the split-expert loader.
