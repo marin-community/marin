@@ -81,6 +81,10 @@ class ContainerRegistryThrottledError(Exception):
     """Raised when a container registry throttles an environment build."""
 
 
+class NetworkLockdownError(RuntimeError):
+    """The agent's network policy could not be applied or confirmed after task setup."""
+
+
 class SandboxDiskFullError(RuntimeError):
     """A sandbox command failed because its filesystem has no space left."""
 
@@ -751,6 +755,9 @@ class BaseEnvironment(ABC):
 
     async def collect_runtime_logs(self) -> None:
         """Copy declared runtime output into the actor before grading or recovery."""
+
+    async def apply_agent_network_policy(self) -> None:
+        """Switch from the task-setup network to the agent's, for backends that start setup with more access."""
 
     async def quiesce_agent_commands(self) -> None:
         """Stop retained agent commands before granting verifier-only authority."""

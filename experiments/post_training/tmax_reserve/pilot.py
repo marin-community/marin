@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Generate the TMax reserve pilot: serve a catalog model on Iris and run the pilot Harbor policy in snapshot waves.
+"""Generate the TMax reserve pilot: serve a catalog model on Iris and run the pilot Harbor policy as one job.
 
 Runs as one CPU Iris coordinator job. It lowers the model exactly as the evaluation launcher does
-(``inference_config_for_model`` + ``remote_inference``), waits for the endpoint, and runs the policy through
-``run_in_waves`` on ``run_harbor_driver``. The model's agent kwargs come from ``harbor_model_agent_kwargs``, as
+(``inference_config_for_model`` + ``remote_inference``), waits for the endpoint, and runs the policy as one Harbor
+job (``harbor_job.py``). The model's agent kwargs come from ``harbor_model_agent_kwargs``, as
 in the TBLite eval. The summary reports per-task pass@1 and pass@k, trial errors, live sandbox hours, and how
 many trials ran apt (the Ubuntu mirror is the one egress Daytona's lockdown leaves open).
 """
@@ -32,12 +32,11 @@ from rigging.secrets import require_secret
 
 from experiments.evaluation.evals import harbor_model_agent_kwargs
 from experiments.evaluation.models import models
+from experiments.post_training.tmax_reserve.harbor_job import run_harbor_job, sandbox_seconds
 from experiments.post_training.tmax_reserve.null_run import trial_results
-from experiments.post_training.tmax_reserve.waves import HeadroomGate, run_in_waves, wave_usage
 
 logger = logging.getLogger(__name__)
 
-HEADROOM_POLL_SECONDS = 300
 SERVE_GPU = "H100"
 SERVE_GPU_COUNT = 8
 # An agent command that installs or refreshes apt packages; the mirror is reachable under the lockdown.
@@ -106,11 +105,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--policy", type=Path, required=True, help="The pilot Harbor policy (local dataset path).")
     parser.add_argument("--model", required=True, help="Evaluation catalog model name.")
-    parser.add_argument("--wave-size", type=int, required=True, help="Most tasks per wave (see waves.py).")
-    parser.add_argument("--min-wave-size", type=int, required=True, help="Wait rather than run a smaller wave.")
     parser.add_argument("--snapshot-quota", type=int, required=True, help="The account's snapshot quota.")
-    parser.add_argument("--headroom-wait", type=int, required=True, help="Seconds to wait for room per wave.")
-    parser.add_argument("--max-sandbox-hours", type=float, required=True, help="Stop after the wave that passes it.")
     parser.add_argument("--output", type=Path, required=True, help="New local directory for jobs and the summary.")
     parser.add_argument("--upload", required=True, help="Remote directory that receives a copy of --output.")
     args = parser.parse_args()
@@ -131,7 +126,6 @@ def main() -> None:
         inference,
         iris=replace(inference.iris, worker_resources=replace(inference.iris.worker_resources, preemptible=False)),
     )
-    gate = HeadroomGate(args.snapshot_quota, args.min_wave_size, HEADROOM_POLL_SECONDS, args.headroom_wait)
     try:
         with remote_inference(inference) as session:
             session.wait_until_ready()
@@ -154,21 +148,12 @@ def main() -> None:
                 CANDIDATE_API_KEY_ENV: session.model.endpoint.api_key or "EMPTY",
             }
             driver_env.update({key: os.environ[key] for key in DAYTONA_RUNTIME_ENV_KEYS if key in os.environ})
-            run_in_waves(
-                config,
-                overlay,
-                driver_env,
-                session.backend_state,
-                args.wave_size,
-                gate,
-                args.output,
-                args.max_sandbox_hours,
-            )
+            run_harbor_job(config, overlay, driver_env, session.backend_state, args.snapshot_quota, args.output)
     finally:
-        jobs_dirs = sorted((args.output / "waves").glob("w*/jobs"))
-        trials = trial_results(jobs_dirs)
-        seconds = sum(wave_usage(jobs_dir)[0] for jobs_dir in jobs_dirs)
-        apt = apt_usage(sorted(path.parent for jobs_dir in jobs_dirs for path in jobs_dir.glob("*/*/result.json")))
+        jobs_dir = args.output / "jobs"
+        trials = trial_results(jobs_dir)
+        seconds = sandbox_seconds(jobs_dir)
+        apt = apt_usage(sorted(path.parent for path in jobs_dir.glob("*/*/result.json")))
         summary = summarize(trials, seconds, apt)
         (args.output / "pilot-trials.jsonl").write_text("".join(json.dumps(t) + "\n" for t in trials))
         (args.output / "pilot-summary.json").write_text(json.dumps(summary, indent=1))

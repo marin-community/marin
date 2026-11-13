@@ -12,8 +12,7 @@ runs those commands instead. Checks, written to ``<output>/null-summary.json``:
 - every control task scores 1 (the verifier passes on a known-good state);
 - every probe shows tmux, and only iris.oa.dev answers.
 
-Tasks run in waves (``waves.py``) so the snapshots fit the Daytona quota. Only Daytona sandboxes run; there is no
-GPU or model.
+The dataset runs as one Harbor job (``harbor_job.py``). Only Daytona sandboxes run; there is no GPU or model.
 """
 
 import argparse
@@ -42,7 +41,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from experiments.post_training.tmax_reserve.waves import HeadroomGate, run_in_waves
+from experiments.post_training.tmax_reserve.harbor_job import run_harbor_job
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +78,6 @@ PROBE_KEYSTROKES = (
     f'python3 -c "$(echo {base64.b64encode(_PROBE_PY.encode()).decode()} | base64 -d)"; echo PROBE_DONE\n'
 )
 PROBE_DURATION = 60
-HEADROOM_POLL_SECONDS = 300
 EGRESS_LINE = re.compile(r"^EGRESS (\S+) (.+)$", re.MULTILINE)
 TMUX_LINE = re.compile(r"^TMUX (.+)$", re.MULTILINE)
 
@@ -177,9 +175,9 @@ def null_policy(policy: Path, dest: Path) -> Path:
     return dest
 
 
-def trial_results(jobs_dirs: list[Path]) -> list[dict]:
+def trial_results(jobs_dir: Path) -> list[dict]:
     rows = []
-    for result in sorted(path for jobs_dir in jobs_dirs for path in jobs_dir.glob("*/*/result.json")):
+    for result in sorted(jobs_dir.glob("*/*/result.json")):
         data = json.loads(result.read_text())
         rewards = (data.get("verifier_result") or {}).get("rewards") or {}
         exc = data.get("exception_info")
@@ -222,11 +220,7 @@ def summarize(trials: list[dict], probes: dict[str, list[dict]], controls: set[s
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--policy", type=Path, required=True, help="The pilot Harbor policy (local dataset path).")
-    parser.add_argument("--wave-size", type=int, required=True, help="Most tasks per wave (see waves.py).")
-    parser.add_argument("--min-wave-size", type=int, required=True, help="Wait rather than run a smaller wave.")
     parser.add_argument("--snapshot-quota", type=int, required=True, help="The account's snapshot quota.")
-    parser.add_argument("--headroom-wait", type=int, required=True, help="Seconds to wait for room per wave.")
-    parser.add_argument("--max-sandbox-hours", type=float, required=True, help="Stop after the wave that passes it.")
     parser.add_argument("--controls", type=Path, help="JSON {task name: known-good shell commands}.")
     parser.add_argument("--output", type=Path, required=True, help="New local directory for jobs and the summary.")
     parser.add_argument("--upload", help="Remote directory that receives a copy of --output at the end.")
@@ -258,20 +252,12 @@ def main() -> None:
     )
     driver_env = {"DAYTONA_API_KEY": require_secret("DAYTONA_API_KEY"), CANDIDATE_API_KEY_ENV: "EMPTY"}
     driver_env.update({key: os.environ[key] for key in DAYTONA_RUNTIME_ENV_KEYS if key in os.environ})
-    gate = HeadroomGate(args.snapshot_quota, args.min_wave_size, HEADROOM_POLL_SECONDS, args.headroom_wait)
     try:
-        run_in_waves(
-            config,
-            overlay,
-            driver_env,
-            lambda: InferenceBackendState.READY,
-            args.wave_size,
-            gate,
-            args.output,
-            args.max_sandbox_hours,
+        run_harbor_job(
+            config, overlay, driver_env, lambda: InferenceBackendState.READY, args.snapshot_quota, args.output
         )
     finally:
-        trials = trial_results(sorted((args.output / "waves").glob("w*/jobs")))
+        trials = trial_results(args.output / "jobs")
         summary = summarize(trials, scripted.probes, set(controls))
         (args.output / "null-trials.jsonl").write_text("".join(json.dumps(t) + "\n" for t in trials))
         (args.output / "null-probes.json").write_text(json.dumps(scripted.probes, indent=1))

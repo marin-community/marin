@@ -4,6 +4,7 @@
 """Harbor's single-container adapter for Shellbox Daytona machines."""
 
 import asyncio
+import re
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from enum import StrEnum
@@ -15,6 +16,7 @@ from harbor.environments.base import (
     BASE_ENVIRONMENT_ARGUMENTS,
     BaseEnvironment,
     ExecResult,
+    NetworkLockdownError,
 )
 from harbor.environments.capabilities import (
     EnvironmentCapabilities,
@@ -70,6 +72,11 @@ def task_snapshot_source(docker_image: str | None, environment_dir: Path) -> Reg
     return validate_source(DockerfileSource(environment_dir, dockerfile))
 
 
+# Seconds the post-lockdown probe waits for a TCP connection that must not succeed.
+LOCKDOWN_PROBE_TIMEOUT = 10
+LOCKDOWN_PROBE = re.compile(r"[A-Za-z0-9.-]+:[0-9]{1,5}")
+
+
 def machine_spec(task_env_config, environment_dir: Path, env: dict[str, str], *, cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int = 0) -> MachineSpec:
     """The shellbox spec for one task environment.
 
@@ -104,6 +111,8 @@ class DaytonaEnvironment(BaseEnvironment):
         *args,
         client_factory: Callable[[], AsyncDaytona] | None = None,
         network_policy: dict[str, str] | None = None,
+        setup_network_policy: dict[str, str] | None = None,
+        lockdown_probe: str | None = None,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
         provisioning: DaytonaProvisioning = DaytonaProvisioning.SNAPSHOT,
@@ -119,9 +128,20 @@ class DaytonaEnvironment(BaseEnvironment):
             raise ValueError(
                 f"Unsupported Shellbox Daytona arguments: {sorted(unknown)}"
             )
-        policy = None
-        if network_policy is not None:
-            policy = DaytonaNetworkPolicy.from_config(network_policy)
+        policy = None if network_policy is None else DaytonaNetworkPolicy.from_config(network_policy)
+        self.setup_network_policy = (
+            None if setup_network_policy is None else DaytonaNetworkPolicy.from_config(setup_network_policy)
+        )
+        if self.setup_network_policy is not None and (
+            policy is None or lockdown_probe is None
+        ):
+            raise ValueError(
+                "setup_network_policy requires network_policy and a lockdown_probe host:port"
+            )
+        if lockdown_probe is not None and not LOCKDOWN_PROBE.fullmatch(lockdown_probe):
+            raise ValueError(f"lockdown_probe must be host:port, got {lockdown_probe!r}")
+        self.agent_network_policy = policy
+        self.lockdown_probe = lockdown_probe
         if client_factory is None:
             capabilities: HostCapabilities = kwargs.get(
                 "host_capabilities", HostCapabilities()
@@ -141,7 +161,7 @@ class DaytonaEnvironment(BaseEnvironment):
             client_factory,
             ttl_minutes=ttl_minutes,
             create_timeout=create_timeout,
-            network_policy=policy,
+            network_policy=self.setup_network_policy or policy,
             snapshot_leaser=kwargs.get("host_capabilities", HostCapabilities()).snapshot_leaser,
         )
         self.model_endpoint, self.model_name = model_endpoint, model_name
@@ -247,6 +267,29 @@ class DaytonaEnvironment(BaseEnvironment):
                     f"Daytona sandbox cleanup failed ({type(cleanup_error).__name__})"
                 )
             raise
+
+    async def apply_agent_network_policy(self) -> None:
+        """Apply the agent policy after an open setup, then require that the probe host is unreachable."""
+        if self.setup_network_policy is None:
+            return
+        if self.machine is None:
+            raise RuntimeError("Daytona environment is not running")
+        assert self.agent_network_policy is not None and self.lockdown_probe is not None
+        try:
+            await self.machine.update_network(self.agent_network_policy)
+        except Exception as error:
+            raise NetworkLockdownError("Could not apply the agent network policy") from error
+        host, port = self.lockdown_probe.rsplit(":", 1)
+        probe = await self.exec(
+            f"timeout {LOCKDOWN_PROBE_TIMEOUT} bash -c 'exec 3<>/dev/tcp/{host}/{int(port)}'",
+            cwd="/",
+            timeout_sec=LOCKDOWN_PROBE_TIMEOUT + 30,
+            user="root",
+        )
+        if probe.return_code == 0:
+            raise NetworkLockdownError(
+                f"{self.lockdown_probe} is still reachable after the agent network policy"
+            )
 
     @property
     def requires_agent_quiescence_for_verifier(self) -> bool:

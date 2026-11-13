@@ -19,6 +19,9 @@ class TaskPaths:
     │   └── ...
     ├── setup_files/      # copied to container @ /setup_files before agent runs
     │   └── ...
+    ├── task_setup/       # run as root before the agent; nothing stays in the container
+    │   ├── setup.sh
+    │   └── files/        # copied onto / before setup.sh runs
     ├── solution/         # reference solution; not copied by supported agents
     │   ├── solve.{sh,bat}
     │   └── ...
@@ -106,6 +109,11 @@ class TaskPaths:
     def setup_files_dir(self) -> Path:
         """Path to the setup_files/ directory (uploaded before agent runs)."""
         return self.task_dir / "setup_files"
+
+    @property
+    def task_setup_dir(self) -> Path:
+        """Path to the task_setup/ directory (hidden setup run before the agent)."""
+        return self.task_dir / "task_setup"
 
     @property
     def tests_dir(self) -> Path:

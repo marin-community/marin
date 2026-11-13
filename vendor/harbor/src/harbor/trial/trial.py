@@ -1,9 +1,11 @@
 import asyncio
 import contextlib
 import hashlib
+import json
 import logging
 import math
 import traceback
+import uuid
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
@@ -26,7 +28,9 @@ from harbor.models.task.config import (
 )
 from harbor.models.task.task import Task
 from harbor.models.task.verifier_mode import (
+    VerifierEnvironmentMode,
     resolve_effective_verifier_env_config,
+    resolve_task_verifier_mode,
 )
 from harbor.models.trial.config import (
     ArtifactConfig,
@@ -54,6 +58,7 @@ from harbor.trial.errors import (
     AgentTimeoutError,
     EnvironmentStartTimeoutError,
     EnvironmentStopError,
+    TaskSetupError,
     PhaseCancellationError,
     RuntimeLogCollectionError,
     RuntimeServiceError,
@@ -80,6 +85,10 @@ _MAX_VERIFIER_ENV_SESSION_ID_LEN = 63
 # task is abandoned, not cancelled: it stays shielded and completes if the
 # connection heals, and an orphaned sandbox is reaped server-side.
 ENVIRONMENT_STOP_TIMEOUT_SEC = 300.0
+# Hidden task setup: guest staging prefix, host record name, and the output tail it keeps.
+TASK_SETUP_GUEST_PREFIX = "/tmp/.harbor-task-setup-"
+TASK_SETUP_RECORD = "task_setup.json"
+TASK_SETUP_OUTPUT_LIMIT = 64 * 1024
 
 
 def _log_abandoned_stop_failure(
@@ -155,6 +164,11 @@ async def load_task(
         extra_instruction_paths=extra_instruction_paths,
         disable_verification=disable_verification,
     )
+
+
+def task_setup_command(guest: str) -> str:
+    """The root command that applies a staged ``task_setup/`` directory: copy ``files/`` onto ``/``, run ``setup.sh``."""
+    return f"chmod 700 {guest} && if [ -d {guest}/files ]; then cp -R {guest}/files/. /; fi && bash {guest}/setup.sh"
 
 
 class Trial(ABC):
@@ -1342,8 +1356,57 @@ class Trial(ABC):
         self.result.environment_setup = TimingInfo(started_at=self._now())
         try:
             await self._start_agent_environment()
+            await self._run_task_setup()
+            await self.agent_environment.apply_agent_network_policy()
         finally:
             self.result.environment_setup.finished_at = self._now()
+
+    async def _run_task_setup(self) -> None:
+        """Run the task's hidden ``task_setup/`` step as root before the agent sees the environment.
+
+        ``files/`` is copied onto ``/`` and ``setup.sh`` runs from ``/``, matching an image build's
+        ``COPY`` then ``RUN``. The setup inputs are removed afterwards, and the output is written only
+        to the host trial directory (``task_setup.json``). A nonzero exit or a timeout is a
+        ``TaskSetupError``: the agent never ran, so the trial is not a model failure.
+        """
+        source = self.task.paths.task_setup_dir
+        if not source.is_dir():
+            return
+        if not (source / "setup.sh").is_file():
+            raise ValueError(f"{source} has no setup.sh")
+        if resolve_task_verifier_mode(self.task.config) == VerifierEnvironmentMode.SEPARATE:
+            raise ValueError("task_setup is not supported with a separate verifier environment")
+        # A fixed prefix plus hex needs no shell quoting.
+        guest = f"{TASK_SETUP_GUEST_PREFIX}{uuid.uuid4().hex}"
+        environment = self.agent_environment
+        timeout_sec = math.ceil(self._environment_build_timeout_sec)
+        try:
+            await environment.upload_dir(source_dir=source, target_dir=guest)
+            try:
+                result = await environment.exec(
+                    task_setup_command(guest),
+                    cwd="/",
+                    timeout_sec=timeout_sec,
+                    user="root",
+                )
+            except asyncio.TimeoutError as error:
+                raise TaskSetupError(f"Task setup timed out after {timeout_sec} seconds") from error
+        finally:
+            await environment.exec(f"rm -rf {guest}", cwd="/", user="root")
+        (self.paths.trial_dir / TASK_SETUP_RECORD).write_text(
+            json.dumps(
+                {
+                    "exit_code": result.return_code,
+                    "stdout": (result.stdout or "")[-TASK_SETUP_OUTPUT_LIMIT:],
+                    "stderr": (result.stderr or "")[-TASK_SETUP_OUTPUT_LIMIT:],
+                },
+                indent=1,
+            )
+        )
+        if result.return_code:
+            raise TaskSetupError(
+                f"Task setup exited {result.return_code}: {(result.stderr or result.stdout or '')[-500:]}"
+            )
 
     async def _start_agent_environment(self) -> None:
         assert self._service_tasks is not None

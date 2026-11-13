@@ -295,6 +295,10 @@ class DaytonaMachine:
             except BaseException as close_error:
                 cancellation.add_note(f"Daytona machine cleanup failed ({type(close_error).__name__})")
 
+    async def update_network(self, policy: DaytonaNetworkPolicy) -> None:
+        """Replace the running sandbox's network policy."""
+        await self.sandbox.update_network_settings(**policy.parameters())
+
     async def open_process_scope(self) -> ProcessScope:
         raise UnsupportedMachineSpec("Daytona does not provide confirmed scoped descendant teardown")
 

@@ -21,6 +21,10 @@ class EnvironmentStartTimeoutError(asyncio.TimeoutError):
     pass
 
 
+class TaskSetupError(RuntimeError):
+    """The task's hidden setup step failed or timed out; the agent never ran."""
+
+
 class TrialTimeoutError(asyncio.TimeoutError):
     """An admitted trial attempt exceeded its whole-lifecycle deadline."""
 

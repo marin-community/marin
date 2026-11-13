@@ -34,6 +34,7 @@ from harbor.agents.terminus_2.tmux_session import (
     TmuxSession,
 )
 from harbor.environments import model_relay
+from harbor.environments.base import NetworkLockdownError
 from harbor.environments.daytona import DaytonaEnvironment, task_snapshot_source
 from harbor.environments.factory import EnvironmentFactory
 from harbor.models.environment_type import EnvironmentType
@@ -806,3 +807,99 @@ def test_task_snapshot_source_selects_and_validates_the_task_environment(tmp_pat
 
     with pytest.raises(UnsupportedMachineSpec, match="registry image or Dockerfile"):
         task_snapshot_source(None, tmp_path / "absent")
+
+
+class _NetworkMachine:
+    def __init__(self, failure=None):
+        self.policies = []
+        self.failure = failure
+
+    async def update_network(self, policy):
+        if self.failure is not None:
+            raise self.failure
+        self.policies.append(policy)
+
+
+def _lockdown_adapter(tmp_path, probe_exit_code, machine, **kwargs):
+    adapter = DaytonaEnvironment(
+        environment_dir=tmp_path,
+        environment_name="task",
+        session_id="trial",
+        trial_paths=TrialPaths(tmp_path / "trial"),
+        task_env_config=EnvironmentConfig(docker_image="test/image"),
+        client_factory=lambda: pytest.fail("Unexpected provider access"),
+        **kwargs,
+    )
+    adapter.machine = machine
+    probes = []
+
+    async def exec(command, **exec_kwargs):
+        probes.append(command)
+        return SimpleNamespace(return_code=probe_exit_code)
+
+    adapter.exec = exec
+    return adapter, probes
+
+
+LOCKDOWN = {
+    "network_policy": {"mode": "domain_allow_list", "value": "iris.oa.dev"},
+    "setup_network_policy": {"mode": "unrestricted"},
+    "lockdown_probe": "pypi.org:443",
+}
+
+
+@pytest.mark.parametrize("probe_exit_code", [1, 124])
+async def test_open_setup_switches_to_the_agent_policy_and_requires_the_probe_to_fail(
+    tmp_path, probe_exit_code
+):
+    machine = _NetworkMachine()
+    adapter, probes = _lockdown_adapter(tmp_path, probe_exit_code, machine, **LOCKDOWN)
+
+    assert adapter.factory.network_policy.mode == "unrestricted"
+    await adapter.apply_agent_network_policy()
+
+    assert [policy.parameters() for policy in machine.policies] == [
+        {"domain_allow_list": "iris.oa.dev"}
+    ]
+    assert probes == ["timeout 10 bash -c 'exec 3<>/dev/tcp/pypi.org/443'"]
+
+
+async def test_a_reachable_probe_after_lockdown_is_a_lockdown_error(tmp_path):
+    adapter, _ = _lockdown_adapter(tmp_path, 0, _NetworkMachine(), **LOCKDOWN)
+
+    with pytest.raises(NetworkLockdownError, match="still reachable"):
+        await adapter.apply_agent_network_policy()
+
+
+async def test_a_failed_policy_update_is_a_lockdown_error(tmp_path):
+    machine = _NetworkMachine(failure=RuntimeError("provider rejected"))
+    adapter, probes = _lockdown_adapter(tmp_path, 1, machine, **LOCKDOWN)
+
+    with pytest.raises(NetworkLockdownError, match="Could not apply"):
+        await adapter.apply_agent_network_policy()
+    assert probes == []
+
+
+async def test_without_a_setup_policy_the_creation_policy_stays_and_nothing_changes(tmp_path):
+    machine = _NetworkMachine()
+    adapter, probes = _lockdown_adapter(
+        tmp_path, 0, machine, network_policy=LOCKDOWN["network_policy"]
+    )
+
+    await adapter.apply_agent_network_policy()
+
+    assert adapter.factory.network_policy.mode == "domain_allow_list"
+    assert machine.policies == [] and probes == []
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"setup_network_policy": {"mode": "unrestricted"}, "lockdown_probe": "pypi.org:443"},
+        {**LOCKDOWN, "lockdown_probe": None},
+        {**LOCKDOWN, "lockdown_probe": "pypi.org; rm -rf /:443"},
+    ],
+)
+def test_an_open_setup_needs_an_agent_policy_and_a_valid_probe(tmp_path, kwargs):
+    with pytest.raises(ValueError):
+        _lockdown_adapter(tmp_path, 1, _NetworkMachine(), **kwargs)
