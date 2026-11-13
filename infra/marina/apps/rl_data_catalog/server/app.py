@@ -15,9 +15,10 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from taskcompendium.source_fingerprints import DuplicateGroup, DuplicateReview
 
+from .contamination import contamination
 from .curriculum import register_curriculum_routes, source_coverage
 from .daytona import daytona
-from .quality import intended_use, quality, result
+from .quality import intended_use, issue_rate, quality, result
 from .schema import SCHEMA_SQL
 
 
@@ -161,7 +162,9 @@ def create_api(services: AppletServices) -> FastAPI:
                         "task_count": row["task_count"],
                         "curation": row["curation"],
                         "quality": quality(row["declaration"], row["curation"]),
+                        "contamination_status": contamination(row["declaration"]),
                         "result": result(row["declaration"], (row["cohorts"] or {}).get("admitted")),
+                        "issue_rate": issue_rate(row["declaration"], (row["cohorts"] or {}).get("admitted")),
                         "updated_at": metadata["loaded_at"],
                         "daytona": daytona(row["declaration"], DAYTONA_SAFE_SNAPSHOT_LIMIT),
                         "coverage": coverage.get(row["id"]),
@@ -417,6 +420,7 @@ def create_api(services: AppletServices) -> FastAPI:
             "declaration": declaration,
             "coverage": coverage,
             "intended_use": intended_use(declaration),
+            "contamination_status": contamination(declaration),
             "curation": source["curation"],
             "diagnostics": source["diagnostics"],
             "backend_capabilities": capabilities,
@@ -431,6 +435,7 @@ def create_api(services: AppletServices) -> FastAPI:
             "archived_reviews": reviews,
             "quality": level,
             "result": result(declaration, review),
+            "issue_rate": issue_rate(declaration, review),
             "daytona": daytona(declaration, DAYTONA_SAFE_SNAPSHOT_LIMIT),
             "updated_at": load["loaded_at"],
             "catalog": {"root": load["catalog_root"], "snapshot_id": load["snapshot_id"]},
