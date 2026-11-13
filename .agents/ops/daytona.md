@@ -295,7 +295,9 @@ redact those as well as named API keys before publication.
 Snapshot metadata, snapshot creation/listing and named sandbox creation retry
 HTTP 5xx, HTTP 408/429 and SDK connection/timeouts. Retry delays are capped at
 120 seconds. Retries continue until success or caller cancellation/deadline.
-Other 4xx errors and terminal image-build failures propagate. Deterministic
+The provider's HTTP 400 "failed to resolve container IP after 3 attempts"
+startup state also retries. Other 4xx errors and terminal image-build failures
+propagate. Deterministic
 snapshot names and caller-supplied sandbox names identify resources whose
 creation succeeded despite a lost response.
 
@@ -303,6 +305,29 @@ Each retry emits `DAYTONA_PROVIDER_RETRY` with operation, attempt, status and
 delay fields. Count these events separately from task outcomes. Provider errors
 remain infrastructure evidence and receive no oracle score. Command
 execution is not replayed after an ambiguous response.
+
+Harbor selects `ProviderWaitPolicy.JOB` only when the trial has an explicit
+`trial_attempt_timeout_sec`. Queue supervision enforces that overall bound on
+wall-clock time; standalone trials without it retain phase-bound behavior.
+Task-curation calibration and approved retries set a 72-hour overall attempt
+bound without changing the native task or environment kwargs.
+
+Under JOB, safe harness controls, artifact reads/writes and resource probes retry
+within the overall bound. Controls and named sandbox deletion use a 60-second
+per-call timeout; artifact transfers, snapshot operations and sandbox acquisition
+retain SDK operation settings, allowing healthy large transfers to complete.
+Request duration and retry backoff pause phase and command clocks; source-command
+limits remain active during source execution. Normal cleanup also permits these
+provider waits. Cancellation cleanup and grace use wall-clock bounds and disable
+recovery retries. Retain retry events separately from task verdicts.
+
+Retryable controls include read-only metadata/resource probes, private staging-file
+operations, fixed-content artifact transfers and named sandbox deletion.
+Source execution remains single-shot after an ambiguous response. An ambiguous
+process-group termination falls back to sandbox teardown; it cannot safely be
+replayed after PID reuse. Named sandbox deletion and private-file cleanup are
+idempotent. External cancellation disables recovery retries during cancellation
+cleanup and retains its existing cleanup deadline and primary exception.
 
 ## Making a dataset Daytona-safe
 

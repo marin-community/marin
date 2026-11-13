@@ -155,6 +155,20 @@ def source_title(name: str, subset: str | None, variant: str | None) -> str:
     return " · ".join(part for part in (name, subset, variant) if part)
 
 
+class ContentEvidenceReference(CatalogRecord):
+    """Immutable content-evidence location and byte digest."""
+
+    uri: str = Field(min_length=1)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class QualityResultFinalization(StrEnum):
+    """Explicit whole-source content Result finalization, independent of coverage."""
+
+    COMPLETE = "complete"
+    ACCEPTED_INCOMPLETE = "accepted_incomplete"
+
+
 class SourceQualityResult(CatalogRecord):
     """Informational Result over conclusive reviewed tasks; exclusions are separate."""
 
@@ -639,6 +653,8 @@ class SourceDeclaration(CatalogRecord):
     daytona_unsafe_details: dict[str, str] = Field(default_factory=dict)
     daytona_unsafe_counts: dict[str, int] = Field(default_factory=dict)
     quality_result: SourceQualityResult | None = None
+    quality_result_finalization: QualityResultFinalization | None = None
+    quality_result_waiver: ContentEvidenceReference | None = None
 
     @model_validator(mode="after")
     def _canonical_identity(self) -> "SourceDeclaration":

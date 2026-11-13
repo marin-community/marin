@@ -537,7 +537,7 @@ class BaseEnvironment(ABC):
         """Create environment directories without removing existing contents."""
         if not dirs:
             return None
-        return await self.exec(
+        return await self.exec_control(
             self._ensure_dirs_command(dirs, chmod=chmod),
             user=self._reset_dirs_user() if chmod else None,
         )
@@ -551,7 +551,7 @@ class BaseEnvironment(ABC):
         """Ensure directories exist and are empty without replacing directory roots."""
         if not dirs:
             return None
-        return await self.exec(
+        return await self.exec_control(
             self._empty_dirs_command(dirs, chmod=chmod),
             user=self._reset_dirs_user(),
         )
@@ -888,6 +888,10 @@ class BaseEnvironment(ABC):
                 ``self.default_user``; if that is also None the environment's
                 container default (typically root) is used.
         """
+
+    async def exec_control(self, command: str, *, timeout_sec: int | None = None, user: str | int | None = None, cwd: str | None = None) -> ExecResult:
+        """Execute an idempotent harness control; source commands must use exec."""
+        return await self.exec(command, timeout_sec=timeout_sec, user=user, cwd=cwd)
 
     async def is_dir(self, path: str, user: str | int | None = None) -> bool:
         """Check if a remote path is a directory.
