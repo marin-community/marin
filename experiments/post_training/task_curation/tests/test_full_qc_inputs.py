@@ -15,6 +15,8 @@ from types import SimpleNamespace
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from iris.client.client import IrisContext, iris_ctx_scope
+from iris.cluster.types import JobName
 from iris.rpc import controller_pb2
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 from rigging.filesystem.storage_path import StoragePath
@@ -34,7 +36,8 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.pipeline.review import ReviewBatchResult
 from taskcompendium.runtime.resources import inline_resource
 
-from experiments.post_training.task_curation import full_qc_repair
+from experiments.post_training.task_curation import full_qc_repair, full_qc_shards, judges
+from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.full_qc_artifacts import (
     FullQCInputs,
     FullQCReview,
@@ -421,6 +424,81 @@ def test_shard_replenishes_batches_before_slow_tail_finishes_and_preserves_cache
         worker_jobs=(),
     )
     assert replay.receipts == shard.receipts and replay.status_counts == shard.status_counts
+
+
+@pytest.mark.parametrize(
+    "current_root,resume_roots",
+    [("/fixture/retired", ()), ("/fixture/replacement", ("/fixture/retired",))],
+)
+def test_completed_primary_shard_resumes_without_loading_model_or_retrying_invalid_reviews(
+    qc_inputs, tmp_path, monkeypatch, current_root, resume_roots
+):
+    config, _ = qc_inputs
+    inputs = prepare_inputs(config)
+    write_record(
+        ArtifactRecord(
+            output_path=inputs.path, result_type=result_type_name(type(inputs)), result=inputs.result_payload()
+        )
+    )
+    spec = local_reviewer(ReviewerVersion.V2)
+
+    class PinnedReviewService(ReviewService):
+        @property
+        def identity(self):
+            return {"mode": "chat", **spec.identity}
+
+    work = full_qc_shards.ShardWork(
+        inputs_path=inputs.path,
+        batch_output_path=str(tmp_path / "batches"),
+        shard_output_path=str(tmp_path / "shards"),
+        assembly_output_path=str(tmp_path / "assembled"),
+        batch_offset=0,
+        prompt_budget=spec.prompt_budget,
+    )
+    output = StoragePath(work.shard_output_path) / "000"
+    shard = review_shard(
+        inputs,
+        PinnedReviewService(invalid_task_ids=frozenset({"unshaped"}), confidence=Confidence.LOW),
+        REVIEW_RUBRIC,
+        work.batch_output_path,
+        str(output),
+        shard_index=0,
+        shard_count=1,
+        batch_offset=0,
+        max_passes=3,
+        batch_workers=1,
+        worker_jobs=("/fixture/retired/inference-lease",),
+    )
+    pointer = output / "latest.json"
+    full_qc_shards.write_pointer(shard, pointer)
+    saved_pointer = pointer.read_bytes()
+    receipts = sorted((tmp_path / "batches").rglob("*.json"))
+    saved_receipts = {path: path.read_bytes() for path in receipts}
+
+    def reject_model_load(_config):
+        raise AssertionError("Completed primary shards must not load a model or issue more reviews")
+
+    monkeypatch.setattr(judges, "remote_inference", reject_model_load)
+    args = SimpleNamespace(
+        reviewer_version=ReviewerVersion.V2,
+        shard_index=0,
+        shard_count=1,
+        max_passes=3,
+        batch_workers=8,
+        resume_roots=tuple(JobName.from_string(root) for root in resume_roots),
+        review_cache=str(tmp_path / "request-cache"),
+        campaign_output=str(tmp_path / "campaign"),
+    )
+    with iris_ctx_scope(IrisContext(job_id=JobName.from_string(current_root))):
+        full_qc_shards.review_work([work], args)
+    assert pointer.read_bytes() == saved_pointer
+    assert sorted((tmp_path / "batches").rglob("*.json")) == receipts
+    assert {path: path.read_bytes() for path in receipts} == saved_receipts
+    resumed = full_qc_shards.read_shard(pointer)
+    assert resumed.path == shard.path
+    assert resumed.status_counts == {"reviewed": 1, "invalid": 1}
+    cached = json.loads(StoragePath(resumed.receipts[0].path).read_text())["reviews"]
+    assert next(row for row in cached if row["status"] == "reviewed")["verdict"]["confidence"] == "low"
 
 
 @pytest.mark.parametrize("shard_count", [3, 5])
