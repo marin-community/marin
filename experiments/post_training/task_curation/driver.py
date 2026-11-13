@@ -13,7 +13,6 @@ from typing import cast
 
 import click
 from finestore.rl.curation import LexicalContaminationEvidence, SourceDeclaration
-from finestore.rl.source_identity import canonical_source_id
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -74,6 +73,7 @@ from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTie
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CampaignMachines, CurationRecipe
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
+from experiments.post_training.task_curation.source_identity import canonical_source_id
 from experiments.post_training.task_curation.sources import all_sources, runnable_sources
 from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM
 

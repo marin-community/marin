@@ -9,7 +9,6 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from finestore.rl.curation import ActorCensusInput, LexicalContaminationEvidence
-from finestore.rl.source_identity import canonical_source_map
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt
@@ -18,6 +17,7 @@ from experiments.post_training.task_curation.lexical_binding import LexicalMeasu
 from experiments.post_training.task_curation.lexical_policy import LexicalInputUse
 from experiments.post_training.task_curation.receipt_shards import read_receipt_shards, write_receipt_shards
 from experiments.post_training.task_curation.registry import read_registry_json
+from experiments.post_training.task_curation.source_identity import canonical_source_map
 
 
 def measurement_receipts(

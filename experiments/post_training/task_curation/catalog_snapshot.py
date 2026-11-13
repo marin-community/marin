@@ -41,7 +41,6 @@ from finestore.rl.curation import (
     register_catalog,
     validate_items,
 )
-from finestore.rl.source_identity import canonical_source_id, canonical_source_map
 from finestore.store import DataStore
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.storage_path import StoragePath
@@ -49,8 +48,10 @@ from taskcompendium.pipeline.assessment import assessment_inputs, assessment_jud
 from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.campaign import CampaignStatus
+from experiments.post_training.task_curation.catalog_identity import canonical_attempt, canonical_snapshot_source
 from experiments.post_training.task_curation.curation_catalog import RUNS
 from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.source_identity import canonical_source_id, canonical_source_map
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 
 
@@ -226,14 +227,21 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
             existing = catalog.view.point(SNAPSHOTS, snapshot_id=run_id)
             if existing is not None:
                 return CatalogSnapshot.model_validate({key: existing[key] for key in CatalogSnapshot.model_fields})
-            attempts = list(catalog.attempts(run_id))
+            attempts = [canonical_attempt(attempt) for attempt in catalog.attempts(run_id)]
             if len(attempts) != run["source_count"]:
                 raise ValueError("Assessment attempts do not cover the terminal campaign")
             selected = {row.source_id: row for row in attempts}
             if len(selected) != len(attempts) or None in selected or not set(selected).issubset(by_id):
                 raise ValueError("Campaign sources must be unique members of the catalog inventory")
             pointer = catalog.view.point(CURRENT, name="latest")
-            previous = {row.id: row for row in catalog.sources(pointer["snapshot_id"])} if pointer else {}
+            previous = (
+                {
+                    canonical_source_id(row.id): canonical_snapshot_source(row)
+                    for row in catalog.sources(pointer["snapshot_id"])
+                }
+                if pointer
+                else {}
+            )
             if run["started_at"] is None:
                 raise ValueError(f"Campaign {run_id} has no start time")
             started = datetime.fromisoformat(run["started_at"])

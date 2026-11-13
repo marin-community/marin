@@ -12,7 +12,6 @@ from functools import partial
 from pathlib import Path
 
 import pyarrow.parquet as pq
-from finestore.rl.source_identity import original_source_id
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -27,6 +26,7 @@ from experiments.post_training.task_curation.daytona_census import (
 )
 from experiments.post_training.task_curation.lexical_artifacts import ActorCensus, SourceTextPopulation
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
+from experiments.post_training.task_curation.source_identity import original_source_id
 
 
 @dataclass(frozen=True)

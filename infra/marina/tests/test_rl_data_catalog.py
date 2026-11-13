@@ -39,7 +39,6 @@ from finestore.rl.curation import (
     SourceOrigin,
     register_catalog,
 )
-from finestore.rl.source_identity import canonical_source_id
 from finestore.store import DataStore
 from marina.applets import (
     AppletServices,
@@ -60,7 +59,9 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
 
+from experiments.post_training.task_curation.catalog_identity import backend_survey_payload, canonical_backend_survey
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
+from experiments.post_training.task_curation.source_identity import canonical_source_id
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, prepare_preview
@@ -1119,9 +1120,9 @@ def test_frozen_backend_survey_digest_survives_canonical_source_projection(tmp_p
     publish_sample(root, "frozen", source_id="HuggingFaceH4:aime24", origin=SourceOrigin.HUGGINGFACEH4)
     raw = catalog_backend_map(CurationCatalog(root)).model_dump(mode="json")
     raw["sources"][0]["source_id"] = "MarinSkyRL:aime24"
-    survey = BackendSurvey.model_validate(raw)
+    survey = canonical_backend_survey(raw)
     assert survey.sources[0].source_id == "HuggingFaceH4:aime24"
-    assert canonical_sha256(survey.identity_payload()) == canonical_sha256(raw)
+    assert canonical_sha256(backend_survey_payload(survey)) == canonical_sha256(raw)
 
 
 def test_preview_package_imports_canonical_models_without_new_shared_runtime_modules(tmp_path, monkeypatch):
@@ -1135,7 +1136,7 @@ def test_preview_package_imports_canonical_models_without_new_shared_runtime_mod
     def old_runtime_import(name, global_namespace=None, local_namespace=None, fromlist=(), level=0):
         if level == 0 and name in {
             "finestore.rl.curation",
-            "finestore.rl.source_identity",
+            "experiments.post_training.task_curation.source_identity",
             "taskcompendium.source_fingerprints",
         }:
             raise ModuleNotFoundError(name)

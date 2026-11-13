@@ -9,7 +9,6 @@ import logging
 from functools import partial
 from pathlib import Path
 
-from finestore.rl.source_identity import original_source_id
 from marin.execution.lazy import ArtifactStep, run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from taskcompendium.identity import canonical_sha256
@@ -23,6 +22,7 @@ from experiments.post_training.task_curation.published_census import (
     population_documents,
     write_contract_summary,
 )
+from experiments.post_training.task_curation.source_identity import original_source_id
 
 
 def measure_integrity(config: CensusConfig) -> IntegrityCensus:

@@ -10,7 +10,6 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from finestore.rl.source_identity import canonical_source_id
 from iris.rpc import job_pb2
 from marin.evaluation.eval_env import EVALUATION_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.model_config import load_model_config
@@ -29,6 +28,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.source_fingerprints import DuplicateLabel, DuplicateReview, SourceFingerprint, SourceIdentitySurvey
 
+from experiments.post_training.task_curation.catalog_identity import canonical_identity_survey, identity_survey_payload
 from experiments.post_training.task_curation.duplicate_review import (
     DUPLICATE_MAX_TOKENS,
     DUPLICATE_MODEL,
@@ -45,6 +45,7 @@ from experiments.post_training.task_curation.source_fingerprints import (
     duplicate_groups,
     fingerprint_source,
 )
+from experiments.post_training.task_curation.source_identity import canonical_source_id
 from experiments.post_training.task_curation.tests.review_server import JudgeReply
 
 
@@ -298,6 +299,6 @@ def test_frozen_survey_digest_survives_canonical_source_projection():
         "groups": [],
         "judge": None,
     }
-    survey = SourceIdentitySurvey.model_validate(raw)
+    survey = canonical_identity_survey(raw)
     assert set(survey.fingerprints) == {"HuggingFaceH4:aime24", "ChilleD:svamp"}
-    assert canonical_sha256(survey.identity_payload()) == canonical_sha256(raw)
+    assert canonical_sha256(identity_survey_payload(survey)) == canonical_sha256(raw)

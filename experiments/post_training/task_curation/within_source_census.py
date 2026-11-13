@@ -19,7 +19,6 @@ from tempfile import TemporaryDirectory
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.curation import LexicalUse
-from finestore.rl.source_identity import canonical_source_id, canonical_source_map, original_source_id
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256, task_identity
@@ -27,6 +26,11 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.deduplication import DUPLICATE_WITHIN_SOURCE
 
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
+from experiments.post_training.task_curation.source_identity import (
+    canonical_source_id,
+    canonical_source_map,
+    original_source_id,
+)
 
 logger = logging.getLogger(__name__)
 LEXICAL_CONTAMINATION = "LEXICAL_CONTAMINATION"

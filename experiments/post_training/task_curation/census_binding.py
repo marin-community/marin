@@ -10,13 +10,13 @@ from dataclasses import replace
 from pathlib import Path
 
 from finestore.rl.curation import ActorCensusInput, DaytonaMeasurement, IntegrityContractSummary
-from finestore.rl.source_identity import SourceId, canonical_source_id
 from pydantic import BaseModel, ConfigDict, model_validator
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.source_identity import SourceId, canonical_source_id
 
 
 class ActorCensusReceipt(BaseModel):

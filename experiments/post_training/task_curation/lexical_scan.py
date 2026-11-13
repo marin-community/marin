@@ -15,7 +15,6 @@ from pathlib import Path
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.source_identity import canonical_source_id, original_source_id
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -50,6 +49,7 @@ from experiments.post_training.task_curation.lexical_artifacts import (
     SourceTextPopulation,
 )
 from experiments.post_training.task_curation.local import artifact_prefix
+from experiments.post_training.task_curation.source_identity import canonical_source_id, original_source_id
 
 logger = logging.getLogger(__name__)
 NGRAM = NGramConfig(ngram_length=13, stride=0, overlap_threshold=0.5, min_matched_features=2)

@@ -12,12 +12,12 @@ from typing import Any
 
 import click
 import pyarrow.parquet as pq
-from finestore.rl.source_identity import canonical_source_id
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage, CurriculumStatistic
 
+from experiments.post_training.task_curation.source_identity import canonical_source_id
 from infra.marina.apps.rl_data_catalog.load import batches, insert_rows
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference, validated_role_projection
 

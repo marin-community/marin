@@ -9,11 +9,12 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT
-from finestore.rl.source_identity import canonical_source_id, original_source_id
 from marina.applets import AppletServices
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from taskcompendium.source_fingerprints import DuplicateGroup, DuplicateReview
+
+from experiments.post_training.task_curation.source_identity import canonical_source_id, original_source_id
 
 from .contamination import contamination
 from .curriculum import register_curriculum_routes, source_coverage

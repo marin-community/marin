@@ -7,8 +7,9 @@ import json
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from finestore.rl.source_identity import canonical_source_id
 from pydantic import BaseModel
+
+from experiments.post_training.task_curation.source_identity import canonical_source_id
 
 RECEIPTS_PER_SHARD = 64
 

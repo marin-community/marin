@@ -12,13 +12,13 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
-from finestore.rl.source_identity import canonical_source_id, canonical_source_map
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.reviewer_spec import JudgeEndpoint
 from taskcompendium.source_fingerprints import DuplicateJudgeRun, DuplicateLabel, SourceFingerprint, SourceIdentitySurvey
 
 from experiments.post_training.task_curation.backend_capabilities import converted_specs
+from experiments.post_training.task_curation.catalog_identity import canonical_identity_survey
 from experiments.post_training.task_curation.duplicate_review import (
     DUPLICATE_MODEL,
     DUPLICATE_MODEL_CONFIG,
@@ -37,6 +37,7 @@ from experiments.post_training.task_curation.source_fingerprints import (
     fingerprint_source,
     pair_similarity,
 )
+from experiments.post_training.task_curation.source_identity import canonical_source_id, canonical_source_map
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +160,7 @@ def main() -> None:
     else:
         if args.top_k <= 0:
             raise ValueError("Candidate count must be positive")
-        source = SourceIdentitySurvey.model_validate_json(args.fingerprints.read_text())
+        source = canonical_identity_survey(json.loads(args.fingerprints.read_text()))
         if args.route == "local":
             endpoint: JudgeEndpoint = LocalDuplicateEndpoint(args.model_config)
         else:

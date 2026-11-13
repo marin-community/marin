@@ -4,10 +4,9 @@
 """Versioned source identity and advisory overlap records for catalog ingestion."""
 
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Literal
 
-from finestore.rl.source_identity import SourceId, canonical_source_map, original_source_id
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class SourceLineage(BaseModel):
@@ -53,8 +52,8 @@ class SourceFingerprint(BaseModel):
 class PairSimilarity(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    left: SourceId
-    right: SourceId
+    left: str
+    right: str
     rank_score: float = Field(ge=0, le=1)
     instruction_similarity: float = Field(ge=0, le=1)
     instruction_overlap: float = Field(ge=0, le=1)
@@ -105,7 +104,7 @@ class DuplicateReview(BaseModel):
 class DuplicateGroupMember(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    source_id: SourceId
+    source_id: str
     overlap_with_canonical: float | None
 
 
@@ -113,7 +112,7 @@ class DuplicateGroup(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     group_id: str
-    canonical_source_id: SourceId
+    canonical_source_id: str
     members: list[DuplicateGroupMember]
     advisory: Literal[True] = True
 
@@ -147,25 +146,6 @@ class SourceIdentitySurvey(BaseModel):
     reviews: list[DuplicateReview]
     groups: list[DuplicateGroup]
     judge: DuplicateJudgeRun | None
-
-    def identity_payload(self) -> dict:
-        """Keep survey and cached-review identities tied to the original source labels."""
-        document = self.model_dump(mode="json")
-        document["fingerprints"] = {original_source_id(key): value for key, value in document["fingerprints"].items()}
-        for review in document["reviews"]:
-            similarity = review["similarity"]
-            for side in ("left", "right"):
-                similarity[side] = original_source_id(similarity[side])
-        for group in document["groups"]:
-            group["canonical_source_id"] = original_source_id(group["canonical_source_id"])
-            for member in group["members"]:
-                member["source_id"] = original_source_id(member["source_id"])
-        return document
-
-    @field_validator("fingerprints", mode="before")
-    @classmethod
-    def _source_keys(cls, value: dict[str, Any]) -> dict[str, Any]:
-        return canonical_source_map(value)
 
     @model_validator(mode="after")
     def validate_references(self) -> "SourceIdentitySurvey":

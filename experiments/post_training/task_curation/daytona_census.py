@@ -20,7 +20,6 @@ from typing import NamedTuple
 
 import pyarrow.parquet as pq
 from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT
-from finestore.rl.source_identity import canonical_source_id, original_source_id
 from huggingface_hub import snapshot_download
 from rolloutengine.machines import _machine_spec
 from rolloutengine.models import MachineRuntimeSpec
@@ -48,6 +47,7 @@ from experiments.post_training.task_curation.pipeline import (
 )
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.retained_release import RetainedCohort
+from experiments.post_training.task_curation.source_identity import canonical_source_id, original_source_id
 from experiments.post_training.task_curation.sources import all_sources
 
 logger = logging.getLogger(__name__)

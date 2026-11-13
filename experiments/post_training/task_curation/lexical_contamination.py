@@ -17,7 +17,6 @@ from typing import NamedTuple
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.source_identity import canonical_source_id, original_source_id
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -45,6 +44,7 @@ from experiments.post_training.task_curation.pipeline import (
 )
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.retained_release import RetainedCohort
+from experiments.post_training.task_curation.source_identity import canonical_source_id, original_source_id
 from experiments.post_training.task_curation.sources import all_sources
 
 logger = logging.getLogger(__name__)

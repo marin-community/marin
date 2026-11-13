@@ -14,14 +14,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from finestore.rl.curation import ActorCensusInput, PipelineReference
-from finestore.rl.source_identity import canonical_source_id, canonical_source_map
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
 
+from experiments.post_training.task_curation.catalog_identity import canonical_identity_survey
 from experiments.post_training.task_curation.registry import read_registry_json
+from experiments.post_training.task_curation.source_identity import canonical_source_id, canonical_source_map
 
 EXPORT_DECLARATIONS = """import json
 from experiments.post_training.task_curation.sources import all_sources
@@ -113,7 +114,7 @@ def prepare_review(base_ref: str, index: Path, output: Path, changed_output: Pat
             payload = StoragePath(reference.uri).read_bytes()
             if hashlib.sha256(payload).hexdigest() != reference.sha256:
                 raise ValueError(f"Fingerprint artifact digest differs: {reference.uri}")
-            artifacts[reference.uri] = SourceIdentitySurvey.model_validate_json(payload)
+            artifacts[reference.uri] = canonical_identity_survey(json.loads(payload))
         fingerprint = artifacts[reference.uri].fingerprints[source_id]
         if fingerprint is None:
             raise ValueError(f"Published fingerprint is unassessed: {source_id}")

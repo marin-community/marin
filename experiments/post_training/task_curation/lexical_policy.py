@@ -8,7 +8,6 @@ import json
 from pathlib import Path
 
 from finestore.rl.curation import DeconReceiptStatus, LexicalContaminationEvidence, LexicalReceipt, LexicalUse
-from finestore.rl.source_identity import SourceId, canonical_source_map
 from pydantic import BaseModel, ConfigDict
 from taskcompendium.pipeline.models import IntendedUse
 
@@ -17,6 +16,7 @@ from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.retained_release import RetainedCohort
 from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.source_identity import SourceId, canonical_source_map
 
 
 class LexicalInputUse(BaseModel):

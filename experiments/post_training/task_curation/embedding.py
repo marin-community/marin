@@ -12,7 +12,6 @@ from functools import partial
 
 import numpy as np
 from finestore.rl.curation import SourceDeclaration
-from finestore.rl.source_identity import canonical_source_id, canonical_source_map, original_source_id
 from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
@@ -58,6 +57,13 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_REQUEST_TIMEOUT, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.catalog_identity import canonical_declaration
+from experiments.post_training.task_curation.source_identity import (
+    SOURCE_ID_ALIASES,
+    canonical_source_id,
+    canonical_source_map,
+    original_source_id,
+)
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
 INPUTS_VERSION = "2026.10.14.1"
@@ -269,6 +275,7 @@ def _align(
         curriculum_key=curriculum_key,
         spec=spec,
         output_root=output_root,
+        source_id_replacements=SOURCE_ID_ALIASES,
     )
     manifest = AlignmentManifest(
         inputs_root=inputs_root,
@@ -298,10 +305,13 @@ def _publish(
     output_root: str,
 ) -> SemanticArtifact:
     curated_roots = canonical_source_map(curated_roots)
-    inventory = [row.model_copy(update={"id": canonical_source_id(row.id)}) for row in inventory]
+    inventory = [canonical_declaration(row) for row in inventory]
     alignment = AlignmentManifest.model_validate_json((StoragePath(alignment_root) / "alignment.json").read_text())
     paths = SemanticArtifact.raw_load(alignment_root).paths
-    counts = {canonical_source_id(row.source_id): row for row in count_alignment_sources(runtime.context, paths=paths)}
+    counts = {
+        canonical_source_id(row.source_id): replace(row, source_id=canonical_source_id(row.source_id))
+        for row in count_alignment_sources(runtime.context, paths=paths)
+    }
     if set(counts) - curated_roots.keys():
         raise ValueError("Alignment contains sources outside the selected corpus")
     if curated_roots.keys() - {row.id for row in inventory}:
@@ -409,6 +419,11 @@ def _coverage(
         capability_distance=capability_distance,
         source_sample_size=source_sample_size,
         area_sample_size=area_sample_size,
+        sampling_source_ids={
+            identifier: original_source_id(row.source_id)
+            for row in release.sources
+            for identifier in (row.source_id, canonical_source_id(row.source_id), original_source_id(row.source_id))
+        },
     )
     coverage = CurriculumCoverage(
         coverage_id=canonical_sha256(
