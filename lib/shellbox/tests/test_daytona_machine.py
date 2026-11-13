@@ -36,6 +36,7 @@ from daytona import (
     Resources,
 )
 from daytona_api_client_async import SnapshotState
+from shellbox.backends.daytona import machine as daytona_machine
 from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.machine import (
     DaytonaDeclarativeMachineFactory,
@@ -53,6 +54,7 @@ from shellbox.backends.daytona.snapshot import (
     snapshot_request_for_spec,
     snapshot_resources,
 )
+from shellbox.backends.docker import machine as docker_machine
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
@@ -317,6 +319,36 @@ def test_daytona_failed_creation_deletes_an_accepted_sandbox(error_type):
             await factory.create(MachineSpec(source=RegistryImage("fixture@sha256:" + "a" * 64), cpus=2))
         assert client.deleted
         assert client.closed
+
+    asyncio.run(scenario())
+
+
+def test_daytona_control_calls_have_their_own_timeout():
+    """Daytona control calls take seconds under load; Docker's interrupt bound is too short for them."""
+    assert daytona_machine.DAYTONA_CONTROL_TIMEOUT == 60
+    assert daytona_machine.DAYTONA_CONTROL_TIMEOUT > docker_machine.INTERRUPT_TIMEOUT
+    assert not hasattr(daytona_machine, "INTERRUPT_TIMEOUT")
+
+
+@pytest.mark.parametrize(("bound", "deleted"), [(5, True), (0.01, False)])
+def test_daytona_cleanup_get_is_bounded_by_the_daytona_control_timeout(monkeypatch, bound, deleted):
+    monkeypatch.setattr("shellbox.backends.daytona.machine.DAYTONA_CONTROL_TIMEOUT", bound)
+
+    class SlowControlPlane(LocalDaytona):
+        async def create(self, params, *, timeout):
+            await super().create(params, timeout=timeout)
+            raise RuntimeError("SDK failed after acceptance")
+
+        async def get(self, name):
+            await asyncio.sleep(0.1)
+            return await super().get(name)
+
+    async def scenario():
+        client = SlowControlPlane()
+        factory = DaytonaMachineFactory(client_factory=lambda: client)
+        with pytest.raises((RuntimeError, TimeoutError)):
+            await factory.create(MachineSpec(source=RegistryImage("fixture@sha256:" + "a" * 64), cpus=2))
+        assert bool(client.deleted) is deleted
 
     asyncio.run(scenario())
 

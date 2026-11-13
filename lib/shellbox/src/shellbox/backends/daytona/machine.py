@@ -39,7 +39,7 @@ from shellbox.backends.daytona.snapshot import (
     ensure_snapshot,
     snapshot_request_for_spec,
 )
-from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
+from shellbox.backends.docker.machine import KILL_PROCESS_GROUP_COMMAND, START_COMMAND
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
     LINUX_PROCESS_CAPABILITIES,
@@ -58,6 +58,11 @@ from shellbox.machine import (
 from shellbox.process_session import finish_owned, own_cleanup
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
+# Daytona control-plane calls (get, delete, toolbox exec and file reads) take
+# seconds under load; on 2026-11-13 a single get measured p50 9.7 s and p90
+# 13.7 s against the Eval org. Docker's 10 s interrupt bound turned those slow
+# replies into setup and teardown failures, so Daytona keeps its own bound.
+DAYTONA_CONTROL_TIMEOUT = 60
 logger = logging.getLogger(__name__)
 CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 CONTROL_CWD = "/"
@@ -114,7 +119,7 @@ async def _create_sandbox(
 
 
 async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
-    async with asyncio.timeout(INTERRUPT_TIMEOUT):
+    async with asyncio.timeout(DAYTONA_CONTROL_TIMEOUT):
         try:
             sandbox = await client.get(name)
         except DaytonaNotFoundError:
@@ -204,7 +209,7 @@ class DaytonaMachine:
         self._sessions.add(session)
 
         async def start() -> None:
-            async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            async with asyncio.timeout(DAYTONA_CONTROL_TIMEOUT):
                 argv = await self._user_argv(command.argv, command.user)
                 await session.start(argv, command.cwd or self.spec.workdir or None, {**self.spec.env, **command.env})
 
@@ -259,7 +264,7 @@ class DaytonaMachine:
 
     async def _stop_command(self, pidfile: str, completed_path: str) -> None:
         command = _control_command(shlex.join(("/bin/sh", "-c", STOP_COMMAND, "stop-command", pidfile, completed_path)))
-        async with asyncio.timeout(INTERRUPT_TIMEOUT):
+        async with asyncio.timeout(DAYTONA_CONTROL_TIMEOUT):
             try:
                 stopped = await self.sandbox.process.exec(command, cwd=CONTROL_CWD)
             except DaytonaError as error:
@@ -269,7 +274,7 @@ class DaytonaMachine:
 
     async def _remove_command_files(self, prefix: str) -> None:
         command = _control_command(f"rm -rf {shlex.quote(prefix)}")
-        async with asyncio.timeout(INTERRUPT_TIMEOUT):
+        async with asyncio.timeout(DAYTONA_CONTROL_TIMEOUT):
             try:
                 removed = await self.sandbox.process.exec(command, cwd=CONTROL_CWD)
             except DaytonaError as error:
@@ -353,7 +358,7 @@ class DaytonaMachine:
                     env=environment,
                     timeout=math.ceil(command.timeout + 10) if command.timeout is not None else None,
                 )
-            async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            async with asyncio.timeout(DAYTONA_CONTROL_TIMEOUT):
                 limit = command.output_limit_bytes
                 stdout, stdout_truncated = await self._read_output(stdout_path, limit)
                 stderr, stderr_truncated = await self._read_output(stderr_path, limit)
@@ -617,7 +622,7 @@ class DaytonaMachineFactory:
                 if not PurePosixPath(workdir).is_absolute() or "\0" in workdir:
                     raise UnsupportedMachineSpec(f"Daytona image workdir must be absolute: {workdir!r}")
             prepared = await sandbox.process.exec(
-                _control_command("command -v setsid"), cwd=CONTROL_CWD, timeout=INTERRUPT_TIMEOUT
+                _control_command("command -v setsid"), cwd=CONTROL_CWD, timeout=DAYTONA_CONTROL_TIMEOUT
             )
             if prepared.exit_code:
                 raise UnsupportedMachineSpec("Daytona task images require setsid for command timeout recovery")
