@@ -26,7 +26,7 @@ from verifyit.spec import Constraint, SchemaFormat
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.json_schemas import is_trivial
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 IFEVAL_CONFIG = "laion__nemotron-gym-instruction-following-v3"
 STRUCTURED_CONFIG = "laion__nemotron-gym-instruction-following-structured-v3"
@@ -226,12 +226,13 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "IFEval-style deterministic checkers. Filter rows with empty constraint lists "
                     "(vacuous pass) at conversion."
                 ),
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
                 name="tasktrove-ifeval",
                 source=tasktrove_source(IFEVAL_CONFIG),
                 convert=TaskTroveConverter(IFEVAL_CONFIG, convert_ifeval),
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=IFEVAL_RUBRIC,
             ),
@@ -246,12 +247,13 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn"),
                 count=9437,
                 notes="Any schema-valid instance is accepted, and jsonschema does the grading.",
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
                 name="tasktrove-structured",
                 source=tasktrove_source(STRUCTURED_CONFIG),
                 convert=TaskTroveConverter(STRUCTURED_CONFIG, convert_structured),
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=STRUCTURED_RUBRIC,
                 controls=Controls(),

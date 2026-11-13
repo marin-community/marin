@@ -3,17 +3,21 @@ import logging
 from types import SimpleNamespace
 
 import pytest
-from upath import UPath
-
-from harbor.job import Job
 from harbor.cli.jobs import resume
+from harbor.job import Job
 from harbor.models.job.config import JobConfig
-from harbor.models.trial.config import ArtifactAuthorityConfig, TaskConfig, TrialConfig
+from harbor.models.trial.config import (
+    AgentConfig,
+    ArtifactAuthorityConfig,
+    TaskConfig,
+    TrialConfig,
+)
 from harbor.trial.single_step import SingleStepTrial
 from harbor.utils.artifact_authority import (
     ArtifactAuthorityError,
     validate_artifact_authority,
 )
+from upath import UPath
 
 
 def _authority(record_path, *, authority_id="launch-123", mode="require"):
@@ -157,6 +161,7 @@ def test_authority_record_must_not_be_a_symlink(tmp_path) -> None:
 def test_job_checks_authority_before_creating_job_directory(tmp_path) -> None:
     jobs_dir = tmp_path / "artifact-store"
     config = JobConfig(
+        agents=[AgentConfig(name="pi")],
         job_name="protected-job",
         jobs_dir=jobs_dir,
         artifact_authority=_authority(jobs_dir / ".harbor-authority.json"),
@@ -174,6 +179,7 @@ def test_direct_trial_checks_authority_before_creating_trial_directory(
 ) -> None:
     trials_dir = tmp_path / "artifact-store"
     config = TrialConfig(
+        agent=AgentConfig(name="pi"),
         task=TaskConfig(path=tmp_path / "task"),
         trial_name="protected-trial",
         trials_dir=trials_dir,
@@ -195,6 +201,7 @@ def test_job_propagates_authority_to_trial_configs(tmp_path) -> None:
     task_config = TaskConfig(path=tmp_path / "task")
     authority = _authority(record_path)
     config = JobConfig(
+        agents=[AgentConfig(name="pi")],
         job_name="protected-job",
         jobs_dir=jobs_dir,
         artifact_authority=authority,
@@ -215,8 +222,11 @@ def test_authority_config_round_trips_with_job_and_trial_configs(tmp_path) -> No
         tmp_path / "artifact-store" / ".harbor-authority.json",
         mode="warn",
     )
-    job_config = JobConfig(artifact_authority=authority)
+    job_config = JobConfig(
+        agents=[AgentConfig(name="pi")], artifact_authority=authority
+    )
     trial_config = TrialConfig(
+        agent=AgentConfig(name="pi"),
         task=TaskConfig(path=tmp_path / "task"),
         artifact_authority=authority,
     )
@@ -240,6 +250,7 @@ def test_resume_checks_authority_before_pruning_trial_directories(tmp_path) -> N
     trial_dir.mkdir(parents=True)
     (trial_dir / "result.json").write_text("not valid json")
     config = JobConfig(
+        agents=[AgentConfig(name="pi")],
         job_name=job_dir.name,
         jobs_dir=tmp_path,
         artifact_authority=_authority(tmp_path / ".harbor-authority.json"),

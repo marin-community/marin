@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from finestore.layout import BlobTables, OnConflict, parse_uri
 from finestore.reader import ReadView
@@ -60,12 +60,110 @@ class CatalogRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+class IndependentQC(CatalogRecord):
+    """Quality checks reported by a pinned source release."""
+
+    verdict: Verdict
+    method: str = Field(min_length=1)
+    reviewed: int = Field(ge=0)
+    # Absent when the release retained its reviewed population without an admission claim.
+    admitted: int | None = Field(default=None, ge=0)
+    evidence_url: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _admitted_within_reviewed(self) -> "IndependentQC":
+        if self.admitted is not None and self.admitted > self.reviewed:
+            raise ValueError(f"admitted {self.admitted} exceeds reviewed {self.reviewed}")
+        return self
+
+
 class PipelineReference(CatalogRecord):
     name: str
     version: str
     source: str | None
     revision: str | None
     files: list[str]
+
+
+class DaytonaSafety(StrEnum):
+    """Whether running a source fits the Daytona snapshot budget."""
+
+    SAFE = "safe"
+    UNSAFE = "unsafe"
+    UNASSESSED = "unassessed"
+
+
+DAYTONA_SAFE_SNAPSHOT_LIMIT = 10
+"""The unique-snapshot budget a source must fit to count as Daytona-safe."""
+
+
+def daytona_verdict(*, snapshot_count: int | None, execution_failures: int | None, agentic: bool) -> DaytonaSafety:
+    """Derive a source's Daytona verdict from its measurement.
+
+    Sources that provision no sandbox are safe regardless of any count. An agentic
+    source without a measured count is unassessed: a count that was never taken
+    cannot establish safety, and a declared value must not stand in for one.
+    Otherwise the source is unsafe when its unique environment count exceeds
+    ``DAYTONA_SAFE_SNAPSHOT_LIMIT`` or when the Daytona backend refuses a task's
+    declared execution requirements.
+    """
+    if not agentic:
+        return DaytonaSafety.SAFE
+    if snapshot_count is None:
+        return DaytonaSafety.UNASSESSED
+    if snapshot_count > DAYTONA_SAFE_SNAPSHOT_LIMIT or execution_failures:
+        return DaytonaSafety.UNSAFE
+    return DaytonaSafety.SAFE
+
+
+class CurationMode(StrEnum):
+    """How much of a source a curation pass examined."""
+
+    QUICK = "quick"
+    """Inventory or a spot check. Never admits tasks and never selects for training."""
+
+    SAMPLE = "sample"
+    """A documented sample was executed end to end, including its verifiers."""
+
+    FULL = "full"
+    """Every task was executed end to end, including its verifier."""
+
+
+class OversightLevel(StrEnum):
+    """The weakest form of review a source's admission rests on."""
+
+    NONE = "none"
+    """Inventory only: no execution evidence, so the source is not selectable."""
+
+    SAMPLE = "sample"
+    """Execution was verified on a documented sample of tasks."""
+
+    FULL = "full"
+    """Execution was verified on every task."""
+
+
+class OversightEvidence(CatalogRecord):
+    """The pointers an oversight level rests on, so a reader can check it."""
+
+    campaign: str | None = None
+    recipe_revision: str | None = None
+    verification: str
+    level: OversightLevel = OversightLevel.NONE
+    reviewed: int | None = None
+    admitted: int | None = None
+
+
+class OracleValidation(StrEnum):
+    """How an admitted source's grader was qualified."""
+
+    EXECUTED = "executed"
+    """Every sampled task's oracle solution ran and scored its expected reward."""
+
+    VERIFIER_EXECUTED = "verifier_executed"
+    """The grader rejected an untouched submission; successful oracle execution is not certified."""
+
+    SKIPPED = "skipped"
+    """Neither qualification ran; the source's execution is not certified."""
 
 
 class SourceDeclaration(CatalogRecord):
@@ -86,6 +184,21 @@ class SourceDeclaration(CatalogRecord):
     kind: str
     status: str
     pipeline: PipelineReference | None
+    independent_qc: IndependentQC | None = None
+    # Non-agentic sources never provision Daytona sandboxes; an agentic source stays
+    # UNASSESSED until its unique snapshot count is assessed against DAYTONA_SAFE_SNAPSHOT_LIMIT.
+    daytona_safety: DaytonaSafety = DaytonaSafety.UNASSESSED
+    # Measured distinct snapshot identities, required for any agentic SAFE/UNSAFE verdict.
+    # A verdict without a count stays UNASSESSED; counts are never inferred. The basis
+    # records the rule behind the measurement so a reader can check it.
+    daytona_snapshot_count: int | None = None
+    daytona_snapshot_threshold: int | None = None
+    daytona_count_basis: str | None = None
+    # How the grader's execution was qualified: oracle runs, an executed verifier, or neither.
+    oracle_validation: OracleValidation | None = None
+    # The weakest review behind the admission, with the pointers that establish it.
+    oversight: OversightLevel = OversightLevel.NONE
+    oversight_evidence: OversightEvidence | None = None
 
 
 class AdmissionCounts(CatalogRecord):
@@ -115,7 +228,7 @@ class ControlSummary(CatalogRecord):
 
 class CurationSummary(CatalogRecord):
     status: str
-    mode: str
+    mode: CurationMode
     source_revision: str | None
     recipe_revision: str | None
     raw_population_count: int | None
@@ -124,6 +237,13 @@ class CurationSummary(CatalogRecord):
     unprocessed_rows: int | None
     admission_counts: AdmissionCounts
     verification: ControlSummary | None
+
+    @model_validator(mode="after")
+    def _quick_curation_admits_nothing(self) -> "CurationSummary":
+        """A spot check has no admitted tasks to report."""
+        if self.mode is CurationMode.QUICK and self.admission_counts.admitted:
+            raise ValueError("QUICK curation cannot carry admitted tasks")
+        return self
 
 
 class ModelReference(CatalogRecord):
