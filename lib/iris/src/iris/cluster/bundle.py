@@ -77,8 +77,9 @@ class BundleStore:
         self._content_locks: dict[str, _ContentLock] = {}
 
         # The controller's state bucket can sit in another region, and it serves every
-        # handoff and worker fetch from here for its whole lifetime. Each object is at
-        # most MAX_BUNDLE_SIZE_BYTES, so these reads skip the process-wide budget.
+        # handoff and worker fetch from here for its whole lifetime. These are job
+        # payloads it stored itself, each read once per delivery, so they skip the
+        # process-wide budget meant for bulk data reads.
         self._fs, self._fs_path = unbudgeted_url_to_fs(storage_dir)
         self._fs.mkdirs(self._fs_path, exist_ok=True)
 
