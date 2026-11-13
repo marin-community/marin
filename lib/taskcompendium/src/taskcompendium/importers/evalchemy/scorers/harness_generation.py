@@ -263,7 +263,7 @@ def grade_harness_generation_candidate(
                 percent_reference = rf"\frac{{{reference}}}{{100}}"
                 equivalent = any(is_equiv(normalize_final_answer(value), percent_reference) for value in candidates)
             metrics[f"exact_match,{name}"] = float(equivalent)
-        primary = "exact_match,strict-match"
+        primary = "exact_match,flexible-extract"
     else:
         extracted = {
             "strict_answer": extract_short_answer(response, marked=True),

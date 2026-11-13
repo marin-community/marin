@@ -16,6 +16,8 @@ from iris.cluster.runtime.env import STANDARD_MOUNTS
 from iris.cluster.runtime.types import MountKind, MountSpec
 from iris.rpc import job_pb2
 
+SANDBOX_IMAGE_WORKDIR_CAPABILITY = "sandbox-image-workdir"
+
 # A writable cache shared with other tasks would let a sandbox plant packages
 # they later install. The cache env still names these paths; without a mount
 # they land in the container's own layer.

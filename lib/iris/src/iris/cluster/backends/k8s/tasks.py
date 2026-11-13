@@ -149,6 +149,7 @@ from iris.cluster.stats.tables import (
 )
 from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, get_gpu_count
 from iris.preemption import SHUTDOWN_MARGIN, resolve_termination_grace
+from iris.resources.limits import ResourceLimitReason
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
@@ -194,6 +195,7 @@ _LABEL_TASK_HASH = "iris.task_hash"
 _LABEL_JOB_ID = "iris.job_id"
 # Unique per attempt, even when a resubmitted job reuses the task ID and attempt number.
 _LABEL_ATTEMPT_UID = "iris.attempt_uid"
+_SANDBOX_STORAGE_LIMIT_ANNOTATION = "iris.sandbox_storage_limit_bytes"
 
 # Runtime identifier for pods created by K8sTaskProvider.
 _RUNTIME_LABEL_VALUE = IRIS_KUBERNETES_RUNTIME
@@ -489,10 +491,21 @@ def _lookup_pod(
     return candidates[0], None
 
 
+def _sandbox_image_owns_workdir(run_req: job_pb2.RunTaskRequest) -> bool:
+    return (
+        run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
+        and not run_req.bundle_id
+        and not run_req.entrypoint.workdir_files
+        and not run_req.entrypoint.workdir_file_refs
+    )
+
+
 def _build_volumes_and_mounts(
     mount_specs: Sequence[MountSpec],
     cache_dir: str,
     shm_limit_bytes: int,
+    *,
+    image_owns_workdir: bool,
 ) -> tuple[list[dict], list[dict]]:
     """Build pod volumes and container volume mounts for ``mount_specs`` plus /dev/shm.
 
@@ -501,6 +514,8 @@ def _build_volumes_and_mounts(
     Workdir, outputs and tmpfs use emptyDir; cache mounts use hostPath under
     cache_dir so they persist across pods on the same node. /dev/shm is
     memory-backed and shares the task container's memory limit when one is set.
+    When ``image_owns_workdir`` is true, omit the workdir volume and mount to
+    preserve the prepared image's files.
 
     NOTE: On CoreWeave bare-metal GPU nodes the root filesystem is a 15GB
     ramdisk. Set cache_dir to a path on the NVMe (e.g. /mnt/local/iris-cache)
@@ -510,6 +525,9 @@ def _build_volumes_and_mounts(
     volumes: list[dict] = []
     mounts: list[dict] = []
     for spec in mount_specs:
+        if image_owns_workdir and spec.kind is MountKind.WORKDIR:
+            # An empty workdir volume would hide the prepared image's /app.
+            continue
         if spec.kind is MountKind.CACHE:
             volumes.append(
                 {
@@ -963,12 +981,15 @@ def _build_pod_manifest(
         limits: dict[str, str] = {}
         requests: dict[str, str] = {}
         if res.cpu_millicores:
-            # CPU as a request only (no limits.cpu) so containers can burst onto
-            # idle node CPU. The scheduler still places by cpu_millicores, and
+            # Ordinary jobs can burst onto idle node CPU. Sandbox jobs use a
+            # hard CPU ceiling so task resource declarations are enforced.
+            # The scheduler still places by cpu_millicores, and
             # under contention CFS shares CPU proportionally to requests. This
             # matches the soft-cap behavior the docker runtime uses for
             # CAPACITY_TYPE_ON_DEMAND workers.
             requests["cpu"] = f"{res.cpu_millicores}m"
+            if run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
+                limits["cpu"] = requests["cpu"]
         if res.memory_bytes:
             # Memory stays a hard cap — overshoot is fatal, not just slow.
             # Memory-backed emptyDir usage is charged to this same cgroup.
@@ -989,9 +1010,13 @@ def _build_pod_manifest(
         if requests:
             resources.setdefault("requests", {}).update(requests)
         if res.disk_bytes:
-            disk_gi = max(1, res.disk_bytes // (1024**3))
-            resources.setdefault("requests", {})["ephemeral-storage"] = f"{disk_gi}Gi"
-            resources.setdefault("limits", {})["ephemeral-storage"] = f"{disk_gi}Gi"
+            disk_quantity = (
+                str(res.disk_bytes)
+                if run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
+                else f"{max(1, res.disk_bytes // (1024**3))}Gi"
+            )
+            resources.setdefault("requests", {})["ephemeral-storage"] = disk_quantity
+            resources.setdefault("limits", {})["ephemeral-storage"] = disk_quantity
 
     is_gang = bool(run_req.coscheduling.group_by)
     has_accelerator = gpu_count > 0 or has_tpu
@@ -999,7 +1024,12 @@ def _build_pod_manifest(
     # ResourceSpec.memory defaults to zero, so low-level accelerator requests may omit it.
     if not shm_limit_bytes and has_accelerator:
         shm_limit_bytes = ACCELERATOR_SHM_FALLBACK_BYTES
-    volumes, vol_mounts = _build_volumes_and_mounts(isolation.mounts, cache_dir, shm_limit_bytes=shm_limit_bytes)
+    volumes, vol_mounts = _build_volumes_and_mounts(
+        isolation.mounts,
+        cache_dir,
+        shm_limit_bytes=shm_limit_bytes,
+        image_owns_workdir=_sandbox_image_owns_workdir(run_req),
+    )
 
     container: dict = {
         "name": "task",
@@ -1059,6 +1089,9 @@ def _build_pod_manifest(
         "labels": labels,
         "annotations": {IRIS_TASK_ID_ANNOTATION: run_req.task_id},
     }
+
+    if run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX and run_req.resources.disk_bytes:
+        metadata["annotations"][_SANDBOX_STORAGE_LIMIT_ANNOTATION] = str(run_req.resources.disk_bytes)
 
     # Every pod is admitted through one Kueue TAS flavor: its accounting and
     # preemption arbitrate all capacity. A pod that bypassed Kueue would hold nodes
@@ -1312,6 +1345,22 @@ def _format_disruption_reason(condition: dict) -> str:
     return reason[:_TERMINAL_REASON_MAX_CHARS]
 
 
+def _disk_limit_exceeded(pod: dict) -> bool:
+    # Only newly opted-in sandbox pods change retry semantics. Existing and
+    # ordinary pods retain their original disruption classification.
+    if _SANDBOX_STORAGE_LIMIT_ANNOTATION not in pod.get("metadata", {}).get("annotations", {}):
+        return False
+    status = pod.get("status", {})
+    if status.get("reason") != "Evicted":
+        return False
+    message = status.get("message", "")
+    # Kubelet's localStorageEviction messages. Node disk pressure also says
+    # "ephemeral-storage", but does not establish that this task exceeded its limit.
+    return message.startswith("Pod ephemeral local storage usage exceeds the total limit of containers") or (
+        message.startswith("Container ") and " exceeded its local ephemeral storage limit" in message
+    )
+
+
 def _pod_failure_state(pod: dict) -> int:
     """Classify a failed pod as PREEMPTED, WORKER_FAILED, or FAILED.
 
@@ -1319,7 +1368,11 @@ def _pod_failure_state(pod: dict) -> int:
     tells a triager whether the control plane took the pod away or the node let
     it die.
     """
-    # Authoritative first: the control plane explicitly disrupted this pod
+    # Exceeding a task storage ceiling charges the failure budget, even when
+    # kubelet also marks the eviction as a disruption.
+    if _disk_limit_exceeded(pod):
+        return job_pb2.TASK_STATE_FAILED
+    # Authoritative next: the control plane explicitly disrupted this pod
     # (preempted/evicted/drained), regardless of how the container exited. This
     # catches a preemption SIGKILLed after the grace period — reason="Error",
     # exit 137 — which the terminated-reason whitelist below misses. A container
@@ -1402,7 +1455,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
     task_terminated = _task_container_terminated(pod)
     new_state = (
         job_pb2.TASK_STATE_SUCCEEDED
-        if task_terminated and exit_code == 0 and _disruption_condition(pod) is None
+        if task_terminated and exit_code == 0 and _disruption_condition(pod) is None and not _disk_limit_exceeded(pod)
         else _pod_failure_state(pod)
     )
     terminal_reason = _extract_terminal_reason(pod)
@@ -1415,7 +1468,11 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
         error=(
             None
             if new_state == job_pb2.TASK_STATE_SUCCEEDED
-            else terminal_reason if new_state == job_pb2.TASK_STATE_PREEMPTED else _extract_error(pod)
+            else (
+                terminal_reason
+                if new_state == job_pb2.TASK_STATE_PREEMPTED or _disk_limit_exceeded(pod)
+                else _extract_error(pod)
+            )
         ),
         status_message="",
         terminal_reason=terminal_reason,
@@ -1437,7 +1494,11 @@ def _extract_exit_code(pod: dict) -> int | None:
 
 def _task_update_after_output_timeout(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
     exit_code = _extract_exit_code(pod)
-    terminal_phase = "Succeeded" if exit_code == 0 and _disruption_condition(pod) is None else "Failed"
+    terminal_phase = (
+        "Succeeded"
+        if exit_code == 0 and _disruption_condition(pod) is None and not _disk_limit_exceeded(pod)
+        else "Failed"
+    )
     terminal_pod = {**pod, "status": {**pod.get("status", {}), "phase": terminal_phase}}
     update = _task_update_from_pod(entry, terminal_pod)
     return replace(
@@ -1488,10 +1549,12 @@ def _init_container_failure(pod: dict) -> str | None:
 def _extract_terminal_reason(pod: dict) -> str | None:
     """A bounded terminal-cause string for a failed attempt.
 
-    Prefers an authoritative controller disruption condition, then an
-    init-container failure invisible to the task-container extractors, over the
-    task container's own terminal reason.
+    Prefers a task storage-limit eviction, then an authoritative controller
+    disruption condition, then an init-container failure invisible to the
+    task-container extractors, over the task container's own terminal reason.
     """
+    if _disk_limit_exceeded(pod):
+        return f"{ResourceLimitReason.DISK}: {pod['status']['message']}"[:_TERMINAL_REASON_MAX_CHARS]
     condition = _disruption_condition(pod)
     condition_reason = _format_disruption_reason(condition) if condition is not None else None
     reason = condition_reason or _init_container_failure(pod) or _extract_error(pod)
@@ -3187,7 +3250,8 @@ class K8sTaskProvider:
                     self._released_output_attempts.add(entry)
                 else:
                     logger.warning("Failed to release task output uploader in pod %s: %s", pod_name, release.stderr)
-            except KubectlError:
+            except Exception:
+                # Output release is best effort; a failed pod must not block the rest of this scan.
                 logger.warning("Failed to release task output uploader in pod %s", pod_name, exc_info=True)
 
         if time.monotonic() - started < policy.finalization_timeout.to_seconds():

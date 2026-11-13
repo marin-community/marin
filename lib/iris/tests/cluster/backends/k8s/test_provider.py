@@ -172,6 +172,44 @@ def test_sync_releases_output_uploader_after_task_container_exits(k8s):
     assert release_marker == b""
 
 
+def test_sync_continues_after_output_release_exec_failure(k8s):
+    provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
+        kubectl=k8s,
+        pods=pod_config(task_outputs=TaskOutputPolicy()),
+        cluster_scan_interval=0.0,
+    )
+    output_task = JobName.from_wire("/job/output-finalization")
+    other_task = JobName.from_wire("/job/other")
+    entries = [
+        RunningTaskEntry(task_id=output_task, attempt_id=0, attempt_uid="0123456789abcdef"),
+        RunningTaskEntry(task_id=other_task, attempt_id=0, attempt_uid="fedcba9876543210"),
+    ]
+    for entry in entries:
+        pod_name = _pod_name(entry.task_id, entry.attempt_id, entry.attempt_uid)
+        pod = make_pod(pod_name, "Running")
+        pod["kind"] = "Pod"
+        pod["metadata"]["labels"] = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE}
+        if entry == entries[0]:
+            pod["status"]["containerStatuses"] = [
+                {"name": "task", "state": {"terminated": {"exitCode": 0, "reason": "Completed"}}},
+                {"name": "output-uploader", "state": {"running": {}}},
+            ]
+        k8s.seed_resource(K8sResource.PODS, pod_name, pod)
+    k8s.inject_failure("exec", ValueError("OCI runtime exec failed"))
+
+    try:
+        updates = provider.sync(make_batch(running_tasks=entries))
+    finally:
+        provider.close()
+
+    assert len(updates) == 2
+    assert updates[0].task_id == output_task
+    assert updates[0].new_state == job_pb2.TASK_STATE_RUNNING
+    assert updates[1].task_id == other_task
+    assert updates[1].new_state == job_pb2.TASK_STATE_RUNNING
+
+
 def test_sync_output_timeout_preserves_successful_task_outcome(k8s, monkeypatch):
     provider = K8sTaskProvider(
         descriptor=k8s_backend_descriptor(),

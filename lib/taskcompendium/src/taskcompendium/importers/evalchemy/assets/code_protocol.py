@@ -7,6 +7,7 @@ Adapted from the MIT Evalchemy integrations and lm-evaluation-harness v0.4.12.
 See lm-evaluation-harness-MIT.txt for the harness license.
 """
 
+import ast
 import re
 import textwrap
 from collections.abc import Mapping, Sequence
@@ -33,6 +34,8 @@ PYTHON_IMPORTS = (
     "from typing import *",
     "from collections import *",
 )
+CRUX_CALL = re.compile(r"f\(.*?\)")
+CRUX_ANSWER_SPAN = re.compile(r"\[ANSWER\](.*?)\[/ANSWER\]", flags=re.DOTALL)
 FUNCTION_INSTRUCTION = (
     "Please continue to complete the function. You are not allowed to modify the given code and do the completion only. "
     "Please return all completed function in a codeblock. Here is the given code to do completion:\n```python\n{}\n```"
@@ -85,11 +88,27 @@ def generation_code(problem: Mapping[str, Any], response: str, suite: str) -> st
 
 
 def crux_answer(response: str, direction: str) -> str:
-    """Extract the source's first answer block and shallow function-call match."""
-    answer = response
-    if "[ANSWER]" in answer and "[/ANSWER]" in answer:
-        answer = answer.split("[ANSWER]", 1)[1].split("[/ANSWER]", 1)[0].strip()
-    call = re.search(r"f\(.*?\)", answer)
+    """Extract the first answer block holding a CruxEval candidate."""
+    spans = [span.strip() for span in CRUX_ANSWER_SPAN.findall(response)]
+    answer = spans[0] if spans else response
+    for span in spans:
+        candidate = _crux_expression(span, direction)
+        if direction == "input":
+            if CRUX_CALL.search(span) is not None:
+                answer = span
+                break
+        else:
+            try:
+                ast.parse(candidate, mode="eval")
+            except SyntaxError:
+                continue
+            answer = span
+            break
+    return _crux_expression(answer, direction)
+
+
+def _crux_expression(answer: str, direction: str) -> str:
+    call = CRUX_CALL.search(answer)
     if call is not None:
         if direction == "input":
             return call.group(0)

@@ -26,11 +26,14 @@ partial marker expression such as `-m "not slow"`; pytest replaces the default
 expression and may select live-cluster tests. Run excluded markers only when
 requested or directed by the relevant module guide.
 
-Tests run from the repository root have a 60-second per-test timeout, including
-fixture setup and teardown. On POSIX, pytest-timeout first interrupts the test
-with `SIGALRM`; if the test suppresses that failure, the test process exits five
+The root and standalone Levanter pytest configurations use a 60-second per-test
+timeout, including fixture setup and teardown. On POSIX, pytest-timeout first
+interrupts the test with `SIGALRM`; if the test suppresses that failure, the test process exits five
 seconds later. Give a legitimately longer test an explicit
 `@pytest.mark.timeout(...)` value instead of increasing the repository default.
+Both configurations also stop the session between tests once its 600-second
+budget has elapsed. Levanter retains its `src` and `tests` Python paths and adds
+the repository root to load the shared guard without a Marin package dependency.
 
 A formatter-only mechanical edit does not require another test run. Rerun the
 repository formatting and lint checks after the edit; rerun tests only when the
@@ -46,10 +49,9 @@ When adding a new `lib/<name>/` package, run its unit tests through
 These registrations include the library in pull request, push, and full-suite
 runs.
 
-`vendor/evalchemy` is excluded from the workspace and uses its own `uv.lock`.
-Its dedicated `evalchemy-unit` lane checks that lock and runs the retained tests
-in the independent evaluator environment. Run them locally with
-`uv run --directory vendor/evalchemy --frozen --all-extras --group test pytest`.
+Harbor's isolated test environment includes TaskCompendium for task-curation
+rebuild and snapshot-identity checks; rebuild tests skip in environments without
+Harbor.
 
 Root `pyproject.toml` and `uv.lock` changes run the broad CPU matrix. The
 Levanter TPU lane runs for those changes when the resolved dependencies of

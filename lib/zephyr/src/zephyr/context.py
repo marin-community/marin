@@ -234,7 +234,8 @@ class ZephyrContext:
         chunk_storage_prefix: Storage prefix for shared data, chunks, and results.
         name: Name prefix for actor groups.
         no_workers_timeout: Maximum wait for a live worker during one stage.
-        max_execution_retries: Maximum pool retries for a dedicated execute call.
+        max_execution_retries: Maximum pool retries for a dedicated execute call,
+            and maximum retries of a shared pool's start.
         stage_runner_factory: Factory for the worker stage runner.
         heartbeat_timeout: Maximum time between worker heartbeats.
         max_shard_failures: Maximum task failures for one shard.
@@ -418,15 +419,40 @@ class ZephyrContext:
             raise
 
     def start(self) -> "ZephyrContext":
-        """Start a shared pool and retain idle workers."""
+        """Start a shared pool and retain idle workers.
+
+        A failed start is retried like a dedicated pipeline's pool, with the same
+        ``max_execution_retries`` budget and backoff.
+        """
         with self._state_lock:
             if self._state is not _ContextState.NEW:
                 raise RuntimeError(f"Cannot start ZephyrContext in state {self._state}")
-            pool = self._start_pool(self._worker_limit(), _IdleWorkerPolicy.RETAIN)
+            pool = self._start_shared_pool()
             self._pool = pool
             self._coordinator = pool.coordinator
             self._state = _ContextState.OWNER
         return self
+
+    def _start_shared_pool(self) -> _OwnedPool:
+        backoff = _pool_retry_backoff()
+        for attempt in range(self.max_execution_retries + 1):
+            try:
+                return self._start_pool(self._worker_limit(), _IdleWorkerPolicy.RETAIN)
+            except _NON_RETRYABLE_ERRORS:
+                raise
+            except Exception as error:
+                if attempt >= self.max_execution_retries:
+                    raise
+                delay = backoff.next_interval()
+                logger.warning(
+                    "Shared pool start attempt %d failed (%d retries left), retrying in %.1fs: %s",
+                    attempt,
+                    self.max_execution_retries - attempt,
+                    delay,
+                    error,
+                )
+                time.sleep(delay)
+        raise AssertionError("unreachable")
 
     def _run_on_coordinator(
         self,
@@ -525,7 +551,7 @@ class ZephyrContext:
             _tasks_per_worker(self.resources, resolved_reduce),
         )
         last_exception: Exception | None = None
-        backoff = ExponentialBackoff(initial=2.0, maximum=60.0, factor=2.0, jitter=0.1)
+        backoff = _pool_retry_backoff()
         for attempt in range(self.max_execution_retries + 1):
             execution_id = _generate_execution_id(name)
             logger.info("Starting dedicated Zephyr pipeline %s", execution_id)
@@ -592,6 +618,10 @@ class ZephyrContext:
 
     def __exit__(self, *exc: object) -> None:
         self.shutdown()
+
+
+def _pool_retry_backoff() -> ExponentialBackoff:
+    return ExponentialBackoff(initial=2.0, maximum=60.0, factor=2.0, jitter=0.1)
 
 
 def _print_plan(original_ops: list, plan: PhysicalPlan) -> None:
