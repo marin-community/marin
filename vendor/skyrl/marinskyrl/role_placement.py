@@ -2,6 +2,9 @@
 
 from collections.abc import Mapping, Sequence
 
+import ray
+from ray.util.placement_group import placement_group_table
+
 ROLE_RESOURCE_PREFIX = "skyrl_role:"
 FABRIC_RESOURCE_PREFIX = "skyrl_nvlink:"
 POLICY_ROLE = "policy"
@@ -37,9 +40,6 @@ def role_bundles(
 
 def verify_role_placement(pg, role: str) -> dict[int, str]:
     """Check ready bundle assignments against physical domains before model actors start."""
-    import ray
-    from ray.util.placement_group import placement_group_table
-
     nodes = {node["NodeID"]: node["Resources"] for node in ray.nodes() if node["Alive"]}
     table = placement_group_table(pg)
     assignments = table["bundles_to_node_id"]

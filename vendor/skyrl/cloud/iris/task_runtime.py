@@ -98,7 +98,13 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
-from cloud.iris.role_topology import RoleTopology, derive_role_topology, node_role_resources, validate_role_nodes
+from cloud.iris.role_topology import (
+    NVLINK_ROLE_TOPOLOGY,
+    RoleTopology,
+    derive_role_topology,
+    node_role_resources,
+    validate_role_nodes,
+)
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
@@ -1341,7 +1347,7 @@ def wait_for_nodes(
             if count >= expected_nodes:
                 if role_topology is not None:
                     rows = validate_role_nodes(alive, topology=role_topology)
-                    report = json.dumps({"role_topology": "nvlink.domain", "nodes": rows}, sort_keys=True)
+                    report = json.dumps({"role_topology": NVLINK_ROLE_TOPOLOGY, "nodes": rows}, sort_keys=True)
                     (Path(os.environ.get("IRIS_OUTPUT_DIR", "/tmp")) / "role-topology.json").write_text(report + "\n")
                     _log(f"Verified physical role placement before model actors: {report}")
                 _log(f"All {expected_nodes} Ray node(s) joined. Resources: {ray.cluster_resources()}")

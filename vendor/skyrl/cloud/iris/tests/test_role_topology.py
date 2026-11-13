@@ -4,8 +4,12 @@ from collections import Counter
 import json
 
 import pytest
+import ray
 import yaml
 from omegaconf import OmegaConf
+from ray.cluster_utils import Cluster
+from ray.util.placement_group import placement_group
+from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from cloud.iris.launch_config import load_launch_config
 from cloud.iris.role_topology import (
@@ -16,6 +20,7 @@ from cloud.iris.role_topology import (
     validate_role_nodes,
 )
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
+from cloud.iris.task_runtime import wait_for_nodes
 from marinskyrl.role_placement import role_bundles, verify_role_placement
 
 
@@ -113,9 +118,6 @@ def test_configured_groups_stay_within_domains_and_can_share_one(tmp_path, geome
 
 @pytest.mark.parametrize("wrong_layout", ["split_policy", "overlapping_slices", "duplicate_gpu"])
 def test_physical_gate_rejects_incorrect_placement_despite_correct_counts(tmp_path, monkeypatch, wrong_layout):
-    import ray
-    from cloud.iris.task_runtime import wait_for_nodes
-
     topology = launch_topology(tmp_path)
     nodes = physical_nodes(topology)
     if wrong_layout == "split_policy":
@@ -142,9 +144,6 @@ def test_physical_gate_rejects_incorrect_placement_despite_correct_counts(tmp_pa
 
 
 def test_physical_gate_writes_a_complete_receipt_before_the_driver(tmp_path, monkeypatch):
-    import ray
-    from cloud.iris.task_runtime import wait_for_nodes
-
     topology = launch_topology(tmp_path)
     monkeypatch.setattr(ray, "init", lambda **_kwargs: None)
     monkeypatch.setattr(ray, "shutdown", lambda: None)
@@ -175,11 +174,6 @@ def test_omitted_locality_preserves_colocated_launches_and_unlabelled_bundles(tm
 
 @pytest.mark.slow
 def test_real_ray_actors_use_disjoint_gpus_in_their_assigned_domains(tmp_path, monkeypatch):
-    import ray
-    from ray.cluster_utils import Cluster
-    from ray.util.placement_group import placement_group
-    from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-
     # Synthetic GPUs exercise real Ray reservations and actors on this CPU host;
     # physical NVLink and CUDA communication are qualified by the separate live probe.
     monkeypatch.setenv("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
