@@ -7,9 +7,10 @@ import importlib
 from pathlib import Path
 from typing import Callable, cast
 
-from omegaconf import DictConfig, open_dict
+from omegaconf import DictConfig, OmegaConf, open_dict
 
 from cloud.iris.launch_config import load_launch_config
+from cloud.iris.role_topology import derive_role_topology
 from cloud.iris.rl_config_translation import registered_rl_entrypoint_module
 
 
@@ -22,6 +23,15 @@ def run_config(config_path: Path) -> None:
         with open_dict(config.skyrl):
             config.skyrl.runtime = {
                 "checkpoint_path": str(config.skyrl.trainer.resume_path or config.inputs.model.uri),
+            }
+    topology = derive_role_topology(OmegaConf.to_container(config, resolve=True))
+    if topology is not None:
+        with open_dict(config.skyrl):
+            if "runtime" not in config.skyrl:
+                config.skyrl.runtime = {}
+            config.skyrl.runtime.placement = {
+                "policy": topology.selector("policy"),
+                "engines": [topology.selector(role) for role in topology.roles if role != "policy"],
             }
     run(config.skyrl)
 

@@ -367,6 +367,38 @@ def test_cross_host_ep_launch_reserves_policy_and_rollout_nodes(trainer_gpus, ro
     assert allocation["num_nodes"] * allocation["gpus_per_node"] == trainer_gpus + rollout_gpus
 
 
+def test_nvlink_launch_requires_extra_hosts_when_each_group_rounds_up():
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        num_inference_engines=7,
+        inference_engine_data_parallel_size=18,
+        inference_engine_expert_parallel_size=18,
+    )
+    spec = dataclasses.replace(
+        _spec(),
+        topology=SkyRLTopology(num_nodes=plan.num_nodes, gpus_per_node=4, gpu_variant="GB200", role_plan=plan),
+    )
+    execution = dataclasses.replace(_execution(), role_topology="nvlink.domain")
+    step = skyrl_step(spec, execution)
+    with pytest.raises(ValueError, match="needs 34 hosts"):
+        step.build_config(
+            StepContext.for_run(
+                output_path="s3://test/run", prefix="s3://test", runtime_args=step.runtime_args, deps=step.deps
+            )
+        )
+
+    spec = dataclasses.replace(spec, topology=dataclasses.replace(spec.topology, num_nodes=34))
+    step = skyrl_step(spec, execution)
+    config = step.build_config(
+        StepContext.for_run(
+            output_path="s3://test/run", prefix="s3://test", runtime_args=step.runtime_args, deps=step.deps
+        )
+    )
+    allocation = yaml.safe_load(config.launch_config_yaml)["iris"]["allocation"]
+    assert allocation["num_nodes"] == 34
+
+
 @pytest.mark.parametrize(
     ("gpus_per_node", "engines", "dp", "rollout_nodes"),
     [(4, 4, 3, 4), (8, 5, 3, 3), (4, 3, 10, 8), (8, 2, 12, 3)],

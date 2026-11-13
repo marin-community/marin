@@ -43,8 +43,6 @@ from marinskyrl.runtime_options import (
     static_preference_pairs_requested,
 )
 from marinskyrl.resource_locator import RolloutModelLoading
-from marinskyrl.ray_role_placement import verify_role_placement
-from marinskyrl.role_placement import POLICY_ROLE, role_bundles, role_resources
 from skyrl_train.dataset.preference_pairs import PreferencePairFormat
 
 if TYPE_CHECKING:
@@ -222,6 +220,9 @@ def create_ray_wrapped_inference_engines_from_config(
         role,
         engine_init_kwargs=engine_init_kwargs,
     )
+    selectors = OmegaConf.select(cfg, "runtime.placement.engines", default=None)
+    if selectors:
+        engine_kwargs["node_label_selectors"] = [dict(selector) for selector in selectors]
     if cfg.generator.weight_sync_transport == WeightSyncTransport.EXPERT_BLOCK:
         engine_kwargs["require_verified_placements"] = True
     if cfg.trainer.strategy == "megatron":
@@ -476,13 +477,13 @@ class BasePPOExp:
         )  # noqa: PLC0415
 
         timeout = int(self.cfg.trainer.distributed.placement_group_timeout_seconds) if timeout is None else timeout
-        resources = role_resources(POLICY_ROLE, ray.cluster_resources())
-        if not policy_strict_spread_eligible(self.cfg) and not resources:
+        selector = dict(OmegaConf.select(self.cfg, "runtime.placement.policy", default={}))
+        if not policy_strict_spread_eligible(self.cfg) and not selector:
             return None
 
         from ray.util.placement_group import placement_group as _placement_group
 
-        bundles = role_bundles(POLICY_ROLE, policy_spread_bundles(self.cfg), ray.cluster_resources())
+        bundles = policy_spread_bundles(self.cfg)
         per_gpu = policy_per_gpu_bundles_enabled(self.cfg)
         # Per-GPU bundles ({GPU:1} x world_size) must NOT use STRICT_SPREAD
         # (that would force each single-GPU bundle onto a distinct node).
@@ -492,14 +493,10 @@ class BasePPOExp:
         # reservation ordering, not from the spread strategy. Whole-node bundles
         # keep STRICT_SPREAD (one whole-node bundle per node) as before.
         strategy = "PACK" if per_gpu else "STRICT_SPREAD"
-        pg = _placement_group(bundles, strategy=strategy)
+        pg = _placement_group(
+            bundles, strategy=strategy, bundle_label_selector=[selector] * len(bundles) if selector else None
+        )
         get_ray_pg_ready_with_timeout(pg, timeout=timeout)
-        if resources:
-            try:
-                verify_role_placement(pg, POLICY_ROLE)
-            except Exception:
-                ray.util.remove_placement_group(pg)
-                raise
         logger.info(
             f"Reserved dedicated policy placement group (strategy={strategy}, "
             f"{'per-GPU {GPU:1}' if per_gpu else 'whole-node {GPU:N}'} bundles): "

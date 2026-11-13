@@ -15,8 +15,6 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 from transformers import AutoConfig, PretrainedConfig
 
 from marinskyrl.inference_placement import COLOCATED_EXPERT_BLOCK_GPU_COUNT, InferenceReplicaPlacement
-from marinskyrl.ray_role_placement import verify_role_placement
-from marinskyrl.role_placement import inference_role, role_bundles, role_resources
 from skyrl_train.inference_engines.base import (
     InferenceEngineInterface,
     InferenceEngineInput,
@@ -532,6 +530,7 @@ def create_ray_wrapped_inference_engines(
     placement_group_timeout_seconds: int = DEFAULT_RAY_PLACEMENT_GROUP_TIMEOUT_SECONDS,
     weight_sync_pause_policy: WeightSyncPausePolicy = DEFAULT_WEIGHT_SYNC_PAUSE_POLICY,
     nccl_buffer_size_bytes: int | None = None,
+    node_label_selectors: list[dict[str, str]] | None = None,
 ) -> List[InferenceEngineInterface]:
     """
     Create a list of RayWrappedInferenceEngine instances wrapping Ray actor handles to InferenceEngineInterface instances.
@@ -667,9 +666,11 @@ def create_ray_wrapped_inference_engines(
     # Single-GPU engines share a PACK group to leave whole nodes available for training.
     per_engine_pgs: list = []
     owned_placement_groups: list = []
-    locality_resources = role_resources(inference_role(0), ray.cluster_resources())
-    if locality_resources and (use_hybrid_engine or tensor_parallel_size != 1 or pipeline_parallel_size != 1):
-        raise ValueError("NVLink role placement requires disaggregated TP1/PP1 inference engines")
+    if node_label_selectors is not None:
+        if len(node_label_selectors) != num_inference_engines:
+            raise ValueError("Each inference engine needs one node label selector")
+        if use_hybrid_engine or use_mp_backend:
+            raise ValueError("Node label selectors require separate Ray placement groups for inference engines")
     needs_per_engine_pg = (
         use_per_engine_pg(
             use_hybrid_engine=use_hybrid_engine,
@@ -679,7 +680,7 @@ def create_ray_wrapped_inference_engines(
             data_parallel_size=data_parallel_size,
         )
         or require_verified_placements
-        or bool(locality_resources)
+        or bool(node_label_selectors)
     )
     if not use_hybrid_engine:
         if use_mp_backend:
@@ -703,25 +704,18 @@ def create_ray_wrapped_inference_engines(
             # Each engine owns a group. TP/PP and ordinary DP groups remain node-local.
             # PACK prefers fewer nodes but permits spanning them for verified TP=PP=1 EP replicas.
             for engine_index in range(num_inference_engines):
-                bundles = role_bundles(
-                    inference_role(engine_index),
-                    [{"GPU": 1, "CPU": 1} for _ in range(per_engine_gpu_count)],
-                    ray.cluster_resources(),
-                )
+                bundles = [{"GPU": 1, "CPU": 1} for _ in range(per_engine_gpu_count)]
                 pg = placement_group(
                     bundles,
                     strategy="PACK" if cross_node_ep else "STRICT_PACK",
+                    bundle_label_selector=(
+                        [node_label_selectors[engine_index]] * len(bundles) if node_label_selectors else None
+                    ),
                 )
                 per_engine_pgs.append(pg)
                 owned_placement_groups.append(pg)
-            for engine_index, pg in enumerate(per_engine_pgs):
+            for pg in per_engine_pgs:
                 get_ray_pg_ready_with_timeout(pg, timeout=placement_group_timeout_seconds)
-                if locality_resources:
-                    try:
-                        verify_role_placement(pg, inference_role(engine_index))
-                    except Exception:
-                        _release_node_local_gang([], per_engine_pgs)
-                        raise
             # Keep `shared_pg` defined for downstream indexing; per-engine path
             # re-selects the engine's own PG in the loop.
             shared_pg = per_engine_pgs[0]

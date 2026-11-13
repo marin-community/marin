@@ -300,7 +300,8 @@ def validate_iris_allocation(config: dict[str, Any]) -> IrisAllocationConfig:
     plan = derive_policy_export_role_plan(skyrl) if checkpoint_export else derive_role_plan(skyrl)
     allocation = config["iris"]["allocation"]
     policy = plan.claim("policy")
-    expected_nodes = derive_num_nodes(plan)
+    role_topology = derive_role_topology(config)
+    expected_nodes = role_topology.num_nodes if role_topology is not None else derive_num_nodes(plan)
     if allocation["num_nodes"] != expected_nodes:
         raise ValueError(
             f"iris.allocation.num_nodes={allocation['num_nodes']} does not match SkyRL role plan's "
@@ -316,7 +317,6 @@ def validate_iris_allocation(config: dict[str, Any]) -> IrisAllocationConfig:
             f"iris.allocation.gpus_per_node={allocation['gpus_per_node']} does not match SkyRL policy "
             f"placement ({policy.gpus_per_node})"
         )
-    derive_role_topology(config)
     return IrisAllocationConfig(**allocation)
 
 

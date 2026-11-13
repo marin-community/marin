@@ -37,6 +37,7 @@ from omegaconf import DictConfig, OmegaConf
 from rigging.config_discovery import find_project_root
 
 from cloud.iris.launch_config import SubmissionMode, load_launch_config
+from cloud.iris.role_topology import derive_role_topology
 from cloud.iris.launch import LaunchOutcome
 from cloud.iris.export_hf_checkpoint import export_terminal_policy
 from cloud.iris.ray_storage import (
@@ -282,6 +283,7 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
         num_nodes=int(allocation["num_nodes"]),
         gpus_per_node=int(allocation["gpus_per_node"]),
         gpu_variant=allocation["gpu_variant"],
+        role_topology=derive_role_topology(OmegaConf.to_container(config, resolve=True)),
         cpu=float(allocation["cpu"]),
         memory=allocation["memory"],
         disk=allocation["disk"],
@@ -906,7 +908,12 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
     # CoschedulingConfig(group_by="leafgroup") — co-schedule all nodes on one IB
     # leaf fabric, atomically (Kueue gang admission on cw-us-east-02a).
     replicas = args.num_nodes
-    coscheduling = _gpu_multinode(args.gpu_variant, args.gpus_per_node, replicas)
+    if args.role_topology is not None and args.role_topology.rack_based:
+        coscheduling = CoschedulingConfig(
+            group_by="nvlink.domain", group_sizes=args.role_topology.locality.group_sizes
+        )
+    else:
+        coscheduling = _gpu_multinode(args.gpu_variant, args.gpus_per_node, replicas)
 
     resources_proto = resources.to_proto()
     # --target-cluster (federated submission) appends a `cluster EQ <peer>` constraint

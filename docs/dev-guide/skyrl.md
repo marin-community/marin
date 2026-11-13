@@ -132,22 +132,23 @@ TP=PP=1 and EP=DP for inference. A reference model may share the trainer's
 GPUs. Other independent local roles and colocated trainer/inference launches
 are outside this mode. Omitting the option keeps existing placement behavior.
 
-Iris allocates its usual single domain or balanced rack slices. The launcher
-places each complete group within one slice; smaller engines can share one.
-For example, 64 trainer GPUs and two 64-GPU engines use 48 four-GPU hosts in
-three 16-host rack slices. A 64-GPU trainer and two 32-GPU engines fit two
-16-host slices, with both engines in the second rack. Groups that cannot fit
-the planned slices fail validation before submitting the Iris GPU job. This option does not
-expand a slice or change Iris's rack availability policy.
+Iris admits the whole job together, with task groups sized for the models.
+A 32-GPU trainer and a 64-GPU engine use 24 four-GPU hosts in groups of eight
+and sixteen. A 64-GPU trainer and two 64-GPU engines use three groups of
+sixteen hosts. Smaller engines can share a group. Each group rounds its GPU
+demand up to whole hosts, so the allocation must include any padding.
 
-Before model actors start, every host reports its GPU UUIDs. NVL72 hosts also
-report NVIDIA fabric identities. The head checks that each native slice has
-one physical domain and that slices occupy distinct domains, then writes `role-topology.json` to its
-Iris task output. Ray reserves the trainer and each engine with their assigned
-role resources and checks the ready bundles' actual nodes against those domains.
-Wrong physical placement fails startup; a cluster join or placement timeout
-reports unavailable workers or GPU capacity. The option does not select or
-qualify the transport used between trainer and inference domains.
+Each trainer or engine must fit one domain: at most 64 GPUs on NVL72 or eight
+on H100. CoreWeave guarantees 16 schedulable four-GPU hosts per NVL72 rack.
+This mode keeps the RL trainer within one rack; multi-rack trainers
+need a separate placement policy. NVL72 launches require an Iris controller
+that supports `CoschedulingConfig.group_sizes`.
+
+Each Ray node carries its Iris group label and the NVLink domain reported by
+Iris. Ray reserves the trainer's GPUs first, then restricts every model's
+placement group to its assigned Iris group. Startup trusts Iris's topology
+labels. Physical fabric checks belong in diagnostic probes. This option does
+not select or qualify the transport between trainer and inference domains.
 
 ## Expert-block weight sync placement
 

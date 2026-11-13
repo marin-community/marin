@@ -47,8 +47,12 @@ from typing import Any, Protocol
 
 import huggingface_hub.constants
 from filelock import FileLock
+from iris.client.client import iris_ctx
+from iris.cluster.platforms.k8s.coreweave_topology import CW_LABEL_NVLINK_DOMAIN
+from iris.cluster.runtime.env import IRIS_ATTEMPT_UID_ENV
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
+from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from cloud.iris.artifacts import (
     ArtifactSource,
@@ -99,11 +103,10 @@ from marinskyrl.process_diagnostics import (
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
 from cloud.iris.role_topology import (
-    NVLINK_ROLE_TOPOLOGY,
+    LOCALITY_GROUP_LABEL,
+    NVLINK_DOMAIN_LABEL,
     RoleTopology,
     derive_role_topology,
-    node_role_resources,
-    validate_role_nodes,
 )
 from cloud.iris.ray_storage import (
     RaySpillBackend,
@@ -1233,11 +1236,40 @@ def _ray_mem_flags() -> list[str]:
     return flags
 
 
+def locality_node_labels(topology: RoleTopology, rank: int, timeout: int) -> dict[str, str]:
+    labels = {LOCALITY_GROUP_LABEL: str(topology.locality.group_for_rank(rank))}
+    if not topology.rack_based:
+        return {**labels, NVLINK_DOMAIN_LABEL: os.environ["IRIS_NODE_NAME"]}
+    ctx = iris_ctx()
+    if ctx.client is None or ctx.task_attempt is None:
+        raise RuntimeError("NVLink placement needs the running Iris task's client and attempt identity")
+    client, task = ctx.client, ctx.task_attempt
+    attempt_uid = os.environ[IRIS_ATTEMPT_UID_ENV]
+    duration = Duration.from_seconds(timeout)
+    deadline = Deadline.from_now(duration)
+
+    def assigned() -> bool:
+        status = client.task_status(task.task_id, deadline=deadline)
+        for attempt in status.attempts:
+            if attempt.attempt_uid == attempt_uid:
+                domain = attempt.topology.get(CW_LABEL_NVLINK_DOMAIN)
+                if domain:
+                    labels[NVLINK_DOMAIN_LABEL] = domain
+                    return True
+        return False
+
+    ExponentialBackoff(initial=0.1, maximum=2).wait_until_or_raise(
+        assigned, timeout=duration,
+        error_message="Iris has not reported an NVLink domain for this attempt; the controller must support locality groups",
+    )
+    return labels
+
+
 def ray_start_head(
     head_ip: str,
     spill_target: RaySpillTarget,
     *,
-    resources: dict[str, float] | None = None,
+    labels: dict[str, str] | None = None,
 ) -> None:
     spill_target.prepare_node()
     cmd = [
@@ -1252,7 +1284,7 @@ def ray_start_head(
         *_ray_port_flags(),
         *_ray_mem_flags(),
         *spill_target.head_flags(),
-        *([f"--resources={json.dumps(resources)}"] if resources else []),
+        *([f"--labels={json.dumps(labels)}"] if labels else []),
     ]
     _log(spill_target.description())
     _log(f"Starting Ray HEAD: {' '.join(cmd)}")
@@ -1267,7 +1299,7 @@ def ray_start_worker(
     node_ip: str,
     spill_target: RaySpillTarget,
     *,
-    resources: dict[str, float] | None = None,
+    labels: dict[str, str] | None = None,
 ) -> None:
     spill_target.prepare_node()
     cmd = [
@@ -1278,7 +1310,7 @@ def ray_start_worker(
         *_ray_port_flags(),
         *_ray_mem_flags(),
         *spill_target.worker_flags(),
-        *([f"--resources={json.dumps(resources)}"] if resources else []),
+        *([f"--labels={json.dumps(labels)}"] if labels else []),
     ]
     _log(spill_target.description())
     _log(f"Starting Ray WORKER: {' '.join(cmd)}")
@@ -1312,8 +1344,6 @@ def wait_for_nodes(
     expected_nodes: int,
     timeout: int,
     rewrite_cb=None,
-    *,
-    role_topology: RoleTopology | None = None,
 ) -> None:
     """Block until the Ray cluster reports ``expected_nodes`` alive nodes.
 
@@ -1345,11 +1375,6 @@ def wait_for_nodes(
                 _log(f"Ray nodes alive: {count}/{expected_nodes}")
                 last_count = count
             if count >= expected_nodes:
-                if role_topology is not None:
-                    rows = validate_role_nodes(alive, topology=role_topology)
-                    report = json.dumps({"role_topology": NVLINK_ROLE_TOPOLOGY, "nodes": rows}, sort_keys=True)
-                    (Path(os.environ["IRIS_OUTPUT_DIR"]) / "role-topology.json").write_text(report + "\n")
-                    _log(f"Verified physical role placement before model actors: {report}")
                 _log(f"All {expected_nodes} Ray node(s) joined. Resources: {ray.cluster_resources()}")
                 return
             time.sleep(POLL_INTERVAL)
@@ -1989,7 +2014,7 @@ def run_head(
     ray_start_head(
         head_ip,
         resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
-        resources=args.ray_resources,
+        labels=args.ray_labels,
     )
     _log("Ray head bootstrap complete; entering rendezvous / cluster-join phase.")
 
@@ -2013,13 +2038,9 @@ def run_head(
             num_tasks,
             args.cluster_join_timeout,
             rewrite_cb=lambda: write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch),
-            role_topology=args.role_topology,
         )
     else:
-        if args.role_topology is not None:
-            wait_for_nodes(ray_address, num_tasks, args.cluster_join_timeout, role_topology=args.role_topology)
-        else:
-            _log("Single-node slice: skipping rendezvous and multi-node wait.")
+        _log("Single-node slice: skipping rendezvous and multi-node wait.")
 
     with ray_metrics_telemetry(head_ip, allocated_ray_port(RayPort.METRICS), CONTROLLER_ROLE):
         env = training_driver_env(derived_gloo_ifname)
@@ -2119,7 +2140,7 @@ def run_worker(args: argparse.Namespace, *, debug_mode: DebugMode = DebugMode.LI
         ray_port,
         node_ip,
         resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
-        resources=args.ray_resources,
+        labels=args.ray_labels,
     )
     wait_for_nodes(ray_address, num_tasks, args.cluster_join_timeout)
     _log(f"Worker rank {rank} joined Ray cluster at {ray_address}; parking until the head finishes.")
@@ -2204,7 +2225,7 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     prestage_model = model_uri if not is_cloud_uri(model_uri) and (model.chat_template or offline) else ""
     return argparse.Namespace(
         role_topology=derive_role_topology(_container(config)),
-        ray_resources={},
+        ray_labels={},
         ray_spill_dir=validate_ray_spill_dir(str(config.ray.spill_dir)),
         ray_spill_backend=RaySpillBackend(str(config.ray.spill_backend)),
         rendezvous_dir=str(config.ray.rendezvous_dir),
@@ -2330,13 +2351,7 @@ def main() -> None:
     args = _runtime_namespace(launch_config)
     os.environ.update(args.task_env)
     if args.role_topology is not None:
-        fabric = subprocess.run(["nvidia-smi", "-q", "-x"], check=True, capture_output=True, text=True, timeout=30)
-        args.ray_resources = node_role_resources(
-            topology=args.role_topology,
-            rank=_rank(),
-            host=os.environ["IRIS_NODE_NAME"],
-            fabric_xml=fabric.stdout,
-        )
+        args.ray_labels = locality_node_labels(args.role_topology, _rank(), args.cluster_join_timeout)
     _print_env_snapshot()
     # Pin virtual-hosted S3 addressing for the boto3 path (Ray object-spill IO workers)
     # BEFORE any `ray start`, on head + every worker — CoreWeave R2 rejects path-style.

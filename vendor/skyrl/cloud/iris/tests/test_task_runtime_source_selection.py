@@ -95,7 +95,7 @@ def _runtime_args(
         ray_spill_backend=task_runtime.RaySpillBackend.LOCAL,
         ray_spill_dir=str(tmp_path / "spill"),
         cluster_join_timeout=1,
-        ray_resources={},
+        ray_labels={},
         role_topology=None,
         driver_liveness_timeout=liveness_timeout,
     )

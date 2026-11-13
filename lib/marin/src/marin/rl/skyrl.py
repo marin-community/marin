@@ -20,11 +20,13 @@ from typing import Literal, cast
 
 import fsspec
 import yaml
+from iris.cluster.platforms.k8s.coreweave_topology import SCHEDULABLE_RACK_NODES, is_rack_based
 from iris.rpc import job_pb2
 from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from skyrlrecipe.locality import plan_locality_groups
 
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
@@ -853,6 +855,23 @@ def _launch_config_yaml(
 ) -> str:
     recipe = _parsed_config(spec.config_yaml)
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
+    if execution.role_topology is not None:
+        plan = spec.topology.role_plan
+        engine_gpus = (
+            plan.inference_engine_tensor_parallel_size
+            * plan.inference_engine_pipeline_parallel_size
+            * plan.inference_engine_data_parallel_size
+        )
+        locality = plan_locality_groups(
+            [plan.policy_num_nodes * plan.policy_num_gpus_per_node] + [engine_gpus] * plan.num_inference_engines,
+            gpus_per_node=spec.topology.gpus_per_node,
+            max_nodes_per_domain=SCHEDULABLE_RACK_NODES if is_rack_based(spec.topology.gpu_variant) else 1,
+        )
+        if spec.topology.num_nodes != locality.num_nodes:
+            raise ValueError(
+                f"NVLink role placement needs {locality.num_nodes} hosts for groups {locality.group_sizes}; "
+                f"the topology allocates {spec.topology.num_nodes}"
+            )
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")

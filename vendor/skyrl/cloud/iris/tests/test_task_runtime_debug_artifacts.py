@@ -52,7 +52,7 @@ def test_supervisors_share_worker_diagnostics_with_uploader(
         rendezvous_timeout=1,
         ray_spill_backend=RaySpillBackend.LOCAL,
         ray_spill_dir=str(tmp_path / "spill"),
-        ray_resources={},
+        ray_labels={},
     )
     task_runtime.write_rendezvous(args.rendezvous_dir, "192.0.2.1", iris_ray_ports[RayPort.HEAD], "test-gang")
 
