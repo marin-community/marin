@@ -674,6 +674,8 @@ the grading session validates required plugins after loading the frozen baseline
 Conftest plugin imports keep pytest's normal test-path handling.
 The `-I -S` launcher restores standard `site` builtins such as `help` after
 adding dependency sites and before importing `sitecustomize`.
+Product subprocesses launched through `sys.executable` also load the source
+interpreter's live dependency sites from a protected startup-path file.
 The runner disables live plugin autoload
 and clears the test environment,
 including PYTHONPATH, PYTEST_ADDOPTS, LD_PRELOAD and user-site loading. Verifyit

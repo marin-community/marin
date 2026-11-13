@@ -24,6 +24,7 @@ from taskcompendium.models import (
     ResourceGroups,
     TaskSpec,
 )
+from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.pipeline.oracle_filter import OracleExclusionReason
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.runtime.resources import inline_resource
@@ -66,7 +67,12 @@ def _write(tmp_path, rows: list[dict]):
 
 def _cohort(rows: int):
     return prebuilt.PrebuiltCohort(
-        name="c", version="2026.11.12.1", repo="open-athena/repo", revision="a" * 40, expected_rows=rows
+        intended_use=IntendedUse.TRAIN,
+        name="c",
+        version="2026.11.12.1",
+        repo="open-athena/repo",
+        revision="a" * 40,
+        expected_rows=rows,
     )
 
 
@@ -253,7 +259,12 @@ def test_direct_prebuilt_admission_requires_oversight_but_allows_unsafe_tasks(tm
     path = _write(tmp_path, [prebuilt_task("a")])
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(path.parent / kwargs["filename"]))
     config = prebuilt.PrebuiltCohort(
-        name="unsafe-cohort", version="2026.11.12.1", repo="open-athena/repo", revision="a" * 40, expected_rows=1
+        intended_use=IntendedUse.TRAIN,
+        name="unsafe-cohort",
+        version="2026.11.12.1",
+        repo="open-athena/repo",
+        revision="a" * 40,
+        expected_rows=1,
     )
     source = RlDataSource(
         config=config,
@@ -502,7 +513,12 @@ def test_atlas_private_release_policy_blocks_prebuilt_download(monkeypatch, poli
     config = _cohort(1)
     if policy == "other_namespace":
         config = prebuilt.PrebuiltCohort(
-            name=config.name, version=config.version, repo="other/private", revision=config.revision, expected_rows=1
+            intended_use=IntendedUse.TRAIN,
+            name=config.name,
+            version=config.version,
+            repo="other/private",
+            revision=config.revision,
+            expected_rows=1,
         )
     document = decontamination_evidence(config.repo, config.revision, 1).model_dump(mode="json")
     if policy == "public":

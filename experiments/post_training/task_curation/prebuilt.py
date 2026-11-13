@@ -44,7 +44,7 @@ from taskcompendium.models import NoGrader, TaskSpec
 from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
 from taskcompendium.pipeline.conversion import normalization_columns
 from taskcompendium.pipeline.deduplication import DROP_SCHEMA, unique_task_indices
-from taskcompendium.pipeline.models import SourceStatus
+from taskcompendium.pipeline.models import IntendedUse, SourceStatus
 from taskcompendium.pipeline.oracle_filter import load_oracle_filter, require_oracle_filter
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.runtime.resources import resource_bytes
@@ -55,7 +55,7 @@ from experiments.post_training.task_curation.decontamination import require_priv
 from experiments.post_training.task_curation.environment_fidelity import missing_environment
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference, TaskFormat
 
-PREBUILT_ADMISSION_VERSION = "2026.11.12.3"
+PREBUILT_ADMISSION_VERSION = "2026.11.13.3"
 TASKS_FILENAME = "tasks.parquet"
 CONTROLS_FILENAME = "controls.jsonl"
 ORACLE_FILTER_FILENAME = "oracle-filter.json"
@@ -70,6 +70,7 @@ class PrebuiltCohort:
     repo: str
     revision: str
     expected_rows: int
+    intended_use: IntendedUse
     repo_type: str = "dataset"
 
     @property
@@ -256,10 +257,8 @@ def import_oracle_harbor_prebuilt(
     )
 
 
-QUICK_VIEW_VERSION = "2026.11.12.1"
+QUICK_VIEW_VERSION = "2026.11.13.2"
 """Format version of the converted view a QUICK pass writes; the cohort revision is in the step identity."""
-COHORT_INTENDED_USE = "train"
-"""Published campaign cohorts are RL training populations."""
 
 
 def deduplicate_cohort(tasks: Path, destination: StoragePath) -> tuple[pa.Table, dict]:
@@ -306,7 +305,7 @@ def _quick_view(config: PrebuiltCohort, tasks: Path, destination: str) -> Campai
         "mode": SourceProcessingMode.QUICK.value,
         "repo": config.repo,
         "revision": config.revision,
-        "intended_use": COHORT_INTENDED_USE,
+        "intended_use": config.intended_use.value,
         "input_rows": dedup["raw_count"],
         "within_source_dedup": dedup,
         "converted_rows": len(task_json),
@@ -419,7 +418,7 @@ def prebuilt_artifact(
         manifest = {
             "mode": invocation.mode.value,
             "task_format": invocation.task_format.value,
-            "intended_use": "train",
+            "intended_use": config.intended_use.value,
             "input_rows": dedup["raw_count"],
             "within_source_dedup": dedup,
             "converted_rows": len(tasks),

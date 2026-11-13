@@ -1666,13 +1666,20 @@
       "ngram_length": 13,
       "overlap_threshold": 0.5,
       "p95_max_overlap": 0.0,
-      "receipt": null,
+      "receipt": {
+        "dropped_tasks": 0,
+        "duplicate_dropped_tasks": 0,
+        "release": null,
+        "retained_tasks": 1768,
+        "status": "measured (benchmark, not remediated)",
+        "use": "eval"
+      },
       "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/0a9ec61e9600c2fbcbd9/task_flags",
       "text_renderer_version": "taskcompendium-format-conversation-v1",
       "version": 1
     },
     "source_id": "TaskTrove:laion__exp_rpt_crosscodeeval-csharp-v4",
-    "use": "train"
+    "use": "eval"
   },
   "TaskTrove:laion__exp_rpt_crosscodeeval-java-v3": {
     "input": {
@@ -1707,13 +1714,20 @@
       "ngram_length": 13,
       "overlap_threshold": 0.5,
       "p95_max_overlap": 0.0,
-      "receipt": null,
+      "receipt": {
+        "dropped_tasks": 0,
+        "duplicate_dropped_tasks": 0,
+        "release": null,
+        "retained_tasks": 2139,
+        "status": "measured (benchmark, not remediated)",
+        "use": "eval"
+      },
       "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/8fe8c203a3a9e875d768/task_flags",
       "text_renderer_version": "taskcompendium-format-conversation-v1",
       "version": 1
     },
     "source_id": "TaskTrove:laion__exp_rpt_crosscodeeval-java-v3",
-    "use": "train"
+    "use": "eval"
   },
   "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2": {
     "input": {
@@ -1748,13 +1762,20 @@
       "ngram_length": 13,
       "overlap_threshold": 0.5,
       "p95_max_overlap": 0.0,
-      "receipt": null,
+      "receipt": {
+        "dropped_tasks": 0,
+        "duplicate_dropped_tasks": 0,
+        "release": null,
+        "retained_tasks": 500,
+        "status": "measured (benchmark, not remediated)",
+        "use": "eval"
+      },
       "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/b5d2abe06afc8a793318/task_flags",
       "text_renderer_version": "taskcompendium-format-conversation-v1",
       "version": 1
     },
     "source_id": "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2",
-    "use": "train"
+    "use": "eval"
   },
   "TaskTrove:laion__exp_rpt_crosscodeeval-typescript-v2": {
     "input": {
@@ -1789,13 +1810,20 @@
       "ngram_length": 13,
       "overlap_threshold": 0.5,
       "p95_max_overlap": 0.0,
-      "receipt": null,
+      "receipt": {
+        "dropped_tasks": 0,
+        "duplicate_dropped_tasks": 0,
+        "release": null,
+        "retained_tasks": 3356,
+        "status": "measured (benchmark, not remediated)",
+        "use": "eval"
+      },
       "task_flags_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/2026.11.12.6/66eacfa201a4723674cb/task_flags",
       "text_renderer_version": "taskcompendium-format-conversation-v1",
       "version": 1
     },
     "source_id": "TaskTrove:laion__exp_rpt_crosscodeeval-typescript-v2",
-    "use": "train"
+    "use": "eval"
   },
   "TaskTrove:laion__exp_rpt_ghactions-v3": {
     "input": {

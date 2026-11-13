@@ -28,6 +28,8 @@ from taskcompendium.runtime.resources import resource_bytes
 from verifyit.json_objects import unique_object
 from zephyr.writers import write_parquet_file
 
+from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_SOURCE_IDS
+
 TRAIN_FILENAME = "train.parquet"
 VALIDATION_FILENAME = "validation.parquet"
 FULL_VALIDATION_FILENAME = "full_validation.parquet"
@@ -290,6 +292,9 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
             "source_limits": None if recipe.source_limits is None else canonical_source_map(recipe.source_limits),
         }
     )
+    excluded = recipe.sources.keys() & CROSSCODE_EVAL_SOURCE_IDS
+    if excluded:
+        raise ValueError(f"Evaluation-only CrossCodeEval sources cannot enter TRAIN selection: {sorted(excluded)}")
     missing = recipe.sources.keys() - curated.keys()
     if missing:
         raise ValueError(f"Selection requires curation sources: {', '.join(sorted(missing))}")
