@@ -7,19 +7,14 @@ import json
 import time
 import uuid
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import click
 from finestore.rl.curation import (
     MAX_UNAVAILABLE_JUDGMENT_SHARE,
-    AssessmentItem,
-    AssessmentPopulation,
     CurationCatalog,
     JudgmentStatus,
-    SourceDeclaration,
-    Verdict,
     validate_items,
 )
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
@@ -42,11 +37,12 @@ from experiments.post_training.task_curation.catalog_identity import (
 )
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
+from infra.marina.apps.rl_data_catalog.server.quality import review_completeness
 
 MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
 DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
-REVIEW_COMPLETENESS_VERSION = 1
+REVIEW_COMPLETENESS_VERSION = 4
 TABLE_COLUMNS = {
     "sources": (
         "id TEXT, declaration JSONB, assessment_key TEXT, latest_attempt_key TEXT, "
@@ -69,45 +65,6 @@ TABLE_COLUMNS = {
     "identity_surveys": "survey_id TEXT, metadata JSONB",
     "duplicate_reviews": "left_source TEXT, right_source TEXT, review JSONB",
 }
-
-
-@dataclass(frozen=True)
-class ReviewCompleteness:
-    reviewed: int
-    required: int
-    coverage_complete: bool
-
-    @property
-    def provisional(self) -> bool:
-        return not self.coverage_complete or self.reviewed < self.required
-
-
-def review_completeness(
-    declaration: SourceDeclaration, populations: list[AssessmentPopulation], items: list[AssessmentItem]
-) -> dict[str, Any] | None:
-    """Bind Result completeness to its required review panel, independently of Quality."""
-    aggregate = declaration.quality_result
-    if aggregate is not None:
-        assert aggregate.sample_count is not None
-        completeness = ReviewCompleteness(
-            reviewed=aggregate.reviewed,
-            required=aggregate.sample_count,
-            coverage_complete=aggregate.unavailable_count == 0,
-        )
-    elif populations:
-        required = next(row.sample_count for row in populations if row.cohort == "admitted")
-        panel = [row for row in items if row.cohort == "admitted"]
-        completeness = ReviewCompleteness(
-            reviewed=sum(
-                row.status == JudgmentStatus.REVIEWED and row.has_task and row.verdict != Verdict.UNKNOWN
-                for row in panel
-            ),
-            required=required,
-            coverage_complete=len(panel) == required and all(row.status == JudgmentStatus.REVIEWED for row in panel),
-        )
-    else:
-        return None
-    return {**asdict(completeness), "provisional": completeness.provisional}
 
 
 def batches(rows: Iterable[dict[str, Any]]) -> Iterable[str]:

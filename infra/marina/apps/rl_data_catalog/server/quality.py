@@ -3,10 +3,19 @@
 
 """Compute execution oversight and informational review results for Atlas."""
 
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any
 
-from finestore.rl.curation import SourceQualityResult
+from finestore.rl.curation import (
+    AssessmentItem,
+    AssessmentPopulation,
+    JudgmentStatus,
+    QualityResultFinalization,
+    SourceDeclaration,
+    SourceQualityResult,
+    Verdict,
+)
 
 
 class Quality(StrEnum):
@@ -15,11 +24,76 @@ class Quality(StrEnum):
     FULL = "FULL"
 
 
+@dataclass(frozen=True)
+class ReviewCompleteness:
+    reviewed: int
+    required: int
+    coverage_complete: bool
+
+    @property
+    def provisional(self) -> bool:
+        return not self.coverage_complete or self.reviewed < self.required
+
+
+def review_completeness(
+    declaration: SourceDeclaration, populations: list[AssessmentPopulation], items: list[AssessmentItem]
+) -> dict[str, Any] | None:
+    """Bind Result completeness to its required review panel, independently of Quality."""
+    aggregate = declaration.quality_result
+    if aggregate is not None:
+        assert aggregate.sample_count is not None
+        completeness = ReviewCompleteness(
+            reviewed=aggregate.reviewed,
+            required=aggregate.sample_count,
+            coverage_complete=aggregate.unavailable_count == 0,
+        )
+    elif populations:
+        required = next(row.sample_count for row in populations if row.cohort == "admitted")
+        panel = [row for row in items if row.cohort == "admitted"]
+        completeness = ReviewCompleteness(
+            reviewed=sum(
+                row.status == JudgmentStatus.REVIEWED and row.has_task and row.verdict != Verdict.UNKNOWN
+                for row in panel
+            ),
+            required=required,
+            coverage_complete=len(panel) == required and all(row.status == JudgmentStatus.REVIEWED for row in panel),
+        )
+    else:
+        return None
+    return {
+        **asdict(completeness),
+        "provisional": completeness.provisional and not final_whole_source_result(declaration.model_dump(mode="json")),
+    }
+
+
+def final_whole_source_result(declaration: dict[str, Any]) -> bool:
+    """Accept finality only when its state and evidence account for the retained population."""
+    review = declaration.get("quality_result")
+    qc = declaration.get("independent_qc")
+    retained = (declaration.get("within_source_dedup") or {}).get("unique_count")
+    if review is None or qc is None or retained is None:
+        return False
+    unavailable = review.get("unavailable_count", 0)
+    if (
+        review.get("sample_count") != retained
+        or qc["reviewed"] != review["reviewed"] + review.get("uncertain_count", 0)
+        or qc["reviewed"] + unavailable != retained
+    ):
+        return False
+    finalization = declaration.get("quality_result_finalization")
+    waiver = declaration.get("quality_result_waiver")
+    if finalization == QualityResultFinalization.COMPLETE:
+        return unavailable == 0 and waiver is None
+    return finalization == QualityResultFinalization.ACCEPTED_INCOMPLETE and unavailable > 0 and waiver is not None
+
+
 def quality(declaration: dict[str, Any], curation: dict[str, Any] | None) -> Quality:
-    """Reserve FULL for a separately verified complete content-review assembly."""
+    """Report whole-source review coverage, including explicitly accepted FULL waivers."""
     review = declaration.get("quality_result")
     qc = declaration.get("independent_qc")
     retained = declaration.get("within_source_dedup", {}).get("unique_count")
+    if final_whole_source_result(declaration):
+        return Quality.FULL
     if (
         retained
         and qc is not None

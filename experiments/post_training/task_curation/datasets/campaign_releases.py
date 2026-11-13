@@ -21,7 +21,6 @@ from finestore.rl.curation import (
     OracleValidation,
     OversightEvidence,
     OversightLevel,
-    SourceQualityResult,
     Verdict,
 )
 from taskcompendium.pipeline.models import IntendedUse
@@ -75,8 +74,6 @@ def _tasktrove_qa_release(
     recipe_revision: str,
     notes: str,
     tags: tuple[str, ...] = ("rlvr", "single-turn", "campaign-release", "converted"),
-    qc: IndependentQC | None = None,
-    quality_result: SourceQualityResult | None = None,
     reviewed: int = 24,
 ) -> RlDataSource[PrebuiltCohort]:
     """A privately published, QA-qualified TaskTrove cohort pending release.
@@ -104,8 +101,6 @@ def _tasktrove_qa_release(
             upstream_url=TASKTROVE_UPSTREAM_URL,
             family=family,
             tags=tags,
-            independent_qc=qc,
-            quality_result=quality_result,
             oracle_validation=OracleValidation.VERIFIER_EXECUTED,
             oversight=OversightEvidence(
                 campaign="RL Data Atlas",
@@ -1155,29 +1150,6 @@ def sources() -> list[RlDataSource]:
                 "remain unverified by this method. An earlier provisional impossible-reference claim was "
                 "retracted: the connected 20-vertex/21-edge graph is bicyclic and theta(7,7,7) attains the "
                 "recorded 147 spanning trees, confirmed by two independent Matrix-Tree determinant checks."
-            ),
-            qc=IndependentQC(
-                verdict=Verdict.SOME_ISSUES,
-                method=(
-                    "Final v2 content review: 2,220 valid observations over 2,221 exact retained contracts; "
-                    "2,213 conclusive and seven uncertain. One persistent INVALID remains QC unreviewed; "
-                    "coverage_complete=false. Execution qualification is unchanged."
-                ),
-                reviewed=2220,
-                evidence_url=(
-                    "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/" "final-content/2026.11.13.1/prism.json"
-                ),
-            ),
-            quality_result=SourceQualityResult(
-                reviewed=2213,
-                issue_count=286,
-                issues=[],
-                repair_recommendation=(
-                    "Inspect the pinned task-level evidence for wrong references, ambiguity, missing context "
-                    "and rubric mismatches; qualify repairs with renewed QA."
-                ),
-                unavailable_count=1,
-                uncertain_count=7,
             ),
             notes=(
                 "Symbolic exact compare with hidden gold references. Final v2 content QC reports 286 issues "
