@@ -46,6 +46,7 @@ from shellbox.machine import (
     MachineSpec,
     MachineTerminated,
     NetworkPolicy,
+    ProcessScope,
     Result,
     UnsupportedMachineSpec,
     check_execution_requirements,
@@ -222,6 +223,9 @@ class IrisMachine:
             uid, name = (await self._checked("id -u && id -un")).split()
             self._container_user = (uid, name)
         return self._container_user
+
+    async def open_process_scope(self) -> ProcessScope:
+        raise UnsupportedMachineSpec("Iris does not provide confirmed scoped descendant teardown")
 
     async def run(self, command: Command) -> Result:
         if self._closed:

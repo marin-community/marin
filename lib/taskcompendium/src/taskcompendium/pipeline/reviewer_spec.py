@@ -98,7 +98,8 @@ class ReviewerSpec:
 
     ``model_revision`` records an explicit unverified deployment identity when the
     provider cannot attest an immutable checkpoint. ``temperature=None`` requests
-    the API default for endpoints that cannot accept a temperature.
+    the API default for endpoints that cannot accept a temperature. Optional
+    top_p/top_k overrides are omitted from requests and identity when absent.
     """
 
     tier: JudgeTier
@@ -107,6 +108,8 @@ class ReviewerSpec:
     endpoint: JudgeEndpoint
     precision: str = "unspecified"
     temperature: float | None = 0.7
+    top_p: float | None = None
+    top_k: int | None = None
     reasoning_effort: str = "low"
     max_tokens: int = DEFAULT_REVIEW_MAX_TOKENS
     retry_max_tokens: int = DEFAULT_REVIEW_RETRY_MAX_TOKENS
@@ -120,13 +123,22 @@ class ReviewerSpec:
     def __post_init__(self) -> None:
         if self.temperature is not None and self.temperature <= 0:
             raise ValueError("Reviewer temperature must be positive or the API default")
+        if self.top_p is not None and not 0 < self.top_p <= 1:
+            raise ValueError("Reviewer top_p must be in (0, 1]")
+        if self.top_k is not None and self.top_k < -1:
+            raise ValueError("Reviewer top_k must be -1 or nonnegative")
         if self.base_rubric_sha256 != BASE_RUBRIC_SHA256 or self.payload_revision != REVIEW_PAYLOAD_REVISION:
             raise ValueError("ReviewerSpec must pin the running base rubric and payload implementation")
 
     @property
     def identity(self) -> dict[str, Any]:
         return {
-            **{item.name: getattr(self, item.name) for item in fields(self) if item.name != "endpoint"},
+            **{
+                item.name: getattr(self, item.name)
+                for item in fields(self)
+                if item.name != "endpoint"
+                and (item.name not in {"top_p", "top_k"} or getattr(self, item.name) is not None)
+            },
             "endpoint": self.endpoint.identity,
         }
 
@@ -139,5 +151,7 @@ class ReviewerSpec:
     def sampling_body(self) -> dict[str, Any]:
         return {
             **({"temperature": self.temperature} if self.temperature is not None else {}),
+            **({"top_p": self.top_p} if self.top_p is not None else {}),
+            **({"top_k": self.top_k} if self.top_k is not None else {}),
             "chat_template_kwargs": {"reasoning_effort": self.reasoning_effort},
         }

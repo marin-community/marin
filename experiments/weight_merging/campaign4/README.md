@@ -81,19 +81,14 @@ run_campaign_launch 1 \
   --records-prefix "$RECORDS_PREFIX" \
   --federated_cluster cw-rno2a \
   --priority interactive \
-  --evalchemy-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/humanevalplus.yaml \
-  --evalchemy-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/mbppplus.yaml \
-  --evalchemy-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/olympiadbench.yaml \
-  --evalchemy-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/math500.yaml \
+  --evaluation-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy.yaml \
+  --evals humanevalplus,mbppplus,olympiadbench,math500 \
   --harbor-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/harbor-configs/bfclparity-pi.yaml
 ```
 
 The pinned campaign [README](https://github.com/marin-community/marin/blob/aaf1878ce65a1a05b386aef257b952fa7205283a/experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/README.md) documents credentials, durable records, and policy-conformance limits. The command above matches the original one-server topology and selects these exact configurations:
 
-- `evalchemy-configs/math500.yaml`
-- `evalchemy-configs/humanevalplus.yaml`
-- `evalchemy-configs/mbppplus.yaml`
-- `evalchemy-configs/olympiadbench.yaml`
+- `evalchemy.yaml`: `math500`, `humanevalplus`, `mbppplus`, `olympiadbench`
 - `harbor-configs/bfclparity-pi.yaml`
 
 Seal a score only when at least 90% of declared trials are scoreable, as required by the release policy. Compute Target Sum from the unrounded HumanEval+, MBPP+, OlympiadBench, and BFCL-Parity/Pi scores; MATH500 remains separate.
