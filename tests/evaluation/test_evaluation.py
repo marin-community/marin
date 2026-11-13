@@ -31,6 +31,7 @@ from fray.types import JobStatus
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.resources.state import JobState, TaskState
 from iris.rpc import job_pb2
+from marin.evaluation import runner as evaluation_runner
 from marin.evaluation.eval_policy import source_config_digest
 from marin.evaluation.evalchemy.config import EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
@@ -286,6 +287,7 @@ def _remote_session(endpoint: str = "https://inference.example/v1") -> RemoteInf
 def _patch_inference_runtime(monkeypatch: pytest.MonkeyPatch, remote) -> None:
     """Point the batch runner at a fake inference runtime with ``remote`` as its session factory."""
     monkeypatch.setattr("marin.evaluation.runner.configure_coreweave_s3", lambda: None)
+    monkeypatch.setattr("marin.inference.iris.iris_ctx", lambda: evaluation_runner.iris_ctx())
     monkeypatch.setattr(
         "marin.evaluation.runner.iris_ctx",
         lambda: SimpleNamespace(
@@ -349,6 +351,7 @@ def _evaluate_with_session(
     with (
         patch("marin.evaluation.runner.configure_coreweave_s3", lambda: None),
         patch("marin.evaluation.runner.iris_ctx", lambda: context),
+        patch("marin.inference.iris.iris_ctx", lambda: context),
         patch("marin.evaluation.runner.remote_inference", lambda _config: nullcontext(session)),
         patch(
             "marin.evaluation.runner.inference_config_for_model",
@@ -941,6 +944,7 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
     clock = iter((10.0, 12.0))
     monkeypatch.setattr("marin.evaluation.inference_metrics.time", SimpleNamespace(monotonic=lambda: next(clock)))
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _row: None)
+    monkeypatch.setattr("marin.inference.iris.iris_ctx", lambda: evaluation_runner.iris_ctx())
     monkeypatch.setattr(
         "marin.evaluation.runner.iris_ctx",
         lambda: SimpleNamespace(client=SimpleNamespace(resolve_endpoint=lambda _name: "http://10.0.0.1:8000")),

@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
@@ -22,6 +24,19 @@ class ReviewHTTPServer(ThreadingHTTPServer):
         self.model_ids: list[str] = []
         self.bare_model_list = False
         super().__init__(("127.0.0.1", 0), ReviewHandler)
+
+
+@contextmanager
+def running_review_server():
+    server = ReviewHTTPServer()
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
 
 
 class ReviewHandler(BaseHTTPRequestHandler):

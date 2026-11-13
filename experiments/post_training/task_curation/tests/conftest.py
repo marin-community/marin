@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import threading
 from dataclasses import replace
 
 import pytest
@@ -10,7 +9,7 @@ from taskcompendium.pipeline.reviewer_spec import JudgeTier
 from experiments.post_training.task_curation import driver
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, HostedJudgeEndpoint
 from experiments.post_training.task_curation.tests.local_grader import LocalGraderMachines, local_grader_machines
-from experiments.post_training.task_curation.tests.review_server import ReviewHTTPServer
+from experiments.post_training.task_curation.tests.review_server import running_review_server
 
 
 @pytest.fixture(scope="session")
@@ -21,15 +20,8 @@ def machines() -> LocalGraderMachines:
 
 @pytest.fixture
 def review_server():
-    server = ReviewHTTPServer()
-    thread = threading.Thread(target=server.serve_forever)
-    thread.start()
-    try:
+    with running_review_server() as server:
         yield server
-    finally:
-        server.shutdown()
-        thread.join()
-        server.server_close()
 
 
 @pytest.fixture

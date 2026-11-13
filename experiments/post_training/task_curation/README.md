@@ -425,6 +425,13 @@ resource files remain visible: changes to those inputs select new requests.
 Native resource files are preserved, including any embedded resource settings;
 rewriting a native task.toml therefore invalidates its content request.
 
+Batch preemption can move a serving task to a new address. Full-QC reviewers wait
+for serving readiness and resolve the current endpoint before each uncached
+batch or outer retry. Valid observations stay in immutable batch receipts and
+are reused after recovery. When replacing an interrupted worker, stop the old
+writer before resuming the same shard assignment and output prefix; keep its
+reviewer identity and caches when the task and reviewer contracts are unchanged.
+
 ```bash
 uv run --no-sync --package marin-core --extra dedup python -m \
   experiments.post_training.task_curation.full_qc \

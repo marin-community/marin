@@ -171,6 +171,16 @@ class RemoteInferenceSession:
         client = iris_ctx().client
         return sum(client.job_status(JobName.from_string(str(job.job_id))).preemption_count for job in self.jobs)
 
+    def direct_session(self) -> "RemoteInferenceSession":
+        """Return a session using the serving task's current direct address."""
+        address = iris_ctx().client.resolve_endpoint(self.endpoint_name).rstrip("/")
+        endpoint = replace(self.model.endpoint, base_url=f"{address}{OPENAI_API_SUFFIX}")
+        return replace(
+            self,
+            model=replace(self.model, endpoint=endpoint),
+            metrics_url=f"{address}/metrics" if self.metrics_url is not None else None,
+        )
+
     def backend_state(self) -> InferenceBackendState:
         """Return broker readiness or the direct serving jobs' aggregate lifecycle state."""
         if self.broker is not None:

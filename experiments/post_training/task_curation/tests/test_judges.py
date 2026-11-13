@@ -146,6 +146,9 @@ def test_local_endpoint_releases_inference_after_identity_or_grading_failure(
         def wait_until_ready(self):
             pass
 
+        def direct_session(self):
+            return self
+
     @contextmanager
     def inference(config):
         try:
