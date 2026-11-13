@@ -43,18 +43,15 @@ def prepare_preview(checkout: Path, output: Path) -> None:
     modules = []
     for name, relative in MODEL_SOURCES.items():
         raw = (checkout / relative).read_bytes()
-        relocated = raw.decode().replace(
-            "from experiments.post_training.task_curation.source_identity import ", "from .source_identity import "
-        )
-        payload = relocated.encode()
-        (bundled / name).write_bytes(payload)
+        digest = hashlib.sha256(raw).hexdigest()
+        (bundled / name).write_bytes(raw)
         modules.append(
             {
                 "source": relative,
-                "source_sha256": hashlib.sha256(raw).hexdigest(),
+                "source_sha256": digest,
                 "packaged": f"server/bundled/{name}",
-                "packaged_sha256": hashlib.sha256(payload).hexdigest(),
-                "transformation": "Package-relative imports only; definitions unchanged",
+                "packaged_sha256": digest,
+                "transformation": "Unchanged",
             }
         )
     for relative in ("server/app.py", "server/curriculum.py", "server/quality.py", "server/contamination.py"):
