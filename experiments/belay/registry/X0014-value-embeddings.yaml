@@ -430,7 +430,8 @@ trials:
   batch: X0014
   date: '2026-11-13'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0014
-  wandb: []
+  wandb:
+  - belay-X0014d768-seed0
   settings:
     value_embed_lr_mult: '0.3'
     value_embeds: gated
