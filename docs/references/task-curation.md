@@ -1583,9 +1583,13 @@ For candidate trials, select `task-spec-chat` with explicit `api_base`,
 `max_turns` and `max_tokens` agent kwargs. It consumes the original conversation
 and final-submission tools; shell tools require the declared actor machine.
 External tool-provider implementations are unsupported. Actor files and setup commands run only in the declared actor
-environment; private grader inputs stay in the declared verifier environment.
-A conversation-only task receives no actor image. The verifier uses its original
-package lock, JudgeSpec and the production structured-verdict parser. Judge
+environment. Script graders and non-judge Verifyit graders retain their declared
+verifier environment.
+A conversation-only task receives no actor image. Verifyit judge mode uses production
+host-side grading through the declared JudgeSpec and connection. Its trusted
+framework worker enforces the verifier CPU, RAM, disk and time budget; it leaves
+the TaskSpec and task package lock unchanged and installs no SDK into the task
+environment. Both paths use the production structured-verdict parser. Judge
 transport requires `model_endpoint` and its declared `model_name` in environment
 kwargs. A verifier-only loopback relay carries requests to that fixed endpoint;
 provider credentials stay on the host. Agent/verifier credential declarations
@@ -1602,15 +1606,16 @@ contract remain execution blockers; the adapter does not rewrite them.
 
 Changes to TaskSpec provisioning require the dedicated LOCAL regression below
 on a privileged Linux CPU worker with delegated cgroup v2, loop devices and
-ext4 mount tools. It executes the frozen tau and language-mixing graders using
-their original package locks and a local HTTP judge fixture. The test observes
+ext4 mount tools. It executes the frozen tau and language-mixing JudgeSpecs through the production
+host service and a local HTTP judge fixture, preserving their original task locks. The test observes
 the actual CPU/memory controller values, exact disk-image allocation and cleanup.
 It does not provide oracle, admission or external-model quality evidence.
 Ordinary offline test selection excludes this runtime suite.
 
 ~~~bash
 uv run --project vendor/harbor --frozen --extra runtime --group test python -m pytest \
-  --noconftest -c vendor/harbor/pyproject.toml \
+  --noconftest -p lib.shellbox.tests.conftest -c vendor/harbor/pyproject.toml \
+  --local-cgroup-parent /sys/fs/cgroup/path/to/delegated/worker \
   vendor/harbor/tests/runtime/test_taskcompendium_local.py \
   -m 'runtime and not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual and not windows_containers'
 ~~~

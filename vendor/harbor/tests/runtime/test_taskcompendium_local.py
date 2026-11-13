@@ -25,7 +25,9 @@ FIXTURES = Path(__file__).parents[4] / "experiments/post_training/task_curation/
 @pytest.mark.parametrize("reward", [0.0, 1.0])
 @pytest.mark.timeout(600)
 @pytest.mark.asyncio
-async def test_original_judge_contract_uses_real_local_disk_and_cgroup_limits(tmp_path, monkeypatch, name, reward):
+async def test_original_judge_contract_uses_real_local_disk_and_cgroup_limits(
+    tmp_path, monkeypatch, pytestconfig, name, reward
+):
     task = TaskSpec.model_validate_json((FIXTURES / f"{name}.json").read_text())
     original = task.model_dump_json()
     evidence = Path(os.environ.get("IRIS_OUTPUT_DIR", str(tmp_path))) / f"{name}-{int(reward)}"
@@ -64,15 +66,17 @@ async def test_original_judge_contract_uses_real_local_disk_and_cgroup_limits(tm
             JudgeReply(next(label for label, score in judge.label_scores.items() if score == reward))
         )
         endpoint = f"http://127.0.0.1:{server.server_port}/v1"
+        worker = {"disk_root": str(tmp_path / "disks"), "model_endpoint": endpoint, "model_name": judge.model}
+        parent = pytestconfig.getoption("--local-cgroup-parent")
+        if parent is not None:
+            worker["cgroup_parent"] = parent
         trial = await Trial.create(
             TrialConfig(
                 task=TaskConfig(path=directory),
                 trial_name=name,
                 trials_dir=evidence / "trials",
                 agent=AgentConfig(name="task-spec-response", kwargs={"response_path": str(response)}),
-                environment=EnvironmentConfig(
-                    kwargs={"disk_root": str(tmp_path / "disks"), "model_endpoint": endpoint, "model_name": judge.model}
-                ),
+                environment=EnvironmentConfig(kwargs=worker),
             )
         )
         result = await trial.run()

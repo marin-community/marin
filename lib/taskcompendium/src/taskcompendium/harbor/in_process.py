@@ -22,7 +22,7 @@ def main() -> None:
     parser.add_argument("--stop-reason")
     args = parser.parse_args()
     task = TaskSpec.model_validate_json(args.task.read_text())
-    if task.grader.environment is not None:
+    if task.grader.environment is not None and not grades_with_judge(task.grader):
         raise ValueError("The TaskSpec declares its own grading environment")
     attempt = GradingAttempt(
         ConversationTrace.model_validate_json(args.conversation.read_text()), stop_reason=args.stop_reason

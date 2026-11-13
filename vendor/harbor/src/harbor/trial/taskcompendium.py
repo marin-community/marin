@@ -404,7 +404,7 @@ class TaskSpecTrial(Trial):
                 authentication=self.host_capabilities.model_authentication,
             )
             connection = JudgeConnection("http://127.0.0.1:8787/v1", "EMPTY", default_model=judge.model)
-        if isinstance(grader, VerifyitGrader) and grader.environment is None:
+        if isinstance(grader, VerifyitGrader) and (grader.environment is None or judge is not None):
             return await self._grade_in_process(relay, connection)
         assert grader.environment is not None
         source = grader.environment.package_spec or HostImage()
@@ -446,8 +446,8 @@ class TaskSpecTrial(Trial):
             )
 
     async def _grade_in_process(self, relay: ModelRelay | None, connection: JudgeConnection | None) -> GradeResult:
-        # Environment-less graders use the same trusted interpreter as the driver, within
-        # a bounded worker. This supplies no actor image or extra actor instructions.
+        # Production Verifyit judges use the host judge service. Keep its interpreter
+        # in a bounded framework worker, leaving the task lock and actor environment untouched.
         roots = tuple(
             dict.fromkeys(
                 Path(path).resolve() for path in (sys.prefix, sys.base_prefix, *sys.path) if path and Path(path).is_dir()

@@ -23,6 +23,7 @@ from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
     ConversationInput,
+    ConversationTrace,
     EnvironmentRequirements,
     PlainText,
     ResourceGroups,
@@ -37,11 +38,9 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
-from taskcompendium.runtime.grading import SPEC_PATH
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import BASE_URL_ENV
-from verifyit.spec import parse_spec
 
 from harbor.agents import taskcompendium as agents
 from harbor.models.trial.config import (
@@ -258,7 +257,10 @@ async def test_converted_judge_task_preserves_contract_through_production_trial(
             assert server.requests[0]["model"] == judge.model
             assert judge.references[0] in server.requests[0]["messages"][-1]["content"]
         else:
-            assert machines.machines[-1].local("/app/answer.txt").read_bytes() == b""
+            conversation = ConversationTrace.model_validate_json(
+                machines.machines[-1].local("/tests/conversation.json").read_text()
+            )
+            assert conversation.events[-1].content == ""
     if agent_name == "task-spec-chat":
         assert candidate_requests[0]["messages"] == conversation_messages(task.context.events)
     else:
@@ -267,13 +269,13 @@ async def test_converted_judge_task_preserves_contract_through_production_trial(
         assert candidate_requests[0].get("tools", []) == [
             {"type": "function", "function": tool.model_dump(exclude_none=True)} for tool in task.final_tools
         ]
-    assert locks == [task.grader.environment.packages_lock]
+    assert locks == []  # The production judge service does not install SDK packages in the task environment.
     assert len(machines.machines) == 1  # No synthetic actor environment for either source.
     selected = machines.specifications[0]
     assert (selected.cpus, selected.memory_mb, selected.storage_mb) == (1, 2048, 2048)
     machine = machines.machines[0]
     assert machine.closed
-    assert parse_spec(machine.local(SPEC_PATH).read_text()) == verifyit_spec(task.grader)
+    assert TaskSpec.model_validate_json(machine.local("/tests/task-spec.json").read_text()) == task
     verdict = json.loads((trial.paths.verifier_dir / "verdict.json").read_text())
     assert (verdict["status"], verdict["reward"]) == ("scored", reward)
     assert (trial.paths.verifier_dir / "verdict.json").read_bytes() == machine.local(
