@@ -525,9 +525,7 @@ def test_grug_megatron_four_gpu_disaggregated_rollout_train_sync_rollout(tmp_pat
     model_path.mkdir()
     write_tiny_checkpoint(model_path)
     cfg = _config(
-        str(model_path),
-        world_size=policy_world_size,
-        pp=2 if transport == "broadcast" else 1,
+        str(model_path), world_size=policy_world_size, pp=2 if transport == "broadcast" else 1,
         ep=1 if transport == "broadcast" else 2,
     )
     cfg.generator.weight_sync_transport = transport
@@ -734,7 +732,9 @@ def test_grug_megatron_four_gpu_colocated_expert_block_matches_fresh_load_after_
         moe_backend="triton",
     )
     try:
-        policy = init_worker_with_type("policy", shared_pg=shared_pg, colocate_all=True, num_gpus_per_node=4, cfg=cfg)
+        policy = init_worker_with_type(
+            "policy", shared_pg=shared_pg, colocate_all=True, num_gpus_per_node=4, cfg=cfg
+        )
         sync = ExpertBlockSync(policy_model=policy, inference_engine_client=client, timeout_seconds=600, colocated=True)
         for step in range(3):
             if step:

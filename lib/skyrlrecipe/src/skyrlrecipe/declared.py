@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, Field, PlainSerializer, PositiveInt
 
-from .model import FrozenMap, OpenMap, Section, SectionMap, thaw, unset_field
+from .model import FrozenMap, NumberMap, OpenMap, Section, SectionMap, thaw, unset_field
 from .sampling import EvalSamplingParams
 
 
@@ -99,6 +99,7 @@ class CheckpointCallback(Section):
     type: Literal["checkpoint"]
     save_steps: int = unset_field()
     save_on_train_end: bool = unset_field()
+    save_after_fraction: int | float = unset_field()
 
 
 class BestCheckpointCallback(Section):
@@ -106,6 +107,9 @@ class BestCheckpointCallback(Section):
     initial_model_uri: str
     expected_tasks: int
     minimum_scored_tasks: int
+    selection_metric: str = unset_field()
+    save_after_fraction: int | float = unset_field()
+    preservation_max_drop: NumberMap | None = unset_field()
 
 
 class DistillationTokenBudgetCallback(Section):
@@ -144,6 +148,7 @@ class HFModelSaveCallback(Section):
     type: Literal["hf_model_save"]
     save_steps: int = unset_field()
     save_on_train_end: bool = unset_field()
+    save_after_fraction: int | float = unset_field()
 
 
 class DatabaseRegistrationCallback(Section):
@@ -183,6 +188,7 @@ class InferenceStatsCallback(Section):
     log_to_tracker: bool = unset_field()
     console_log_level: str = unset_field()
     poll_interval_seconds: int | float = unset_field()
+    sinks: None = unset_field()
 
 
 LoggingBackend = Literal["wandb", "mlflow", "swanlab", "tensorboard", "console", "records"]

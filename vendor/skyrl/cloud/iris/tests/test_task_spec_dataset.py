@@ -11,6 +11,7 @@ from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
 from rolloutengine.validation import validate_spec
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
 from shellbox.backends.local.machine import check_local_environment
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineSpec
 from skyrl_gym.rollout_specs import is_shell_harness
 from skyrl_train.config.utils import get_default_config
@@ -24,12 +25,11 @@ from taskcompendium.models import (
     ResourceGroups,
     ScriptGrader,
     Source,
-    TaskSpec,
     TextMessage,
 )
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import inline_resource
-from tests.cpu.task_specs import text_task
+from tests.cpu.task_specs import SHELL_ENVIRONMENT, machine_runtime, text_task
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
@@ -44,7 +44,7 @@ class LocalAdmissionFactory:
         raise AssertionError(f"Admission must not acquire a machine: {spec}")
 
 
-def _loaded_specs(tmp_path: Path, tasks: list[TaskSpec]) -> list:
+def _load(tmp_path: Path, tasks, **task_spec_overrides) -> list:
     path = tmp_path / "tasks.parquet"
     pq.write_table(pa.Table.from_pylist([{"task_spec": task.model_dump_json()} for task in tasks]), path)
     tokenizer = PreTrainedTokenizerFast(
@@ -52,15 +52,27 @@ def _loaded_specs(tmp_path: Path, tasks: list[TaskSpec]) -> list:
         unk_token="[UNK]",
         chat_template="{% for message in messages %}{{ message.content }} {% endfor %}",
     )
-    config = get_default_config()
-    dataset = SourceTaskDataset(
-        [str(path)],
-        tokenizer,
-        128,
-        num_workers=1,
-        environment_configs=OmegaConf.to_container(config.environment.task_sessions, resolve=True),
-    )
+    configs = OmegaConf.to_container(get_default_config().environment.task_sessions, resolve=True)
+    configs["task_spec"].update(task_spec_overrides)
+    dataset = SourceTaskDataset([str(path)], tokenizer, 128, num_workers=1, environment_configs=configs)
     return [row["input"].spec for row in dataset.collate_fn(list(dataset))]
+
+
+FACTORIES = {
+    "daytona": DaytonaMachineFactory(client_factory=lambda: pytest.fail("No sandbox may be created")),
+    "local": LocalAdmissionFactory(),
+}
+
+
+def test_a_dataset_machine_attaches_only_to_rows_that_need_one(tmp_path: Path):
+    shell = text_task("shell-task", source="probes").model_copy(update={"environment_requirements": SHELL_ENVIRONMENT})
+    output = text_task("output-task", source="probes").model_copy(update={"output_paths": ("/workspace/answer.txt",)})
+    reply = text_task("reply-task", source="probes")
+    runtime = machine_runtime("shellsim")
+    loaded = _load(tmp_path, (shell, output, reply), task_machine_by_dataset={"probes": runtime.model_dump()})
+    assert [spec.task_machine for spec in loaded] == [runtime, runtime, None]
+    for spec in (loaded[0], loaded[2]):
+        validate_spec(spec, {"shellsim": ShellSimMachineFactory()})
 
 
 def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_path: Path):
@@ -89,16 +101,12 @@ def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_pa
             ),
         }
     )
-    loaded = _loaded_specs(tmp_path, [image, prefix])
+    loaded = _load(tmp_path, (image, prefix))
     assert [spec.task.id for spec in loaded] == ["image-task", "prefix-task"]
     assert is_shell_harness(loaded[0].harness)
     assert loaded[1].harness == ASSISTANT_PREFIX_HARNESS
-    factories = {
-        "daytona": DaytonaMachineFactory(client_factory=lambda: pytest.fail("No sandbox may be created")),
-        "local": LocalAdmissionFactory(),
-    }
     for spec in loaded:
-        validate_spec(spec, factories)
+        validate_spec(spec, FACTORIES)
 
 
 def test_curated_structure_closure_row_keeps_its_prefix_last(tmp_path: Path):
@@ -116,7 +124,7 @@ def test_curated_structure_closure_row_keeps_its_prefix_last(tmp_path: Path):
     release = Source(dataset="published/release", revision="b" * 40, row="train.parquet:7", importer_revision="1")
     curated = structure_closure_task(RawRow("curated-id", release, {"lowered_task_spec": json.dumps(payload)})).task
 
-    spec = _loaded_specs(tmp_path, [curated])[0]
+    spec = _load(tmp_path, (curated,))[0]
 
     assert task_messages(spec)[-1] == {"role": "assistant", "content": '{"a":[1'}
     assert spec.harness == ASSISTANT_PREFIX_HARNESS

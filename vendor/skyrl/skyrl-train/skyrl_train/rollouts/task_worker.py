@@ -413,10 +413,7 @@ class TaskRolloutWorker:
         self, lowered: TaskRolloutSpec, harbor: HarborTaskSettings | None, session_id: str, phase: str
     ) -> tuple[TaskRolloutSpec, Mapping[str, Harness]]:
         harnesses = episode_harnesses(lowered, self.sessions)
-        if (
-            lowered.harness == ASSISTANT_PREFIX_HARNESS
-            and lowered.task.reasoning_markup == ReasoningMarkupPolicy.REJECT
-        ):
+        if lowered.harness == ASSISTANT_PREFIX_HARNESS and lowered.task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
             # The assistant-prefix transport records no reasoning violation, so rejection would never fire.
             raise ValueError("Assistant-prefix tasks cannot reject malformed reasoning spans")
         if lowered.harness == ASSISTANT_PREFIX_HARNESS:

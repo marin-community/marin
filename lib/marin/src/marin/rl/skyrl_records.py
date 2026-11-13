@@ -13,24 +13,13 @@ from finestore.rl.run_records import (
     read_attempt_metrics,
     read_attempts,
 )
-from pydantic import AliasPath, BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import AliasPath, BaseModel, ConfigDict, Field, ValidationError
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
 RESOLVED_LAUNCH_FILENAME = "resolved-launch.yaml"
 TERMINAL_RECEIPT_FILENAME = "terminal.json"
 EXPORTS_SUBDIRECTORY = "exports"
-ENGINE_CONFIG_KEYS = (
-    "backend",
-    "model_dtype",
-    "vllm_attention_backend",
-    "enable_prefix_caching",
-    "max_num_seqs",
-    "max_num_batched_tokens",
-    "enable_chunked_prefill",
-    "enforce_eager",
-    "engine_init_kwargs",
-)
 
 
 class RecordedSource(BaseModel):
@@ -52,6 +41,19 @@ class RecordedCallback(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
     type: str
     additional_evaluations: dict[str, RecordedEvaluation] | None = None
+
+
+class RecordedEngine(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+    backend: str
+    model_dtype: str
+    vllm_attention_backend: str | None
+    enable_prefix_caching: bool
+    max_num_seqs: int
+    max_num_batched_tokens: int | None
+    enable_chunked_prefill: bool | None
+    enforce_eager: bool
+    engine_init_kwargs: dict[str, Any]
 
 
 class RecordedLaunch(BaseModel):
@@ -91,26 +93,7 @@ class RecordedLaunch(BaseModel):
     )
     eval_n_samples_per_prompt: int = Field(validation_alias=AliasPath("skyrl", "generator", "eval_n_samples_per_prompt"))
     chat_template: dict[str, Any] | None = Field(validation_alias=AliasPath("skyrl", "generator", "chat_template"))
-    backend: str = Field(validation_alias=AliasPath("skyrl", "generator", "backend"))
-    model_dtype: str = Field(validation_alias=AliasPath("skyrl", "generator", "model_dtype"))
-    vllm_attention_backend: str | None = Field(
-        validation_alias=AliasPath("skyrl", "generator", "vllm_attention_backend")
-    )
-    enable_prefix_caching: bool = Field(validation_alias=AliasPath("skyrl", "generator", "enable_prefix_caching"))
-    max_num_seqs: int = Field(validation_alias=AliasPath("skyrl", "generator", "max_num_seqs"))
-    max_num_batched_tokens: int | None = Field(
-        validation_alias=AliasPath("skyrl", "generator", "max_num_batched_tokens")
-    )
-    enable_chunked_prefill: bool | None = Field(
-        validation_alias=AliasPath("skyrl", "generator", "enable_chunked_prefill")
-    )
-    enforce_eager: bool = Field(validation_alias=AliasPath("skyrl", "generator", "enforce_eager"))
-    engine_init_kwargs: dict[str, Any] = Field(validation_alias=AliasPath("skyrl", "generator", "engine_init_kwargs"))
-
-    @field_validator("logger", mode="before")
-    @classmethod
-    def logger_collection(cls, value):
-        return [value] if isinstance(value, str) else value
+    engine: RecordedEngine = Field(validation_alias=AliasPath("skyrl", "generator"))
 
     @classmethod
     def from_document(cls, document: dict, *, attempt: str) -> "RecordedLaunch":
@@ -148,16 +131,14 @@ def read_skyrl_launch_config(run_output: str) -> dict:
 
 def read_stored_skyrl_receipt(run_output: str) -> AttemptRecord | None:
     """Read the current native attempt, including its receipt and startup facts."""
+    try:
+        config = read_skyrl_launch_config(run_output)
+    except FileNotFoundError:
+        return None
     terminal = None
     fs, key = filesystem_for(prefix_join(run_output, TERMINAL_RECEIPT_FILENAME))
     if fs.exists(key):
         terminal = LaunchReceipt.model_validate_json(fs.cat(key))
-    try:
-        config = read_skyrl_launch_config(run_output)
-    except FileNotFoundError:
-        if terminal is None:
-            return None
-        config = terminal.config
     attempt_id = config["run"]["attempt_id"]
     record = read_attempt(config["artifacts"]["export_root"], attempt_id)
     if (
@@ -210,7 +191,7 @@ def attempt_tracking(record: AttemptRecord, config: RecordedLaunch) -> AttemptTr
     """Describe the native attempt's startup, engine configuration and W&B run."""
     if record.started_at is None:
         return {}
-    engine = {key: getattr(config, key) for key in ENGINE_CONFIG_KEYS}
+    engine = config.engine.model_dump()
     engine.update(
         batch_invariant=config.batch_invariant,
         vllm_env={key: value for key, value in config.task_env.items() if key.startswith("VLLM_")},

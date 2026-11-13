@@ -51,7 +51,7 @@ The pinned Ray release has no Intel macOS wheel.
 
 ## Run records
 
-Native receipts and numeric metrics use the [FineStore run-record contract](../../lib/finestore/README.md#package-boundary).
+Native receipts and numeric metrics use the [FineStore run-record contract](https://github.com/marin-community/marin/blob/main/lib/finestore/README.md#package-boundary).
 See [RL launching](../references/rl-launching.md) for checkpoint continuation and retry procedures.
 
 Generate-only launches through Marin allocate the inference engines' nodes and

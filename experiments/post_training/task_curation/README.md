@@ -48,8 +48,11 @@ Evaluation sources also use QUICK, with stricter publication checks that preserv
 the complete benchmark population. They publish canonical TaskSpec rows and
 evaluation protocol sidecars. See [evaluation tasks](../../../docs/references/evaluation-tasks.md)
 for declarations, outputs and the standard evaluation driver.
-`evaluation.py` binds `EvalDataset` recipes to
+`experiments.evaluation.preparation` binds `EvaluationCorpusRecipe` inputs to
 `taskcompendium.pipeline.evaluation.publish_evaluation_corpus`. Evaluation
+configuration and prompt compilation belong to `experiments/evaluation/`;
+shot counts are recorded with the resulting immutable tasks. Shared curation
+provides acquisition and inventory/catalog integration. Evaluation
 protocols use schema version 3 from `taskcompendium.evaluation.spec`; source
 adapters live under `taskcompendium.importers` and `taskcompendium.convert`,
 including reusable benchmark modules in `taskcompendium.importers.evalchemy`.

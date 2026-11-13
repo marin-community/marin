@@ -498,14 +498,10 @@ def validate_cfg(cfg: DictConfig):
 
 
 def validate_generator_cfg(cfg: DictConfig):
-    """Validates the correctness of generator-related config.
+    """Validate generation settings before engine startup."""
 
-    Args:
-        cfg (DictConfig): config to validate
-
-    Raises:
-        ValueError: when cfg.generator.sampling_params.logprobs > 0
-    """
+    if cfg.generator.backend != "vllm":
+        raise ValueError(f"generator.backend must be 'vllm', got {cfg.generator.backend!r}")
 
     parse_trajectory_reward_shaping_config(cfg.generator.get("trajectory_reward_shaping"))
     parse_trajectory_retention_config(cfg.generator.get("trajectory_retention"))

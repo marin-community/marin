@@ -3,9 +3,9 @@
 Named results use eval/<name>/ metrics and <trainer.export_path>/<name>/ outputs.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 import json
-from typing import Any, NamedTuple
+from typing import Any
 
 from marinskyrl.resource_locator import join_resource_path
 from omegaconf import DictConfig, OmegaConf
@@ -94,42 +94,19 @@ def validate_generation_profiles(profiles: Mapping[str, EvaluationProfile]) -> N
         raise ValueError("final evaluation profiles require training updates")
 
 
-class PeriodicEvaluation(NamedTuple):
-    eval_steps: int
-    additional_evaluations: Mapping[str, EvaluationProfile]
-    metric_groups: Mapping[str, Sequence[str]]
-    stop_when: Mapping[str, object]
-
-
 def validate_evaluation_schedule(
-    config: DictConfig, profiles: Mapping[str, EvaluationProfile], *, generation: bool
+    config: DictConfig, profiles: Mapping[str, EvaluationProfile], *, generation: bool = False
 ) -> None:
     if generation:
         validate_generation_profiles(profiles)
     evaluations = [
-        PeriodicEvaluation(
-            eval_steps=callback.get("eval_steps", DEFAULT_EVALUATION_STEPS),
-            additional_evaluations={name: profiles[name] for name in callback.get("additional_evaluations") or {}},
-            metric_groups=callback.get("metric_groups") or {},
-            stop_when=callback.get("stop_when") or {},
-        )
-        for callback in config.trainer.get("callbacks") or ()
-        if callback.get("type") == "evaluation"
+        callback for callback in config.trainer.get("callbacks") or () if callback.get("type") == "evaluation"
     ]
-    validate_periodic_evaluation_inputs(evaluations)
-
-
-def validate_periodic_evaluation_inputs(evaluations: Sequence[PeriodicEvaluation]) -> None:
-    if any(callback.eval_steps > 0 for callback in evaluations):
-        final_prefixes = tuple(
-            f"eval/{name}/"
-            for callback in evaluations
-            for name, profile in callback.additional_evaluations.items()
-            if profile.schedule == "final"
-        )
+    if any(callback.get("eval_steps", DEFAULT_EVALUATION_STEPS) > 0 for callback in evaluations):
+        final_prefixes = tuple(f"eval/{name}/" for name, profile in profiles.items() if profile.schedule == "final")
         for callback in evaluations:
-            inputs = set(callback.stop_when)
-            inputs.update(key for members in callback.metric_groups.values() for key in members)
+            inputs = set(callback.get("stop_when") or {})
+            inputs.update(key for members in (callback.get("metric_groups") or {}).values() for key in members)
             final_inputs = sorted(key for key in inputs if key.startswith(final_prefixes))
             if final_inputs:
                 raise ValueError(

@@ -48,8 +48,6 @@ from marin.rl.skyrl_records import (
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 from marin.training.training import LevanterCheckpoint
 
-IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
-
 _EXECUTION = "skyrl_execution"
 _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
@@ -57,7 +55,7 @@ _TRACE_JOBS_SUBDIR = "trace_jobs"
 _TRAJECTORIES_SUBDIR = "trajectories"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
-BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
+_BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
 SKYRL_PROJECT = Path("vendor/skyrl")
 # The SkyRL runtime is packaged separately, so its matching limit is checked there too.
 _COLOCATED_EXPERT_BLOCK_GPU_COUNT = 4
@@ -114,6 +112,14 @@ class _InferenceGeometry:
     inference_engine_expert_parallel_size: int
     n_samples_per_prompt: int
 
+    @property
+    def engine_gpus(self) -> int:
+        return (
+            self.inference_engine_tensor_parallel_size
+            * self.inference_engine_pipeline_parallel_size
+            * self.inference_engine_data_parallel_size
+        )
+
     def inference_config(self) -> dict[str, object]:
         return {f"generator.{item.name}": getattr(self, item.name) for item in fields(_InferenceGeometry)}
 
@@ -140,8 +146,8 @@ class SkyRLRolePlan(_InferenceGeometry):
         from skyrlrecipe import RLEntrypoint  # noqa: PLC0415 - optional authoring dependency
 
         selected = RLEntrypoint(self.entrypoint)
-        if selected not in (RLEntrypoint.STANDARD, RLEntrypoint.TASKCOMPENDIUM):
-            raise ValueError("SkyRL training plans support standard or taskcompendium entrypoints")
+        if selected is RLEntrypoint.GENERATE:
+            raise ValueError("entrypoint=generate requires SkyRLGenerationPlan")
         object.__setattr__(self, "entrypoint", selected.value)
 
     @property
@@ -176,12 +182,11 @@ class SkyRLRolePlan(_InferenceGeometry):
 
     def validate(self, topology: SkyRLTopology) -> None:
         """Validate training geometry against the allocated topology."""
-        plan = self
         _validate_inference_geometry(self)
         if not self.colocate_all:
             _validate_engine_fits_node(self, topology)
         tensor_pipeline_gpus = self.inference_engine_tensor_parallel_size * self.inference_engine_pipeline_parallel_size
-        rollout_gpus = self.num_inference_engines * tensor_pipeline_gpus * self.inference_engine_data_parallel_size
+        rollout_gpus = self.num_inference_engines * self.engine_gpus
         for field_name in (
             "policy_num_nodes",
             "policy_num_gpus_per_node",
@@ -190,49 +195,49 @@ class SkyRLRolePlan(_InferenceGeometry):
             "micro_train_batch_size_per_gpu",
             "n_samples_per_prompt",
         ):
-            if getattr(plan, field_name) <= 0:
+            if getattr(self, field_name) <= 0:
                 raise ValueError(f"SkyRL role plan {field_name} must be positive")
-        if plan.num_inference_engines == 0 and plan.colocate_all:
+        if self.num_inference_engines == 0 and self.colocate_all:
             raise ValueError("a SkyRL role plan without inference engines cannot colocate policy and rollout roles")
-        if plan.policy_num_nodes > topology.num_nodes:
+        if self.policy_num_nodes > topology.num_nodes:
             raise ValueError("SkyRL policy_num_nodes exceeds the allocated topology")
-        if plan.policy_num_gpus_per_node > topology.gpus_per_node:
+        if self.policy_num_gpus_per_node > topology.gpus_per_node:
             raise ValueError("SkyRL policy_num_gpus_per_node exceeds the GPUs on one allocated node")
-        if plan.colocate_all and not plan.colocate_policy_ref:
+        if self.colocate_all and not self.colocate_policy_ref:
             raise ValueError("colocate_all requires a shared policy/reference footprint")
-        if plan.reference_num_nodes is not None and plan.reference_num_nodes <= 0:
+        if self.reference_num_nodes is not None and self.reference_num_nodes <= 0:
             raise ValueError("SkyRL reference_num_nodes must be positive")
 
-        if plan.colocate_all and topology.gpus_per_node % tensor_pipeline_gpus:
+        if self.colocate_all and topology.gpus_per_node % tensor_pipeline_gpus:
             raise ValueError(
                 "each colocated SkyRL inference engine TP*PP slice must divide gpus_per_node; "
                 f"got TP*PP={tensor_pipeline_gpus} and gpus_per_node={topology.gpus_per_node}"
             )
-        policy_gpus = plan.policy_num_nodes * plan.policy_num_gpus_per_node
-        if plan.colocate_all and policy_gpus != rollout_gpus:
+        policy_gpus = self.policy_num_nodes * self.policy_num_gpus_per_node
+        if self.colocate_all and policy_gpus != rollout_gpus:
             raise ValueError(
                 "colocated SkyRL roles must use the same GPUs: "
                 f"policy={policy_gpus}, rollout={rollout_gpus} "
-                f"({plan.num_inference_engines} engines x TP{plan.inference_engine_tensor_parallel_size} "
-                f"x PP{plan.inference_engine_pipeline_parallel_size} x DP{plan.inference_engine_data_parallel_size})"
+                f"({self.num_inference_engines} engines x TP{self.inference_engine_tensor_parallel_size} "
+                f"x PP{self.inference_engine_pipeline_parallel_size} x DP{self.inference_engine_data_parallel_size})"
             )
-        planned_gpus = policy_gpus if plan.colocate_all else policy_gpus + rollout_gpus
-        if plan.reference_num_nodes is not None:
-            planned_gpus += plan.reference_num_nodes * plan.policy_num_gpus_per_node
+        planned_gpus = policy_gpus if self.colocate_all else policy_gpus + rollout_gpus
+        if self.reference_num_nodes is not None:
+            planned_gpus += self.reference_num_nodes * self.policy_num_gpus_per_node
         allocated_gpus = topology.num_nodes * topology.gpus_per_node
         # SkyRL derives optional critic, teacher, and draft-trainer claims from the recipe
         # and validates that the complete role plan exactly consumes this allocation.
         if planned_gpus > allocated_gpus:
-            placement = "colocated policy/rollout" if plan.colocate_all else "policy + rollout"
+            placement = "colocated policy/rollout" if self.colocate_all else "policy + rollout"
             raise ValueError(
                 "SkyRL core role plan exceeds the allocated topology: "
                 f"{placement}={planned_gpus} GPUs, topology={allocated_gpus} GPUs "
                 f"({topology.num_nodes} nodes x {topology.gpus_per_node})"
             )
 
-        if plan.train_batch_size % plan.policy_mini_batch_size:
+        if self.train_batch_size % self.policy_mini_batch_size:
             raise ValueError("SkyRL train_batch_size must be divisible by policy_mini_batch_size")
-        if plan.policy_mini_batch_size % plan.micro_train_batch_size_per_gpu:
+        if self.policy_mini_batch_size % self.micro_train_batch_size_per_gpu:
             raise ValueError("SkyRL policy_mini_batch_size must be divisible by micro_train_batch_size_per_gpu")
 
     def validate_recipe(self, config: dict[str, object], topology: SkyRLTopology) -> None:
@@ -338,11 +343,7 @@ class SkyRLGenerationPlan(_InferenceGeometry):
 
 
 def _validate_engine_fits_node(plan: SkyRLRolePlan | SkyRLGenerationPlan, topology: SkyRLTopology) -> None:
-    engine_gpus = (
-        plan.inference_engine_tensor_parallel_size
-        * plan.inference_engine_pipeline_parallel_size
-        * plan.inference_engine_data_parallel_size
-    )
+    engine_gpus = plan.engine_gpus
     if engine_gpus > topology.gpus_per_node:
         raise ValueError(
             "each SkyRL inference engine must fit on one node, but "
@@ -351,11 +352,7 @@ def _validate_engine_fits_node(plan: SkyRLRolePlan | SkyRLGenerationPlan, topolo
 
 
 def _inference_nodes(plan: SkyRLRolePlan | SkyRLGenerationPlan) -> int:
-    engine_gpus = (
-        plan.inference_engine_tensor_parallel_size
-        * plan.inference_engine_pipeline_parallel_size
-        * plan.inference_engine_data_parallel_size
-    )
+    engine_gpus = plan.engine_gpus
     engines_per_node = plan.gpus_per_node // engine_gpus
     if not engines_per_node:
         raise ValueError("each SkyRL inference engine must fit on one node")
@@ -641,6 +638,9 @@ class SkyRLSpec:
         names = [name for name, _ in self.evaluation_data]
         if len(names) != len(set(names)):
             raise ValueError("duplicate evaluation data names")
+
+
+IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
 
 
 @dataclass(frozen=True)
@@ -958,7 +958,7 @@ def _launch_config_yaml(
     recipe["entrypoint"] = spec.topology.role_plan.entrypoint
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
     for callback in recipe.get("trainer", {}).get("callbacks") or []:
-        if callback["type"] == BEST_CHECKPOINT_CALLBACK:
+        if callback["type"] == _BEST_CHECKPOINT_CALLBACK:
             callback["initial_model_uri"] = model.uri
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):

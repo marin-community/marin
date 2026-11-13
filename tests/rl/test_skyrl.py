@@ -446,6 +446,7 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
     }
 
 
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize("failure", ["render", "extra-node", "node-width", "entrypoint"])
 def test_generation_plan_renders_native_geometry_and_rejects_conflicts(failure, tmp_path):
     spec = _spec()
@@ -599,40 +600,24 @@ def test_skyrl_step_fingerprint_includes_roles_and_excludes_placement() -> None:
 
     recipe = yaml.safe_load(spec.config_yaml)
     recipe["trainer"]["callbacks"] = [{"type": "evaluation", "additional_evaluations": {"quality": {}}}]
-    panel = dataclasses.replace(_data_step(), name="tests/heldout-panel", version="2026.11.05")
-    source = ArtifactDataSource(panel, relative_path="validation.parquet")
+    task_set = dataclasses.replace(_data_step(), name="tests/heldout-task_set", version="2026.11.05")
+    source = ArtifactDataSource(task_set, relative_path="validation.parquet")
     profiled_spec = dataclasses.replace(
         spec, config_yaml=yaml.safe_dump(recipe), evaluation_data=(("quality", (source,)),)
     )
     profiled = skyrl_step(profiled_spec, _execution())
-    changed_panel = dataclasses.replace(source, step=dataclasses.replace(panel, version="2026.11.05.1"))
+    assert [(dep.name, dep.version) for dep in profiled.deps] == [
+        ("tests/iceball-sft", "2026.08.01"),
+        ("tests/iceball-gsm8k", "2026.08.01"),
+        ("tests/heldout-task_set", "2026.11.05"),
+    ]
+    changed_task_set = dataclasses.replace(source, step=dataclasses.replace(task_set, version="2026.11.05.1"))
     assert (
         profiled.fingerprint()
         != skyrl_step(
-            dataclasses.replace(profiled_spec, evaluation_data=(("quality", (changed_panel,)),)), _execution()
+            dataclasses.replace(profiled_spec, evaluation_data=(("quality", (changed_task_set,)),)), _execution()
         ).fingerprint()
     )
-
-
-def test_skyrl_step_declares_model_and_data_dependencies() -> None:
-    spec = _spec()
-    recipe = yaml.safe_load(spec.config_yaml)
-    recipe["trainer"]["callbacks"] = [{"type": "evaluation", "additional_evaluations": {"quality": {}}}]
-    panel = dataclasses.replace(_data_step(), name="tests/heldout-panel", version="2026.11.05")
-    step = skyrl_step(
-        dataclasses.replace(
-            spec,
-            config_yaml=yaml.safe_dump(recipe),
-            evaluation_data=(("quality", (ArtifactDataSource(panel, relative_path="validation.parquet"),)),),
-        ),
-        _execution(),
-    )
-
-    assert [(dep.name, dep.version) for dep in step.deps] == [
-        ("tests/iceball-sft", "2026.08.01"),
-        ("tests/iceball-gsm8k", "2026.08.01"),
-        ("tests/heldout-panel", "2026.11.05"),
-    ]
 
 
 def test_skyrl_step_routes_disposable_state_to_ttl_storage(
@@ -1076,12 +1061,6 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     (tmp_path / "terminal.json").write_text(receipt.native.model_dump_json())
     assert read_stored_skyrl_receipt(str(tmp_path)) == attempts["earlier-failed-attempt"]
     (tmp_path / "resolved-launch.yaml").unlink()
-    legacy = receipt.native.model_dump(mode="json")
-    legacy["config"]["artifacts"]["export_root"] = str(tmp_path / "legacy-exports")
-    (tmp_path / "terminal.json").write_text(json.dumps(legacy))
-    terminal_only = read_stored_skyrl_receipt(str(tmp_path))
-    assert terminal_only.native.model_dump(mode="json") == legacy
-    assert terminal_only.started_at is None and terminal_only.vllm_version is None
     (tmp_path / "terminal.json").unlink()
     assert read_stored_skyrl_attempts(str(tmp_path)) == (None, {})
     assert read_skyrl_launch_receipt(str(tmp_path)) is None

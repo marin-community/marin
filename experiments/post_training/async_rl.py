@@ -52,6 +52,7 @@ from marin.rl.skyrl import (
 from rigging.provenance import username_segment
 from skyrlrecipe import ContextBudget, RecipePatch, SkyRLRecipe, sections
 
+from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.pipeline import EvaluationResult
 from experiments.post_training.curriculum_rl.launch import (
     ARMS,
@@ -65,7 +66,9 @@ from experiments.post_training.curriculum_rl.launch import (
     PolicySpec,
     evaluation_model_config,
     model_step,
-    rl_config_yaml,
+)
+from experiments.post_training.curriculum_rl.launch import (
+    training_recipe as curriculum_training_recipe,
 )
 from experiments.post_training.curriculum_rl.pool import (
     MAX_PROMPT_TOKENS,
@@ -224,20 +227,20 @@ FIXED_SETTINGS = ROLE_PLAN_SETTINGS | {
 }
 
 
-def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict:
+def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> SkyRLRecipe:
     """Render the RL config: the curriculum data wiring plus every setting this launcher decides."""
     recipe = SNOWBALL_RECIPE
     plan = recipe.role_plan
     # The curriculum template supplies data and environment; the typed sections define the training settings.
-    config = yaml.safe_load(rl_config_yaml(CURRICULUM_TEMPLATE, ARMS["naive"], SNOWBALL_POLICY))
+    template = curriculum_training_recipe(CURRICULUM_TEMPLATE, ARMS["naive"], SNOWBALL_POLICY)
     # The public context declaration supplies the prompt, generation and engine lengths.
-    config["context_budget"] = ContextBudget(
+    budget = ContextBudget(
         request_window_tokens=preset.request_window_tokens,
         max_new_tokens_per_turn=preset.max_new_tokens,
         # Single-turn math ends after one answer; each of the prompt's four answers is its own rollout.
         max_turns=1,
-    ).to_skyrl()
-    config["trainer"] = sections.Trainer(
+    )
+    trainer = sections.Trainer(
         strategy="megatron",
         # Keep Transformer Engine's attention backend; true forces the flash-attn package
         # (NVTE_FUSED_ATTN=0).
@@ -313,8 +316,8 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
             max_in_flight=None,
             object_store_root=None,
         ),
-    ).to_skyrl()
-    config["generator"] = sections.Generator(
+    )
+    generator = sections.Generator(
         backend="vllm",
         model_dtype="bfloat16",
         vllm_attention_backend="FLASH_ATTN",
@@ -353,9 +356,16 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         engine_init_kwargs=dict(recipe.engine_init_kwargs),
         # Return the sampled token's logprob so the ratio diagnostics can compare it with the learner's.
         sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
-    ).to_skyrl()
-    # Let the allocator grow segments instead of fragmenting at the memory ceiling.
-    config["extra_env"] = {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
+    )
+    config = SkyRLRecipe(
+        context_budget=budget,
+        environment=template.environment,
+        data=template.data,
+        trainer=trainer,
+        generator=generator,
+        # Let the allocator grow segments instead of fragmenting at the memory ceiling.
+        extra_env={"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+    )
     for setting in settings:
         key = setting.partition("=")[0]
         if key == "trainer.seed":
@@ -363,18 +373,22 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         if any(key == fixed or key.startswith(f"{fixed}.") or fixed.startswith(f"{key}.") for fixed in FIXED_SETTINGS):
             raise click.BadParameter(f"{key!r} is fixed by this launcher's run inputs")
     try:
-        config = RecipePatch.from_document(config).with_settings(settings).to_skyrl()
+        config = config.with_settings(settings)
     except ValueError as error:
         raise click.BadParameter(str(error)) from error
-    trainer = config["trainer"]
     # Score the starting weights once when evaluation is on, so the curves have a step-0 point.
-    trainer["eval_before_train"] = trainer["eval_interval"] > 0
-    trainer["ckpt_interval"] = checkpoint_interval(trainer["max_steps"], trainer["eval_interval"])
+    config = config.merge(
+        RecipePatch(
+            trainer=sections.Trainer(
+                eval_before_train=config.trainer.eval_interval > 0,
+                ckpt_interval=checkpoint_interval(config.trainer.max_steps, config.trainer.eval_interval),
+            )
+        )
+    )
     # Pool prompts fit beside a complete response in the request window.
-    budget = config["context_budget"]
-    if MAX_PROMPT_TOKENS > budget["request_window_tokens"] - budget["max_new_tokens_per_turn"]:
+    if MAX_PROMPT_TOKENS > config.context_budget.max_input_tokens:
         raise click.BadParameter("pool prompts do not fit the request window beside the response cap")
-    return SkyRLRecipe.from_document(config).to_skyrl()
+    return config
 
 
 @dataclass(frozen=True)
@@ -400,7 +414,7 @@ def build_run(
         SkyRLSpec(
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
-            config_yaml=yaml.safe_dump(config, sort_keys=False),
+            config_yaml=yaml.safe_dump(config.to_skyrl(), sort_keys=False),
             model=ArtifactHfModel(
                 step=model,
                 tokenizer_uri=policy.tokenizer_uri,
@@ -438,11 +452,11 @@ def build_run(
     )
     # The evaluation serves the rendered window, so a --set on the budget reaches the server.
     # evaluation_model_config adds max_new_tokens to request_window_tokens, so it gets the prompt share.
-    budget = config["context_budget"]
+    budget = config.context_budget
     served = replace(
         CURRICULUM_TEMPLATE,
-        request_window_tokens=budget["request_window_tokens"] - budget["max_new_tokens_per_turn"],
-        max_new_tokens=budget["max_new_tokens_per_turn"],
+        request_window_tokens=budget.max_input_tokens,
+        max_new_tokens=budget.max_new_tokens_per_turn,
     )
     # The eval artifact is keyed on the model name; the owner keeps two users at one version apart.
     evaluation_model_name = f"{username_segment()}-{EXPERIMENT_NAME}-{policy.label}-{preset.label}{suffix}"
@@ -452,7 +466,7 @@ def build_run(
     evaluation = skyrl_eval_step(
         rl,
         evaluation_model,
-        preset.evals,
+        resolve_evaluations(preset.evals),
         version=evaluation_version,
         accelerator=f"{GPU_VARIANT}x{policy.serve_gpus}",
         submission_cluster=policy.cluster,

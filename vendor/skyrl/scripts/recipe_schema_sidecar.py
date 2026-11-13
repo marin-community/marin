@@ -28,9 +28,7 @@ from marinskyrl.speculative_decoding import SpeculativeDecodingMethod
 
 
 def _literal(choices) -> str:
-    return (
-        "Literal[" + ", ".join(repr(choice.value if isinstance(choice, Enum) else choice) for choice in choices) + "]"
-    )
+    return "Literal[" + ", ".join(repr(choice.value if isinstance(choice, Enum) else choice) for choice in choices) + "]"
 
 
 CORRECTION_PRESETS = tuple(
@@ -66,7 +64,6 @@ TYPES = MappingProxyType(
         "trainer.rollout_buffer.max_staleness_steps": "NonNegativeInt",
         "trainer.rollout_buffer.batch_policy": _literal(BatchPolicy),
         "trainer.hf_upload_mode": _literal(HFUploadMode),
-        "checkpoint_export.hf_upload_mode": _literal(HFUploadMode),
         "trainer.policy.grug_query_bias_update_mode": _literal(GrugQueryBiasUpdateMode),
         "trainer.algorithm.advantage_estimator": _literal(AdvantageEstimatorRegistry.list_available()),
         "trainer.algorithm.resolved_group_advantage.kind": _literal(GroupAdvantageKind),
@@ -84,7 +81,7 @@ TYPES = MappingProxyType(
         "trainer.algorithm.distillation.advantage_clip": "int | float | None",
         "trainer.mismatch_probe.rescore_prefix_cache": 'Literal["off", "on", "both"]',
         "trainer.mismatch_probe.extra_trainer_modes": 'tuple[Literal["router_replay", "router_replay_filtered"], ...]',
-        "generator.backend": 'Literal["vllm", "sglang"]',
+        "generator.backend": 'Literal["vllm"]',
         "generator.weight_sync_backend": 'Literal["nccl", "gloo"]',
         "generator.weight_sync_transport": _literal(runtime_options.WeightSyncTransport),
         "generator.override_existing_update_group": 'Literal["auto", "enable", "disable"]',
@@ -186,10 +183,6 @@ TYPES = MappingProxyType(
         "trainer.rope_theta": "int | float | None",
         "generator.trajectory_retention.reward_below": "int | float | None",
         "generator.trajectory_retention.reward_above": "int | float | None",
-        "checkpoint_export.step": "NonNegativeInt | None",
-        "checkpoint_export.checkpoint_path": "str | None",
-        "checkpoint_export.export_root": "str | None",
-        "checkpoint_export.hf_hub_repo_id": "str | None",
         "trainer.evaluation_runner": _literal(runtime_options.EvaluationRunner),
         "generator.model_loading": _literal(RolloutModelLoading),
         "data.preference_pair_format": _literal(PreferencePairFormat),

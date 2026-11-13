@@ -346,17 +346,17 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
             paths.append(str(path.with_suffix(".parquet")))
             write_tasks(Path(paths[-1]), tasks)
         cfg.data.train_data, cfg.data.val_data = paths[:1], paths[1:]
-        full_task = tasks[0].model_copy(update={"task": tasks[0].task.model_copy(update={"id": "full-panel-only"})})
-        full_panel = root / "data/full-panel.parquet"
-        write_tasks(full_panel, [full_task])
+        full_task = tasks[0].model_copy(update={"task": tasks[0].task.model_copy(update={"id": "full-task_set-only"})})
+        full_task_set = root / "data/full-task_set.parquet"
+        write_tasks(full_task_set, [full_task])
         cfg.trainer.callbacks = [
             {
                 "type": "evaluation",
                 "eval_steps": interval,
                 "eval_on_train_end": False,
                 "additional_evaluations": {
-                    "full_panel": {
-                        "data_files": [str(full_panel)],
+                    "full_task_set": {
+                        "data_files": [str(full_task_set)],
                         "schedule": "final",
                         "n_samples_per_prompt": 1,
                         "sampling_params": {"temperature": 0.0, "seed": 42},
@@ -375,20 +375,20 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
             continuation = attempts["attempt-4"]
             assert continuation.parent is not None and continuation.parent.attempt_id == generated_attempt_id
             assert continuation.parent.step == continuation.resumed_step == 2
-        final_metrics = [row for row in records if "eval/full_panel/all/num_attempted" in row]
+        final_metrics = [row for row in records if "eval/full_task_set/all/num_attempted" in row]
         expected_final = [2, 4] if resume else [2]
         assert [row["step"] for row in final_metrics] == expected_final
-        assert all(row["eval/full_panel/all/num_attempted"] == 1 for row in final_metrics)
-        dumped = Path(evaluation_dump_dir(str(root / "exports/full_panel"), steps))
+        assert all(row["eval/full_task_set/all/num_attempted"] == 1 for row in final_metrics)
+        dumped = Path(evaluation_dump_dir(str(root / "exports/full_task_set"), steps))
         full_rows = [json.loads(line) for path in dumped.glob("*.jsonl") for line in path.read_text().splitlines()]
-        assert [row["task_id"] for row in full_rows if "task_id" in row] == ["full-panel-only"]
-        assert not Path(evaluation_dump_dir(str(root / "exports/full_panel"), 0)).exists()
-        assert not Path(evaluation_dump_dir(str(root / "exports/full_panel"), 3)).exists()
+        assert [row["task_id"] for row in full_rows if "task_id" in row] == ["full-task_set-only"]
+        assert not Path(evaluation_dump_dir(str(root / "exports/full_task_set"), 0)).exists()
+        assert not Path(evaluation_dump_dir(str(root / "exports/full_task_set"), 3)).exists()
         observed = Counter(
             row["attributes"]["step"]
             for row in cat_count_session
             if row["name"] == "training_metric_value"
-            and row["attributes"].get("metric") == "eval/full_panel/all/num_attempted"
+            and row["attributes"].get("metric") == "eval/full_task_set/all/num_attempted"
         )
         assert observed == Counter({str(step): 1 for step in expected_final})
         assert [row["step"] for row in records] == list(range(steps + 1))
@@ -426,13 +426,13 @@ def test_cat_count_final_profile_skips_zero_progress(tmp_path, cat_count_policy,
             "eval_steps": 1,
             "eval_before_train": True,
             "eval_on_train_end": False,
-            "additional_evaluations": {"final_panel": {"schedule": "final"}},
+            "additional_evaluations": {"final_task_set": {"schedule": "final"}},
         }
     ]
     records = run_process(forkserver_context, root, cfg)
     assert any("eval/all/num_attempted" in row for row in records)
     assert all("policy/raw_grad_norm" not in row for row in records)
-    assert all(not any(key.startswith("eval/final_panel/") for key in row) for row in records)
+    assert all(not any(key.startswith("eval/final_task_set/") for key in row) for row in records)
 
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
