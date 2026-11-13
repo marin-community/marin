@@ -56,7 +56,7 @@ async def test_restored_oracle_runs_source_solution_through_local_environment(tm
 
 
 async def test_oracle_cgroup_evidence_records_cpu_and_oom_counter_deltas(tmp_path):
-    environment = SimpleNamespace(os=TaskOS.LINUX, exec=AsyncMock(side_effect=[
+    environment = SimpleNamespace(os=TaskOS.LINUX, exec_control=AsyncMock(side_effect=[
         SimpleNamespace(stdout="usage_usec 1000\noom_kill 4\n"),
         SimpleNamespace(stdout="usage_usec 1501000\noom_kill 6\n"),
     ]))

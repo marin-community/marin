@@ -17,6 +17,8 @@ def review_declarations() -> list[tuple[bool, SourceDeclaration]]:
         ("full-uncertain", 2, 1, 0, "full", 3, True),
         ("full-complete", 3, 0, 0, "full", 3, False),
         ("full-waiver", 1, 1, 1, "full", 2, False),
+        ("full-false-complete", 1, 0, 2, "full", 1, True),
+        ("sample-false-waiver", 1, 0, 1, "sample", 1, True),
     ]
     return [
         (
@@ -30,10 +32,14 @@ def review_declarations() -> list[tuple[bool, SourceDeclaration]]:
                     "upstream_dataset": name,
                     "upstream_name": name,
                     "oversight": oversight,
-                    "quality_result_finalization": "accepted_incomplete" if name == "full-waiver" else None,
+                    "quality_result_finalization": (
+                        "complete"
+                        if name == "full-false-complete"
+                        else "accepted_incomplete" if name in {"full-waiver", "sample-false-waiver"} else None
+                    ),
                     "quality_result_waiver": (
                         {"uri": "https://example.org/waiver-with-exact-reasons.json", "sha256": "a" * 64}
-                        if name == "full-waiver"
+                        if name in {"full-waiver", "sample-false-waiver"}
                         else None
                     ),
                     "quality_result": {

@@ -594,6 +594,27 @@ Result while retaining false strict coverage and every missing review.
 Completed uncertain observations remain separate from the conclusive denominator.
 Neither state changes execution qualification or drops tasks.
 
+The campaign owner writes the private waiver sidecar after approval, using the
+frozen review observations. The verifier reads it; it does not grant approval or
+create missing reviews. The sidecar requires these JSON fields (additional audit
+metadata may be retained):
+
+| Field | Required value |
+| --- | --- |
+| `source_id` | Exact reviewed source ID |
+| `retained_count` | Number of retained contract records |
+| `contract_index_sha256` | SHA-256 of the frozen contract index |
+| `review_artifact_sha256` | SHA-256 of the immutable review artifact record |
+| `records_sha256` | SHA-256 of the review-record parquet |
+| `qc_unreviewed` | One `{ "task_id": "...", "reason": "..." }` per unreviewed task, with its exact nonempty failure reason |
+| `result` | Frozen `SourceQualityResult` object, including `reviewed`, `issue_count`, `uncertain_count` and `unavailable_count` |
+
+The task-ID set must match all unreviewed observations exactly, without duplicates.
+Result counts must match recomputation from the records; uncertain observations
+remain explicit. The binding pins the SHA-256 of the entire sidecar. Invalid or
+inconsistent finalization fields in stored declarations never suppress provisional
+Result status: Atlas also requires matching whole-population Result and QC counts.
+
 Verify observations before staging the small transport record:
 
 ```bash

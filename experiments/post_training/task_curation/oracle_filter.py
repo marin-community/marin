@@ -63,6 +63,7 @@ BACKEND_CODE_ROOTS = (
 )
 BACKEND_CODE_FILES = {"uv.lock", "pyproject.toml", "experiments/post_training/task_curation/oracle_filter.py"}
 FAILURE_LOG_BYTES = 64 * 1024
+CALIBRATION_ATTEMPT_TIMEOUT = 72 * 60 * 60
 
 
 def declared_native_requirements(path: Path) -> dict[ResourceDimension, float]:
@@ -562,6 +563,7 @@ def calibrated_task(
             "environment": {"type": environment, "kwargs": environment_kwargs},
             "trials_dir": str(attempt / "jobs"),
             "trial_name": "oracle",
+            "trial_attempt_timeout_sec": CALIBRATION_ATTEMPT_TIMEOUT,
         }
         config_path = attempt / "trial.json"
         config_path.write_text(json.dumps(config))

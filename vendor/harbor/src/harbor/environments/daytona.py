@@ -33,6 +33,7 @@ from harbor.environments.model_relay import (
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
 from shellbox.backends.daytona.machine import (
+    INTERRUPT_TIMEOUT,
     DEFAULT_SANDBOX_TTL_MINUTES,
     DaytonaMachine,
     DaytonaMachineFactory,
@@ -44,10 +45,11 @@ from shellbox.backends.daytona.snapshot import (
     validate_source,
 )
 from shellbox.image import DockerfileSource, RegistryImage
+from shellbox.backends.daytona.provider import PROVIDER_REQUEST_TIMEOUT, ProviderWaitPolicy
+from functools import partial
 from shellbox.machine import MachineSpec, NetworkPolicy, UnsupportedMachineSpec
 from shellbox.process_session import (
     acquire_owned,
-    await_cleanup,
     finish_owned,
     own_cleanup,
 )
@@ -99,6 +101,7 @@ class DaytonaEnvironment(BaseEnvironment):
         network_policy: dict[str, str] | None = None,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
+        trial_attempt_timeout_sec: float | None = None,
         model_endpoint: str | None = None,
         model_name: str | None = None,
         judge_access: JudgeAccess = JudgeAccess.VERIFIER,
@@ -125,10 +128,14 @@ class DaytonaEnvironment(BaseEnvironment):
             client_factory = (
                 connection.client_factory() if connection is not None else None
             )
+        self.provider_wait_policy = (
+            ProviderWaitPolicy.JOB if trial_attempt_timeout_sec is not None else ProviderWaitPolicy.PHASE
+        )
         self.factory = DaytonaMachineFactory(
             client_factory,
             ttl_minutes=ttl_minutes,
             create_timeout=create_timeout,
+            provider_wait_policy=self.provider_wait_policy,
             network_policy=policy,
         )
         self.model_endpoint, self.model_name = model_endpoint, model_name
@@ -220,8 +227,8 @@ class DaytonaEnvironment(BaseEnvironment):
             )
             targets = self._mount_targets(writable_only=True)
             if targets:
-                result = await self.exec(
-                    self._ensure_dirs_command(targets, chmod=True), cwd="/"
+                result = await self.exec_control(
+                    self._ensure_dirs_command(targets, chmod=True), cwd="/", timeout_sec=PROVIDER_REQUEST_TIMEOUT, user="root"
                 )
                 if result.return_code:
                     raise RuntimeError("Failed to prepare Daytona artifact paths")
@@ -251,7 +258,15 @@ class DaytonaEnvironment(BaseEnvironment):
     async def stop(self, delete: bool) -> None:
         if self._stopping is None:
             self._stopping = own_cleanup(self._stop())
-        await await_cleanup(self._stopping)
+        try:
+            await asyncio.shield(self._stopping)
+        except asyncio.CancelledError as cancellation:
+            self._stopping.cancel()
+            try:
+                await finish_owned(self._stopping, timeout=INTERRUPT_TIMEOUT)
+            except BaseException as error:
+                cancellation.add_note(f"Daytona environment cleanup failed ({type(error).__name__})")
+            raise
 
     async def _stop(self) -> None:
         try:
@@ -279,6 +294,13 @@ class DaytonaEnvironment(BaseEnvironment):
             env=self._merge_env(env) or {},
             timeout_sec=timeout_sec,
             user=str(effective_user) if effective_user is not None else None,
+        )
+
+    async def exec_control(self, command: str, *, timeout_sec: int | None = None, user: str | int | None = None, cwd: str | None = None) -> ExecResult:
+        return await self.provider_wait_policy.request(
+            "sandbox.control_command",
+            partial(self.exec, command, timeout_sec=self.provider_wait_policy.control_timeout(timeout_sec), user=user, cwd=cwd),
+            request_timeout=PROVIDER_REQUEST_TIMEOUT,
         )
 
     async def upload_file(self, source_path: Path | str, target_path: str) -> None:
