@@ -13,6 +13,7 @@ import signal
 import stat
 import subprocess
 import sys
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack
 from dataclasses import replace
@@ -29,12 +30,14 @@ pytest.importorskip("daytona")
 from daytona import (
     AsyncDaytona,
     CreateSandboxFromSnapshotParams,
+    DaytonaAuthorizationError,
     DaytonaConfig,
     DaytonaConflictError,
     DaytonaNotFoundError,
     Resources,
 )
 from daytona_api_client_async import SnapshotState
+from rigging.timing import ExponentialBackoff
 from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.machine import (
     PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
@@ -46,6 +49,7 @@ from shellbox.backends.daytona.machine import (
 )
 from shellbox.backends.daytona.snapshot import (
     SnapshotRequest,
+    ensure_snapshot,
     list_snapshots,
     purge_stale_snapshots,
     snapshot_name,
@@ -63,10 +67,14 @@ from shellbox.machine import (
 )
 
 
-@pytest.mark.parametrize("failure", ["rejected_post", "late_get", "prolonged_throttle", "deadline", "cancelled"])
-def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, failure):
+@pytest.mark.parametrize("status", [429, 502, 503])
+@pytest.mark.parametrize(
+    "failure", ["rejected_post", "accepted_post", "late_get", "prolonged_throttle", "deadline", "cancelled"]
+)
+def test_daytona_creation_recovers_named_sandbox_after_transient_errors(monkeypatch, failure, status):
     async def scenario():
         requests = []
+        names = []
         delays = []
         waiting = asyncio.Event()
 
@@ -76,7 +84,7 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
             if failure in {"deadline", "cancelled"}:
                 await asyncio.Future()
 
-        monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
+        monkeypatch.setattr("shellbox.backends.daytona.provider.sleep", wait)
 
         created = False
 
@@ -89,6 +97,11 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
                     pass
                 return websocket
             requests.append(request.method)
+            if request.method == "POST":
+                names.append((await request.json())["name"])
+                if failure == "accepted_post" and requests.count("POST") == 1:
+                    created = True
+                    return web.json_response({"message": "ambiguous creation"}, status=status)
             if request.method == "POST" and created:
                 return web.json_response({"message": "name already exists"}, status=409)
             if (request.method == "GET" and created and requests.count("GET") > 1) or (
@@ -124,7 +137,7 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
                     }
                 )
             return web.json_response(
-                {"message": "rate limited"}, status=429, headers={"Retry-After-sandbox-create": "17"}
+                {"message": "transient provider error"}, status=status, headers={"Retry-After-sandbox-create": "17"}
             )
 
         app = web.Application()
@@ -164,8 +177,96 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
                 else:
                     sandbox = await _create_sandbox(client, params, 60)
                     assert sandbox.id == "created-once"
-                    assert requests == ["POST", "GET", "POST", "GET"]
-                    assert len(delays) == 1 and delays[0] >= 17
+                    assert requests == (
+                        ["POST", "POST", "GET", "POST", "GET"]
+                        if failure == "accepted_post"
+                        else ["POST", "GET", "POST", "GET"]
+                    )
+                    assert len(delays) == (2 if failure == "accepted_post" else 1)
+                    assert all(0 < delay <= 120 for delay in delays)
+                    assert delays[-1] >= 17
+                assert set(names) == {"fixture"}
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", ["rejected_create", "accepted_create", "metadata", "list", "transport", "forbidden"])
+def test_daytona_snapshot_recovers_transient_http_without_duplicate_images(monkeypatch, failure):
+    async def scenario():
+        # Advance the existing backoff clock without real waiting in either version.
+        monkeypatch.setattr(ExponentialBackoff, "next_interval", lambda self: 0)
+        request = SnapshotRequest(
+            RegistryImage("fixture.invalid/image@sha256:" + "0" * 64), Resources(cpu=2, memory=4, disk=10)
+        )
+        snapshots = {}
+        attempts = Counter()
+
+        def snapshot():
+            return {
+                "id": request.name,
+                "name": request.name,
+                "general": False,
+                "state": SnapshotState.ACTIVE.value,
+                "size": None,
+                "entrypoint": None,
+                "cpu": 2,
+                "gpu": 0,
+                "mem": 4,
+                "disk": 10,
+                "errorReason": None,
+                "createdAt": "2026-11-13T15:00:00Z",
+                "updatedAt": "2026-11-13T15:00:00Z",
+                "lastUsedAt": None,
+            }
+
+        async def endpoint(http):
+            operation = "create" if http.method == "POST" else "list" if http.path.endswith("/snapshots") else "get"
+            attempts[operation] += 1
+            if failure == "forbidden":
+                return web.json_response({"message": "forbidden"}, status=403)
+            if failure == "transport" and operation == "get" and attempts[operation] == 1:
+                assert http.transport is not None
+                http.transport.close()
+                return web.Response()
+            if (failure == "metadata" and operation == "get" and attempts[operation] <= 5) or (
+                failure == "list" and operation == "list" and attempts[operation] <= 5
+            ):
+                return web.Response(text="<html>Bad Gateway</html>", status=502)
+            if operation == "create":
+                name = (await http.json())["name"]
+                if failure == "rejected_create" and attempts[operation] == 1:
+                    return web.Response(text="Unavailable", status=503)
+                if name in snapshots:
+                    return web.json_response({"message": "name already exists"}, status=409)
+                snapshots[name] = snapshot()
+                if failure == "accepted_create" and attempts[operation] == 1:
+                    return web.Response(text="<html>Bad Gateway</html>", status=502)
+                return web.json_response(snapshots[name])
+            if operation == "list":
+                return web.json_response(
+                    {"items": list(snapshots.values()), "total": len(snapshots), "page": 1, "totalPages": 1}
+                )
+            name = http.path.rsplit("/", 1)[-1]
+            if name not in snapshots:
+                return web.json_response({"message": "missing"}, status=404)
+            return web.json_response(snapshots[name])
+
+        app = web.Application()
+        app.router.add_route("*", "/{path:.*}", endpoint)
+        async with TestServer(app) as server:
+            async with AsyncDaytona(
+                DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/"))
+            ) as client:
+                if failure == "forbidden":
+                    with pytest.raises(DaytonaAuthorizationError):
+                        await ensure_snapshot(client, request)
+                    assert not snapshots
+                    return
+                assert await ensure_snapshot(client, request) == request.name
+                assert [row.name for row in await list_snapshots(client)] == [request.name]
+        assert set(snapshots) == {request.name}
+        if failure == "accepted_create":
+            assert attempts["create"] == 1
 
     asyncio.run(scenario())
 
