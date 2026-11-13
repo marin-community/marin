@@ -300,6 +300,9 @@ private verifier resources. Task and curriculum text use the same Harrier
 checkpoint, retrieval instruction and normalization. `--worker-cpu` and
 `--worker-memory` size each CPU worker; `--max-workers` bounds the shared pool.
 The model loads inside workers when an embedding batch has cache misses.
+Model initialization is serialized within each process because Transformers
+temporarily changes Torch's default dtype. Concurrent workers reuse the cached
+backend after initialization.
 
 `--cache-dir` selects local workers and artifacts. `--review-cache` selects the
 shared inference cache, defaulting locally to `<cache-dir>/review-cache`.
