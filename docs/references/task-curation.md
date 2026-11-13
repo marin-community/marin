@@ -1172,6 +1172,17 @@ judgments, execution qualification, admission or publication receipt. Reuse QA
 evidence only for identical task and runtime hashes after calibration or repair.
 Hugging Face publication and Atlas loading remain separate operations.
 
+Content-only campaigns may use `full_qc` to review every retained task while
+execution qualification remains pending. The resulting evidence explicitly
+records `qualification_status=pending`; complete content review does not imply
+SAMPLE/FULL execution admission. Payload revision 4 excludes top-level execution
+requirements and actor/grader package-lock artifact locations. Deployment runtime
+remains in audit hashes rather than the content rubric. Exact requests can be
+reused after changes confined to those fields. Images, grader settings,
+instructions and resource bytes remain model-visible; modifying them invalidates
+the request, including edits to resource settings embedded in native task.toml.
+See the [campaign command](../../../experiments/post_training/task_curation/README.md#complete-retained-population-review).
+
 ### Full-population oracle filter
 
 Every admitted TaskSpec must declare `execution_requirements`: `cpus`,

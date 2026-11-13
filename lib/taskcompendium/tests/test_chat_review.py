@@ -7,13 +7,13 @@ from dataclasses import replace
 import pytest
 from finestore.cache import PersistentKvCache
 
-from taskcompendium.models import Source, TaskSpec
+from taskcompendium.models import ScriptGrader, Source, TaskSpec
 from taskcompendium.pipeline.models import RawRow, ReviewRubric, ReviewStatus
 from taskcompendium.pipeline.query_cache import cached_request_output
 from taskcompendium.pipeline.review import BatchReviewer, ChatReviewer, valid_review_completion
 from taskcompendium.pipeline.review_requests import RequestObservation, RequestOutput
 
-from .pipeline_stages import response, svamp_row_task
+from .pipeline_stages import GRADER_ENVIRONMENT, response, svamp_row_task
 from .reviewer_specs import reviewer_spec
 
 
@@ -251,3 +251,49 @@ def test_review_cache_tracks_spec_but_reuses_capacity_changes(tmp_path):
     assert len(chat.requests) == 5
     assert chat.requests[0]["temperature"] == 0.7
     assert chat.requests[-2]["chat_template_kwargs"] == {"reasoning_effort": "medium"}
+
+
+def test_content_cache_reuses_calibration_but_tracks_grader_and_image_changes(tmp_path):
+    task = svamp_row_task(
+        RawRow(
+            "task",
+            Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
+            {"Body": "Ada has two apples.", "Question": "How many apples?", "Answer": "2"},
+        )
+    )
+    assert isinstance(task, TaskSpec) and task.execution_requirements is not None
+    environment = GRADER_ENVIRONMENT.model_copy(
+        update={"docker_image": None, "packages_lock": "/original/requirements.lock"}
+    )
+    task = task.model_copy(
+        update={
+            "environment_requirements": environment,
+            "grader": ScriptGrader(argv=("true",), environment=environment),
+        }
+    )
+    rubric = ReviewRubric("content", "1", ("Check the public task and grader.",))
+    chat = ReviewChat()
+    reviewer = ChatReviewer(chat, reviewer_spec(), query_cache_root=str(tmp_path / "cache"))
+    first = reviewer.review([task], rubric)
+    repaired_environment = environment.model_copy(update={"packages_lock": "/repaired/requirements.lock"})
+    calibrated = task.model_copy(
+        update={
+            "execution_requirements": task.execution_requirements.model_copy(update={"cpus": 2, "memory_mb": 4096}),
+            "environment_requirements": repaired_environment,
+            "grader": task.grader.model_copy(update={"environment": repaired_environment}),
+        }
+    )
+    reused = reviewer.review([calibrated], rubric)
+    assert reused.reviews == first.reviews
+    assert len(chat.requests) == 1
+    changed_grader = calibrated.model_copy(update={"grader": calibrated.grader.model_copy(update={"argv": ("false",)})})
+    reviewer.review([changed_grader], rubric)
+    changed_image = calibrated.model_copy(
+        update={
+            "environment_requirements": repaired_environment.model_copy(
+                update={"packages_lock": None, "docker_image": "example.test/task@sha256:" + "b" * 64}
+            ),
+        }
+    )
+    reviewer.review([changed_image], rubric)
+    assert len(chat.requests) == 3

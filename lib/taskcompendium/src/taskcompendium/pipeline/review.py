@@ -265,7 +265,7 @@ def project_source_contract(parameters: dict[str, Any], payload: dict[str, Any])
 
 def review_payload(task: TaskSpec) -> dict[str, Any]:
     """Expose bounded readable fixture evidence without duplicating encoded bytes."""
-    payload = task.model_dump(mode="json")
+    payload = task.model_dump(mode="json", exclude={"execution_requirements"})
     remaining = TOTAL_RESOURCE_PREVIEW_CHARACTERS
     previews = []
     resources = [
@@ -282,6 +282,7 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
     if isinstance(task.grader, ScriptGrader | VerifyitGrader) and task.grader.environment is not None:
         environments.append(("grader_build", task.grader.environment, payload["grader"]["environment"]))
     for role, environment, projected in environments:
+        projected.pop("packages_lock")
         if environment.docker_build is not None:
             resources.extend((role, resource) for resource in environment.docker_build.files)
             projected["docker_build"] = {"resource_role": role, "status": "unresolved"}
@@ -334,6 +335,7 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
                 project_source_contract(parameters, payload)
             payload["grader_data"] = parameters
     payload["resource_preview_policy"] = (
+        "Execution resource requirements and package-lock artifact locations are omitted; qualification is separate. "
         "Resources are private reviewer evidence, with roles identifying what the actor sees. "
         "actor_build and grader_build are unresolved image-build inputs, separate from workspace mounts. "
         f"Text previews reserve the first {RESOURCE_PREFIX_CHARACTERS} characters of each selected UTF-8 file, "
@@ -653,7 +655,9 @@ def review_request(
 ) -> dict[str, Any]:
     """Build the exact provider request without submitting or caching it."""
     if reviewer.query_cache_root is not None:
-        payload = task.model_dump(mode="json", exclude={"id", "source"})
+        payload = review_payload(task)
+        payload.pop("id")
+        payload.pop("source")
         semantic_id = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
         if original is not None:
             original = original.model_copy(update={"id": "original", "source": None})

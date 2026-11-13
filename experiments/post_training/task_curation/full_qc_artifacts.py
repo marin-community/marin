@@ -3,6 +3,8 @@
 
 """Persisted contracts and review evidence for retained Atlas populations."""
 
+from typing import Literal
+
 from finestore.rl.curation import SourceQualityResult
 from marin.execution.artifact import Artifact
 from pydantic import BaseModel, Field
@@ -45,6 +47,7 @@ class FullQCReview(Artifact):
     reviewer: dict
     rubric: dict
     coverage_complete: bool
+    qualification_status: Literal["pending"]
     attempted_count: int
     result: SourceQualityResult
     top_issues: dict[str, int]
