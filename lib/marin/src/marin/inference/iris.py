@@ -390,7 +390,9 @@ def _effective_serving(
     geometry = iris.serving_geometry
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument("--tensor-parallel-size", type=int, default=tensor_parallel_size)
-    parser.add_argument("--data-parallel-size", type=int, default=geometry.data_parallel_size if geometry else 1)
+    parser.add_argument(
+        "--data-parallel-size", type=int, default=geometry.global_data_parallel_size if geometry else 1
+    )
     parser.add_argument("--max-model-len", default=model.max_model_len)
     options, _ = parser.parse_known_args(engine.extra_args if isinstance(engine, VllmEngineConfig) else ())
     context = options.max_model_len
@@ -652,7 +654,8 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
     with iris_vllm_launch(
         pipeline_parallel_size=geometry.pipeline_parallel_size,
         tensor_parallel_size=geometry.tensor_parallel_size,
-        data_parallel_size=geometry.data_parallel_size,
+        data_parallel_size=geometry.global_data_parallel_size,
+        data_parallel_size_local=geometry.data_parallel_size,
     ) as launch:
         with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env) as environment:
             if launch.is_leader:

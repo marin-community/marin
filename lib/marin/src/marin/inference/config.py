@@ -16,6 +16,7 @@ from typing import Any
 
 from fray.types import CpuConfig, EnvironmentConfig, GpuConfig, ResourceConfig, TpuConfig
 from rigging.filesystem.storage_path import StoragePath
+from marin.external_dependencies import VllmGpuRelease
 
 # Worker and isolated vLLM environments use one Python version so cloudpickle
 # and the launched callable stay compatible.
@@ -70,16 +71,26 @@ class ServingGeometry:
     data_parallel_size: int
     pipeline_parallel_size: int
     gpus_per_task: int
+    data_parallel_hosts: int = 1
+    """Tasks that each run ``data_parallel_size`` local DP ranks; global DP is their product."""
 
     def __post_init__(self) -> None:
         if min(self.tensor_parallel_size, self.data_parallel_size, self.pipeline_parallel_size) < 1:
             raise ValueError("parallel sizes must be positive")
+        if self.data_parallel_hosts < 1:
+            raise ValueError("data_parallel_hosts must be positive")
+        if self.pipeline_parallel_size > 1 and self.data_parallel_hosts > 1:
+            raise ValueError("a gang may distribute pipeline stages or data-parallel ranks, not both")
         if self.tensor_parallel_size * self.data_parallel_size != self.gpus_per_task:
             raise ValueError("tensor_parallel_size * data_parallel_size must equal gpus_per_task")
 
     @property
+    def global_data_parallel_size(self) -> int:
+        return self.data_parallel_size * self.data_parallel_hosts
+
+    @property
     def task_count(self) -> int:
-        return self.pipeline_parallel_size
+        return self.pipeline_parallel_size * self.data_parallel_hosts
 
     @property
     def total_gpus(self) -> int:
@@ -87,7 +98,7 @@ class ServingGeometry:
 
     @property
     def label(self) -> str:
-        return f"PP{self.pipeline_parallel_size} TP{self.tensor_parallel_size} DP{self.data_parallel_size}"
+        return f"PP{self.pipeline_parallel_size} TP{self.tensor_parallel_size} DP{self.global_data_parallel_size}"
 
 
 @dataclass(frozen=True)
@@ -273,6 +284,8 @@ class VllmEngineConfig:
     source: VllmSource = VllmSource.UPSTREAM
     version: str | None = None
     extra_requirements: tuple[str, ...] = ()
+    gpu_release: VllmGpuRelease | None = None
+    """Marin fork release override; ``None`` uses the promoted ``VLLM_GPU_RELEASE``."""
     compilation_cache: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED
     startup_timeout_seconds: int = 1800
     max_num_batched_tokens: int | None = None
