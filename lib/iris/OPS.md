@@ -135,6 +135,15 @@ through Fray. Use a unique `IRIS_PORT_JAX` per concurrent gang. The timeout
 includes queueing, and stopping the coordinator stops its children.
 `SchedulingGated` means Kueue has not admitted the gang. See [CoreWeave](docs/coreweave.md).
 
+### Sandbox prepared-image workdirs
+
+The Kubernetes backend advertises `sandbox-image-workdir` as a task capability.
+SANDBOX pods without a bundle, inline workdir files, or workdir file references
+preserve the prepared image's `/app`; an empty workdir volume would hide those
+files. Explicitly staged inputs and non-sandbox jobs retain their workdir mounts.
+Harbor requires this capability before submitting prepared-image tasks. Older
+controllers need a separately authorized rollout before submitting prepared-image tasks.
+
 ### Sandbox disk limits
 
 Kubernetes sandbox pod manifests set CPU and memory container limits. A nonzero

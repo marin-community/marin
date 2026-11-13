@@ -145,6 +145,7 @@ TYPES = MappingProxyType(
         "generator.vllm_attention_backend": "str | None",
         "generator.chat_template.name_or_path": "str | None",
         "generator.sampling_params.logprobs": "NonNegativeInt | None",
+        "generator.eval_sampling_params.seed": "NonNegativeInt | None",
         "generator.eval_sampling_params.logprobs": "NonNegativeInt | None",
         "generator.sampling_params.stop_token_ids": "tuple[NonNegativeInt, ...] | None",
         "generator.eval_sampling_params.stop_token_ids": "tuple[NonNegativeInt, ...] | None",
