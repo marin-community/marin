@@ -77,7 +77,8 @@ Inspect `submission_valid` and its reasons, process exit status, profiling
 errors, context overflows, metric coverage and unfinished/cancelled requests.
 Report warmup failures separately. Native validity alone does not establish
 model correctness or an acceptable error rate; generic errors are not a direct
-validity input. See the [validity implementation and FAQ][validity]. Keep invalid
+validity input, though an error threshold can abort the run. See the
+[validity FAQ][validity]. Keep invalid
 runs for diagnosis and exclude them from the confirmed comparison.
 
 Preserve raw exports and the unchanged processor's output. InferenceX
@@ -85,7 +86,8 @@ Preserve raw exports and the unchanged processor's output. InferenceX
 request tokens over their [first-start to last-end span][metrics]. Output
 tokens/s differs from total tokens/s, which includes input tokens. Its
 [per-GPU result][aggregation] divides by the GPU count derived from topology
-metadata. Verify that metadata instead of silently editing the metric.
+metadata. Single-node DP replicas need explicit accounting; fix mismatched
+topology metadata passed to the processor instead of editing the metric.
 Native deadline handling can [cancel in-flight work][phase]; completed-request
 mixtures can therefore change with concurrency and window length. Report
 cancellation shares alongside errors and throughput.
@@ -137,7 +139,8 @@ The [native GQA qualification][gqa] illustrates why these checks matter.
 Reducing duplicated Hero KV-cache heads required preserving its full ShortConv
 history. Cache capacity gains did not establish long-context quality. Snowball
 FP8 matched the previous implementation, but 10/58 H100 numerical observations
-exceeded the declared 0.075 probability-error bound against BF16 Levanter.
+failed the declared BF16 Levanter contract: a 0.075 probability-error bound,
+reference-top-five coverage and probability-supported winners.
 Implementation parity alone did not establish quantization quality. Snowball
 EAGLE3 speculative decoding passed that sampled screen; five accepted draft
 tokens out of nine did not establish throughput benefit. Precision and
@@ -150,22 +153,24 @@ Snowball's historical BF16 calibration used one host with eight H100s,
 TP1/DP8/EP8/PP1, 262,144-token context and an 8,192-token batch budget. Three
 full-hour C128 runs averaged **134.95 output tokens/s/GPU**; three C256 runs
 averaged **110.55**. C256's TTFT p90 was roughly 197–207 seconds, versus 7.7–7.9
-at C128. The repeated decline justified ending that doubling sweep. See the
-collection artifacts for C128
-([first](https://github.com/marin-community/marin/actions/runs/40696525912),
-[second](https://github.com/marin-community/marin/actions/runs/40728980006),
-[third](https://github.com/marin-community/marin/actions/runs/40743123733))
-and C256
-([first](https://github.com/marin-community/marin/actions/runs/40712952732),
-[second](https://github.com/marin-community/marin/actions/runs/40757943142),
-[third](https://github.com/marin-community/marin/actions/runs/40773289445)),
-and [runner PR #10645](https://github.com/marin-community/marin/pull/10645).
+at C128. The repeated decline justified ending that doubling sweep. The
+[retained calibration rows](data/agentx-snowball-h100-calibration.csv) preserve
+all ten H100 measurements, including errors and dominated points. They extract
+the original values without recomputing metrics and retain submission links,
+native archive URIs and SHA256 hashes. Use these records after Actions artifacts
+expire. The [runner PR #10645](https://github.com/marin-community/marin/pull/10645)
+remained an unmerged draft at authoring on 2026-11-13 UTC.
 These used vLLM `01911be3`, harness `e4bb2f83` and processor `80dff120`.
 The operating point is specific to that recipe and revision. The 5%-of-best
 elbow heuristic was a local choice, not an AgentX rule.
 
 The [Hero calibration handoff][hero] records BF16 vLLM `ef7f5a0`, runner
 `d669e9e4`, the full 393-session corpus and a fixed 2,048-token batch budget.
+At authoring, TP2/TP6 depended on draft vLLM
+[#119](https://github.com/marin-community/vllm/pull/119) above draft
+[#110](https://github.com/marin-community/vllm/pull/110). Check current release
+and adoption status, or recover the exact measured build from the handoff,
+before planning confirmation.
 In 900-second windows, repeated output rates per allocated GB200 were 18.63 at
 TP1/DP16/EP16 C128 (16 GPUs), 37.12 at TP2/DP8/EP16 C128 (16 GPUs), and 45.12
 at TP6/DP2/EP12 C64 (12 GPUs). These suggest candidates for confirmation;
@@ -173,7 +178,7 @@ separate windows do not make a full-hour run. TP1/C256's single higher result
 had 97.8% peak cache use and 32.4% deadline cancellations. Full-hour rates and
 rankings remain unconfirmed. TP2 needed a qualified NCCL fallback; its root
 cause remained unresolved. Use the handoff's portable recipe bundle to recover
-the exact collective settings. Artificial collective timings did not predict
+the exact collective settings. Artificial collective timings do not establish
 AgentX performance. Recheck current code before carrying that policy forward.
 
 ## Decide and hand off
