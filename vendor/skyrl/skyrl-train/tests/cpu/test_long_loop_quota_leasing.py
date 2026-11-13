@@ -1,9 +1,11 @@
 import asyncio
 from collections import Counter
 
-from skyrl_train.dynamic_sampling import GroupSelectionPolicy
+import pytest
+
+from skyrl_train.dynamic_sampling import GroupSelectionPolicy, GroupSelectionResult
 from skyrl_train.group_admission import AdmissionRejection, GroupAdmissionPolicy, GroupAdvantageInvariant
-from skyrl_train.rollouts.buffer import BatchPolicy, PayloadReference, RolloutBuffer, RolloutBufferConfig, RolloutVerdict, RolloutContentPolicy, RolloutGroup
+from skyrl_train.rollouts.buffer import BatchPolicy, FullBatchRolloutPolicy, GroupRewards, PayloadReference, RolloutBuffer, RolloutBufferConfig, RolloutVerdict, RolloutContentPolicy, RolloutGroup
 from skyrl_train.telemetry import GeneratedWork
 
 
@@ -23,6 +25,56 @@ def test_rejected_agentic_groups_do_not_starve_nonagentic_leases():
                             PayloadReference(None))
         next_lease = await buffer.acquire_lease()
         assert {replacement.route, next_lease.route} == {"agentic", "non_agentic"}
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("samples_per_prompt", [4, 8])
+def test_generation_boundary_prevents_prefetch_beyond_eight_batches(samples_per_prompt):
+    async def exercise():
+        groups = 128 // samples_per_prompt
+        config = RolloutBufferConfig(groups, groups * 3, 2, BatchPolicy.FULL_BATCH, None, None,
+                                     {"agentic": groups // 2, "nonagentic": groups // 2},
+                                     generation_batch_limit=8)
+        buffer = RolloutBuffer(config)
+        await buffer.publish(1)
+        generated = Counter()
+        issued = Counter()
+        for step in range(1, 9):
+            # Fill the whole staleness window, including future batches, before consuming.
+            for batch_id in range(step, min(step + 2, 8) + 1):
+                for _ in range(groups - issued[batch_id]):
+                    lease = await buffer.acquire_lease()
+                    assert lease.batch_id == batch_id
+                    uid = f"{batch_id}-{issued[batch_id]}"
+                    issued[batch_id] += 1
+                    generated[lease.route] += samples_per_prompt
+                    rewards = GroupRewards((0.0,) * samples_per_prompt, (0.0,) * samples_per_prompt, False)
+                    verdict = RolloutVerdict(uid, (), GroupSelectionResult.KEEP, rewards,
+                                             GeneratedWork(samples_per_prompt, samples_per_prompt, 0))
+                    await buffer.commit(lease.lease_id, {"uid": uid, "group_route": lease.route}, verdict,
+                                        PayloadReference(uid))
+            admission = await buffer.admit(timeout=1)
+            assert admission.selection is not None
+            assert sum(group.sample_count for group in admission.admitted) == 128
+            await buffer.publish(step + 1)
+        assert generated == {"agentic": 512, "nonagentic": 512}
+        policy = FullBatchRolloutPolicy(config)
+        assert policy.lease_batch(7, Counter({7: groups, 8: groups})) is None
+        assert policy.lease_batch(9, Counter()) is None
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(buffer.acquire_lease(), timeout=0.01)
+    asyncio.run(exercise())
+
+
+def test_fixed_generation_budget_fails_instead_of_replacing_a_masked_group():
+    async def exercise():
+        buffer = RolloutBuffer(RolloutBufferConfig(1, 1, 2, BatchPolicy.FULL_BATCH, None, None,
+                                                   generation_batch_limit=8))
+        await buffer.publish(1)
+        lease = await buffer.acquire_lease()
+        verdict = RolloutVerdict("masked", (AdmissionRejection.FULLY_MASKED,), None, None, GeneratedWork(8, 8, 0))
+        with pytest.raises(RuntimeError, match="Fixed generation budget cannot replace group masked: fully_masked"):
+            await buffer.commit(lease.lease_id, {"uid": "masked"}, verdict, PayloadReference(None))
     asyncio.run(exercise())
 
 

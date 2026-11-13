@@ -454,6 +454,15 @@ def _iter_config_kwargs(node):
 
 
 def validate_cfg(cfg: DictConfig):
+    generation_limit = cfg.trainer.rollout_buffer.generation_batch_limit
+    if generation_limit is not None:
+        if generation_limit != cfg.trainer.max_steps or cfg.trainer.resume_mode != "none":
+            raise ValueError("A fixed generation budget must match max_steps and start without resume")
+        if (
+            cfg.trainer.rollout_buffer.batch_policy != "full_batch"
+            or cfg.trainer.algorithm.dynamic_sampling.type is not None
+        ):
+            raise ValueError("A fixed generation budget requires full_batch without dynamic sampling")
     validate_mismatch_probe_config(cfg)
     if cfg.trainer.strategy != "megatron":
         raise ValueError(f"Unsupported training strategy: {cfg.trainer.strategy}")

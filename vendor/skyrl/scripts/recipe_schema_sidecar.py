@@ -135,6 +135,7 @@ TYPES = MappingProxyType(
         "trainer.eval_num_prompts": "PositiveInt | None",
         "trainer.callbacks": "tuple[Callback, ...] | None",
         "trainer.rollout_buffer.max_in_flight": "PositiveInt | None",
+        "trainer.rollout_buffer.generation_batch_limit": "PositiveInt | None",
         "trainer.rollout_buffer.object_store_root": "str | None",
         "trainer.policy.megatron_config.expert_tensor_parallel_size": "PositiveInt | None",
         "trainer.critic.model.path": "str | None",
