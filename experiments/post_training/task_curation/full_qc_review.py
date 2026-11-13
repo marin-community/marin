@@ -402,6 +402,22 @@ def review_shard(
     return result
 
 
+def shard_contract_matches(
+    shard: FullQCReviewShard,
+    inputs: FullQCInputs,
+    rubric: ReviewRubric,
+    *,
+    shard_count: int,
+    batch_offset: int,
+) -> bool:
+    return (
+        shard.inputs == inputs
+        and canonical_sha256(shard.rubric) == canonical_sha256(asdict(rubric))
+        and shard.shard_count == shard_count
+        and shard.batch_offset == batch_offset
+    )
+
+
 def assemble_shards(
     inputs: FullQCInputs,
     shards: Sequence[FullQCReviewShard],
@@ -417,12 +433,8 @@ def assemble_shards(
         raise ValueError("Source assembly requires every distinct shard")
     receipts = {}
     for shard in shards:
-        if (
-            shard.inputs != inputs
-            or shard.reviewer != reviewer
-            or canonical_sha256(shard.rubric) != canonical_sha256(asdict(rubric))
-            or shard.shard_count != first.shard_count
-            or shard.batch_offset != first.batch_offset
+        if shard.reviewer != reviewer or not shard_contract_matches(
+            shard, inputs, rubric, shard_count=first.shard_count, batch_offset=first.batch_offset
         ):
             raise ValueError("Review shards do not share the exact source and reviewer contract")
         for receipt in shard.receipts:
